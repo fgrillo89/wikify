@@ -25,6 +25,11 @@ lives in `docs/architecture.md` and `docs/project-status.md`.
   - **I**nterface Segregation — small, focused interfaces over fat ones
   - **D**ependency Inversion — depend on abstractions, not concretions
 
+## Git Workflow
+
+- **Commit and push after major changes**: Whenever making significant code changes or
+  updating `docs/project-status.md`, commit and push immediately. Don't batch up changes.
+
 ## Corrections & Lessons Learned
 
 When the user corrects a mistake or misinterpretation, **add an entry below** so the

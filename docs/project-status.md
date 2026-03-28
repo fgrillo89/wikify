@@ -25,12 +25,16 @@
 - [ ] **NEXT: Create GitHub repo and push initial commit**
 - [ ] Test: ingest 5 papers, verify chunks + metadata in SQLite
 
-### Phase 2 — Graph + Figures
-- [ ] `extract/figures.py` with content-addressed storage
-- [ ] `graph/schema.py`, `graph/builder.py`
+### Phase 2 — Obsidian Vault + Graph
+- [ ] `vault/writer.py` — generate paper notes from extracted data
+- [ ] `vault/templates.py` — note templates (paper, concept, author, method, topic)
+- [ ] `vault/linker.py` — incremental link detection + creation
+- [ ] `vault/sync.py` — vault ↔ SQLite consistency
 - [ ] `store/vectors.py` with ChromaDB
+- [ ] `graph/builder.py` — build networkx graph from vault links
 - [ ] `graph/serialize.py` and `graph/traverse.py`
-- [ ] Test: ingest 20 papers, verify graph connectivity
+- [ ] Evaluate LiteParse vs pymupdf4llm on 10 sample papers (see `docs/parser-evaluation.md`)
+- [ ] Test: ingest 20 papers, verify vault notes + graph connectivity
 
 ### Phase 3 — Generation
 - [ ] `llm/client.py` with litellm + caching
