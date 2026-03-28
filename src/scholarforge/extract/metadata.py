@@ -143,60 +143,133 @@ def _parse_authors(raw: str) -> list[str]:
 def _extract_authors_from_markdown(md_text: str) -> list[str]:
     """Try to extract author names from markdown text near the top.
 
-    Looks for author-like lines between the title and the abstract/body:
-    lines containing comma-separated names with optional superscripts/affiliations.
+    Looks for author-like lines between the title and the abstract/body.
     """
     lines = md_text[:5000].split("\n")
 
-    # Find first heading (title), then scan lines after it
+    # Find first non-metadata heading (title)
     title_idx = -1
     for i, line in enumerate(lines):
-        if line.strip().startswith("#"):
+        stripped = line.strip()
+        if stripped.startswith("#") and len(stripped.lstrip("# ")) > 5:
             title_idx = i
             break
 
     if title_idx < 0:
         return []
 
-    # Scan lines after the title, looking for author-like content
-    for i in range(title_idx + 1, min(title_idx + 10, len(lines))):
+    # Collect candidate author lines (between title and abstract/introduction)
+    candidates: list[str] = []
+    for i in range(title_idx + 1, min(title_idx + 15, len(lines))):
         line = lines[i].strip()
         if not line:
             continue
-        # Skip if it looks like a heading or abstract
-        if line.startswith("#") or re.match(r"(?i)abstract", line):
+        # Stop at abstract or introduction heading
+        if re.match(r"(?i)^#*\s*\*?\*?(abstract|introduction|index\s+terms)", line):
             break
-        # Skip affiliation lines (contain university, department, etc.)
-        if re.search(r"(?i)(university|department|institute|school|laboratory|lab\b)", line):
+        # Skip affiliation/address lines
+        if re.search(
+            r"(?i)(university|department|institute|school|laboratory"
+            r"|lab\b|@|e-mail|email|thuwal|saudi|china|usa\b|states\b)",
+            line,
+        ):
             continue
+        candidates.append(line)
 
-        # Clean up superscripts, footnote markers, affiliations in brackets
-        cleaned = re.sub(r"\[[^\]]*\]", "", line)  # remove [†], [1], etc.
-        cleaned = re.sub(r"[†‡§*,]+$", "", cleaned)  # trailing markers
-        cleaned = re.sub(r"[†‡§*]+", "", cleaned)  # inline markers
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-        if not cleaned:
-            continue
-
-        # Split on ", " or " and " — expect at least 2 name-like tokens
-        parts = re.split(r",\s+|\s+and\s+", cleaned)
-        # Filter: each part should look like a name (1-4 words, starts uppercase)
-        names = []
-        for part in parts:
-            part = part.strip().rstrip(",")
-            words = part.split()
-            if 1 <= len(words) <= 5 and words[0][0:1].isupper():
-                # Skip if it's a number or looks like an affiliation
-                if re.match(r"^\d", part):
-                    continue
-                names.append(part)
-
-        # Need at least 2 names to be confident this is an author line
+    # Try each candidate line
+    for line in candidates:
+        names = _parse_author_line(line)
         if len(names) >= 2:
             return names
 
     return []
+
+
+# Words that are NOT author names (IEEE membership, roles, noise)
+_AUTHOR_NOISE = {
+    "ieee",
+    "member",
+    "senior",
+    "fellow",
+    "student",
+    "life",
+    "associate",
+    "et",
+    "al",
+    "and",
+    "the",
+    "of",
+    "vol",
+    "no",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "transactions",
+    "journal",
+    "proceedings",
+    "letters",
+}
+
+
+def _parse_author_line(line: str) -> list[str]:
+    """Parse a single line into author names, filtering noise."""
+    # Strip heading markers and markdown formatting
+    cleaned = re.sub(r"^#+\s*", "", line)
+    cleaned = re.sub(r"\*+", "", cleaned)  # bold/italic
+    cleaned = re.sub(r"_+", " ", cleaned)  # underscores used as italic
+    # Remove IEEE membership titles before splitting
+    cleaned = re.sub(
+        r",?\s*(?:Life |Senior |Student |Associate )?(?:Fellow|Member),?\s*(?:IEEE)?,?",
+        ",",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Remove superscripts, footnote markers, affiliations in brackets
+    cleaned = re.sub(r"\[[^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"[†‡§]+", "", cleaned)
+    # Remove trailing asterisks (corresponding author markers)
+    cleaned = re.sub(r"\*+", "", cleaned)
+    # Collapse whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    if not cleaned:
+        return []
+
+    # Split on ", " or " and "
+    parts = re.split(r",\s*|\s+and\s+", cleaned)
+
+    names: list[str] = []
+    for part in parts:
+        part = part.strip().rstrip(",. ")
+        # Strip "et al" / "et al." suffix
+        part = re.sub(r"\s+et\s+al\.?$", "", part, flags=re.IGNORECASE).strip()
+        if not part:
+            continue
+        # Skip if all words are noise
+        words = part.split()
+        if all(w.lower() in _AUTHOR_NOISE for w in words):
+            continue
+        # Skip numbers, single characters, very short tokens
+        if re.match(r"^\d", part) or len(part) < 2:
+            continue
+        # Must start with uppercase (name-like)
+        if not words[0][0:1].isupper():
+            continue
+        # Skip if too many words (probably a sentence, not a name)
+        if len(words) > 5:
+            continue
+        names.append(part)
+
+    return names
 
 
 def _extract_abstract(md_text: str) -> str | None:
