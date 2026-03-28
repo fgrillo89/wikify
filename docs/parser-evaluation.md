@@ -1,14 +1,175 @@
-# ScholarForge — PDF Parser Evaluation
+# ScholarForge — Document Parser & Ingestion Evaluation
 
-Comparison of document parsing options for the ingestion pipeline.
+Comparison of parsing options across all supported file types.
 
 ## Requirements
 
-- Parse 200 academic PDFs into clean markdown
+- Parse 200+ academic PDFs into clean markdown
+- Handle DOCX, PPTX, Excel, CSV, TXT, Parquet alongside PDFs
 - Handle multi-column layouts, tables, figures, equations
 - Run locally (no cloud APIs)
 - Windows 11 compatible
 - Fast enough for batch processing
+
+## Source Categories
+
+ScholarForge handles four distinct source categories, each with different parsing
+needs, vault note types, and graph roles.
+
+### 1. Literature (external, read-only, citable)
+
+| Format | Parser | Notes |
+|---|---|---|
+| PDF | pymupdf4llm / LiteParse / Marker | Primary academic format |
+| DOCX | python-docx / LiteParse | Preprints, reports, theses |
+| PPTX | python-pptx / LiteParse | Conference talks, lecture slides |
+
+- **Vault path**: `vault/papers/`
+- **Graph role**: Source nodes — referenced by user docs, linked to concepts/methods/authors
+- **Ingestion**: Full pipeline (parse → extract metadata → chunk → embed → create vault note)
+
+### 2. User Documents (user-authored, evolving)
+
+| Format | Parser | Notes |
+|---|---|---|
+| DOCX | python-docx | Drafts, reports, grant proposals |
+| PPTX | python-pptx | User's own presentations |
+| TXT | direct read | Notes, memos, raw text |
+
+- **Vault path**: `vault/docs/`
+- **Graph role**: Output/working nodes — link TO literature and data, evolve over time
+- **Ingestion**: Parse → chunk → embed (no metadata extraction, user provides context)
+- **Key difference**: These are mutable — re-ingestion on file change, not dedup by hash
+
+### 3. Data Files (structured, evidence)
+
+| Format | Parser | Notes |
+|---|---|---|
+| CSV | polars | Tabular data |
+| Excel (.xlsx, .xls) | polars (with xlsx2csv or openpyxl backend) | Spreadsheets (multi-sheet) |
+| Parquet | polars/pyarrow | Columnar analytics data |
+| TSV | pandas | Tab-separated |
+
+- **Vault path**: `vault/data/`
+- **Graph role**: Evidence nodes — supports findings, linked to papers and user docs
+- **Ingestion**: NOT parsed to markdown. Generate a **dataset card** note with:
+  - Schema (columns, types, ranges)
+  - Summary statistics (row count, null rates, distributions)
+  - Preview (first N rows as markdown table)
+  - User-provided description (optional)
+- **No chunking**: Data files are queryable, not readable prose
+- **No embedding of content**: Embed the dataset card description instead
+
+### 4. Presentations as Literature vs User Docs
+
+PPTX files are ambiguous — they could be conference talks (literature) or the user's own slides.
+
+- **Detection heuristic**: If ingested from a `papers/` or `references/` input directory → literature
+- **CLI flag**: `scholarforge ingest slides.pptx --source-type literature|user`
+- **Default**: user document (safer assumption)
+
+## Format-Specific Parsing
+
+### DOCX Parsing
+
+**python-docx** (already in dependencies):
+- Extracts paragraphs with style info (Heading 1, Normal, etc.)
+- Tables extracted as structured data
+- Images extracted via `document.inline_shapes` and relationship parts
+- No layout detection needed (DOCX is already structured)
+
+**LiteParse alternative**:
+- Converts DOCX → PDF via LibreOffice, then parses as PDF
+- Loses DOCX structure (headings, styles) in the conversion
+- Only useful if python-docx output is poor
+
+**Recommendation**: python-docx for DOCX (preserves structure natively). LiteParse only as fallback.
+
+### PPTX Parsing
+
+**python-pptx** (already in dependencies):
+- Extracts slide-by-slide: title, body text, notes, tables, images
+- Each slide → a section in the output markdown
+- Speaker notes are valuable context — include as blockquotes
+
+**Output structure**:
+```markdown
+## Slide 1: Introduction
+Content from slide body...
+
+> **Speaker notes**: Additional context from presenter notes...
+
+## Slide 2: Methods
+...
+```
+
+**LiteParse alternative**:
+- Converts PPTX → PDF → spatial text
+- Loses slide structure and speaker notes
+- Not recommended for PPTX
+
+**Recommendation**: python-pptx for PPTX (preserves slide structure + speaker notes).
+
+### Data File Parsing (CSV, Excel, Parquet)
+
+**No text parsing needed** — these are structured data. Generate a dataset card:
+
+```python
+import polars as pl
+
+def create_dataset_card(file_path: Path) -> dict:
+    """Generate dataset card metadata — no LLM needed."""
+    df = pl.read_csv(file_path)  # or read_excel, read_parquet
+    return {
+        "format": file_path.suffix,
+        "rows": df.height,
+        "columns": df.columns,
+        "dtypes": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
+        "null_counts": {col: df[col].null_count() for col in df.columns},
+        "numeric_stats": df.describe().to_dicts(),
+        "preview": df.head(5),
+        "memory_mb": df.estimated_size("mb"),
+    }
+```
+
+**Excel-specific**: Multi-sheet workbooks → one dataset card per sheet, or one card with sheet index.
+`pl.read_excel(path, sheet_name="Sheet1")` or iterate sheets.
+
+**Parquet-specific**: Schema available without loading full file (`pl.read_parquet_schema()`).
+
+### TXT Parsing
+
+- Direct read, no library needed
+- Chunk by paragraphs (double-newline split) or fixed-size
+- Source type determined by CLI flag or input directory
+
+## Registry Expansion
+
+The current `ingest/registry.py` maps extensions to parsers. Expanded:
+
+```python
+PARSERS = {
+    # Literature / text documents
+    ".pdf": parse_pdf,       # pymupdf4llm (default) or LiteParse
+    ".docx": parse_docx,     # python-docx
+    ".pptx": parse_pptx,     # python-pptx
+    ".txt": parse_txt,       # direct read
+
+    # Data files → dataset cards (not text parsing)
+    ".csv": create_dataset_card,
+    ".tsv": create_dataset_card,
+    ".xlsx": create_dataset_card,
+    ".xls": create_dataset_card,
+    ".parquet": create_dataset_card,
+}
+```
+
+## Dependencies (additions)
+
+```
+polars                         # Data file parsing (CSV, Excel, Parquet) — preferred over pandas
+pyarrow                        # Parquet support + efficient schema reading
+```
 
 ## Parser Comparison
 

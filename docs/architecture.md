@@ -93,11 +93,13 @@ src/scholarforge/
 │
 ├── ingest/                 # Stage 1: Document ingestion
 │   ├── pdf.py              # pymupdf4llm (current) / LiteParse (evaluating)
-│   ├── slides.py           # python-pptx
-│   ├── docx.py             # python-docx
+│   ├── docx.py             # python-docx → markdown
+│   ├── slides.py           # python-pptx → markdown (slide-by-slide + speaker notes)
+│   ├── data.py             # CSV/Excel/Parquet → dataset cards (polars)
+│   ├── txt.py              # Plain text → direct read + chunk
 │   ├── gdrive.py           # Optional: Google Drive
 │   ├── zotero.py           # Zotero library sync
-│   └── registry.py         # file extension → parser dispatcher
+│   └── registry.py         # file extension + source type → parser dispatcher
 │
 ├── extract/                # Stage 2: Structured extraction
 │   ├── chunker.py          # Section-aware semantic chunking
@@ -150,17 +152,33 @@ src/scholarforge/
 The vault is the knowledge graph. ScholarForge generates and maintains it programmatically;
 the user can browse and edit it in Obsidian at any time.
 
+### Source Categories
+
+The vault distinguishes four source categories with different ingestion paths:
+
+| Category | Formats | Vault Path | Graph Role | Mutable? |
+|---|---|---|---|---|
+| **Literature** | PDF, DOCX, PPTX | `vault/papers/` | Source nodes — citable references | No (re-ingest = update) |
+| **User Documents** | DOCX, PPTX, TXT | `vault/docs/` | Working nodes — link to literature + data | Yes (track changes) |
+| **Data Files** | CSV, XLSX, Parquet, TSV | `vault/data/` | Evidence nodes — support findings | Yes (dataset cards) |
+| **Presentations** | PPTX | `vault/papers/` or `vault/docs/` | Depends on `--source-type` flag | Depends |
+
 ### Note Types
 
 | Type | Tag | Color | Example |
 |---|---|---|---|
 | Paper | `#source/paper` | blue | `papers/Vaswani 2017 - Attention Is All You Need.md` |
+| User Doc | `#source/user` | cyan | `docs/Draft - Phase 2 Analysis.md` |
+| Dataset Card | `#source/data` | yellow-green | `data/Experiment Results - Phase 2.md` |
 | Topic | `#topic` | orange | `topics/Transformer Architecture.md` |
 | Concept | `#concept` | green | `concepts/Self-Attention.md` |
 | Method | `#method` | purple | `methods/Multi-Head Attention.md` |
 | Author | `#author` | gray | `authors/Ashish Vaswani.md` |
 | Dataset | `#dataset` | yellow | `datasets/WMT 2014.md` |
 | Finding | `#finding` | red | `findings/Attention outperforms recurrence.md` |
+
+**Note**: `#source/data` (dataset card — metadata about a specific file) is distinct from
+`#dataset` (a conceptual dataset like "MNIST" that multiple papers reference).
 
 ### Paper Note Template
 
@@ -219,16 +237,98 @@ multi-head self-attention. Achieves SOTA on WMT 2014 EN-DE and EN-FR translation
 Stored in SQLite — see chunks table with paper_id matching this note's file_hash.
 ```
 
+### Dataset Card Template
+
+```markdown
+---
+title: "Experiment Results - Phase 2"
+source_type: data
+format: csv
+file_path: "data/raw/experiment_phase2.csv"
+rows: 15420
+columns: ["sample_id", "treatment", "response", "p_value", "effect_size"]
+tags:
+  - source/data
+hasTopic:
+  - "[[topics/Drug Response]]"
+linked_papers:
+  - "[[papers/Smith 2024 - Phase 2 Trial Results]]"
+linked_docs:
+  - "[[docs/Draft - Phase 2 Analysis Report]]"
+ingested_at: 2026-03-28
+---
+
+## Schema
+
+| Column | Type | Description | Range |
+|---|---|---|---|
+| sample_id | int | Unique sample ID | 1-15420 |
+| treatment | str | Treatment group | control, low, high |
+| response | float | Primary endpoint | 0.1 - 98.7 |
+
+## Summary Statistics
+
+- **Rows**: 15,420 | **Columns**: 5
+- **Null rate**: 2.3% (response column)
+- **Groups**: control (5140), low (5140), high (5140)
+
+## Preview
+
+| sample_id | treatment | response | p_value |
+|---|---|---|---|
+| 1 | control | 45.2 | 0.03 |
+| 2 | low | 52.1 | 0.01 |
+| ... | ... | ... | ... |
+
+## Notes
+
+Supports [[findings/Treatment X improves response by 15%]].
+```
+
+### User Document Template
+
+```markdown
+---
+title: "Draft - Phase 2 Analysis Report"
+source_type: user
+format: docx
+file_path: "user_docs/phase2_report.docx"
+tags:
+  - source/user
+hasTopic:
+  - "[[topics/Drug Response]]"
+references:
+  - "[[papers/Smith 2024 - Phase 2 Trial Results]]"
+  - "[[papers/Jones 2023 - Phase 1 Safety Data]]"
+uses_data:
+  - "[[data/Experiment Results - Phase 2]]"
+updated_at: 2026-03-28
+---
+
+## Summary
+
+User's draft analysis report for Phase 2 clinical trial results.
+
+## Sections
+
+1. Introduction
+2. Methods
+3. Results
+4. Discussion
+```
+
 ### Vault Directory Structure
 
 ```
 vault/
-├── papers/                 # One note per ingested paper
+├── papers/                 # Literature — one note per ingested paper
+├── docs/                   # User documents — drafts, reports, memos
+├── data/                   # Dataset cards — metadata about data files
 ├── topics/                 # High-level subject areas
 ├── concepts/               # Field-specific concepts
 ├── methods/                # Research methods and techniques
 ├── authors/                # Researcher pages
-├── datasets/               # Dataset descriptions
+├── datasets/               # Conceptual datasets (e.g., "MNIST", "WMT 2014")
 ├── findings/               # Key results and claims
 ├── figures/                # Content-addressed images (symlinked from data/figures/)
 └── templates/              # Obsidian note templates
@@ -352,6 +452,8 @@ litellm, tiktoken, diskcache   # LLM interface
 pyzotero, bibtexparser>=1.4    # References
 matplotlib, plotly             # Visualization
 python-docx, python-pptx      # Office formats
+polars                         # Data file parsing (CSV, Excel, Parquet) — preferred over pandas
+pyarrow                        # Parquet support + efficient schema reading
 jinja2                         # Templating
 typer, pydantic-settings, rich # CLI + config
 ```

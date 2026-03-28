@@ -36,3 +36,4 @@ When the user corrects a mistake or misinterpretation, **add an entry below** so
 same mistake is never repeated. Format: `- **Topic**: What went wrong → what to do instead.`
 
 <!-- Add corrections below this line -->
+- **Data libraries**: Always use polars over pandas. User strongly prefers polars.
