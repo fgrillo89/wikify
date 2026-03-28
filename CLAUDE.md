@@ -27,8 +27,7 @@ lives in `docs/architecture.md` and `docs/project-status.md`.
 
 ## Git Workflow
 
-- **Commit and push after major changes**: Whenever making significant code changes or
-  updating `docs/project-status.md`, commit and push immediately. Don't batch up changes.
+- **Commit and push regularly**: Commit and push after every meaningful progress — don't batch up changes. This includes code changes, doc updates, and bug fixes. Small frequent commits are better than large infrequent ones.
 
 ## Corrections & Lessons Learned
 

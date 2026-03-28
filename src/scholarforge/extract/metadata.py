@@ -36,9 +36,11 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
     else:
         title = filename.replace(".pdf", "")
 
-    # Authors: prefer PDF metadata, fall back to filename author
+    # Authors: prefer PDF metadata, then markdown author line, then filename
     authors_raw = meta.get("author", "")
     authors = _parse_authors(authors_raw) if authors_raw else []
+    if not authors:
+        authors = _extract_authors_from_markdown(md_text)
     if not authors and fn_author:
         authors = [fn_author]
 
@@ -138,42 +140,170 @@ def _parse_authors(raw: str) -> list[str]:
     return authors
 
 
+def _extract_authors_from_markdown(md_text: str) -> list[str]:
+    """Try to extract author names from markdown text near the top.
+
+    Looks for author-like lines between the title and the abstract/body:
+    lines containing comma-separated names with optional superscripts/affiliations.
+    """
+    lines = md_text[:5000].split("\n")
+
+    # Find first heading (title), then scan lines after it
+    title_idx = -1
+    for i, line in enumerate(lines):
+        if line.strip().startswith("#"):
+            title_idx = i
+            break
+
+    if title_idx < 0:
+        return []
+
+    # Scan lines after the title, looking for author-like content
+    for i in range(title_idx + 1, min(title_idx + 10, len(lines))):
+        line = lines[i].strip()
+        if not line:
+            continue
+        # Skip if it looks like a heading or abstract
+        if line.startswith("#") or re.match(r"(?i)abstract", line):
+            break
+        # Skip affiliation lines (contain university, department, etc.)
+        if re.search(r"(?i)(university|department|institute|school|laboratory|lab\b)", line):
+            continue
+
+        # Clean up superscripts, footnote markers, affiliations in brackets
+        cleaned = re.sub(r"\[[^\]]*\]", "", line)  # remove [†], [1], etc.
+        cleaned = re.sub(r"[†‡§*,]+$", "", cleaned)  # trailing markers
+        cleaned = re.sub(r"[†‡§*]+", "", cleaned)  # inline markers
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        if not cleaned:
+            continue
+
+        # Split on ", " or " and " — expect at least 2 name-like tokens
+        parts = re.split(r",\s+|\s+and\s+", cleaned)
+        # Filter: each part should look like a name (1-4 words, starts uppercase)
+        names = []
+        for part in parts:
+            part = part.strip().rstrip(",")
+            words = part.split()
+            if 1 <= len(words) <= 5 and words[0][0:1].isupper():
+                # Skip if it's a number or looks like an affiliation
+                if re.match(r"^\d", part):
+                    continue
+                names.append(part)
+
+        # Need at least 2 names to be confident this is an author line
+        if len(names) >= 2:
+            return names
+
+    return []
+
+
 def _extract_abstract(md_text: str) -> str | None:
-    # Strategy 1: heading-style abstract (## Abstract\n text...)
-    pattern = re.compile(
-        r"(?:^|\n)#+\s*[Aa]bstract\s*\n(.*?)(?=\n#+\s|\Z)",
-        re.DOTALL,
+    """Extract abstract/summary from markdown text.
+
+    Tries labeled sections first, then falls back to the first substantial
+    paragraph of body text. Works for papers, reports, grant proposals, etc.
+    """
+    # Strip markdown formatting for matching purposes
+    search_text = _clean_markdown(md_text[:10000])
+
+    # ── Strategy 1: Labeled section ──────────────────────────────────────────
+    # Matches "Abstract", "Summary", "Executive Summary" as heading or inline label
+    # Handles: ## Abstract, ABSTRACT, **Abstract**—, _Abstract:_, etc.
+    label_re = re.compile(
+        r"(?:^|\n)\s*(?:#+\s*)?"
+        r"(?:abstract|summary|executive\s+summary)"
+        r"\s*[:\-—.]*\s*"
+        r"(.*?)(?=\n\s*\n|\n#+|\n\s*(?:keywords?|introduction|index\s+terms)\b|\Z)",
+        re.IGNORECASE | re.DOTALL,
     )
-    match = pattern.search(md_text)
+    match = label_re.search(search_text)
     if match:
         text = match.group(1).strip()
-        if len(text) > 50:
-            return text
+        # Sometimes the label and text are on separate lines
+        if len(text) < 30:
+            # Try grabbing the next paragraph after the label
+            label_end = match.end()
+            next_para = re.search(r"\S.*?(?=\n\s*\n|\n#+|\Z)", search_text[label_end:], re.DOTALL)
+            if next_para:
+                text = next_para.group(0).strip()
+        if len(text) > 50 and not _is_noise_paragraph(text):
+            return _clean_markdown(text)
 
-    # Strategy 2: inline abstract — "ABSTRACT text..." or "**Abstract** text..."
-    # Common in ACS, IEEE, Nature-style PDFs
-    pattern2 = re.compile(
-        r"(?:^|\n)\s*\*?\*?(?:ABSTRACT|Abstract)\*?\*?\s*[:\-—.]?\s*(.*?)(?=\n\n|\n#+|\Z)",
-        re.DOTALL,
-    )
-    match2 = pattern2.search(md_text[:8000])
-    if match2:
-        text = match2.group(1).strip()
-        if len(text) > 50:
-            return text
+    # ── Strategy 2: First substantial prose paragraph ──────────────────────
+    # Skip title, author lines, metadata, and take the first real paragraph
+    paragraphs = re.split(r"\n\s*\n", search_text)
+    for para in paragraphs:
+        para = para.strip()
+        if not para or para.startswith("#"):
+            continue
+        if _is_noise_paragraph(para):
+            continue
+        # Must look like prose: long enough and contains sentence-ending punctuation
+        if len(para) > 100 and re.search(r"[.!?]", para):
+            return _clean_markdown(para)
 
-    # Strategy 3: "Abstract—" or "Abstract:" on same line as text
-    pattern3 = re.compile(
-        r"(?:^|\n)\s*\*?\*?[Aa]bstract\*?\*?\s*[—:\-]\s*(.+?)(?=\n\n|\n#+|\Z)",
-        re.DOTALL,
-    )
-    match3 = pattern3.search(md_text[:8000])
-    if match3:
-        text = match3.group(1).strip()
-        if len(text) > 50:
-            return text
+    # ── Strategy 3: Fallback — first ~400 words of body text ─────────────
+    # Concatenate all non-noise, non-heading paragraphs up to ~400 words
+    body_words: list[str] = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para or para.startswith("#"):
+            continue
+        if _is_noise_paragraph(para):
+            continue
+        if len(para) < 30:
+            continue
+        body_words.extend(para.split())
+        if len(body_words) >= 400:
+            break
+    if body_words:
+        text = " ".join(body_words[:400])
+        # Try to cut at last sentence boundary
+        last_period = max(text.rfind(". "), text.rfind(".\n"), text.rfind("."))
+        if last_period > 100:
+            text = text[: last_period + 1]
+        return _clean_markdown(text)
 
     return None
+
+
+def _is_noise_paragraph(text: str) -> bool:
+    """Check if a paragraph is metadata noise rather than content."""
+    lower = text.lower()
+    noise_markers = [
+        "authorized licensed use",
+        "downloaded on",
+        "©",
+        "copyright",
+        "all rights reserved",
+        "using government drawings",
+        "this report is the result of",
+        "ieee transactions",
+        "proceedings of",
+        "permission to make digital",
+        "this article has been accepted",
+        "personal use of this material",
+        "redistribution",
+        "university of",
+        "department of",
+        "manuscript received",
+        "doi:",
+        "published by",
+        "accepted for publication",
+        "public release; distribution",
+        "fundamental research",
+        "approved for public",
+        "report number",
+        "technical report",
+        "contract no",
+        "scientific and technical information",
+        "in the interest of",
+        "==> picture",
+        "intentionally omitted",
+    ]
+    return any(marker in lower for marker in noise_markers)
 
 
 def _extract_year(meta: dict) -> int | None:
