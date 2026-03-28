@@ -3,6 +3,7 @@
 from sqlmodel import Session, SQLModel, create_engine
 
 from scholarforge.config import settings
+from scholarforge.store.models import Citation, FigureRef  # noqa: F401 — ensure tables created
 
 _engine = None
 

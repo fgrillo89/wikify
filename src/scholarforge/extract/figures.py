@@ -20,11 +20,17 @@ def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
     figures: list[Figure] = []
     seen_hashes: set[str] = set()
 
+    max_figures_per_paper = 50
+
     for page_num in range(len(doc)):
         page = doc[page_num]
         image_list = page.get_images(full=True)
 
         for img_index, img_info in enumerate(image_list):
+            if len(figures) >= max_figures_per_paper:
+                doc.close()
+                return figures
+
             xref = img_info[0]
             try:
                 base_image = doc.extract_image(xref)
@@ -39,10 +45,14 @@ def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
                 continue
             seen_hashes.add(img_hash)
 
-            # Skip tiny images (likely icons/decorations)
+            # Skip tiny images (likely icons/decorations) and very small ones
             width = base_image.get("width", 0)
             height = base_image.get("height", 0)
-            if width < 50 or height < 50:
+            if width < 100 or height < 100:
+                continue
+
+            # Skip images that are too small in bytes (likely formatting artifacts)
+            if len(image_bytes) < 2000:
                 continue
 
             ext = base_image.get("ext", "png")

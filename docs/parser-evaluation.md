@@ -48,7 +48,7 @@ needs, vault note types, and graph roles.
 | CSV | polars | Tabular data |
 | Excel (.xlsx, .xls) | polars (with xlsx2csv or openpyxl backend) | Spreadsheets (multi-sheet) |
 | Parquet | polars/pyarrow | Columnar analytics data |
-| TSV | pandas | Tab-separated |
+| TSV | polars | Tab-separated |
 
 - **Vault path**: `vault/data/`
 - **Graph role**: Evidence nodes — supports findings, linked to papers and user docs
@@ -182,6 +182,7 @@ pyarrow                        # Parquet support + efficient schema reading
 - **Dependencies**: pymupdf only
 - **Windows**: Full support
 - **Install**: `uv add pymupdf pymupdf4llm`
+- **Benchmarks**: 206 papers ingested in 460s parallel (4 workers, 2.2s/paper) or 1065s sequential (5.2s/paper)
 - **Verdict**: Good 80% solution. Currently implemented in `ingest/pdf.py`.
 
 ### LiteParse (run-llama/liteparse) — EVALUATING
@@ -204,7 +205,7 @@ pyarrow                        # Parquet support + efficient schema reading
   - Very new (first release March 19, 2026)
 - **Dependencies**: Node.js runtime, optional LibreOffice (Office docs), optional ImageMagick (images)
 - **Windows**: Supported
-- **Install**: `pip install liteparse` or `npm i -g @llamaindex/liteparse`
+- **Install**: `uv add liteparse` (or `npm i -g @llamaindex/liteparse`)
 - **Python API**:
   ```python
   import liteparse
@@ -219,23 +220,41 @@ pyarrow                        # Parquet support + efficient schema reading
   ```
 - **Verdict**: Promising for multi-column academic papers. The spatial approach avoids table-detection failures. Worth testing against pymupdf4llm on sample papers. The screenshot fallback is useful for complex layouts. Concern: Node.js dependency in a Python project.
 
-### Marker (VikParuchuri/marker)
+### Marker (VikParuchuri/marker) — NEAR-TERM FALLBACK
 
-- **Approach**: ML-based layout detection + OCR
-- **Output**: Clean markdown with tables and equations
-- **Strengths**: Excellent multi-column + table support, good equation handling, local
-- **Weaknesses**: GPU recommended for speed, heavier dependencies (PyTorch), slower on CPU
+- **Approach**: Deep-learning layout detection (LayoutLMv3/DiT) + Tesseract/Surya OCR + custom post-processing
+- **Output**: Clean markdown with tables (converted to markdown tables) and equations (LaTeX)
+- **Strengths**: Excellent multi-column + table support, good equation handling, local, handles headers/footers cleanly, supports PDF/DOCX/PPTX/EPUB/HTML/images
+- **Weaknesses**: GPU recommended for speed (~2-4× faster than CPU), heavier deps (PyTorch, ~2 GB), ~8-15s/paper on CPU vs ~2-4s on GPU
+- **Windows**: Supported (CPU or CUDA)
+- **Install**: `uv add marker-pdf`
+- **Python API**:
+  ```python
+  from marker.converters.pdf import PdfConverter
+  converter = PdfConverter()
+  rendered = converter("paper.pdf")
+  markdown_text = rendered.markdown
+  ```
+- **When to use**: Papers where pymupdf4llm produces garbled tables or interleaved columns. Auto-detect candidates by checking for multi-column layout (page width analysis) or high garble ratio in pymupdf4llm output.
+- **Verdict**: Best near-term fallback for hard PDFs. Heavier runtime but highest quality. Trial on 10 papers that pymupdf4llm handles poorly.
+
+### Docling (DS4SD/docling) — SECOND FALLBACK
+
+- **Approach**: IBM's ML-based document understanding pipeline; uses DocLayNet for layout analysis + TableFormer for table structure
+- **Output**: Structured JSON (`DoclingDocument`) convertible to markdown, with explicit table/figure/equation annotations
+- **Strengths**: Good table/figure detection, handles diverse layouts, explicit document structure model, supports PDF/DOCX/PPTX/HTML/images/AsciiDoc
+- **Weaknesses**: Heavier install (PyTorch + IBM models), newer/less battle-tested, slower than Marker for pure PDF, complex output schema
 - **Windows**: Supported
-- **Verdict**: Best accuracy for complex academic layouts, but heavy. Good fallback for papers pymupdf4llm can't handle.
-
-### Docling (IBM)
-
-- **Approach**: ML-based document understanding
-- **Output**: Structured markdown/JSON
-- **Strengths**: Good table/figure detection, handles diverse layouts
-- **Weaknesses**: Heavier install, newer/less battle-tested, IBM ecosystem
-- **Windows**: Supported
-- **Verdict**: Strong alternative to Marker with similar tradeoffs.
+- **Install**: `uv add docling`
+- **Python API**:
+  ```python
+  from docling.document_converter import DocumentConverter
+  converter = DocumentConverter()
+  result = converter.convert("paper.pdf")
+  markdown_text = result.document.export_to_markdown()
+  ```
+- **When to use**: After Marker, if we need structured JSON output with explicit table/figure annotations (useful for FigureRef extraction).
+- **Verdict**: Strong alternative to Marker with richer structured output. Test after Marker evaluation.
 
 ### GROBID
 
@@ -257,15 +276,15 @@ pyarrow                        # Parquet support + efficient schema reading
 
 ## Recommendation
 
-**Hybrid approach** — use multiple parsers based on document complexity:
+**Tiered fallback** — pymupdf4llm first, escalate on quality issues:
 
-1. **Default**: pymupdf4llm (fast, handles 80% of papers well)
-2. **Multi-column/tables**: LiteParse spatial output (let LLM interpret layout)
-3. **Complex layouts**: Marker (ML-based, highest accuracy, slower)
-4. **Metadata enrichment**: CrossRef/Semantic Scholar API for clean title/authors/DOI
+1. **Default**: pymupdf4llm — fast (2.2s/paper parallel), handles 80% of papers, currently implemented
+2. **Fallback 1**: Marker — for papers with garbled tables or interleaved columns. Auto-detect candidates by parsing quality score.
+3. **Fallback 2**: Docling — if Marker fails or structured JSON output is needed for figure/table annotations
+4. **Spatial fallback**: LiteParse — for multi-column layouts where spatial positioning is more informative than structured markdown
+5. **Metadata enrichment**: CrossRef/Semantic Scholar API for clean title/authors/DOI (complements any parser)
 
-The parser could be selectable per-document or auto-detected based on layout complexity
-(e.g., detect multi-column via page width analysis).
+Parser is selectable per-document via CLI flag (`--parser pymupdf|marker|docling|liteparse`) or auto-detected based on quality heuristics (e.g., column count, garble ratio).
 
 ## Testing Plan
 
@@ -285,3 +304,4 @@ Compare: text completeness, structure preservation, table accuracy, processing t
 - [LiteParse blog post](https://www.llamaindex.ai/blog/liteparse-local-document-parsing-for-ai-agents)
 - [LiteParse on PyPI](https://libraries.io/pypi/liteparse) — v1.2.1, released 2026-03-28
 - [MarkTechPost coverage](https://www.marktechpost.com/2026/03/19/llamaindex-releases-liteparse-a-cli-and-typescript-native-library-for-spatial-pdf-parsing-in-ai-agent-workflows/)
+

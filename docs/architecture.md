@@ -2,173 +2,193 @@
 
 ## What is ScholarForge?
 
-A Python app to help researchers write papers, slides, abstracts, and grant proposals.
-It manages a personal knowledge base built from ingested PDFs, slides, and docs into a
-curated knowledge graph backed by an Obsidian vault, optimized for both human browsing
-and LLM consumption.
+A local-first Python pipeline that turns a folder of academic PDFs into a living
+Obsidian knowledge graph, then uses that graph to write papers, lit reviews, and
+grant proposals.
 
-## Key Requirements
+**Core philosophy**: Obsidian IS the app. ScholarForge is the engine that feeds it.
+We don't build UI, visualization, chat, or vector search — the Obsidian plugin
+ecosystem handles all of that. We focus on what plugins can't do: high-quality
+ingestion, structured linking, and LLM-powered generation with export to Word/LaTeX.
 
-- **Knowledge graph**: Ingest PDFs, slides, docs → Obsidian vault of interlinked markdown notes
-- **Figure handling**: Extract figures, annotate with metadata (avoid re-ingestion), support reuse/combination
-- **Output formats**: Word (.docx) and LaTeX
-- **Reference management**: Zotero integration (pyzotero) + Obsidian Zotero bridge
-- **Data visualization**: Python-powered (matplotlib/plotly)
-- **Optional**: Google Drive ingestion
-- **Local-first**: Heavy lifting (PDF parsing, ingestion, embedding) done locally
-- **Staged creation**: First TOC/structure, then sections/figures — unless user asks otherwise
+## Design Principles
 
-## Current Iteration Target
+1. **Vault-first**: The Obsidian vault is the single source of truth. SQLite is a
+   supporting index, not a parallel database. Everything meaningful lives as markdown.
+2. **Plugin-over-code**: If an Obsidian plugin already does it well, don't build it.
+   Neural Composer does GraphRAG. Smart Connections does vector chat. Dataview does queries.
+3. **JIT over batch**: Don't pre-compute what you can resolve at query time. Index
+   cheaply (metadata + chunks), build the deep graph lazily. The user drops 200 PDFs
+   and starts writing in 8 minutes — not 6 hours.
+4. **LLM reads as little as possible**: The system narrows 200 papers down to the
+   5-10 that matter before the LLM sees any full text. Metadata → abstract → chunks → full read.
+5. **Local-first**: All parsing, embedding, and heavy lifting done locally. LLM calls
+   are the only optional network dependency (and can use Ollama for full offline).
 
-Literature review of 200 papers (user will provide them). Backend first, frontend later.
+## What ScholarForge Builds (Our Unique Value)
+
+| We build | Why plugins can't |
+|---|---|
+| **Ingestion pipeline** (PDF → structured markdown with frontmatter) | Plugins parse PDFs but don't extract academic metadata, section structure, or typed links |
+| **Ghost Graph** (frontmatter-driven Obsidian graph with zero graph DB) | We write typed frontmatter → Obsidian renders the graph for free |
+| **JIT context assembly** (narrow 200 papers to 5-10 relevant ones fast) | No plugin does progressive academic narrowing with token budgets |
+| **Generation pipeline** (planner → writer with token budgets) | No plugin writes structured academic output |
+| **Export** (DOCX/LaTeX with citation formatting) | No plugin does academic export |
+
+## What Obsidian Plugins Handle (Don't Build)
+
+| Capability | Plugin | Notes |
+|---|---|---|
+| Vector search + semantic chat | **Smart Connections** | Embeds vault locally, chat sidebar with citations |
+| Knowledge graph + entity extraction | **Neural Composer** | LightRAG integration, auto-extracts entities, 3D graph viz |
+| Structured queries | **Dataview** | SQL-like queries on frontmatter properties |
+| Graph visualization | **Obsidian Graph View** + Neural Composer | Native, color-coded by tags |
+| Zotero sync | **Zotero Integration** | Annotations, metadata, cite keys |
+| PDF conversion (fallback) | **Marker** plugin (`L3-N0X/obsidian-marker`) | In-Obsidian PDF→MD via Marker API |
+| AI agent access | **MCP servers** (multiple) | Claude/Copilot can read/write vault via MCP |
+| Link styling | **Supercharged Links** | Color-code links by note type |
 
 ## Tech Stack
 
-- **Language**: Python 3.10+
+- **Language**: Python 3.12+
 - **Package manager**: UV (with hatchling build backend)
-- **Project layout**: `src/scholarforge/` (src layout, created by `uv init --lib`)
-- **Knowledge graph**: Obsidian vault (markdown files + wikilinks)
-- **Graph algorithms**: Via MCP tooling or networkx on parsed vault
-- **Location**: `C:\dev\scholarforge\`
+- **Project layout**: `src/scholarforge/` (src layout)
+- **Primary store**: Obsidian vault (`data/vault/`) — markdown + wikilinks
+- **Supporting index**: SQLite (via SQLModel) — programmatic queries, chunk storage
+- **PDF parsing**: pymupdf4llm (default), Marker (fallback for hard PDFs)
+- **LLM**: litellm (any provider) or Ollama (local)
+- **CLI**: Typer + Rich
 
-## Pipeline Overview
+## The Two-Phase Engine
 
-```
-PDF/DOCX/PPTX → [parse] → [extract] → [store + vault] → [link] → [generate] → [export]
-```
+### Phase 1 — Cold Start: "8-Minute Ingestion" (No LLM)
 
-### Stage 1 — Parse: Document → Markdown
-
-Convert source documents to clean markdown. See `docs/parser-evaluation.md` for
-detailed comparison of parsing options.
-
-**Current implementation**: pymupdf4llm (fast, local, good 80% solution)
-**Under evaluation**: LiteParse (spatial layout preservation, TypeScript-native with Python wrapper)
-
-### Stage 2 — Extract: Markdown → Structured Data
-
-- **Chunking**: Section-aware semantic chunking (600 target / 800 max tokens)
-- **Metadata**: Title, authors, abstract, year, DOI (regex + PDF fields, CrossRef enrichment planned)
-- **Figures**: Content-addressed extraction via pymupdf (SHA256 dedup)
-- **Citations**: Regex detection of `[Author YYYY]` and `[1]` styles
-- **Equations**: LaTeX delimiter detection
-
-### Stage 3 — Store + Vault: Structured Data → SQLite + Obsidian
-
-Two parallel persistence layers:
-
-1. **SQLite** (via SQLModel) — structured queryable data for programmatic access
-2. **Obsidian vault** — human-readable/editable markdown notes forming the knowledge graph
-
-The vault IS the graph. Every `[[wikilink]]` is an edge. Every `.md` file is a node.
-
-### Stage 4 — Link: Incremental Graph Maintenance
-
-When a new paper is added, detect and create links to existing notes:
-- Shared references/citations → `[[cites::Paper X]]`
-- Shared authors → `[[author::Author Name]]`
-- Topic/keyword overlap → `[[hasTopic::Topic]]`
-- Shared methodology → `[[uses_method::Method]]`
-- Embedding similarity → suggest related papers
-
-### Stage 5 — Generate: Knowledge Graph + Context → LLM → Text
-
-- Two-stage: Planner (TOC) → Writer (sections)
-- Token budget: 40% source, 20% figures, 10% structure, 30% output
-- Context assembly from vault notes + SQLite chunks
-- **Style-aware**: User-provided templates guide tone, structure, and formatting
-- **Reference-aware**: User can point to specific documents as guides for a particular output
-
-### Stage 6 — Export: Generated Content → Word/LaTeX
-
-- python-docx for .docx output
-- Jinja2 templates for LaTeX
-- BibTeX/CSL citation formatting
-- Apply formatting from user's style templates (fonts, heading styles, margins)
-
-## User Templates & Reference Documents
-
-Users can provide two types of guiding documents:
-
-### Style Templates
-
-Example documents that capture the user's writing style, structure preferences, and
-formatting. Used during generation to match tone and during export to match formatting.
+User drops 200 PDFs. ScholarForge runs fully locally, no API calls:
 
 ```
-templates/
-├── styles/                  # User-provided style examples
-│   ├── my_paper.docx        # "Write like this paper"
-│   ├── my_grant.docx        # "Match this grant proposal style"
-│   └── my_slides.pptx       # "Follow this slide layout"
-└── structures/              # Structural templates (TOC skeletons)
-    ├── lit_review.md         # Section ordering + relative lengths
-    └── grant_proposal.md     # Required sections + guidelines
+PDF → pymupdf4llm → markdown → metadata (regex) → chunks → SQLite + vault notes → link
 ```
 
-**How they're used**:
-- **During planning** (Stage 5): Structure templates define the TOC skeleton — the planner
-  fills in section details, but the high-level structure comes from the template
-- **During writing** (Stage 5): Style examples are chunked and embedded. The writer prompt
-  includes representative chunks as few-shot style examples
-- **During export** (Stage 6): DOCX/PPTX templates define formatting (fonts, margins,
-  heading styles). `python-docx` can clone styles from a reference document.
+| Step | Tool | Speed | LLM? |
+|---|---|---|---|
+| Parse PDF → markdown | pymupdf4llm | ~2.2s/paper (parallel) | No |
+| Extract metadata | Regex + PDF fields + filename | <5ms/paper | No |
+| Chunk text | Section-aware splitter | <40ms/paper | No |
+| Write vault note | File I/O | <5ms/paper | No |
+| Detect topics/methods | Keyword matching | <1ms/paper | No |
+| Write author/topic/method notes | File I/O | <5ms/paper | No |
+| **Embed abstracts** | **ChromaDB + all-MiniLM-L6-v2** | **~0.1s/paper** | **No** |
+| **Build k-NN similarity graph** | **Cosine similarity on embeddings** | **<1s total** | **No** |
+| **Total for 200 papers** | | **~9 minutes (parallel)** | **No** |
 
-### Reference Documents
+**What you get after 9 minutes:**
+- 200 paper notes with typed frontmatter (title, authors, year, DOI, topics, methods)
+- Author notes with paper backlinks
+- Topic and method notes with paper backlinks
+- **Abstract embeddings in ChromaDB** — instant semantic search over all papers
+- **k-NN similarity edges** — each paper linked to its 5 most similar papers via embeddings
+- Obsidian graph view showing the full citation/topic/method/similarity network
+- Dataview queries working on all frontmatter
+- Smart Connections indexing the vault in the background (full note embeddings)
+- Neural Composer auto-extracting entities
 
-Specific documents the user points to as context for a particular output. Unlike
-literature (which is ingested into the knowledge graph), references are task-specific.
+**What you DON'T do at ingestion:**
+- No LLM calls (no summaries, no entity extraction via LLM)
+- No binary figure extraction (captions only)
+- No deep graph construction (no triples, no contradiction detection)
+- Embeddings are local (all-MiniLM-L6-v2 runs on CPU, ~80ms per abstract)
+
+### Phase 2 — Query Time: "JIT Retrieval" (LLM Only When Needed)
+
+When the user asks "Write a lit review section on HfO2-based memristors for
+neuromorphic computing," the system doesn't read 200 papers. It narrows progressively:
 
 ```
-CLI usage:
-  scholarforge generate lit-review \
-    --style-template templates/styles/my_paper.docx \
-    --structure-template templates/structures/lit_review.md \
-    --reference "Lab Style Guide.pdf" \
-    --reference "Funding Agency Requirements.pdf"
+Step 1: Semantic + structured   → 200 papers → ~0.1s   → 30 candidates
+Step 2: Abstract rerank         → 30 papers  → ~8K tok  → 15 relevant
+Step 3: Chunk retrieval         → 15 papers  → ~30K tok → best evidence
+Step 4: LLM generates section   → ~30K context → ~3K output
 ```
 
-**Reference documents are**:
-- Ingested on-demand (not stored permanently in the vault)
-- Chunked and included in the generation context alongside source chunks
-- Not linked into the knowledge graph (they're task-specific, not part of the literature)
-- Can be literature papers too: "write section 3 in the style of [[papers/Smith 2024]]"
+**The narrowing funnel:**
 
-### Style Template Vault Notes
+| Stage | Input | Method | Output | Speed | LLM? |
+|---|---|---|---|---|---|
+| **Semantic search** | 200 papers | ChromaDB vector search on abstract embeddings | Top 30 by similarity | <0.1s | No |
+| **Structured filter** | 30 candidates | SQLite WHERE on topics/methods/year | Intersect with frontmatter | <0.01s | No |
+| **Abstract rerank** | 30 abstracts | LLM scores relevance 0-10 (cheap model) | 15 relevant | ~2s | Yes (cheap) |
+| **Chunk retrieval** | 15 papers | Section-aware chunks from SQLite | Top chunks per paper | <0.1s | No |
+| **Generate** | ~30K tokens | LLM writes section with citations | Draft text | ~10s | Yes (capable) |
 
-Style templates get their own vault notes for discoverability:
+**Why this is fast:**
+- Step 1 is instant — ChromaDB k-NN on 200 abstract embeddings is sub-100ms
+- Step 2 is instant — SQLite frontmatter filtering (topics, methods, year range)
+- Step 3 uses a cheap/small model (Haiku, or Llama 3 8B via Ollama) — just scoring
+- Step 4 is a SQLite query — section_path filtering, no vector search needed
+- Step 5 is the only expensive LLM call, and it sees ~30K tokens not 200K
 
-```markdown
----
-title: "My Paper Writing Style"
-source_type: template
-format: docx
-file_path: "templates/styles/my_paper.docx"
-tags:
-  - template/style
-  - template/paper
-output_types:
-  - lit_review
-  - research_paper
----
+**Alternative: zero-LLM narrowing** — for maximum speed, skip step 3 entirely and
+go straight from vector+structured filtering to chunk retrieval. The embedding
+similarity from ChromaDB is often good enough as a "first guess."
 
-## Style Characteristics
+## The Ghost Graph
 
-- Formal academic tone
-- Active voice preferred
-- Short paragraphs (3-5 sentences)
-- Frequent use of transition phrases
-- APA citation style
+The "Ghost Graph" is our term for the Obsidian-native knowledge graph that requires
+**zero graph database infrastructure**. It's not a placeholder — it's a real,
+queryable, multi-dimensional graph that emerges from ingestion alone.
 
-## Structure Pattern
+### What the Ghost Graph contains after ingestion (no LLM)
 
-1. Introduction (with clear thesis statement)
-2. Background (chronological literature summary)
-3. Methods (detailed, reproducible)
-4. Results (figures first, then narrative)
-5. Discussion (compare to prior work)
-6. Conclusion (future directions)
+**Explicit edges** (from metadata extraction):
+
+| Edge Type | Source | Cost | Example |
+|---|---|---|---|
+| **authored_by** | PDF metadata + filename | Free (regex) | `papers/Kim 2024 → authors/Kim` |
+| **hasTopic** | Keyword matching on title + abstract + chunks | Free (string match) | `papers/Kim 2024 → topics/HfO2` |
+| **uses_method** | Keyword matching | Free (string match) | `papers/Kim 2024 → methods/ALD` |
+| **cites** | Bibliography regex (planned) | Free (regex) | `papers/Kim 2024 → papers/Gao 2014` |
+| **co-author** | Shared author nodes | Free (implicit) | `authors/Kim ← paper → authors/Park` |
+| **temporal** | Year field in frontmatter | Free (metadata) | Dataview: sort/filter by year |
+
+**Inferred edges** (from embeddings — the "first guess"):
+
+| Edge Type | Source | Cost | Example |
+|---|---|---|---|
+| **similar_to** | k-NN on abstract embeddings (top 5) | <1s for 200 papers | `papers/Kim 2024 ↔ papers/Park 2022` |
+| **bibliographic_coupling** | Shared references in bibliography (planned) | ~5s (string matching) | Papers that cite the same 3+ sources |
+
+The k-NN edges are the **embedding-first graph scaffold**. Papers that are semantically
+similar get linked even if they don't share explicit topic/method keywords. This catches
+relationships that keyword matching misses (e.g., papers about "resistive switching
+devices" and "memristive synapses" — same thing, different vocabulary).
+
+For 206 papers, this gives us: 464 author nodes, 20 topic nodes, 9 method nodes,
+~1000 k-NN similarity edges, and all cross-links. That's already a rich, multi-layered
+graph — Obsidian renders it instantly, and Dataview can query any combination:
+
 ```
+TABLE year, doi FROM #source/paper
+WHERE contains(hasTopic, [[topics/HfO2]])
+AND year >= 2022
+SORT year DESC
+```
+
+### What Neural Composer adds on top (automatic, in Obsidian)
+
+Neural Composer watches the vault and uses LightRAG to extract deeper relationships
+that keyword matching misses: specific material compositions, device architectures,
+performance metrics, etc. This enriches the Ghost Graph without any ScholarForge code.
+
+### What Smart Connections adds on top (automatic, in Obsidian)
+
+Smart Connections embeds every note and enables **embedding-based clustering** —
+papers that are semantically similar cluster together even without shared keywords.
+This provides a complementary discovery axis: "papers that talk about similar things"
+vs "papers that share explicit topic/method tags."
+
+**The Ghost Graph + Neural Composer + Smart Connections = a complete knowledge graph
+with typed relations, entity extraction, and semantic similarity — built from
+frontmatter, wikilinks, and plugin automation. No graph DB needed.**
 
 ## Module Layout
 
@@ -178,94 +198,88 @@ src/scholarforge/
 ├── cli.py                  # Typer CLI entry point
 ├── config.py               # pydantic-settings config
 │
-├── ingest/                 # Stage 1: Document ingestion
-│   ├── pdf.py              # pymupdf4llm (current) / LiteParse (evaluating)
+├── ingest/                 # Phase 1: Document ingestion (no LLM)
+│   ├── pdf.py              # pymupdf4llm (default) / Marker (fallback)
 │   ├── docx.py             # python-docx → markdown
-│   ├── slides.py           # python-pptx → markdown (slide-by-slide + speaker notes)
+│   ├── slides.py           # python-pptx → markdown
 │   ├── data.py             # CSV/Excel/Parquet → dataset cards (polars)
-│   ├── txt.py              # Plain text → direct read + chunk
-│   ├── gdrive.py           # Optional: Google Drive
 │   ├── zotero.py           # Zotero library sync
-│   └── registry.py         # file extension + source type → parser dispatcher
+│   └── registry.py         # extension → parser dispatcher + parallel orchestration
 │
-├── extract/                # Stage 2: Structured extraction
+├── extract/                # Phase 1: Structured extraction (no LLM)
 │   ├── chunker.py          # Section-aware semantic chunking
-│   ├── figures.py          # Figure/table extraction + content-hash dedup
-│   ├── references.py       # Citation extraction and linking
-│   ├── metadata.py         # Title, authors, abstract, DOI
-│   └── equations.py        # LaTeX equation extraction
+│   ├── metadata.py         # Title, authors, abstract, DOI, year
+│   ├── figures.py          # Caption-first figure reference extraction
+│   └── references.py       # Citation extraction
 │
-├── store/                  # Stage 3: Storage layer
-│   ├── models.py           # SQLModel/Pydantic data models
-│   ├── db.py               # SQLite via SQLModel
-│   ├── vectors.py          # ChromaDB embedded vector store
-│   ├── figures_store.py    # Content-addressed figure storage
-│   └── migrations.py       # Schema versioning
+├── store/                  # Supporting index
+│   ├── models.py           # SQLModel data models
+│   ├── db.py               # SQLite engine + session
+│   └── embeddings.py       # ChromaDB: abstract embeddings + k-NN similarity graph
 │
-├── vault/                  # Stage 3+4: Obsidian vault management
+├── vault/                  # Phase 1: Obsidian vault management (no LLM)
 │   ├── writer.py           # Generate/update vault markdown notes
-│   ├── linker.py           # Incremental link detection + creation
-│   ├── templates.py        # Note templates (paper, concept, author, method, topic)
-│   └── sync.py             # Vault ↔ SQLite consistency
+│   ├── linker.py           # Keyword-based topic/method detection + linking
+│   └── templates.py        # Note templates (paper, author, topic, method)
 │
-├── graph/                  # Graph algorithms on vault data
-│   ├── builder.py          # Build networkx graph from vault links
-│   ├── schema.py           # Node/edge type definitions
-│   ├── traverse.py         # Token-efficient traversal (4 strategies)
-│   ├── queries.py          # Pre-built graph query patterns
-│   └── serialize.py        # Graph → compact LLM-readable format
+├── retrieve/               # Phase 2: JIT retrieval (LLM at query time)
+│   ├── narrower.py         # Progressive narrowing: frontmatter → abstract → chunks
+│   ├── context.py          # Token budget allocator + compression
+│   └── claims.py           # On-demand claim extraction from selected papers
 │
-├── generate/               # Stage 5: Content generation
+├── generate/               # Phase 2: Content generation (LLM)
 │   ├── planner.py          # TOC/structure generation
 │   ├── writer.py           # Section-by-section generation
-│   ├── prompts/            # Jinja2 prompt templates
-│   ├── context.py          # Token budget allocator
-│   └── figures_gen.py      # matplotlib/plotly figure generation
+│   └── prompts/            # Jinja2 prompt templates
 │
-├── export/                 # Stage 6: Output formatting
+├── export/                 # Output formatting
 │   ├── docx_export.py      # python-docx output
 │   ├── latex_export.py     # LaTeX/Jinja2 templates
-│   ├── templates/          # .docx and .tex templates
 │   └── bibliography.py     # BibTeX / CSL citation formatting
 │
 └── llm/                    # LLM interface layer
     ├── client.py           # litellm unified client
-    ├── tokenizer.py        # Token counting
     └── cache.py            # diskcache response caching
 ```
 
-## Obsidian Vault Structure
+**Key change from traditional RAG pipelines:**
+- No `store/vectors.py` — Smart Connections handles vector search inside Obsidian
+- No `graph/` package — the Ghost Graph IS the vault; Neural Composer enriches it
+- New `retrieve/` package — the JIT narrowing engine that makes generation fast
+- `claims.py` moved from `extract/` to `retrieve/` — claims are extracted JIT for
+  selected papers only, not pre-computed for all 200
 
-The vault is the knowledge graph. ScholarForge generates and maintains it programmatically;
-the user can browse and edit it in Obsidian at any time.
+## Vault Structure
 
-### Source Categories
-
-The vault distinguishes four source categories with different ingestion paths:
-
-| Category | Formats | Vault Path | Graph Role | Mutable? |
-|---|---|---|---|---|
-| **Literature** | PDF, DOCX, PPTX | `vault/papers/` | Source nodes — citable references | No (re-ingest = update) |
-| **User Documents** | DOCX, PPTX, TXT | `vault/docs/` | Working nodes — link to literature + data | Yes (track changes) |
-| **Data Files** | CSV, XLSX, Parquet, TSV | `vault/data/` | Evidence nodes — support findings | Yes (dataset cards) |
-| **Presentations** | PPTX | `vault/papers/` or `vault/docs/` | Depends on `--source-type` flag | Depends |
+```
+data/vault/                     # Obsidian vault (gitignored, under data/)
+├── papers/                     # One note per ingested paper
+├── authors/                    # One note per author (auto-created)
+├── topics/                     # Detected topics (keyword + Neural Composer)
+├── methods/                    # Detected methods
+├── concepts/                   # Field-specific concepts (Neural Composer)
+├── findings/                   # Atomic claims (JIT, per-query)
+├── datasets/                   # Conceptual datasets (WMT 2014, MNIST, etc.)
+├── data/                       # Dataset cards for user's data files
+├── docs/                       # User documents (drafts, reports)
+└── templates/                  # User-provided style + structure templates
+    ├── styles/                 # Example documents for tone/formatting
+    └── structures/             # TOC skeletons for different output types
+```
 
 ### Note Types
 
-| Type | Tag | Color | Example |
+| Type | Tag | Graph Color | Example |
 |---|---|---|---|
 | Paper | `#source/paper` | blue | `papers/Vaswani 2017 - Attention Is All You Need.md` |
-| User Doc | `#source/user` | cyan | `docs/Draft - Phase 2 Analysis.md` |
-| Dataset Card | `#source/data` | yellow-green | `data/Experiment Results - Phase 2.md` |
-| Topic | `#topic` | orange | `topics/Transformer Architecture.md` |
-| Concept | `#concept` | green | `concepts/Self-Attention.md` |
-| Method | `#method` | purple | `methods/Multi-Head Attention.md` |
 | Author | `#author` | gray | `authors/Ashish Vaswani.md` |
-| Dataset | `#dataset` | yellow | `datasets/WMT 2014.md` |
+| Topic | `#topic` | orange | `topics/Transformer Architecture.md` |
+| Method | `#method` | purple | `methods/Multi-Head Attention.md` |
+| Concept | `#concept` | green | `concepts/Self-Attention.md` |
 | Finding | `#finding` | red | `findings/Attention outperforms recurrence.md` |
-
-**Note**: `#source/data` (dataset card — metadata about a specific file) is distinct from
-`#dataset` (a conceptual dataset like "MNIST" that multiple papers reference).
+| Dataset | `#dataset` | yellow | `datasets/WMT 2014.md` |
+| Dataset Card | `#source/data` | yellow-green | `data/Experiment Results.md` |
+| User Doc | `#source/user` | cyan | `docs/Draft - Phase 2 Analysis.md` |
 
 ### Paper Note Template
 
@@ -277,7 +291,6 @@ authors:
   - "[[authors/Noam Shazeer]]"
 year: 2017
 doi: "10.48550/arXiv.1706.03762"
-zotero_key: "vaswani2017"
 tags:
   - source/paper
 hasTopic:
@@ -287,142 +300,31 @@ uses_method:
   - "[[methods/Multi-Head Attention]]"
   - "[[methods/Positional Encoding]]"
 cites:
-  - "[[papers/Bahdanau 2014 - Neural Machine Translation by Jointly Learning to Align and Translate]]"
-  - "[[papers/Luong 2015 - Effective Approaches to Attention-based NMT]]"
+  - "[[papers/Bahdanau 2014 - Neural Machine Translation]]"
 file_hash: "abc123..."
 ingested_at: 2026-03-28
 ---
 
-## Summary
+## Abstract
 
 Introduces the Transformer architecture, replacing recurrence entirely with
 multi-head self-attention. Achieves SOTA on WMT 2014 EN-DE and EN-FR translation.
 
-## Key Contributions
+## Figure Mentions
 
-- [[concepts/Self-Attention]] mechanism as sole building block
-- [[methods/Multi-Head Attention]] for parallel attention across subspaces
-- [[methods/Positional Encoding]] to inject sequence order without recurrence
+- **Fig. 1** (p.2): "The Transformer - model architecture" — §Architecture
+- **Fig. 2** (p.4): "Scaled dot-product attention" — §Attention
 
-## Methodology
+## Statistics
 
-- [[datasets/WMT 2014]] English-German (4.5M pairs) and English-French (36M pairs)
-- Base model: 6 layers, 512 dims, 8 heads
-- Training: 8 P100 GPUs, 3.5 days (base), 12 hours (big)
-
-## Findings
-
-- [[findings/Attention outperforms recurrence]]: BLEU 28.4 vs 26.4 on EN-DE
-- Training cost: 1/4 of previous SOTA
-
-## Figures
-
-![[figures/ab/cd/abcdef...png|Transformer architecture diagram]]
-
-## Raw Chunks
-
-Stored in SQLite — see chunks table with paper_id matching this note's file_hash.
+- **Chunks**: 24
+- **Figures referenced**: 5
 ```
 
-### Dataset Card Template
-
-```markdown
----
-title: "Experiment Results - Phase 2"
-source_type: data
-format: csv
-file_path: "data/raw/experiment_phase2.csv"
-rows: 15420
-columns: ["sample_id", "treatment", "response", "p_value", "effect_size"]
-tags:
-  - source/data
-hasTopic:
-  - "[[topics/Drug Response]]"
-linked_papers:
-  - "[[papers/Smith 2024 - Phase 2 Trial Results]]"
-linked_docs:
-  - "[[docs/Draft - Phase 2 Analysis Report]]"
-ingested_at: 2026-03-28
----
-
-## Schema
-
-| Column | Type | Description | Range |
-|---|---|---|---|
-| sample_id | int | Unique sample ID | 1-15420 |
-| treatment | str | Treatment group | control, low, high |
-| response | float | Primary endpoint | 0.1 - 98.7 |
-
-## Summary Statistics
-
-- **Rows**: 15,420 | **Columns**: 5
-- **Null rate**: 2.3% (response column)
-- **Groups**: control (5140), low (5140), high (5140)
-
-## Preview
-
-| sample_id | treatment | response | p_value |
-|---|---|---|---|
-| 1 | control | 45.2 | 0.03 |
-| 2 | low | 52.1 | 0.01 |
-| ... | ... | ... | ... |
-
-## Notes
-
-Supports [[findings/Treatment X improves response by 15%]].
-```
-
-### User Document Template
-
-```markdown
----
-title: "Draft - Phase 2 Analysis Report"
-source_type: user
-format: docx
-file_path: "user_docs/phase2_report.docx"
-tags:
-  - source/user
-hasTopic:
-  - "[[topics/Drug Response]]"
-references:
-  - "[[papers/Smith 2024 - Phase 2 Trial Results]]"
-  - "[[papers/Jones 2023 - Phase 1 Safety Data]]"
-uses_data:
-  - "[[data/Experiment Results - Phase 2]]"
-updated_at: 2026-03-28
----
-
-## Summary
-
-User's draft analysis report for Phase 2 clinical trial results.
-
-## Sections
-
-1. Introduction
-2. Methods
-3. Results
-4. Discussion
-```
-
-### Vault Directory Structure
-
-```
-vault/
-├── papers/                 # Literature — one note per ingested paper
-├── docs/                   # User documents — drafts, reports, memos
-├── data/                   # Dataset cards — metadata about data files
-├── topics/                 # High-level subject areas
-├── concepts/               # Field-specific concepts
-├── methods/                # Research methods and techniques
-├── authors/                # Researcher pages
-├── datasets/               # Conceptual datasets (e.g., "MNIST", "WMT 2014")
-├── findings/               # Key results and claims
-├── figures/                # Content-addressed images (symlinked from data/figures/)
-└── templates/              # User-provided style + structure templates
-    ├── styles/             # Example documents capturing user's writing style
-    ├── structures/         # TOC skeletons for different output types
-    └── notes/              # Obsidian note templates (for manual use)
-```
+Note what's NOT pre-computed in the paper note:
+- No summary (generated JIT when this paper is selected for a query)
+- No claims/findings (extracted JIT when this paper is relevant)
+- No embeddings (Smart Connections handles this in Obsidian)
 
 ### Linking Strategy
 
@@ -432,118 +334,137 @@ Links are typed via frontmatter properties and inline wikilinks:
 - **uses_method**: `[[methods/X]]` — methodological connections
 - **cites**: `[[papers/X]]` — citation network
 - **authors**: `[[authors/X]]` — collaboration network
-- **supports / contradicts**: Inline links between findings
+- **supports / contradicts**: Added JIT when claims are extracted
 
-### Incremental Graph Updates
+Obsidian backlinks provide the reverse index automatically.
 
-When paper N+1 is added to a vault of N papers:
+## Information Compression Layers
 
-1. **Extract metadata** → create/reuse author, method, dataset, topic notes
-2. **Match citations** → resolve `cites` links to existing paper notes
-3. **Detect topics** → compare extracted keywords to existing `topics/` notes
-4. **Embedding similarity** → find top-K similar papers via ChromaDB, suggest `related` links
-5. **Update backlinks** — Obsidian handles this automatically via `[[wikilinks]]`
+Each layer is progressively cheaper to access. The retrieval engine walks down
+the layers only as far as needed.
 
-### Obsidian Plugins (Recommended for User)
+| Layer | Content | Tokens (200 papers) | Access method | When accessed |
+|---|---|---|---|---|
+| **L0 — Frontmatter** | Title, authors, year, DOI, topics, methods | ~2K | SQLite / Dataview | Always — structured filtering |
+| **L0.5 — Embeddings** | Abstract vectors (200 × 384 dims) | 0 tokens (vector math) | ChromaDB k-NN | Always — semantic similarity, <0.1s |
+| **L1 — Abstracts** | Abstract text from paper notes | ~40K (200 × 200 tokens) | SQLite | Candidate reranking |
+| **L2 — Chunks** | Section-aware semantic chunks | ~120K total, top-K selected | SQLite | Evidence gathering |
+| **L3 — Claims** | 3-5 atomic findings per paper (JIT) | ~15K for selected papers | LLM extraction | Argumentation |
+| **L4 — Full text** | Complete markdown | ~600K | File read | Rarely — deep analysis only |
 
-- **Dataview** — query across paper notes (e.g., "all papers using method X published after 2020")
-- **Zotero Integration** — sync annotations and metadata from Zotero
-- **Supercharged Links** — color-code links by note type
-- **Graph Analysis** — enhanced graph view with clustering
+**The LLM never sees L4.** It works with L0-L3. L0.5 (embeddings) costs zero tokens
+and provides the "first guess" for semantic similarity. For a typical lit review
+section, the LLM context is ~30K tokens (L0 for all + L1 for candidates + L2+L3
+for selected).
 
-### Claude ↔ Obsidian via MCP
+## Obsidian as the User Interface
 
-Available MCP servers for Claude to interact with the vault:
+The vault is the primary UI. The user opens Obsidian and sees their knowledge graph.
 
-- **mcp-obsidian** (`MarkusPfundstein/mcp-obsidian`) — read/search/create/modify notes via Obsidian REST API
-- **obsidian-claude-code-mcp** (`iansinnott/obsidian-claude-code-mcp`) — direct vault access for Claude Code
-- **Knowledge Graph Tools** (`blog.fsck.com`) — parses vault into graph with SQLite + vector embeddings, exposes 10 MCP tools (semantic search, n-hop traversal, community detection, PageRank, path finding)
+- **Graph view**: The Ghost Graph — paper↔topic↔method↔author connections from frontmatter.
+- **Backlinks panel**: Click any topic/method/author → see all papers that reference it.
+- **Dataview tables**: `TABLE year, doi FROM #source/paper WHERE uses_method = [[methods/ALD]]`
+- **Canvas**: Drag notes to visually plan a lit review structure before generation.
+- **Smart Connections sidebar**: Ask questions, get answers with links to source notes.
+- **Neural Composer**: Deeper entity extraction + 3D knowledge graph + LightRAG retrieval.
 
-## Core Data Models (SQLite)
+### MCP: AI Agents ↔ Obsidian
 
-SQLite remains the structured storage layer alongside the vault:
+MCP servers allow Claude Code and other AI agents to interact with the vault:
 
-- **Paper**: id (SHA256 of file), title, authors, abstract, year, doi, zotero_key, source_path, file_hash, ingested_at, section_tree (JSON)
+- **mcp-obsidian** (`MarkusPfundstein/mcp-obsidian`) — CRUD via Obsidian REST API
+- **obsidian-mcp-server** (`cyanheads/obsidian-mcp-server`) — comprehensive read/write/search
+- **obsidian-mcp-tools** (`jacksteamdev/obsidian-mcp-tools`) — semantic search integration
+
+This means Claude Code can search the vault, read paper notes, and draft sections
+directly — turning the vault into an AI-accessible research workspace.
+
+## SQLite Schema (Supporting Index)
+
+SQLite stores data for fast programmatic queries during JIT retrieval.
+It is NOT the primary store — the vault is.
+
+- **Paper**: id (SHA256), title, authors (JSON), abstract, year, doi, source_path, file_hash, ingested_at, section_tree (JSON)
 - **Chunk**: id (UUID), paper_id (FK), section_path, content, token_count, chunk_index, has_citations, has_equations
-- **Figure**: id (content-hash), paper_id (FK), caption, figure_number, section_path, image_path, width_px, height_px, format, tags (JSON), extracted_data, reuse_count
-- **Citation**: id, paper_id, cited_paper_id (FK nullable), raw_text, bibtex, csl_json, context_chunk_id
+- **FigureRef**: id (UUID), paper_id (FK), figure_key, caption, section_path, page_number, anchor_text
+- **Citation**: id, paper_id, cited_paper_id (FK nullable), raw_text, bibtex, context_chunk_id
 
-## Token-Efficient Graph Traversal Strategies
+## Figure Handling: Caption-First
 
-These operate on the graph derived from vault links:
+- Extract figure *references* from markdown text (caption, figure key, section, page)
+- Store as `FigureRef` in SQLite + `## Figure Mentions` section in paper notes
+- No binary image extraction — captions are sufficient for writing
+- On-demand binary extraction via pymupdf when user needs figure reuse/composition
 
-1. **Map-then-Dive**: All paper nodes as 1-line summaries (~4K tokens for 200 papers), LLM picks which to expand
-2. **Cluster Walkthrough**: Louvain community detection → cluster summaries, expand one cluster at a time
-3. **Query-Guided Subgraph**: Embed query → top-K nearest chunks → extract 2-hop subgraph
-4. **Progressive Summary Pyramid**: 3-level hierarchy (chunks → sections → papers → clusters)
-
-### Compact Serialization Format (for LLM consumption)
-
-```
-[P:abc123] "Attention Is All You Need" (Vaswani 2017) score=0.95
-  [S:3] Methods: Multi-head attention mechanism with scaled dot-product
-  -> cites [P:def456] "Neural Machine Translation"
-  -> uses_method [M:transformer]
-```
-
-## Figure Handling
-
-- Extract with pymupdf, link captions via spatial proximity
-- Content-hash (SHA256) for dedup — same figure extracted twice is stored once
-- Store at `data/figures/{hash[:2]}/{hash[2:4]}/{hash}.{ext}`
-- Symlink or copy into vault `figures/` for Obsidian display
-- Auto-tag from caption + surrounding text
-- Composite figures: `CompositeRequest` model specifies layout + figure IDs, matplotlib renders
-
-## Key Architectural Decisions
+## Key Decisions
 
 | Decision | Rationale |
 |---|---|
-| Obsidian vault as knowledge graph | Human-readable/editable, graph = wikilinks, user can browse + edit alongside programmatic access |
-| SQLite for structured data | Chunks, embeddings, and metadata need fast programmatic queries |
-| ChromaDB for vectors | Local embedded vector store, Windows-compatible |
-| pymupdf4llm for parsing (current) | Local, fast, good structure preservation for 80% case |
-| LiteParse (evaluating) | Spatial layout preservation, handles tables without structure detection, Python wrapper available |
-| litellm for LLM access | Abstracts over Claude/GPT/local models |
-| Content-addressed figures | Dedup across re-ingests and duplicate papers |
-| Typed wikilinks | `[[hasTopic::X]]` enables structured queries while remaining valid Obsidian markdown |
-| MCP for Claude ↔ Obsidian | Claude can read/search/modify vault notes directly via MCP servers |
+| Vault-first, not DB-first | The vault IS the product. SQLite is just a programmatic index. |
+| JIT over batch indexing | Don't pre-compute summaries/claims for 200 papers. Narrow first, compute for the 10-15 that matter. |
+| Ghost Graph (frontmatter + embeddings) | Typed frontmatter + k-NN similarity edges → Obsidian renders a rich graph. No graph DB needed. |
+| Abstract embeddings at ingestion | Embed abstracts (not all chunks) into ChromaDB. ~200 vectors, <1s k-NN, enables semantic narrowing. Smart Connections handles full-vault embeddings separately. |
+| Plugin-over-code | Smart Connections, Neural Composer, Dataview handle vector/graph/queries. |
+| No LLM at ingestion | Ingestion is pure local compute (pymupdf4llm + regex). LLM calls only at query time. |
+| Progressive narrowing | 200 → 40 → 15 → generate. The LLM never sees all 200 papers. |
+| Caption-first figures | Captions are what LLMs need for writing. Pixel extraction adds latency with no writing benefit. |
+| pymupdf4llm default | 2.2s/paper parallel. Marker as fallback for hard PDFs only. |
+| Parallel parse, sequential persist | ProcessPoolExecutor for CPU-bound parsing; SQLite writes serialized. |
+| litellm for LLM access | Abstracts over Claude/GPT/Ollama. No lock-in. |
 
 ## Data Directory Layout (gitignored)
 
 ```
 data/
-├── papers.db           # SQLite
-├── vectors/            # ChromaDB index
-├── figures/            # Content-addressed images
-└── cache/              # LLM response cache
-
-vault/                  # Obsidian vault (could be separate repo or synced)
-├── papers/
-├── topics/
-├── concepts/
-├── methods/
-├── authors/
-├── datasets/
-├── findings/
-└── figures/            # Symlinks to data/figures/
+├── papers/                 # Source PDFs (user drops files here)
+│   └── ald_references/     # Current test corpus: 206 memristor/ALD papers
+├── papers.db               # SQLite (supporting index)
+├── cache/                  # LLM response cache (diskcache)
+└── vault/                  # Obsidian vault (point Obsidian here)
+    ├── papers/
+    ├── authors/
+    ├── topics/
+    ├── methods/
+    ├── concepts/
+    ├── findings/
+    ├── datasets/
+    ├── data/
+    ├── docs/
+    └── templates/
 ```
 
-## Dependencies (Phase 1 — minimal)
+## Dependencies
 
 ```
-pymupdf, pymupdf4llm          # PDF parsing (current)
-liteparse                      # PDF parsing (evaluating — Python wrapper for TS core)
-sqlmodel                       # SQLite ORM
-chromadb                       # Embedded vector DB
-networkx, python-louvain       # Graph algorithms
-sentence-transformers          # Local embeddings
-litellm, tiktoken, diskcache   # LLM interface
-pyzotero, bibtexparser>=1.4    # References
-matplotlib, plotly             # Visualization
+# Parsing
+pymupdf, pymupdf4llm          # PDF → markdown (default parser)
 python-docx, python-pptx      # Office formats
-polars                         # Data file parsing (CSV, Excel, Parquet) — preferred over pandas
-pyarrow                        # Parquet support + efficient schema reading
-jinja2                         # Templating
+polars, pyarrow                # Data files (CSV, Excel, Parquet)
+
+# Storage
+sqlmodel                       # SQLite ORM (supporting index)
+chromadb                       # Abstract embeddings + k-NN similarity (lightweight, ~200 vectors)
+sentence-transformers          # Local embedding model (all-MiniLM-L6-v2, CPU-friendly)
+
+# LLM
+litellm, tiktoken, diskcache   # LLM interface + caching
+
+# References
+pyzotero, bibtexparser>=1.4    # Zotero integration
+
+# Export
+jinja2                         # LaTeX templating
+matplotlib, plotly             # Figure generation
+
+# CLI
 typer, pydantic-settings, rich # CLI + config
 ```
+
+**Not in our dependencies** (handled by Obsidian plugins or deferred):
+- `networkx` / `python-louvain` — Ghost Graph + Neural Composer handle graph
+- `spacy` / `gliner` — Neural Composer handles entity extraction (or we add later for JIT claims)
+
+**Note on ChromaDB scope**: We use ChromaDB ONLY for abstract embeddings (~200 vectors)
+and k-NN similarity graph construction. Full-vault vector search for chat/Q&A is
+handled by Smart Connections inside Obsidian. This keeps our ChromaDB usage minimal
+and fast — it's a similarity index, not a retrieval engine.

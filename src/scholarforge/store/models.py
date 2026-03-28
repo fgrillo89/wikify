@@ -9,7 +9,6 @@ from typing import Optional
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
 
-
 # ── SQLite models (via SQLModel) ──────────────────────────────────────────────
 
 
@@ -71,6 +70,17 @@ class Citation(SQLModel, table=True):
     context_chunk_id: Optional[str] = Field(default=None, foreign_key="chunk.id")
 
 
+class FigureRef(SQLModel, table=True):
+    """A figure reference extracted from paper text (caption-first, no binary)."""
+
+    id: str = Field(primary_key=True)
+    paper_id: str = Field(foreign_key="paper.id")
+    figure_key: str = ""  # e.g. "Fig. 1", "Figure 2a"
+    caption_text: str = ""
+    section_path: Optional[str] = None
+    page_number: Optional[int] = None
+
+
 # ── Knowledge Graph types ─────────────────────────────────────────────────────
 
 
@@ -96,6 +106,8 @@ class GraphEdgeType(str, Enum):
     CONTRADICTS = "contradicts"
     RELATED_TO = "related_to"
     AUTHORED_BY = "authored_by"
+    SIMILAR_TO = "similar_to"
+    BIBLIOGRAPHIC_COUPLING = "bibliographic_coupling"
 
 
 # ── Generation planning models (Pydantic, not persisted) ─────────────────────

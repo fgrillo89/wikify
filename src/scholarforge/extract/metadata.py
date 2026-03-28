@@ -19,20 +19,34 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
     """
     meta = doc.metadata or {}
 
-    # Title: prefer PDF metadata, fall back to first heading or filename
-    title = meta.get("title", "").strip()
-    if not title:
-        title = _first_heading(md_text) or filename.replace(".pdf", "")
+    # Parse structured info from filename pattern: [YYYY Author] Title.pdf
+    fn_year, fn_author, fn_title = _parse_filename(filename)
 
-    # Authors
+    # Title: try multiple sources, pick the best one
+    heading_title = _first_heading(md_text)
+    pdf_title = meta.get("title", "").strip()
+
+    # Priority: clean heading > clean PDF title > filename title > raw filename
+    if heading_title and not _is_garbled_title(heading_title):
+        title = heading_title
+    elif pdf_title and not _is_garbled_title(pdf_title):
+        title = pdf_title
+    elif fn_title:
+        title = fn_title
+    else:
+        title = filename.replace(".pdf", "")
+
+    # Authors: prefer PDF metadata, fall back to filename author
     authors_raw = meta.get("author", "")
     authors = _parse_authors(authors_raw) if authors_raw else []
+    if not authors and fn_author:
+        authors = [fn_author]
 
     # Abstract: look for "Abstract" section in markdown
     abstract = _extract_abstract(md_text)
 
-    # Year: from metadata date or filename
-    year = _extract_year(meta)
+    # Year: prefer filename year, then metadata date
+    year = fn_year or _extract_year(meta)
 
     # DOI: search in first page text
     doi = _extract_doi(md_text[:3000])
@@ -46,11 +60,59 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
     }
 
 
+def _parse_filename(filename: str) -> tuple[int | None, str | None, str | None]:
+    """Parse [YYYY Author] Title.pdf pattern. Returns (year, author, title)."""
+    # Match [YYYY Author(s)] Title
+    m = re.match(r"\[(\d{4})\s+([^\]]+)\]\s*(.+?)\.(?:pdf|docx|pptx)$", filename, re.IGNORECASE)
+    if m:
+        year = int(m.group(1))
+        author = m.group(2).strip()
+        title = m.group(3).strip()
+        return year, author, title
+
+    # Match [YYYY] Title
+    m = re.match(r"\[(\d{4})\]\s*(.+?)\.(?:pdf|docx|pptx)$", filename, re.IGNORECASE)
+    if m:
+        return int(m.group(1)), None, m.group(2).strip()
+
+    return None, None, None
+
+
+def _is_garbled_title(title: str) -> bool:
+    """Check if a title looks like a garbled internal PDF reference."""
+    # Patterns like "acs_nn_nn-2014-01824r 1..7" or "la6b01014 1..13"
+    if re.search(r"\d+\.\.\d+", title):
+        return True
+    # Short alphanumeric codes
+    if re.match(r"^[a-z0-9_\-]{3,20}$", title, re.IGNORECASE):
+        return True
+    if re.match(r"^untitled$", title, re.IGNORECASE):
+        return True
+    if len(title) < 5 and not any(c.isalpha() for c in title):
+        return True
+    # ACS/journal internal refs
+    if re.match(r"^[a-z]{2,4}[_\-]", title) and re.search(r"\d{4}", title):
+        return True
+    return False
+
+
+def _clean_markdown(text: str) -> str:
+    """Remove markdown formatting from text."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)  # bold
+    text = re.sub(r"\*(.+?)\*", r"\1", text)  # italic
+    text = re.sub(r"_(.+?)_", r"\1", text)  # underline-italic
+    text = re.sub(r"`(.+?)`", r"\1", text)  # inline code
+    return text.strip()
+
+
 def _first_heading(md_text: str) -> str | None:
     for line in md_text.split("\n"):
         stripped = line.strip()
         if stripped.startswith("# "):
-            return stripped.lstrip("# ").strip()
+            heading = stripped.lstrip("# ").strip()
+            heading = _clean_markdown(heading)
+            if heading:
+                return heading
     return None
 
 

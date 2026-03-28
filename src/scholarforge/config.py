@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     figures_dir: Path = Path("data/figures")
     cache_dir: Path = Path("data/cache")
     db_path: Path = Path("data/papers.db")
+    chromadb_dir: Path = Path("data/chromadb")
     graph_path: Path = Path("data/graph.graphml")
 
     # LLM
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         """Create data directories if they don't exist."""
-        for d in [self.data_dir, self.figures_dir, self.cache_dir]:
+        for d in [self.data_dir, self.figures_dir, self.cache_dir, self.chromadb_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
 

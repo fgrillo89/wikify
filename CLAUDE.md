@@ -6,7 +6,7 @@ lives in `docs/architecture.md` and `docs/project-status.md`.
 ## Agent Usage
 
 - **Always prefer sub-agents** for parallelizable work — launch independent tasks simultaneously
-- **Use cheaper models** (haiku/sonnet) for sub-agents when possible; restrict their context to only what they need
+- **Model triaging**: Use haiku for simple tasks (file searches, formatting, simple edits). Use sonnet for moderate tasks (code generation, research). Reserve opus for complex reasoning only.
 - Foreground agents only when results are needed before proceeding; background otherwise
 
 ## Python Tooling
@@ -38,3 +38,5 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 <!-- Add corrections below this line -->
 - **Data libraries**: Always use polars over pandas. User strongly prefers polars.
 - **Package installs**: Always use `uv add` (not `uv pip install`) to add dependencies. This keeps pyproject.toml in sync.
+- **Commit messages**: Never include absolute paths or personal PC paths in commit messages. Use relative paths or project-relative references only.
+- **Vault output location**: The Obsidian vault output goes under `data/vault/` (gitignored), NOT at project root. The vault Python *code* lives in `src/scholarforge/vault/` — don't confuse code with output.

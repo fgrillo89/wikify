@@ -5,7 +5,7 @@ from rich.console import Console
 
 app = typer.Typer(
     name="scholarforge",
-    help="Research writing assistant: ingest papers, build knowledge graphs, generate publications.",
+    help="Research writing assistant: ingest papers, build knowledge graphs, generate.",
 )
 console = Console()
 
@@ -13,8 +13,11 @@ console = Console()
 @app.command()
 def ingest(
     path: str = typer.Argument(..., help="Path to a PDF file or directory of PDFs"),
+    parallel: bool = typer.Option(False, "--parallel", "-p", help="Parse PDFs in parallel"),
+    workers: int = typer.Option(4, "--workers", "-w", help="Number of parallel workers"),
 ):
     """Ingest PDF(s) into the knowledge base."""
+    import time
     from pathlib import Path
 
     from scholarforge.ingest.registry import ingest_path
@@ -24,8 +27,35 @@ def ingest(
         console.print(f"[red]Path not found:[/red] {path}")
         raise typer.Exit(1)
 
-    count = ingest_path(p)
-    console.print(f"[green]Ingested {count} document(s)[/green]")
+    start = time.time()
+    count = ingest_path(p, parallel=parallel, max_workers=workers)
+    elapsed = time.time() - start
+    rate = f" ({elapsed / count:.1f}s/paper)" if count > 0 else ""
+    console.print(f"[green]Ingested {count} document(s) in {elapsed:.1f}s{rate}[/green]")
+
+
+@app.command()
+def link():
+    """Run linking on all ingested papers to create topic/method/author connections."""
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Chunk, Paper
+    from scholarforge.vault.linker import link_all_papers
+
+    with get_session() as session:
+        papers = session.exec(select(Paper)).all()
+        papers_with_text = []
+        for paper in papers:
+            chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
+            full_text = "\n\n".join(c.content for c in chunks)
+            papers_with_text.append((paper, full_text))
+
+    stats = link_all_papers(papers_with_text)
+    console.print(
+        f"[green]Linked {stats['papers_linked']} papers → "
+        f"{stats['topics']} topics, {stats['methods']} methods[/green]"
+    )
 
 
 @app.command()

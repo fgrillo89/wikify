@@ -1,7 +1,10 @@
 """PDF ingestion using pymupdf4llm."""
 
+from __future__ import annotations
+
 import hashlib
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import fitz
@@ -11,23 +14,26 @@ from rich.console import Console
 from scholarforge.extract.chunker import chunk_sections
 from scholarforge.extract.figures import extract_figures
 from scholarforge.extract.metadata import extract_metadata
-from scholarforge.store.db import get_session
-from scholarforge.store.models import Paper
+from scholarforge.store.models import Chunk, Figure, Paper
 
 console = Console()
 
 
-def ingest_pdf(path: Path) -> int:
-    """Ingest a single PDF into the knowledge base. Returns 1 on success, 0 on skip."""
+@dataclass
+class ParsedPaper:
+    """Result of parsing a PDF, before persistence."""
+
+    paper: Paper
+    chunks: list[Chunk] = field(default_factory=list)
+    figures: list[Figure] = field(default_factory=list)
+    md_text: str = ""
+    skipped: bool = False
+
+
+def parse_pdf(path: Path) -> ParsedPaper:
+    """Parse a PDF into structured data. Does NOT touch the database or vault."""
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
-
-    # Check if already ingested with same hash
-    with get_session() as session:
-        existing = session.get(Paper, file_hash)
-        if existing and existing.file_hash == file_hash:
-            console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
-            return 0
 
     # Extract structured markdown
     md_text = pymupdf4llm.to_markdown(str(path))
@@ -37,7 +43,7 @@ def ingest_pdf(path: Path) -> int:
     metadata = extract_metadata(doc, md_text, path.name)
     doc.close()
 
-    # Build section tree from markdown headings
+    # Build section tree
     section_tree = _parse_section_tree(md_text)
 
     # Create paper record
@@ -53,24 +59,51 @@ def ingest_pdf(path: Path) -> int:
         section_tree=json.dumps(section_tree),
     )
 
-    # Chunk the content
+    # Chunk
     chunks = chunk_sections(md_text, section_tree, paper.id)
 
-    # Extract figures
+    # Figures
     figures = extract_figures(str(path), paper.id)
 
-    # Persist
+    return ParsedPaper(paper=paper, chunks=chunks, figures=figures, md_text=md_text)
+
+
+def persist_parsed(parsed: ParsedPaper) -> None:
+    """Persist a parsed paper to SQLite and vault."""
+    from scholarforge.store.db import get_session
+    from scholarforge.vault.writer import write_paper_note
+
     with get_session() as session:
-        session.merge(paper)
-        for chunk in chunks:
+        session.merge(parsed.paper)
+        for chunk in parsed.chunks:
             session.merge(chunk)
-        for figure in figures:
+        for figure in parsed.figures:
             session.merge(figure)
         session.commit()
 
+    write_paper_note(parsed.paper, len(parsed.chunks), len(parsed.figures))
+
+
+def ingest_pdf(path: Path) -> int:
+    """Ingest a single PDF into the knowledge base. Returns 1 on success, 0 on skip."""
+    file_bytes = path.read_bytes()
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    # Check if already ingested with same hash
+    from scholarforge.store.db import get_session
+
+    with get_session() as session:
+        existing = session.get(Paper, file_hash)
+        if existing and existing.file_hash == file_hash:
+            console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
+            return 0
+
+    parsed = parse_pdf(path)
+    persist_parsed(parsed)
+
     console.print(
         f"[green]Ingested:[/green] {path.name} "
-        f"({len(chunks)} chunks, {len(figures)} figures)"
+        f"({len(parsed.chunks)} chunks, {len(parsed.figures)} figures)"
     )
     return 1
 
@@ -95,7 +128,6 @@ def _parse_section_tree(md_text: str) -> dict:
         heading = stripped[level:].strip()
         node = {"title": heading, "level": level, "children": []}
 
-        # Find parent: pop stack until we find a node with lower level
         while len(stack) > 1 and stack[-1].get("level", 0) >= level:
             stack.pop()
 

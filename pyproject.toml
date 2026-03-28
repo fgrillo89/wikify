@@ -17,12 +17,6 @@ dependencies = [
     # Data layer
     "sqlmodel>=0.0.22",
     "chromadb>=0.5",
-
-    # Knowledge graph
-    "networkx>=3.3",
-    "python-louvain>=0.16",
-
-    # Embeddings (local)
     "sentence-transformers>=3.0",
 
     # LLM interface
@@ -67,3 +61,8 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.8",
+]

@@ -2,11 +2,27 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:www.llamaindex.ai)",
-      "WebFetch(domain:libraries.io)",
-      "WebFetch(domain:blog.fsck.com)",
-      "WebFetch(domain:www.emilevankrieken.com)"
+      "WebFetch",
+      "Bash(uv:*)",
+      "Bash(git:*)",
+      "Bash(python:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(du:*)",
+      "Read(//tmp/**)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//c/dev/scholarforge/src/scholarforge/**)",
+      "Bash(done)",
+      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \":*)",
+      "Bash(tasklist)",
+      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport time\nfrom sqlmodel import select\nfrom scholarforge.store.db import get_session\nfrom scholarforge.store.models import Paper, Chunk\nfrom scholarforge.vault.linker import link_all_papers\n\nwith get_session\\(\\) as session:\n    papers = session.exec\\(select\\(Paper\\)\\).all\\(\\)\n    papers_with_text = []\n    for paper in papers:\n        chunks = session.exec\\(select\\(Chunk\\).where\\(Chunk.paper_id == paper.id\\)\\).all\\(\\)\n        full_text = '\\\\n\\\\n'.join\\(c.content for c in chunks\\)\n        papers_with_text.append\\(\\(paper, full_text\\)\\)\n\nt0 = time.time\\(\\)\nstats = link_all_papers\\(papers_with_text\\)\nprint\\(f'Linking: {stats} in {time.time\\(\\)-t0:.1f}s'\\)\n\" 2>&1)",
+      "Bash(C:/dev/scholarforge/.venv/Scripts/python.exe -c \"import chromadb; print\\(chromadb.__version__\\)\")",
+      "Bash(dir:*)",
+      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom sqlmodel import select\nfrom scholarforge.store.db import get_session\nfrom scholarforge.store.models import Paper, Chunk\nfrom scholarforge.vault.linker import link_all_papers\n\nwith get_session\\(\\) as session:\n    papers = session.exec\\(select\\(Paper\\)\\).all\\(\\)\n    papers_with_text = []\n    for paper in papers:\n        chunks = session.exec\\(select\\(Chunk\\).where\\(Chunk.paper_id == paper.id\\)\\).all\\(\\)\n        full_text = '\\\\n\\\\n'.join\\(c.content for c in chunks\\)\n        papers_with_text.append\\(\\(paper, full_text\\)\\)\n\nstats = link_all_papers\\(papers_with_text\\)\nprint\\(f'Linked: {stats}'\\)\n\nimport os\nfor d in ['topics', 'methods']:\n    p = f'data/vault/{d}'\n    if os.path.exists\\(p\\):\n        print\\(f'  {d}/: {len\\(os.listdir\\(p\\)\\)} notes'\\)\n\" 2>&1)",
+      "Bash(wc -l /c/dev/scholarforge/src/scholarforge/**/*.py)",
+      "Bash(grep \"\\\\.pdf$\")"
     ]
   }
 }

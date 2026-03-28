@@ -1,7 +1,5 @@
 """Shared test fixtures for ScholarForge."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
 
