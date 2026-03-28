@@ -76,12 +76,99 @@ When a new paper is added, detect and create links to existing notes:
 - Two-stage: Planner (TOC) → Writer (sections)
 - Token budget: 40% source, 20% figures, 10% structure, 30% output
 - Context assembly from vault notes + SQLite chunks
+- **Style-aware**: User-provided templates guide tone, structure, and formatting
+- **Reference-aware**: User can point to specific documents as guides for a particular output
 
 ### Stage 6 — Export: Generated Content → Word/LaTeX
 
 - python-docx for .docx output
 - Jinja2 templates for LaTeX
 - BibTeX/CSL citation formatting
+- Apply formatting from user's style templates (fonts, heading styles, margins)
+
+## User Templates & Reference Documents
+
+Users can provide two types of guiding documents:
+
+### Style Templates
+
+Example documents that capture the user's writing style, structure preferences, and
+formatting. Used during generation to match tone and during export to match formatting.
+
+```
+templates/
+├── styles/                  # User-provided style examples
+│   ├── my_paper.docx        # "Write like this paper"
+│   ├── my_grant.docx        # "Match this grant proposal style"
+│   └── my_slides.pptx       # "Follow this slide layout"
+└── structures/              # Structural templates (TOC skeletons)
+    ├── lit_review.md         # Section ordering + relative lengths
+    └── grant_proposal.md     # Required sections + guidelines
+```
+
+**How they're used**:
+- **During planning** (Stage 5): Structure templates define the TOC skeleton — the planner
+  fills in section details, but the high-level structure comes from the template
+- **During writing** (Stage 5): Style examples are chunked and embedded. The writer prompt
+  includes representative chunks as few-shot style examples
+- **During export** (Stage 6): DOCX/PPTX templates define formatting (fonts, margins,
+  heading styles). `python-docx` can clone styles from a reference document.
+
+### Reference Documents
+
+Specific documents the user points to as context for a particular output. Unlike
+literature (which is ingested into the knowledge graph), references are task-specific.
+
+```
+CLI usage:
+  scholarforge generate lit-review \
+    --style-template templates/styles/my_paper.docx \
+    --structure-template templates/structures/lit_review.md \
+    --reference "Lab Style Guide.pdf" \
+    --reference "Funding Agency Requirements.pdf"
+```
+
+**Reference documents are**:
+- Ingested on-demand (not stored permanently in the vault)
+- Chunked and included in the generation context alongside source chunks
+- Not linked into the knowledge graph (they're task-specific, not part of the literature)
+- Can be literature papers too: "write section 3 in the style of [[papers/Smith 2024]]"
+
+### Style Template Vault Notes
+
+Style templates get their own vault notes for discoverability:
+
+```markdown
+---
+title: "My Paper Writing Style"
+source_type: template
+format: docx
+file_path: "templates/styles/my_paper.docx"
+tags:
+  - template/style
+  - template/paper
+output_types:
+  - lit_review
+  - research_paper
+---
+
+## Style Characteristics
+
+- Formal academic tone
+- Active voice preferred
+- Short paragraphs (3-5 sentences)
+- Frequent use of transition phrases
+- APA citation style
+
+## Structure Pattern
+
+1. Introduction (with clear thesis statement)
+2. Background (chronological literature summary)
+3. Methods (detailed, reproducible)
+4. Results (figures first, then narrative)
+5. Discussion (compare to prior work)
+6. Conclusion (future directions)
+```
 
 ## Module Layout
 
@@ -331,7 +418,10 @@ vault/
 ├── datasets/               # Conceptual datasets (e.g., "MNIST", "WMT 2014")
 ├── findings/               # Key results and claims
 ├── figures/                # Content-addressed images (symlinked from data/figures/)
-└── templates/              # Obsidian note templates
+└── templates/              # User-provided style + structure templates
+    ├── styles/             # Example documents capturing user's writing style
+    ├── structures/         # TOC skeletons for different output types
+    └── notes/              # Obsidian note templates (for manual use)
 ```
 
 ### Linking Strategy
