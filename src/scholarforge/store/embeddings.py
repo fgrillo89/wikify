@@ -128,7 +128,8 @@ def get_all_similar(
     # Fetch all embeddings in a single batch
     result = collection.get(ids=paper_ids, include=["embeddings"])
     stored_ids: list[str] = result.get("ids") or []
-    stored_embeddings = result.get("embeddings") or []
+    raw_embeddings = result.get("embeddings")
+    stored_embeddings = raw_embeddings if raw_embeddings is not None else []
 
     if not stored_ids:
         return {pid: [] for pid in paper_ids}

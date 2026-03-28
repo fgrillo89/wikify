@@ -177,13 +177,29 @@ def update_paper_note_links(paper: Paper, topics: list[str], methods: list[str])
         note_path.write_text(new_content, encoding="utf-8")
 
 
+def compute_all_links(
+    papers_with_text: list[tuple[Paper, str]],
+) -> dict[str, dict[str, list[str]]]:
+    """Compute topics and methods for all papers without writing anything.
+
+    Returns {paper_id: {"topics": [...], "methods": [...]}}
+    """
+    result: dict[str, dict[str, list[str]]] = {}
+    for paper, text in papers_with_text:
+        links = link_paper(paper, text)
+        result[paper.id] = links
+    return result
+
+
 def link_all_papers(papers_with_text: list[tuple[Paper, str]]) -> dict[str, int]:
     """Run linking for all papers. Returns stats."""
     topic_papers: dict[str, list[str]] = defaultdict(list)
     method_papers: dict[str, list[str]] = defaultdict(list)
 
-    for paper, text in papers_with_text:
-        links = link_paper(paper, text)
+    per_paper = compute_all_links(papers_with_text)
+
+    for paper, _text in papers_with_text:
+        links = per_paper[paper.id]
         display_name = _paper_display_name(paper)
 
         for topic in links["topics"]:

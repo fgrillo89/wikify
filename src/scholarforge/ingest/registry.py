@@ -87,8 +87,8 @@ def _ingest_parallel(files: list[Path], max_workers: int) -> int:
             f"({len(parsed.chunks)} chunks, {len(parsed.figures)} figures)"
         )
 
-    # Run linking on all papers
-    _run_linking()
+    # Run batch steps: linking + embeddings + coupling + vault regeneration
+    _run_batch_steps()
 
     # Process other files sequentially
     for f in other_files:
@@ -106,26 +106,119 @@ def _parse_worker(path_str: str):
     return parse_pdf(Path(path_str))
 
 
-def _run_linking() -> None:
-    """Run topic/method linking on all ingested papers."""
-    from sqlmodel import select
+def _run_batch_steps() -> None:
+    """Run all batch post-ingestion steps: linking, embeddings, coupling, vault regen."""
+    from sqlmodel import func, select
 
     from scholarforge.store.db import get_session
-    from scholarforge.store.models import Chunk, Paper
-    from scholarforge.vault.linker import link_all_papers
+    from scholarforge.store.embeddings import embed_abstracts, get_all_similar
+    from scholarforge.store.models import Chunk, Citation, FigureRef, Paper
+    from scholarforge.vault.coupler import compute_coupling
+    from scholarforge.vault.linker import (
+        compute_all_links,
+        write_method_notes,
+        write_topic_notes,
+    )
+    from scholarforge.vault.writer import _paper_display_name, write_paper_note
 
+    # ── 1. Load all papers + text ────────────────────────────────────────────
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
-        papers_with_text = []
+        papers_with_text: list[tuple[Paper, str]] = []
         for paper in papers:
             chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
             full_text = "\n\n".join(c.content for c in chunks)
             papers_with_text.append((paper, full_text))
 
-    stats = link_all_papers(papers_with_text)
+    paper_ids = [p.id for p in papers]
+    console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
+
+    # ── 2. Topic/method detection ────────────────────────────────────────────
+    per_paper_links = compute_all_links(papers_with_text)
+    console.print("[green]  Topics/methods detected[/green]")
+
+    # ── 3. Report citations + figure refs (already persisted during ingestion)
+    with get_session() as session:
+        total_citations = session.exec(select(func.count(Citation.id))).one()
+        total_figure_refs = session.exec(select(func.count(FigureRef.id))).one()
     console.print(
-        f"[green]Linked {stats['papers_linked']} papers → "
-        f"{stats['topics']} topics, {stats['methods']} methods[/green]"
+        f"[green]  Found {total_citations} citations, {total_figure_refs} figure refs in DB[/green]"
+    )
+
+    # ── 4. Abstract embeddings ───────────────────────────────────────────────
+    embedded = embed_abstracts(papers)
+    console.print(f"[green]  Embedded {embedded} abstracts into ChromaDB[/green]")
+
+    # ── 5. k-NN similarity ──────────────────────────────────────────────────
+    similar_map = get_all_similar(paper_ids, n_results=5)
+    console.print("[green]  k-NN similarity computed[/green]")
+
+    # ── 6. Bibliographic coupling ────────────────────────────────────────────
+    coupling_map = compute_coupling(paper_ids)
+    coupled_count = sum(1 for v in coupling_map.values() if v)
+    console.print(f"[green]  Bibliographic coupling: {coupled_count} papers coupled[/green]")
+
+    # ── 7. Build lookup helpers ──────────────────────────────────────────────
+    # Map paper_id -> display_name for wikilink resolution
+    id_to_display: dict[str, str] = {}
+    for paper in papers:
+        id_to_display[paper.id] = _paper_display_name(paper)
+
+    # Load figure refs from DB for each paper
+    paper_figure_refs: dict[str, list[tuple[str, str]]] = {}
+    with get_session() as session:
+        for paper in papers:
+            frs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
+            paper_figure_refs[paper.id] = [(fr.figure_key, fr.caption_text) for fr in frs]
+
+    # ── 8. Write topic/method hub notes ──────────────────────────────────────
+    from collections import defaultdict
+
+    topic_papers: dict[str, list[str]] = defaultdict(list)
+    method_papers: dict[str, list[str]] = defaultdict(list)
+    for paper in papers:
+        links = per_paper_links.get(paper.id, {"topics": [], "methods": []})
+        display = id_to_display[paper.id]
+        for t in links["topics"]:
+            topic_papers[t].append(display)
+        for m in links["methods"]:
+            method_papers[m].append(display)
+
+    write_topic_notes(topic_papers)
+    write_method_notes(method_papers)
+
+    # ── 9. Regenerate all paper vault notes with full data ───────────────────
+    with get_session() as session:
+        for paper in papers:
+            chunks_count = len(session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all())
+            figures_count = len(
+                session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
+            )
+
+            links = per_paper_links.get(paper.id, {"topics": [], "methods": []})
+
+            # Resolve similar_to IDs to display names
+            similar_names = [
+                id_to_display[sid] for sid in similar_map.get(paper.id, []) if sid in id_to_display
+            ]
+            # Resolve coupling IDs to display names
+            coupled_names = [
+                id_to_display[cid] for cid in coupling_map.get(paper.id, []) if cid in id_to_display
+            ]
+
+            write_paper_note(
+                paper,
+                chunks_count=chunks_count,
+                figures_count=figures_count,
+                topics=links["topics"],
+                methods=links["methods"],
+                similar_to=similar_names if similar_names else None,
+                cites_same=coupled_names if coupled_names else None,
+                figure_refs=paper_figure_refs.get(paper.id) or None,
+            )
+
+    console.print(
+        f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"
     )
 
 

@@ -37,25 +37,17 @@ def ingest(
 @app.command()
 def link():
     """Run linking on all ingested papers to create topic/method/author connections."""
-    from sqlmodel import select
+    from scholarforge.ingest.registry import _run_batch_steps
 
-    from scholarforge.store.db import get_session
-    from scholarforge.store.models import Chunk, Paper
-    from scholarforge.vault.linker import link_all_papers
+    _run_batch_steps()
 
-    with get_session() as session:
-        papers = session.exec(select(Paper)).all()
-        papers_with_text = []
-        for paper in papers:
-            chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
-            full_text = "\n\n".join(c.content for c in chunks)
-            papers_with_text.append((paper, full_text))
 
-    stats = link_all_papers(papers_with_text)
-    console.print(
-        f"[green]Linked {stats['papers_linked']} papers → "
-        f"{stats['topics']} topics, {stats['methods']} methods[/green]"
-    )
+@app.command()
+def embed():
+    """Run embeddings, similarity, coupling, and vault regeneration on all ingested papers."""
+    from scholarforge.ingest.registry import _run_batch_steps
+
+    _run_batch_steps()
 
 
 @app.command()

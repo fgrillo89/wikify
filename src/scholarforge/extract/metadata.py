@@ -117,28 +117,61 @@ def _first_heading(md_text: str) -> str | None:
 
 
 def _parse_authors(raw: str) -> list[str]:
-    # Handle semicolons, "and", commas
+    # Handle semicolons and "and" as primary delimiters
     raw = raw.replace(";", ",").replace(" and ", ",")
-    return [a.strip() for a in raw.split(",") if a.strip()]
+    parts = [a.strip() for a in raw.split(",") if a.strip()]
+
+    # Reassemble "LastName, Initials" pairs: if a part looks like initials
+    # (all uppercase, short, possibly with dots), merge it with the previous part
+    authors: list[str] = []
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        # Check if next part looks like initials (e.g., "J. J." or "A.")
+        if i + 1 < len(parts) and re.match(r"^[A-Z][.\s]*[A-Z]?\.?$", parts[i + 1]):
+            authors.append(f"{parts[i + 1]} {part}")  # "J. J. Yang"
+            i += 2
+        else:
+            authors.append(part)
+            i += 1
+
+    return authors
 
 
 def _extract_abstract(md_text: str) -> str | None:
+    # Strategy 1: heading-style abstract (## Abstract\n text...)
     pattern = re.compile(
         r"(?:^|\n)#+\s*[Aa]bstract\s*\n(.*?)(?=\n#+\s|\Z)",
         re.DOTALL,
     )
     match = pattern.search(md_text)
     if match:
-        return match.group(1).strip()
+        text = match.group(1).strip()
+        if len(text) > 50:
+            return text
 
-    # Try non-heading abstract (bold or uppercase)
+    # Strategy 2: inline abstract — "ABSTRACT text..." or "**Abstract** text..."
+    # Common in ACS, IEEE, Nature-style PDFs
     pattern2 = re.compile(
-        r"(?:^|\n)\*?\*?[Aa]bstract\*?\*?\s*[:\-—]?\s*\n?(.*?)(?=\n\n|\n#+|\Z)",
+        r"(?:^|\n)\s*\*?\*?(?:ABSTRACT|Abstract)\*?\*?\s*[:\-—.]?\s*(.*?)(?=\n\n|\n#+|\Z)",
         re.DOTALL,
     )
-    match2 = pattern2.search(md_text[:5000])
+    match2 = pattern2.search(md_text[:8000])
     if match2:
-        return match2.group(1).strip()
+        text = match2.group(1).strip()
+        if len(text) > 50:
+            return text
+
+    # Strategy 3: "Abstract—" or "Abstract:" on same line as text
+    pattern3 = re.compile(
+        r"(?:^|\n)\s*\*?\*?[Aa]bstract\*?\*?\s*[—:\-]\s*(.+?)(?=\n\n|\n#+|\Z)",
+        re.DOTALL,
+    )
+    match3 = pattern3.search(md_text[:8000])
+    if match3:
+        text = match3.group(1).strip()
+        if len(text) > 50:
+            return text
 
     return None
 

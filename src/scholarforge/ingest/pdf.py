@@ -12,9 +12,11 @@ import pymupdf4llm
 from rich.console import Console
 
 from scholarforge.extract.chunker import chunk_sections
+from scholarforge.extract.citations import extract_citations
+from scholarforge.extract.figure_refs import extract_figure_refs
 from scholarforge.extract.figures import extract_figures
 from scholarforge.extract.metadata import extract_metadata
-from scholarforge.store.models import Chunk, Figure, Paper
+from scholarforge.store.models import Chunk, Citation, Figure, FigureRef, Paper
 
 console = Console()
 
@@ -26,6 +28,8 @@ class ParsedPaper:
     paper: Paper
     chunks: list[Chunk] = field(default_factory=list)
     figures: list[Figure] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
+    figure_refs: list[FigureRef] = field(default_factory=list)
     md_text: str = ""
     skipped: bool = False
 
@@ -65,7 +69,20 @@ def parse_pdf(path: Path) -> ParsedPaper:
     # Figures
     figures = extract_figures(str(path), paper.id)
 
-    return ParsedPaper(paper=paper, chunks=chunks, figures=figures, md_text=md_text)
+    # Citations from bibliography section
+    citations = extract_citations(md_text, paper.id)
+
+    # Caption-first figure references
+    fig_refs = extract_figure_refs(md_text, paper.id)
+
+    return ParsedPaper(
+        paper=paper,
+        chunks=chunks,
+        figures=figures,
+        citations=citations,
+        figure_refs=fig_refs,
+        md_text=md_text,
+    )
 
 
 def persist_parsed(parsed: ParsedPaper) -> None:
@@ -79,6 +96,10 @@ def persist_parsed(parsed: ParsedPaper) -> None:
             session.merge(chunk)
         for figure in parsed.figures:
             session.merge(figure)
+        for citation in parsed.citations:
+            session.merge(citation)
+        for fig_ref in parsed.figure_refs:
+            session.merge(fig_ref)
         session.commit()
 
     write_paper_note(parsed.paper, len(parsed.chunks), len(parsed.figures))
