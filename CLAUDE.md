@@ -37,3 +37,4 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 
 <!-- Add corrections below this line -->
 - **Data libraries**: Always use polars over pandas. User strongly prefers polars.
+- **Package installs**: Always use `uv add` (not `uv pip install`) to add dependencies. This keeps pyproject.toml in sync.

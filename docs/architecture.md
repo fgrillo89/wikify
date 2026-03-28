@@ -29,7 +29,7 @@ Literature review of 200 papers (user will provide them). Backend first, fronten
 - **Project layout**: `src/scholarforge/` (src layout, created by `uv init --lib`)
 - **Knowledge graph**: Obsidian vault (markdown files + wikilinks)
 - **Graph algorithms**: Via MCP tooling or networkx on parsed vault
-- **Location**: `C:\Users\fgril\OneDrive\Documents\scholarforge\`
+- **Location**: `C:\dev\scholarforge\`
 
 ## Pipeline Overview
 

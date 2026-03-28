@@ -3,7 +3,7 @@
 ## Implementation Phases
 
 ### Phase 1 — Foundation (CURRENT)
-- [x] UV project created at `C:\Users\fgril\OneDrive\Documents\scholarforge\`
+- [x] UV project created at `C:\dev\scholarforge\`
 - [x] pyproject.toml with hatchling build
 - [x] Add dependencies to pyproject.toml (chromadb instead of lancedb — no Windows wheels)
 - [x] Python upgraded to 3.12 (uv python pin 3.12)
