@@ -62,6 +62,7 @@ def build_persona(
     context: RetrievedContext | None = None,
     journal_profile: JournalProfile | None = None,
     artifact_type_id: str = "lit_review",
+    user_prompt: str = "",
 ) -> str:
     """Build a system prompt prefix that defines the writer's persona.
 
@@ -117,10 +118,8 @@ def build_persona(
     # Inject field-specific writing guide (auto-detected from corpus topics)
     from scholarforge.generate.field_guide import get_field_instructions
 
-    field_instructions = get_field_instructions(
-        context.query if context else "",
-        topics,
-    )
+    field_query = user_prompt or (context.query if context and hasattr(context, "query") else "")
+    field_instructions = get_field_instructions(field_query, topics)
     if field_instructions:
         parts.append(field_instructions)
 

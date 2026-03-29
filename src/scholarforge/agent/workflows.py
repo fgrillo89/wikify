@@ -28,6 +28,7 @@ def generate_paper(
     system_prompt = build_generation_prompt(
         artifact_type_id=artifact_type_id,
         journal=journal,
+        field_hint=prompt,
     )
 
     hooks = get_default_hooks(token_budget)

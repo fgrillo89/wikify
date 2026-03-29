@@ -10,10 +10,40 @@ Launch via:
 
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+
+from scholarforge.agent.tools import (
+    _build_corpus_summary,
+)
+from scholarforge.agent.tools import (
+    deep_read as _deep_read,
+)
+from scholarforge.agent.tools import (
+    get_corpus_summary as _get_corpus_summary,
+)
+from scholarforge.agent.tools import (
+    get_graph_metrics as _get_graph_metrics,
+)
+from scholarforge.agent.tools import (
+    get_paper as _get_paper,
+)
+from scholarforge.agent.tools import (
+    get_sections as _get_sections,
+)
+from scholarforge.agent.tools import (
+    ingest_paper as _ingest_paper,
+)
+from scholarforge.agent.tools import (
+    list_papers as _list_papers,
+)
+from scholarforge.agent.tools import (
+    list_topics as _list_topics,
+)
+from scholarforge.agent.tools import (
+    search_papers as _search_papers,
+)
 
 mcp = FastMCP(
     "ScholarForge",
@@ -25,125 +55,6 @@ mcp = FastMCP(
         "and ingest_paper to add new documents."
     ),
 )
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _paper_to_dict(paper) -> dict:
-    """Serialize a Paper SQLModel to a plain dict for JSON output."""
-    return {
-        "id": paper.id,
-        "title": paper.title,
-        "authors": paper.parsed_authors,
-        "year": paper.year,
-        "doi": paper.doi,
-        "doc_type": paper.doc_type,
-        "summary": paper.summary,
-        "display_name": paper.display_name(),
-        "source_path": paper.source_path,
-    }
-
-
-def _chunk_to_dict(chunk) -> dict:
-    """Serialize a Chunk SQLModel to a plain dict."""
-    return {
-        "id": chunk.id,
-        "paper_id": chunk.paper_id,
-        "section_path": chunk.section_path,
-        "content": chunk.content,
-        "token_count": chunk.token_count,
-        "chunk_index": chunk.chunk_index,
-        "has_citations": chunk.has_citations,
-        "has_equations": chunk.has_equations,
-    }
-
-
-def _build_corpus_summary() -> str:
-    """Build a pre-formatted markdown summary of the corpus for LLM consumption."""
-    from collections import Counter
-
-    from sqlmodel import select
-
-    from scholarforge.ingest.registry import _load_corpus_vocabulary
-    from scholarforge.store.db import get_session
-    from scholarforge.store.models import Paper
-
-    with get_session() as session:
-        papers = session.exec(select(Paper)).all()
-
-    if not papers:
-        return "## Corpus: 0 papers\n\nNo papers ingested yet."
-
-    # Paper count and year range
-    count = len(papers)
-    years = [p.year for p in papers if p.year is not None]
-    year_range = f"{min(years)}-{max(years)}" if years else "unknown"
-
-    # Top authors (first-author last name, matching display_name() logic)
-    author_counts: Counter = Counter()
-    for paper in papers:
-        authors = paper.parsed_authors
-        if authors:
-            last_name = authors[0].split()[-1]
-            author_counts[last_name] += 1
-    top_authors = author_counts.most_common(5)
-    authors_str = ", ".join(f"{name} ({cnt})" for name, cnt in top_authors)
-
-    lines = [
-        f"## Corpus: {count} papers ({year_range})",
-        "",
-        f"**Top Authors**: {authors_str}",
-    ]
-
-    # Graph metrics (hub / bridge / frontier) — wrapped defensively
-    try:
-        from scholarforge.graph.metrics import compute_metrics
-
-        metrics = compute_metrics()
-        id_to_paper = {p.id: p for p in papers}
-
-        if metrics.hub_papers:
-            hub_parts = []
-            for pid in metrics.hub_papers:
-                p = id_to_paper.get(pid)
-                name = p.display_name() if p else pid[:16]
-                pr = metrics.pagerank.get(pid, 0.0)
-                hub_parts.append(f"{name} (PR: {pr:.3f})")
-            lines.append(f"**Hub Papers**: {', '.join(hub_parts)}")
-
-        if metrics.bridge_papers:
-            bridge_parts = []
-            for pid in metrics.bridge_papers:
-                p = id_to_paper.get(pid)
-                name = p.display_name() if p else pid[:16]
-                bc = metrics.betweenness_centrality.get(pid, 0.0)
-                bridge_parts.append(f"{name} (BC: {bc:.3f})")
-            lines.append(f"**Bridge Papers**: {', '.join(bridge_parts)}")
-
-        if metrics.peripheral_papers:
-            frontier_parts = []
-            for pid in metrics.peripheral_papers:
-                p = id_to_paper.get(pid)
-                name = p.display_name() if p else pid[:16]
-                frontier_parts.append(name)
-            lines.append(f"**Frontier Papers**: {', '.join(frontier_parts)}")
-    except Exception:  # noqa: BLE001
-        lines.append("**Graph Metrics**: unavailable (run ingest to populate)")
-
-    # Topics from corpus vocabulary
-    try:
-        vocab = _load_corpus_vocabulary()
-        if vocab:
-            topic_count = len(vocab)
-            topic_preview = ", ".join(vocab[:20])
-            lines.append(f"**Topics** ({topic_count}): {topic_preview}")
-        else:
-            lines.append("**Topics**: not yet extracted (run ingest)")
-    except Exception:  # noqa: BLE001
-        lines.append("**Topics**: unavailable")
-
-    return "\n".join(lines)
 
 
 # ── Resources ─────────────────────────────────────────────────────────────────
@@ -168,10 +79,7 @@ def get_corpus_summary() -> str:
     Returns:
         Markdown string with corpus overview.
     """
-    try:
-        return _build_corpus_summary()
-    except Exception as exc:  # noqa: BLE001
-        return f"Error building corpus summary: {exc}"
+    return _get_corpus_summary()
 
 
 @mcp.tool()
@@ -193,22 +101,7 @@ def search_papers(
     Returns:
         Formatted text of relevant paper excerpts followed by a metadata summary line.
     """
-    try:
-        from scholarforge.retrieve.context import retrieve_for_query
-
-        ctx = retrieve_for_query(query, max_papers=top_k, max_tokens=max_tokens)
-
-        text = ctx.as_text()
-        if not text:
-            return f"No results found for query: {query!r}"
-
-        meta = (
-            f"\n\n---\nFound {len(ctx.papers)} papers, "
-            f"{len(ctx.chunks)} chunks, {ctx.total_tokens} tokens"
-        )
-        return text + meta
-    except Exception as exc:  # noqa: BLE001
-        return f"Search error: {exc}"
+    return _search_papers(query, top_k, max_tokens)
 
 
 @mcp.tool()
@@ -226,58 +119,7 @@ def get_paper(
     Returns:
         Formatted text with paper metadata block followed by chunks grouped by section.
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Chunk, Paper
-
-        lower = pattern.lower()
-        with get_session() as session:
-            all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
-            if not matched:
-                return f"No paper found matching: {pattern!r}"
-
-            paper = matched[0]
-            chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
-            ).all()
-
-        # Build metadata block
-        authors = paper.parsed_authors
-        authors_str = ", ".join(authors) if authors else "Unknown"
-        lines = [
-            f"# {paper.title}",
-            "",
-            f"**Authors**: {authors_str}",
-            f"**Year**: {paper.year or 'Unknown'}",
-            f"**DOI**: {paper.doi or 'N/A'}",
-            f"**Type**: {paper.doc_type}",
-        ]
-        if paper.summary:
-            lines += ["", "## Abstract", paper.summary]
-
-        if len(matched) > 1:
-            lines += ["", f"*Note: {len(matched)} papers matched; showing first result.*"]
-
-        # Group chunks by section
-        sections: dict[str, list] = {}
-        for chunk in chunks:
-            key = chunk.section_path or "(Unsectioned)"
-            sections.setdefault(key, []).append(chunk)
-
-        lines += ["", "## Full Text"]
-        for section_path, section_chunks in sections.items():
-            lines += ["", f"### {section_path}"]
-            for chunk in section_chunks:
-                lines.append(chunk.content)
-
-        return "\n".join(lines)
-    except Exception as exc:  # noqa: BLE001
-        return f"Error retrieving paper: {exc}"
+    return _get_paper(pattern)
 
 
 @mcp.tool()
@@ -296,66 +138,7 @@ def get_graph_metrics() -> str:
             - full_ranking: list of all papers ranked by PageRank descending
             - error: present only if something went wrong
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.graph.metrics import compute_metrics
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Paper
-
-        with get_session() as session:
-            papers = session.exec(select(Paper)).all()
-        id_to_paper = {p.id: p for p in papers}
-
-        metrics = compute_metrics()
-
-        def paper_entry(pid: str) -> dict:
-            p = id_to_paper.get(pid)
-            return {
-                "id": pid,
-                "display_name": p.display_name() if p else pid[:16],
-                "title": p.title if p else "",
-                "authors": p.parsed_authors if p else [],
-                "year": p.year if p else None,
-            }
-
-        hub_entries = [
-            {**paper_entry(pid), "pagerank": metrics.pagerank.get(pid, 0.0)}
-            for pid in metrics.hub_papers
-        ]
-        bridge_entries = [
-            {
-                **paper_entry(pid),
-                "betweenness": metrics.betweenness_centrality.get(pid, 0.0),
-            }
-            for pid in metrics.bridge_papers
-        ]
-        frontier_entries = [paper_entry(pid) for pid in metrics.peripheral_papers]
-
-        sorted_pr = sorted(metrics.pagerank.items(), key=lambda x: x[1], reverse=True)
-        full_ranking = [
-            {
-                **paper_entry(pid),
-                "pagerank": pr,
-                "degree_centrality": metrics.degree_centrality.get(pid, 0.0),
-                "betweenness": metrics.betweenness_centrality.get(pid, 0.0),
-                "role": metrics.paper_role(pid),
-            }
-            for pid, pr in sorted_pr
-        ]
-
-        return json.dumps(
-            {
-                "hub_papers": hub_entries,
-                "bridge_papers": bridge_entries,
-                "frontier_papers": frontier_entries,
-                "full_ranking": full_ranking,
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "hub_papers": [], "bridge_papers": []})
+    return _get_graph_metrics()
 
 
 @mcp.tool()
@@ -376,27 +159,7 @@ def list_papers(
             - total: total paper count in the corpus
             - error: present only if something went wrong
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Paper
-
-        with get_session() as session:
-            all_papers = session.exec(select(Paper)).all()
-
-        total = len(all_papers)
-        subset = all_papers if limit is None else all_papers[:limit]
-        return json.dumps(
-            {
-                "papers": [_paper_to_dict(p) for p in subset],
-                "total": total,
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "papers": [], "total": 0})
+    return _list_papers(limit)
 
 
 @mcp.tool()
@@ -412,45 +175,7 @@ def list_topics() -> str:
             - total_papers: total number of papers in the corpus
             - error: present only if something went wrong
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Chunk, Paper
-
-        with get_session() as session:
-            papers = session.exec(select(Paper)).all()
-            chunks = session.exec(select(Chunk)).all()
-
-        # Build topic → paper_ids mapping from section paths
-        # Section paths look like "1.Introduction", "3.Methods.3.2.DataCollection"
-        # Extract top-level section names as topic proxies
-        topic_papers: dict[str, set[str]] = {}
-        for chunk in chunks:
-            if chunk.section_path:
-                parts = chunk.section_path.split(".")
-                # Remove leading numeric parts to get readable section name
-                topic_parts = [p for p in parts if not p.isdigit()]
-                if topic_parts:
-                    topic = topic_parts[0].strip()
-                    if topic:
-                        topic_papers.setdefault(topic, set()).add(chunk.paper_id)
-
-        topics_list = [
-            {"topic": topic, "paper_count": len(pids)}
-            for topic, pids in sorted(topic_papers.items(), key=lambda x: len(x[1]), reverse=True)
-        ]
-
-        return json.dumps(
-            {
-                "topics": topics_list,
-                "total_papers": len(papers),
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "topics": [], "total_papers": 0})
+    return _list_topics()
 
 
 @mcp.tool()
@@ -475,52 +200,7 @@ def deep_read(
             - match_count: how many papers matched (first one is returned)
             - error: present only if something went wrong
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Chunk, Paper
-
-        lower = pattern.lower()
-        with get_session() as session:
-            all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
-            if not matched:
-                return json.dumps(
-                    {
-                        "paper": None,
-                        "full_text": "",
-                        "chunks": [],
-                        "token_count": 0,
-                        "match_count": 0,
-                    }
-                )
-
-            paper = matched[0]
-            chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
-            ).all()
-
-        full_text = "\n\n".join(
-            f"[{c.section_path}]\n{c.content}" if c.section_path else c.content for c in chunks
-        )
-        total_tokens = sum(c.token_count for c in chunks)
-
-        return json.dumps(
-            {
-                "paper": _paper_to_dict(paper),
-                "full_text": full_text,
-                "chunks": [_chunk_to_dict(c) for c in chunks],
-                "token_count": total_tokens,
-                "match_count": len(matched),
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "paper": None, "full_text": "", "chunks": []})
+    return _deep_read(pattern)
 
 
 @mcp.tool()
@@ -545,86 +225,7 @@ def get_sections(
     Returns:
         Formatted text with sections grouped by paper, or error message.
     """
-    try:
-        from sqlmodel import select
-
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Chunk, Paper
-
-        valid_types = {
-            "abstract",
-            "introduction",
-            "background",
-            "methods",
-            "results",
-            "discussion",
-            "conclusion",
-            "references",
-            "acknowledgments",
-            "appendix",
-            "body",
-        }
-        st = section_type.lower().strip()
-        if st not in valid_types:
-            return f"Invalid section_type '{section_type}'. Valid: {', '.join(sorted(valid_types))}"
-
-        with get_session() as session:
-            query = (
-                select(Chunk)
-                .where(Chunk.section_type == st)
-                .order_by(Chunk.paper_id, Chunk.chunk_index)
-            )
-            chunks = session.exec(query).all()
-
-            if not chunks:
-                return f"No '{st}' sections found in the corpus."
-
-            # Filter by paper pattern if given
-            paper_ids = {c.paper_id for c in chunks}
-            papers = session.exec(
-                select(Paper).where(Paper.id.in_(list(paper_ids)))  # type: ignore[attr-defined]
-            ).all()
-
-        id_to_paper = {p.id: p for p in papers}
-
-        # Apply paper pattern filter
-        if paper_pattern:
-            lower = paper_pattern.lower()
-            id_to_paper = {
-                pid: p
-                for pid, p in id_to_paper.items()
-                if lower in p.title.lower() or lower in p.authors.lower()
-            }
-            chunks = [c for c in chunks if c.paper_id in id_to_paper]
-
-        if not chunks:
-            return f"No '{st}' sections match pattern '{paper_pattern}'."
-
-        # Group by paper and format
-        from collections import defaultdict
-
-        by_paper: dict[str, list] = defaultdict(list)
-        for c in chunks:
-            by_paper[c.paper_id].append(c)
-
-        sections = []
-        for pid, paper_chunks in by_paper.items():
-            paper = id_to_paper.get(pid)
-            if not paper:
-                continue
-            name = paper.display_name()
-            text = "\n\n".join(c.content for c in paper_chunks)
-            tokens = sum(c.token_count for c in paper_chunks)
-            sections.append(f"### {name}\n\n{text}\n\n*({tokens} tokens)*")
-
-        header = f"## {st.title()} sections"
-        if paper_pattern:
-            header += f" (filter: '{paper_pattern}')"
-        header += f"\n\n{len(sections)} papers, {len(chunks)} chunks\n"
-
-        return header + "\n---\n\n".join(sections)
-    except Exception as exc:  # noqa: BLE001
-        return f"Error retrieving sections: {exc}"
+    return _get_sections(section_type, paper_pattern)
 
 
 @mcp.tool()
@@ -641,53 +242,7 @@ def ingest_paper(file_path: str) -> str:
     Returns:
         Status message with paper title, chunk count, and background refresh status.
     """
-    try:
-        import hashlib
-        from pathlib import Path
-
-        from sqlmodel import select
-
-        from scholarforge.ingest.registry import _ingest_file
-        from scholarforge.store.db import get_session
-        from scholarforge.store.models import Chunk, Paper
-
-        path = Path(file_path)
-        if not path.exists():
-            return f"Error: file not found: {file_path}"
-
-        supported = {".pdf", ".docx", ".pptx"}
-        if path.suffix.lower() not in supported:
-            supported_str = ", ".join(sorted(supported))
-            return f"Error: unsupported format {path.suffix!r}. Supported: {supported_str}"
-
-        # Compute the paper ID (SHA256) before ingestion so we can look it up after
-        file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-
-        result = _ingest_file(path, background_refresh=True)
-
-        if result == 0:
-            # May have been skipped (already ingested) or failed
-            with get_session() as session:
-                existing = session.get(Paper, file_hash)
-            if existing:
-                return f"Already ingested: {existing.display_name()} (no changes detected)"
-            return f"Ingestion failed or skipped for: {path.name}"
-
-        # Retrieve paper details from DB
-        with get_session() as session:
-            paper = session.get(Paper, file_hash)
-            if paper:
-                chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
-                n_chunks = len(chunks)
-                return (
-                    f"Ingested: {paper.display_name()} "
-                    f"({n_chunks} chunks) — background corpus refresh started"
-                )
-
-        return f"Ingested: {path.name} — background corpus refresh started"
-
-    except Exception as exc:  # noqa: BLE001
-        return f"Ingestion error: {exc}"
+    return _ingest_paper(file_path)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

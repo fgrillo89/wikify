@@ -55,7 +55,11 @@ def build_generation_prompt(
     from scholarforge.generate.persona import build_persona
 
     journal_profile = load_journal_profile(journal) if journal else None
-    persona = build_persona(journal_profile=journal_profile, artifact_type_id=artifact_type_id)
+    persona = build_persona(
+        journal_profile=journal_profile,
+        artifact_type_id=artifact_type_id,
+        user_prompt=field_hint,
+    )
 
     # Add agent-specific instructions
     agent_instructions = (
