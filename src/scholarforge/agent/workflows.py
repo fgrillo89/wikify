@@ -53,6 +53,9 @@ def export_paper(
 ) -> list[Path]:
     """Export a generated paper to various formats.
 
+    Resolves [REF:...] citation markers to numbered references [N],
+    builds a bibliography, applies chemistry formatting, and exports.
+
     Returns list of output file paths.
     """
     from scholarforge.export.chemistry import format_formulas_unicode
@@ -62,28 +65,56 @@ def export_paper(
     output.parent.mkdir(parents=True, exist_ok=True)
     outputs = []
 
+    profile = load_journal_profile(journal)
+
+    # Resolve [REF:...] markers to numbered citations + bibliography
+    resolved_md = _resolve_references(markdown, profile)
+
     # Markdown (with Unicode subscripts)
-    md_text = format_formulas_unicode(markdown)
+    md_text = format_formulas_unicode(resolved_md)
     output.write_text(md_text, encoding="utf-8")
     outputs.append(output)
 
-    # DOCX
+    # DOCX (gets raw text — DOCX exporter handles subscripts natively)
     if docx:
         from scholarforge.export.docx_export import DocxExporter
 
-        profile = load_journal_profile(journal)
         exporter = DocxExporter(profile)
         docx_path = output.with_suffix(".docx")
-        exporter.export(markdown, [], docx_path)
+        exporter.export(resolved_md, [], docx_path)
         outputs.append(docx_path)
 
     # PDF
     if pdf:
         from scholarforge.export.pdf_export import PdfExporter
 
-        profile = load_journal_profile(journal)
         pdf_path = output.with_suffix(".pdf")
-        PdfExporter(profile).export(markdown, [], pdf_path)
+        PdfExporter(profile).export(resolved_md, [], pdf_path)
         outputs.append(pdf_path)
 
     return outputs
+
+
+def _resolve_references(markdown: str, profile) -> str:
+    """Resolve [REF:...] markers to numbered citations and append bibliography."""
+    from sqlmodel import select
+
+    from scholarforge.generate.references import ReferenceResolver
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Paper
+
+    with get_session() as session:
+        papers = session.exec(select(Paper)).all()
+
+    if not papers:
+        return markdown
+
+    resolver = ReferenceResolver(papers)
+    numbered_md, ordered_papers = resolver.resolve(markdown)
+
+    if ordered_papers:
+        ref_fmt = profile.reference_format if profile else ""
+        bibliography = resolver.build_bibliography(ordered_papers, reference_format=ref_fmt)
+        return f"{numbered_md}\n\n## References\n\n{bibliography}"
+
+    return numbered_md

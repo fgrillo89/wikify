@@ -7,7 +7,8 @@
       "Read(*)",
       "mcp__scholarforge__get_corpus_summary",
       "mcp__scholarforge__list_papers",
-      "mcp__scholarforge__get_graph_metrics"
+      "mcp__scholarforge__get_graph_metrics",
+      "Skill(update-config)"
     ]
   },
   "enableAllProjectMcpServers": true,
