@@ -10,7 +10,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
 from rich.console import Console
 
 from scholarforge.export.chemistry import split_formula_runs
@@ -20,6 +20,11 @@ from scholarforge.store.models import Paper
 console = Console()
 
 _INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|\[\d+\])")
+
+# Detects:  ![Figure N: short caption](figure_N_placeholder.png)
+_FIGURE_IMG_RE = re.compile(r"!\[Figure\s+(\d+):[^\]]*\]", re.IGNORECASE)
+# Detects:  **Figure N.** Detailed caption text ...
+_FIGURE_CAPTION_RE = re.compile(r"\*\*Figure\s+\d+\.\*\*", re.IGNORECASE)
 
 
 def _parse_inline(
@@ -199,6 +204,21 @@ class DocxExporter:
             if not stripped:
                 continue
 
+            # --- Figure placeholder box (![Figure N: ...] line) --------------
+            if _FIGURE_IMG_RE.match(stripped):
+                # Extract the short caption from the alt text for the box label
+                m = re.match(r"!\[([^\]]*)\]", stripped)
+                alt_text = m.group(1) if m else "Figure"
+                self._add_figure_placeholder(doc, alt_text)
+                continue
+
+            # --- Figure caption line (**Figure N.** ...) ----------------------
+            if _FIGURE_CAPTION_RE.match(stripped):
+                # Render as an italic caption paragraph
+                caption_text = stripped
+                self._add_figure_caption(doc, caption_text)
+                continue
+
             if stripped.startswith("### "):
                 self._add_heading(doc, stripped[4:], level=2)
                 in_abstract = False
@@ -315,3 +335,86 @@ class DocxExporter:
                         _set_run_font(run, font, size)
                     if is_subscript:
                         _set_subscript(run)
+
+    # ------------------------------------------------------------------
+    # Figure placeholder rendering
+    # ------------------------------------------------------------------
+
+    def _add_figure_placeholder(self, doc: Document, alt_text: str) -> None:
+        """Insert a gray bordered box as a figure placeholder in the DOCX."""
+        # A 1-cell table gives us reliable borders and shading
+        table = doc.add_table(rows=1, cols=1)
+        table.style = "Table Grid"
+
+        cell = table.cell(0, 0)
+
+        # Set a fixed height via cell properties
+        tc = cell._tc
+        tcp = tc.get_or_add_tcPr()
+
+        # Gray shading
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), "D9D9D9")  # light gray
+        tcp.append(shd)
+
+        # Set cell height (approx 2 inches = 2880 twips)
+        tr = table.rows[0]._tr
+        tr_pr = tr.get_or_add_trPr()
+        tr_height = OxmlElement("w:trHeight")
+        tr_height.set(qn("w:val"), "2880")
+        tr_height.set(qn("w:hRule"), "exact")
+        tr_pr.append(tr_height)
+
+        # Center the placeholder text inside the cell
+        para = cell.paragraphs[0]
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        para.paragraph_format.space_before = Pt(24)
+
+        run = para.add_run("INSERT FIGURE HERE")
+        run.bold = True
+        run.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+        if not self._using_template:
+            _set_run_font(run, self.profile.font_family, self.profile.font_size_pt)
+
+        # Add a small note with the alt text below the main label
+        if alt_text:
+            note_para = cell.add_paragraph()
+            note_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            note_run = note_para.add_run(alt_text)
+            note_run.italic = True
+            note_run.font.color.rgb = RGBColor(0x60, 0x60, 0x60)
+            if not self._using_template:
+                _set_run_font(note_run, self.profile.font_family, self.profile.font_size_pt - 1)
+
+        # Add spacing after the table
+        doc.add_paragraph()
+
+    def _add_figure_caption(self, doc: Document, text: str) -> None:
+        """Add a figure caption paragraph (italic, small, centered)."""
+        style = self._style_name("body")
+        if self._using_template:
+            para = self._add_para_from_exemplar(doc, style)
+        else:
+            try:
+                para = doc.add_paragraph(style=style)
+            except KeyError:
+                para = doc.add_paragraph(style="Normal")
+            para.paragraph_format.line_spacing = self.profile.line_spacing
+
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Strip outer ** markers and parse remainder with inline parser
+        # but render all text as italic
+        font = self.profile.font_family
+        size = (self.profile.font_size_pt - 1) if not self._using_template else None
+        tokens = _parse_inline(text, superscript_citations=False)
+        for content, bold, _italic, superscript in tokens:
+            run = para.add_run(content)
+            run.bold = bold
+            run.italic = True  # all caption text is italic
+            if not self._using_template:
+                _set_run_font(run, font, size)
+            if superscript:
+                _set_superscript(run)

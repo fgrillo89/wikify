@@ -97,6 +97,28 @@ def _write_section(
 
     persona_block = f"{persona}\n\n" if persona else ""
 
+    # Sections that should NOT receive figure instructions
+    no_figure_sections = {"abstract", "conclusion", "references"}
+    include_figures = section.heading.strip().lower() not in no_figure_sections
+
+    figure_instruction = ""
+    if include_figures:
+        figure_instruction = (
+            "\n\nFIGURE PLACEHOLDERS: Insert 1–2 figure placeholders in this section "
+            "where a figure would strengthen the argument. Use this exact two-line format "
+            "for each figure:\n"
+            "  ![Figure N: Short descriptive title](figure_N_placeholder.png)\n"
+            "  **Figure N.** Full caption: (a) what the figure shows conceptually, "
+            "(b) what data/comparison it contains (axis labels, data series, units), "
+            "(c) key takeaway for the reader. State the figure type explicitly "
+            "(e.g. schematic, bar chart, line plot, heatmap, TEM image, SEM image, "
+            "AFM image, scatter plot). Make the caption detailed enough that a "
+            "figure-generation agent can create the figure from the caption alone. "
+            "Reference each figure in the preceding text (e.g. 'as shown in Figure N'). "
+            "Use consecutive figure numbers continuing from any figures already "
+            "in prior sections."
+        )
+
     system_msg = (
         f"{persona_block}"
         "Write the following section of a review paper based on the literature provided. "
@@ -109,6 +131,7 @@ def _write_section(
         "After drafting, self-revise: check for banned words, nominalizations, "
         "passive voice overuse, vague quantifiers, and LLM structural tells "
         "(em-dashes, uniform hedging, rule-of-three). Fix any violations."
+        f"{figure_instruction}"
     )
 
     source_hint = ""
