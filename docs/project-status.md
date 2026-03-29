@@ -102,19 +102,34 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 - [x] PaperTopic table for efficient topic queries
 - [x] `get_sections` tool for cross-paper section queries
 
+**Reference Management:**
+- Auto-generated `library.bib` on every batch ingest (importable by Zotero, Mendeley, JabRef)
+- Bibliography uses journal profile `reference_format` (AFM: `N. Authors, Title. Year.`)
+- DOCX bibliography renders `[N]` as plain text (not superscript)
+
+**Academic Writing Style Guide (`docs/logic/academic_writing_style.md`):**
+- Synthesized from Williams, Strunk & White, Orwell, Schimel, Sword, Graff/Birkenstein, McEnerney
+- Auto-injected into LLM persona system prompt before every generation call
+- Self-revision requirement: LLM checks output against guide rules after drafting
+
+**Obsidian Graph (cleaned up):**
+- Paper notes: authors/topics stored as plain text (no wikilinks) — graph shows only paper-to-paper connections
+- Default graph filter: `path:papers` (papers network only)
+- Switch to `path:authors` for author collaboration view
+- Color groups: papers (blue), authors (green), topics (orange)
+
 ## Remaining Work
 
 ### High Priority
 - [ ] Set up ANTHROPIC_API_KEY in .env and test generation end-to-end
 - [ ] Scale to full 206-paper corpus
-- [ ] DOCX export for generated papers
 
 ### Medium Priority
-- [ ] Zotero integration
 - [ ] LaTeX export with citation formatting
 - [ ] Claims extraction (JIT, for selected papers only)
 - [ ] Note model + FTS5 search for personal notes
 - [ ] Ollama support for fully offline generation
+- [ ] Add journal/volume/pages fields to Paper model for complete reference formatting
 
 ### Low Priority
 - [ ] Section-level embeddings (expensive, may not be needed with good MCP tools)
