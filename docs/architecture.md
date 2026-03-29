@@ -1,158 +1,156 @@
-# ScholarForge — Architecture
+# ScholarForge -- Architecture
 
 ## What is ScholarForge?
 
-A local-first Python pipeline that turns a folder of academic PDFs into a living
-Obsidian knowledge graph, then uses that graph to write papers, reviews, and
-presentations via MCP-connected LLM agents.
+A local-first Python pipeline that turns a folder of academic PDFs into a
+knowledge graph, then uses an internal agent loop (litellm + tool_use) to
+write papers, reviews, and presentations from that knowledge.
 
 ## Design Principles
 
-1. **Vault-first**: Obsidian vault is the primary output. SQLite is a supporting index.
-2. **MCP-native**: LLM agents interact via MCP tools — no hardcoded generation scripts.
-3. **Incremental + async**: Adding one paper is O(1); corpus signals refresh in background.
-4. **Graph-guided retrieval**: PageRank/centrality guide the LLM to start at hub papers.
-5. **Local-first**: All parsing, embedding, and graph computation done locally.
+1. **Agent-first**: `ScholarForgeAgent` is the core orchestration mechanism.
+   LLM decides what tools to call, in what order, and how to use results.
+2. **Dependency injection**: Tools, hooks, and prompts are passed explicitly.
+   No globals, no singletons, no hidden state.
+3. **Contracts over conventions**: Every LLM interaction has a Pydantic schema
+   defining expected output. Validation failures are retried with feedback.
+4. **Vault-first output**: Obsidian vault is the primary user-facing output.
+5. **Local-first**: Parsing, embedding, and graph computation run locally.
+   LLM calls are the only network dependency (configurable: Claude, OpenAI, Ollama).
+
+## Core: The Agent Loop
+
+```
+User prompt
+    |
+    v
+ScholarForgeAgent(model, tools, hooks, system_prompt)
+    |
+    |-- LLM decides which tool to call
+    |-- Tool executes (list_papers, search_papers, deep_read, ...)
+    |-- Result fed back to LLM
+    |-- Repeat until LLM produces final output
+    |
+    v
+AgentResult (content, tool_calls, token counts)
+    |
+    v
+Export (DOCX, PDF, Markdown)
+```
+
+The agent receives:
+- **Tools**: Plain Python functions (list_papers, search_papers, etc.)
+- **Hooks**: Cross-cutting concerns (CostTracker, TokenBudget, CallLogger)
+- **System prompt**: Layered instructions (style guide + artifact type + field guide)
+- **Output contract**: Optional Pydantic model for validated structured output
 
 ## Module Layout
 
 ```
 src/scholarforge/
+├── agent/                          # Agent loop (core orchestration)
+│   ├── core.py                     # ScholarForgeAgent, AgentResult, ToolCallRecord
+│   ├── tools.py                    # KB tool functions (shared by agent + MCP)
+│   ├── tool_schema.py              # fn -> litellm tool schema introspection
+│   ├── defaults.py                 # get_default_tools(), get_default_hooks()
+│   └── workflows.py                # High-level workflows (generate_paper, etc.)
+│
 ├── cli.py                          # Typer CLI + template subcommands
 ├── config.py                       # pydantic-settings (.env support)
-├── mcp_server.py                   # FastMCP server (9 tools)
+├── mcp_server.py                   # MCP server (thin wrapper over agent/tools.py)
 │
 ├── ingest/                         # Document ingestion (no LLM)
-│   ├── pdf.py                      # pymupdf4llm + OCR fallback
-│   ├── docx.py                     # python-docx → markdown
-│   ├── pptx.py                     # python-pptx → markdown
+│   ├── pdf.py, docx.py, pptx.py   # Parsers
 │   └── registry.py                 # Dispatcher + batch orchestration
 │
 ├── extract/                        # Structured extraction (no LLM)
-│   ├── chunker.py                  # Section-aware chunking (tiktoken)
+│   ├── chunker.py                  # Section-aware chunking
 │   ├── metadata.py                 # Title, authors, DOI, year
-│   ├── figures.py                  # Binary figure extraction
 │   ├── figure_refs.py              # Caption-first figure/table refs
 │   ├── citations.py                # Bibliography extraction
-│   ├── cite_match.py               # Fuzzy citation matching
-│   └── section_classifier.py       # Heading → canonical type mapping
+│   └── cite_match.py               # Fuzzy citation matching
 │
 ├── store/                          # SQLite + ChromaDB
-│   ├── models.py                   # Paper, Chunk, Citation, FigureRef,
-│   │                               #   PaperTopic, JournalTemplate, PaperPlan
+│   ├── models.py                   # Paper, Chunk, Citation, JournalTemplate, etc.
 │   ├── db.py                       # Engine + session management
-│   └── embeddings.py               # ChromaDB embeddings + k-NN
+│   └── embeddings.py               # EmbeddingStore (DI-friendly)
 │
 ├── vault/                          # Obsidian vault (no LLM)
-│   ├── writer.py                   # Paper/author note generation + graph config
-│   ├── linker.py                   # Topic extraction + topic hub notes
-│   ├── templates.py                # Note templates (paper, author, topic)
-│   └── coupler.py                  # Bibliographic coupling (threshold ≥ 3)
+│   ├── writer.py                   # Paper/author note generation
+│   ├── linker.py                   # Topic extraction + hubs
+│   ├── templates.py                # Note templates
+│   └── coupler.py                  # Bibliographic coupling
 │
 ├── graph/                          # NetworkX graph analysis
 │   └── metrics.py                  # PageRank, centrality, hub/bridge/frontier
 │
-├── retrieve/                       # Context assembly for generation
+├── retrieve/                       # Context assembly
 │   ├── context.py                  # RetrievedContext, SectionContext
 │   └── strategies/                 # 5 retrieval strategies
-│       ├── base.py                 # RetrievalStrategy ABC + StrategyConfig
-│       ├── flat.py                 # Top-N hub deep-read (default)
-│       ├── hub_spoke.py            # Parallel subagent hub traversal
-│       ├── query_driven.py         # Per-section ChromaDB retrieval
-│       ├── snowball.py             # BFS from top PageRank paper
-│       └── topic_cluster.py        # Group by topic, deep-read reps
 │
-├── generate/                       # Content generation (LLM)
-│   ├── planner.py                  # Structured outline from prompt
-│   ├── writer.py                   # Section-by-section generation
-│   ├── persona.py                  # System prompt: style + field + type
-│   ├── references.py               # [REF:...] → [N] resolver
-│   ├── chat.py                     # Interactive RAG Q&A
+├── generate/                       # Content generation support
+│   ├── planner.py                  # Paper outline from prompt
+│   ├── writer.py                   # Section-by-section writing
+│   ├── verifier.py                 # Plan compliance + paper verification
+│   ├── persona.py                  # System prompt builder
+│   ├── references.py               # [REF:...] -> [N] resolver
 │   ├── figures.py                  # Figure placeholder extraction
 │   ├── field_guide.py              # Field detection + guide loading
-│   └── artifact_types/             # Document type definitions
-│       └── registry.py             # ArtifactType + 7 types
+│   └── artifact_types/             # Document type definitions (7 types)
 │
 ├── export/                         # Output formatting
 │   ├── docx_export.py              # DOCX with template cloning
-│   ├── pdf_export.py               # HTML→PDF (xhtml2pdf)
-│   ├── pptx_export.py              # PPTX with professional template
-│   ├── chemistry.py                # Chemical formula detection + subscripts
-│   ├── journal_profile.py          # JournalProfile model + loader
-│   ├── journals/                   # JSON profiles (AFM, Nature, ACS, IEEE, arXiv)
+│   ├── pdf_export.py               # HTML->PDF
+│   ├── chemistry.py                # Chemical formula subscripts
+│   ├── journal_profile.py          # JournalProfile model
+│   ├── journals/                   # JSON profiles (AFM, Nature, ACS, etc.)
 │   └── templates/                  # Template registry + DOCX files
-│       ├── registry.py             # SQLite-backed template management
-│       └── docx/                   # Downloaded publisher .docx templates
 │
 ├── zotero/                         # Reference management
-│   ├── bibtex_builder.py           # Paper → BibTeX entry
-│   ├── bibtex_library.py           # Corpus-wide library.bib maintenance
-│   └── client.py                   # Zotero API client
+│   ├── bibtex_builder.py           # Paper -> BibTeX
+│   └── bibtex_library.py           # Corpus-wide library.bib
 │
 └── llm/                            # LLM interface
-    └── client.py                   # litellm + diskcache caching
+    ├── client.py                   # litellm wrapper, complete_structured
+    ├── schemas.py                  # Pydantic output models
+    └── hooks.py                    # LLMHook protocol, CostTracker, etc.
 ```
 
 ## Writing Pipeline
 
-When an agent writes a paper, the LLM receives layered instructions:
+The agent's system prompt is layered:
+```
+1. Base style guide (680 words)     <- docs/logic/academic_writing_style.md
+2. Artifact type rules              <- docs/logic/artifact_types/{type}.md
+3. Field-specific guide             <- docs/logic/fields/{field}.md
+4. Figure instructions              <- per-section, body sections only
+5. Journal constraints              <- export/journals/{journal}.json
+```
+
+## Two Interfaces to the Same Tools
 
 ```
-1. Base style guide (680 words)     ← docs/logic/academic_writing_style.md
-2. Artifact type rules              ← docs/logic/artifact_types/{type}.md
-3. Field-specific guide             ← docs/logic/fields/{field}.md (auto-detected)
-4. Figure instructions              ← per-section, body sections only
-5. Journal profile constraints      ← export/journals/{journal}.json
+Agent Loop (primary)          MCP Server (external clients)
+  ScholarForgeAgent             @mcp.tool() wrappers
+       |                              |
+       v                              v
+  agent/tools.py  <--- shared --->  agent/tools.py
+       |
+       v
+  litellm.completion(tools=...)
 ```
 
-## Retrieval Strategies
-
-| Strategy | LLM calls | Description |
-|----------|-----------|-------------|
-| `flat` (default) | 0 | Top-N hub deep-read, rest shallow |
-| `hub-spoke` | 3-4 | Parallel subagents per hub, synthesize |
-| `topic-cluster` | 0 | Group by topic, deep-read per cluster |
-| `query-driven` | 0 | Per-section ChromaDB retrieval |
-| `snowball` | 0 | BFS from top PageRank paper |
-
-## DOCX Template System
-
-Templates are tracked in SQLite (`JournalTemplate` table). Three sources:
-1. **Publisher downloads**: `scholarforge templates download wiley_afm`
-2. **User papers**: `scholarforge templates import my_paper.docx`
-3. **Built-in fallback**: Programmatic styling from journal profile
-
-The exporter clones paragraph exemplars from the template XML, preserving
-exact spacing, fonts, headers, footers, and logos.
+Both call the same Python functions. Agent loop uses litellm's native
+tool_use. MCP server wraps them for external clients (Claude Code, Cursor).
 
 ## Data Layout
 
 ```
 data/
-├── papers.db               # SQLite (papers, chunks, citations, templates)
+├── papers.db               # SQLite
 ├── chromadb/               # Embedding vectors
-├── library.bib             # Auto-generated BibTeX (updated on ingest)
+├── library.bib             # Auto-generated BibTeX
 ├── cache/                  # LLM response cache
-├── corpus_vocabulary.json  # Topic vocabulary
-├── output/                 # Generated papers (md, docx, pdf)
-├── downloads/              # Downloaded publisher templates
+├── output/                 # Generated papers
 └── vault/                  # Obsidian vault
-    ├── papers/             # Paper notes (blue in graph)
-    ├── authors/            # Author notes (green)
-    ├── topics/             # Topic hubs (orange)
-    └── Dashboard.md        # Entry point
 ```
-
-## Key Dependencies
-
-| Category | Libraries |
-|---|---|
-| PDF | pymupdf, pymupdf4llm, rapidocr-onnxruntime |
-| Office | python-docx, python-pptx |
-| Storage | sqlmodel (SQLite), chromadb, sentence-transformers |
-| LLM | litellm, tiktoken, diskcache |
-| Graph | networkx |
-| References | bibtexparser |
-| Export | jinja2, xhtml2pdf, docx2pdf |
-| Scraping | scrapling, patchright (template downloads) |
-| CLI | typer, pydantic-settings, rich |
