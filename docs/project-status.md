@@ -27,10 +27,17 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 **Generation (Phase 2 — implemented, needs API key):**
 - LLM client with litellm + diskcache response caching
 - Retrieval: ChromaDB k-NN + token-budgeted chunk assembly
+- Auto deep-read: top 3 hub papers (by PageRank) get all chunks; rest get first 3
 - Graph metrics: PageRank, centrality, hub/bridge/frontier classification
 - Paper generation: structured planning → section-by-section writing
 - Slides generation: plan via LLM → export to PPTX via python-pptx
 - Interactive literature chat with retrieval-augmented generation
+- Multi-library support: `--library` flag scopes all data per domain
+- Full text in vault notes (Obsidian collapsible callout, invisible to LLM pipeline)
+
+**Testing (107 unit tests, all passing):**
+- Metadata extraction, graph metrics, Paper model, chunker, vault templates
+- No external services required (no API key, no ChromaDB)
 
 ### CLI Commands
 
@@ -63,7 +70,10 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 ### Phase 2 — Generation Pipeline
 - [x] LLM client (litellm + diskcache)
 - [x] Retrieval context assembly (ChromaDB query + chunk budget)
+- [x] Auto deep-read top 3 hub papers by PageRank (all chunks vs 3 for rest)
+- [x] Full text in vault notes (collapsed Obsidian callout, invisible to LLM)
 - [x] Graph metrics (PageRank, centrality, hub/bridge/frontier)
+- [x] Multi-library support (--library flag scopes DB/vault/embeddings per domain)
 - [x] Paper planner (structured outline from prompt + literature)
 - [x] Section-by-section writer
 - [x] Slides planner + PPTX export
@@ -74,7 +84,6 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 
 ### High Priority
 - [ ] Set up ANTHROPIC_API_KEY in .env and run end-to-end mock tests
-- [ ] Multi-library support (different domains/fields)
 - [ ] Scale to full 206-paper corpus
 - [ ] DOCX export for generated papers
 
