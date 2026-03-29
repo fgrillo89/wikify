@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -272,6 +273,137 @@ def _parse_author_line(line: str) -> list[str]:
     return names
 
 
+@dataclass
+class _Slide:
+    """A single parsed slide from PPTX markdown."""
+
+    index: int
+    title: str
+    body: str
+    notes: str
+
+
+def _parse_slides(md_text: str) -> list[_Slide]:
+    """Split PPTX markdown into individual slides with title, body, and notes."""
+    # Split on slide headings: ## Slide N: Title  or  ## Slide N
+    slide_splits = re.split(r"(?=^## (?:Slide \d+))", md_text, flags=re.MULTILINE)
+    slides: list[_Slide] = []
+
+    for block in slide_splits:
+        block = block.strip()
+        if not block:
+            continue
+        # Extract heading
+        heading_match = re.match(r"^## Slide (\d+)(?::\s*(.+))?$", block, re.MULTILINE)
+        if not heading_match:
+            continue
+
+        index = int(heading_match.group(1))
+        title = (heading_match.group(2) or "").strip()
+        rest = block[heading_match.end() :].strip()
+
+        # Separate notes (blockquote lines starting with >) from body
+        body_lines: list[str] = []
+        note_lines: list[str] = []
+        for line in rest.splitlines():
+            if line.strip().startswith(">"):
+                note_lines.append(line.strip().lstrip("> ").strip())
+            else:
+                body_lines.append(line)
+
+        body = "\n".join(body_lines).strip()
+        notes = " ".join(note_lines).strip()
+        # Remove "Note:" prefix from notes
+        notes = re.sub(r"^Note:\s*", "", notes, flags=re.IGNORECASE).strip()
+
+        slides.append(_Slide(index=index, title=title, body=body, notes=notes))
+
+    return slides
+
+
+def _is_conclusion_slide(slide: _Slide) -> bool:
+    """Check if a slide looks like a conclusion/summary slide."""
+    title_lower = slide.title.lower()
+    conclusion_keywords = (
+        "conclusion",
+        "concluding",
+        "summary",
+        "takeaway",
+        "key finding",
+        "wrap up",
+        "wrap-up",
+        "closing",
+        "final",
+        "outlook",
+        "future work",
+    )
+    return any(kw in title_lower for kw in conclusion_keywords)
+
+
+def _synthesize_slide_summary(slides: list[_Slide]) -> str:
+    """Build a summary from first 3 slides + conclusion slides from last 3.
+
+    Structure: title context from opening slides, then conclusion content.
+    """
+    parts: list[str] = []
+
+    # ── Opening: first 3 slides (title + body + notes) ──────────────────────
+    for slide in slides[:3]:
+        slide_text = ""
+        if slide.title:
+            slide_text = slide.title
+        body_clean = _clean_markdown(slide.body)
+        if body_clean:
+            # Take first ~150 words of body to keep summary concise
+            words = body_clean.split()
+            excerpt = " ".join(words[:150])
+            slide_text = f"{slide_text}. {excerpt}" if slide_text else excerpt
+        if slide.notes:
+            # Speaker notes often have the real explanation
+            notes_clean = _clean_markdown(slide.notes)
+            words = notes_clean.split()
+            notes_excerpt = " ".join(words[:80])
+            slide_text = f"{slide_text} {notes_excerpt}" if slide_text else notes_excerpt
+        if slide_text:
+            parts.append(slide_text.strip())
+
+    # ── Closing: check last 3 slides for conclusions ────────────────────────
+    tail_slides = slides[-3:] if len(slides) > 3 else []
+    conclusion_parts: list[str] = []
+    for slide in tail_slides:
+        if _is_conclusion_slide(slide):
+            conclusion_text = ""
+            if slide.title:
+                conclusion_text = slide.title
+            body_clean = _clean_markdown(slide.body)
+            if body_clean:
+                words = body_clean.split()
+                excerpt = " ".join(words[:200])
+                conclusion_text = f"{conclusion_text}. {excerpt}" if conclusion_text else excerpt
+            if slide.notes:
+                notes_clean = _clean_markdown(slide.notes)
+                words = notes_clean.split()
+                notes_excerpt = " ".join(words[:100])
+                conclusion_text = (
+                    f"{conclusion_text} {notes_excerpt}" if conclusion_text else notes_excerpt
+                )
+            if conclusion_text:
+                conclusion_parts.append(conclusion_text.strip())
+
+    if conclusion_parts:
+        parts.append("Conclusions: " + ". ".join(conclusion_parts))
+
+    if not parts:
+        return ""
+
+    # Join and clean up
+    text = ". ".join(parts)
+    # Collapse multiple periods/spaces
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _extract_summary(md_text: str) -> str | None:
     """Extract a document summary from markdown text.
 
@@ -280,15 +412,23 @@ def _extract_summary(md_text: str) -> str | None:
     (first ~400 words of content).
 
     Strategies tried in order:
-    1. Labeled section (Abstract, Summary, Executive Summary, Overview, Scope)
-    2. First substantial prose paragraph (>100 chars with sentence punctuation)
-    3. Slide-aware: concatenate slide titles and first bullets
+    1. Slide-aware: first 3 slides + conclusion slides from last 3
+    2. Labeled section (Abstract, Summary, Executive Summary, Overview, Scope)
+    3. First substantial prose paragraph (>100 chars with sentence punctuation)
     4. Fallback: first ~400 words of body text
     """
+    # ── Strategy 1: Slide-aware synthesis ────────────────────────────────────
+    # Check for slide decks first — their body text can false-positive on labels
+    slides = _parse_slides(md_text)
+    if len(slides) >= 3:
+        summary = _synthesize_slide_summary(slides)
+        if summary and len(summary) > 50:
+            return summary
+
     # Strip markdown formatting for matching purposes
     search_text = _clean_markdown(md_text[:10000])
 
-    # ── Strategy 1: Labeled section ──────────────────────────────────────────
+    # ── Strategy 2: Labeled section ──────────────────────────────────────────
     # Matches heading or inline label for abstract-like sections
     label_re = re.compile(
         r"(?:^|\n)\s*(?:#+\s*)?"
@@ -332,7 +472,7 @@ def _extract_summary(md_text: str) -> str | None:
         if len(text) > 50 and not _is_noise_paragraph(text):
             return _clean_markdown(text)
 
-    # ── Strategy 2: First substantial prose paragraph ──────────────────────
+    # ── Strategy 3: First substantial prose paragraph ──────────────────────
     paragraphs = re.split(r"\n\s*\n", search_text)
     for para in paragraphs:
         para = para.strip()
@@ -342,20 +482,6 @@ def _extract_summary(md_text: str) -> str | None:
             continue
         if len(para) > 100 and re.search(r"[.!?]", para):
             return _clean_markdown(para)
-
-    # ── Strategy 3: Slide-aware synthesis ────────────────────────────────────
-    # For presentations: extract slide titles and first bullet from each slide
-    # Produces a synthetic summary like "Title. Outline: point 1, point 2. ..."
-    slide_headings = re.findall(r"^##\s+(?:Slide\s+\d+:\s*)?(.+)$", md_text, re.MULTILINE)
-    if len(slide_headings) >= 3:
-        # This looks like a slide deck — synthesize from headings + content
-        parts: list[str] = []
-        for heading in slide_headings[:8]:
-            cleaned = _clean_markdown(heading).strip()
-            if cleaned and not cleaned.lower().startswith("slide "):
-                parts.append(cleaned)
-        if parts:
-            return ". ".join(parts) + "."
 
     # ── Strategy 4: Fallback — first ~400 words of body text ─────────────
     body_words: list[str] = []

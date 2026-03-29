@@ -26,23 +26,29 @@ This works for journal articles and conference papers. It breaks for:
 These are **external knowledge** — things you're reading, not writing. They go into the
 corpus and should be searchable.
 
-**Embedding strategy for documents without abstracts:**
-- Generate a **synthetic abstract** from the first ~500 tokens of content
-- For slides: concatenate all slide titles + first bullet of each slide
-- For books: use preface/introduction or first chapter opening
-- For reports: use executive summary or introduction section
-- Store as `Paper.abstract` — same field, same pipeline, no special cases
+**Summary extraction strategies (in `_extract_summary`):**
 
-This keeps the architecture uniform: every document gets an abstract (real or synthetic),
-and the rest of the pipeline works unchanged.
+`Paper.abstract` has been renamed to `Paper.summary` — every document gets one, real or synthetic.
 
-**Implementation**: Add a fallback in `extract_metadata()`:
-```
-If no abstract found AND doc_type != "article":
-    abstract = first 500 tokens of content, cleaned up
-```
+The extraction tries strategies in order, first match wins:
 
-This is a small change with big impact — slides and reports immediately become searchable.
+1. **Slide-aware synthesis** (≥3 `## Slide N` headings detected):
+   - Extract title + body text + speaker notes from **first 3 slides**
+   - Check **last 3 slides** for conclusion-like headings (conclusion, summary, takeaway, future work, etc.)
+   - Combine: opening content + "Conclusions: ..." if found
+   - Result: rich summary with both topic overview and key findings
+
+2. **Labeled section** (abstract, summary, executive summary, overview, scope, synopsis, etc.):
+   - Standard paper abstract extraction — matches heading or inline label
+   - Works for papers, reports with executive summaries, proposals with scope sections
+
+3. **First substantial prose paragraph** (>100 chars with sentence punctuation):
+   - Catches reports/books that start with a meaningful opening paragraph
+
+4. **Fallback**: first ~400 words of body text, truncated at last sentence boundary
+
+This keeps the architecture uniform: every document gets a summary, and the rest
+of the pipeline (ChromaDB embedding, LLM prompts, k-NN similarity) works unchanged.
 
 ### Personal notes (separate handling)
 
