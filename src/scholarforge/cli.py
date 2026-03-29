@@ -188,6 +188,52 @@ def generate(
         console.print(f"[green]PDF:[/green] {pdf_path}")
 
 
+@app.command("agent-generate")
+def agent_generate(
+    prompt: str = typer.Argument(..., help="What to write"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model (default from config)"),
+    journal: str = typer.Option("", "--journal", "-j", help="Target journal"),
+    artifact_type: str = typer.Option("lit_review", "--type", "-t", help="Document type"),
+    token_budget: int = typer.Option(200_000, "--token-budget", help="Max tokens"),
+    max_turns: int = typer.Option(30, "--max-turns", help="Max agent turns"),
+    output: str = typer.Option("data/output/paper.md", "--output", "-o"),
+    docx: bool = typer.Option(True, "--docx/--no-docx", help="Export DOCX"),
+    pdf: bool = typer.Option(False, "--pdf", help="Export PDF"),
+):
+    """Generate a paper using the agent loop (LLM explores corpus via tools)."""
+    from scholarforge.agent.workflows import export_paper, generate_paper
+
+    console.print(f"[bold]Generating with agent loop[/bold] (model: {model or 'default'})...")
+    console.print(f"  Type: {artifact_type}, Journal: {journal or 'generic'}")
+    console.print(f"  Token budget: {token_budget:,}, Max turns: {max_turns}")
+
+    markdown, result, hooks = generate_paper(
+        prompt=prompt,
+        model=model,
+        artifact_type_id=artifact_type,
+        journal=journal,
+        token_budget=token_budget,
+        max_turns=max_turns,
+    )
+
+    console.print("\n[green]Generation complete:[/green]")
+    console.print(f"  Turns: {result.total_turns}")
+    console.print(f"  Tool calls: {len(result.tool_calls)}")
+    console.print(
+        f"  Tokens: {result.total_input_tokens:,} in + {result.total_output_tokens:,} out"
+    )
+
+    # Show cost from the CostTracker hook
+    for hook in hooks:
+        if hasattr(hook, "summary"):
+            console.print(f"  Cost: {hook.summary()}")
+
+    # Export
+    outputs = export_paper(markdown, output, journal, docx, pdf)
+    for p in outputs:
+        console.print(f"  Written: {p} ({p.stat().st_size:,} bytes)")
+
+
 @app.command()
 def slides(
     prompt: str = typer.Argument(..., help="Presentation topic"),
