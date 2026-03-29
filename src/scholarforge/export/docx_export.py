@@ -101,13 +101,30 @@ class DocxExporter:
     ) -> Path:
         """Parse *numbered_markdown* and write a styled DOCX to *output_path*.
 
+        If the journal profile has a ``template_docx`` set and the template
+        file exists, the template is used as the base document (preserving
+        its styles, headers, footers, and page setup).  Otherwise falls back
+        to a blank document with programmatic styling.
+
+        A user-supplied .docx file can also be used as a template by setting
+        ``template_docx`` to its path.
+
         Returns the resolved output path.
         """
+        from scholarforge.export.templates.registry import get_template_path
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        doc = Document()
-        self._configure_document(doc)
+        template = get_template_path(self.profile.template_docx)
+        if template:
+            doc = Document(str(template))
+            self._clear_body(doc)
+            console.print(f"[dim]Using template: {template.name}[/dim]")
+        else:
+            doc = Document()
+            self._configure_document(doc)
+
         self._parse_markdown(doc, numbered_markdown)
 
         doc.save(str(output_path))
@@ -140,6 +157,18 @@ class DocxExporter:
                 heading_style.font.name = self.profile.font_family
             except KeyError:
                 pass
+
+    @staticmethod
+    def _clear_body(doc: Document) -> None:
+        """Remove all paragraphs from a template document, keeping styles/headers."""
+        body = doc.element.body
+        for child in list(body):
+            if child.tag.endswith("}p") or child.tag.endswith("}tbl"):
+                body.remove(child)
+
+    def _style_name(self, role: str) -> str:
+        """Resolve a ScholarForge role to a template style name."""
+        return self.profile.style_map.get(role, role)
 
     # ------------------------------------------------------------------
     # Markdown parser
@@ -174,14 +203,23 @@ class DocxExporter:
     # ------------------------------------------------------------------
 
     def _add_title(self, doc: Document, text: str) -> None:
-        """Add a centred Title heading (level 0)."""
-        para = doc.add_heading(level=0)
+        """Add a centred Title heading."""
+        title_style = self._style_name("title")
+        try:
+            para = doc.add_paragraph(style=title_style)
+        except KeyError:
+            para = doc.add_heading(level=0)
         para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         self._fill_runs(para, text)
 
     def _add_heading(self, doc: Document, text: str, level: int) -> None:
         """Add a heading at *level* (1 or 2)."""
-        para = doc.add_heading(level=level)
+        style_key = f"heading{level}"
+        style_name = self._style_name(style_key)
+        try:
+            para = doc.add_paragraph(style=style_name)
+        except KeyError:
+            para = doc.add_heading(level=level)
         self._fill_runs(para, text)
 
     def _add_body_paragraph(
@@ -190,9 +228,14 @@ class DocxExporter:
         text: str,
         *,
         superscript_citations: bool = True,
+        style_role: str = "body",
     ) -> None:
         """Add a body-text paragraph with inline formatting."""
-        para = doc.add_paragraph(style="Normal")
+        style_name = self._style_name(style_role)
+        try:
+            para = doc.add_paragraph(style=style_name)
+        except KeyError:
+            para = doc.add_paragraph(style="Normal")
         _apply_paragraph_spacing(para, self.profile.line_spacing)
         self._fill_runs(para, text, superscript_citations=superscript_citations)
 

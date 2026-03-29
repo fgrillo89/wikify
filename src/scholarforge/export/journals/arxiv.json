@@ -1,0 +1,21 @@
+{
+    "name": "arXiv Preprint",
+    "publisher": "arXiv",
+    "citation_style": "numbered",
+    "word_limit": null,
+    "abstract_word_limit": null,
+    "required_sections": [
+        "Abstract",
+        "Introduction",
+        "Conclusion"
+    ],
+    "font_family": "Computer Modern",
+    "font_size_pt": 11,
+    "line_spacing": 1.15,
+    "column_layout": "single",
+    "reference_format": "[{number}] {authors}. {title}. {journal} {volume}, {pages} ({year}).",
+    "figure_min_dpi": 150,
+    "notes": "Standard arXiv preprint format. LaTeX preferred. Single-column, Computer Modern font. No strict section requirements beyond abstract and references.",
+    "template_docx": "arxiv_preprint.docx",
+    "template_latex": "arxiv_preprint.tex"
+}

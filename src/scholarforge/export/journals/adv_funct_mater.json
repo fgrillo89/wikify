@@ -17,5 +17,8 @@
     "column_layout": "single",
     "reference_format": "{number}. {authors}, {title}. {journal} {year}, {volume}, {pages}.",
     "figure_min_dpi": 300,
-    "notes": "Wiley journal. Reviews welcome. Numbered citations in square brackets [1]. References: Author1, Author2, Title. Adv. Funct. Mater. YYYY, Vol, Pages. Supporting Information for methods details. Figures should be submitted as separate high-resolution files."
+    "notes": "Wiley journal. Reviews welcome. Numbered citations in square brackets [1]. References: Author1, Author2, Title. Adv. Funct. Mater. YYYY, Vol, Pages. Supporting Information for methods details. Figures should be submitted as separate high-resolution files.",
+    "template_docx": "wiley_adv_funct_mater.docx",
+    "template_latex": "",
+    "template_url": ""
 }

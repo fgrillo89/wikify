@@ -28,6 +28,22 @@ class JournalProfile(BaseModel):
     figure_min_dpi: int = 300
     notes: str = ""
 
+    # Template files (filenames relative to templates/docx/ or templates/latex/)
+    template_docx: str = ""  # e.g., "wiley_adv_funct_mater.docx"
+    template_latex: str = ""  # e.g., "wiley.cls"
+    template_url: str = ""  # URL to download the template from publisher
+
+    # Style mapping: maps ScholarForge roles to template style names
+    style_map: dict[str, str] = {
+        "body": "Normal",
+        "title": "Title",
+        "heading1": "Heading 1",
+        "heading2": "Heading 2",
+        "heading3": "Heading 3",
+        "abstract": "Normal",
+        "references": "Normal",
+    }
+
 
 # ── Default profile (used when no journal specified) ─────────────────────────
 
