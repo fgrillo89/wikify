@@ -17,5 +17,6 @@
     "column_layout": "double",
     "reference_format": "{number}. {authors}. {title}. {journal} {year}, {volume}, {pages}.",
     "figure_min_dpi": 300,
-    "notes": "ACS journal. Superscript numbered citations. TOC/Abstract Graphic required. References: Author1; Author2; Author3. Title. J. Name Year, Vol, Pages. Methods at end or in Supporting Information."
+    "notes": "ACS journal. Superscript numbered citations. TOC/Abstract Graphic required.",
+    "template_docx": "acs_manuscript.docx"
 }
