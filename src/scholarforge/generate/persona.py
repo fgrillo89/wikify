@@ -19,9 +19,9 @@ def _find_style_guide() -> Path | None:
     """Locate the style guide from multiple candidate paths."""
     candidates = [
         # Relative to package source (works with uv run / editable install)
-        Path(__file__).parent.parent.parent.parent / "docs" / "logic" / "academic_writing_style.md",
+        Path(__file__).parent.parent / "prompts" / "style_guide.md",
         # Relative to working directory
-        Path.cwd() / "docs" / "logic" / "academic_writing_style.md",
+        Path.cwd() / "src" / "scholarforge" / "prompts" / "style_guide.md",
     ]
     for p in candidates:
         if p.exists():

@@ -6,11 +6,12 @@ General rules for how Claude should operate in this project.
 1. `docs/project-status.md` — current state, what works, remaining work
 2. `docs/architecture.md` — module layout, writing pipeline, data flow
 
-**Business logic docs**: `docs/logic/` contains:
-- `academic_writing_style.md` — base style guide (injected into LLM persona)
-- `artifact_types/` — per-document-type writing rules (lit review, thesis, etc.)
-- `fields/` — per-field writing guides (materials science, CS, biology, etc.)
-- Numbered files (01-17) — design decisions per algorithm/component
+**Runtime prompts** (loaded by code, NOT documentation):
+- `src/scholarforge/prompts/style_guide.md` — base writing style
+- `src/scholarforge/prompts/artifact_types/` — per-document-type rules
+- `src/scholarforge/prompts/fields/` — per-field writing guides
+
+**Design docs**: `docs/design/` — architecture decisions, design plans (reference only)
 
 ## Agent Usage
 

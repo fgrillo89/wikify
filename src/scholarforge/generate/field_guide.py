@@ -316,8 +316,8 @@ _FIELD_KEYWORDS: dict[str, list[str]] = {
 def _find_fields_dir() -> Path | None:
     """Locate the fields/ directory from multiple candidate paths."""
     candidates = [
-        Path(__file__).parent.parent.parent.parent / "docs" / "logic" / "fields",
-        Path.cwd() / "docs" / "logic" / "fields",
+        Path(__file__).parent.parent / "prompts" / "fields",
+        Path.cwd() / "src" / "scholarforge" / "prompts" / "fields",
     ]
     for p in candidates:
         if p.is_dir():

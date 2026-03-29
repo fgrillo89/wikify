@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
-_GUIDES_DIR = Path(__file__).resolve().parents[4] / "docs" / "logic" / "artifact_types"
+_GUIDES_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifact_types"
 
 
 @dataclass
