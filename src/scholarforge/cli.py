@@ -112,6 +112,13 @@ def generate(
     pages: int = typer.Option(10, "--pages", "-n", help="Target page count"),
     output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
     journal: str = typer.Option("", "--journal", "-j", help="Target journal for formatting"),
+    strategy: str = typer.Option(
+        "flat",
+        "--strategy",
+        "-s",
+        help="Retrieval strategy: flat, hub-spoke, topic-cluster, query-driven, snowball",
+    ),
+    token_budget: int = typer.Option(12000, "--token-budget", help="Max context tokens"),
     docx: bool = typer.Option(False, "--docx", help="Also export as DOCX"),
     pdf: bool = typer.Option(False, "--pdf", help="Also export as PDF"),
 ):
@@ -122,15 +129,25 @@ def generate(
     from scholarforge.export.journal_profile import load_journal_profile
     from scholarforge.generate.planner import plan_paper
     from scholarforge.generate.writer import write_paper
-    from scholarforge.retrieve.context import retrieve_all_papers
+    from scholarforge.retrieve.strategies import StrategyConfig, get_strategy
 
     start = time.time()
     journal_profile = load_journal_profile(journal)
     if journal:
         console.print(f"[dim]Journal: {journal_profile.name}[/dim]")
 
-    console.print("[bold]Retrieving literature...[/bold]")
-    context = retrieve_all_papers()
+    config = StrategyConfig(token_budget=token_budget, user_focus=prompt)
+    retriever = get_strategy(strategy, config=config)
+    console.print(f"[bold]Retrieving literature[/bold] (strategy: {strategy})...")
+
+    if retriever.expensive:
+        cost = retriever.estimate_cost()
+        console.print(
+            f"  [yellow]Strategy uses ~{cost['llm_calls']:.0f} LLM calls"
+            f" (~${cost['est_usd']:.4f})[/yellow]"
+        )
+
+    context = retriever.retrieve()
     console.print(f"  {len(context.papers)} papers, {context.total_tokens} tokens of context")
 
     console.print("[bold]Planning paper structure...[/bold]")

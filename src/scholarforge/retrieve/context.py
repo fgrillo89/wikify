@@ -13,6 +13,36 @@ from scholarforge.store.models import Chunk, Paper
 
 
 @dataclass
+class SectionContext:
+    """Context tailored for a specific section of a generated paper."""
+
+    section_heading: str = ""
+    chunks: list[Chunk] = field(default_factory=list)
+    synthesis_notes: str = ""  # LLM-generated synthesis (for agent strategies)
+    token_count: int = 0
+
+    def as_text(self) -> str:
+        """Format section-specific context for the LLM prompt."""
+
+        parts: list[str] = []
+        if self.synthesis_notes:
+            parts.append(f"--- Synthesis ---\n{self.synthesis_notes}")
+
+        # Group chunks by paper
+        chunks_by_paper: dict[str, list[Chunk]] = {}
+        for c in self.chunks:
+            chunks_by_paper.setdefault(c.paper_id, []).append(c)
+
+        if chunks_by_paper:
+            parts.append("--- Source excerpts ---")
+            for _pid, pchunks in chunks_by_paper.items():
+                body = "\n\n".join(c.content for c in pchunks)
+                parts.append(body)
+
+        return "\n\n".join(parts)
+
+
+@dataclass
 class RetrievedContext:
     """Context assembled for a generation or chat request."""
 
@@ -20,6 +50,8 @@ class RetrievedContext:
     chunks: list[Chunk] = field(default_factory=list)
     total_tokens: int = 0
     graph_metrics: GraphMetrics | None = None
+    section_contexts: dict[str, SectionContext] = field(default_factory=dict)
+    strategy_name: str = "flat"
 
     def as_text(self) -> str:
         """Format context for LLM prompt.

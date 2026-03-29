@@ -16,6 +16,7 @@ from scholarforge.store.models import PaperPlan, SectionPlan
 
 if TYPE_CHECKING:
     from scholarforge.export.journal_profile import JournalProfile
+    from scholarforge.retrieve.context import SectionContext
     from scholarforge.store.models import Paper
 
 console = Console()
@@ -47,6 +48,9 @@ def write_paper(
             prefix = "#" * section.level
             prior_text = "\n\n".join(sections_written[-3:]) if sections_written else ""
 
+            # Use per-section context if the strategy produced one
+            sec_ctx = context.section_contexts.get(section.heading)
+
             section_md = _write_section(
                 section=section,
                 plan=plan,
@@ -54,6 +58,7 @@ def write_paper(
                 prior_sections=prior_text,
                 persona=persona,
                 journal_profile=journal_profile,
+                section_context=sec_ctx,
             )
 
             sections_written.append(f"{prefix} {section.heading}\n\n{section_md}")
@@ -86,8 +91,14 @@ def _write_section(
     prior_sections: str,
     persona: str = "",
     journal_profile: JournalProfile | None = None,
+    section_context: SectionContext | None = None,
 ) -> str:
-    """Generate a single section."""
+    """Generate a single section.
+
+    If *section_context* is provided (from a per-section strategy), its
+    content is used instead of the global ``lit_context``.
+    """
+
     persona_block = f"{persona}\n\n" if persona else ""
 
     system_msg = (
@@ -108,13 +119,19 @@ def _write_section(
     if section.source_papers:
         source_hint = f"\nKey sources for this section: {', '.join(section.source_papers)}"
 
+    # Prefer per-section context if available
+    if section_context and (section_context.chunks or section_context.synthesis_notes):
+        effective_context = section_context.as_text()[:8000]
+    else:
+        effective_context = lit_context[:8000]
+
     user_msg = (
         f"Paper title: {plan.title}\n"
         f"Section: {section.heading}\n"
         f"Section description: {section.description}\n"
         f"{source_hint}\n\n"
         f"--- Previously written sections (for coherence) ---\n{prior_sections}\n\n"
-        f"--- Literature context ---\n{lit_context[:8000]}"
+        f"--- Literature context ---\n{effective_context}"
     )
 
     return complete(

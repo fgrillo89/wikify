@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     default_journal: str = ""  # Journal name for formatting (empty = generic)
     output_style: str = "numbered"  # "numbered" or "author_year"
 
+    # Retrieval
+    retrieval_strategy: str = "flat"  # flat, hub-spoke, topic-cluster, query-driven, snowball
+    retrieval_token_budget: int = 12000
+
     # Zotero (optional)
     zotero_library_id: str = ""
     zotero_api_key: str = ""
