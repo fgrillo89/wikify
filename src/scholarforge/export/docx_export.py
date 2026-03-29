@@ -160,11 +160,27 @@ class DocxExporter:
 
     @staticmethod
     def _clear_body(doc: Document) -> None:
-        """Remove all paragraphs from a template document, keeping styles/headers."""
+        """Remove placeholder content from a template, preserving structure.
+
+        Keeps:
+        - Section properties (<w:sectPr>) — these define page layout,
+          headers, footers, and logo images per section
+        - Paragraphs containing section breaks (they hold <w:sectPr>)
+        - The body-level sectPr (last section properties)
+        """
         body = doc.element.body
+        sect_pr_tag = qn("w:sectPr")
         for child in list(body):
-            if child.tag.endswith("}p") or child.tag.endswith("}tbl"):
+            if child.tag.endswith("}tbl"):
                 body.remove(child)
+            elif child.tag.endswith("}p"):
+                # Keep paragraphs that contain section breaks
+                if child.find(f".//{sect_pr_tag}") is not None:
+                    # Clear text but keep the sectPr
+                    for r in child.findall(qn("w:r")):
+                        child.remove(r)
+                else:
+                    body.remove(child)
 
     def _style_name(self, role: str) -> str:
         """Resolve a ScholarForge role to a template style name."""
@@ -178,25 +194,41 @@ class DocxExporter:
         """Convert markdown line-by-line to Word paragraphs."""
         lines = markdown.splitlines()
         in_references = False
+        in_abstract = False
+        title_written = False
 
         for line in lines:
             stripped = line.strip()
 
             if not stripped:
-                continue  # skip blank lines
+                continue
 
             if stripped.startswith("### "):
                 self._add_heading(doc, stripped[4:], level=2)
+                in_abstract = False
             elif stripped.startswith("## "):
                 heading_text = stripped[3:]
                 self._add_heading(doc, heading_text, level=1)
-                # Detect the References section
                 in_references = heading_text.strip().lower() == "references"
+                in_abstract = False
             elif stripped.startswith("# "):
-                self._add_title(doc, stripped[2:])
+                heading_text = stripped[2:]
+                in_abstract = False
                 in_references = False
+                if heading_text.strip().lower() == "abstract":
+                    in_abstract = True
+                elif not title_written:
+                    self._add_title(doc, heading_text)
+                    title_written = True
+                else:
+                    self._add_heading(doc, heading_text, level=1)
             else:
-                role = "references" if in_references else "body"
+                if in_references:
+                    role = "references"
+                elif in_abstract:
+                    role = "abstract"
+                else:
+                    role = "body"
                 self._add_body_paragraph(
                     doc,
                     stripped,

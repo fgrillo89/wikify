@@ -21,11 +21,14 @@
     "template_docx": "wiley_afm",
     "style_map": {
         "body": "Main Text",
-        "title": "Title1",
+        "title": "Title2",
         "heading1": "Head 1",
         "heading2": "Head 2",
         "heading3": "Head 2",
         "abstract": "Abstract",
-        "references": "Literature"
+        "references": "Literature",
+        "authors": "Authors Full",
+        "addresses": "Addresses",
+        "keywords": "Normal"
     }
 }
