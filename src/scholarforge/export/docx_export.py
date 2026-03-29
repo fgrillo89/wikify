@@ -12,6 +12,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from rich.console import Console
 
+from scholarforge.export.chemistry import split_formula_runs
 from scholarforge.export.journal_profile import JournalProfile
 from scholarforge.store.models import Paper
 
@@ -66,6 +67,14 @@ def _set_superscript(run) -> None:
     r_pr = run._r.get_or_add_rPr()
     vert_align = OxmlElement("w:vertAlign")
     vert_align.set(qn("w:val"), "superscript")
+    r_pr.append(vert_align)
+
+
+def _set_subscript(run) -> None:
+    """Mark a run as subscript."""
+    r_pr = run._r.get_or_add_rPr()
+    vert_align = OxmlElement("w:vertAlign")
+    vert_align.set(qn("w:val"), "subscript")
     r_pr.append(vert_align)
 
 
@@ -188,12 +197,41 @@ class DocxExporter:
         self._fill_runs(para, text, superscript_citations=superscript_citations)
 
     def _fill_runs(self, para, text: str, *, superscript_citations: bool = True) -> None:
-        """Populate *para* with runs derived from inline markdown in *text*."""
+        """Populate *para* with runs derived from inline markdown in *text*.
+
+        Plain text segments are further split by chemical formula detection:
+        digits in formulas like HfO2 are rendered as subscript runs.
+        """
         tokens = _parse_inline(text, superscript_citations=superscript_citations)
+        font = self.profile.font_family
+        size = self.profile.font_size_pt
         for content, bold, italic, superscript in tokens:
-            run = para.add_run(content)
-            run.bold = bold
-            run.italic = italic
-            _set_run_font(run, self.profile.font_family, self.profile.font_size_pt)
-            if superscript:
-                _set_superscript(run)
+            if superscript or bold or italic:
+                # Styled runs are emitted as-is (no chemistry splitting)
+                run = para.add_run(content)
+                run.bold = bold
+                run.italic = italic
+                _set_run_font(run, font, size)
+                if superscript:
+                    _set_superscript(run)
+            else:
+                # Plain text: split words to detect chemical formulas
+                self._fill_with_chemistry(para, content, font, size)
+
+    def _fill_with_chemistry(self, para, text: str, font: str, size: int) -> None:
+        """Emit runs for plain text, subscripting digits in chemical formulas."""
+        # Split on word boundaries to check each word for formulas
+        words = re.split(r"(\b\w+\b)", text)
+        for word in words:
+            formula_runs = split_formula_runs(word)
+            if len(formula_runs) == 1 and not formula_runs[0][1]:
+                # Not a formula — emit as single plain run
+                run = para.add_run(word)
+                _set_run_font(run, font, size)
+            else:
+                # Chemical formula — emit element/digit runs with subscripts
+                for part, is_subscript in formula_runs:
+                    run = para.add_run(part)
+                    _set_run_font(run, font, size)
+                    if is_subscript:
+                        _set_subscript(run)

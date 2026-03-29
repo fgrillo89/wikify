@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.progress import Progress
 
+from scholarforge.export.chemistry import format_formulas_unicode
 from scholarforge.generate.persona import build_persona
 from scholarforge.generate.references import ReferenceResolver
 from scholarforge.llm.client import complete
@@ -71,6 +72,9 @@ def write_paper(
     ref_fmt = journal_profile.reference_format if journal_profile else ""
     bibliography = resolver.build_bibliography(ordered_papers, reference_format=ref_fmt)
     full_document = f"{numbered_md}\n\n## References\n\n{bibliography}"
+
+    # Format chemical formulas (HfO2 → HfO₂) in the final output
+    full_document = format_formulas_unicode(full_document)
 
     return full_document, ordered_papers
 
