@@ -1,90 +1,413 @@
-"""Incremental link detection and creation between vault notes."""
+"""Automatic topic/keyword extraction and vault linking.
+
+Extracts topics from:
+1. Author-declared keywords (from "Keywords:" sections in paper text)
+2. TF-IDF-style extraction: terms that appear in a paper's abstract but are
+   distinctive (not in every paper)
+
+No hardcoded keyword dictionaries — topics emerge from the corpus.
+"""
 
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter
 
 from scholarforge.store.models import Paper
-from scholarforge.vault.templates import method_note, topic_note
-from scholarforge.vault.writer import _paper_display_name, _sanitize_filename, vault_dir
+from scholarforge.vault.templates import topic_note
+from scholarforge.vault.writer import _sanitize_filename, vault_dir
 
-# Keywords that indicate topics/methods in memristor/ALD literature
-# These get expanded as we see more papers
-TOPIC_KEYWORDS: dict[str, list[str]] = {
-    "Memristor": [
-        "memristor",
-        "memristive",
-        "rram",
-        "resistive switching",
-        "resistive random access",
-    ],
-    "Neuromorphic Computing": ["neuromorphic", "brain-inspired", "neural network hardware"],
-    "Atomic Layer Deposition": ["atomic layer deposition", "ald", "ald-grown"],
-    "Synapse": ["synapse", "synaptic", "artificial synapse"],
-    "Crossbar Array": ["crossbar", "crossbar array"],
-    "HfO2": ["hfo2", "hafnium oxide", "hafnium dioxide", "hfox"],
-    "TiO2": ["tio2", "titanium oxide", "titanium dioxide", "tiox"],
-    "Al2O3": ["al2o3", "aluminum oxide", "alumina", "alox"],
-    "Filamentary Switching": ["filamentary", "conductive filament", "filament formation"],
-    "Interface Switching": ["interface type", "interface switching", "non-filamentary"],
-    "Ferroelectric": ["ferroelectric", "ferroelectric tunnel junction"],
-    "2D Materials": ["2d material", "mos2", "graphene", "van der waals", "mxene"],
-    "Flexible Electronics": ["flexible", "stretchable", "wearable"],
-    "In-Memory Computing": ["in-memory computing", "compute-in-memory", "processing-in-memory"],
-    "Multilevel Storage": ["multilevel", "multi-level", "multibit", "multi-bit"],
-    "Oxygen Vacancy": ["oxygen vacancy", "oxygen vacancies", "vo"],
-    "Reservoir Computing": ["reservoir computing"],
-    "Optoelectronic": ["optoelectronic", "photoelectric", "photosensitive", "light-modulated"],
-    "CMOS Compatible": ["cmos compatible", "cmos-compatible", "back-end-of-line", "beol"],
-    "Spiking Neural Network": ["spiking", "spike-timing", "stdp"],
+# ── Keyword extraction ───────────────────────────────────────────────────────
+
+# Words too common or too short to be useful topics
+_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "as",
+    "is",
+    "was",
+    "are",
+    "were",
+    "been",
+    "be",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "shall",
+    "can",
+    "not",
+    "no",
+    "nor",
+    "so",
+    "if",
+    "than",
+    "that",
+    "this",
+    "these",
+    "those",
+    "it",
+    "its",
+    "we",
+    "our",
+    "they",
+    "their",
+    "he",
+    "she",
+    "him",
+    "her",
+    "his",
+    "which",
+    "what",
+    "who",
+    "whom",
+    "where",
+    "when",
+    "how",
+    "why",
+    "each",
+    "every",
+    "all",
+    "both",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "only",
+    "also",
+    "very",
+    "just",
+    "about",
+    "above",
+    "after",
+    "again",
+    "between",
+    "into",
+    "through",
+    "during",
+    "before",
+    "below",
+    "up",
+    "down",
+    "out",
+    "off",
+    "over",
+    "under",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "any",
+    "same",
+    "own",
+    "too",
+    "using",
+    "based",
+    "used",
+    "shows",
+    "show",
+    "shown",
+    "found",
+    "results",
+    "result",
+    "however",
+    "therefore",
+    "thus",
+    "hence",
+    "while",
+    "since",
+    "although",
+    "because",
+    "due",
+    "et",
+    "al",
+    "fig",
+    "figure",
+    "table",
+    "ref",
+    "respectively",
+    "i.e",
+    "e.g",
+    "etc",
+    "new",
+    "high",
+    "low",
+    "large",
+    "small",
+    "two",
+    "three",
+    "one",
+    "first",
+    "second",
+    "different",
+    "several",
+    "many",
+    "well",
+    "even",
+    "still",
+    "much",
+    "paper",
+    "study",
+    "work",
+    "proposed",
+    "approach",
+    "method",
+    "methods",
+    "technique",
+    "techniques",
+    "important",
+    "significant",
+    "increasing",
+    "devices",
+    "device",
+    "structure",
+    "structures",
+    "properties",
+    "property",
+    "materials",
+    "material",
+    "film",
+    "films",
+    "layer",
+    "layers",
+    "effect",
+    "effects",
+    "performance",
+    "obtained",
+    "reported",
+    "applied",
+    "process",
+    "fabricated",
+    "fabrication",
+    "measured",
+    "measurement",
+    "analysis",
+    "compared",
+    "corresponding",
+    "including",
+    "recent",
+    "recently",
+    "demonstrated",
+    "showing",
+    "various",
+    "possible",
+    "potential",
+    "computing",
+    "applications",
+    "application",
+    "analog",
+    "digital",
+    "integrated",
+    "integration",
+    "circuit",
+    "circuits",
+    "array",
+    "arrays",
+    "system",
+    "systems",
+    "network",
+    "networks",
+    "voltage",
+    "current",
+    "resistance",
+    "design",
+    "model",
+    "data",
+    "energy",
+    "power",
+    "speed",
+    "time",
+    "state",
+    "states",
+    "level",
+    "levels",
+    "value",
+    "values",
+    "size",
+    "type",
+    "order",
+    "number",
+    "range",
+    "ratio",
+    "rate",
+    "achieved",
+    "achieve",
+    "achieving",
+    "attractive",
+    "promising",
+    "excellent",
+    "superior",
+    "conventional",
+    "traditional",
+    "provides",
+    "enable",
+    "enables",
+    "enabled",
+    "ultra-compact",
+    "folded",
+    "meanwhile",
+    "pure",
+    "good",
+    "poor",
+    "better",
+    "worse",
+    "approved",
+    "release",
+    "distribution",
+    "unlimited",
+    "access",
+    "average",
+    "maximum",
+    "minimum",
+    "total",
+    "region",
+    "regions",
+    "area",
+    "operation",
+    "operations",
+    "operating",
+    "wafer",
+    "computer",
+    "memory",
+    "silicon",
+    "metal",
+    "oxide",
 }
 
-METHOD_KEYWORDS: dict[str, list[str]] = {
-    "Atomic Layer Deposition": ["atomic layer deposition", "ald"],
-    "Sputtering": ["sputtering", "sputter"],
-    "Pulse Programming": ["pulse programming", "pulse scheme", "pulse width"],
-    "DC Sweep": ["dc sweep", "i-v curve", "current-voltage"],
-    "Conductance Quantization": ["conductance quantization", "quantized conductance"],
-    "Endurance Testing": ["endurance", "cycling", "write/erase cycles"],
-    "Retention Testing": ["retention", "data retention"],
-    "STDP": ["stdp", "spike-timing-dependent plasticity"],
-    "Potentiation/Depression": ["potentiation", "depression", "ltp", "ltd"],
-}
+
+def _extract_declared_keywords(text: str) -> list[str]:
+    """Extract keywords from a 'Keywords:' or 'Index Terms:' section."""
+    # Match patterns like:
+    #   Keywords: word1, word2, word3
+    #   KEYWORDS: word1. word2. word3
+    #   Index Terms— word1, word2
+    pattern = re.compile(
+        r"(?:keywords?|index\s+terms|key\s+words)\s*[:\-—.]+\s*(.+?)(?:\n\s*\n|\n#+|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(text[:10000])
+    if not match:
+        return []
+
+    raw = match.group(1).strip()
+    # Clean markdown formatting and bracket artifacts from PDF extraction
+    raw = re.sub(r"[*_`]+", "", raw)
+    raw = re.sub(r"\[+\]?", "", raw)  # remove [ and [] artifacts
+    raw = re.sub(r"\]+", "", raw)  # remove remaining ]
+    # Split on comma, semicolon, period (common in IEEE), or bullet markers
+    parts = re.split(r"[,;]|\.\s+|\n\s*[-•]\s*", raw)
+
+    keywords = []
+    for part in parts:
+        kw = part.strip().rstrip(".")
+        # Remove leading numbers/bullets
+        kw = re.sub(r"^\d+[.)]\s*", "", kw)
+        kw = kw.strip()
+        if 2 < len(kw) < 60 and not kw[0].isdigit() and len(kw.split()) <= 5:
+            keywords.append(kw.lower())
+    return keywords
 
 
-def detect_topics(text: str) -> list[str]:
-    """Detect topics from text using keyword matching."""
-    text_lower = text.lower()
-    found = []
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        if any(kw in text_lower for kw in keywords):
-            found.append(topic)
-    return found
+def _extract_distinctive_terms(abstract: str, all_abstracts: list[str]) -> list[str]:
+    """Extract bigram terms from abstract that are distinctive across the corpus.
+
+    Only returns bigrams (two-word phrases) — single words are too noisy.
+    Filters out phrases where both words are stopwords.
+    """
+    if not abstract or len(abstract) < 50:
+        return []
+
+    def tokenize(text: str) -> list[str]:
+        return re.findall(r"[a-z][a-z0-9/-]{2,}", text.lower())
+
+    words = tokenize(abstract)
+
+    # Only extract bigrams where BOTH words are not stopwords
+    bigrams: list[str] = []
+    for i in range(len(words) - 1):
+        w1, w2 = words[i], words[i + 1]
+        if w1 in _STOPWORDS or w2 in _STOPWORDS:
+            continue
+        bigram = f"{w1} {w2}"
+        if len(bigram) > 8:
+            bigrams.append(bigram)
+
+    if not bigrams:
+        return []
+
+    # Count document frequency across all abstracts
+    doc_count: Counter[str] = Counter()
+    for other_abstract in all_abstracts:
+        other_lower = other_abstract.lower()
+        seen: set[str] = set()
+        for term in bigrams:
+            if term not in seen and term in other_lower:
+                doc_count[term] += 1
+                seen.add(term)
+
+    # Keep bigrams present in 2+ papers (signal, not noise) but < 50% of corpus
+    min_df = 2
+    max_df = max(3, len(all_abstracts) * 0.5)
+    local_counts = Counter(bigrams)
+
+    distinctive = []
+    for term, _count in local_counts.most_common():
+        df = doc_count.get(term, 0)
+        if min_df <= df < max_df:
+            distinctive.append(term)
+        if len(distinctive) >= 6:
+            break
+
+    return distinctive
 
 
-def detect_methods(text: str) -> list[str]:
-    """Detect methods from text using keyword matching."""
-    text_lower = text.lower()
-    found = []
-    for method, keywords in METHOD_KEYWORDS.items():
-        if any(kw in text_lower for kw in keywords):
-            found.append(method)
-    return found
+def extract_topics(paper: Paper, text: str, all_abstracts: list[str]) -> list[str]:
+    """Extract topics for a paper from declared keywords + distinctive terms."""
+    # Source 1: declared keywords from the paper text
+    declared = _extract_declared_keywords(text)
+
+    # Source 2: distinctive terms from the abstract
+    distinctive = _extract_distinctive_terms(paper.abstract or "", all_abstracts)
+
+    # Merge, deduplicate, prefer declared keywords
+    seen: set[str] = set()
+    topics: list[str] = []
+    for kw in declared + distinctive:
+        normalized = kw.strip().lower()
+        if normalized not in seen:
+            seen.add(normalized)
+            # Title-case for display
+            display = kw.strip().title() if len(kw) > 4 else kw.strip().upper()
+            topics.append(display)
+
+    return topics[:15]  # Cap at 15 topics per paper
 
 
-def link_paper(paper: Paper, all_text: str) -> dict[str, list[str]]:
-    """Detect topics and methods for a paper. Returns dict of link types."""
-    # Combine title + abstract + text for matching
-    search_text = f"{paper.title or ''} {paper.abstract or ''} {all_text}"
-
-    topics = detect_topics(search_text)
-    methods = detect_methods(search_text)
-
-    return {
-        "topics": topics,
-        "methods": methods,
-    }
+# ── Writing hub notes ────────────────────────────────────────────────────────
 
 
 def write_topic_notes(topic_papers: dict[str, list[str]]) -> int:
@@ -113,108 +436,22 @@ def write_topic_notes(topic_papers: dict[str, list[str]]) -> int:
     return count
 
 
-def write_method_notes(method_papers: dict[str, list[str]]) -> int:
-    """Write/update method notes. Returns count written."""
-    vd = vault_dir()
-    (vd / "methods").mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    for method_name, papers in method_papers.items():
-        safe_name = _sanitize_filename(method_name)
-        note_path = vd / "methods" / f"{safe_name}.md"
-
-        existing_papers: list[str] = []
-        if note_path.exists():
-            content = note_path.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                m = re.match(r"- \[\[papers/(.+?)\]\]", line)
-                if m:
-                    existing_papers.append(m.group(1))
-
-        all_papers = list(dict.fromkeys(existing_papers + papers))
-        note_content = method_note(method_name, all_papers)
-        note_path.write_text(note_content, encoding="utf-8")
-        count += 1
-
-    return count
-
-
-def update_paper_note_links(paper: Paper, topics: list[str], methods: list[str]) -> None:
-    """Update a paper note's frontmatter with detected topics and methods."""
-    display_name = _paper_display_name(paper)
-    safe_name = _sanitize_filename(display_name)
-    note_path = vault_dir() / "papers" / f"{safe_name}.md"
-
-    if not note_path.exists():
-        return
-
-    content = note_path.read_text(encoding="utf-8")
-
-    # Parse frontmatter
-    if not content.startswith("---"):
-        return
-
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return
-
-    fm_text = parts[1]
-    body = parts[2]
-
-    # Add topic and method links to frontmatter
-    additions = ""
-    if topics:
-        additions += "hasTopic:\n"
-        for t in topics:
-            additions += f"- '[[topics/{t}]]'\n"
-    if methods:
-        additions += "uses_method:\n"
-        for m in methods:
-            additions += f"- '[[methods/{m}]]'\n"
-
-    if additions:
-        new_content = f"---\n{fm_text.rstrip()}\n{additions}---{body}"
-        note_path.write_text(new_content, encoding="utf-8")
+# ── Compute + link ───────────────────────────────────────────────────────────
 
 
 def compute_all_links(
     papers_with_text: list[tuple[Paper, str]],
 ) -> dict[str, dict[str, list[str]]]:
-    """Compute topics and methods for all papers without writing anything.
+    """Compute topics for all papers automatically.
 
-    Returns {paper_id: {"topics": [...], "methods": [...]}}
+    Returns {paper_id: {"topics": [...]}}
     """
+    # Gather all abstracts for TF-IDF-style distinctiveness
+    all_abstracts = [p.abstract or "" for p, _ in papers_with_text if p.abstract]
+
     result: dict[str, dict[str, list[str]]] = {}
     for paper, text in papers_with_text:
-        links = link_paper(paper, text)
-        result[paper.id] = links
+        search_text = f"{paper.title or ''} {paper.abstract or ''} {text}"
+        topics = extract_topics(paper, search_text, all_abstracts)
+        result[paper.id] = {"topics": topics}
     return result
-
-
-def link_all_papers(papers_with_text: list[tuple[Paper, str]]) -> dict[str, int]:
-    """Run linking for all papers. Returns stats."""
-    topic_papers: dict[str, list[str]] = defaultdict(list)
-    method_papers: dict[str, list[str]] = defaultdict(list)
-
-    per_paper = compute_all_links(papers_with_text)
-
-    for paper, _text in papers_with_text:
-        links = per_paper[paper.id]
-        display_name = _paper_display_name(paper)
-
-        for topic in links["topics"]:
-            topic_papers[topic].append(display_name)
-        for method in links["methods"]:
-            method_papers[method].append(display_name)
-
-        # Update paper note frontmatter
-        update_paper_note_links(paper, links["topics"], links["methods"])
-
-    topics_written = write_topic_notes(topic_papers)
-    methods_written = write_method_notes(method_papers)
-
-    return {
-        "topics": topics_written,
-        "methods": methods_written,
-        "papers_linked": len(papers_with_text),
-    }

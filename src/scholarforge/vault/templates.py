@@ -16,7 +16,6 @@ def paper_note(
     file_hash: str,
     source_path: str,
     topics: list[str] | None = None,
-    methods: list[str] | None = None,
     cites: list[str] | None = None,
     similar_to: list[str] | None = None,
     cites_same: list[str] | None = None,
@@ -38,8 +37,6 @@ def paper_note(
         frontmatter["doi"] = doi
     if topics:
         frontmatter["hasTopic"] = [f"[[topics/{t}]]" for t in topics]
-    if methods:
-        frontmatter["uses_method"] = [f"[[methods/{m}]]" for m in methods]
     if cites:
         frontmatter["cites"] = [f"[[papers/{c}]]" for c in cites]
     if similar_to:
@@ -98,15 +95,3 @@ def topic_note(name: str, papers: list[str]) -> str:
 
     paper_links = "\n".join(f"- [[papers/{p}]]" for p in papers)
     return f"---\n{fm}---\n\n## Related Papers\n\n{paper_links}\n"
-
-
-def method_note(name: str, papers: list[str]) -> str:
-    """Generate markdown for a method note."""
-    frontmatter = {
-        "name": name,
-        "tags": ["method"],
-    }
-    fm = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-    paper_links = "\n".join(f"- [[papers/{p}]]" for p in papers)
-    return f"---\n{fm}---\n\n## Used In\n\n{paper_links}\n"

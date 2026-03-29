@@ -116,7 +116,6 @@ def _run_batch_steps() -> None:
     from scholarforge.vault.coupler import compute_coupling
     from scholarforge.vault.linker import (
         compute_all_links,
-        write_method_notes,
         write_topic_notes,
     )
     from scholarforge.vault.writer import _paper_display_name, write_paper_note
@@ -133,9 +132,9 @@ def _run_batch_steps() -> None:
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
-    # ── 2. Topic/method detection ────────────────────────────────────────────
+    # ── 2. Automatic topic extraction ─────────────────────────────────────────
     per_paper_links = compute_all_links(papers_with_text)
-    console.print("[green]  Topics/methods detected[/green]")
+    console.print("[green]  Topics extracted[/green]")
 
     # ── 3. Report citations + figure refs (already persisted during ingestion)
     with get_session() as session:
@@ -171,21 +170,17 @@ def _run_batch_steps() -> None:
             frs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
             paper_figure_refs[paper.id] = [(fr.figure_key, fr.caption_text) for fr in frs]
 
-    # ── 8. Write topic/method hub notes ──────────────────────────────────────
+    # ── 8. Write topic hub notes ───────────────────────────────────────────
     from collections import defaultdict
 
     topic_papers: dict[str, list[str]] = defaultdict(list)
-    method_papers: dict[str, list[str]] = defaultdict(list)
     for paper in papers:
-        links = per_paper_links.get(paper.id, {"topics": [], "methods": []})
+        links = per_paper_links.get(paper.id, {"topics": []})
         display = id_to_display[paper.id]
         for t in links["topics"]:
             topic_papers[t].append(display)
-        for m in links["methods"]:
-            method_papers[m].append(display)
 
     write_topic_notes(topic_papers)
-    write_method_notes(method_papers)
 
     # ── 9. Regenerate all paper vault notes with full data ───────────────────
     with get_session() as session:
@@ -195,7 +190,7 @@ def _run_batch_steps() -> None:
                 session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
             )
 
-            links = per_paper_links.get(paper.id, {"topics": [], "methods": []})
+            links = per_paper_links.get(paper.id, {"topics": []})
 
             # Resolve similar_to IDs to display names
             similar_names = [
@@ -211,7 +206,6 @@ def _run_batch_steps() -> None:
                 chunks_count=chunks_count,
                 figures_count=figures_count,
                 topics=links["topics"],
-                methods=links["methods"],
                 similar_to=similar_names if similar_names else None,
                 cites_same=coupled_names if coupled_names else None,
                 figure_refs=paper_figure_refs.get(paper.id) or None,
@@ -230,11 +224,13 @@ def _ingest_file(path: Path) -> int:
 
         return ingest_pdf(path)
     elif ext == ".docx":
-        console.print(f"[yellow]DOCX ingestion not yet implemented:[/yellow] {path.name}")
-        return 0
+        from scholarforge.ingest.docx import ingest_docx
+
+        return ingest_docx(path)
     elif ext == ".pptx":
-        console.print(f"[yellow]PPTX ingestion not yet implemented:[/yellow] {path.name}")
-        return 0
+        from scholarforge.ingest.pptx import ingest_pptx
+
+        return ingest_pptx(path)
     else:
         console.print(f"[yellow]Unsupported format:[/yellow] {path.name}")
         return 0

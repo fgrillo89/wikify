@@ -12,6 +12,15 @@ from sqlmodel import Field, SQLModel
 # ── SQLite models (via SQLModel) ──────────────────────────────────────────────
 
 
+class DocType(str, Enum):
+    PAPER = "paper"
+    REPORT = "report"
+    PROPOSAL = "proposal"
+    NOTE = "note"
+    PRESENTATION = "presentation"
+    OTHER = "other"
+
+
 class Paper(SQLModel, table=True):
     """A research paper or document in the knowledge base."""
 
@@ -21,6 +30,7 @@ class Paper(SQLModel, table=True):
     abstract: Optional[str] = None
     year: Optional[int] = None
     doi: Optional[str] = None
+    doc_type: str = DocType.PAPER  # paper, report, proposal, note, presentation
     zotero_key: Optional[str] = None
     source_path: str = ""
     file_hash: str = ""  # For change detection on re-ingest

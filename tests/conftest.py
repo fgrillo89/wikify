@@ -1,6 +1,5 @@
 """Shared test fixtures for ScholarForge."""
 
-
 import pytest
 
 from scholarforge.config import Settings
