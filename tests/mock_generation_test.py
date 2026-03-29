@@ -15,6 +15,7 @@ from unittest.mock import patch
 from scholarforge.generate.chat import chat_once
 from scholarforge.generate.planner import plan_paper, plan_slides
 from scholarforge.generate.writer import write_paper
+from scholarforge.llm.schemas import PaperPlanOutput
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import Chunk, Paper
 
@@ -356,6 +357,37 @@ def mock_complete_json(
         return {"result": "mock"}
 
 
+def mock_complete_structured(
+    messages: list[dict],
+    response_model=None,
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    max_retries: int = 2,
+    hooks=None,
+):
+    """Return a PaperPlanOutput validated from the mock JSON."""
+    return PaperPlanOutput.model_validate(MOCK_PAPER_PLAN_JSON)
+
+
+def mock_validate_and_retry_text(
+    messages: list[dict],
+    response_model=None,
+    content_field: str = "content",
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    max_retries: int = 2,
+    hooks=None,
+    skip_citation_check: bool = False,
+):
+    """Return mock section text + a trivially-validated model."""
+    from scholarforge.llm.schemas import SectionOutput
+
+    validated = SectionOutput(content=MOCK_SECTION_TEXT)
+    return MOCK_SECTION_TEXT, validated
+
+
 def mock_complete(
     messages: list[dict],
     model: str | None = None,
@@ -382,7 +414,10 @@ def mock_retrieve_for_query(
 def run_plan_paper(context: RetrievedContext) -> None:
     print("\n--- test_plan_paper ---")
 
-    with patch("scholarforge.generate.planner.complete_json", side_effect=mock_complete_json):
+    with patch(
+        "scholarforge.generate.planner.complete_structured",
+        side_effect=mock_complete_structured,
+    ):
         plan = plan_paper(
             prompt="Write a survey on atomic layer deposition for semiconductor manufacturing.",
             context=context,
@@ -408,13 +443,19 @@ def run_write_paper(context: RetrievedContext) -> None:
     print("\n--- test_write_paper ---")
 
     # Build a real PaperPlan from the mock JSON (via plan_paper)
-    with patch("scholarforge.generate.planner.complete_json", side_effect=mock_complete_json):
+    with patch(
+        "scholarforge.generate.planner.complete_structured",
+        side_effect=mock_complete_structured,
+    ):
         plan = plan_paper(
             prompt="Write a survey on atomic layer deposition.",
             context=context,
         )
 
-    with patch("scholarforge.generate.writer.complete", side_effect=mock_complete):
+    with patch(
+        "scholarforge.generate.writer.validate_and_retry_text",
+        side_effect=mock_validate_and_retry_text,
+    ):
         markdown = write_paper(plan, context)
 
     assert markdown, "write_paper returned empty string"

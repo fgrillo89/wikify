@@ -9,7 +9,8 @@ from rich.progress import Progress
 
 from scholarforge.generate.persona import build_persona
 from scholarforge.generate.references import ReferenceResolver
-from scholarforge.llm.client import complete
+from scholarforge.llm.client import LLMOutputError, complete, validate_and_retry_text
+from scholarforge.llm.schemas import SectionOutput
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import PaperPlan, SectionPlan
 
@@ -153,11 +154,29 @@ def _write_section(
         f"--- Literature context ---\n{effective_context}"
     )
 
-    return complete(
-        messages=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.3,
-        max_tokens=2048,
-    )
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
+
+    # Abstract sections don't need citations
+    is_abstract = section.heading.strip().lower() == "abstract"
+
+    try:
+        raw_text, _validated = validate_and_retry_text(
+            messages=messages,
+            response_model=SectionOutput,
+            content_field="content",
+            temperature=0.3,
+            max_tokens=2048,
+            max_retries=2,
+            skip_citation_check=is_abstract,
+        )
+        return raw_text
+    except LLMOutputError:
+        # Fallback: return whatever we got (best effort)
+        return complete(
+            messages=messages,
+            temperature=0.3,
+            max_tokens=2048,
+        )

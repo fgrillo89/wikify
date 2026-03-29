@@ -1,4 +1,4 @@
-"""Unified LLM client with disk caching."""
+"""Unified LLM client with disk caching and structured output."""
 
 from __future__ import annotations
 
@@ -6,13 +6,17 @@ import hashlib
 import json
 import os
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import diskcache
 import litellm
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
 from scholarforge.config import settings
+
+if TYPE_CHECKING:
+    from scholarforge.llm.hooks import LLMEvent, LLMHook
 
 console = Console()
 
@@ -147,3 +151,280 @@ def complete_streaming(
         delta = chunk.choices[0].delta
         if delta and delta.content:
             yield delta.content
+
+
+# ── Structured output ────────────────────────────────────────────────────────
+
+
+class LLMOutputError(Exception):
+    """Raised when LLM output fails validation after all retries."""
+
+    def __init__(self, errors: list[str], raw_output: str) -> None:
+        self.errors = errors
+        self.raw_output = raw_output
+        super().__init__(f"LLM output invalid after retries: {errors}")
+
+
+def schema_to_prompt(model_cls: type[BaseModel]) -> str:
+    """Convert a Pydantic model to LLM-friendly JSON format instructions."""
+    schema = model_cls.model_json_schema()
+    return (
+        "Return a JSON object conforming to this schema:\n"
+        f"```json\n{json.dumps(schema, indent=2)}\n```\n"
+        "Return ONLY valid JSON. No markdown fences, no commentary."
+    )
+
+
+def _extract_json(text: str) -> dict | list | None:
+    """Extract a JSON object or array from raw LLM text.
+
+    Handles markdown fences and boundary recovery. Returns None on failure.
+    """
+    text = text.strip()
+
+    # Strip markdown fences
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+    if text.endswith("```"):
+        text = text[:-3].rstrip()
+
+    # Direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find JSON boundaries
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
+        start = text.find(start_char)
+        end = text.rfind(end_char)
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                continue
+
+    return None
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token."""
+    return len(text) // 4
+
+
+def _run_hooks_before(
+    hooks: list[LLMHook],
+    event: LLMEvent,
+) -> LLMEvent:
+    for hook in hooks:
+        event = hook.before_call(event)
+    return event
+
+
+def _run_hooks_after(
+    hooks: list[LLMHook],
+    event: LLMEvent,
+) -> LLMEvent:
+    for hook in hooks:
+        event = hook.after_call(event)
+    return event
+
+
+def complete_structured(
+    messages: list[dict[str, str]],
+    response_model: type[BaseModel],
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    max_retries: int = 2,
+    hooks: list[LLMHook] | None = None,
+) -> BaseModel:
+    """Send a completion request and validate against a Pydantic model.
+
+    On validation failure, appends the error to the conversation and retries.
+    Raises ``LLMOutputError`` after *max_retries* failed attempts.
+    """
+    from scholarforge.llm.hooks import LLMEvent
+
+    resolved_model = model or settings.llm_model
+    active_hooks: list[LLMHook] = hooks or []
+
+    # Inject schema instructions into the system message
+    schema_instructions = schema_to_prompt(response_model)
+    enriched: list[dict[str, str]] = _inject_schema(messages, schema_instructions)
+
+    errors_so_far: list[str] = []
+    raw = ""
+
+    for attempt in range(max_retries + 1):
+        event = LLMEvent(
+            messages=enriched,
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            attempt=attempt,
+        )
+        event = _run_hooks_before(active_hooks, event)
+
+        start_time = time.time()
+        raw = complete(
+            messages=enriched,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_cache=(attempt == 0),
+        )
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        event.raw_response = raw
+        event.latency_ms = elapsed_ms
+        event.input_tokens = sum(_estimate_tokens(m.get("content", "")) for m in enriched)
+        event.output_tokens = _estimate_tokens(raw)
+
+        # Parse JSON
+        parsed = _extract_json(raw)
+        if parsed is None:
+            error_msg = f"Could not extract valid JSON from response: {raw[:200]}"
+            errors_so_far.append(error_msg)
+            event.parsed_output = None
+            event = _run_hooks_after(active_hooks, event)
+            enriched = _append_retry_context(enriched, raw, error_msg)
+            continue
+
+        # Validate against Pydantic model
+        try:
+            result = response_model.model_validate(parsed)
+            event.parsed_output = result
+            event = _run_hooks_after(active_hooks, event)
+            return result
+        except ValidationError as e:
+            error_msg = str(e)
+            errors_so_far.append(error_msg)
+            event.parsed_output = None
+            event = _run_hooks_after(active_hooks, event)
+            enriched = _append_retry_context(enriched, raw, error_msg)
+
+    raise LLMOutputError(errors_so_far, raw)
+
+
+def validate_and_retry_text(
+    messages: list[dict[str, str]],
+    response_model: type[BaseModel],
+    content_field: str = "content",
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    max_retries: int = 2,
+    hooks: list[LLMHook] | None = None,
+    skip_citation_check: bool = False,
+) -> tuple[str, BaseModel]:
+    """Call ``complete()`` for prose output, then validate via a Pydantic model.
+
+    Unlike ``complete_structured()``, this does NOT ask the LLM for JSON.
+    The raw text is wrapped into ``{content_field: text}`` and validated.
+    On failure the validation errors are fed back and the LLM retries.
+
+    Returns ``(raw_text, validated_model)`` on success.
+    Raises ``LLMOutputError`` after *max_retries* failed attempts.
+    """
+    from scholarforge.llm.hooks import LLMEvent
+
+    resolved_model = model or settings.llm_model
+    active_hooks: list[LLMHook] = hooks or []
+
+    enriched: list[dict[str, str]] = list(messages)
+    errors_so_far: list[str] = []
+    raw = ""
+
+    for attempt in range(max_retries + 1):
+        event = LLMEvent(
+            messages=enriched,
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            attempt=attempt,
+        )
+        event = _run_hooks_before(active_hooks, event)
+
+        start_time = time.time()
+        raw = complete(
+            messages=enriched,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_cache=(attempt == 0),
+        )
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        event.raw_response = raw
+        event.latency_ms = elapsed_ms
+        event.input_tokens = sum(_estimate_tokens(m.get("content", "")) for m in enriched)
+        event.output_tokens = _estimate_tokens(raw)
+
+        # Validate the prose as a Pydantic model
+        try:
+            result = response_model.model_validate({content_field: raw})
+            # Run optional citation check (not a field validator so it can
+            # be skipped for Abstract sections)
+            if not skip_citation_check and hasattr(result, "check_citations"):
+                result.check_citations()
+            event.parsed_output = result
+            event = _run_hooks_after(active_hooks, event)
+            return raw, result
+        except (ValidationError, ValueError) as e:
+            error_msg = str(e)
+            errors_so_far.append(error_msg)
+            event.parsed_output = None
+            event = _run_hooks_after(active_hooks, event)
+            enriched = enriched + [
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Your previous output failed quality validation:\n"
+                        f"{error_msg}\n\n"
+                        "Please rewrite the section fixing the issues above."
+                    ),
+                },
+            ]
+
+    raise LLMOutputError(errors_so_far, raw)
+
+
+# ── Internal helpers ─────────────────────────────────────────────────────────
+
+
+def _inject_schema(
+    messages: list[dict[str, str]],
+    schema_instructions: str,
+) -> list[dict[str, str]]:
+    """Append schema instructions to the system message."""
+    enriched = list(messages)
+    for i, msg in enumerate(enriched):
+        if msg.get("role") == "system":
+            enriched[i] = {
+                "role": "system",
+                "content": msg["content"] + "\n\n" + schema_instructions,
+            }
+            return enriched
+    # No system message found — prepend one
+    return [{"role": "system", "content": schema_instructions}, *enriched]
+
+
+def _append_retry_context(
+    messages: list[dict[str, str]],
+    raw_output: str,
+    error: str,
+) -> list[dict[str, str]]:
+    """Feed the failed output + error back for retry."""
+    return [
+        *messages,
+        {"role": "assistant", "content": raw_output},
+        {
+            "role": "user",
+            "content": (
+                f"Your previous output failed validation:\n{error}\n\n"
+                "Please fix the errors and return valid JSON."
+            ),
+        },
+    ]

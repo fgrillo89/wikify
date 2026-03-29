@@ -4,12 +4,39 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from scholarforge.llm.client import complete_json
+from scholarforge.llm.client import complete_json, complete_structured, schema_to_prompt
+from scholarforge.llm.schemas import PaperPlanOutput
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import PaperPlan, SectionPlan
 
 if TYPE_CHECKING:
     from scholarforge.export.journal_profile import JournalProfile
+
+
+def _plan_output_to_paper_plan(output: PaperPlanOutput) -> PaperPlan:
+    """Convert a validated PaperPlanOutput to the existing PaperPlan model."""
+
+    def _convert_sections(sections):
+        result = []
+        for s in sections:
+            result.append(
+                SectionPlan(
+                    heading=s.heading,
+                    level=s.level,
+                    description=s.description,
+                    target_tokens=s.target_tokens,
+                    source_papers=s.source_papers,
+                    subsections=_convert_sections(s.subsections),
+                )
+            )
+        return result
+
+    return PaperPlan(
+        title=output.title,
+        paper_type=output.paper_type,
+        target_length=output.target_length,
+        sections=_convert_sections(output.sections),
+    )
 
 
 def plan_paper(
@@ -57,19 +84,16 @@ def plan_paper(
             "across multiple papers in each section."
         )
 
+    # Schema instructions for structured output
+    schema_instructions = schema_to_prompt(PaperPlanOutput)
+
     system_msg = (
-        "You are an academic writing assistant. Given a writing prompt and a list of "
+        f"You are an academic writing assistant. Given a writing prompt and a list of "
         f"source papers, create a detailed outline for a {artifact.name}.\n\n"
-        "Return a JSON object with this exact structure:\n"
-        f'{{"title": "...", "paper_type": "{artifact_type_id}", '
-        f'"target_length": {target_words}, '
-        '"sections": [{"heading": "...", "level": 1, "description": "what to cover", '
-        '"target_tokens": N, "source_papers": ["Author Year - Title", ...], '
-        '"subsections": [...]}]}\n\n'
+        f"{schema_instructions}\n\n"
         f"{section_guidance}\n"
         f"{type_hint}\n"
-        "Distribute the target word count across sections proportionally.\n"
-        "Return ONLY valid JSON, no markdown fences."
+        "Distribute the target word count across sections proportionally."
     )
 
     # Include graph metrics if available
@@ -80,43 +104,17 @@ def plan_paper(
 
     user_msg = f"Prompt: {prompt}\n\nAvailable papers:\n{paper_list}{graph_section}"
 
-    plan_data = complete_json(
+    plan_output = complete_structured(
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
+        response_model=PaperPlanOutput,
         temperature=0.3,
         max_tokens=4096,
     )
 
-    # Build PaperPlan from response
-    sections = []
-    for s in plan_data.get("sections", []):
-        section = SectionPlan(
-            heading=s["heading"],
-            level=s.get("level", 1),
-            description=s.get("description", ""),
-            target_tokens=s.get("target_tokens", 300),
-            source_papers=s.get("source_papers", []),
-            subsections=[
-                SectionPlan(
-                    heading=sub["heading"],
-                    level=sub.get("level", 2),
-                    description=sub.get("description", ""),
-                    target_tokens=sub.get("target_tokens", 200),
-                    source_papers=sub.get("source_papers", []),
-                )
-                for sub in s.get("subsections", [])
-            ],
-        )
-        sections.append(section)
-
-    return PaperPlan(
-        title=plan_data.get("title", "Untitled Review"),
-        paper_type=plan_data.get("paper_type", "lit_review"),
-        target_length=plan_data.get("target_length", target_words),
-        sections=sections,
-    )
+    return _plan_output_to_paper_plan(plan_output)
 
 
 def plan_slides(
