@@ -47,7 +47,7 @@ def rebuild_bibtex_library(papers: list[Paper], output_dir: Path) -> Path:
         entries.append(bib_entry.strip())
 
     bib_path.write_text("\n\n".join(entries) + "\n", encoding="utf-8")
-    console.print(f"[green]  BibTeX library: {len(entries)} entries → {bib_path}[/green]")
+    console.print(f"[green]  BibTeX library: {len(entries)} entries -> {bib_path}[/green]")
     return bib_path
 
 

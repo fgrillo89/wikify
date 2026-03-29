@@ -853,6 +853,12 @@ def main() -> None:
     pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
     print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
 
+    # Export BibTeX
+    from scholarforge.zotero.bibtex_library import rebuild_bibtex_library
+
+    bib_path = rebuild_bibtex_library(context.papers, output_dir)
+    print(f"BibTeX written: {bib_path}")
+
     word_count = len(numbered_md.split())
     line_count = numbered_md.count("\n") + 1
     print(f"\nDone. {word_count} words (~{word_count // 250} pages), {line_count} lines")
