@@ -1,17 +1,17 @@
 """Automatic topic/keyword extraction and vault linking.
 
-Extracts topics from:
-1. Author-declared keywords (from "Keywords:" sections in paper text)
-2. TF-IDF-style extraction: terms that appear in a paper's abstract but are
-   distinctive (not in every paper)
+Strategy:
+1. Extract declared keywords from every paper's "Keywords:" / "Index Terms:" section
+2. Build a corpus vocabulary from ALL declared keywords
+3. For papers without declared keywords, match corpus vocabulary against their text
+4. Normalize: merge plurals, absorb substrings into longer forms
 
-No hardcoded keyword dictionaries — topics emerge from the corpus.
+No hardcoded topic dictionaries — topics emerge from what authors declare.
 """
 
 from __future__ import annotations
 
 import re
-from collections import Counter
 
 from scholarforge.store.models import Paper
 from scholarforge.vault.templates import topic_note
@@ -19,292 +19,9 @@ from scholarforge.vault.writer import _sanitize_filename, vault_dir
 
 # ── Keyword extraction ───────────────────────────────────────────────────────
 
-# Words too common or too short to be useful topics
-_STOPWORDS = {
-    "a",
-    "an",
-    "the",
-    "and",
-    "or",
-    "but",
-    "in",
-    "on",
-    "at",
-    "to",
-    "for",
-    "of",
-    "with",
-    "by",
-    "from",
-    "as",
-    "is",
-    "was",
-    "are",
-    "were",
-    "been",
-    "be",
-    "have",
-    "has",
-    "had",
-    "do",
-    "does",
-    "did",
-    "will",
-    "would",
-    "could",
-    "should",
-    "may",
-    "might",
-    "shall",
-    "can",
-    "not",
-    "no",
-    "nor",
-    "so",
-    "if",
-    "than",
-    "that",
-    "this",
-    "these",
-    "those",
-    "it",
-    "its",
-    "we",
-    "our",
-    "they",
-    "their",
-    "he",
-    "she",
-    "him",
-    "her",
-    "his",
-    "which",
-    "what",
-    "who",
-    "whom",
-    "where",
-    "when",
-    "how",
-    "why",
-    "each",
-    "every",
-    "all",
-    "both",
-    "few",
-    "more",
-    "most",
-    "other",
-    "some",
-    "such",
-    "only",
-    "also",
-    "very",
-    "just",
-    "about",
-    "above",
-    "after",
-    "again",
-    "between",
-    "into",
-    "through",
-    "during",
-    "before",
-    "below",
-    "up",
-    "down",
-    "out",
-    "off",
-    "over",
-    "under",
-    "further",
-    "then",
-    "once",
-    "here",
-    "there",
-    "any",
-    "same",
-    "own",
-    "too",
-    "using",
-    "based",
-    "used",
-    "shows",
-    "show",
-    "shown",
-    "found",
-    "results",
-    "result",
-    "however",
-    "therefore",
-    "thus",
-    "hence",
-    "while",
-    "since",
-    "although",
-    "because",
-    "due",
-    "et",
-    "al",
-    "fig",
-    "figure",
-    "table",
-    "ref",
-    "respectively",
-    "i.e",
-    "e.g",
-    "etc",
-    "new",
-    "high",
-    "low",
-    "large",
-    "small",
-    "two",
-    "three",
-    "one",
-    "first",
-    "second",
-    "different",
-    "several",
-    "many",
-    "well",
-    "even",
-    "still",
-    "much",
-    "paper",
-    "study",
-    "work",
-    "proposed",
-    "approach",
-    "method",
-    "methods",
-    "technique",
-    "techniques",
-    "important",
-    "significant",
-    "increasing",
-    "devices",
-    "device",
-    "structure",
-    "structures",
-    "properties",
-    "property",
-    "materials",
-    "material",
-    "film",
-    "films",
-    "layer",
-    "layers",
-    "effect",
-    "effects",
-    "performance",
-    "obtained",
-    "reported",
-    "applied",
-    "process",
-    "fabricated",
-    "fabrication",
-    "measured",
-    "measurement",
-    "analysis",
-    "compared",
-    "corresponding",
-    "including",
-    "recent",
-    "recently",
-    "demonstrated",
-    "showing",
-    "various",
-    "possible",
-    "potential",
-    "computing",
-    "applications",
-    "application",
-    "analog",
-    "digital",
-    "integrated",
-    "integration",
-    "circuit",
-    "circuits",
-    "array",
-    "arrays",
-    "system",
-    "systems",
-    "network",
-    "networks",
-    "voltage",
-    "current",
-    "resistance",
-    "design",
-    "model",
-    "data",
-    "energy",
-    "power",
-    "speed",
-    "time",
-    "state",
-    "states",
-    "level",
-    "levels",
-    "value",
-    "values",
-    "size",
-    "type",
-    "order",
-    "number",
-    "range",
-    "ratio",
-    "rate",
-    "achieved",
-    "achieve",
-    "achieving",
-    "attractive",
-    "promising",
-    "excellent",
-    "superior",
-    "conventional",
-    "traditional",
-    "provides",
-    "enable",
-    "enables",
-    "enabled",
-    "ultra-compact",
-    "folded",
-    "meanwhile",
-    "pure",
-    "good",
-    "poor",
-    "better",
-    "worse",
-    "approved",
-    "release",
-    "distribution",
-    "unlimited",
-    "access",
-    "average",
-    "maximum",
-    "minimum",
-    "total",
-    "region",
-    "regions",
-    "area",
-    "operation",
-    "operations",
-    "operating",
-    "wafer",
-    "computer",
-    "memory",
-    "silicon",
-    "metal",
-    "oxide",
-}
-
 
 def _extract_declared_keywords(text: str) -> list[str]:
     """Extract keywords from a 'Keywords:' or 'Index Terms:' section."""
-    # Match patterns like:
-    #   Keywords: word1, word2, word3
-    #   KEYWORDS: word1. word2. word3
-    #   Index Terms— word1, word2
     pattern = re.compile(
         r"(?:keywords?|index\s+terms|key\s+words)\s*[:\-—.]+\s*(.+?)(?:\n\s*\n|\n#+|\Z)",
         re.IGNORECASE | re.DOTALL,
@@ -316,15 +33,14 @@ def _extract_declared_keywords(text: str) -> list[str]:
     raw = match.group(1).strip()
     # Clean markdown formatting and bracket artifacts from PDF extraction
     raw = re.sub(r"[*_`]+", "", raw)
-    raw = re.sub(r"\[+\]?", "", raw)  # remove [ and [] artifacts
-    raw = re.sub(r"\]+", "", raw)  # remove remaining ]
+    raw = re.sub(r"\[+\]?", "", raw)
+    raw = re.sub(r"\]+", "", raw)
     # Split on comma, semicolon, period (common in IEEE), or bullet markers
     parts = re.split(r"[,;]|\.\s+|\n\s*[-•]\s*", raw)
 
     keywords = []
     for part in parts:
         kw = part.strip().rstrip(".")
-        # Remove leading numbers/bullets
         kw = re.sub(r"^\d+[.)]\s*", "", kw)
         kw = kw.strip()
         if 2 < len(kw) < 60 and not kw[0].isdigit() and len(kw.split()) <= 5:
@@ -332,79 +48,108 @@ def _extract_declared_keywords(text: str) -> list[str]:
     return keywords
 
 
-def _extract_distinctive_terms(abstract: str, all_abstracts: list[str]) -> list[str]:
-    """Extract bigram terms from abstract that are distinctive across the corpus.
+def _normalize_topic(topic: str) -> str:
+    """Normalize a topic string for deduplication.
 
-    Only returns bigrams (two-word phrases) — single words are too noisy.
-    Filters out phrases where both words are stopwords.
+    Lowercases, strips trailing 's'/'es' for simple plural handling.
     """
-    if not abstract or len(abstract) < 50:
-        return []
-
-    def tokenize(text: str) -> list[str]:
-        return re.findall(r"[a-z][a-z0-9/-]{2,}", text.lower())
-
-    words = tokenize(abstract)
-
-    # Only extract bigrams where BOTH words are not stopwords
-    bigrams: list[str] = []
-    for i in range(len(words) - 1):
-        w1, w2 = words[i], words[i + 1]
-        if w1 in _STOPWORDS or w2 in _STOPWORDS:
-            continue
-        bigram = f"{w1} {w2}"
-        if len(bigram) > 8:
-            bigrams.append(bigram)
-
-    if not bigrams:
-        return []
-
-    # Count document frequency across all abstracts
-    doc_count: Counter[str] = Counter()
-    for other_abstract in all_abstracts:
-        other_lower = other_abstract.lower()
-        seen: set[str] = set()
-        for term in bigrams:
-            if term not in seen and term in other_lower:
-                doc_count[term] += 1
-                seen.add(term)
-
-    # Keep bigrams present in 2+ papers (signal, not noise) but < 50% of corpus
-    min_df = 2
-    max_df = max(3, len(all_abstracts) * 0.5)
-    local_counts = Counter(bigrams)
-
-    distinctive = []
-    for term, _count in local_counts.most_common():
-        df = doc_count.get(term, 0)
-        if min_df <= df < max_df:
-            distinctive.append(term)
-        if len(distinctive) >= 6:
-            break
-
-    return distinctive
+    t = topic.strip().lower()
+    # Simple plural normalization
+    if t.endswith("ies") and len(t) > 5:
+        t = t[:-3] + "y"  # e.g., "vacancies" → "vacancy"
+    elif t.endswith("ses") or t.endswith("xes") or t.endswith("zes"):
+        t = t[:-2]  # e.g., "synapses" → "synapse"
+    elif t.endswith("s") and not t.endswith("ss") and len(t) > 4:
+        t = t[:-1]  # e.g., "memristors" → "memristor"
+    return t
 
 
-def extract_topics(paper: Paper, text: str, all_abstracts: list[str]) -> list[str]:
-    """Extract topics for a paper from declared keywords + distinctive terms."""
-    # Source 1: declared keywords from the paper text
+def _deduplicate_topics(topics: list[str]) -> list[str]:
+    """Deduplicate topics: merge plurals and absorb substrings into longer forms.
+
+    When "X" is a substring of "X Y" (or "Y X"), keep only the longer form.
+    E.g., "neuromorphic" is absorbed by "neuromorphic computing".
+    """
+    # Group by normalized form, keep the first (most common) spelling
+    norm_to_display: dict[str, str] = {}
+    for t in topics:
+        norm = _normalize_topic(t)
+        if norm not in norm_to_display:
+            norm_to_display[norm] = t
+
+    # Now check for substring absorption among the surviving topics
+    surviving = list(norm_to_display.values())
+    absorbed: set[str] = set()
+
+    for i, short in enumerate(surviving):
+        short_lower = short.lower()
+        for j, long in enumerate(surviving):
+            if i == j:
+                continue
+            long_lower = long.lower()
+            # If short is a proper substring of long (not equal), absorb short
+            if short_lower != long_lower and short_lower in long_lower:
+                absorbed.add(short)
+                break
+
+    return [t for t in surviving if t not in absorbed]
+
+
+def _match_corpus_vocabulary(
+    text: str, vocabulary: list[str], max_matches: int = 8
+) -> list[str]:
+    """Find which corpus keywords appear in this paper's text.
+
+    Only matches whole-phrase occurrences (word boundaries).
+    Returns up to max_matches keywords, ordered by specificity (longer first).
+    """
+    text_lower = text.lower()
+    matches: list[str] = []
+
+    # Sort vocabulary by length descending — prefer specific terms
+    for kw in sorted(vocabulary, key=len, reverse=True):
+        # Word-boundary match to avoid partial hits
+        pattern = r"\b" + re.escape(kw.lower()) + r"\b"
+        if re.search(pattern, text_lower):
+            matches.append(kw)
+            if len(matches) >= max_matches:
+                break
+
+    return matches
+
+
+def _to_display(kw: str) -> str:
+    """Convert a keyword to display form (title case, short words uppercase)."""
+    return kw.strip().title() if len(kw) > 4 else kw.strip().upper()
+
+
+def extract_topics(
+    paper: Paper,
+    text: str,
+    corpus_vocabulary: list[str],
+    canonical_map: dict[str, str] | None = None,
+) -> list[str]:
+    """Extract topics for a paper.
+
+    Uses declared keywords if available, otherwise matches against the corpus
+    vocabulary (keywords declared by other papers). When canonical_map is
+    provided, normalizes keywords to canonical forms (merging plurals etc.).
+    """
     declared = _extract_declared_keywords(text)
 
-    # Source 2: distinctive terms from the abstract
-    distinctive = _extract_distinctive_terms(paper.abstract or "", all_abstracts)
+    if declared:
+        topics = declared
+    else:
+        # Fall back: match this paper's text against keywords from other papers
+        search_text = f"{paper.title or ''} {paper.abstract or ''} {text[:3000]}"
+        topics = _match_corpus_vocabulary(search_text, corpus_vocabulary)
 
-    # Merge, deduplicate, prefer declared keywords
-    seen: set[str] = set()
-    topics: list[str] = []
-    for kw in declared + distinctive:
-        normalized = kw.strip().lower()
-        if normalized not in seen:
-            seen.add(normalized)
-            # Title-case for display
-            display = kw.strip().title() if len(kw) > 4 else kw.strip().upper()
-            topics.append(display)
+    # Normalize to canonical forms if available
+    if canonical_map:
+        topics = [canonical_map.get(_normalize_topic(t), t) for t in topics]
 
-    return topics[:15]  # Cap at 15 topics per paper
+    display_topics = [_to_display(kw) for kw in topics]
+    return _deduplicate_topics(display_topics)[:12]
 
 
 # ── Writing hub notes ────────────────────────────────────────────────────────
@@ -444,14 +189,63 @@ def compute_all_links(
 ) -> dict[str, dict[str, list[str]]]:
     """Compute topics for all papers automatically.
 
-    Returns {paper_id: {"topics": [...]}}
+    Two-pass approach:
+    1. Extract declared keywords from all papers → build corpus vocabulary
+    2. For each paper, use its declared keywords or match against the vocabulary
     """
-    # Gather all abstracts for TF-IDF-style distinctiveness
-    all_abstracts = [p.abstract or "" for p, _ in papers_with_text if p.abstract]
+    # Pass 1: build corpus vocabulary from all declared keywords
+    all_declared: list[str] = []
+    paper_declared: dict[str, list[str]] = {}
+    for paper, text in papers_with_text:
+        search_text = f"{paper.title or ''} {paper.abstract or ''} {text}"
+        declared = _extract_declared_keywords(search_text)
+        paper_declared[paper.id] = declared
+        all_declared.extend(declared)
 
+    # Deduplicate vocabulary (normalize plurals), pick longest form as canonical
+    seen_norms: dict[str, str] = {}
+    for kw in all_declared:
+        norm = _normalize_topic(kw)
+        if norm not in seen_norms or len(kw) > len(seen_norms[norm]):
+            seen_norms[norm] = kw
+    corpus_vocabulary = list(seen_norms.values())
+
+    # Build canonical map: normalized_form → canonical_keyword
+    canonical_map = dict(seen_norms)
+
+    # Pass 2: assign topics to each paper
     result: dict[str, dict[str, list[str]]] = {}
     for paper, text in papers_with_text:
         search_text = f"{paper.title or ''} {paper.abstract or ''} {text}"
-        topics = extract_topics(paper, search_text, all_abstracts)
+        topics = extract_topics(paper, search_text, corpus_vocabulary, canonical_map)
         result[paper.id] = {"topics": topics}
+
+    # Pass 3: global normalization — merge plural variants only
+    # (Substring absorption already happens per-paper; don't do it globally
+    # because "Resistive Switching" ≠ "Analog Resistive Switching")
+    all_global_topics: dict[str, str] = {}  # norm → display
+    for v in result.values():
+        for t in v["topics"]:
+            norm = _normalize_topic(t)
+            # Keep the most common display form (longest wins for ties)
+            if norm not in all_global_topics or len(t) > len(all_global_topics[norm]):
+                all_global_topics[norm] = t
+
+    # Build rename map: old display → canonical display
+    rename: dict[str, str] = {}
+    for v in result.values():
+        for t in v["topics"]:
+            canonical = all_global_topics[_normalize_topic(t)]
+            if t != canonical:
+                rename[t] = canonical
+
+    # Apply renames
+    if rename:
+        for paper_id in result:
+            result[paper_id]["topics"] = list(
+                dict.fromkeys(
+                    rename.get(t, t) for t in result[paper_id]["topics"]
+                )
+            )
+
     return result
