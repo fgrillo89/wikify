@@ -4,7 +4,12 @@
       "Bash(*)",
       "WebSearch",
       "WebFetch",
-      "Read(*)"
+      "Read(*)",
+      "mcp__scholarforge__get_corpus_summary"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "scholarforge"
+  ]
 }
