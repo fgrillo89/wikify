@@ -370,8 +370,12 @@ def run_batch_steps() -> None:
 
     write_topic_notes(topic_papers)
 
-    # ── 9. Clear author notes so they're rebuilt fresh (avoids stale wikilinks)
-    from scholarforge.vault.writer import vault_dir
+    # ── 9. Write Obsidian graph config (papers-only default) ─────────────────
+    from scholarforge.vault.writer import vault_dir, write_graph_config
+
+    write_graph_config()
+
+    # ── 9b. Clear author notes so they're rebuilt fresh (avoids stale wikilinks)
 
     authors_dir = vault_dir() / "authors"
     if authors_dir.exists():
@@ -413,6 +417,13 @@ def run_batch_steps() -> None:
             figure_refs=paper_figure_refs.get(paper.id) or None,
             full_text=text_by_paper.get(paper.id),
         )
+
+    # ── 11. Rebuild BibTeX library file ──────────────────────────────────────
+    from scholarforge.config import Settings
+    from scholarforge.zotero.bibtex_library import rebuild_bibtex_library
+
+    settings = Settings()
+    rebuild_bibtex_library(papers, settings.data_dir)
 
     console.print(
         f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"

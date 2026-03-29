@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -32,6 +33,46 @@ def ensure_vault_dirs() -> None:
         "topics",
     ]:
         (vd / sub).mkdir(parents=True, exist_ok=True)
+
+
+def write_graph_config() -> None:
+    """Write the Obsidian graph.json with papers-only default filter.
+
+    The default graph view shows only paper-to-paper connections.
+    Users can change the search filter in the graph UI to see authors
+    or topics (e.g. ``path:authors`` for the author collaboration graph).
+    """
+    obsidian_dir = vault_dir() / ".obsidian"
+    obsidian_dir.mkdir(parents=True, exist_ok=True)
+
+    config = {
+        "collapse-filter": False,
+        "search": "path:papers",
+        "showTags": False,
+        "showAttachments": False,
+        "hideUnresolved": True,
+        "showOrphans": False,
+        "collapse-color-groups": False,
+        "colorGroups": [
+            {"query": "path:papers", "color": {"a": 1, "rgb": 52479}},
+            {"query": "path:authors", "color": {"a": 1, "rgb": 3394611}},
+            {"query": "path:topics", "color": {"a": 1, "rgb": 16753920}},
+        ],
+        "collapse-display": False,
+        "showArrow": True,
+        "textFadeMultiplier": 0,
+        "nodeSizeMultiplier": 1.2,
+        "lineSizeMultiplier": 1,
+        "collapse-forces": False,
+        "centerStrength": 0.5,
+        "repelStrength": 10,
+        "linkStrength": 1,
+        "linkDistance": 100,
+        "scale": 0.5,
+        "close": False,
+    }
+
+    (obsidian_dir / "graph.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
 def write_paper_note(

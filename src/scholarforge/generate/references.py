@@ -62,14 +62,22 @@ class ReferenceResolver:
         numbered = marker_pattern.sub(_replace_marker, raw_markdown)
         return numbered, ordered
 
-    def build_bibliography(self, ordered_papers: list[Paper], style: str = "numbered") -> str:
+    def build_bibliography(
+        self,
+        ordered_papers: list[Paper],
+        style: str = "numbered",
+        reference_format: str = "",
+    ) -> str:
         """Format a bibliography section from ordered papers.
 
-        Default style: Nature-style numbered references.
+        If *reference_format* is provided (from a JournalProfile), it is used
+        as a Python format string with keys: number, authors, title, journal,
+        volume, pages, year, doi.  Otherwise falls back to a default numbered
+        style.
         """
         lines: list[str] = []
         for i, paper in enumerate(ordered_papers, 1):
-            entry = _format_reference(paper, i, style)
+            entry = _format_reference(paper, i, style, reference_format)
             lines.append(entry)
         return "\n".join(lines)
 
@@ -114,8 +122,18 @@ class ReferenceResolver:
         return best if best_score >= 3 else None
 
 
-def _format_reference(paper: Paper, number: int, style: str = "numbered") -> str:
-    """Format a single reference entry."""
+def _format_reference(
+    paper: Paper,
+    number: int,
+    style: str = "numbered",
+    reference_format: str = "",
+) -> str:
+    """Format a single reference entry.
+
+    If *reference_format* is a non-empty Python format string (from a
+    JournalProfile), it is used directly.  Missing fields are replaced
+    with empty strings so the template never raises KeyError.
+    """
     authors = paper.parsed_authors
     if len(authors) > 3:
         author_str = f"{authors[0]}, {authors[1]}, {authors[2]} et al."
@@ -126,9 +144,24 @@ def _format_reference(paper: Paper, number: int, style: str = "numbered") -> str
 
     title = paper.title or "Untitled"
     year = paper.year or "n.d."
-    doi_str = f" https://doi.org/{paper.doi}" if paper.doi else ""
+    doi_str = f"https://doi.org/{paper.doi}" if paper.doi else ""
+
+    # Use journal profile format if provided
+    if reference_format:
+        return (
+            reference_format.format(
+                number=number,
+                authors=author_str,
+                title=title,
+                journal="",  # not available in Paper model yet
+                volume="",
+                pages="",
+                year=year,
+                doi=doi_str,
+            ).rstrip(", .")
+            + "."
+        )
 
     if style == "numbered":
-        return f"[{number}] {author_str}. {title}. ({year}).{doi_str}"
-    else:
-        return f"{author_str}. {title}. ({year}).{doi_str}"
+        return f"[{number}] {author_str}. {title}. ({year}). {doi_str}".rstrip()
+    return f"{author_str}. {title}. ({year}). {doi_str}".rstrip()

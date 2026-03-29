@@ -41,7 +41,7 @@ def paper_note(
     """Generate markdown for a paper note."""
     frontmatter: dict[str, Any] = {
         "title": title,
-        "authors": [f"[[authors/{a}]]" for a in authors] if authors else [],
+        "authors": list(authors) if authors else [],  # plain text, no wikilinks
         "year": year,
         "tags": ["source/paper"],
         "file_hash": file_hash,
@@ -50,7 +50,7 @@ def paper_note(
     if doi:
         frontmatter["doi"] = doi
     if topics:
-        frontmatter["hasTopic"] = [f"[[topics/{t}]]" for t in topics]
+        frontmatter["topics"] = list(topics)  # plain text, no wikilinks
     if cites:
         frontmatter["cites"] = [f"[[papers/{c}]]" for c in cites]
     if similar_to:

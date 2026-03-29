@@ -22,8 +22,14 @@ console = Console()
 _INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|\[\d+\])")
 
 
-def _parse_inline(text: str) -> list[tuple[str, bool, bool, bool]]:
-    """Return list of (text, bold, italic, superscript) tuples for a line."""
+def _parse_inline(
+    text: str, *, superscript_citations: bool = True
+) -> list[tuple[str, bool, bool, bool]]:
+    """Return list of (text, bold, italic, superscript) tuples for a line.
+
+    When *superscript_citations* is False, [N] markers are kept as plain text
+    (used in the bibliography section where numbers should not be superscripted).
+    """
     parts: list[tuple[str, bool, bool, bool]] = []
     for segment in _INLINE_RE.split(text):
         if not segment:
@@ -33,7 +39,10 @@ def _parse_inline(text: str) -> list[tuple[str, bool, bool, bool]]:
         elif segment.startswith("*") and segment.endswith("*"):
             parts.append((segment[1:-1], False, True, False))
         elif re.fullmatch(r"\[\d+\]", segment):
-            parts.append((segment[1:-1], False, False, True))  # strip brackets
+            if superscript_citations:
+                parts.append((segment[1:-1], False, False, True))  # strip brackets
+            else:
+                parts.append((segment, False, False, False))  # keep as-is
         else:
             parts.append((segment, False, False, False))
     return parts
@@ -130,6 +139,8 @@ class DocxExporter:
     def _parse_markdown(self, doc: Document, markdown: str) -> None:
         """Convert markdown line-by-line to Word paragraphs."""
         lines = markdown.splitlines()
+        in_references = False
+
         for line in lines:
             stripped = line.strip()
 
@@ -139,11 +150,15 @@ class DocxExporter:
             if stripped.startswith("### "):
                 self._add_heading(doc, stripped[4:], level=2)
             elif stripped.startswith("## "):
-                self._add_heading(doc, stripped[3:], level=1)
+                heading_text = stripped[3:]
+                self._add_heading(doc, heading_text, level=1)
+                # Detect the References section
+                in_references = heading_text.strip().lower() == "references"
             elif stripped.startswith("# "):
                 self._add_title(doc, stripped[2:])
+                in_references = False
             else:
-                self._add_body_paragraph(doc, stripped)
+                self._add_body_paragraph(doc, stripped, superscript_citations=not in_references)
 
     # ------------------------------------------------------------------
     # Element builders
@@ -160,15 +175,21 @@ class DocxExporter:
         para = doc.add_heading(level=level)
         self._fill_runs(para, text)
 
-    def _add_body_paragraph(self, doc: Document, text: str) -> None:
+    def _add_body_paragraph(
+        self,
+        doc: Document,
+        text: str,
+        *,
+        superscript_citations: bool = True,
+    ) -> None:
         """Add a body-text paragraph with inline formatting."""
         para = doc.add_paragraph(style="Normal")
         _apply_paragraph_spacing(para, self.profile.line_spacing)
-        self._fill_runs(para, text)
+        self._fill_runs(para, text, superscript_citations=superscript_citations)
 
-    def _fill_runs(self, para, text: str) -> None:
+    def _fill_runs(self, para, text: str, *, superscript_citations: bool = True) -> None:
         """Populate *para* with runs derived from inline markdown in *text*."""
-        tokens = _parse_inline(text)
+        tokens = _parse_inline(text, superscript_citations=superscript_citations)
         for content, bold, italic, superscript in tokens:
             run = para.add_run(content)
             run.bold = bold

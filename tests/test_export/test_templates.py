@@ -82,7 +82,8 @@ def test_paper_note_frontmatter_is_valid_yaml():
     assert fm["doi"] == "10.1234/test"
 
 
-def test_paper_note_authors_as_wikilinks():
+def test_paper_note_authors_as_plain_text():
+    """Authors stored as plain text (no wikilinks) to keep the graph clean."""
     note = paper_note(
         title="T",
         authors=["Alice Brown", "Bob Green"],
@@ -93,8 +94,9 @@ def test_paper_note_authors_as_wikilinks():
         source_path="data/t.pdf",
     )
     fm = _extract_frontmatter(note)
-    assert "[[authors/Alice Brown]]" in fm["authors"]
-    assert "[[authors/Bob Green]]" in fm["authors"]
+    assert "Alice Brown" in fm["authors"]
+    assert "Bob Green" in fm["authors"]
+    assert not any("[[" in a for a in fm["authors"])
 
 
 def test_paper_note_tags_include_source_paper():
@@ -199,6 +201,7 @@ def test_paper_note_source_path_creates_file_link():
 
 
 def test_paper_note_topics_in_frontmatter():
+    """Topics stored as plain text (no wikilinks) to keep the graph clean."""
     note = paper_note(
         title="T",
         authors=[],
@@ -210,8 +213,9 @@ def test_paper_note_topics_in_frontmatter():
         topics=["ALD", "Memristors"],
     )
     fm = _extract_frontmatter(note)
-    assert "[[topics/ALD]]" in fm["hasTopic"]
-    assert "[[topics/Memristors]]" in fm["hasTopic"]
+    assert "ALD" in fm["topics"]
+    assert "Memristors" in fm["topics"]
+    assert not any("[[" in t for t in fm["topics"])
 
 
 def test_paper_note_cites_in_frontmatter_and_section():

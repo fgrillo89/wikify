@@ -68,7 +68,8 @@ def write_paper(
     # Resolve [REF:...] markers to numbered citations + build bibliography
     resolver = ReferenceResolver(context.papers)
     numbered_md, ordered_papers = resolver.resolve(raw_markdown)
-    bibliography = resolver.build_bibliography(ordered_papers)
+    ref_fmt = journal_profile.reference_format if journal_profile else ""
+    bibliography = resolver.build_bibliography(ordered_papers, reference_format=ref_fmt)
     full_document = f"{numbered_md}\n\n## References\n\n{bibliography}"
 
     return full_document, ordered_papers
