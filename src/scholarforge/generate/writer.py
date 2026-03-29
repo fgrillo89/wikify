@@ -94,7 +94,10 @@ def _write_section(
         "(e.g. [REF:Kim 2021 - 4K-memristor...]). "
         "Be precise, technical, and thorough. "
         "Do NOT include the section heading — just the body text. "
-        f"Target approximately {section.target_tokens} words."
+        f"Target approximately {section.target_tokens} words. "
+        "After drafting, self-revise: check for banned words, nominalizations, "
+        "passive voice overuse, vague quantifiers, and LLM structural tells "
+        "(em-dashes, uniform hedging, rule-of-three). Fix any violations."
     )
 
     source_hint = ""

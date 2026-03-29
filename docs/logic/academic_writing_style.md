@@ -2,6 +2,11 @@
 
 > Read this document before generating any research paper, review, or academic draft.
 > Every rule here is a direct instruction. Follow them unless the user explicitly overrides.
+>
+> **Self-revision requirement:** After generating each section, re-read it against this
+> guide. Check for: banned words/phrases, nominalizations, passive voice overuse, missing
+> known-new flow, unsupported claims, vague quantifiers, and structural LLM tells (em-dashes,
+> uniform hedging, rule-of-three). Revise any violations before returning the text.
 
 ## 1. Sentence-Level Clarity
 
@@ -9,9 +14,11 @@
 
 **Put the subject and verb close together, early in the sentence.** Do not bury the main verb behind a long subordinate clause. Bad: "The relationship between growth rate and precursor partial pressure, which has been debated in the literature for decades, remains unclear." Better: "The relationship between growth rate and precursor partial pressure remains unclear, despite decades of debate."
 
-**Use strong, precise verbs.** Do not nominalize verbs into abstract nouns. Write "We analyzed" not "We performed an analysis of." Write "X increases Y" not "X leads to an increase in Y."
+**Use strong, precise verbs — avoid nominalizations.** Do not turn verbs into abstract nouns (the "zombie nouns" ending in -ation, -ism, -ity, -ence). Write "We analyzed" not "We performed an analysis of." Write "Implementing the policy irritated the staff" not "The implementation of the policy was a cause of irritation." Write "X increases Y" not "X leads to an increase in Y."
 
-**Cut every word that does not earn its place.** Apply Strunk & White's Rule 17: omit needless words. Delete filler phrases: "it is worth noting that," "it should be mentioned that," "in order to" (use "to"), "a number of" (use "several" or state the number), "due to the fact that" (use "because"), "in the context of" (use "in" or "for").
+**Make characters the subjects and actions the verbs.** The real actors in your story (researchers, devices, processes) should be grammatical subjects. Bad: "An increase in resistance was observed." Better: "The device exhibited increased resistance." This is Williams' core principle: readers understand sentences best when subjects are characters and verbs are their actions.
+
+**Cut every word that does not earn its place.** Apply Strunk & White's Rule 17: omit needless words. Delete filler phrases: "it is worth noting that," "it should be mentioned that," "in order to" (use "to"), "a number of" (use "several" or state the number), "due to the fact that" (use "because"), "in the context of" (use "in" or "for"). Delete qualifiers that weaken prose: "very," "rather," "quite," "fairly," "pretty." They add nothing.
 
 **Use short words over long ones when meaning is equal.** Write "use" not "utilize," "show" not "demonstrate," "about" not "approximately" (unless precision matters), "begin" not "commence," "help" not "facilitate."
 
@@ -23,11 +30,17 @@
 
 **Each paragraph makes exactly one point.** State that point in the first or second sentence (the topic sentence). The remaining sentences provide evidence, elaboration, or qualification. The final sentence either concludes the point or transitions to the next paragraph.
 
-**Use the known-new contract.** Begin each sentence with information the reader already knows (from the previous sentence or established context), then introduce new information at the end. This creates forward momentum without explicit transition words.
+**Use the known-new contract (old-to-new flow).** Begin each sentence with information the reader already knows (from the previous sentence or established context), then place new, complex, or "heavy" information at the end. This creates forward momentum without explicit transition words. Williams calls this the single most powerful tool for readable prose.
+
+**Apply the breadcrumb test.** Every sentence must logically necessitate the next. If a sentence can be removed without breaking the chain of logic, delete it. Each paragraph is a chain, not a collection.
 
 **Limit paragraphs to 4-8 sentences.** A paragraph longer than 10 sentences almost certainly contains two ideas. Split it.
 
-**Use transition words sparingly and precisely.** "However" signals a genuine contrast. "Moreover" signals a genuine addition. "Therefore" signals a genuine logical consequence. Do not use these words as paragraph-starting filler. If the logical connection is clear from context, omit the transition word entirely.
+**Use transition words sparingly and precisely.** "However" signals a genuine contrast. "Moreover" signals a genuine addition. "Therefore" signals a genuine logical consequence. Do not use these words as paragraph-starting filler. If the logical connection is clear from context, omit the transition word entirely. When you do use them, match the relationship precisely:
+- Contrast: "however," "despite this," "on the other hand"
+- Concession: "admittedly," "of course"
+- Elaboration: "specifically," "in other words"
+- Consequence: "therefore," "as a result"
 
 ## 3. Section-by-Section Guidance
 
@@ -39,7 +52,7 @@ Do not start with "This paper presents..." or "In this study, we..." Start with 
 
 ### Introduction
 
-Follow the "funnel" structure: broad context, narrowing to the specific gap, then your contribution. Apply McEnerney's principle: create instability. The reader must feel that something is unresolved, contradictory, or unknown. Use words like "however," "yet," "remains unclear," "conflicting reports" to establish the gap.
+Follow the "funnel" structure: broad context, narrowing to the specific gap, then your contribution. Apply the Graff/Birkenstein "They Say / I Say" framework: always establish the existing conversation ("they say") before stating what this paper contributes ("I say"). Apply McEnerney's principle: create instability. The reader must feel that something is unresolved, contradictory, or unknown. Use words like "however," "yet," "remains unclear," "conflicting reports" to establish the gap.
 
 End the Introduction with a clear statement of what this paper does and, optionally, a brief roadmap of the paper's structure. Do not preview results here unless the journal style requires it.
 
@@ -155,4 +168,4 @@ Do not use explicit signpost phrases like "The next section will discuss..." Ins
 
 ---
 
-*Sources synthesized: Strunk & White, "The Elements of Style"; Orwell, "Politics and the English Language" (six rules); Schimel, "Writing Science"; Sword, "Stylish Academic Writing"; McEnerney (UChicago) on value-driven academic writing; Nature author guidelines; ACS Guide to Scholarly Communication; Stanford "Writing in the Sciences" (Sainani); MIT/Broad Institute CommKit.*
+*Sources synthesized: Williams, "Style: Toward Clarity and Grace" (characters-as-subjects, known-new contract); Strunk & White, "The Elements of Style"; Orwell, "Politics and the English Language" (six rules); Schimel, "Writing Science"; Sword, "Stylish Academic Writing" (zombie nouns, verb vitality); Graff & Birkenstein, "They Say / I Say" (argumentative moves); McEnerney (UChicago) on value-driven academic writing; Nature author guidelines; ACS Guide to Scholarly Communication; Stanford "Writing in the Sciences" (Sainani); MIT/Broad Institute CommKit.*
