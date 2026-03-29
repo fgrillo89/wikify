@@ -105,13 +105,17 @@ def build_corpus_graph() -> nx.DiGraph:
             graph.add_edge(citing_id, cited_id, type="cites", weight=1.0)
 
     # 2. Similarity edges (undirected, added as bidirectional)
-    similar_map = get_all_similar(paper_ids, n_results=5)
-    for pid, similar_ids in similar_map.items():
-        for sid in similar_ids:
-            if not graph.has_edge(pid, sid):
-                graph.add_edge(pid, sid, type="similar", weight=0.3)
-            if not graph.has_edge(sid, pid):
-                graph.add_edge(sid, pid, type="similar", weight=0.3)
+    # ChromaDB may be locked by another process (e.g., MCP server) — degrade gracefully
+    try:
+        similar_map = get_all_similar(paper_ids, n_results=5)
+        for pid, similar_ids in similar_map.items():
+            for sid in similar_ids:
+                if not graph.has_edge(pid, sid):
+                    graph.add_edge(pid, sid, type="similar", weight=0.3)
+                if not graph.has_edge(sid, pid):
+                    graph.add_edge(sid, pid, type="similar", weight=0.3)
+    except Exception:
+        pass  # Graph works with citation + coupling edges only
 
     # 3. Coupling edges (undirected)
     coupling_map = compute_coupling(paper_ids)

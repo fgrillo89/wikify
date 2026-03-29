@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import chromadb
-from chromadb.api.models.Collection import Collection
-from sentence_transformers import SentenceTransformer
 
 from scholarforge.config import settings
 from scholarforge.store.models import Paper
+
+if TYPE_CHECKING:
+    from chromadb.api.models.Collection import Collection
+    from sentence_transformers import SentenceTransformer
 
 # Module-level singletons (lazy-initialized)
 _model: SentenceTransformer | None = None
@@ -17,9 +21,22 @@ _COLLECTION_NAME = "document_summaries"
 
 
 def _get_model() -> SentenceTransformer:
-    """Return the SentenceTransformer model, lazy-initialized as a singleton."""
+    """Return the SentenceTransformer model, lazy-initialized.
+
+    The import is deferred so modules that only need ChromaDB (graph metrics,
+    similarity lookups on stored vectors) don't pay the 10s sentence-transformers
+    import + model-load cost.
+    """
     global _model
     if _model is None:
+        import os
+
+        from sentence_transformers import SentenceTransformer
+
+        # Suppress HuggingFace HTTP calls that check for model updates
+        # on every load. The model is cached locally after first download.
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         _model = SentenceTransformer(settings.embedding_model)
     return _model
 
