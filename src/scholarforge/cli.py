@@ -35,16 +35,8 @@ def ingest(
 
 
 @app.command()
-def link():
-    """Run linking on all ingested papers to create topic/method/author connections."""
-    from scholarforge.ingest.registry import _run_batch_steps
-
-    _run_batch_steps()
-
-
-@app.command()
-def embed():
-    """Run embeddings, similarity, coupling, and vault regeneration on all ingested papers."""
+def refresh():
+    """Full refresh: recompute all topics, embeddings, similarity, coupling, and vault notes."""
     from scholarforge.ingest.registry import _run_batch_steps
 
     _run_batch_steps()

@@ -1,8 +1,16 @@
-"""Dispatcher: file extension -> parser."""
+"""Dispatcher: file extension -> parser.
+
+Two ingestion modes:
+- Single file: fast incremental (process only the new paper), then background
+  refresh of cross-paper signals (topics, similarity, coupling).
+- Batch (--parallel): parse all PDFs in parallel, then one synchronous full
+  refresh at the end.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -30,7 +38,10 @@ def ingest_path(path: Path, parallel: bool = False, max_workers: int = 4) -> int
         else:
             count = 0
             for file in files:
-                count += _ingest_file(file)
+                count += _ingest_file(file, background_refresh=False)
+            # After sequential batch, do one full refresh (not N background refreshes)
+            if count > 0:
+                _run_batch_steps()
             return count
     return 0
 
@@ -106,6 +117,118 @@ def _parse_worker(path_str: str):
     return parse_pdf(Path(path_str))
 
 
+def _get_vocab_cache_path() -> Path:
+    """Path to the cached corpus vocabulary JSON file."""
+    from scholarforge.config import settings
+
+    return settings.data_dir / "corpus_vocabulary.json"
+
+
+def _load_corpus_vocabulary() -> list[str]:
+    """Load cached corpus vocabulary. Returns empty list if no cache."""
+    import json
+
+    cache = _get_vocab_cache_path()
+    if cache.exists():
+        return json.loads(cache.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_corpus_vocabulary(vocabulary: list[str]) -> None:
+    """Save corpus vocabulary to cache."""
+    import json
+
+    cache = _get_vocab_cache_path()
+    cache.write_text(json.dumps(vocabulary, ensure_ascii=False), encoding="utf-8")
+
+
+def _run_incremental_steps(paper_id: str) -> None:
+    """Fast O(1) post-ingestion for a single paper.
+
+    - Extracts topics from the paper's own declared keywords + cached corpus vocab
+    - Embeds its abstract into ChromaDB
+    - Queries k-NN for this paper only
+    - Writes this paper's vault note with all available signals
+    """
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.embeddings import embed_abstracts, query_similar
+    from scholarforge.store.models import Chunk, FigureRef, Paper
+    from scholarforge.vault.linker import _extract_declared_keywords, _to_display
+    from scholarforge.vault.writer import _paper_display_name, write_paper_note
+
+    with get_session() as session:
+        paper = session.get(Paper, paper_id)
+        if not paper:
+            return
+
+        chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
+        full_text = "\n\n".join(c.content for c in chunks)
+        search_text = f"{paper.title or ''} {paper.abstract or ''} {full_text}"
+
+        # ── Topics: own declared keywords + cached corpus vocabulary ─────────
+        declared = _extract_declared_keywords(search_text)
+
+        if declared:
+            topics = [_to_display(kw) for kw in declared]
+        else:
+            # Match against cached vocabulary (O(1) file read, no DB scan)
+            from scholarforge.vault.linker import _match_corpus_vocabulary
+
+            vocab = _load_corpus_vocabulary()
+            matched = _match_corpus_vocabulary(search_text, vocab)
+            topics = [_to_display(kw) for kw in matched]
+
+        # ── Embed abstract ──────────────────────────────────────────────────
+        embed_abstracts([paper])
+
+        # ── k-NN similarity (query only this paper) ────────────────────────
+        similar_pairs = query_similar(paper.id, n_results=5)
+        all_papers = session.exec(select(Paper)).all()
+        id_to_display: dict[str, str] = {p.id: _paper_display_name(p) for p in all_papers}
+        similar_names = [id_to_display[sid] for sid, _ in similar_pairs if sid in id_to_display]
+
+        # ── Figure refs from DB ─────────────────────────────────────────────
+        frs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
+        figure_refs = [(fr.figure_key, fr.caption_text) for fr in frs] or None
+
+        # ── Write vault note ────────────────────────────────────────────────
+        chunks_count = len(chunks)
+        figures_count = len(frs) if frs else 0
+
+        write_paper_note(
+            paper,
+            chunks_count=chunks_count,
+            figures_count=figures_count,
+            topics=topics if topics else None,
+            similar_to=similar_names if similar_names else None,
+            figure_refs=figure_refs,
+        )
+
+    console.print(
+        f"[dim]  Incremental: {len(topics)} topics, {len(similar_names)} similar papers[/dim]"
+    )
+
+
+def _run_background_refresh() -> None:
+    """Spawn a background thread to refresh all cross-paper signals.
+
+    Updates topic vocabulary matches, k-NN neighbors, coupling, and vault notes
+    for existing papers that may be affected by the newly added paper.
+    """
+
+    def _refresh() -> None:
+        try:
+            _run_batch_steps()
+        except Exception as e:
+            console.print(f"[yellow]Background refresh error:[/yellow] {e}")
+
+    thread = threading.Thread(target=_refresh, daemon=False, name="corpus-refresh")
+    thread.start()
+    console.print("[dim]  Background corpus refresh started...[/dim]")
+
+
 def _run_batch_steps() -> None:
     """Run all batch post-ingestion steps: linking, embeddings, coupling, vault regen."""
     from sqlmodel import func, select
@@ -133,7 +256,8 @@ def _run_batch_steps() -> None:
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
     # ── 2. Automatic topic extraction ─────────────────────────────────────────
-    per_paper_links = compute_all_links(papers_with_text)
+    per_paper_links, corpus_vocabulary = compute_all_links(papers_with_text)
+    _save_corpus_vocabulary(corpus_vocabulary)
     console.print("[green]  Topics extracted[/green]")
 
     # ── 3. Report citations + figure refs (already persisted during ingestion)
@@ -216,21 +340,39 @@ def _run_batch_steps() -> None:
     )
 
 
-def _ingest_file(path: Path) -> int:
-    """Ingest a single file based on extension."""
+def _ingest_file(path: Path, background_refresh: bool = True) -> int:
+    """Ingest a single file based on extension.
+
+    When background_refresh is True (default for single-file ingest), runs
+    fast incremental steps synchronously then spawns a background thread
+    to update the rest of the corpus. When False (batch mode), only parses
+    and persists — caller is responsible for running batch steps.
+    """
     ext = path.suffix.lower()
+    paper_id: str | None = None
+
     if ext == ".pdf":
         from scholarforge.ingest.pdf import ingest_pdf
 
-        return ingest_pdf(path)
+        paper_id = ingest_pdf(path, return_id=True)
     elif ext == ".docx":
         from scholarforge.ingest.docx import ingest_docx
 
-        return ingest_docx(path)
+        paper_id = ingest_docx(path, return_id=True)
     elif ext == ".pptx":
         from scholarforge.ingest.pptx import ingest_pptx
 
-        return ingest_pptx(path)
+        paper_id = ingest_pptx(path, return_id=True)
     else:
         console.print(f"[yellow]Unsupported format:[/yellow] {path.name}")
         return 0
+
+    if not paper_id:
+        return 0
+
+    if background_refresh:
+        # Single-file mode: fast incremental for this paper, then background corpus refresh
+        _run_incremental_steps(paper_id)
+        _run_background_refresh()
+
+    return 1

@@ -95,9 +95,7 @@ def _deduplicate_topics(topics: list[str]) -> list[str]:
     return [t for t in surviving if t not in absorbed]
 
 
-def _match_corpus_vocabulary(
-    text: str, vocabulary: list[str], max_matches: int = 8
-) -> list[str]:
+def _match_corpus_vocabulary(text: str, vocabulary: list[str], max_matches: int = 8) -> list[str]:
     """Find which corpus keywords appear in this paper's text.
 
     Only matches whole-phrase occurrences (word boundaries).
@@ -186,12 +184,14 @@ def write_topic_notes(topic_papers: dict[str, list[str]]) -> int:
 
 def compute_all_links(
     papers_with_text: list[tuple[Paper, str]],
-) -> dict[str, dict[str, list[str]]]:
+) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
     """Compute topics for all papers automatically.
 
     Two-pass approach:
     1. Extract declared keywords from all papers → build corpus vocabulary
     2. For each paper, use its declared keywords or match against the vocabulary
+
+    Returns (per_paper_links, corpus_vocabulary) so the vocabulary can be cached.
     """
     # Pass 1: build corpus vocabulary from all declared keywords
     all_declared: list[str] = []
@@ -243,9 +243,7 @@ def compute_all_links(
     if rename:
         for paper_id in result:
             result[paper_id]["topics"] = list(
-                dict.fromkeys(
-                    rename.get(t, t) for t in result[paper_id]["topics"]
-                )
+                dict.fromkeys(rename.get(t, t) for t in result[paper_id]["topics"])
             )
 
-    return result
+    return result, corpus_vocabulary

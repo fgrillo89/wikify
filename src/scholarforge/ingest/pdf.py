@@ -105,19 +105,22 @@ def persist_parsed(parsed: ParsedPaper) -> None:
     write_paper_note(parsed.paper, len(parsed.chunks), len(parsed.figures))
 
 
-def ingest_pdf(path: Path) -> int:
-    """Ingest a single PDF into the knowledge base. Returns 1 on success, 0 on skip."""
+def ingest_pdf(path: Path, return_id: bool = False) -> int | str | None:
+    """Ingest a single PDF into the knowledge base.
+
+    Returns 1 on success / 0 on skip, or the paper ID string if return_id=True
+    (None on skip).
+    """
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    # Check if already ingested with same hash
     from scholarforge.store.db import get_session
 
     with get_session() as session:
         existing = session.get(Paper, file_hash)
         if existing and existing.file_hash == file_hash:
             console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
-            return 0
+            return None if return_id else 0
 
     parsed = parse_pdf(path)
     persist_parsed(parsed)
@@ -126,7 +129,7 @@ def ingest_pdf(path: Path) -> int:
         f"[green]Ingested:[/green] {path.name} "
         f"({len(parsed.chunks)} chunks, {len(parsed.figures)} figures)"
     )
-    return 1
+    return parsed.paper.id if return_id else 1
 
 
 def _parse_section_tree(md_text: str) -> dict:

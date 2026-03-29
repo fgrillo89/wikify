@@ -242,8 +242,11 @@ def parse_docx(path: Path) -> ParsedPaper:
     )
 
 
-def ingest_docx(path: Path) -> int:
-    """Ingest a single DOCX file into the knowledge base. Returns 1 on success, 0 on skip."""
+def ingest_docx(path: Path, return_id: bool = False) -> int | str | None:
+    """Ingest a single DOCX file into the knowledge base.
+
+    Returns 1/0 or the paper ID string if return_id=True (None on skip).
+    """
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -253,7 +256,7 @@ def ingest_docx(path: Path) -> int:
         existing = session.get(Paper, file_hash)
         if existing and existing.file_hash == file_hash:
             console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
-            return 0
+            return None if return_id else 0
 
     parsed = parse_docx(path)
     persist_parsed(parsed)
@@ -262,4 +265,4 @@ def ingest_docx(path: Path) -> int:
         f"[green]Ingested:[/green] {path.name} "
         f"({len(parsed.chunks)} chunks, {len(parsed.figure_refs)} figure refs)"
     )
-    return 1
+    return parsed.paper.id if return_id else 1
