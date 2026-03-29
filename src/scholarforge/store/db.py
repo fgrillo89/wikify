@@ -1,9 +1,9 @@
 """SQLite database setup and session management.
 
-Uses a DatabaseManager class instead of global variables.
-Callers should prefer dependency injection where practical;
-the module-level ``get_session()`` is a convenience that delegates
-to the default manager.
+Uses a DatabaseManager class for the engine lifecycle.
+Module-level ``get_engine()`` and ``get_session()`` delegate to a
+single module-level instance ``_db``.  Prefer dependency injection
+(pass a DatabaseManager explicitly) when you need to swap it in tests.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ class DatabaseManager:
     """Manages the SQLite engine lifecycle.
 
     Designed for dependency injection: create an instance and pass it
-    where needed. A default instance is available via ``default_manager()``.
+    where needed.  The module-level ``_db`` instance is used by the
+    convenience functions below.
     """
 
     def __init__(self, db_path: str | None = None, echo: bool = False) -> None:
@@ -45,27 +46,19 @@ class DatabaseManager:
         return Session(self.engine)
 
 
-# ── Default instance ─────────────────────────────────────────────────────────
+# ── Module-level instance ─────────────────────────────────────────────────────
 
-_default: DatabaseManager | None = None
-
-
-def default_manager() -> DatabaseManager:
-    """Return the default DatabaseManager (lazy-created, uses settings)."""
-    global _default  # noqa: PLW0603
-    if _default is None:
-        _default = DatabaseManager()
-    return _default
+_db = DatabaseManager()
 
 
-# ── Backward-compatible module-level functions ───────────────────────────────
+# ── Module-level convenience functions ───────────────────────────────────────
 
 
 def get_engine():
-    """Return the default SQLAlchemy engine."""
-    return default_manager().engine
+    """Return the SQLAlchemy engine from the module-level DatabaseManager."""
+    return _db.engine
 
 
 def get_session() -> Session:
-    """Return a new session from the default manager."""
-    return default_manager().session()
+    """Return a new session from the module-level DatabaseManager."""
+    return _db.session()

@@ -31,7 +31,8 @@ class CacheManager:
     """Manages the diskcache lifecycle for LLM responses.
 
     Designed for dependency injection: create an instance and pass it where
-    needed. A default instance is available via ``default_cache_manager()``.
+    needed.  The module-level ``_cache_mgr`` instance is used by the
+    convenience function below.
     """
 
     def __init__(self, cache_dir: str | None = None) -> None:
@@ -50,22 +51,14 @@ class CacheManager:
         return self._cache
 
 
-# ── Default instance ──────────────────────────────────────────────────────────
+# ── Module-level instance ─────────────────────────────────────────────────────
 
-_default: CacheManager | None = None
-
-
-def default_cache_manager() -> CacheManager:
-    """Return the default CacheManager (lazy-created, uses settings)."""
-    global _default  # noqa: PLW0603
-    if _default is None:
-        _default = CacheManager()
-    return _default
+_cache_mgr = CacheManager()
 
 
 def _get_cache() -> diskcache.Cache:
-    """Return the default diskcache.Cache instance."""
-    return default_cache_manager().cache
+    """Return the diskcache.Cache from the module-level CacheManager."""
+    return _cache_mgr.cache
 
 
 def _cache_key(model: str, messages: list[dict], **kwargs: Any) -> str:

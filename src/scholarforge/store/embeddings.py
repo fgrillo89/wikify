@@ -1,9 +1,8 @@
 """ChromaDB summary embeddings and k-NN similarity queries.
 
-EmbeddingStore is the core class. Callers receive it via dependency injection
-(passed as an argument) rather than importing a global. For convenience, a
-module-level `default_store()` factory is provided — but production code
-should prefer explicit injection.
+EmbeddingStore is the core class.  A module-level instance ``_store`` is used
+by the convenience functions below.  Prefer dependency injection (pass an
+EmbeddingStore explicitly) when you need to swap it in tests.
 """
 
 from __future__ import annotations
@@ -26,7 +25,8 @@ class EmbeddingStore:
     """Manages ChromaDB + SentenceTransformer lifecycle.
 
     Designed for dependency injection: create an instance and pass it where
-    needed. Lazy-initializes both components on first property access.
+    needed.  The module-level ``_store`` instance is used by the convenience
+    functions below.  Lazy-initializes both components on first property access.
 
     SentenceTransformer is only loaded when encoding is needed (search, embed).
     ChromaDB operations on stored vectors (k-NN lookup) don't require the model.
@@ -72,47 +72,33 @@ class EmbeddingStore:
         return self._collection
 
 
-# ── Default instance factory ─────────────────────────────────────────────────
+# ── Module-level instance ─────────────────────────────────────────────────────
 
-_default: EmbeddingStore | None = None
-
-
-def default_store() -> EmbeddingStore:
-    """Return a default EmbeddingStore (lazy-created, uses settings).
-
-    Prefer passing an EmbeddingStore explicitly. This exists for backward
-    compatibility and convenience in CLI/MCP entry points.
-    """
-    global _default  # noqa: PLW0603
-    if _default is None:
-        _default = EmbeddingStore()
-    return _default
+_store = EmbeddingStore()
 
 
-# ── Backward-compatible module-level functions ───────────────────────────────
-# These delegate to the default store. New code should use EmbeddingStore directly.
+# ── Module-level convenience functions ───────────────────────────────────────
 
 
 def _get_model() -> SentenceTransformer:
-    return default_store().model
+    return _store.model
 
 
 def _get_collection() -> Collection:
-    return default_store().collection
+    return _store.collection
 
 
-def embed_summaries(papers: list[Paper], store: EmbeddingStore | None = None) -> int:
+def embed_summaries(papers: list[Paper]) -> int:
     """Batch-upsert summary embeddings for a list of papers."""
-    s = store or default_store()
     eligible = [p for p in papers if p.summary and p.summary.strip()]
     if not eligible:
         return 0
 
     summaries = [p.summary for p in eligible]  # type: ignore[misc]
     ids = [p.id for p in eligible]
-    embeddings = s.model.encode(summaries)
+    embeddings = _store.model.encode(summaries)
 
-    s.collection.upsert(
+    _store.collection.upsert(
         ids=ids,
         embeddings=embeddings,  # type: ignore[arg-type]
         documents=summaries,
@@ -120,11 +106,9 @@ def embed_summaries(papers: list[Paper], store: EmbeddingStore | None = None) ->
     return len(eligible)
 
 
-def query_similar(
-    paper_id: str, n_results: int = 5, store: EmbeddingStore | None = None
-) -> list[tuple[str, float]]:
+def query_similar(paper_id: str, n_results: int = 5) -> list[tuple[str, float]]:
     """Query ChromaDB for papers similar to the given paper."""
-    collection = (store or default_store()).collection
+    collection = _store.collection
 
     result = collection.get(ids=[paper_id], include=["embeddings"])
     stored_embeddings = result.get("embeddings")
@@ -147,13 +131,12 @@ def query_similar(
 def get_all_similar(
     paper_ids: list[str],
     n_results: int = 5,
-    store: EmbeddingStore | None = None,
 ) -> dict[str, list[str]]:
     """Return similar paper IDs for each given paper ID."""
     if not paper_ids:
         return {}
 
-    collection = (store or default_store()).collection
+    collection = _store.collection
 
     result = collection.get(ids=paper_ids, include=["embeddings"])
     stored_ids: list[str] = result.get("ids") or []
