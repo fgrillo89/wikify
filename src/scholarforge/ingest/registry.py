@@ -260,13 +260,23 @@ def _run_batch_steps() -> None:
     _save_corpus_vocabulary(corpus_vocabulary)
     console.print("[green]  Topics extracted[/green]")
 
-    # ── 3. Report citations + figure refs (already persisted during ingestion)
+    # ── 3. Citation graph: match bibliography entries to corpus papers ────────
+    from scholarforge.extract.cite_match import build_citation_graph
+
+    citations_by_paper: dict[str, list[str]] = {}
     with get_session() as session:
-        total_citations = session.exec(select(func.count(Citation.id))).one()
+        for paper in papers:
+            cites = session.exec(select(Citation).where(Citation.paper_id == paper.id)).all()
+            if cites:
+                citations_by_paper[paper.id] = [c.raw_text for c in cites]
+
+    citation_graph = build_citation_graph(papers, citations_by_paper)
+    cite_count = sum(len(v) for v in citation_graph.values())
+    console.print(f"[green]  Citation graph: {cite_count} cross-references resolved[/green]")
+
+    with get_session() as session:
         total_figure_refs = session.exec(select(func.count(FigureRef.id))).one()
-    console.print(
-        f"[green]  Found {total_citations} citations, {total_figure_refs} figure refs in DB[/green]"
-    )
+    console.print(f"[green]  Found {total_figure_refs} figure refs in DB[/green]")
 
     # ── 4. Abstract embeddings ───────────────────────────────────────────────
     embedded = embed_abstracts(papers)
@@ -325,11 +335,19 @@ def _run_batch_steps() -> None:
                 id_to_display[cid] for cid in coupling_map.get(paper.id, []) if cid in id_to_display
             ]
 
+            # Resolve citation graph IDs to display names
+            cites_names = [
+                id_to_display[cid]
+                for cid in citation_graph.get(paper.id, [])
+                if cid in id_to_display
+            ]
+
             write_paper_note(
                 paper,
                 chunks_count=chunks_count,
                 figures_count=figures_count,
                 topics=links["topics"],
+                cites=cites_names if cites_names else None,
                 similar_to=similar_names if similar_names else None,
                 cites_same=coupled_names if coupled_names else None,
                 figure_refs=paper_figure_refs.get(paper.id) or None,

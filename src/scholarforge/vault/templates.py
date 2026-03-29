@@ -54,6 +54,10 @@ def paper_note(
     if summary:
         sections.append(f"## Summary\n\n{summary}\n")
 
+    if cites:
+        links = "\n".join(f"- [[papers/{c}]]" for c in cites)
+        sections.append(f"## Cites\n\n{links}\n")
+
     if figure_refs:
         lines = "\n".join(f"- **{key}**: {caption}" for key, caption in figure_refs)
         sections.append(f"## Figure References\n\n{lines}\n")
