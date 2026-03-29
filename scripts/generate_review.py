@@ -855,7 +855,11 @@ def main() -> None:
     print(f"\nDone. {word_count} words (~{word_count // 250} pages), {line_count} lines")
     print("\n--- First 30 lines of review_paper.md ---")
     for i, line in enumerate(numbered_md.splitlines()[:30], 1):
-        print(f"{i:3d}  {line}")
+        # Use ASCII-safe repr fallback for Windows consoles that can't handle Unicode
+        try:
+            print(f"{i:3d}  {line}")
+        except UnicodeEncodeError:
+            print(f"{i:3d}  {line.encode('ascii', 'replace').decode()}")
 
 
 if __name__ == "__main__":
