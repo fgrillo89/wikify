@@ -38,7 +38,15 @@ def plan_paper(
         "Return ONLY valid JSON, no markdown fences."
     )
 
-    user_msg = f"Prompt: {prompt}\n\nAvailable papers:\n{paper_list}"
+    # Include graph metrics if available
+    graph_section = ""
+    if context.graph_metrics:
+        from scholarforge.vault.writer import _paper_display_name
+
+        id_to_name = {p.id: _paper_display_name(p) for p in context.papers}
+        graph_section = "\n\n" + context.graph_metrics.summary_for_llm(id_to_name)
+
+    user_msg = f"Prompt: {prompt}\n\nAvailable papers:\n{paper_list}{graph_section}"
 
     response = complete(
         messages=[

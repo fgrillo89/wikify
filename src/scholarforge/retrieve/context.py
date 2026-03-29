@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from sqlmodel import select
 
+from scholarforge.graph.metrics import GraphMetrics
 from scholarforge.store.db import get_session
 from scholarforge.store.embeddings import _get_collection, _get_model
 from scholarforge.store.models import Chunk, Paper
@@ -19,6 +20,7 @@ class RetrievedContext:
     papers: list[Paper] = field(default_factory=list)
     chunks: list[Chunk] = field(default_factory=list)
     total_tokens: int = 0
+    graph_metrics: GraphMetrics | None = None
 
     def as_text(self) -> str:
         """Format context for LLM prompt."""
@@ -107,8 +109,10 @@ def retrieve_for_query(
     )
 
 
-def retrieve_all_papers() -> RetrievedContext:
+def retrieve_all_papers(include_metrics: bool = True) -> RetrievedContext:
     """Load all papers with their abstracts (for review-style generation)."""
+    from scholarforge.graph.metrics import compute_metrics
+
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
         # For review papers, we want abstracts + key chunks, not all chunks
@@ -121,4 +125,5 @@ def retrieve_all_papers() -> RetrievedContext:
             chunks.extend(paper_chunks[:3])
 
     total = sum(c.token_count for c in chunks)
-    return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total)
+    metrics = compute_metrics() if include_metrics else None
+    return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total, graph_metrics=metrics)

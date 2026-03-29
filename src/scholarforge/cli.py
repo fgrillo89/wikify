@@ -59,6 +59,39 @@ def stats():
 
 
 @app.command()
+def graph():
+    """Show graph metrics: hubs, bridges, and frontier papers."""
+
+    from sqlmodel import select
+
+    from scholarforge.graph.metrics import compute_metrics
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Paper
+    from scholarforge.vault.writer import _paper_display_name
+
+    metrics = compute_metrics()
+
+    with get_session() as session:
+        papers = session.exec(select(Paper)).all()
+    id_to_name = {p.id: _paper_display_name(p) for p in papers}
+
+    console.print("\n[bold]Graph Metrics[/bold]\n")
+    console.print(metrics.summary_for_llm(id_to_name))
+
+    # Full ranking table
+    console.print("\n[bold]Full PageRank Ranking[/bold]")
+    sorted_pr = sorted(metrics.pagerank.items(), key=lambda x: x[1], reverse=True)
+    for i, (pid, pr) in enumerate(sorted_pr, 1):
+        name = id_to_name.get(pid, pid[:12])
+        dc = metrics.degree_centrality.get(pid, 0)
+        bc = metrics.betweenness_centrality.get(pid, 0)
+        role = metrics.paper_role(pid)
+        console.print(
+            f"  {i:2d}. {name[:60]:<60s}  PR={pr:.3f}  DC={dc:.2f}  BC={bc:.3f}  [{role}]"
+        )
+
+
+@app.command()
 def generate(
     prompt: str = typer.Argument(
         ..., help="Writing prompt, e.g. 'Review of memristor-based neuromorphic computing'"
