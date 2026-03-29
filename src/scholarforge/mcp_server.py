@@ -693,6 +693,37 @@ def ingest_paper(file_path: str) -> str:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+def _prewarm() -> None:
+    """Pre-load ChromaDB and SentenceTransformer in a background thread.
+
+    This runs on server startup so the first tool call doesn't pay the
+    10+ second cold start penalty.  Errors are logged, not swallowed.
+    """
+    import logging
+    import threading
+
+    logger = logging.getLogger(__name__)
+
+    def _load():
+        try:
+            from scholarforge.store.embeddings import _get_collection
+
+            col = _get_collection()
+            logger.info("ChromaDB pre-warmed: %d embeddings", col.count())
+        except Exception:
+            logger.warning("ChromaDB pre-warm failed", exc_info=True)
+
+        try:
+            from scholarforge.store.embeddings import _get_model
+
+            _get_model()
+            logger.info("SentenceTransformer pre-warmed")
+        except Exception:
+            logger.warning("SentenceTransformer pre-warm failed", exc_info=True)
+
+    threading.Thread(target=_load, daemon=True).start()
+
+
 def run_server(library: str = "default") -> None:
     """Configure library scope and start the MCP stdio server."""
     if library != "default":
@@ -700,6 +731,7 @@ def run_server(library: str = "default") -> None:
 
         settings.library = library
 
+    _prewarm()
     mcp.run(transport="stdio")
 
 

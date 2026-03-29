@@ -54,3 +54,5 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **Chemistry subscripts**: Apply Unicode subscripts (HfO₂) only to markdown output. DOCX gets raw text (HfO2) and the exporter renders native Word subscripts.
 - **Unicode on Windows**: Avoid Unicode arrows/special chars in console print statements. Use ASCII alternatives.
 - **No silent error swallowing**: NEVER use bare `except: pass` or `try/except` that hides failures. If something fails, log it or raise it. Silent swallowing is obfuscation by design. If ChromaDB fails, the user needs to know and fix it, not get silently degraded results.
+- **No global mutable variables**: NEVER use `global _foo` singleton patterns. Prefer dependency injection — pass dependencies as constructor/function arguments. Use a singleton class only as a last resort, and prefer DI containers or factory functions that can be overridden in tests.
+- **Performance-critical paths**: Consider whether hot paths (embedding, graph computation, chunk retrieval) should eventually be compiled (Rust via PyO3/maturin, or Cython). Python's GIL and startup cost are real bottlenecks for a responsive app.
