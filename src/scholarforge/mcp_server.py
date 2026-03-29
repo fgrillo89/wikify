@@ -524,6 +524,110 @@ def deep_read(
 
 
 @mcp.tool()
+def get_sections(
+    section_type: str,
+    paper_pattern: Optional[str] = None,
+) -> str:
+    """Retrieve specific section types across papers.
+
+    Enables cross-paper queries like "get all conclusions" or
+    "compare methods sections of papers X and Y."
+
+    Valid section types: abstract, introduction, background, methods,
+    results, discussion, conclusion, references, acknowledgments,
+    appendix, body.
+
+    Args:
+        section_type: Canonical section type to retrieve.
+        paper_pattern: Optional title/author filter. If None, searches
+            all papers.
+
+    Returns:
+        Formatted text with sections grouped by paper, or error message.
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Chunk, Paper
+
+        valid_types = {
+            "abstract",
+            "introduction",
+            "background",
+            "methods",
+            "results",
+            "discussion",
+            "conclusion",
+            "references",
+            "acknowledgments",
+            "appendix",
+            "body",
+        }
+        st = section_type.lower().strip()
+        if st not in valid_types:
+            return f"Invalid section_type '{section_type}'. Valid: {', '.join(sorted(valid_types))}"
+
+        with get_session() as session:
+            query = (
+                select(Chunk)
+                .where(Chunk.section_type == st)
+                .order_by(Chunk.paper_id, Chunk.chunk_index)
+            )
+            chunks = session.exec(query).all()
+
+            if not chunks:
+                return f"No '{st}' sections found in the corpus."
+
+            # Filter by paper pattern if given
+            paper_ids = {c.paper_id for c in chunks}
+            papers = session.exec(
+                select(Paper).where(Paper.id.in_(list(paper_ids)))  # type: ignore[attr-defined]
+            ).all()
+
+        id_to_paper = {p.id: p for p in papers}
+
+        # Apply paper pattern filter
+        if paper_pattern:
+            lower = paper_pattern.lower()
+            id_to_paper = {
+                pid: p
+                for pid, p in id_to_paper.items()
+                if lower in p.title.lower() or lower in p.authors.lower()
+            }
+            chunks = [c for c in chunks if c.paper_id in id_to_paper]
+
+        if not chunks:
+            return f"No '{st}' sections match pattern '{paper_pattern}'."
+
+        # Group by paper and format
+        from collections import defaultdict
+
+        by_paper: dict[str, list] = defaultdict(list)
+        for c in chunks:
+            by_paper[c.paper_id].append(c)
+
+        sections = []
+        for pid, paper_chunks in by_paper.items():
+            paper = id_to_paper.get(pid)
+            if not paper:
+                continue
+            name = paper.display_name()
+            text = "\n\n".join(c.content for c in paper_chunks)
+            tokens = sum(c.token_count for c in paper_chunks)
+            sections.append(f"### {name}\n\n{text}\n\n*({tokens} tokens)*")
+
+        header = f"## {st.title()} sections"
+        if paper_pattern:
+            header += f" (filter: '{paper_pattern}')"
+        header += f"\n\n{len(sections)} papers, {len(chunks)} chunks\n"
+
+        return header + "\n---\n\n".join(sections)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error retrieving sections: {exc}"
+
+
+@mcp.tool()
 def ingest_paper(file_path: str) -> str:
     """Ingest a document (PDF/DOCX/PPTX) into the knowledge base.
 

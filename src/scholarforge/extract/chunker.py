@@ -8,6 +8,7 @@ import uuid
 import tiktoken
 
 from scholarforge.config import settings
+from scholarforge.extract.section_classifier import classify_section_path
 from scholarforge.store.models import Chunk
 
 _enc = tiktoken.get_encoding("cl100k_base")
@@ -43,6 +44,7 @@ def chunk_sections(md_text: str, section_tree: dict, paper_id: str) -> list[Chun
                     id=str(uuid.uuid4()),
                     paper_id=paper_id,
                     section_path=section_path,
+                    section_type=classify_section_path(section_path).value,
                     content=text,
                     token_count=token_count,
                     chunk_index=idx,

@@ -68,6 +68,7 @@ class Chunk(SQLModel, table=True):
     id: str = Field(primary_key=True)  # UUID
     paper_id: str = Field(foreign_key="paper.id")
     section_path: str = ""  # e.g. "3.Methods.3.2.Data Collection"
+    section_type: str = "body"  # Canonical type: introduction, methods, results, etc.
     content: str = ""
     token_count: int = 0
     chunk_index: int = 0  # Order within section

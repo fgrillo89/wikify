@@ -29,8 +29,7 @@ MOCK_PAPER_PLAN_JSON = {
             "heading": "Abstract",
             "level": 1,
             "description": (
-                "Brief overview of ALD and its significance"
-                " in semiconductor fabrication."
+                "Brief overview of ALD and its significance in semiconductor fabrication."
             ),
             "target_tokens": 150,
             "source_papers": ["George 2010 - Atomic layer deposition"],
@@ -59,8 +58,7 @@ MOCK_PAPER_PLAN_JSON = {
             "heading": "Fundamental ALD Mechanisms",
             "level": 1,
             "description": (
-                "Self-limiting surface reactions, precursor"
-                " chemistry, and growth modes."
+                "Self-limiting surface reactions, precursor chemistry, and growth modes."
             ),
             "target_tokens": 500,
             "source_papers": [
@@ -280,8 +278,7 @@ def make_mock_papers() -> list[Paper]:
             "title": "Status and Prospects of Plasma-Enhanced ALD",
             "authors": json.dumps(["Harm C. M. Knoops", "Sjoerd E. Potts"]),
             "abstract": (
-                "Plasma-enhanced ALD enables low-temperature"
-                " deposition of advanced materials."
+                "Plasma-enhanced ALD enables low-temperature deposition of advanced materials."
             ),
             "year": 2019,
         },
@@ -290,8 +287,7 @@ def make_mock_papers() -> list[Paper]:
             "title": "Crystallinity of Inorganic Films Grown by ALD",
             "authors": json.dumps(["Ville Miikkulainen", "Markku Leskelä"]),
             "abstract": (
-                "Systematic review of crystallinity behaviour"
-                " in ALD-grown inorganic films."
+                "Systematic review of crystallinity behaviour in ALD-grown inorganic films."
             ),
             "year": 2013,
         },
