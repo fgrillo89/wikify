@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>{{ title }}</title>
+<style>
+@page {
+    margin: 1in;
+}
+
+body {
+    font-family: {{ font_family }};
+    font-size: {{ font_size_pt }}pt;
+    line-height: {{ line_spacing }};
+    color: #000000;
+}
+
+h1 {
+    text-align: center;
+    font-size: {{ (font_size_pt * 1.5) | int }}pt;
+    font-weight: bold;
+    margin-top: 0;
+    margin-bottom: 12pt;
+}
+
+h2 {
+    font-size: {{ (font_size_pt * 1.2) | int }}pt;
+    font-weight: bold;
+    margin-top: 18pt;
+    margin-bottom: 6pt;
+}
+
+h3 {
+    font-size: {{ font_size_pt }}pt;
+    font-weight: bold;
+    margin-top: 12pt;
+    margin-bottom: 4pt;
+}
+
+p {
+    text-align: justify;
+    margin-top: 0;
+    margin-bottom: 8pt;
+}
+
+sup {
+    font-size: {{ (font_size_pt * 0.75) | int }}pt;
+    vertical-align: super;
+    line-height: 0;
+}
+
+.bibliography {
+    font-size: {{ (font_size_pt * 0.9) | int }}pt;
+    margin-top: 4pt;
+}
+
+.bibliography p {
+    margin-bottom: 4pt;
+}
+
+ul, ol {
+    margin-top: 4pt;
+    margin-bottom: 8pt;
+    padding-left: 24pt;
+}
+
+li {
+    margin-bottom: 2pt;
+}
+
+blockquote {
+    margin-left: 24pt;
+    margin-right: 24pt;
+    font-style: italic;
+}
+</style>
+</head>
+<body>
+{{ body_html }}
+</body>
+</html>
