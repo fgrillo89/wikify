@@ -270,37 +270,35 @@ def test_generic_guide_loaded_and_nonempty():
 # ── Test 12: Generic guide always included alongside specific field ─────────
 
 
-def test_specific_field_also_gets_generic_guide():
-    """When a specific field is detected, generic cross-field guide is ALSO included."""
+def test_specific_field_gets_only_its_guide():
+    """When a specific field is detected, only that field's guide is used (no generic)."""
     from scholarforge.generate.field_guide import get_field_instructions
 
     instructions = get_field_instructions("ALD thin film memristor nanoparticle", [])
-    # Should have both
-    assert "Cross-Field Best Practices" in instructions, (
-        "Generic guide should always be included as base layer"
-    )
-    assert "Field Guide: materials_science" in instructions, (
-        "Specific field guide should be layered on top"
+    assert "Field Guide: materials_science" in instructions
+    assert "Cross-Field Best Practices" not in instructions, (
+        "Generic guide should NOT be included when a specific field is detected"
     )
 
 
 def test_generic_only_when_no_field_detected():
-    """When no field matches, only generic guide is included (no duplicate)."""
+    """When no field matches, generic guide is the fallback."""
     from scholarforge.generate.field_guide import get_field_instructions
 
     instructions = get_field_instructions("random topic xyz", [])
     assert "Cross-Field Best Practices" in instructions
-    assert "Field Guide:" not in instructions, (
-        "No specific field guide should appear when field is generic"
-    )
+    assert "Field Guide:" not in instructions
 
 
-def test_all_fields_include_generic_base():
-    """For every detectable field, the generic guide is always present."""
+def test_all_specific_fields_exclude_generic():
+    """For every detectable field, only the specific guide is returned."""
     from scholarforge.generate.field_guide import get_field_instructions
 
     for trigger in FIELD_TRIGGERS.values():
         instructions = get_field_instructions(trigger, [])
-        assert "Cross-Field Best Practices" in instructions, (
-            f"Generic guide missing for trigger: {trigger}"
+        assert "Cross-Field Best Practices" not in instructions, (
+            f"Generic guide should not appear for trigger: {trigger}"
+        )
+        assert "Field Guide:" in instructions, (
+            f"Specific field guide missing for trigger: {trigger}"
         )
