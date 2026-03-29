@@ -1,4 +1,4 @@
-"""ChromaDB abstract embeddings and k-NN similarity queries."""
+"""ChromaDB summary embeddings and k-NN similarity queries."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from scholarforge.store.models import Paper
 _model: SentenceTransformer | None = None
 _collection: Collection | None = None
 
-_COLLECTION_NAME = "abstract_embeddings"
+_COLLECTION_NAME = "document_summaries"
 
 
 def _get_model() -> SentenceTransformer:
@@ -36,10 +36,10 @@ def _get_collection() -> Collection:
     return _collection
 
 
-def embed_abstracts(papers: list[Paper]) -> int:
-    """Batch-upsert abstract embeddings for a list of papers.
+def embed_summaries(papers: list[Paper]) -> int:
+    """Batch-upsert summary embeddings for a list of papers.
 
-    Skips papers with null or empty abstracts.
+    Skips papers with null or empty summaries.
 
     Args:
         papers: List of Paper objects to embed.
@@ -47,22 +47,22 @@ def embed_abstracts(papers: list[Paper]) -> int:
     Returns:
         Count of papers actually embedded.
     """
-    eligible = [p for p in papers if p.abstract and p.abstract.strip()]
+    eligible = [p for p in papers if p.summary and p.summary.strip()]
     if not eligible:
         return 0
 
     model = _get_model()
     collection = _get_collection()
 
-    abstracts = [p.abstract for p in eligible]  # type: ignore[misc]
+    summaries = [p.summary for p in eligible]  # type: ignore[misc]
     ids = [p.id for p in eligible]
 
-    embeddings = model.encode(abstracts)
+    embeddings = model.encode(summaries)
 
     collection.upsert(
         ids=ids,
         embeddings=embeddings,  # type: ignore[arg-type]
-        documents=abstracts,
+        documents=summaries,
     )
 
     return len(eligible)

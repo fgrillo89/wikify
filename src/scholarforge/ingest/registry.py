@@ -146,14 +146,14 @@ def _run_incremental_steps(paper_id: str) -> None:
     """Fast O(1) post-ingestion for a single paper.
 
     - Extracts topics from the paper's own declared keywords + cached corpus vocab
-    - Embeds its abstract into ChromaDB
+    - Embeds its summary into ChromaDB
     - Queries k-NN for this paper only
     - Writes this paper's vault note with all available signals
     """
     from sqlmodel import select
 
     from scholarforge.store.db import get_session
-    from scholarforge.store.embeddings import embed_abstracts, query_similar
+    from scholarforge.store.embeddings import embed_summaries, query_similar
     from scholarforge.store.models import Chunk, FigureRef, Paper
     from scholarforge.vault.linker import _extract_declared_keywords, _to_display
     from scholarforge.vault.writer import write_paper_note
@@ -165,7 +165,7 @@ def _run_incremental_steps(paper_id: str) -> None:
 
         chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
         full_text = "\n\n".join(c.content for c in chunks)
-        search_text = f"{paper.title or ''} {paper.abstract or ''} {full_text}"
+        search_text = f"{paper.title or ''} {paper.summary or ''} {full_text}"
 
         # ── Topics: own declared keywords + cached corpus vocabulary ─────────
         declared = _extract_declared_keywords(search_text)
@@ -197,8 +197,8 @@ def _run_incremental_steps(paper_id: str) -> None:
                 )
             topic_session.commit()
 
-        # ── Embed abstract ──────────────────────────────────────────────────
-        embed_abstracts([paper])
+        # ── Embed summary ───────────────────────────────────────────────────
+        embed_summaries([paper])
 
         # ── k-NN similarity (query only this paper) ────────────────────────
         similar_pairs = query_similar(paper.id, n_results=5)
@@ -252,7 +252,7 @@ def run_batch_steps() -> None:
     from sqlmodel import func, select
 
     from scholarforge.store.db import get_session
-    from scholarforge.store.embeddings import embed_abstracts, get_all_similar
+    from scholarforge.store.embeddings import embed_summaries, get_all_similar
     from scholarforge.store.models import Chunk, Citation, FigureRef, Paper
     from scholarforge.vault.coupler import compute_coupling
     from scholarforge.vault.linker import (
@@ -334,9 +334,9 @@ def run_batch_steps() -> None:
         total_figure_refs = session.exec(select(func.count(FigureRef.id))).one()
     console.print(f"[green]  Extracted {total_figure_refs} figure/table refs[/green]")
 
-    # ── 4. Abstract embeddings ───────────────────────────────────────────────
-    embedded = embed_abstracts(papers)
-    console.print(f"[green]  Embedded {embedded} abstracts into ChromaDB[/green]")
+    # ── 4. Summary embeddings ────────────────────────────────────────────────
+    embedded = embed_summaries(papers)
+    console.print(f"[green]  Embedded {embedded} summaries into ChromaDB[/green]")
 
     # ── 5. k-NN similarity ──────────────────────────────────────────────────
     similar_map = get_all_similar(paper_ids, n_results=5)

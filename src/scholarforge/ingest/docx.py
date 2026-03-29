@@ -16,8 +16,8 @@ from scholarforge.extract.chunker import chunk_sections
 from scholarforge.extract.citations import extract_citations
 from scholarforge.extract.figure_refs import extract_figure_refs
 from scholarforge.extract.metadata import (
-    _extract_abstract,
     _extract_doi,
+    _extract_summary,
     _first_heading,
     _parse_authors,
     _parse_filename,
@@ -168,8 +168,8 @@ def _extract_docx_metadata(doc: Document, md_text: str, filename: str) -> dict:
     else:
         authors = []
 
-    # Abstract: scan markdown text
-    abstract = _extract_abstract(md_text)
+    # Summary: scan markdown text for abstract/summary section
+    summary = _extract_summary(md_text)
 
     # Year: core_properties.created → filename
     year: int | None = None
@@ -184,7 +184,7 @@ def _extract_docx_metadata(doc: Document, md_text: str, filename: str) -> dict:
     return {
         "title": title,
         "authors": authors,
-        "abstract": abstract,
+        "summary": summary,
         "year": year,
         "doi": doi,
     }
@@ -214,7 +214,7 @@ def parse_docx(path: Path) -> ParsedPaper:
         id=file_hash,
         title=metadata.get("title", path.stem),
         authors=json.dumps(metadata.get("authors", [])),
-        abstract=metadata.get("abstract"),
+        summary=metadata.get("summary"),
         year=metadata.get("year"),
         doi=metadata.get("doi"),
         doc_type="paper",

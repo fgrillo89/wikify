@@ -57,7 +57,7 @@ def write_paper_note(
         authors=authors,
         year=paper.year,
         doi=paper.doi,
-        abstract=paper.abstract,
+        summary=paper.summary,
         file_hash=paper.file_hash,
         source_path=paper.source_path,
         topics=topics,

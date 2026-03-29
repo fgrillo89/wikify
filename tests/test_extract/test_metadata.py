@@ -182,8 +182,8 @@ def test_extract_metadata_abstract_extracted():
     md = f"# Some Paper\n\n## Abstract\n\n{LONG_ABSTRACT}\n\n## Introduction\n\nIntro text."
     doc = _make_doc({"title": "", "author": ""})
     result = extract_metadata(doc, md, "paper.pdf")
-    assert result["abstract"] is not None
-    assert len(result["abstract"].split()) >= 50
+    assert result["summary"] is not None
+    assert len(result["summary"].split()) >= 50
 
 
 def test_extract_metadata_abstract_none_when_short_and_no_prose():
@@ -191,9 +191,9 @@ def test_extract_metadata_abstract_none_when_short_and_no_prose():
     md = "# Title\n"
     doc = _make_doc({"title": "", "author": ""})
     result = extract_metadata(doc, md, "paper.pdf")
-    # Abstract may be None or very short — it should not crash
+    # Summary may be None or very short — it should not crash
     # (the function is allowed to return None for trivially short docs)
-    assert "abstract" in result
+    assert "summary" in result
 
 
 def test_extract_metadata_year_from_filename():
@@ -237,4 +237,4 @@ def test_extract_metadata_returns_all_keys():
     md = "# Paper\n\n" + LONG_ABSTRACT
     doc = _make_doc({"title": "T", "author": ""})
     result = extract_metadata(doc, md, "paper.pdf")
-    assert set(result.keys()) == {"title", "authors", "abstract", "year", "doi"}
+    assert set(result.keys()) == {"title", "authors", "summary", "year", "doi"}

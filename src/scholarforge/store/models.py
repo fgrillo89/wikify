@@ -29,7 +29,7 @@ class Paper(SQLModel, table=True):
     id: str = Field(primary_key=True)  # SHA256 of file content
     title: str
     authors: str = ""  # JSON list
-    abstract: Optional[str] = None
+    summary: Optional[str] = None
     year: Optional[int] = None
     doi: Optional[str] = None
     doc_type: str = DocType.PAPER  # paper, report, proposal, note, presentation

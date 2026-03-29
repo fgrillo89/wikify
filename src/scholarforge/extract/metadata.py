@@ -7,7 +7,7 @@ from typing import Any
 
 
 def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
-    """Extract title, authors, abstract, year, DOI from a PDF document.
+    """Extract title, authors, summary, year, DOI from a PDF document.
 
     Args:
         doc: A fitz.Document instance.
@@ -15,7 +15,7 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
         filename: Original filename (fallback for title).
 
     Returns:
-        Dict with keys: title, authors, abstract, year, doi.
+        Dict with keys: title, authors, summary, year, doi.
     """
     meta = doc.metadata or {}
 
@@ -44,8 +44,8 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
     if not authors and fn_author:
         authors = [fn_author]
 
-    # Abstract: look for "Abstract" section in markdown
-    abstract = _extract_abstract(md_text)
+    # Summary: look for "Abstract" or "Summary" section in markdown
+    summary = _extract_summary(md_text)
 
     # Year: prefer filename year, then metadata date
     year = fn_year or _extract_year(meta)
@@ -56,7 +56,7 @@ def extract_metadata(doc, md_text: str, filename: str) -> dict[str, Any]:
     return {
         "title": title,
         "authors": authors,
-        "abstract": abstract,
+        "summary": summary,
         "year": year,
         "doi": doi,
     }
@@ -272,7 +272,7 @@ def _parse_author_line(line: str) -> list[str]:
     return names
 
 
-def _extract_abstract(md_text: str) -> str | None:
+def _extract_summary(md_text: str) -> str | None:
     """Extract abstract/summary from markdown text.
 
     Tries labeled sections first, then falls back to the first substantial
@@ -310,13 +310,13 @@ def _extract_abstract(md_text: str) -> str | None:
         text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
         text = re.sub(r"\n{2,}", "\n\n", text)
         # Take first paragraph if multiple
-        paragraphs_in_abstract = text.split("\n\n")
-        text = paragraphs_in_abstract[0].strip()
+        paragraphs = text.split("\n\n")
+        text = paragraphs[0].strip()
 
         # If too short, concatenate more paragraphs
         word_count = len(text.split())
-        if word_count < 50 and len(paragraphs_in_abstract) > 1:
-            for extra in paragraphs_in_abstract[1:]:
+        if word_count < 50 and len(paragraphs) > 1:
+            for extra in paragraphs[1:]:
                 extra = extra.strip()
                 if _is_noise_paragraph(extra):
                     break

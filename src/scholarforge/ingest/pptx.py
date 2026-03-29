@@ -11,7 +11,7 @@ from rich.console import Console
 
 from scholarforge.extract.chunker import chunk_sections
 from scholarforge.extract.figure_refs import extract_figure_refs
-from scholarforge.extract.metadata import _extract_abstract, _parse_filename
+from scholarforge.extract.metadata import _extract_summary, _parse_filename
 from scholarforge.ingest.pdf import ParsedPaper, _parse_section_tree, persist_parsed
 from scholarforge.store.models import Paper
 
@@ -181,8 +181,8 @@ def parse_pptx(path: Path) -> ParsedPaper:
     else:
         authors = []
 
-    # ── Abstract ─────────────────────────────────────────────────────────────
-    abstract = _extract_abstract(md_text)
+    # ── Summary ──────────────────────────────────────────────────────────────
+    summary = _extract_summary(md_text)
 
     # ── Year ─────────────────────────────────────────────────────────────────
     year: int | None = fn_year
@@ -202,7 +202,7 @@ def parse_pptx(path: Path) -> ParsedPaper:
         id=file_hash,
         title=title,
         authors=json.dumps(authors),
-        abstract=abstract,
+        summary=summary,
         year=year,
         doi=None,
         doc_type="presentation",

@@ -72,7 +72,7 @@ def test_paper_note_frontmatter_is_valid_yaml():
         authors=["Alice Brown", "Bob Green"],
         year=2022,
         doi="10.1234/test",
-        abstract="Short abstract.",
+        summary="Short abstract.",
         file_hash="abc123",
         source_path="data/test.pdf",
     )
@@ -88,7 +88,7 @@ def test_paper_note_authors_as_wikilinks():
         authors=["Alice Brown", "Bob Green"],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
     )
@@ -103,7 +103,7 @@ def test_paper_note_tags_include_source_paper():
         authors=[],
         year=None,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
     )
@@ -117,7 +117,7 @@ def test_paper_note_doi_absent_when_none():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
     )
@@ -125,14 +125,14 @@ def test_paper_note_doi_absent_when_none():
     assert "doi" not in fm
 
 
-def test_paper_note_abstract_citation_brackets_stripped():
-    abstract = "This extends [4] and [10,11] prior work."
+def test_paper_note_summary_citation_brackets_stripped():
+    summary_text = "This extends [4] and [10,11] prior work."
     note = paper_note(
         title="T",
         authors=[],
         year=2020,
         doi=None,
-        abstract=abstract,
+        summary=summary_text,
         file_hash="x",
         source_path="data/t.pdf",
     )
@@ -146,7 +146,7 @@ def test_paper_note_full_text_callout_included():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         full_text="The full body of the paper goes here.",
@@ -161,7 +161,7 @@ def test_paper_note_full_text_callout_absent_when_none():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         full_text=None,
@@ -175,7 +175,7 @@ def test_paper_note_full_text_lines_prefixed():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         full_text="Line one.\nLine two.",
@@ -190,7 +190,7 @@ def test_paper_note_source_path_creates_file_link():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/test.pdf",
     )
@@ -204,7 +204,7 @@ def test_paper_note_topics_in_frontmatter():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         topics=["ALD", "Memristors"],
@@ -220,7 +220,7 @@ def test_paper_note_cites_in_frontmatter_and_section():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         cites=["Paper A", "Paper B"],
@@ -237,7 +237,7 @@ def test_paper_note_statistics_section_always_present():
         authors=[],
         year=2020,
         doi=None,
-        abstract=None,
+        summary=None,
         file_hash="x",
         source_path="data/t.pdf",
         chunks_count=5,

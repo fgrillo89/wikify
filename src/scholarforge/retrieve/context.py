@@ -49,8 +49,8 @@ class RetrievedContext:
             # Handle "Last, First" and "First Last" formats
             raw = authors[0] if authors else "Unknown"
             first = raw.split(",")[0].strip() if "," in raw else raw.split()[-1]
-            abstract = (p.abstract or "")[:200]
-            lines.append(f"- {first} {p.year}: {p.title}\n  {abstract}")
+            summary = (p.summary or "")[:200]
+            lines.append(f"- {first} {p.year}: {p.title}\n  {summary}")
         return "\n".join(lines)
 
 
@@ -69,7 +69,7 @@ def retrieve_for_query(
 
     query_embedding = model.encode([query])[0]
 
-    # Query ChromaDB for similar paper abstracts
+    # Query ChromaDB for similar paper summaries
     results = collection.query(
         query_embeddings=[query_embedding.tolist()],
         n_results=min(max_papers, collection.count()),
@@ -114,7 +114,7 @@ def retrieve_all_papers(
     include_metrics: bool = True,
     deep_read_top_n: int = 3,
 ) -> RetrievedContext:
-    """Load all papers with their abstracts (for review-style generation).
+    """Load all papers with their summaries (for review-style generation).
 
     Top N hub papers (by PageRank) get ALL chunks (deep read).
     Remaining papers get first ~3 chunks (shallow read).

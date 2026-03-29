@@ -270,14 +270,14 @@ def make_mock_papers() -> list[Paper]:
             "id": "sha256_george_2010",
             "title": "Atomic Layer Deposition: An Overview",
             "authors": json.dumps(["Steven M. George"]),
-            "abstract": "ALD is reviewed with emphasis on surface chemistry and applications.",
+            "summary": "ALD is reviewed with emphasis on surface chemistry and applications.",
             "year": 2010,
         },
         {
             "id": "sha256_knoops_2019",
             "title": "Status and Prospects of Plasma-Enhanced ALD",
             "authors": json.dumps(["Harm C. M. Knoops", "Sjoerd E. Potts"]),
-            "abstract": (
+            "summary": (
                 "Plasma-enhanced ALD enables low-temperature deposition of advanced materials."
             ),
             "year": 2019,
@@ -286,7 +286,7 @@ def make_mock_papers() -> list[Paper]:
             "id": "sha256_miikkulainen_2013",
             "title": "Crystallinity of Inorganic Films Grown by ALD",
             "authors": json.dumps(["Ville Miikkulainen", "Markku Leskelä"]),
-            "abstract": (
+            "summary": (
                 "Systematic review of crystallinity behaviour in ALD-grown inorganic films."
             ),
             "year": 2013,
@@ -295,7 +295,7 @@ def make_mock_papers() -> list[Paper]:
             "id": "sha256_ritala_2000",
             "title": "Atomic Layer Epitaxy — A Valuable Tool for Nanotechnology",
             "authors": json.dumps(["Mikko Ritala", "Markku Leskelä"]),
-            "abstract": "Early review of ALE/ALD nucleation and growth on nanoscale features.",
+            "summary": "Early review of ALE/ALD nucleation and growth on nanoscale features.",
             "year": 2000,
         },
     ]
@@ -316,7 +316,7 @@ def make_mock_chunks(papers: list[Paper]) -> list[Chunk]:
             section_path="1.Introduction",
             content=(
                 f"This paper by {paper.parsed_authors[0]} ({paper.year}) addresses "
-                f"key aspects of ALD. {paper.abstract or ''}"
+                f"key aspects of ALD. {paper.summary or ''}"
             ),
             token_count=80,
             chunk_index=0,

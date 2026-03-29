@@ -120,7 +120,7 @@ def parse_pdf(path: Path) -> ParsedPaper:
         id=file_hash,
         title=metadata.get("title", path.stem),
         authors=json.dumps(metadata.get("authors", [])),
-        abstract=metadata.get("abstract"),
+        summary=metadata.get("summary"),
         year=metadata.get("year"),
         doi=metadata.get("doi"),
         source_path=str(path),

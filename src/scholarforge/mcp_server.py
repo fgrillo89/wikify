@@ -39,7 +39,7 @@ def _paper_to_dict(paper) -> dict:
         "year": paper.year,
         "doi": paper.doi,
         "doc_type": paper.doc_type,
-        "abstract": paper.abstract,
+        "summary": paper.summary,
         "display_name": paper.display_name(),
         "source_path": paper.source_path,
     }
@@ -257,8 +257,8 @@ def get_paper(
             f"**DOI**: {paper.doi or 'N/A'}",
             f"**Type**: {paper.doc_type}",
         ]
-        if paper.abstract:
-            lines += ["", "## Abstract", paper.abstract]
+        if paper.summary:
+            lines += ["", "## Abstract", paper.summary]
 
         if len(matched) > 1:
             lines += ["", f"*Note: {len(matched)} papers matched; showing first result.*"]
@@ -631,7 +631,7 @@ def get_sections(
 def ingest_paper(file_path: str) -> str:
     """Ingest a document (PDF/DOCX/PPTX) into the knowledge base.
 
-    Parses and persists the document, embeds its abstract, runs incremental
+    Parses and persists the document, embeds its summary, runs incremental
     topic extraction and similarity queries, then spawns a background thread
     to refresh cross-paper signals for the whole corpus.
 

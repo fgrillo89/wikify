@@ -157,7 +157,7 @@ def extract_topics(
         topics = declared
     else:
         # Fall back: match this paper's text against keywords from other papers
-        search_text = f"{paper.title or ''} {paper.abstract or ''} {text[:3000]}"
+        search_text = f"{paper.title or ''} {paper.summary or ''} {text[:3000]}"
         topics = _match_corpus_vocabulary(search_text, corpus_vocabulary)
 
     # Normalize to canonical forms if available
@@ -217,7 +217,7 @@ def compute_all_links(
     all_declared: list[str] = []
     paper_declared: dict[str, list[str]] = {}
     for paper, text in papers_with_text:
-        search_text = f"{paper.title or ''} {paper.abstract or ''} {text}"
+        search_text = f"{paper.title or ''} {paper.summary or ''} {text}"
         declared = _extract_declared_keywords(search_text)
         paper_declared[paper.id] = declared
         all_declared.extend(declared)
@@ -236,7 +236,7 @@ def compute_all_links(
     # Pass 2: assign topics to each paper
     result: dict[str, dict[str, list[str]]] = {}
     for paper, text in papers_with_text:
-        search_text = f"{paper.title or ''} {paper.abstract or ''} {text}"
+        search_text = f"{paper.title or ''} {paper.summary or ''} {text}"
         topics = extract_topics(paper, search_text, corpus_vocabulary, canonical_map)
         result[paper.id] = {"topics": topics}
 

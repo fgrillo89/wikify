@@ -25,7 +25,7 @@ def paper_note(
     authors: list[str],
     year: int | None,
     doi: str | None,
-    abstract: str | None,
+    summary: str | None,
     file_hash: str,
     source_path: str,
     topics: list[str] | None = None,
@@ -33,7 +33,7 @@ def paper_note(
     similar_to: list[str] | None = None,
     cites_same: list[str] | None = None,
     figure_refs: list[tuple[str, str]] | None = None,
-    summary: str | None = None,
+    note: str | None = None,
     chunks_count: int = 0,
     figures_count: int = 0,
     full_text: str | None = None,
@@ -71,12 +71,12 @@ def paper_note(
         file_uri = abs_path.as_uri()
         sections.append(f"[Open original file]({file_uri})\n")
 
-    if abstract:
-        clean_abstract = _strip_citation_brackets(abstract)
-        sections.append(f"## Abstract\n\n{clean_abstract}\n")
-
     if summary:
-        sections.append(f"## Summary\n\n{summary}\n")
+        clean_summary = _strip_citation_brackets(summary)
+        sections.append(f"## Abstract\n\n{clean_summary}\n")
+
+    if note:
+        sections.append(f"## Summary\n\n{note}\n")
 
     if cites:
         links = "\n".join(f"- [[papers/{c}]]" for c in cites)
