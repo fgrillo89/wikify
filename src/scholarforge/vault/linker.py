@@ -106,9 +106,7 @@ def _deduplicate_topics(topics: list[str]) -> list[str]:
             # Rule 3: stem absorption for single-word topics only
             if len(short_words) == 1 and len(long_lower.split()) > 1:
                 stem = _word_stem(short_words[0])
-                if len(stem) >= 5 and any(
-                    _word_stem(w) == stem for w in long_lower.split()
-                ):
+                if len(stem) >= 5 and any(_word_stem(w) == stem for w in long_lower.split()):
                     absorbed.add(short)
                     break
 

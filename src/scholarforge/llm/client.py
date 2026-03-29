@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from typing import Any
 
@@ -14,6 +15,9 @@ from rich.console import Console
 from scholarforge.config import settings
 
 console = Console()
+
+# Suppress litellm debug noise
+litellm.suppress_debug_info = True
 
 # Disk cache for LLM responses (keyed by model + messages hash)
 _cache: diskcache.Cache | None = None
@@ -46,6 +50,11 @@ def complete(
     Uses disk cache by default to avoid duplicate API calls.
     """
     model = model or settings.llm_model
+
+    # Check API key early
+    if "anthropic" in model or "claude" in model:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to .env or export it.")
 
     cache_params = {"temperature": temperature, "max_tokens": max_tokens}
     key = _cache_key(model, messages, **cache_params)

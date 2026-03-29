@@ -10,6 +10,20 @@ app = typer.Typer(
 console = Console()
 
 
+@app.callback()
+def main(
+    library: str = typer.Option(
+        "default", "--library", "-l", help="Library name (for multi-domain research)"
+    ),
+):
+    """ScholarForge CLI — research writing assistant."""
+    if library != "default":
+        from scholarforge.config import settings
+
+        settings.library = library
+        console.print(f"[dim]Library: {library}[/dim]")
+
+
 @app.command()
 def ingest(
     path: str = typer.Argument(..., help="Path to a PDF file or directory of PDFs"),

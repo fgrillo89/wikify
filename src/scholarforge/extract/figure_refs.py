@@ -13,14 +13,10 @@ from scholarforge.store.models import FigureRef
 
 # Matches figure captions: Fig., Fig, Figure, FIG followed by number + optional letter.
 # Also matches inline patterns like "**Fig. 1.** caption text" (bold key followed by caption).
-_FIG_CAPTION_RE = re.compile(
-    r"(?i)\*{0,2}(fig(?:ure)?\.?\s*\d+[a-z]?)\*{0,2}[.:\s\u2014\-]+(.+)"
-)
+_FIG_CAPTION_RE = re.compile(r"(?i)\*{0,2}(fig(?:ure)?\.?\s*\d+[a-z]?)\*{0,2}[.:\s\u2014\-]+(.+)")
 
 # Matches table captions: Table, TABLE, Tbl followed by number.
-_TABLE_CAPTION_RE = re.compile(
-    r"(?i)\*{0,2}(table\.?\s*\d+[a-z]?)\*{0,2}[.:\s\u2014\-]+(.+)"
-)
+_TABLE_CAPTION_RE = re.compile(r"(?i)\*{0,2}(table\.?\s*\d+[a-z]?)\*{0,2}[.:\s\u2014\-]+(.+)")
 
 # Matches headings: one or more leading '#' characters.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)")

@@ -83,8 +83,7 @@ def paper_note(
 
     if figure_refs:
         lines = "\n".join(
-            f"- **{key}**: {_strip_citation_brackets(caption)}"
-            for key, caption in figure_refs
+            f"- **{key}**: {_strip_citation_brackets(caption)}" for key, caption in figure_refs
         )
         sections.append(f"## Figure References\n\n{lines}\n")
 

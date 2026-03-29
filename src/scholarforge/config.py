@@ -6,15 +6,17 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "SCHOLARFORGE_"}
+    model_config = {
+        "env_prefix": "SCHOLARFORGE_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+    }
 
-    # Paths
-    data_dir: Path = Path("data")
-    figures_dir: Path = Path("data/figures")
-    cache_dir: Path = Path("data/cache")
-    db_path: Path = Path("data/papers.db")
-    chromadb_dir: Path = Path("data/chromadb")
-    graph_path: Path = Path("data/graph.graphml")
+    # Library: scopes all data to a named library (for multi-domain research)
+    library: str = "default"
+
+    # Base data directory (libraries are subdirectories of this)
+    data_root: Path = Path("data")
 
     # LLM
     llm_model: str = "claude-sonnet-4-20250514"
@@ -29,6 +31,29 @@ class Settings(BaseSettings):
     zotero_library_id: str = ""
     zotero_api_key: str = ""
     zotero_library_type: str = "user"
+
+    @property
+    def data_dir(self) -> Path:
+        """Library-scoped data directory."""
+        if self.library == "default":
+            return self.data_root
+        return self.data_root / "libraries" / self.library
+
+    @property
+    def figures_dir(self) -> Path:
+        return self.data_dir / "figures"
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.data_dir / "cache"
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "papers.db"
+
+    @property
+    def chromadb_dir(self) -> Path:
+        return self.data_dir / "chromadb"
 
     def ensure_dirs(self) -> None:
         """Create data directories if they don't exist."""

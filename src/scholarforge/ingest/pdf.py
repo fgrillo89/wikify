@@ -44,9 +44,7 @@ def _needs_ocr(md_text: str, doc: fitz.Document) -> bool:
     """
     import re
 
-    placeholder_chars = sum(
-        len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text)
-    )
+    placeholder_chars = sum(len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text))
     if len(md_text) == 0:
         return True
 
@@ -105,14 +103,10 @@ def parse_pdf(path: Path) -> ParsedPaper:
     else:
         import re
 
-        placeholder_chars = sum(
-            len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text)
-        )
+        placeholder_chars = sum(len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text))
         if len(md_text) > 0 and placeholder_chars / len(md_text) > 0.3:
             # pymupdf4llm failed but fitz has text — use fitz fallback
-            console.print(
-                f"[yellow]  Layout extraction poor, using raw text:[/yellow] {path.name}"
-            )
+            console.print(f"[yellow]  Layout extraction poor, using raw text:[/yellow] {path.name}")
             md_text = _fitz_fallback_markdown(doc)
 
     # Extract metadata

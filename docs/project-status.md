@@ -1,141 +1,126 @@
 # ScholarForge — Project Status
 
-## Architecture Pivot (2026-03-28)
+## Current State (2026-03-29)
 
-Shifted from "build everything" to **vault-first + JIT** strategy:
+ScholarForge is a working end-to-end pipeline. The ingestion pipeline is battle-tested
+on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
+(paper writing, slides, literature chat) is implemented and wired to CLI commands.
 
-- **Obsidian IS the app**. ScholarForge is the engine that feeds it.
-- **JIT retrieval**: No LLM at ingestion. Ingestion is pure local compute (~8 min for
-  200 papers). LLM calls only at query/generation time with progressive narrowing
-  (200 → 40 → 15 papers). The LLM never reads all papers.
-- **Ghost Graph**: The knowledge graph is built from typed frontmatter + wikilinks at
-  ingestion time. Obsidian renders it. No graph DB. Already contains: 464 author nodes,
-  20 topics, 9 methods, and all cross-links for 206 papers.
-- Obsidian plugins handle: vector search (Smart Connections), entity extraction (Neural
-  Composer/LightRAG), queries (Dataview), visualization (Graph View).
-- Removed `networkx`, `python-louvain` from deps (Ghost Graph + Neural Composer handle graph).
-- **Kept** `chromadb` + `sentence-transformers` — scoped to abstract embeddings + k-NN
-  similarity graph only (~200 vectors). Full-vault vector search is Smart Connections' job.
-- Removed planned modules: `store/vectors.py` (replaced by focused `store/embeddings.py`),
-  `graph/` package, `vault/sync.py`.
-- Added planned modules: `store/embeddings.py` (abstract ChromaDB), `retrieve/` package.
+### What Works
 
-## Implementation Phases
+**Ingestion (Phase 1 — complete, no LLM required):**
+- PDF parsing via pymupdf4llm with OCR fallback (RapidOCR) for scanned papers
+- DOCX and PPTX ingestion
+- Metadata extraction: title, authors, abstract, DOI, year
+- Section-aware chunking (600-token target, tiktoken-counted)
+- Caption-first figure + table reference extraction (195 refs from 20 papers)
+- Bibliography extraction + fuzzy citation matching (21 cross-references)
+- Abstract embeddings in ChromaDB (all-MiniLM-L6-v2)
+- k-NN similarity graph (top-5 per paper)
+- Bibliographic coupling
+- Topic extraction from corpus vocabulary (author-declared keywords)
+- Obsidian vault generation: paper notes, author notes, topic hubs, Dashboard
+- Graph config with color groups (blue=papers, orange=topics, green=authors)
+- Incremental ingestion (O(1) per paper) + async background refresh
+- Parallel batch ingestion via ProcessPoolExecutor
 
-### Phase 1 — Foundation (COMPLETE)
+**Generation (Phase 2 — implemented, needs API key):**
+- LLM client with litellm + diskcache response caching
+- Retrieval: ChromaDB k-NN + token-budgeted chunk assembly
+- Graph metrics: PageRank, centrality, hub/bridge/frontier classification
+- Paper generation: structured planning → section-by-section writing
+- Slides generation: plan via LLM → export to PPTX via python-pptx
+- Interactive literature chat with retrieval-augmented generation
 
-- [x] UV project + pyproject.toml + hatchling build
-- [x] Python 3.12 via UV
-- [x] All dependencies installed via `uv sync`
-- [x] Module scaffold (all directories + `__init__.py` files)
-- [x] `store/models.py` — Paper, Chunk, Figure, Citation + graph enums + PaperPlan
-- [x] `store/db.py` — SQLite engine + session
-- [x] `config.py` — pydantic-settings with all paths/defaults
-- [x] `cli.py` — Typer CLI: `ingest` (with `--parallel`, `--workers`), `link`, `stats`
-- [x] `ingest/pdf.py` — pymupdf4llm pipeline (parse/persist separated for parallelism)
-- [x] `ingest/registry.py` — extension dispatcher + ProcessPoolExecutor parallel ingestion
-- [x] `extract/chunker.py` — section-aware semantic chunking
-- [x] `extract/metadata.py` — title/authors/abstract/DOI + filename pattern `[YYYY Author] Title.pdf`
-- [x] `extract/figures.py` — content-addressed figure extraction (to be replaced by caption-first)
-- [x] Git repo initialized, committed, pushed to GitHub
-- [x] `.gitignore` configured (data/ is gitignored)
+### CLI Commands
 
-### Phase 2 — Vault + Linking (IN PROGRESS)
+| Command | Status | Description |
+|---|---|---|
+| `scholarforge ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (supports --parallel) |
+| `scholarforge refresh` | Working | Recompute all batch signals + regenerate vault |
+| `scholarforge stats` | Working | Show paper/chunk/figure counts |
+| `scholarforge graph` | Working | Show PageRank, centrality, hub/bridge/frontier |
+| `scholarforge generate "prompt"` | Implemented | Generate review paper (needs API key) |
+| `scholarforge slides "topic"` | Implemented | Generate PPTX presentation (needs API key) |
+| `scholarforge chat` | Implemented | Interactive literature Q&A (needs API key) |
 
-- [x] `vault/__init__.py`, `vault/writer.py`, `vault/templates.py` — note generation
-- [x] `vault/linker.py` — keyword-based topic/method detection + linking
-- [x] Vault output moved to `data/vault/` (gitignored)
-- [x] Full 206-paper ingestion tested (see Benchmarks below)
-- [ ] **Implement `store/embeddings.py`** — ChromaDB abstract embeddings + k-NN similarity graph
-- [ ] **Add `similar_to` edges** to paper vault notes from k-NN results
-- [ ] Implement `FigureRef` model + caption-first extraction (replace binary figure extraction)
-- [ ] Implement citation extraction from bibliography sections (regex-based, no LLM)
-- [ ] Implement bibliographic coupling (shared references → edges)
-- [ ] Evaluate Marker as fallback parser on 10 hard papers
-- [ ] Set up Obsidian vault with recommended plugins (Neural Composer, Smart Connections, Dataview)
-- [ ] Test Ghost Graph rendering in Obsidian graph view
-- [ ] Configure MCP server for Claude Code ↔ vault integration
+## Completed Phases
 
-### Phase 3 — JIT Retrieval + Generation
+### Phase 1 — Ingestion Pipeline
+- [x] PDF parsing (pymupdf4llm + OCR + fitz fallback)
+- [x] Metadata extraction (regex + PDF fields + filename patterns)
+- [x] Section-aware chunking
+- [x] Caption-first figure/table reference extraction
+- [x] Bibliography extraction + citation matching
+- [x] ChromaDB abstract embeddings + k-NN similarity
+- [x] Bibliographic coupling
+- [x] Topic extraction (corpus vocabulary from declared keywords)
+- [x] Incremental + async ingestion architecture
+- [x] Parallel batch ingestion
+- [x] Obsidian vault generation with Ghost Graph
+- [x] Dashboard + graph color configuration
 
-- [ ] `llm/client.py` with litellm + diskcache caching
-- [ ] `retrieve/narrower.py` — progressive narrowing: frontmatter → abstract → chunks
-- [ ] `retrieve/context.py` — token budget allocator (200 papers → 30K tokens)
-- [ ] `retrieve/claims.py` — on-demand claim extraction for selected papers only
-- [ ] `generate/planner.py` — TOC generation from vault structure
-- [ ] `generate/writer.py` — section-by-section generation
-- [ ] Jinja2 prompt templates for lit review
-- [ ] Test: generate 3-section lit review from 20 papers
+### Phase 2 — Generation Pipeline
+- [x] LLM client (litellm + diskcache)
+- [x] Retrieval context assembly (ChromaDB query + chunk budget)
+- [x] Graph metrics (PageRank, centrality, hub/bridge/frontier)
+- [x] Paper planner (structured outline from prompt + literature)
+- [x] Section-by-section writer
+- [x] Slides planner + PPTX export
+- [x] Literature chat (RAG-based Q&A)
+- [x] CLI commands wired
 
-### Phase 4 — Export + Polish
+## Remaining Work
 
-- [ ] `export/docx_export.py` — python-docx output with style templates
-- [ ] `export/latex_export.py` — LaTeX/Jinja2 templates
-- [ ] `export/bibliography.py` — BibTeX/CSL citation formatting
-- [ ] `ingest/zotero.py` — Zotero library sync
-- [ ] Scale test: full 200-paper lit review end-to-end
+### High Priority
+- [ ] Set up ANTHROPIC_API_KEY in .env and run end-to-end mock tests
+- [ ] Multi-library support (different domains/fields)
+- [ ] Scale to full 206-paper corpus
+- [ ] DOCX export for generated papers
+
+### Medium Priority
+- [ ] Zotero integration
+- [ ] LaTeX export with citation formatting
+- [ ] Claims extraction (JIT, for selected papers only)
+- [ ] Abstract reranking step in retrieval narrowing
+
+### Low Priority
+- [ ] Ollama support for fully offline generation
+- [ ] MCP server for Claude Code ↔ vault integration
 
 ## Benchmarks
 
-### 206-Paper Ingestion (ALD/Memristor/Neuromorphic)
+### 20-Paper Test Corpus (ALD/Memristor)
 
-| Mode | Time | Per Paper | Speedup |
-|---|---|---|---|
-| Sequential | 1065s | 5.2s | — |
-| Parallel (4 workers) | 460s | 2.2s | 2.3× |
+| Metric | Value |
+|---|---|
+| Papers ingested | 20 |
+| Chunks | ~800 |
+| Figure/table refs | 195 |
+| Citation cross-refs | 21 |
+| Topics | 22 |
+| Authors | 91 |
+| Refresh time | ~15s |
 
-- **Paper notes created**: 205 in `data/vault/papers/`
-- **Author notes created**: 464 in `data/vault/authors/`
-- **Topics detected**: 20 (keyword-based)
-- **Methods detected**: 9 (keyword-based)
-- **Linking time**: 1.9s for all 206 papers
+### Graph Metrics (top papers by PageRank)
 
-### Bottleneck Profile (per paper)
-
-| Stage | Time | Notes |
-|---|---|---|
-| pymupdf4llm parse | 1-5s | Dominant cost. Parallel helps. |
-| Metadata extraction | <5ms | Regex + PDF fields |
-| Chunking | 5-40ms | Depends on paper length |
-| Figure extraction | 0-3s | Scanned papers are worst case |
-| DB persist | <10ms | Sequential, fast |
-| Vault write | <5ms | Just file writes |
+1. Jo 2010 — Nanoscale memristor device as synapse (PR=0.097, hub)
+2. Kim 2021 — 4K-memristor analog-grade crossbar (PR=0.073, hub)
+3. Kim 2017 — Silicon nitride memristor (PR=0.066, hub)
+4. Matveyev 2015 — ALD TiN/HfO2 resistive switching (PR=0.065, hub)
 
 ## Known Issues
 
-- **Scanned papers** (e.g. 1971 Chua): pymupdf4llm extracts hundreds of image tiles.
-  Caption-first approach will eliminate this issue entirely.
-- **Garbled titles**: Some PDFs have internal refs as first heading (e.g. `acs_nn_nn-2014-01824r`).
-  Fixed by garbled-title detection + filename fallback.
-- **Author extraction**: Many PDFs lack author metadata. Filename-derived first author
-  only gives surname. Full author lists need CrossRef/Semantic Scholar enrichment.
-
-## Obsidian Plugin Setup (Recommended)
-
-| Plugin | Purpose | Priority |
-|---|---|---|
-| **Neural Composer** | LightRAG: auto entity extraction + knowledge graph | High |
-| **Smart Connections** | Semantic vector search + chat sidebar | High |
-| **Dataview** | SQL-like queries on frontmatter properties | High |
-| **Zotero Integration** | Sync Zotero library + annotations | Medium |
-| **Supercharged Links** | Color-code links by note type tag | Medium |
-| **Marker** | In-Obsidian PDF→MD for manual conversion | Low |
-| **Local REST API** | HTTP access for external tools | Low (MCP covers this) |
-
-## User Info
-
-- **Name**: Fabio Grillo
-- **GitHub email**: fabio.grillo89@gmail.com
-- **Platform**: Windows 11, bash shell
-- **Python**: 3.12.11 via UV
-- **Tools**: UV 0.7.13, git configured, gh CLI v2.89.0
+- **Chua 1971 abstract**: OCR'd text fragments the abstract (gets truncated). Improved
+  abstract extraction now extends short abstracts, but OCR quality limits results.
+- **Bibliographic coupling**: Currently 0 papers coupled — bibliography text matching
+  may need loosening.
+- **API key setup**: Generation commands require ANTHROPIC_API_KEY (see .env.example).
 
 ## Resume Instructions
 
 1. Read `CLAUDE.md` for working conventions
 2. Read `docs/architecture.md` for vault-first architecture
 3. Read this file for current status
-4. **Next step**: Implement FigureRef + caption-first extraction, then claim extraction
-5. All code is in `src/scholarforge/`; vault output goes to `data/vault/`
-6. The vault-first pivot means we no longer build: vector store, graph algorithms,
-   graph visualization, or chat UI — Obsidian plugins handle those
+4. All code is in `src/scholarforge/`; vault output goes to `data/vault/`
+5. Generation requires ANTHROPIC_API_KEY in .env
