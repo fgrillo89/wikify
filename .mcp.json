@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "scholarforge": {
+      "command": "uv",
+      "args": ["run", "scholarforge", "mcp"],
+      "cwd": "C:\\dev\\scholarforge"
+    }
+  }
+}
