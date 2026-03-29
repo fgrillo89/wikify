@@ -11,11 +11,11 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 **Ingestion (Phase 1 — complete, no LLM required):**
 - PDF parsing via pymupdf4llm with OCR fallback (RapidOCR) for scanned papers
 - DOCX and PPTX ingestion
-- Metadata extraction: title, authors, abstract, DOI, year
+- Metadata extraction: title, authors, summary, DOI, year
 - Section-aware chunking (600-token target, tiktoken-counted)
 - Caption-first figure + table reference extraction (195 refs from 20 papers)
 - Bibliography extraction + fuzzy citation matching (21 cross-references)
-- Abstract embeddings in ChromaDB (all-MiniLM-L6-v2)
+- Summary embeddings in ChromaDB (all-MiniLM-L6-v2)
 - k-NN similarity graph (top-5 per paper)
 - Bibliographic coupling
 - Topic extraction from corpus vocabulary (author-declared keywords)
@@ -35,6 +35,19 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 - Multi-library support: `--library` flag scopes all data per domain
 - Full text in vault notes (Obsidian collapsible callout, invisible to LLM pipeline)
 
+**MCP Server (Phase 3 — implemented):**
+- FastMCP server exposable via `scholarforge mcp`
+- Tools: search_papers, get_paper, list_papers, list_topics, deep_read, get_sections, get_graph_metrics, get_corpus_summary, ingest_paper
+- Section classification: keyword-based normalizer maps raw headings to canonical types (introduction, methods, results, conclusion, etc.)
+- Cross-paper queries: `get_sections("conclusion")` returns all conclusions across corpus
+- Auto-injected `scholarforge://corpus` resource for LLM context
+
+**Summary generalization:**
+- `Paper.summary` (renamed from `abstract`) — works for all document types
+- 4-strategy extraction: slide-aware synthesis → labeled section → first prose paragraph → fallback
+- Slide summaries: first 3 slides + conclusion slides from last 3, including speaker notes
+- PaperTopic junction table for efficient topic queries
+
 **Testing (107 unit tests, all passing):**
 - Metadata extraction, graph metrics, Paper model, chunker, vault templates
 - No external services required (no API key, no ChromaDB)
@@ -50,6 +63,7 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 | `scholarforge generate "prompt"` | Implemented | Generate review paper (needs API key) |
 | `scholarforge slides "topic"` | Implemented | Generate PPTX presentation (needs API key) |
 | `scholarforge chat` | Implemented | Interactive literature Q&A (needs API key) |
+| `scholarforge mcp` | Working | Launch MCP server for LLM tool access |
 
 ## Completed Phases
 
@@ -59,7 +73,7 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 - [x] Section-aware chunking
 - [x] Caption-first figure/table reference extraction
 - [x] Bibliography extraction + citation matching
-- [x] ChromaDB abstract embeddings + k-NN similarity
+- [x] ChromaDB summary embeddings + k-NN similarity
 - [x] Bibliographic coupling
 - [x] Topic extraction (corpus vocabulary from declared keywords)
 - [x] Incremental + async ingestion architecture
@@ -80,10 +94,18 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 - [x] Literature chat (RAG-based Q&A)
 - [x] CLI commands wired
 
+### Phase 3 — MCP & Cross-Paper Intelligence
+- [x] MCP server (FastMCP) with 9 tools
+- [x] Section type classification (keyword regex → canonical IMRaD types)
+- [x] Summary generalization (abstract → summary, multi-strategy extraction)
+- [x] Slide-aware summary synthesis (first 3 + conclusion slides)
+- [x] PaperTopic table for efficient topic queries
+- [x] `get_sections` tool for cross-paper section queries
+
 ## Remaining Work
 
 ### High Priority
-- [ ] Set up ANTHROPIC_API_KEY in .env and run end-to-end mock tests
+- [ ] Set up ANTHROPIC_API_KEY in .env and test generation end-to-end
 - [ ] Scale to full 206-paper corpus
 - [ ] DOCX export for generated papers
 
@@ -91,11 +113,12 @@ on 20 ALD/memristor papers (scoped from 206 for MVP). The generation pipeline
 - [ ] Zotero integration
 - [ ] LaTeX export with citation formatting
 - [ ] Claims extraction (JIT, for selected papers only)
-- [ ] Abstract reranking step in retrieval narrowing
+- [ ] Note model + FTS5 search for personal notes
+- [ ] Ollama support for fully offline generation
 
 ### Low Priority
-- [ ] Ollama support for fully offline generation
-- [ ] MCP server for Claude Code ↔ vault integration
+- [ ] Section-level embeddings (expensive, may not be needed with good MCP tools)
+- [ ] Abstract reranking step in retrieval narrowing
 
 ## Benchmarks
 
