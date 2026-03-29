@@ -23,17 +23,49 @@ console = Console()
 # Suppress litellm debug noise
 litellm.suppress_debug_info = True
 
-# Disk cache for LLM responses (keyed by model + messages hash)
-_cache: diskcache.Cache | None = None
+
+# ── Cache manager ─────────────────────────────────────────────────────────────
+
+
+class CacheManager:
+    """Manages the diskcache lifecycle for LLM responses.
+
+    Designed for dependency injection: create an instance and pass it where
+    needed. A default instance is available via ``default_cache_manager()``.
+    """
+
+    def __init__(self, cache_dir: str | None = None) -> None:
+        self._cache_dir = cache_dir
+        self._cache: diskcache.Cache | None = None
+
+    @property
+    def cache(self) -> diskcache.Cache:
+        """Return the diskcache.Cache, creating it on first access."""
+        if self._cache is None:
+            resolved = self._cache_dir or str(settings.cache_dir / "llm_cache")
+            import pathlib
+
+            pathlib.Path(resolved).mkdir(parents=True, exist_ok=True)
+            self._cache = diskcache.Cache(resolved)
+        return self._cache
+
+
+# ── Default instance ──────────────────────────────────────────────────────────
+
+_default: CacheManager | None = None
+
+
+def default_cache_manager() -> CacheManager:
+    """Return the default CacheManager (lazy-created, uses settings)."""
+    global _default  # noqa: PLW0603
+    if _default is None:
+        _default = CacheManager()
+    return _default
 
 
 def _get_cache() -> diskcache.Cache:
-    global _cache
-    if _cache is None:
-        cache_dir = settings.cache_dir / "llm_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        _cache = diskcache.Cache(str(cache_dir))
-    return _cache
+    """Return the default diskcache.Cache instance."""
+    return default_cache_manager().cache
 
 
 def _cache_key(model: str, messages: list[dict], **kwargs: Any) -> str:
