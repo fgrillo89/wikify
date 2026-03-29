@@ -184,3 +184,16 @@ class PaperPlan(BaseModel):
     paper_type: str  # "lit_review", "research", "grant_proposal", "abstract"
     target_length: int = 0  # approximate word count
     sections: list[SectionPlan] = []
+
+    def flat_sections(self) -> list[SectionPlan]:
+        """Return all sections and subsections in a flat list (depth-first)."""
+
+        def _flatten(sections: list[SectionPlan]) -> list[SectionPlan]:
+            result: list[SectionPlan] = []
+            for s in sections:
+                result.append(s)
+                if s.subsections:
+                    result.extend(_flatten(s.subsections))
+            return result
+
+        return _flatten(self.sections)

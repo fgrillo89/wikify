@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.progress import Progress
 
-from scholarforge.export.chemistry import format_formulas_unicode
 from scholarforge.generate.persona import build_persona
 from scholarforge.generate.references import ReferenceResolver
 from scholarforge.llm.client import complete
@@ -39,7 +38,7 @@ def write_paper(
     lit_context = context.as_text()
     sections_written: list[str] = []
 
-    all_sections = _flatten_sections(plan.sections)
+    all_sections = plan.flat_sections()
 
     with Progress() as progress:
         task = progress.add_task("Writing sections...", total=len(all_sections))
@@ -77,9 +76,6 @@ def write_paper(
     ref_fmt = journal_profile.reference_format if journal_profile else ""
     bibliography = resolver.build_bibliography(ordered_papers, reference_format=ref_fmt)
     full_document = f"{numbered_md}\n\n## References\n\n{bibliography}"
-
-    # Format chemical formulas (HfO2 → HfO₂) in the final output
-    full_document = format_formulas_unicode(full_document)
 
     return full_document, ordered_papers
 
@@ -142,13 +138,3 @@ def _write_section(
         temperature=0.3,
         max_tokens=2048,
     )
-
-
-def _flatten_sections(sections: list[SectionPlan]) -> list[SectionPlan]:
-    """Flatten nested sections into a linear list for sequential writing."""
-    result: list[SectionPlan] = []
-    for s in sections:
-        result.append(s)
-        if s.subsections:
-            result.extend(_flatten_sections(s.subsections))
-    return result

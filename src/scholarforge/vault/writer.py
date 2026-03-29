@@ -87,7 +87,6 @@ def write_paper_note(
     full_text: str | None = None,
 ) -> Path:
     """Write a paper note to the vault. Returns the path of the written note."""
-    ensure_vault_dirs()
 
     authors = paper.parsed_authors
     display_name = paper.display_name()
@@ -123,7 +122,6 @@ def write_paper_note(
 
 def write_author_note(name: str, papers: list[str]) -> Path:
     """Write or update an author note. Merges paper lists if note exists."""
-    ensure_vault_dirs()
     safe_name = _sanitize_filename(name)
     note_path = vault_dir() / "authors" / f"{safe_name}.md"
 

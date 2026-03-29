@@ -36,7 +36,11 @@ def rebuild_bibtex_library(papers: list[Paper], output_dir: Path) -> Path:
         entry_id = _extract_entry_id(bib_entry)
         if entry_id in seen_ids:
             seen_ids[entry_id] += 1
-            suffix = chr(ord("a") + seen_ids[entry_id] - 1)
+            count = seen_ids[entry_id]
+            if count <= 26:
+                suffix = chr(ord("a") + count - 1)
+            else:
+                suffix = "a" + chr(ord("a") + count - 27)
             bib_entry = bib_entry.replace(f"{{{entry_id},", f"{{{entry_id}{suffix},", 1)
         else:
             seen_ids[entry_id] = 0

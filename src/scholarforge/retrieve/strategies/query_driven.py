@@ -59,7 +59,7 @@ class QueryDrivenStrategy(RetrievalStrategy):
         total_tokens = 0
 
         # Flatten sections
-        sections = _flatten_sections(plan.sections)
+        sections = plan.flat_sections()
         per_section_budget = self.config.token_budget // max(len(sections), 1)
 
         for section in sections:
@@ -108,13 +108,3 @@ class QueryDrivenStrategy(RetrievalStrategy):
             section_contexts=section_contexts,
             strategy_name=self.name,
         )
-
-
-def _flatten_sections(sections):
-    """Flatten nested section plans."""
-    result = []
-    for s in sections:
-        result.append(s)
-        if s.subsections:
-            result.extend(_flatten_sections(s.subsections))
-    return result

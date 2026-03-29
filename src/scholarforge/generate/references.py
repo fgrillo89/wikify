@@ -9,11 +9,6 @@ if TYPE_CHECKING:
     from scholarforge.store.models import Paper
 
 
-def ref_marker(paper: Paper) -> str:
-    """Canonical reference marker for a paper, used in context headers and by the resolver."""
-    return paper.display_name()
-
-
 class ReferenceResolver:
     """Resolve [REF:...] semantic markers to sequential numbered citations.
 
@@ -30,7 +25,7 @@ class ReferenceResolver:
         self._fuzzy_index: list[tuple[str, str, Paper]] = []  # (year, last_name, paper)
 
         for p in papers:
-            marker = ref_marker(p)
+            marker = p.display_name()
             self._name_to_paper[marker.lower()] = p
             # Build fuzzy index: year + first author last name
             authors = p.parsed_authors

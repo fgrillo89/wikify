@@ -834,8 +834,11 @@ def main() -> None:
     else:
         print("  All REF markers resolved successfully.")
 
-    # Export markdown
-    md_path.write_text(numbered_md, encoding="utf-8")
+    # Export markdown (with Unicode subscripts for chemical formulas)
+    from scholarforge.export.chemistry import format_formulas_unicode
+
+    md_with_chem = format_formulas_unicode(numbered_md)
+    md_path.write_text(md_with_chem, encoding="utf-8")
     print(f"\nMarkdown written: {md_path} ({md_path.stat().st_size:,} bytes)")
 
     # Export DOCX

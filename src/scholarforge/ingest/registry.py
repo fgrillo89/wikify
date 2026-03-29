@@ -156,7 +156,9 @@ def _run_incremental_steps(paper_id: str) -> None:
     from scholarforge.store.embeddings import embed_summaries, query_similar
     from scholarforge.store.models import Chunk, FigureRef, Paper
     from scholarforge.vault.linker import _extract_declared_keywords, _to_display
-    from scholarforge.vault.writer import write_paper_note
+    from scholarforge.vault.writer import ensure_vault_dirs, write_paper_note
+
+    ensure_vault_dirs()
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)
@@ -259,7 +261,9 @@ def run_batch_steps() -> None:
         compute_all_links,
         write_topic_notes,
     )
-    from scholarforge.vault.writer import write_paper_note
+    from scholarforge.vault.writer import ensure_vault_dirs, write_paper_note
+
+    ensure_vault_dirs()
 
     # ── 1. Load all papers + text (single query for all chunks) ───────────
     with get_session() as session:
@@ -419,10 +423,9 @@ def run_batch_steps() -> None:
         )
 
     # ── 11. Rebuild BibTeX library file ──────────────────────────────────────
-    from scholarforge.config import Settings
+    from scholarforge.config import settings
     from scholarforge.zotero.bibtex_library import rebuild_bibtex_library
 
-    settings = Settings()
     rebuild_bibtex_library(papers, settings.data_dir)
 
     console.print(

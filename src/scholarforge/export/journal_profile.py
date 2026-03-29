@@ -24,9 +24,7 @@ class JournalProfile(BaseModel):
     font_size_pt: int = 12
     line_spacing: float = 2.0
     column_layout: Literal["single", "double"] = "single"
-    reference_format: str = (
-        "{number}. {authors}. {title}. {journal} {volume}, {pages} ({year})."
-    )
+    reference_format: str = "{number}. {authors}. {title}. {journal} {volume}, {pages} ({year})."
     figure_min_dpi: int = 300
     notes: str = ""
 

@@ -59,8 +59,6 @@ class RetrievedContext:
         Each paper header includes its display_name as a [REF:...] anchor
         so the LLM knows the exact citation marker to use.
         """
-        from scholarforge.generate.references import ref_marker
-
         sections: list[str] = []
         # Group chunks by paper
         paper_map: dict[str, Paper] = {p.id: p for p in self.papers}
@@ -72,7 +70,7 @@ class RetrievedContext:
             paper = paper_map.get(paper_id)
             if not paper:
                 continue
-            marker = ref_marker(paper)
+            marker = paper.display_name()
             authors = paper.parsed_authors
             header = (
                 f"### [REF:{marker}] {paper.title} ({', '.join(authors[:3])}, {paper.year or '?'})"
