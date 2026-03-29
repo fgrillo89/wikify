@@ -847,18 +847,52 @@ def main() -> None:
     docx_exporter.export(numbered_md, ordered_papers, docx_path)
     print(f"DOCX written: {docx_path} ({docx_path.stat().st_size:,} bytes)")
 
-    # Export PDF (DOCX → PDF conversion preserves template formatting + logos)
-    print("Exporting PDF from DOCX...")
+    # Export PDF: try DOCX->PDF (preserves template/logo), fallback to HTML->PDF
+    print("Exporting PDF...")
+    pdf_done = False
+
+    # Try 1: docx2pdf (Word COM automation)
     try:
         from docx2pdf import convert
 
         convert(str(docx_path.resolve()), str(pdf_path.resolve()))
-        print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
-    except Exception as e:
-        print(f"DOCX->PDF conversion failed ({e}), falling back to HTML->PDF...")
+        pdf_done = True
+        print(f"PDF written (Word): {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+    except Exception:
+        pass
+
+    # Try 2: LibreOffice headless
+    if not pdf_done:
+        import shutil
+        import subprocess
+
+        soffice = shutil.which("soffice")
+        if not soffice:
+            for candidate in [
+                "C:/Program Files/LibreOffice/program/soffice.exe",
+                "C:/Program Files (x86)/LibreOffice/program/soffice.exe",
+            ]:
+                if Path(candidate).exists():
+                    soffice = candidate
+                    break
+        if soffice:
+            try:
+                subprocess.run(
+                    [soffice, "--headless", "--convert-to", "pdf",
+                     "--outdir", str(pdf_path.parent), str(docx_path)],
+                    check=True, capture_output=True, timeout=60,
+                )
+                pdf_done = True
+                print(f"PDF written (LibreOffice): {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+            except Exception:
+                pass
+
+    # Try 3: HTML->PDF fallback (no logo/template styling)
+    if not pdf_done:
+        print("  No Word/LibreOffice available, using HTML->PDF fallback...")
         pdf_exporter = PdfExporter(journal_profile)
         pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
-        print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+        print(f"PDF written (HTML): {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
 
     # Note: BibTeX library.bib is auto-generated at data/library.bib
     # during `scholarforge ingest` or `scholarforge refresh`, not here.

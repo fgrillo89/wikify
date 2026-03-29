@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import Path
 
@@ -18,19 +19,13 @@ from scholarforge.store.models import Paper
 
 console = Console()
 
-# Regex to split a text segment into bold/italic/citation tokens and plain text.
-# Processed in this order: **bold**, *italic*, [N] superscript citation.
 _INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|\[\d+\])")
 
 
 def _parse_inline(
     text: str, *, superscript_citations: bool = True
 ) -> list[tuple[str, bool, bool, bool]]:
-    """Return list of (text, bold, italic, superscript) tuples for a line.
-
-    When *superscript_citations* is False, [N] markers are kept as plain text
-    (used in the bibliography section where numbers should not be superscripted).
-    """
+    """Return (text, bold, italic, superscript) tuples for a line."""
     parts: list[tuple[str, bool, bool, bool]] = []
     for segment in _INLINE_RE.split(text):
         if not segment:
@@ -41,9 +36,9 @@ def _parse_inline(
             parts.append((segment[1:-1], False, True, False))
         elif re.fullmatch(r"\[\d+\]", segment):
             if superscript_citations:
-                parts.append((segment[1:-1], False, False, True))  # strip brackets
+                parts.append((segment[1:-1], False, False, True))
             else:
-                parts.append((segment, False, False, False))  # keep as-is
+                parts.append((segment, False, False, False))
         else:
             parts.append((segment, False, False, False))
     return parts
@@ -52,7 +47,6 @@ def _parse_inline(
 def _set_run_font(run, font_family: str, font_size_pt: int | None = None) -> None:
     """Apply font family (and optional size) to a run."""
     run.font.name = font_family
-    # Also set the complex-script font so it applies consistently
     r_pr = run._r.get_or_add_rPr()
     r_fonts = r_pr.get_or_add_rFonts()
     r_fonts.set(qn("w:ascii"), font_family)
@@ -63,7 +57,6 @@ def _set_run_font(run, font_family: str, font_size_pt: int | None = None) -> Non
 
 
 def _set_superscript(run) -> None:
-    """Mark a run as superscript."""
     r_pr = run._r.get_or_add_rPr()
     vert_align = OxmlElement("w:vertAlign")
     vert_align.set(qn("w:val"), "superscript")
@@ -71,16 +64,10 @@ def _set_superscript(run) -> None:
 
 
 def _set_subscript(run) -> None:
-    """Mark a run as subscript."""
     r_pr = run._r.get_or_add_rPr()
     vert_align = OxmlElement("w:vertAlign")
     vert_align.set(qn("w:val"), "subscript")
     r_pr.append(vert_align)
-
-
-def _apply_paragraph_spacing(paragraph, line_spacing: float) -> None:
-    """Apply line spacing multiplier to a paragraph."""
-    paragraph.paragraph_format.line_spacing = line_spacing
 
 
 class DocxExporter:
@@ -88,29 +75,15 @@ class DocxExporter:
 
     def __init__(self, journal_profile: JournalProfile) -> None:
         self.profile = journal_profile
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        self._using_template = False
+        self._exemplars: dict[str, OxmlElement] = {}
 
     def export(
         self,
         numbered_markdown: str,
-        ordered_papers: list[Paper],  # noqa: ARG002 — reserved for future use
+        ordered_papers: list[Paper],  # noqa: ARG002
         output_path: Path,
     ) -> Path:
-        """Parse *numbered_markdown* and write a styled DOCX to *output_path*.
-
-        If the journal profile has a ``template_docx`` set and the template
-        file exists, the template is used as the base document (preserving
-        its styles, headers, footers, and page setup).  Otherwise falls back
-        to a blank document with programmatic styling.
-
-        A user-supplied .docx file can also be used as a template by setting
-        ``template_docx`` to its path.
-
-        Returns the resolved output path.
-        """
         from scholarforge.export.templates.registry import get_template_path
 
         output_path = Path(output_path)
@@ -119,13 +92,14 @@ class DocxExporter:
         template = get_template_path(self.profile.template_docx)
         if template:
             doc = Document(str(template))
-            self._clear_body(doc)
             self._using_template = True
+            self._collect_exemplars(doc)
+            self._clear_body(doc)
             console.print(f"[dim]Using template: {template.name}[/dim]")
         else:
             doc = Document()
-            self._configure_document(doc)
             self._using_template = False
+            self._configure_document(doc)
 
         self._parse_markdown(doc, numbered_markdown)
 
@@ -134,58 +108,80 @@ class DocxExporter:
         return output_path
 
     # ------------------------------------------------------------------
-    # Document configuration
+    # Template handling
     # ------------------------------------------------------------------
 
-    def _configure_document(self, doc: Document) -> None:
-        """Set page margins and default body-text style."""
-        for section in doc.sections:
-            section.left_margin = Inches(1)
-            section.right_margin = Inches(1)
-            section.top_margin = Inches(1)
-            section.bottom_margin = Inches(1)
+    def _collect_exemplars(self, doc: Document) -> None:
+        """Save a deep copy of one paragraph per style from the template.
 
-        # Patch the Normal/Body Text style defaults
-        normal = doc.styles["Normal"]
-        normal.font.name = self.profile.font_family
-        normal.font.size = Pt(self.profile.font_size_pt)
-        normal.paragraph_format.line_spacing = self.profile.line_spacing
+        These exemplars preserve the exact XML formatting (spacing, font,
+        indentation) that the template defines. When we need a new paragraph
+        of a given style, we clone from the exemplar instead of using
+        doc.add_paragraph() which may not inherit all XML properties.
+        """
+        self._exemplars = {}
+        for para in doc.paragraphs:
+            style_name = para.style.name if para.style else "Normal"
+            if style_name not in self._exemplars:
+                # Deep-copy the paragraph XML, strip all runs (text content)
+                p_copy = copy.deepcopy(para._element)
+                for r in p_copy.findall(qn("w:r")):
+                    p_copy.remove(r)
+                self._exemplars[style_name] = p_copy
 
-        # Patch heading styles' fonts
-        for level in range(1, 4):
-            style_name = f"Heading {level}"
-            try:
-                heading_style = doc.styles[style_name]
-                heading_style.font.name = self.profile.font_family
-            except KeyError:
-                pass
+    def _add_para_from_exemplar(self, doc: Document, style_name: str):
+        """Clone a paragraph from the template exemplar, preserving formatting."""
+        from docx.text.paragraph import Paragraph
+
+        if style_name in self._exemplars:
+            new_p = copy.deepcopy(self._exemplars[style_name])
+            # Insert before the last body-level sectPr
+            body = doc.element.body
+            sect_pr = body.find(qn("w:sectPr"))
+            if sect_pr is not None:
+                sect_pr.addprevious(new_p)
+            else:
+                body.append(new_p)
+            return Paragraph(new_p, doc.element.body)
+
+        # Fallback: use add_paragraph
+        return doc.add_paragraph(style=style_name)
 
     @staticmethod
     def _clear_body(doc: Document) -> None:
-        """Remove placeholder content from a template, preserving structure.
-
-        Keeps:
-        - Section properties (<w:sectPr>) — these define page layout,
-          headers, footers, and logo images per section
-        - Paragraphs containing section breaks (they hold <w:sectPr>)
-        - The body-level sectPr (last section properties)
-        """
+        """Remove placeholder content, preserving section breaks."""
         body = doc.element.body
         sect_pr_tag = qn("w:sectPr")
         for child in list(body):
             if child.tag.endswith("}tbl"):
                 body.remove(child)
             elif child.tag.endswith("}p"):
-                # Keep paragraphs that contain section breaks
                 if child.find(f".//{sect_pr_tag}") is not None:
-                    # Clear text but keep the sectPr
                     for r in child.findall(qn("w:r")):
                         child.remove(r)
                 else:
                     body.remove(child)
 
+    def _configure_document(self, doc: Document) -> None:
+        """Set page margins and default styles (blank document only)."""
+        for section in doc.sections:
+            section.left_margin = Inches(1)
+            section.right_margin = Inches(1)
+            section.top_margin = Inches(1)
+            section.bottom_margin = Inches(1)
+
+        normal = doc.styles["Normal"]
+        normal.font.name = self.profile.font_family
+        normal.font.size = Pt(self.profile.font_size_pt)
+        normal.paragraph_format.line_spacing = self.profile.line_spacing
+
+        for level in range(1, 4):
+            try:
+                doc.styles[f"Heading {level}"].font.name = self.profile.font_family
+            except KeyError:
+                pass
+
     def _style_name(self, role: str) -> str:
-        """Resolve a ScholarForge role to a template style name."""
         return self.profile.style_map.get(role, role)
 
     # ------------------------------------------------------------------
@@ -193,7 +189,6 @@ class DocxExporter:
     # ------------------------------------------------------------------
 
     def _parse_markdown(self, doc: Document, markdown: str) -> None:
-        """Convert markdown line-by-line to Word paragraphs."""
         lines = markdown.splitlines()
         in_references = False
         in_abstract = False
@@ -201,7 +196,6 @@ class DocxExporter:
 
         for line in lines:
             stripped = line.strip()
-
             if not stripped:
                 continue
 
@@ -243,23 +237,26 @@ class DocxExporter:
     # ------------------------------------------------------------------
 
     def _add_title(self, doc: Document, text: str) -> None:
-        """Add a centred Title heading."""
-        title_style = self._style_name("title")
-        try:
-            para = doc.add_paragraph(style=title_style)
-        except KeyError:
-            para = doc.add_heading(level=0)
-        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        style = self._style_name("title")
+        if self._using_template:
+            para = self._add_para_from_exemplar(doc, style)
+        else:
+            try:
+                para = doc.add_paragraph(style=style)
+            except KeyError:
+                para = doc.add_heading(level=0)
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         self._fill_runs(para, text)
 
     def _add_heading(self, doc: Document, text: str, level: int) -> None:
-        """Add a heading at *level* (1 or 2)."""
-        style_key = f"heading{level}"
-        style_name = self._style_name(style_key)
-        try:
-            para = doc.add_paragraph(style=style_name)
-        except KeyError:
-            para = doc.add_heading(level=level)
+        style = self._style_name(f"heading{level}")
+        if self._using_template:
+            para = self._add_para_from_exemplar(doc, style)
+        else:
+            try:
+                para = doc.add_paragraph(style=style)
+            except KeyError:
+                para = doc.add_heading(level=level)
         self._fill_runs(para, text)
 
     def _add_body_paragraph(
@@ -270,24 +267,18 @@ class DocxExporter:
         superscript_citations: bool = True,
         style_role: str = "body",
     ) -> None:
-        """Add a body-text paragraph with inline formatting."""
-        style_name = self._style_name(style_role)
-        try:
-            para = doc.add_paragraph(style=style_name)
-        except KeyError:
-            para = doc.add_paragraph(style="Normal")
-        # Only override spacing when NOT using a template —
-        # template styles already define correct spacing
-        if not self._using_template:
-            _apply_paragraph_spacing(para, self.profile.line_spacing)
+        style = self._style_name(style_role)
+        if self._using_template:
+            para = self._add_para_from_exemplar(doc, style)
+        else:
+            try:
+                para = doc.add_paragraph(style=style)
+            except KeyError:
+                para = doc.add_paragraph(style="Normal")
+            para.paragraph_format.line_spacing = self.profile.line_spacing
         self._fill_runs(para, text, superscript_citations=superscript_citations)
 
     def _fill_runs(self, para, text: str, *, superscript_citations: bool = True) -> None:
-        """Populate *para* with runs derived from inline markdown in *text*.
-
-        Plain text segments are further split by chemical formula detection:
-        digits in formulas like HfO2 are rendered as subscript runs.
-        """
         tokens = _parse_inline(text, superscript_citations=superscript_citations)
         font = self.profile.font_family
         size = self.profile.font_size_pt if not self._using_template else None
@@ -304,9 +295,12 @@ class DocxExporter:
                 self._fill_with_chemistry(para, content, font, size)
 
     def _fill_with_chemistry(
-        self, para, text: str, font: str, size: int | None
+        self,
+        para,
+        text: str,
+        font: str,
+        size: int | None,
     ) -> None:
-        """Emit runs for plain text, subscripting digits in chemical formulas."""
         words = re.split(r"(\b\w+\b)", text)
         for word in words:
             formula_runs = split_formula_runs(word)
