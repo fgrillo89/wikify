@@ -34,6 +34,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "rich>=13.7",
     "rapidocr-onnxruntime>=1.4.4",
+    "mcp[cli]>=1.26.0",
 ]
 
 [project.optional-dependencies]

@@ -202,14 +202,16 @@ def write_topic_notes(topic_papers: dict[str, list[str]]) -> int:
 
 def compute_all_links(
     papers_with_text: list[tuple[Paper, str]],
-) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
+) -> tuple[dict[str, dict[str, list[str]]], list[str], dict[str, list[str]]]:
     """Compute topics for all papers automatically.
 
     Two-pass approach:
     1. Extract declared keywords from all papers → build corpus vocabulary
     2. For each paper, use its declared keywords or match against the vocabulary
 
-    Returns (per_paper_links, corpus_vocabulary) so the vocabulary can be cached.
+    Returns (per_paper_links, corpus_vocabulary, paper_declared) where
+    paper_declared maps paper_id → list of declared keywords (empty list means
+    the paper had no keywords section and topics came from corpus vocabulary).
     """
     # Pass 1: build corpus vocabulary from all declared keywords
     all_declared: list[str] = []
@@ -264,4 +266,4 @@ def compute_all_links(
                 dict.fromkeys(rename.get(t, t) for t in result[paper_id]["topics"])
             )
 
-    return result, corpus_vocabulary
+    return result, corpus_vocabulary, paper_declared

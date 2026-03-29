@@ -180,6 +180,23 @@ def _run_incremental_steps(paper_id: str) -> None:
             matched = _match_corpus_vocabulary(search_text, vocab)
             topics = [_to_display(kw) for kw in matched]
 
+        # ── Persist topics to PaperTopic table ─────────────────────────────
+        from scholarforge.store.models import PaperTopic
+
+        with get_session() as topic_session:
+            existing_topics = topic_session.exec(
+                select(PaperTopic).where(PaperTopic.paper_id == paper.id)
+            ).all()
+            for pt in existing_topics:
+                topic_session.delete(pt)
+            topic_session.flush()
+            is_declared = bool(declared)
+            for topic in topics:
+                topic_session.add(
+                    PaperTopic(paper_id=paper.id, topic=topic, is_declared=is_declared)
+                )
+            topic_session.commit()
+
         # ── Embed abstract ──────────────────────────────────────────────────
         embed_abstracts([paper])
 
@@ -265,8 +282,26 @@ def run_batch_steps() -> None:
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
     # ── 2. Automatic topic extraction ─────────────────────────────────────────
-    per_paper_links, corpus_vocabulary = compute_all_links(papers_with_text)
+    per_paper_links, corpus_vocabulary, paper_declared = compute_all_links(papers_with_text)
     _save_corpus_vocabulary(corpus_vocabulary)
+
+    # Persist topics to PaperTopic table
+    from scholarforge.store.models import PaperTopic
+
+    with get_session() as session:
+        # Clear existing entries
+        existing_topics = session.exec(select(PaperTopic)).all()
+        for pt in existing_topics:
+            session.delete(pt)
+        session.flush()
+        # Insert new ones
+        for paper in papers:
+            links = per_paper_links.get(paper.id, {"topics": []})
+            is_declared = bool(paper_declared.get(paper.id))
+            for topic in links["topics"]:
+                session.add(PaperTopic(paper_id=paper.id, topic=topic, is_declared=is_declared))
+        session.commit()
+
     console.print("[green]  Topics extracted[/green]")
 
     # ── 3. Citation graph: match bibliography entries to corpus papers ────────

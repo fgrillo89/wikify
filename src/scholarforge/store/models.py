@@ -115,6 +115,14 @@ class FigureRef(SQLModel, table=True):
     page_number: Optional[int] = None
 
 
+class PaperTopic(SQLModel, table=True):
+    """A topic tag for a paper, extracted during ingestion."""
+
+    paper_id: str = Field(foreign_key="paper.id", primary_key=True)
+    topic: str = Field(primary_key=True)  # canonical display form
+    is_declared: bool = False  # True = from paper's own keywords
+
+
 # ── Knowledge Graph types ─────────────────────────────────────────────────────
 
 
