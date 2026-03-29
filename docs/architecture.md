@@ -59,11 +59,12 @@ PDF → pymupdf4llm → markdown → metadata (regex) → chunks → SQLite
 
 **Generation architecture:**
 1. **Retrieve**: ChromaDB k-NN + chunk assembly with token budget
-2. **Graph metrics**: PageRank, centrality, hub/bridge/frontier classification
+2. **Deep read**: Top 3 hub papers (by PageRank) get ALL chunks; rest get first 3
+3. **Graph metrics**: PageRank, centrality, hub/bridge/frontier classification
    guide the LLM to prioritize key papers and explore peripheral topics
-3. **Plan**: LLM creates structured outline with source paper assignments
-4. **Write**: Section-by-section generation with running context for coherence
-5. **Export**: Markdown (papers) or PPTX (slides)
+4. **Plan**: LLM creates structured outline with source paper assignments
+5. **Write**: Section-by-section generation with running context for coherence
+6. **Export**: Markdown (papers) or PPTX (slides)
 
 ### Graph Metrics
 
@@ -175,6 +176,7 @@ data/vault/                     # Obsidian vault (gitignored)
 - Similar Papers section
 - Bibliographic Coupling section
 - Statistics (chunk + figure counts)
+- Full text (collapsed Obsidian callout `[!quote]- Full Text` — searchable but hidden by default, invisible to LLM retrieval pipeline)
 
 ## Two-Phase Ingestion Model
 
@@ -205,6 +207,18 @@ data/vault/                     # Obsidian vault (gitignored)
    - Regenerate all paper notes with full signals
    - Write topic hub notes
 ```
+
+## Multi-Library Support
+
+The `--library` flag scopes all data paths per domain:
+
+```
+scholarforge --library ald ingest ./ald-papers/
+scholarforge --library memristors ingest ./memristor-papers/
+```
+
+Each library gets its own DB, vault, ChromaDB, and cache under `data/<library>/`.
+Default library is `default` (backward compatible).
 
 ## Data Directory Layout (gitignored)
 
@@ -244,3 +258,6 @@ data/
 | Corpus vocabulary topics | Author-declared keywords are the only topic source; matched against papers without keywords. |
 | OCR fallback chain | pymupdf4llm → fitz raw text → RapidOCR. Auto-detected by placeholder ratio. |
 | litellm for LLM | Abstracts over Claude/GPT/Ollama. No lock-in. Disk-cached responses. |
+| Deep read for hubs | Top 3 PageRank papers get all chunks; LLM gets deep context on key papers without reading everything. |
+| Full text in vault | Collapsible callout visible in Obsidian, invisible to LLM. Best of both worlds. |
+| Multi-library | `--library` flag scopes DB/vault/chromadb per domain. Researchers can work across fields. |
