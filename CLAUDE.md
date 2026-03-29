@@ -53,3 +53,4 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **BibTeX is corpus-level**: `library.bib` is auto-generated on ingest/refresh at `data/library.bib`, not per-output.
 - **Chemistry subscripts**: Apply Unicode subscripts (HfO₂) only to markdown output. DOCX gets raw text (HfO2) and the exporter renders native Word subscripts.
 - **Unicode on Windows**: Avoid Unicode arrows/special chars in console print statements. Use ASCII alternatives.
+- **No silent error swallowing**: NEVER use bare `except: pass` or `try/except` that hides failures. If something fails, log it or raise it. Silent swallowing is obfuscation by design. If ChromaDB fails, the user needs to know and fix it, not get silently degraded results.
