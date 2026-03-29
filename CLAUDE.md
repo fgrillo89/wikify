@@ -3,6 +3,9 @@
 General rules for how Claude should operate in this project. Project-specific context
 lives in `docs/architecture.md` and `docs/project-status.md`.
 
+**Business logic docs**: `docs/logic/` contains one short .md per design choice/algorithm.
+Read these to understand the *why* behind the code without reading the code itself.
+
 ## Agent Usage
 
 - **Always prefer sub-agents** for parallelizable work — launch independent tasks simultaneously
