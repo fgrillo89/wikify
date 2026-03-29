@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
-from scholarforge.llm.client import complete
+from scholarforge.llm.client import complete_json
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import PaperPlan, SectionPlan
 
@@ -41,14 +39,12 @@ def plan_paper(
     # Include graph metrics if available
     graph_section = ""
     if context.graph_metrics:
-        from scholarforge.vault.writer import _paper_display_name
-
-        id_to_name = {p.id: _paper_display_name(p) for p in context.papers}
+        id_to_name = {p.id: p.display_name() for p in context.papers}
         graph_section = "\n\n" + context.graph_metrics.summary_for_llm(id_to_name)
 
     user_msg = f"Prompt: {prompt}\n\nAvailable papers:\n{paper_list}{graph_section}"
 
-    response = complete(
+    plan_data = complete_json(
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
@@ -56,16 +52,6 @@ def plan_paper(
         temperature=0.3,
         max_tokens=4096,
     )
-
-    # Parse JSON response
-    # Strip markdown fences if present
-    text = response.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text[:-3]
-
-    plan_data = json.loads(text)
 
     # Build PaperPlan from response
     sections = []
@@ -121,7 +107,7 @@ def plan_slides(
 
     user_msg = f"Topic: {prompt}\n\nSource papers:\n{paper_list}"
 
-    response = complete(
+    return complete_json(
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
@@ -129,11 +115,3 @@ def plan_slides(
         temperature=0.3,
         max_tokens=4096,
     )
-
-    text = response.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text[:-3]
-
-    return json.loads(text)

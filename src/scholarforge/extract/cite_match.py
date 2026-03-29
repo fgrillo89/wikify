@@ -6,7 +6,6 @@ citations to known paper IDs.
 
 from __future__ import annotations
 
-import json
 import re
 
 from scholarforge.store.models import Paper
@@ -66,7 +65,7 @@ def match_citations_to_corpus(
         words = _title_words(paper.title)
 
         # Extract author last names
-        authors = json.loads(paper.authors) if paper.authors else []
+        authors = paper.parsed_authors
         last_names = []
         for a in authors:
             parts = a.strip().split()

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from rich.console import Console
 from rich.markdown import Markdown
 
@@ -28,7 +26,7 @@ def chat_once(query: str, history: list[dict[str, str]] | None = None) -> str:
     # Build paper reference list for citations
     paper_refs = []
     for p in context.papers:
-        authors = json.loads(p.authors) if p.authors else []
+        authors = p.parsed_authors
         first = authors[0].split()[-1] if authors else "Unknown"
         paper_refs.append(f"{first} {p.year}")
 

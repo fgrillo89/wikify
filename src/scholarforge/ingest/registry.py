@@ -41,7 +41,7 @@ def ingest_path(path: Path, parallel: bool = False, max_workers: int = 4) -> int
                 count += _ingest_file(file, background_refresh=False)
             # After sequential batch, do one full refresh (not N background refreshes)
             if count > 0:
-                _run_batch_steps()
+                run_batch_steps()
             return count
     return 0
 
@@ -99,7 +99,7 @@ def _ingest_parallel(files: list[Path], max_workers: int) -> int:
         )
 
     # Run batch steps: linking + embeddings + coupling + vault regeneration
-    _run_batch_steps()
+    run_batch_steps()
 
     # Process other files sequentially
     for f in other_files:
@@ -156,7 +156,7 @@ def _run_incremental_steps(paper_id: str) -> None:
     from scholarforge.store.embeddings import embed_abstracts, query_similar
     from scholarforge.store.models import Chunk, FigureRef, Paper
     from scholarforge.vault.linker import _extract_declared_keywords, _to_display
-    from scholarforge.vault.writer import _paper_display_name, write_paper_note
+    from scholarforge.vault.writer import write_paper_note
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)
@@ -186,7 +186,7 @@ def _run_incremental_steps(paper_id: str) -> None:
         # ── k-NN similarity (query only this paper) ────────────────────────
         similar_pairs = query_similar(paper.id, n_results=5)
         all_papers = session.exec(select(Paper)).all()
-        id_to_display: dict[str, str] = {p.id: _paper_display_name(p) for p in all_papers}
+        id_to_display: dict[str, str] = {p.id: p.display_name() for p in all_papers}
         similar_names = [id_to_display[sid] for sid, _ in similar_pairs if sid in id_to_display]
 
         # ── Figure refs from DB ─────────────────────────────────────────────
@@ -220,7 +220,7 @@ def _run_background_refresh() -> None:
 
     def _refresh() -> None:
         try:
-            _run_batch_steps()
+            run_batch_steps()
         except Exception as e:
             console.print(f"[yellow]Background refresh error:[/yellow] {e}")
 
@@ -229,7 +229,7 @@ def _run_background_refresh() -> None:
     console.print("[dim]  Background corpus refresh started...[/dim]")
 
 
-def _run_batch_steps() -> None:
+def run_batch_steps() -> None:
     """Run all batch post-ingestion steps: linking, embeddings, coupling, vault regen."""
     from sqlmodel import func, select
 
@@ -241,16 +241,24 @@ def _run_batch_steps() -> None:
         compute_all_links,
         write_topic_notes,
     )
-    from scholarforge.vault.writer import _paper_display_name, write_paper_note
+    from scholarforge.vault.writer import write_paper_note
 
-    # ── 1. Load all papers + text ────────────────────────────────────────────
+    # ── 1. Load all papers + text (single query for all chunks) ───────────
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
-        papers_with_text: list[tuple[Paper, str]] = []
-        for paper in papers:
-            chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
-            full_text = "\n\n".join(c.content for c in chunks)
-            papers_with_text.append((paper, full_text))
+        all_chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
+
+    # Group chunks by paper_id
+    from collections import defaultdict
+
+    chunks_by_paper: dict[str, list[Chunk]] = defaultdict(list)
+    for chunk in all_chunks:
+        chunks_by_paper[chunk.paper_id].append(chunk)
+
+    papers_with_text: list[tuple[Paper, str]] = []
+    for paper in papers:
+        full_text = "\n\n".join(c.content for c in chunks_by_paper.get(paper.id, []))
+        papers_with_text.append((paper, full_text))
 
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
@@ -307,18 +315,16 @@ def _run_batch_steps() -> None:
     # Map paper_id -> display_name for wikilink resolution
     id_to_display: dict[str, str] = {}
     for paper in papers:
-        id_to_display[paper.id] = _paper_display_name(paper)
+        id_to_display[paper.id] = paper.display_name()
 
-    # Load figure refs from DB for each paper
-    paper_figure_refs: dict[str, list[tuple[str, str]]] = {}
+    # Load all figure refs in one query
+    paper_figure_refs: dict[str, list[tuple[str, str]]] = defaultdict(list)
     with get_session() as session:
-        for paper in papers:
-            frs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
-            paper_figure_refs[paper.id] = [(fr.figure_key, fr.caption_text) for fr in frs]
+        all_frs = session.exec(select(FigureRef)).all()
+        for fr in all_frs:
+            paper_figure_refs[fr.paper_id].append((fr.figure_key, fr.caption_text))
 
     # ── 8. Write topic hub notes ───────────────────────────────────────────
-    from collections import defaultdict
-
     topic_papers: dict[str, list[str]] = defaultdict(list)
     for paper in papers:
         links = per_paper_links.get(paper.id, {"topics": []})
@@ -338,41 +344,36 @@ def _run_batch_steps() -> None:
                 f.unlink()
 
     # ── 10. Regenerate all paper vault notes with full data ──────────────────
-    with get_session() as session:
-        for paper in papers:
-            chunks_count = len(session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all())
-            figures_count = len(
-                session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
-            )
+    # Use already-loaded data instead of per-paper queries
+    for paper in papers:
+        chunks_count = len(chunks_by_paper.get(paper.id, []))
+        figures_count = len(paper_figure_refs.get(paper.id, []))
+        links = per_paper_links.get(paper.id, {"topics": []})
 
-            links = per_paper_links.get(paper.id, {"topics": []})
+        # Resolve similar_to IDs to display names
+        similar_names = [
+            id_to_display[sid] for sid in similar_map.get(paper.id, []) if sid in id_to_display
+        ]
+        # Resolve coupling IDs to display names
+        coupled_names = [
+            id_to_display[cid] for cid in coupling_map.get(paper.id, []) if cid in id_to_display
+        ]
 
-            # Resolve similar_to IDs to display names
-            similar_names = [
-                id_to_display[sid] for sid in similar_map.get(paper.id, []) if sid in id_to_display
-            ]
-            # Resolve coupling IDs to display names
-            coupled_names = [
-                id_to_display[cid] for cid in coupling_map.get(paper.id, []) if cid in id_to_display
-            ]
+        # Resolve citation graph IDs to display names
+        cites_names = [
+            id_to_display[cid] for cid in citation_graph.get(paper.id, []) if cid in id_to_display
+        ]
 
-            # Resolve citation graph IDs to display names
-            cites_names = [
-                id_to_display[cid]
-                for cid in citation_graph.get(paper.id, [])
-                if cid in id_to_display
-            ]
-
-            write_paper_note(
-                paper,
-                chunks_count=chunks_count,
-                figures_count=figures_count,
-                topics=links["topics"],
-                cites=cites_names if cites_names else None,
-                similar_to=similar_names if similar_names else None,
-                cites_same=coupled_names if coupled_names else None,
-                figure_refs=paper_figure_refs.get(paper.id) or None,
-            )
+        write_paper_note(
+            paper,
+            chunks_count=chunks_count,
+            figures_count=figures_count,
+            topics=links["topics"],
+            cites=cites_names if cites_names else None,
+            similar_to=similar_names if similar_names else None,
+            cites_same=coupled_names if coupled_names else None,
+            figure_refs=paper_figure_refs.get(paper.id) or None,
+        )
 
     console.print(
         f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"

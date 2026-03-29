@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 from sqlmodel import select
@@ -35,7 +34,7 @@ class RetrievedContext:
             paper = paper_map.get(paper_id)
             if not paper:
                 continue
-            authors = json.loads(paper.authors) if paper.authors else []
+            authors = paper.parsed_authors
             header = f"### {paper.title} ({', '.join(authors[:3])}, {paper.year or '?'})"
             body = "\n\n".join(c.content for c in paper_chunks)
             sections.append(f"{header}\n\n{body}")
@@ -46,7 +45,7 @@ class RetrievedContext:
         """Short summaries of all papers for planning."""
         lines = []
         for p in self.papers:
-            authors = json.loads(p.authors) if p.authors else []
+            authors = p.parsed_authors
             first = authors[0].split()[-1] if authors else "Unknown"
             abstract = (p.abstract or "")[:200]
             lines.append(f"- {first} {p.year}: {p.title}\n  {abstract}")

@@ -7,7 +7,6 @@ and identify frontier topics.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 import networkx as nx
@@ -86,7 +85,7 @@ def build_corpus_graph() -> nx.DiGraph:
 
     paper_ids = [p.id for p in papers]
     for p in papers:
-        authors = json.loads(p.authors) if p.authors else []
+        authors = p.parsed_authors
         graph.add_node(p.id, title=p.title, year=p.year, authors=authors)
 
     # 1. Citation edges (directed)

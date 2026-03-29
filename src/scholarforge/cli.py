@@ -51,9 +51,9 @@ def ingest(
 @app.command()
 def refresh():
     """Full refresh: recompute all topics, embeddings, similarity, coupling, and vault notes."""
-    from scholarforge.ingest.registry import _run_batch_steps
+    from scholarforge.ingest.registry import run_batch_steps
 
-    _run_batch_steps()
+    run_batch_steps()
 
 
 @app.command()
@@ -81,13 +81,12 @@ def graph():
     from scholarforge.graph.metrics import compute_metrics
     from scholarforge.store.db import get_session
     from scholarforge.store.models import Paper
-    from scholarforge.vault.writer import _paper_display_name
 
     metrics = compute_metrics()
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
-    id_to_name = {p.id: _paper_display_name(p) for p in papers}
+    id_to_name = {p.id: p.display_name() for p in papers}
 
     console.print("\n[bold]Graph Metrics[/bold]\n")
     console.print(metrics.summary_for_llm(id_to_name))

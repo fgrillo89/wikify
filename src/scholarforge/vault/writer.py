@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -13,24 +12,14 @@ from scholarforge.vault.templates import author_note, paper_note
 
 def _sanitize_filename(name: str) -> str:
     """Remove characters invalid in filenames."""
-    # Remove or replace problematic characters
     name = re.sub(r'[<>:"/\\|?*]', "", name)
     name = name.strip(". ")
-    return name[:200]  # Cap length
+    return name[:200]
 
 
 def _paper_display_name(paper: Paper) -> str:
-    """Create a display name like 'Vaswani 2017 - Attention Is All You Need'.
-
-    Returns the sanitized form so it matches the filename and can be used
-    directly in wikilinks like ``[[papers/Vaswani 2017 - Attention Is All You Need]]``.
-    """
-    authors = json.loads(paper.authors) if paper.authors else []
-    first_author = authors[0].split()[-1] if authors else "Unknown"
-    year = paper.year or "YYYY"
-    title = paper.title or "Untitled"
-    raw = f"{first_author} {year} - {title}"
-    return _sanitize_filename(raw)
+    """Thin wrapper for backward compatibility. Delegates to Paper.display_name()."""
+    return paper.display_name()
 
 
 def vault_dir() -> Path:
@@ -63,9 +52,9 @@ def write_paper_note(
     """Write a paper note to the vault. Returns the path of the written note."""
     ensure_vault_dirs()
 
-    authors = json.loads(paper.authors) if paper.authors else []
-    display_name = _paper_display_name(paper)
-    safe_name = _sanitize_filename(display_name)
+    authors = paper.parsed_authors
+    display_name = paper.display_name()
+    safe_name = display_name  # Already sanitized by display_name()
 
     note_content = paper_note(
         title=paper.title,

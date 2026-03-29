@@ -84,6 +84,49 @@ def complete(
     return text
 
 
+def complete_json(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> dict | list:
+    """Send a completion request expecting JSON output.
+
+    Handles markdown fence stripping and JSON boundary recovery.
+    """
+    text = complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    text = text.strip()
+
+    # Strip markdown fences
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+    if text.endswith("```"):
+        text = text[:-3].rstrip()
+
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find JSON boundaries
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
+        start = text.find(start_char)
+        end = text.rfind(end_char)
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                continue
+
+    raise ValueError(f"Could not parse JSON from LLM response: {text[:200]}")
+
+
 def complete_streaming(
     messages: list[dict[str, str]],
     model: str | None = None,

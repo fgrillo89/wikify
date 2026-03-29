@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+import re
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -34,8 +36,30 @@ class Paper(SQLModel, table=True):
     zotero_key: Optional[str] = None
     source_path: str = ""
     file_hash: str = ""  # For change detection on re-ingest
-    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     section_tree: str = "{}"  # JSON: nested TOC structure
+
+    @property
+    def parsed_authors(self) -> list[str]:
+        """Parse authors JSON safely."""
+        if not self.authors:
+            return []
+        try:
+            return json.loads(self.authors)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def display_name(self) -> str:
+        """Create display name like 'Kim 2021 - 4K-memristor...' for wikilinks."""
+        authors = self.parsed_authors
+        first_author = authors[0].split()[-1] if authors else "Unknown"
+        year = self.year or "YYYY"
+        title = self.title or "Untitled"
+        raw = f"{first_author} {year} - {title}"
+        # Sanitize for filenames
+        raw = re.sub(r'[<>:"/\\|?*]', "", raw)
+        raw = raw.strip(". ")
+        return raw[:200]
 
 
 class Chunk(SQLModel, table=True):
