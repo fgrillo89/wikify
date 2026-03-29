@@ -853,11 +853,8 @@ def main() -> None:
     pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
     print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
 
-    # Export BibTeX
-    from scholarforge.zotero.bibtex_library import rebuild_bibtex_library
-
-    bib_path = rebuild_bibtex_library(context.papers, output_dir)
-    print(f"BibTeX written: {bib_path}")
+    # Note: BibTeX library.bib is auto-generated at data/library.bib
+    # during `scholarforge ingest` or `scholarforge refresh`, not here.
 
     word_count = len(numbered_md.split())
     line_count = numbered_md.count("\n") + 1
