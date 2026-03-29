@@ -3,261 +3,156 @@
 ## What is ScholarForge?
 
 A local-first Python pipeline that turns a folder of academic PDFs into a living
-Obsidian knowledge graph, then uses that graph to write papers, lit reviews, and
-presentations.
-
-**Core philosophy**: Obsidian IS the app. ScholarForge is the engine that feeds it.
+Obsidian knowledge graph, then uses that graph to write papers, reviews, and
+presentations via MCP-connected LLM agents.
 
 ## Design Principles
 
-1. **Vault-first**: The Obsidian vault is the single source of truth. SQLite is a
-   supporting index, not a parallel database. Everything meaningful lives as markdown.
-2. **Plugin-over-code**: If an Obsidian plugin already does it well, don't build it.
-3. **Incremental + async**: Adding one paper is O(1) sync; corpus-wide signals
-   refresh asynchronously in a background thread.
-4. **LLM reads as little as possible**: Graph metrics guide the LLM to start at hub
-   papers and explore frontiers — no need to read all N papers.
+1. **Vault-first**: Obsidian vault is the primary output. SQLite is a supporting index.
+2. **MCP-native**: LLM agents interact via MCP tools — no hardcoded generation scripts.
+3. **Incremental + async**: Adding one paper is O(1); corpus signals refresh in background.
+4. **Graph-guided retrieval**: PageRank/centrality guide the LLM to start at hub papers.
 5. **Local-first**: All parsing, embedding, and graph computation done locally.
-   LLM calls are the only network dependency (and can use Ollama for offline).
-
-## Implemented Features
-
-### Phase 1 — Ingestion Pipeline (No LLM)
-
-```
-PDF → pymupdf4llm → markdown → metadata (regex) → chunks → SQLite
-  → vault notes → topic extraction → similarity graph → citation graph
-```
-
-| Step | Tool | Speed | LLM? |
-|---|---|---|---|
-| Parse PDF → markdown | pymupdf4llm | ~2.2s/paper (parallel) | No |
-| OCR fallback (scanned PDFs) | RapidOCR + fitz raw text | ~30s/paper | No |
-| Extract metadata | Regex + PDF fields + filename patterns | <5ms/paper | No |
-| Chunk text | Section-aware splitter (600-token target) | <40ms/paper | No |
-| Extract figure/table refs | Caption-first regex (195+ refs) | <5ms/paper | No |
-| Extract bibliography | Regex on references section | <5ms/paper | No |
-| Write vault notes | File I/O (papers, authors, topics) | <5ms/paper | No |
-| Embed abstracts | ChromaDB + all-MiniLM-L6-v2 | ~0.1s/paper | No |
-| k-NN similarity graph | Cosine similarity on embeddings | <1s total | No |
-| Citation graph | Fuzzy matching (year+author+title) | <1s total | No |
-| Bibliographic coupling | Shared references (strength ≥ 2) | <1s total | No |
-| Topic extraction | Corpus vocabulary from declared keywords | <1s total | No |
-
-**Ingestion modes:**
-- **Single file**: Fast incremental (O(1) sync) + background corpus refresh
-- **Batch**: Parallel parse via ProcessPoolExecutor + single batch refresh
-- **Refresh**: Re-run all batch steps without re-parsing
-
-### Phase 2 — Generation Pipeline (LLM Required)
-
-| Command | Description |
-|---|---|
-| `scholarforge generate "prompt"` | Generate a review paper (plan → write sections) |
-| `scholarforge slides "topic"` | Generate a PowerPoint presentation |
-| `scholarforge chat` | Interactive Q&A with the literature corpus |
-
-**Generation architecture:**
-1. **Retrieve**: ChromaDB k-NN + chunk assembly with token budget
-2. **Deep read**: Top 3 hub papers (by PageRank) get ALL chunks; rest get first 3
-3. **Graph metrics**: PageRank, centrality, hub/bridge/frontier classification
-   guide the LLM to prioritize key papers and explore peripheral topics
-4. **Plan**: LLM creates structured outline with source paper assignments
-5. **Write**: Section-by-section generation with running context for coherence
-6. **Export**: Markdown (papers) or PPTX (slides)
-
-### Graph Metrics
-
-NetworkX-based analysis of the citation + similarity + coupling graph:
-
-| Metric | Purpose |
-|---|---|
-| **PageRank** | Identifies most influential/connected papers (hubs) |
-| **Degree centrality** | Overall connectivity |
-| **Betweenness centrality** | Bridge papers connecting different research clusters |
-| **Peripheral detection** | Frontier papers covering emerging/niche topics |
-
-These metrics are:
-- Fed into LLM prompts to guide literature traversal
-- Available via `scholarforge graph` CLI command
-- Designed for reuse in downstream applications
-
-## The Ghost Graph
-
-Obsidian-native knowledge graph from YAML frontmatter + wikilinks. No graph DB.
-
-**Four signal layers:**
-
-| Layer | Source | Edge Type | Direction |
-|---|---|---|---|
-| **Topics** | Author-declared keywords + corpus vocabulary matching | Paper ↔ Topic | Undirected |
-| **Similarity** | k-NN on abstract embeddings (ChromaDB, top-5) | Paper ↔ Paper | Undirected |
-| **Citations** | Fuzzy bibliography matching against corpus | Paper → Paper | Directed |
-| **Coupling** | Shared references (strength ≥ 2) | Paper ↔ Paper | Undirected |
-
-Plus implicit edges: authored_by (Paper → Author), co-authorship (Author ↔ Author via shared papers).
 
 ## Module Layout
 
 ```
 src/scholarforge/
-├── cli.py                  # Typer CLI: ingest, refresh, stats, graph, generate, slides, chat
-├── config.py               # pydantic-settings (supports .env files)
+├── cli.py                          # Typer CLI + template subcommands
+├── config.py                       # pydantic-settings (.env support)
+├── mcp_server.py                   # FastMCP server (9 tools)
 │
-├── ingest/                 # Document ingestion (no LLM)
-│   ├── pdf.py              # pymupdf4llm + OCR fallback (RapidOCR) + fitz raw text
-│   ├── docx.py             # python-docx → markdown
-│   ├── pptx.py             # python-pptx → markdown
-│   └── registry.py         # Dispatcher + parallel orchestration + incremental/batch modes
+├── ingest/                         # Document ingestion (no LLM)
+│   ├── pdf.py                      # pymupdf4llm + OCR fallback
+│   ├── docx.py                     # python-docx → markdown
+│   ├── pptx.py                     # python-pptx → markdown
+│   └── registry.py                 # Dispatcher + batch orchestration
 │
-├── extract/                # Structured extraction (no LLM)
-│   ├── chunker.py          # Section-aware semantic chunking (tiktoken)
-│   ├── metadata.py         # Title, authors, abstract, DOI, year (regex + PDF fields)
-│   ├── figures.py          # Binary figure extraction (pymupdf)
-│   ├── figure_refs.py      # Caption-first figure + table reference extraction
-│   ├── citations.py        # Bibliography section extraction
-│   └── cite_match.py       # Fuzzy citation matching (year + author + title scoring)
+├── extract/                        # Structured extraction (no LLM)
+│   ├── chunker.py                  # Section-aware chunking (tiktoken)
+│   ├── metadata.py                 # Title, authors, DOI, year
+│   ├── figures.py                  # Binary figure extraction
+│   ├── figure_refs.py              # Caption-first figure/table refs
+│   ├── citations.py                # Bibliography extraction
+│   ├── cite_match.py               # Fuzzy citation matching
+│   └── section_classifier.py       # Heading → canonical type mapping
 │
-├── store/                  # Supporting index
-│   ├── models.py           # SQLModel tables + Pydantic plan models
-│   ├── db.py               # SQLite engine + session
-│   └── embeddings.py       # ChromaDB: abstract embeddings + k-NN similarity
+├── store/                          # SQLite + ChromaDB
+│   ├── models.py                   # Paper, Chunk, Citation, FigureRef,
+│   │                               #   PaperTopic, JournalTemplate, PaperPlan
+│   ├── db.py                       # Engine + session management
+│   └── embeddings.py               # ChromaDB embeddings + k-NN
 │
-├── vault/                  # Obsidian vault management (no LLM)
-│   ├── writer.py           # Generate/update paper + author notes
-│   ├── linker.py           # Corpus vocabulary topic extraction + deduplication
-│   ├── templates.py        # Note templates (paper, author, topic)
-│   └── coupler.py          # Bibliographic coupling computation
+├── vault/                          # Obsidian vault (no LLM)
+│   ├── writer.py                   # Paper/author note generation + graph config
+│   ├── linker.py                   # Topic extraction + topic hub notes
+│   ├── templates.py                # Note templates (paper, author, topic)
+│   └── coupler.py                  # Bibliographic coupling (threshold ≥ 3)
 │
-├── graph/                  # Graph analysis
-│   └── metrics.py          # PageRank, centrality, hub/bridge/frontier classification
+├── graph/                          # NetworkX graph analysis
+│   └── metrics.py                  # PageRank, centrality, hub/bridge/frontier
 │
-├── retrieve/               # Context assembly for generation
-│   └── context.py          # ChromaDB query + token-budgeted chunk retrieval
+├── retrieve/                       # Context assembly for generation
+│   ├── context.py                  # RetrievedContext, SectionContext
+│   └── strategies/                 # 5 retrieval strategies
+│       ├── base.py                 # RetrievalStrategy ABC + StrategyConfig
+│       ├── flat.py                 # Top-N hub deep-read (default)
+│       ├── hub_spoke.py            # Parallel subagent hub traversal
+│       ├── query_driven.py         # Per-section ChromaDB retrieval
+│       ├── snowball.py             # BFS from top PageRank paper
+│       └── topic_cluster.py        # Group by topic, deep-read reps
 │
-├── generate/               # Content generation (LLM required)
-│   ├── planner.py          # Paper outline + slide deck planning
-│   ├── writer.py           # Section-by-section paper generation
-│   └── chat.py             # Interactive literature Q&A
+├── generate/                       # Content generation (LLM)
+│   ├── planner.py                  # Structured outline from prompt
+│   ├── writer.py                   # Section-by-section generation
+│   ├── persona.py                  # System prompt: style + field + type
+│   ├── references.py               # [REF:...] → [N] resolver
+│   ├── chat.py                     # Interactive RAG Q&A
+│   ├── figures.py                  # Figure placeholder extraction
+│   ├── field_guide.py              # Field detection + guide loading
+│   └── artifact_types/             # Document type definitions
+│       └── registry.py             # ArtifactType + 7 types
 │
-├── export/                 # Output formatting
-│   └── pptx_export.py      # python-pptx slide generation
+├── export/                         # Output formatting
+│   ├── docx_export.py              # DOCX with template cloning
+│   ├── pdf_export.py               # HTML→PDF (xhtml2pdf)
+│   ├── pptx_export.py              # PPTX with professional template
+│   ├── chemistry.py                # Chemical formula detection + subscripts
+│   ├── journal_profile.py          # JournalProfile model + loader
+│   ├── journals/                   # JSON profiles (AFM, Nature, ACS, IEEE, arXiv)
+│   └── templates/                  # Template registry + DOCX files
+│       ├── registry.py             # SQLite-backed template management
+│       └── docx/                   # Downloaded publisher .docx templates
 │
-└── llm/                    # LLM interface
-    └── client.py           # litellm + diskcache response caching
+├── zotero/                         # Reference management
+│   ├── bibtex_builder.py           # Paper → BibTeX entry
+│   ├── bibtex_library.py           # Corpus-wide library.bib maintenance
+│   └── client.py                   # Zotero API client
+│
+└── llm/                            # LLM interface
+    └── client.py                   # litellm + diskcache caching
 ```
 
-## Vault Structure
+## Writing Pipeline
+
+When an agent writes a paper, the LLM receives layered instructions:
 
 ```
-data/vault/                     # Obsidian vault (gitignored)
-├── papers/                     # One note per ingested paper
-├── authors/                    # One note per author (auto-created)
-├── topics/                     # Topic hub notes
-├── Dashboard.md                # Entry point: paper table + topic index
-└── .obsidian/                  # Graph config (color groups: blue/orange/green)
+1. Base style guide (680 words)     ← docs/logic/academic_writing_style.md
+2. Artifact type rules              ← docs/logic/artifact_types/{type}.md
+3. Field-specific guide             ← docs/logic/fields/{field}.md (auto-detected)
+4. Figure instructions              ← per-section, body sections only
+5. Journal profile constraints      ← export/journals/{journal}.json
 ```
 
-### Note Types
+## Retrieval Strategies
 
-| Type | Tag | Graph Color | Example |
-|---|---|---|---|
-| Paper | `#source/paper` | Blue | `papers/Kim 2021 - 4K-memristor...md` |
-| Author | `#author` | Green | `authors/Can Li.md` |
-| Topic | `#topic` | Orange | `topics/Memristors.md` |
+| Strategy | LLM calls | Description |
+|----------|-----------|-------------|
+| `flat` (default) | 0 | Top-N hub deep-read, rest shallow |
+| `hub-spoke` | 3-4 | Parallel subagents per hub, synthesize |
+| `topic-cluster` | 0 | Group by topic, deep-read per cluster |
+| `query-driven` | 0 | Per-section ChromaDB retrieval |
+| `snowball` | 0 | BFS from top PageRank paper |
 
-### Paper Note Contents
+## DOCX Template System
 
-- YAML frontmatter: title, authors (wikilinks), year, tags, hasTopic, cites, similar_to, cites_same, file_hash, source_path
-- Link to open original PDF (file:/// URI)
-- Abstract (with citation brackets stripped)
-- Cites section (direct citation links)
-- Figure/Table References section
-- Similar Papers section
-- Bibliographic Coupling section
-- Statistics (chunk + figure counts)
-- Full text (collapsed Obsidian callout `[!quote]- Full Text` — searchable but hidden by default, invisible to LLM retrieval pipeline)
+Templates are tracked in SQLite (`JournalTemplate` table). Three sources:
+1. **Publisher downloads**: `scholarforge templates download wiley_afm`
+2. **User papers**: `scholarforge templates import my_paper.docx`
+3. **Built-in fallback**: Programmatic styling from journal profile
 
-## Two-Phase Ingestion Model
+The exporter clones paragraph exemplars from the template XML, preserving
+exact spacing, fonts, headers, footers, and logos.
 
-### Single file: O(1) incremental + background refresh
-
-```
-1. Parse PDF → ParsedPaper (sync, ~2s)
-2. Persist to SQLite + write vault note (sync, <100ms)
-3. Extract topics from own keywords + cached vocabulary (sync, <50ms)
-4. Embed abstract + query k-NN (sync, ~200ms)
-5. Write paper note with available signals (sync, <10ms)
-6. Spawn background thread → full corpus refresh (async)
-```
-
-### Batch: parallel parse + single refresh
-
-```
-1. Parse all PDFs in parallel (ProcessPoolExecutor, ~2.2s/paper)
-2. Persist all sequentially (SQLite + vault)
-3. Single _run_batch_steps():
-   - Topic extraction (corpus vocabulary)
-   - Citation graph
-   - Figure/table ref re-extraction
-   - Abstract embeddings
-   - k-NN similarity
-   - Bibliographic coupling
-   - Clear + regenerate all author notes
-   - Regenerate all paper notes with full signals
-   - Write topic hub notes
-```
-
-## Multi-Library Support
-
-The `--library` flag scopes all data paths per domain:
-
-```
-scholarforge --library ald ingest ./ald-papers/
-scholarforge --library memristors ingest ./memristor-papers/
-```
-
-Each library gets its own DB, vault, ChromaDB, and cache under `data/<library>/`.
-Default library is `default` (backward compatible).
-
-## Data Directory Layout (gitignored)
+## Data Layout
 
 ```
 data/
-├── papers/                 # Source PDFs
-├── papers.db               # SQLite (supporting index)
-├── chromadb/               # Abstract embeddings
-├── cache/                  # LLM response cache (diskcache)
-├── corpus_vocabulary.json  # Cached topic vocabulary
-├── output/                 # Generated papers + slides
-└── vault/                  # Obsidian vault (point Obsidian here)
+├── papers.db               # SQLite (papers, chunks, citations, templates)
+├── chromadb/               # Embedding vectors
+├── library.bib             # Auto-generated BibTeX (updated on ingest)
+├── cache/                  # LLM response cache
+├── corpus_vocabulary.json  # Topic vocabulary
+├── output/                 # Generated papers (md, docx, pdf)
+├── downloads/              # Downloaded publisher templates
+└── vault/                  # Obsidian vault
+    ├── papers/             # Paper notes (blue in graph)
+    ├── authors/            # Author notes (green)
+    ├── topics/             # Topic hubs (orange)
+    └── Dashboard.md        # Entry point
 ```
 
 ## Key Dependencies
 
 | Category | Libraries |
 |---|---|
-| PDF parsing | pymupdf, pymupdf4llm, rapidocr-onnxruntime |
-| Office formats | python-docx, python-pptx |
+| PDF | pymupdf, pymupdf4llm, rapidocr-onnxruntime |
+| Office | python-docx, python-pptx |
 | Storage | sqlmodel (SQLite), chromadb, sentence-transformers |
 | LLM | litellm, tiktoken, diskcache |
-| Graph analysis | networkx |
-| References | pyzotero, bibtexparser |
-| Export | jinja2, matplotlib, plotly |
+| Graph | networkx |
+| References | bibtexparser |
+| Export | jinja2, xhtml2pdf, docx2pdf |
+| Scraping | scrapling, patchright (template downloads) |
 | CLI | typer, pydantic-settings, rich |
-
-## Key Decisions
-
-| Decision | Rationale |
-|---|---|
-| Vault-first | The vault IS the product. SQLite is a programmatic index. |
-| Incremental + async | O(1) for adding one paper; background refresh for corpus signals. |
-| Ghost Graph | Typed frontmatter + k-NN edges → Obsidian renders a rich graph. No graph DB. |
-| Graph metrics for LLM | PageRank/centrality guide the model to start at hubs and explore frontiers. |
-| Caption-first figures | Captions are what LLMs need for writing. Binary extraction on demand only. |
-| Corpus vocabulary topics | Author-declared keywords are the only topic source; matched against papers without keywords. |
-| OCR fallback chain | pymupdf4llm → fitz raw text → RapidOCR. Auto-detected by placeholder ratio. |
-| litellm for LLM | Abstracts over Claude/GPT/Ollama. No lock-in. Disk-cached responses. |
-| Deep read for hubs | Top 3 PageRank papers get all chunks; LLM gets deep context on key papers without reading everything. |
-| Full text in vault | Collapsible callout visible in Obsidian, invisible to LLM. Best of both worlds. |
-| Multi-library | `--library` flag scopes DB/vault/chromadb per domain. Researchers can work across fields. |

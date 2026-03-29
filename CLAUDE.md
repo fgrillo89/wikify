@@ -1,10 +1,16 @@
 # Claude Code — Working Conventions
 
-General rules for how Claude should operate in this project. Project-specific context
-lives in `docs/architecture.md` and `docs/project-status.md`.
+General rules for how Claude should operate in this project.
 
-**Business logic docs**: `docs/logic/` contains one short .md per design choice/algorithm.
-Read these to understand the *why* behind the code without reading the code itself.
+**Key docs (read in order):**
+1. `docs/project-status.md` — current state, what works, remaining work
+2. `docs/architecture.md` — module layout, writing pipeline, data flow
+
+**Business logic docs**: `docs/logic/` contains:
+- `academic_writing_style.md` — base style guide (injected into LLM persona)
+- `artifact_types/` — per-document-type writing rules (lit review, thesis, etc.)
+- `fields/` — per-field writing guides (materials science, CS, biology, etc.)
+- Numbered files (01-17) — design decisions per algorithm/component
 
 ## Agent Usage
 
@@ -42,3 +48,8 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **Package installs**: Always use `uv add` (not `uv pip install`) to add dependencies. This keeps pyproject.toml in sync.
 - **Commit messages**: Never include absolute paths or personal PC paths in commit messages. Use relative paths or project-relative references only.
 - **Vault output location**: The Obsidian vault output goes under `data/vault/` (gitignored), NOT at project root. The vault Python *code* lives in `src/scholarforge/vault/` — don't confuse code with output.
+- **No mock generation scripts**: Don't hardcode paper text in scripts. Use the MCP server + Claude Code agents to generate real papers from the knowledge base.
+- **DOCX templates**: When using a publisher template, clone paragraph exemplars from the template XML. Never override template fonts/spacing programmatically — let the template's native styles handle formatting.
+- **BibTeX is corpus-level**: `library.bib` is auto-generated on ingest/refresh at `data/library.bib`, not per-output.
+- **Chemistry subscripts**: Apply Unicode subscripts (HfO₂) only to markdown output. DOCX gets raw text (HfO2) and the exporter renders native Word subscripts.
+- **Unicode on Windows**: Avoid Unicode arrows/special chars in console print statements. Use ASCII alternatives.
