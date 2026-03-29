@@ -262,42 +262,64 @@ app.add_typer(templates_app, name="templates")
 
 @templates_app.command("list")
 def templates_list():
-    """List all available journal templates."""
+    """List all available journal templates (from SQLite + filesystem)."""
     from rich.table import Table
 
     from scholarforge.export.templates.registry import list_templates
 
     items = list_templates()
     if not items:
-        console.print("[yellow]No templates found.[/yellow]")
-        console.print("Import a template: scholarforge templates import <path.docx>")
+        console.print("[yellow]No templates imported yet.[/yellow]")
+        console.print("Run: scholarforge templates sources")
         return
 
     table = Table(title="Available Templates")
+    table.add_column("ID")
     table.add_column("Name")
+    table.add_column("Publisher")
     table.add_column("Type")
     table.add_column("Source")
+    table.add_column("Status")
     for item in items:
-        table.add_row(item["name"], item["type"], item["source"])
+        table.add_row(
+            item["id"],
+            item["name"],
+            item.get("publisher", ""),
+            item["type"],
+            item["source"],
+            item.get("status", "ok"),
+        )
     console.print(table)
+
+
+@templates_app.command("sources")
+def templates_sources():
+    """Show known publisher template sources and download instructions."""
+    from scholarforge.export.templates.registry import show_download_instructions
+
+    show_download_instructions()
 
 
 @templates_app.command("import")
 def templates_import(
-    path: str = typer.Argument(..., help="Path to a .docx file to import as template"),
-    name: str = typer.Option("", "--name", "-n", help="Name for the template"),
+    path: str = typer.Argument(..., help="Path to a .docx or .cls file"),
+    name: str = typer.Option("", "--name", "-n", help="Name/ID for the template"),
+    publisher: str = typer.Option("", "--publisher", "-p", help="Publisher name"),
 ):
     """Import a .docx file as a reusable template.
 
-    Use this to import your own paper's formatting as a template, or
-    a publisher template you downloaded manually.
+    Use this to import a publisher template you downloaded, or
+    your own paper's formatting as a template for future papers.
+
+    Examples:
+        scholarforge templates import wiley_template.docx --name "wiley_afm"
+        scholarforge templates import my_old_paper.docx --name "my_style"
     """
     from pathlib import Path
 
     from scholarforge.export.templates.registry import import_template
 
-    imported = import_template(Path(path), name=name)
-    console.print(f"[green]Template available as:[/green] {imported.stem}")
+    import_template(Path(path), name=name, publisher=publisher)
 
 
 @templates_app.command("styles")
@@ -322,13 +344,13 @@ def templates_styles(
     table.add_column("Style Name")
     table.add_column("Type")
     table.add_column("Mapped To")
-    for name, stype in sorted(styles.items()):
+    for sname, stype in sorted(styles.items()):
         role = ""
         for r, s in suggested.items():
-            if s == name:
+            if s == sname:
                 role = r
                 break
-        table.add_row(name, stype, role or "")
+        table.add_row(sname, stype, role or "")
     console.print(table)
 
     console.print("\n[bold]Suggested style_map:[/bold]")

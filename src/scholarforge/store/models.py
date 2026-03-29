@@ -124,6 +124,19 @@ class PaperTopic(SQLModel, table=True):
     is_declared: bool = False  # True = from paper's own keywords
 
 
+class JournalTemplate(SQLModel, table=True):
+    """A tracked journal/publisher DOCX or LaTeX template."""
+
+    id: str = Field(primary_key=True)  # sanitized name, e.g. "wiley_afm"
+    name: str  # display name, e.g. "Advanced Functional Materials"
+    publisher: str = ""
+    file_path: str  # absolute path to the .docx/.cls file
+    file_type: str = "docx"  # "docx" or "latex"
+    source_url: str = ""  # where to download from
+    imported_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    notes: str = ""
+
+
 # ── Knowledge Graph types ─────────────────────────────────────────────────────
 
 

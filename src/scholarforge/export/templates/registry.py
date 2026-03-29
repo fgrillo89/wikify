@@ -1,18 +1,25 @@
-"""Template registry: discover, download, and manage DOCX/LaTeX templates.
+"""Template registry: track, import, and discover DOCX/LaTeX templates via SQLite.
 
-Handles three template sources:
-1. Built-in templates (shipped with ScholarForge in templates/docx/)
-2. Downloaded publisher templates (fetched via URL and cached)
-3. User-supplied templates (any .docx file the user provides)
+Templates come from three sources:
+1. Publisher downloads — user downloads from URL, imports via CLI
+2. User-supplied — any .docx the user provides (e.g., their own paper)
+3. Built-in fallbacks — programmatic templates in templates/docx/
+
+All imported templates are tracked in the JournalTemplate SQLite table.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
+
+if TYPE_CHECKING:
+    from scholarforge.store.models import JournalTemplate
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -21,91 +28,162 @@ _TEMPLATES_DIR = Path(__file__).parent
 _DOCX_DIR = _TEMPLATES_DIR / "docx"
 _LATEX_DIR = _TEMPLATES_DIR / "latex"
 
-# Known publisher template URLs (freely available author guidelines).
-# These are stable URLs that resolve to .docx or .zip files.
-# Updated manually when publishers change their URLs.
-KNOWN_TEMPLATES: dict[str, dict[str, str]] = {
-    "wiley": {
-        "description": "Wiley generic author template",
-        "url": "",  # Requires manual download from Wiley Author Services
-        "filename": "wiley_generic.docx",
-    },
-    "elsevier": {
-        "description": "Elsevier single-column article template",
-        "url": "",  # Available via Elsevier Author Hub
-        "filename": "elsevier_generic.docx",
+# Known publisher template download URLs.
+# Some are behind Cloudflare — user must download manually via browser.
+KNOWN_SOURCES: dict[str, dict[str, str]] = {
+    "wiley_afm": {
+        "name": "Advanced Functional Materials",
+        "publisher": "Wiley",
+        "url": (
+            "https://advanced.onlinelibrary.wiley.com/pb-assets/assets/"
+            "vch/msp/Article-template-1749710971070.docx"
+        ),
+        "notes": "Wiley VCH article template for Advanced Portfolio journals",
     },
     "nature": {
-        "description": "Nature/Springer manuscript template",
-        "url": "",  # Available via nature.com/documents
-        "filename": "nature_manuscript.docx",
+        "name": "Nature Manuscript",
+        "publisher": "Springer Nature",
+        "url": "",
+        "notes": "Download from nature.com submission guidelines",
+    },
+    "elsevier": {
+        "name": "Elsevier Article",
+        "publisher": "Elsevier",
+        "url": "",
+        "notes": "LaTeX preferred. DOCX from Elsevier Author Hub",
     },
     "acs": {
-        "description": "ACS manuscript template",
-        "url": "",  # Available via ACS Paragon Plus
-        "filename": "acs_manuscript.docx",
+        "name": "ACS Manuscript",
+        "publisher": "American Chemical Society",
+        "url": "",
+        "notes": "Download from pubs.acs.org author templates",
     },
     "ieee": {
-        "description": "IEEE conference/journal template",
-        "url": "",  # Available via IEEE Author Center
-        "filename": "ieee_manuscript.docx",
+        "name": "IEEE Manuscript",
+        "publisher": "IEEE",
+        "url": "",
+        "notes": "Download from template-selector.ieee.org",
+    },
+    "arxiv": {
+        "name": "arXiv Preprint",
+        "publisher": "arXiv",
+        "url": "",
+        "notes": "Standard LaTeX article class. DOCX fallback uses Times 11pt",
     },
 }
 
 
-def get_template_path(name: str) -> Path | None:
-    """Find a template by name. Searches built-in, then downloaded, then user dir.
+def _sanitize_id(name: str) -> str:
+    """Convert a name to a safe ID."""
+    return re.sub(r"[^a-z0-9_]", "_", name.lower().strip()).strip("_")
 
-    Args:
-        name: Template filename (e.g., "wiley_adv_funct_mater.docx") or
-              a full path to a user-supplied .docx file.
 
-    Returns:
-        Path to the template file, or None if not found.
+def import_template(
+    source_path: Path,
+    name: str = "",
+    publisher: str = "",
+    source_url: str = "",
+    notes: str = "",
+) -> JournalTemplate:
+    """Import a .docx or .cls file into the template registry.
+
+    Copies the file into the templates directory and creates a SQLite record.
     """
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import JournalTemplate
+
+    source_path = Path(source_path).resolve()
+    if not source_path.exists():
+        msg = f"File not found: {source_path}"
+        raise FileNotFoundError(msg)
+
+    display_name = name or source_path.stem
+    template_id = _sanitize_id(display_name)
+
+    # Determine type and destination
+    suffix = source_path.suffix.lower()
+    if suffix == ".docx":
+        dest_dir = _DOCX_DIR
+        file_type = "docx"
+    elif suffix in (".cls", ".sty", ".tex"):
+        dest_dir = _LATEX_DIR
+        file_type = "latex"
+    else:
+        msg = f"Unsupported template type: {suffix}. Use .docx, .cls, .sty, or .tex"
+        raise ValueError(msg)
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{template_id}{suffix}"
+    shutil.copy2(source_path, dest)
+
+    # Upsert into SQLite
+    template = JournalTemplate(
+        id=template_id,
+        name=display_name,
+        publisher=publisher,
+        file_path=str(dest.resolve()),
+        file_type=file_type,
+        source_url=source_url,
+        notes=notes,
+    )
+    with get_session() as session:
+        existing = session.get(JournalTemplate, template_id)
+        if existing:
+            existing.file_path = template.file_path
+            existing.publisher = publisher or existing.publisher
+            existing.source_url = source_url or existing.source_url
+            existing.notes = notes or existing.notes
+            session.add(existing)
+        else:
+            session.add(template)
+        session.commit()
+
+    console.print(f"[green]Template imported:[/green] {display_name} ({dest.name})")
+    return template
+
+
+def get_template_path(name: str) -> Path | None:
+    """Find a template by name or ID. Checks SQLite first, then filesystem fallbacks."""
     if not name:
         return None
 
-    # Check if it's a direct path to a user-supplied file
-    user_path = Path(name)
-    if user_path.is_absolute() and user_path.exists():
-        return user_path
+    # Direct path (user-supplied absolute or relative)
+    direct = Path(name)
+    if direct.suffix in (".docx", ".cls", ".sty", ".tex"):
+        if direct.is_absolute() and direct.exists():
+            return direct
+        cwd_path = Path.cwd() / name
+        if cwd_path.exists():
+            return cwd_path
 
-    # Check relative to CWD
-    cwd_path = Path.cwd() / name
-    if cwd_path.exists():
-        return cwd_path
+    # Check SQLite registry
+    try:
+        from sqlmodel import select
 
-    # Check built-in DOCX templates
-    builtin = _DOCX_DIR / name
-    if builtin.exists():
-        return builtin
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import JournalTemplate
 
-    # Check with .docx extension added
-    if not name.endswith(".docx"):
-        builtin_ext = _DOCX_DIR / f"{name}.docx"
-        if builtin_ext.exists():
-            return builtin_ext
+        with get_session() as session:
+            # By ID
+            template = session.get(JournalTemplate, _sanitize_id(name))
+            if template and Path(template.file_path).exists():
+                return Path(template.file_path)
 
-    return None
+            # By name (fuzzy)
+            all_templates = session.exec(select(JournalTemplate)).all()
+            name_lower = name.lower()
+            for t in all_templates:
+                if name_lower in t.name.lower() or name_lower in t.id:
+                    p = Path(t.file_path)
+                    if p.exists():
+                        return p
+    except Exception:
+        logger.debug("SQLite template lookup failed", exc_info=True)
 
-
-def get_latex_template_path(name: str) -> Path | None:
-    """Find a LaTeX template/class file by name."""
-    if not name:
-        return None
-
-    user_path = Path(name)
-    if user_path.is_absolute() and user_path.exists():
-        return user_path
-
-    builtin = _LATEX_DIR / name
-    if builtin.exists():
-        return builtin
-
-    if not name.endswith((".cls", ".sty", ".tex")):
-        for ext in (".cls", ".sty", ".tex"):
-            candidate = _LATEX_DIR / f"{name}{ext}"
+    # Filesystem fallback (built-in templates dir)
+    for candidate_name in [name, _sanitize_id(name)]:
+        for suffix in [".docx", ""]:
+            candidate = _DOCX_DIR / f"{candidate_name}{suffix}"
             if candidate.exists():
                 return candidate
 
@@ -113,73 +191,69 @@ def get_latex_template_path(name: str) -> Path | None:
 
 
 def list_templates() -> list[dict[str, str]]:
-    """List all available templates (built-in + downloaded)."""
+    """List all tracked templates from SQLite + filesystem."""
     templates: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
 
-    # Built-in DOCX templates
-    if _DOCX_DIR.exists():
-        for f in sorted(_DOCX_DIR.glob("*.docx")):
-            templates.append(
-                {
-                    "name": f.stem,
-                    "type": "docx",
-                    "path": str(f),
-                    "source": "built-in",
-                }
-            )
+    # SQLite tracked templates
+    try:
+        from sqlmodel import select
 
-    # LaTeX templates
-    if _LATEX_DIR.exists():
-        for f in sorted(_LATEX_DIR.glob("*")):
-            if f.suffix in (".cls", ".sty", ".tex"):
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import JournalTemplate
+
+        with get_session() as session:
+            for t in session.exec(select(JournalTemplate)).all():
+                exists = Path(t.file_path).exists()
                 templates.append(
                     {
-                        "name": f.stem,
-                        "type": "latex",
+                        "id": t.id,
+                        "name": t.name,
+                        "publisher": t.publisher,
+                        "type": t.file_type,
+                        "path": t.file_path,
+                        "source": "imported",
+                        "status": "ok" if exists else "MISSING",
+                    }
+                )
+                seen_ids.add(t.id)
+    except Exception:
+        pass
+
+    # Filesystem fallbacks not yet in SQLite
+    if _DOCX_DIR.exists():
+        for f in sorted(_DOCX_DIR.glob("*.docx")):
+            fid = f.stem
+            if fid not in seen_ids:
+                templates.append(
+                    {
+                        "id": fid,
+                        "name": fid.replace("_", " ").title(),
+                        "publisher": "",
+                        "type": "docx",
                         "path": str(f),
                         "source": "built-in",
+                        "status": "ok",
                     }
                 )
 
     return templates
 
 
-def import_template(source_path: Path, name: str = "") -> Path:
-    """Import a user-supplied .docx file as a reusable template.
-
-    Copies the file into the built-in templates directory so it can be
-    referenced by name in journal profiles.
-
-    Args:
-        source_path: Path to the user's .docx file.
-        name: Optional name for the template. Defaults to the filename stem.
-
-    Returns:
-        Path to the imported template.
-    """
-    source_path = Path(source_path)
-    if not source_path.exists():
-        msg = f"Template file not found: {source_path}"
-        raise FileNotFoundError(msg)
-
-    _DOCX_DIR.mkdir(parents=True, exist_ok=True)
-
-    stem = name or source_path.stem
-    # Sanitize the name
-    safe_name = stem.replace(" ", "_").replace("-", "_").lower()
-    dest = _DOCX_DIR / f"{safe_name}.docx"
-
-    shutil.copy2(source_path, dest)
-    console.print(f"[green]Template imported:[/green] {dest.name}")
-    return dest
+def show_download_instructions() -> None:
+    """Print instructions for downloading publisher templates."""
+    console.print("\n[bold]Download publisher templates:[/bold]\n")
+    for tid, info in KNOWN_SOURCES.items():
+        console.print(f"  [cyan]{info['name']}[/cyan] ({info['publisher']})")
+        if info["url"]:
+            console.print(f"    URL: {info['url']}")
+        else:
+            console.print(f"    {info['notes']}")
+        console.print(f'    Import: scholarforge templates import <file> --name "{tid}"\n')
 
 
 def extract_styles(docx_path: Path) -> dict[str, str]:
-    """Extract all defined style names from a .docx file.
-
-    Useful for discovering what styles a template provides so the
-    exporter can map to them.
-    """
+    """Extract all defined style names from a .docx file."""
     from docx import Document
 
     doc = Document(str(docx_path))
@@ -192,60 +266,30 @@ def extract_styles(docx_path: Path) -> dict[str, str]:
 
 
 def suggest_style_map(docx_path: Path) -> dict[str, str]:
-    """Suggest a style map for a template based on its defined styles.
-
-    Looks for common style name patterns and maps them to ScholarForge roles.
-    """
+    """Suggest a style map for a template based on its defined styles."""
     styles = extract_styles(docx_path)
     style_names = set(styles.keys())
-
     mapping: dict[str, str] = {}
 
-    # Body text
-    for candidate in ["Normal", "Body Text", "Body", "Text"]:
-        if candidate in style_names:
-            mapping["body"] = candidate
-            break
-    if "body" not in mapping:
-        mapping["body"] = "Normal"
+    for role, candidates in [
+        ("body", ["Normal", "Body Text", "Body", "Text"]),
+        ("title", ["Title", "Paper Title", "Article Title"]),
+        ("abstract", ["Abstract", "Abstract Text"]),
+        ("references", ["Bibliography", "Reference", "References", "Endnote Text"]),
+    ]:
+        for c in candidates:
+            if c in style_names:
+                mapping[role] = c
+                break
+        if role not in mapping:
+            mapping[role] = "Normal" if role != "title" else "Title"
 
-    # Title
-    for candidate in ["Title", "Paper Title", "Article Title"]:
-        if candidate in style_names:
-            mapping["title"] = candidate
-            break
-    if "title" not in mapping:
-        mapping["title"] = "Title"
-
-    # Headings
     for level in range(1, 4):
         key = f"heading{level}"
         standard = f"Heading {level}"
         if standard in style_names:
             mapping[key] = standard
         else:
-            # Try custom patterns
-            for candidate in [f"Heading{level}", f"H{level}", f"Section {level}"]:
-                if candidate in style_names:
-                    mapping[key] = candidate
-                    break
-            if key not in mapping:
-                mapping[key] = standard  # default even if not in template
-
-    # Abstract
-    for candidate in ["Abstract", "Abstract Text"]:
-        if candidate in style_names:
-            mapping["abstract"] = candidate
-            break
-    if "abstract" not in mapping:
-        mapping["abstract"] = mapping.get("body", "Normal")
-
-    # References
-    for candidate in ["Bibliography", "Reference", "References", "Endnote Text"]:
-        if candidate in style_names:
-            mapping["references"] = candidate
-            break
-    if "references" not in mapping:
-        mapping["references"] = mapping.get("body", "Normal")
+            mapping[key] = standard
 
     return mapping
