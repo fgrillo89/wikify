@@ -17,11 +17,6 @@ def _sanitize_filename(name: str) -> str:
     return name[:200]
 
 
-def _paper_display_name(paper: Paper) -> str:
-    """Thin wrapper for backward compatibility. Delegates to Paper.display_name()."""
-    return paper.display_name()
-
-
 def vault_dir() -> Path:
     """Get the vault root directory (under data/, gitignored)."""
     vd = settings.data_dir / "vault"
@@ -104,12 +99,3 @@ def write_author_note(name: str, papers: list[str]) -> Path:
     note_content = author_note(name, all_papers)
     note_path.write_text(note_content, encoding="utf-8")
     return note_path
-
-
-def write_all_paper_notes(papers_with_counts: list[tuple[Paper, int, int]]) -> int:
-    """Write vault notes for a batch of papers. Returns count written."""
-    count = 0
-    for paper, chunks_count, figures_count in papers_with_counts:
-        write_paper_note(paper, chunks_count, figures_count)
-        count += 1
-    return count

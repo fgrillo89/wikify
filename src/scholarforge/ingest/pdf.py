@@ -34,30 +34,34 @@ class ParsedPaper:
     skipped: bool = False
 
 
-def _needs_ocr(md_text: str, doc: fitz.Document) -> bool:
-    """Detect if pymupdf4llm output is mostly picture placeholders.
+def _classify_pdf_text(md_text: str, doc: fitz.Document) -> str:
+    """Classify the pymupdf4llm output and return the extraction action to take.
 
-    Some PDFs (scanned, old formats) produce text via fitz.get_text() but
-    pymupdf4llm's layout mode drops it in favor of image placeholders.
-    If >50% of the markdown is placeholders and fitz can extract real text,
-    we should re-extract with OCR.
+    Returns:
+        "ok"           -- text is good, use as-is
+        "fitz_fallback" -- high placeholder ratio but fitz has real text
+        "ocr"          -- truly scanned, needs OCR
     """
     import re
 
-    placeholder_chars = sum(len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text))
     if len(md_text) == 0:
-        return True
+        return "ocr"
 
+    placeholder_chars = sum(len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text))
     placeholder_ratio = placeholder_chars / len(md_text)
-    if placeholder_ratio < 0.3:
-        return False
 
-    # Check if fitz can extract meaningful text directly
+    if placeholder_ratio < 0.3:
+        return "ok"
+
+    # High placeholder ratio — check if fitz can extract meaningful text directly
     raw_text = ""
     for i in range(min(3, doc.page_count)):
         raw_text += doc[i].get_text()
     alphanumeric = sum(1 for c in raw_text if c.isalnum())
-    return alphanumeric < 500  # True scanned — fitz can't extract either
+
+    if alphanumeric < 500:
+        return "ocr"  # True scanned — fitz can't extract either
+    return "fitz_fallback"  # pymupdf4llm failed but fitz has text
 
 
 def _fitz_fallback_markdown(doc: fitz.Document) -> str:
@@ -92,22 +96,17 @@ def parse_pdf(path: Path) -> ParsedPaper:
 
     doc = fitz.open(str(path))
 
-    if _needs_ocr(md_text, doc):
-        # True scanned PDF — run OCR
+    action = _classify_pdf_text(md_text, doc)
+    if action == "ocr":
         console.print(f"[yellow]  Scanned PDF detected, running OCR:[/yellow] {path.name}")
         try:
             md_text = pymupdf4llm.to_markdown(str(path), force_ocr=True, ocr_language="eng")
         except Exception as e:
             console.print(f"[yellow]  OCR failed ({e}), using raw text fallback[/yellow]")
             md_text = _fitz_fallback_markdown(doc)
-    else:
-        import re
-
-        placeholder_chars = sum(len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text))
-        if len(md_text) > 0 and placeholder_chars / len(md_text) > 0.3:
-            # pymupdf4llm failed but fitz has text — use fitz fallback
-            console.print(f"[yellow]  Layout extraction poor, using raw text:[/yellow] {path.name}")
-            md_text = _fitz_fallback_markdown(doc)
+    elif action == "fitz_fallback":
+        console.print(f"[yellow]  Layout extraction poor, using raw text:[/yellow] {path.name}")
+        md_text = _fitz_fallback_markdown(doc)
 
     # Extract metadata
     metadata = extract_metadata(doc, md_text, path.name)
@@ -189,7 +188,7 @@ def ingest_pdf(path: Path, return_id: bool = False) -> int | str | None:
 
     with get_session() as session:
         existing = session.get(Paper, file_hash)
-        if existing and existing.file_hash == file_hash:
+        if existing:
             console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
             return None if return_id else 0
 

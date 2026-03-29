@@ -242,7 +242,7 @@ def ingest_pptx(path: Path, return_id: bool = False) -> int | str | None:
 
     with get_session() as session:
         existing = session.get(Paper, file_hash)
-        if existing and existing.file_hash == file_hash:
+        if existing:
             console.print(f"[dim]Skipping (unchanged):[/dim] {path.name}")
             return None if return_id else 0
 
