@@ -114,6 +114,16 @@ def build_persona(
             combined = style_guide
         parts.append(f"\n--- Writing Instructions ---\n{combined}")
 
+    # Inject field-specific writing guide (auto-detected from corpus topics)
+    from scholarforge.generate.field_guide import get_field_instructions
+
+    field_instructions = get_field_instructions(
+        context.query if context else "",
+        topics,
+    )
+    if field_instructions:
+        parts.append(field_instructions)
+
     return "\n".join(parts)
 
 
