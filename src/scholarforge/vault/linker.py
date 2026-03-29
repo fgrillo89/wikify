@@ -64,11 +64,20 @@ def _normalize_topic(topic: str) -> str:
     return t
 
 
-def _deduplicate_topics(topics: list[str]) -> list[str]:
-    """Deduplicate topics: merge plurals and absorb substrings into longer forms.
+def _word_stem(word: str) -> str:
+    """Get the stem of a word (first 5 chars, lowercased)."""
+    return word.lower()[:5]
 
-    When "X" is a substring of "X Y" (or "Y X"), keep only the longer form.
-    E.g., "neuromorphic" is absorbed by "neuromorphic computing".
+
+def _deduplicate_topics(topics: list[str]) -> list[str]:
+    """Deduplicate topics: merge plurals, absorb substrings, and merge stem variants.
+
+    Rules applied in order:
+    1. Normalize plurals → group by normalized form
+    2. Literal substring absorption: "neuromorphic" absorbed by "neuromorphic computing"
+    3. Stem absorption for single-word topics: "synapse" (stem "synap") absorbed by
+       "synaptic device" (contains stem "synap") — only single-word topics get absorbed
+       this way, to avoid merging multi-word topics that are genuinely distinct.
     """
     # Group by normalized form, keep the first (most common) spelling
     norm_to_display: dict[str, str] = {}
@@ -77,20 +86,31 @@ def _deduplicate_topics(topics: list[str]) -> list[str]:
         if norm not in norm_to_display:
             norm_to_display[norm] = t
 
-    # Now check for substring absorption among the surviving topics
     surviving = list(norm_to_display.values())
     absorbed: set[str] = set()
 
     for i, short in enumerate(surviving):
         short_lower = short.lower()
+        short_words = short_lower.split()
+
         for j, long in enumerate(surviving):
             if i == j:
                 continue
             long_lower = long.lower()
-            # If short is a proper substring of long (not equal), absorb short
+
+            # Rule 2: literal substring absorption
             if short_lower != long_lower and short_lower in long_lower:
                 absorbed.add(short)
                 break
+
+            # Rule 3: stem absorption for single-word topics only
+            if len(short_words) == 1 and len(long_lower.split()) > 1:
+                stem = _word_stem(short_words[0])
+                if len(stem) >= 5 and any(
+                    _word_stem(w) == stem for w in long_lower.split()
+                ):
+                    absorbed.add(short)
+                    break
 
     return [t for t in surviving if t not in absorbed]
 

@@ -34,16 +34,88 @@ class ParsedPaper:
     skipped: bool = False
 
 
+def _needs_ocr(md_text: str, doc: fitz.Document) -> bool:
+    """Detect if pymupdf4llm output is mostly picture placeholders.
+
+    Some PDFs (scanned, old formats) produce text via fitz.get_text() but
+    pymupdf4llm's layout mode drops it in favor of image placeholders.
+    If >50% of the markdown is placeholders and fitz can extract real text,
+    we should re-extract with OCR.
+    """
+    import re
+
+    placeholder_chars = sum(
+        len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text)
+    )
+    if len(md_text) == 0:
+        return True
+
+    placeholder_ratio = placeholder_chars / len(md_text)
+    if placeholder_ratio < 0.3:
+        return False
+
+    # Check if fitz can extract meaningful text directly
+    raw_text = ""
+    for i in range(min(3, doc.page_count)):
+        raw_text += doc[i].get_text()
+    alphanumeric = sum(1 for c in raw_text if c.isalnum())
+    return alphanumeric < 500  # True scanned — fitz can't extract either
+
+
+def _fitz_fallback_markdown(doc: fitz.Document) -> str:
+    """Build markdown from fitz raw text when pymupdf4llm layout mode fails.
+
+    For old/scanned PDFs where fitz extracts text but pymupdf4llm doesn't.
+    Joins fragmented lines, preserves paragraph breaks.
+    """
+    import re
+
+    pages: list[str] = []
+    for i in range(doc.page_count):
+        raw = doc[i].get_text()
+        # Rejoin hyphenated line breaks
+        raw = re.sub(r"-\s*\n\s*", "", raw)
+        # Collapse single newlines (fragmented lines) into spaces
+        raw = re.sub(r"(?<!\n)\n(?!\n)", " ", raw)
+        # Normalize multiple blank lines
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        pages.append(raw.strip())
+
+    return "\n\n".join(pages)
+
+
 def parse_pdf(path: Path) -> ParsedPaper:
     """Parse a PDF into structured data. Does NOT touch the database or vault."""
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    # Extract structured markdown
+    # First pass: standard layout extraction
     md_text = pymupdf4llm.to_markdown(str(path))
 
-    # Extract metadata
     doc = fitz.open(str(path))
+
+    if _needs_ocr(md_text, doc):
+        # True scanned PDF — run OCR
+        console.print(f"[yellow]  Scanned PDF detected, running OCR:[/yellow] {path.name}")
+        try:
+            md_text = pymupdf4llm.to_markdown(str(path), force_ocr=True, ocr_language="eng")
+        except Exception as e:
+            console.print(f"[yellow]  OCR failed ({e}), using raw text fallback[/yellow]")
+            md_text = _fitz_fallback_markdown(doc)
+    else:
+        import re
+
+        placeholder_chars = sum(
+            len(m.group()) for m in re.finditer(r"\*\*==>.*?<==\*\*", md_text)
+        )
+        if len(md_text) > 0 and placeholder_chars / len(md_text) > 0.3:
+            # pymupdf4llm failed but fitz has text — use fitz fallback
+            console.print(
+                f"[yellow]  Layout extraction poor, using raw text:[/yellow] {path.name}"
+            )
+            md_text = _fitz_fallback_markdown(doc)
+
+    # Extract metadata
     metadata = extract_metadata(doc, md_text, path.name)
     doc.close()
 

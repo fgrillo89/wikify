@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import yaml
+
+
+def _strip_citation_brackets(text: str) -> str:
+    """Remove inline citation markers like [[4,5]], [[10-12]], [4], [10,11].
+
+    These look like wikilinks to Obsidian and create phantom numbered nodes.
+    """
+    # [[4]], [[4,5]], [[10–12]], [[4-6,8]]
+    text = re.sub(r"\[\[\d[\d,\s\-–—]*\]\]", "", text)
+    # [4], [4,5], [10–12] (single brackets with only numbers inside)
+    text = re.sub(r"\[(\d[\d,\s\-–—]*)\]", r"(\1)", text)
+    return text
 
 
 def paper_note(
@@ -58,7 +71,8 @@ def paper_note(
         sections.append(f"[Open original file]({file_uri})\n")
 
     if abstract:
-        sections.append(f"## Abstract\n\n{abstract}\n")
+        clean_abstract = _strip_citation_brackets(abstract)
+        sections.append(f"## Abstract\n\n{clean_abstract}\n")
 
     if summary:
         sections.append(f"## Summary\n\n{summary}\n")
@@ -68,7 +82,10 @@ def paper_note(
         sections.append(f"## Cites\n\n{links}\n")
 
     if figure_refs:
-        lines = "\n".join(f"- **{key}**: {caption}" for key, caption in figure_refs)
+        lines = "\n".join(
+            f"- **{key}**: {_strip_citation_brackets(caption)}"
+            for key, caption in figure_refs
+        )
         sections.append(f"## Figure References\n\n{lines}\n")
 
     if similar_to:

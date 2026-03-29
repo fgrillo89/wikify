@@ -1,43 +1,10 @@
 {
   "permissions": {
     "allow": [
+      "Bash(*)",
       "WebSearch",
       "WebFetch",
-      "Bash(uv:*)",
-      "Bash(git:*)",
-      "Bash(python:*)",
-      "Bash(mkdir:*)",
-      "Bash(ls:*)",
-      "Bash(find:*)",
-      "Bash(du:*)",
-      "Read(//tmp/**)",
-      "Bash(for f:*)",
-      "Bash(do echo:*)",
-      "Read(//c/dev/scholarforge/src/scholarforge/**)",
-      "Bash(done)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \":*)",
-      "Bash(tasklist)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport time\nfrom sqlmodel import select\nfrom scholarforge.store.db import get_session\nfrom scholarforge.store.models import Paper, Chunk\nfrom scholarforge.vault.linker import link_all_papers\n\nwith get_session\\(\\) as session:\n    papers = session.exec\\(select\\(Paper\\)\\).all\\(\\)\n    papers_with_text = []\n    for paper in papers:\n        chunks = session.exec\\(select\\(Chunk\\).where\\(Chunk.paper_id == paper.id\\)\\).all\\(\\)\n        full_text = '\\\\n\\\\n'.join\\(c.content for c in chunks\\)\n        papers_with_text.append\\(\\(paper, full_text\\)\\)\n\nt0 = time.time\\(\\)\nstats = link_all_papers\\(papers_with_text\\)\nprint\\(f'Linking: {stats} in {time.time\\(\\)-t0:.1f}s'\\)\n\" 2>&1)",
-      "Bash(C:/dev/scholarforge/.venv/Scripts/python.exe -c \"import chromadb; print\\(chromadb.__version__\\)\")",
-      "Bash(dir:*)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom sqlmodel import select\nfrom scholarforge.store.db import get_session\nfrom scholarforge.store.models import Paper, Chunk\nfrom scholarforge.vault.linker import link_all_papers\n\nwith get_session\\(\\) as session:\n    papers = session.exec\\(select\\(Paper\\)\\).all\\(\\)\n    papers_with_text = []\n    for paper in papers:\n        chunks = session.exec\\(select\\(Chunk\\).where\\(Chunk.paper_id == paper.id\\)\\).all\\(\\)\n        full_text = '\\\\n\\\\n'.join\\(c.content for c in chunks\\)\n        papers_with_text.append\\(\\(paper, full_text\\)\\)\n\nstats = link_all_papers\\(papers_with_text\\)\nprint\\(f'Linked: {stats}'\\)\n\nimport os\nfor d in ['topics', 'methods']:\n    p = f'data/vault/{d}'\n    if os.path.exists\\(p\\):\n        print\\(f'  {d}/: {len\\(os.listdir\\(p\\)\\)} notes'\\)\n\" 2>&1)",
-      "Bash(wc -l /c/dev/scholarforge/src/scholarforge/**/*.py)",
-      "Bash(grep \"\\\\.pdf$\")",
-      "Bash(mkdir -p /c/dev/scholarforge/data/papers/mvp20)",
-      "Bash(do cp:*)",
-      "Bash(echo \"OK: $f\")",
-      "Bash(echo \"MISSING: $f\")",
-      "Bash(cp \"/c/dev/scholarforge/data/papers/ald_references/[2025 Jie Ma] Stable_Synapse_Function_of_Bilayer_Stretchable_Memristor_via_Atomic_Layer_Deposition.pdf\" /c/dev/scholarforge/data/papers/mvp20/)",
-      "Bash(cp \"/c/dev/scholarforge/data/papers/ald_references/[2020 Huh] Memristors Based on 2D Materials as an Artificial Synapse for Neuromorphic Electronics.pdf\" /c/dev/scholarforge/data/papers/mvp20/)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run scholarforge ingest data/papers/mvp20 --parallel -w 4)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom sqlmodel import select\nfrom scholarforge.store.db import get_session\nfrom scholarforge.store.models import Paper\nimport json\nwith get_session\\(\\) as s:\n    for p in s.exec\\(select\\(Paper\\)\\).all\\(\\):\n        authors = json.loads\\(p.authors\\)\n        print\\(f'{p.year} | {authors[:3]} | abstract: {bool\\(p.abstract\\)} | {p.title[:60]}'\\)\n\")",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom pathlib import Path\nimport re\n\nvault = Path\\('data/vault'\\)\npapers = list\\(\\(vault / 'papers'\\).glob\\('*.md'\\)\\)\nprint\\(f'Paper notes: {len\\(papers\\)}'\\)\nprint\\(f'Topic notes: {len\\(list\\(\\(vault / \\\\\"topics\\\\\"\\).glob\\(\\\\\"*.md\\\\\"\\)\\)\\)}'\\)\nprint\\(f'Method notes: {len\\(list\\(\\(vault / \\\\\"methods\\\\\"\\).glob\\(\\\\\"*.md\\\\\"\\)\\)\\)}'\\)\nprint\\(f'Author notes: {len\\(list\\(\\(vault / \\\\\"authors\\\\\"\\).glob\\(\\\\\"*.md\\\\\"\\)\\)\\)}'\\)\n\nhas_topic = has_similar = has_figure_ref = has_abstract = 0\nfor p in papers:\n    content = p.read_text\\(encoding='utf-8'\\)\n    if 'hasTopic:' in content: has_topic += 1\n    if 'similar_to:' in content: has_similar += 1\n    if '## Figure References' in content: has_figure_ref += 1\n    if '## Abstract' in content: has_abstract += 1\n\nprint\\(f'\\\\\\\\nSignal coverage \\(out of {len\\(papers\\)}\\):'\\)\nprint\\(f'  hasTopic:        {has_topic}'\\)\nprint\\(f'  similar_to:      {has_similar}'\\)\nprint\\(f'  Figure Refs:     {has_figure_ref}'\\)\nprint\\(f'  Abstract:        {has_abstract}'\\)\nprint\\(f'  cites_same:      0 \\(expected: only 20 papers, coupling threshold=2\\)'\\)\n\")",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport pymupdf4llm\ntext = pymupdf4llm.to_markdown\\('data/papers/mvp20/[2014 Gao] Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses for Implementation of Robust High-Accuracy Neuromorphic Computation Systems.pdf'\\)\nfor line in text.split\\('\\\\n'\\)[:20]:\n    print\\(repr\\(line\\)\\)\n\" 2>&1)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport pymupdf4llm, fitz\nfrom scholarforge.extract.metadata import extract_metadata\n\npapers = [\n    'data/papers/mvp20/[2014 Gao] Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses for Implementation of Robust High-Accuracy Neuromorphic Computation Systems.pdf',\n    'data/papers/mvp20/[2018 Yang] Memristor Crossbar Arrays for Analog and Neuromorphic Computing.pdf',\n    'data/papers/mvp20/[1971 Chua] Memristor-The_missing_circuit_element.pdf',\n    'data/papers/mvp20/[2018 Li] In-Memory Computing with Memristor Arrays.pdf',\n    'data/papers/mvp20/[2011 Yang] Dopant Control by Atomic Layer Deposition in Oxide Films for Memristive Switches.pdf',\n    'data/papers/mvp20/[2019 Jeong] Memristor devices for neural networks.pdf',\n]\nfor p in papers:\n    md = pymupdf4llm.to_markdown\\(p\\)\n    doc = fitz.open\\(p\\)\n    meta = extract_metadata\\(doc, md, p.split\\('/'\\)[-1]\\)\n    doc.close\\(\\)\n    ab = meta['abstract']\n    preview = \\(ab[:80] + '...'\\) if ab and len\\(ab\\) > 80 else ab\n    print\\(f'Authors: {meta[\\\\\"authors\\\\\"][:3]}'\\)\n    print\\(f'Abstract: {bool\\(ab\\)} | {preview}'\\)\n    print\\(\\)\n\" 2>&1)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport pymupdf4llm, fitz\nfrom scholarforge.extract.metadata import extract_metadata\nfrom pathlib import Path\n\nmvp = Path\\('data/papers/mvp20'\\)\nfor p in sorted\\(mvp.glob\\('*.pdf'\\)\\):\n    md = pymupdf4llm.to_markdown\\(str\\(p\\)\\)\n    doc = fitz.open\\(str\\(p\\)\\)\n    meta = extract_metadata\\(doc, md, p.name\\)\n    doc.close\\(\\)\n    ab = meta['abstract']\n    authors = meta['authors'][:3]\n    has_ab = bool\\(ab\\)\n    preview = \\(ab[:90] + '...'\\) if ab and len\\(ab\\) > 90 else \\(ab or 'NONE'\\)\n    print\\(f'[{meta[\\\\\"year\\\\\"]} {authors[0] if authors else \\\\\"?\\\\\"}] ab={has_ab} | {preview}'\\)\n\" 2>&1)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom pathlib import Path\nvault = Path\\('data/vault'\\)\npapers = list\\(\\(vault / 'papers'\\).glob\\('*.md'\\)\\)\nhas_topic = has_similar = has_figure_ref = has_abstract = 0\nfor p in papers:\n    c = p.read_text\\(encoding='utf-8'\\)\n    if 'hasTopic:' in c: has_topic += 1\n    if 'similar_to:' in c: has_similar += 1\n    if '## Figure References' in c: has_figure_ref += 1\n    if '## Abstract' in c: has_abstract += 1\nprint\\(f'Papers: {len\\(papers\\)}'\\)\nprint\\(f'hasTopic:    {has_topic}/{len\\(papers\\)}'\\)\nprint\\(f'similar_to:  {has_similar}/{len\\(papers\\)}'\\)\nprint\\(f'Figure refs: {has_figure_ref}/{len\\(papers\\)}'\\)\nprint\\(f'Abstract:    {has_abstract}/{len\\(papers\\)}'\\)\n\")",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nimport pymupdf4llm\nfor name, path in [\n    \\('Adam', 'data/papers/mvp20/[2017 Adam] 3-D Memristor Crossbars for Analog and Neuromorphic Computing Applications.pdf'\\),\n    \\('Ghoneim', 'data/papers/mvp20/[2014 Ghoneim] Foldable neuromorphic memristive electronics.pdf'\\),\n    \\('Jo', 'data/papers/mvp20/[2010 Jo] Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems.pdf'\\),\n]:\n    text = pymupdf4llm.to_markdown\\(path\\)\n    print\\(f'=== {name} ==='\\)\n    for line in text.split\\('\\\\n'\\)[:15]:\n        print\\(repr\\(line\\)\\)\n    print\\(\\)\n\" 2>&1)",
-      "Bash(PYTHONIOENCODING=utf-8 uv run python -c \"\nfrom pathlib import Path\nimport yaml\nvault = Path\\('data/vault'\\)\nfor p in sorted\\(\\(vault / 'papers'\\).glob\\('*.md'\\)\\):\n    c = p.read_text\\(encoding='utf-8'\\).split\\('---', 2\\)\n    if len\\(c\\) >= 3:\n        fm = yaml.safe_load\\(c[1]\\)\n        t = [x.replace\\('[[topics/',''\\).rstrip\\(']]'\\) for x in fm.get\\('hasTopic', []\\)]\n        print\\(f'{p.stem[:50]:50s} | {t}'\\)\n\")"
+      "Read(*)"
     ]
   }
 }
