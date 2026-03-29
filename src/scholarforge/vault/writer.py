@@ -20,12 +20,17 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _paper_display_name(paper: Paper) -> str:
-    """Create a display name like 'Vaswani 2017 - Attention Is All You Need'."""
+    """Create a display name like 'Vaswani 2017 - Attention Is All You Need'.
+
+    Returns the sanitized form so it matches the filename and can be used
+    directly in wikilinks like ``[[papers/Vaswani 2017 - Attention Is All You Need]]``.
+    """
     authors = json.loads(paper.authors) if paper.authors else []
     first_author = authors[0].split()[-1] if authors else "Unknown"
     year = paper.year or "YYYY"
     title = paper.title or "Untitled"
-    return f"{first_author} {year} - {title}"
+    raw = f"{first_author} {year} - {title}"
+    return _sanitize_filename(raw)
 
 
 def vault_dir() -> Path:
@@ -41,11 +46,6 @@ def ensure_vault_dirs() -> None:
         "papers",
         "authors",
         "topics",
-        "methods",
-        "concepts",
-        "datasets",
-        "findings",
-        "figures",
     ]:
         (vd / sub).mkdir(parents=True, exist_ok=True)
 
