@@ -300,6 +300,21 @@ def templates_sources():
     show_download_instructions()
 
 
+@templates_app.command("download")
+def templates_download(
+    template_id: str = typer.Argument(..., help="Template ID (e.g., wiley_afm, nature, acs, ieee)"),
+):
+    """Download a publisher template automatically (bypasses Cloudflare).
+
+    Uses a stealth browser under the hood — no visible window.
+    """
+    from scholarforge.export.templates.registry import download_template
+
+    result = download_template(template_id)
+    if result:
+        console.print(f'[green]Ready to use.[/green] template_docx: "{template_id}"')
+
+
 @templates_app.command("import")
 def templates_import(
     path: str = typer.Argument(..., help="Path to a .docx or .cls file"),

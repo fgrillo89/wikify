@@ -196,7 +196,13 @@ class DocxExporter:
                 self._add_title(doc, stripped[2:])
                 in_references = False
             else:
-                self._add_body_paragraph(doc, stripped, superscript_citations=not in_references)
+                role = "references" if in_references else "body"
+                self._add_body_paragraph(
+                    doc,
+                    stripped,
+                    superscript_citations=not in_references,
+                    style_role=role,
+                )
 
     # ------------------------------------------------------------------
     # Element builders

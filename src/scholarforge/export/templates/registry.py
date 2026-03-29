@@ -240,16 +240,110 @@ def list_templates() -> list[dict[str, str]]:
     return templates
 
 
+def download_template(template_id: str) -> Path | None:
+    """Download a known publisher template using a stealth browser.
+
+    Uses patchright (patched Playwright) to bypass Cloudflare protection.
+    The browser runs headless — no visible window.
+    """
+    import time
+
+    info = KNOWN_SOURCES.get(template_id)
+    if not info or not info["url"]:
+        console.print(f"[red]No download URL for '{template_id}'[/red]")
+        console.print("Available templates with URLs:")
+        for tid, src in KNOWN_SOURCES.items():
+            if src["url"]:
+                console.print(f"  {tid}: {src['name']}")
+        return None
+
+    url = info["url"]
+    _DOCX_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _DOCX_DIR / f"{template_id}.docx"
+
+    try:
+        from patchright.sync_api import sync_playwright
+    except ImportError:
+        console.print("[red]patchright not installed. Run: uv add scrapling[all][/red]")
+        return None
+
+    console.print(f"[dim]Downloading {info['name']} template...[/dim]")
+
+    with sync_playwright() as p:
+        # Try headless first, fall back to non-headless if CF blocks
+        for headless in (True, False):
+            try:
+                browser = p.chromium.launch(headless=headless)
+                context = browser.new_context(accept_downloads=True)
+                page = context.new_page()
+
+                # Visit main site first to get cookies
+                base_url = "/".join(url.split("/")[:3])
+                page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
+                time.sleep(5)
+
+                # Set up download handler
+                downloaded = [False]
+
+                def on_download(dl):
+                    dl.save_as(str(dest))
+                    downloaded[0] = True
+
+                page.on("download", on_download)
+
+                try:
+                    page.goto(url, wait_until="load", timeout=15000)
+                except Exception:
+                    pass  # "Download is starting" error is expected
+
+                # Wait for download to complete
+                for _ in range(10):
+                    if downloaded[0]:
+                        break
+                    time.sleep(1)
+
+                browser.close()
+
+                if dest.exists() and dest.stat().st_size > 1000:
+                    with open(dest, "rb") as f:
+                        if f.read(2) == b"PK":
+                            console.print(
+                                f"[green]Downloaded:[/green] {dest.name}"
+                                f" ({dest.stat().st_size:,} bytes)"
+                            )
+                            # Auto-import into SQLite
+                            import_template(
+                                dest,
+                                name=template_id,
+                                publisher=info["publisher"],
+                                source_url=url,
+                                notes=info["notes"],
+                            )
+                            return dest
+                # If headless failed, try non-headless
+                if headless:
+                    continue
+            except Exception as e:
+                logger.warning("Download attempt failed: %s", e)
+                if not headless:
+                    break
+
+    console.print("[red]Download failed. Please download manually:[/red]")
+    console.print(f"  URL: {url}")
+    console.print(f'  Then: scholarforge templates import <file> --name "{template_id}"')
+    return None
+
+
 def show_download_instructions() -> None:
     """Print instructions for downloading publisher templates."""
-    console.print("\n[bold]Download publisher templates:[/bold]\n")
+    console.print("\n[bold]Publisher templates:[/bold]\n")
     for tid, info in KNOWN_SOURCES.items():
         console.print(f"  [cyan]{info['name']}[/cyan] ({info['publisher']})")
         if info["url"]:
-            console.print(f"    URL: {info['url']}")
+            console.print(f"    Auto-download: scholarforge templates download {tid}")
         else:
             console.print(f"    {info['notes']}")
-        console.print(f'    Import: scholarforge templates import <file> --name "{tid}"\n')
+        console.print(f'    Manual import: scholarforge templates import <file> --name "{tid}"\n')
 
 
 def extract_styles(docx_path: Path) -> dict[str, str]:
