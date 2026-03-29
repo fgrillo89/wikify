@@ -1,7 +1,16 @@
-"""Generate a 10-page review paper on ALD-based memristors for neuromorphic computing.
+"""Generate a review paper on ALD-based memristors for neuromorphic computing.
 
 Patches the LLM client with mock functions so the full ScholarForge pipeline runs
-without any real API calls. Writes the final markdown to data/output/review_paper.md.
+without any real API calls. Uses the journal-aware generation pipeline with:
+  - JournalProfile for Advanced Functional Materials
+  - build_persona (via write_paper)
+  - [REF:display_name] markers resolved to numbered citations
+  - DocxExporter and PdfExporter for additional output formats
+
+Writes output to:
+  data/output/review_paper.md
+  data/output/review_paper.docx
+  data/output/review_paper.pdf
 """
 
 from __future__ import annotations
@@ -13,32 +22,40 @@ from unittest.mock import patch
 # ── Make sure the package is importable when run directly ────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from scholarforge.export.docx_export import DocxExporter
+from scholarforge.export.journal_profile import load_journal_profile
+from scholarforge.export.pdf_export import PdfExporter
 from scholarforge.generate.planner import plan_paper
 from scholarforge.generate.writer import write_paper
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import Chunk, Paper
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1.  Fake corpus — 18 papers, no DB required
+# 1.  Fake corpus — 19 papers, no DB required
+#
+# IMPORTANT: paper titles are chosen so that Paper.display_name() produces
+# exactly the REF markers used in SECTION_PROSE below.
+# display_name() = "{LastName} {year} - {sanitized_title}"
+# sanitize removes: < > : " / \ | ? *
 # ─────────────────────────────────────────────────────────────────────────────
 
 PAPERS_DATA = [
     {
         "id": "chua1971",
-        "title": "Memristor — The Missing Circuit Element",
+        "title": "Memristor-The missing circuit element",
         "authors": '["Leon O. Chua"]',
         "year": 1971,
         "summary": (
             "Chua postulated the existence of a fourth fundamental circuit element, the "
             "memristor, linking charge and flux. The device exhibits a pinched hysteresis "
-            "loop in its current–voltage characteristic — a hallmark signature used to "
+            "loop in its current-voltage characteristic — a hallmark signature used to "
             "identify memristive behavior in experimental devices to this day."
         ),
     },
     {
         "id": "strukov2008",
         "title": "The missing memristor found",
-        "authors": '["Dmitri B. Strukov", "Gregory S. Snider", "Duncan R. Stewart", "R. Stanley Williams"]',  # noqa: E501
+        "authors": '["Dmitri B. Strukov", "Gregory S. Snider", "Duncan R. Stewart", "R. Stanley Williams"]',
         "year": 2008,
         "summary": (
             "The first physical realization of a memristor was demonstrated using a TiO2 "
@@ -49,8 +66,8 @@ PAPERS_DATA = [
     },
     {
         "id": "jo2010",
-        "title": "Nanoscale Memristor Device as Synapse in Neuromorphic Systems",
-        "authors": '["Sung Hyun Jo", "Ting Chang", "Idongesit Ebong", "Bhavitavya B. Bhadviya", "Pinaki Mazumder", "Wei Lu"]',  # noqa: E501
+        "title": "Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems",
+        "authors": '["Sung Hyun Jo", "Ting Chang", "Idongesit Ebong", "Bhavitavya B. Bhadviya", "Pinaki Mazumder", "Wei Lu"]',
         "year": 2010,
         "summary": (
             "Jo et al. demonstrated that a Si-based memristor can emulate biological synaptic "
@@ -60,20 +77,21 @@ PAPERS_DATA = [
         ),
     },
     {
-        "id": "gao2014",
-        "title": "Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses",
-        "authors": '["Shuai Gao", "Guangqin Liu", "Qi Liu", "Fangyu Liao", "Zhehao Hu", "Shan Xiao"]',  # noqa: E501
-        "year": 2014,
+        "id": "yang2011",
+        "title": "Dopant Control by Atomic Layer Deposition in Oxide Films for Memristive Switches",
+        "authors": '["J. Joshua Yang", "Matthew D. Pickett", "Xuema Li", "Douglas A. A. Ohlberg", "Duncan R. Stewart", "R. Stanley Williams"]',
+        "year": 2011,
         "summary": (
-            "Ultra-low-energy oxide-based synaptic devices were demonstrated, achieving "
-            "sub-femtojoule switching energies per pulse. The gradual resistance modulation "
-            "enabled faithful emulation of long-term potentiation and depression, establishing "
-            "a benchmark for energy-efficient neuromorphic hardware."
+            "Yang et al. demonstrated that ALD dopant control of oxide films enables "
+            "precise tuning of memristive switching parameters. Controlled introduction "
+            "of titanium dopant into hafnium oxide shifted switching voltages and "
+            "endurance characteristics, establishing ALD as the tool for defect engineering "
+            "in resistive switching memory."
         ),
     },
     {
         "id": "ghoneim2014",
-        "title": "Foldable Substrate-Free Ultrathin Neuromorphic Electronics",
+        "title": "Foldable neuromorphic memristive electronics",
         "authors": '["Mohamed T. Ghoneim", "Marwan M. Hussain"]',
         "year": 2014,
         "summary": (
@@ -84,8 +102,20 @@ PAPERS_DATA = [
         ),
     },
     {
+        "id": "gao2014",
+        "title": "Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses...",
+        "authors": '["Shuai Gao", "Guangqin Liu", "Qi Liu", "Fangyu Liao", "Zhehao Hu", "Shan Xiao"]',
+        "year": 2014,
+        "summary": (
+            "Ultra-low-energy oxide-based synaptic devices were demonstrated, achieving "
+            "sub-femtojoule switching energies per pulse. The gradual resistance modulation "
+            "enabled faithful emulation of long-term potentiation and depression, establishing "
+            "a benchmark for energy-efficient neuromorphic hardware."
+        ),
+    },
+    {
         "id": "matveyev2015",
-        "title": "Resistive switching and synaptic properties of fully ALD TiN/HfO2/TiN devices",
+        "title": "Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2",
         "authors": '["Yury Matveyev", "Konstantin Egorov", "Andrei Markeev", "Andrei Zenkevich"]',
         "year": 2015,
         "summary": (
@@ -96,8 +126,20 @@ PAPERS_DATA = [
         ),
     },
     {
+        "id": "kim2017",
+        "title": "Analog Synaptic Behavior of a Silicon Nitride Memristor",
+        "authors": '["Sungho Kim", "Chao Du", "Patrick Sheridan", "Wen Ma", "ShinHyun Choi", "Wei D. Lu"]',
+        "year": 2017,
+        "summary": (
+            "Silicon nitride memristors grown by ALD exhibited smooth, analog resistance "
+            "modulation over more than 500 distinct conductance states. Potentiation and "
+            "depression curves demonstrated high linearity, which is critical for gradient-"
+            "descent-based training of memristor crossbar neural networks."
+        ),
+    },
+    {
         "id": "adam2017",
-        "title": "3D Memristor Crossbars for Analog and Neuromorphic Computing Applications",
+        "title": "3-D Memristor Crossbars for Analog and Neuromorphic Computing Applications",
         "authors": '["Gina C. Adam", "Brian D. Hoskins", "Mirko Prezioso", "Dmitri B. Strukov"]',
         "year": 2017,
         "summary": (
@@ -108,21 +150,9 @@ PAPERS_DATA = [
         ),
     },
     {
-        "id": "kim2017",
-        "title": "Analog Synaptic Behavior of a Silicon Nitride Memristor",
-        "authors": '["Sungho Kim", "Chao Du", "Patrick Sheridan", "Wen Ma", "ShinHyun Choi", "Wei D. Lu"]',  # noqa: E501
-        "year": 2017,
-        "summary": (
-            "Silicon nitride memristors grown by ALD exhibited smooth, analog resistance "
-            "modulation over more than 500 distinct conductance states. Potentiation and "
-            "depression curves demonstrated high linearity, which is critical for gradient-"
-            "descent-based training of memristor crossbar neural networks."
-        ),
-    },
-    {
         "id": "porro2018",
-        "title": "Multi-Level Resistive Switching in ALD Iron Oxide Memristors",
-        "authors": '["Stefano Porro", "Erik Jasmin Tolstolutskaya", "Sergio Ferrero", "Candido F. Pirri"]',  # noqa: E501
+        "title": "A multi-level memristor based on atomic layer deposition of iron oxide",
+        "authors": '["Stefano Porro", "Erik Jasmin Tolstolutskaya", "Sergio Ferrero", "Candido F. Pirri"]',
         "year": 2018,
         "summary": (
             "ALD-deposited Fe2O3 thin films were shown to support multi-level resistance "
@@ -133,9 +163,8 @@ PAPERS_DATA = [
     },
     {
         "id": "li2018",
-        "title": "Efficient and Self-Adaptive In-Situ Learning in Multilayer Memristor "
-        "Neural Networks",
-        "authors": '["Cong Li", "Daniel Belkin", "Yunning Li", "Peng Yan", "Miao Hu", "Ning Ge", "Hao Jiang", "Eric Montgomery", "Peng Lin", "Zhongrui Wang", "Wei Song", "John Paul Strachan", "Mark Barnell", "Qing Wu", "R. Stanley Williams", "J. Joshua Yang", "Qiangfei Xia"]',  # noqa: E501
+        "title": "In-Memory Computing with Memristor Arrays",
+        "authors": '["Cong Li", "Daniel Belkin", "Yunning Li", "Peng Yan", "Miao Hu", "Ning Ge", "Hao Jiang", "Eric Montgomery", "Peng Lin", "Zhongrui Wang", "Wei Song", "John Paul Strachan", "Mark Barnell", "Qing Wu", "R. Stanley Williams", "J. Joshua Yang", "Qiangfei Xia"]',
         "year": 2018,
         "summary": (
             "In-situ learning was demonstrated on a multi-layer memristor neural network "
@@ -146,12 +175,11 @@ PAPERS_DATA = [
     },
     {
         "id": "wan2018",
-        "title": "Memristor-Based Artificial Synapses with ALD Iron Oxide for Neuromorphic "
-        "Computing",
+        "title": "Bio-mimicked atomic-layer-deposited iron oxide-based memristor...",
         "authors": '["Tiefeng Wan", "Siqi Qu", "Alison Du", "Tingting Lin", "Dewei Chu"]',
         "year": 2018,
         "summary": (
-            "ALD iron oxide thin films deposited at low temperature (150 °C) were used to "
+            "ALD iron oxide thin films deposited at low temperature (150 C) were used to "
             "fabricate synaptic memristors. Wan et al. demonstrated reliable analogue "
             "switching, multi-level storage, and STDP emulation, positioning iron oxide "
             "as an attractive alternative to HfO2 for flexible neuromorphic platforms."
@@ -159,8 +187,8 @@ PAPERS_DATA = [
     },
     {
         "id": "chandrasekaran2019",
-        "title": "Improving Linearity by Introducing Al in HfO2 as a Memristor Synapse Device",
-        "authors": '["Suhas Chandrasekaran", "Firman Mangkusaputra Simanjuntak", "Rakesh Saminathan Bonam", "Hsin-Chu Liang", "Tahui Wang"]',  # noqa: E501
+        "title": "Improving linearity by introducing Al in HfO2 as a memristor synapse device",
+        "authors": '["Suhas Chandrasekaran", "Firman Mangkusaputra Simanjuntak", "Rakesh Saminathan Bonam", "Hsin-Chu Liang", "Tahui Wang"]',
         "year": 2019,
         "summary": (
             "Aluminium doping of HfO2 dielectric was shown to linearise the potentiation "
@@ -171,8 +199,8 @@ PAPERS_DATA = [
     },
     {
         "id": "kim2019",
-        "title": "Defect-Engineered HfO2 Memristor for Neuromorphic Computing",
-        "authors": '["Woojoon Kim", "Andrea Chattopadhyay", "Andrea Siemon", "Eike Linn", "Rainer Waser", "Vikas Rana"]',  # noqa: E501
+        "title": "HfO Memristor and Defect-Engineered Electroforming-Free Analog...",
+        "authors": '["Woojoon Kim", "Andrea Chattopadhyay", "Andrea Siemon", "Eike Linn", "Rainer Waser", "Vikas Rana"]',
         "year": 2019,
         "summary": (
             "Engineered oxygen vacancy profiles in ALD-HfO2 were used to tune switching "
@@ -183,11 +211,11 @@ PAPERS_DATA = [
     },
     {
         "id": "sokolov2019",
-        "title": "Memristive Devices for Artificial Neural Networks: Review",
+        "title": "Memristor devices for neural networks",
         "authors": '["Alexander S. Sokolov", "Ali Abbas Jafari Jalan", "Changhwan Choi"]',
         "year": 2019,
         "summary": (
-            "A comprehensive review of memristive devices for neural network hardware "
+            "A review of memristive devices for neural network hardware "
             "covering resistive switching mechanisms, device architectures, training "
             "algorithms, and benchmark comparisons. The review identifies device variability "
             "and the weight update nonlinearity as the chief impediments to large-scale "
@@ -196,7 +224,7 @@ PAPERS_DATA = [
     },
     {
         "id": "huh2020",
-        "title": "2D Materials for Memristive Neuromorphic Computing",
+        "title": "Memristors Based on 2D Materials as an Artificial Synapse for Neuromorphic Electronics",
         "authors": '["Wonho Huh", "Daewon Lee", "Chul-Ho Lee"]',
         "year": 2020,
         "summary": (
@@ -208,8 +236,8 @@ PAPERS_DATA = [
     },
     {
         "id": "liu2020",
-        "title": "HfO2/HfOx Bilayer Optimization for Highly Linear Synaptic Devices",
-        "authors": '["Xing Liu", "Mingyi An", "Wenqing Gao", "Tianhao Yang", "Qi Shi", "Kaijian Liu"]',  # noqa: E501
+        "title": "Optimization of oxygen vacancy concentration in HfO2HfOx bilayer...",
+        "authors": '["Xing Liu", "Mingyi An", "Wenqing Gao", "Tianhao Yang", "Qi Shi", "Kaijian Liu"]',
         "year": 2020,
         "summary": (
             "Bilayer HfO2/HfOx structures fabricated entirely by ALD were optimised for "
@@ -220,8 +248,8 @@ PAPERS_DATA = [
     },
     {
         "id": "kim2021",
-        "title": "4K-Memristor Analog-Grade Passive Crossbar Circuit",
-        "authors": '["Woojoon Kim", "Shashank Maheshwaram", "Luigi Goux", "Sergiu Clima", "Andrea Fantini", "Gouri Sankar Kar"]',  # noqa: E501
+        "title": "4K-memristor analog-grade passive crossbar circuit",
+        "authors": '["Woojoon Kim", "Shashank Maheshwaram", "Luigi Goux", "Sergiu Clima", "Andrea Fantini", "Gouri Sankar Kar"]',
         "year": 2021,
         "summary": (
             "A 4096-cell (4K) passive memristor crossbar fabricated with ALD HfO2 as the "
@@ -232,7 +260,7 @@ PAPERS_DATA = [
     },
     {
         "id": "ma2025",
-        "title": "Bilayer Stretchable Memristor via ALD for Flexible Neuromorphic Computing",
+        "title": "Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition",
         "authors": '["Hao Ma", "Jiaqian Li", "Yiming Liu", "Zhen Fan", "Yue Zhang"]',
         "year": 2025,
         "summary": (
@@ -284,18 +312,23 @@ def build_mock_context() -> RetrievedContext:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2.  Mock plan — returned by the patched complete_json
+#     Targets Advanced Functional Materials required sections.
+#     No Experimental Section (review paper).
 # ─────────────────────────────────────────────────────────────────────────────
 
 MOCK_PLAN = {
     "title": "Atomic Layer Deposition for Memristive Synapses in Neuromorphic Computing: A Review",
     "paper_type": "lit_review",
-    "target_length": 2500,
+    "target_length": 1850,
     "sections": [
         {
             "heading": "Abstract",
             "level": 1,
-            "description": "Concise overview of ALD-based memristors and their role in neuromorphic computing.",  # noqa: E501
-            "target_tokens": 150,
+            "description": (
+                "Concise overview (~200 words) of ALD-based memristors and their role "
+                "in neuromorphic computing, covering key oxide systems and outcomes."
+            ),
+            "target_tokens": 200,
             "source_papers": [],
             "subsections": [],
         },
@@ -303,63 +336,41 @@ MOCK_PLAN = {
             "heading": "Introduction",
             "level": 1,
             "description": (
-                "What are memristors, why neuromorphic computing matters, and how ALD enables "
-                "precision fabrication of synaptic devices."
+                "What are memristors, why neuromorphic computing matters, and how ALD "
+                "enables precision fabrication of synaptic devices. ~400 words."
             ),
             "target_tokens": 400,
             "source_papers": [
-                "Chua 1971 - Memristor — The Missing Circuit Element",
+                "Chua 1971 - Memristor-The missing circuit element",
                 "Strukov 2008 - The missing memristor found",
-                "Jo 2010 - Nanoscale Memristor Device as Synapse",
-                "Sokolov 2019 - Memristive Devices for Neural Networks Review",
+                "Jo 2010 - Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems",
+                "Sokolov 2019 - Memristor devices for neural networks",
             ],
             "subsections": [],
         },
         {
-            "heading": "Memristor Fundamentals",
+            "heading": "Results and Discussion",
             "level": 1,
-            "description": (
-                "Resistive switching physics, the seminal Chua (1971) postulate, the Strukov "
-                "(2008) physical realisation, and the main switching mechanisms."
-            ),
-            "target_tokens": 350,
-            "source_papers": [
-                "Chua 1971 - Memristor — The Missing Circuit Element",
-                "Strukov 2008 - The missing memristor found",
-                "Huh 2020 - 2D Materials Memristors",
-            ],
-            "subsections": [],
-        },
-        {
-            "heading": "ALD for Memristor Fabrication",
-            "level": 1,
-            "description": (
-                "Why ALD is uniquely suited to memristor fabrication: angstrom-scale thickness "
-                "control, conformality, and the ability to engineer defect profiles."
-            ),
-            "target_tokens": 500,
-            "source_papers": [
-                "Matveyev 2015 - ALD TiN/HfO2 Resistive Switching",
-                "Kim 2019 - HfO2 Defect-Engineered Memristor",
-                "Chandrasekaran 2019 - Al-Doped HfO2 Linearity",
-                "Liu 2020 - HfO2/HfOx Bilayer Optimization",
-                "Ma 2025 - Bilayer Stretchable Memristor via ALD",
-            ],
+            "description": ("Overview paragraph framing the four subsections that follow."),
+            "target_tokens": 80,
+            "source_papers": [],
             "subsections": [
                 {
-                    "heading": "HfO2-Based Devices",
+                    "heading": "HfO2-Based Memristive Devices",
                     "level": 2,
                     "description": (
-                        "HfO2 as the dominant ALD switching oxide: pristine HfO2, Al-doped "
-                        "variants, and bilayer HfO2/HfOx stacks."
+                        "ALD HfO2 as the primary switching oxide: pristine films, Al-doped "
+                        "variants, bilayer HfO2/HfOx stacks, and large-scale crossbar "
+                        "integration. ~350 words."
                     ),
-                    "target_tokens": 250,
+                    "target_tokens": 350,
                     "source_papers": [
-                        "Matveyev 2015 - ALD TiN/HfO2 Resistive Switching",
-                        "Chandrasekaran 2019 - Al-Doped HfO2 Linearity",
-                        "Kim 2019 - HfO2 Defect-Engineered Memristor",
-                        "Liu 2020 - HfO2/HfOx Bilayer Optimization",
-                        "Kim 2021 - 4K Passive Crossbar Circuit",
+                        "Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2",
+                        "Yang 2011 - Dopant Control by Atomic Layer Deposition in Oxide Films for Memristive Switches",
+                        "Chandrasekaran 2019 - Improving linearity by introducing Al in HfO2 as a memristor synapse device",
+                        "Kim 2019 - HfO Memristor and Defect-Engineered Electroforming-Free Analog...",
+                        "Liu 2020 - Optimization of oxygen vacancy concentration in HfO2HfOx bilayer...",
+                        "Kim 2021 - 4K-memristor analog-grade passive crossbar circuit",
                     ],
                     "subsections": [],
                 },
@@ -367,95 +378,61 @@ MOCK_PLAN = {
                     "heading": "Alternative Oxide Systems",
                     "level": 2,
                     "description": (
-                        "ALD iron oxide (Fe2O3), silicon nitride (SiNx), and emerging 2D-material "
-                        "approaches as alternatives to HfO2."
+                        "ALD iron oxide (Fe2O3), silicon nitride (Si3N4), and 2D-material "
+                        "approaches as alternatives to HfO2. ~350 words."
                     ),
-                    "target_tokens": 250,
+                    "target_tokens": 350,
                     "source_papers": [
-                        "Porro 2018 - ALD Iron Oxide Memristor",
-                        "Wan 2018 - ALD Iron Oxide Neuromorphic",
-                        "Kim 2017 - SiNx Analog Synaptic Behavior",
-                        "Huh 2020 - 2D Materials Memristors",
-                        "Ma 2025 - Bilayer Stretchable Memristor via ALD",
-                    ],
-                    "subsections": [],
-                },
-            ],
-        },
-        {
-            "heading": "Synaptic Behavior and Neuromorphic Applications",
-            "level": 1,
-            "description": (
-                "Analog switching modes for synaptic weight emulation, learning rules "
-                "implemented in hardware, and large-scale crossbar arrays."
-            ),
-            "target_tokens": 500,
-            "source_papers": [
-                "Jo 2010 - Nanoscale Memristor Device as Synapse",
-                "Gao 2014 - Ultra-Low-Energy Oxide Synapses",
-                "Kim 2017 - SiNx Analog Synaptic Behavior",
-                "Li 2018 - In-Memory Computing with Memristor Arrays",
-                "Kim 2021 - 4K Passive Crossbar Circuit",
-            ],
-            "subsections": [
-                {
-                    "heading": "Analog Synaptic Properties",
-                    "level": 2,
-                    "description": (
-                        "Gradual conductance modulation, potentiation and depression curves, "
-                        "nonlinearity figures of merit, and STDP demonstrations."
-                    ),
-                    "target_tokens": 250,
-                    "source_papers": [
-                        "Jo 2010 - Nanoscale Memristor Device as Synapse",
-                        "Gao 2014 - Ultra-Low-Energy Oxide Synapses",
-                        "Matveyev 2015 - ALD TiN/HfO2 Resistive Switching",
-                        "Kim 2017 - SiNx Analog Synaptic Behavior",
-                        "Chandrasekaran 2019 - Al-Doped HfO2 Linearity",
+                        "Porro 2018 - A multi-level memristor based on atomic layer deposition of iron oxide",
+                        "Wan 2018 - Bio-mimicked atomic-layer-deposited iron oxide-based memristor...",
+                        "Kim 2017 - Analog Synaptic Behavior of a Silicon Nitride Memristor",
+                        "Huh 2020 - Memristors Based on 2D Materials as an Artificial Synapse for Neuromorphic Electronics",
+                        "Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition",
                     ],
                     "subsections": [],
                 },
                 {
-                    "heading": "Crossbar Architectures",
+                    "heading": "Synaptic Behavior and Analog Switching",
                     "level": 2,
                     "description": (
-                        "Passive and 1T1R crossbar topologies, sneak-path mitigation, "
-                        "matrix-vector multiplication demonstrations, and scalability."
+                        "Analog conductance modulation, STDP, potentiation/depression "
+                        "figures of merit, and nonlinearity benchmarks. ~350 words."
                     ),
-                    "target_tokens": 250,
+                    "target_tokens": 350,
                     "source_papers": [
-                        "Adam 2017 - 3D Memristor Crossbars",
-                        "Li 2018 - In-Memory Computing",
-                        "Kim 2021 - 4K Passive Crossbar Circuit",
-                        "Ghoneim 2014 - Foldable Neuromorphic Electronics",
+                        "Jo 2010 - Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems",
+                        "Gao 2014 - Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses...",
+                        "Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2",
+                        "Kim 2017 - Analog Synaptic Behavior of a Silicon Nitride Memristor",
+                        "Chandrasekaran 2019 - Improving linearity by introducing Al in HfO2 as a memristor synapse device",
+                    ],
+                    "subsections": [],
+                },
+                {
+                    "heading": "Crossbar Array Architectures",
+                    "level": 2,
+                    "description": (
+                        "Passive and 1T1R topologies, sneak-path mitigation, "
+                        "matrix-vector multiplication, and flexible/3D integration. ~300 words."
+                    ),
+                    "target_tokens": 300,
+                    "source_papers": [
+                        "Adam 2017 - 3-D Memristor Crossbars for Analog and Neuromorphic Computing Applications",
+                        "Li 2018 - In-Memory Computing with Memristor Arrays",
+                        "Kim 2021 - 4K-memristor analog-grade passive crossbar circuit",
+                        "Ghoneim 2014 - Foldable neuromorphic memristive electronics",
+                        "Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition",
                     ],
                     "subsections": [],
                 },
             ],
-        },
-        {
-            "heading": "Challenges and Future Directions",
-            "level": 1,
-            "description": (
-                "Remaining hurdles: weight update nonlinearity, cycle-to-cycle and "
-                "device-to-device variability, scaling to 3D, and flexible/stretchable platforms."
-            ),
-            "target_tokens": 350,
-            "source_papers": [
-                "Sokolov 2019 - Memristive Devices Review",
-                "Chandrasekaran 2019 - Al-Doped HfO2 Linearity",
-                "Adam 2017 - 3D Memristor Crossbars",
-                "Ghoneim 2014 - Foldable Neuromorphic Electronics",
-                "Ma 2025 - Bilayer Stretchable Memristor via ALD",
-            ],
-            "subsections": [],
         },
         {
             "heading": "Conclusion",
             "level": 1,
             "description": (
                 "Summary of the state of the art, key achievements, and outlook for "
-                "ALD-based memristors in neuromorphic hardware."
+                "ALD-based memristors in neuromorphic hardware. ~200 words."
             ),
             "target_tokens": 200,
             "source_papers": [],
@@ -467,295 +444,268 @@ MOCK_PLAN = {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3.  Section prose — keyed by section heading (lower-case)
+#     All citations use [REF:display_name] markers.
+#     display_name format: LastName Year - Title  (as returned by Paper.display_name())
+#     Style rules: no em-dashes as parenthetical separators, no banned phrases,
+#     no bullet points, direct technical prose.
 # ─────────────────────────────────────────────────────────────────────────────
 
 SECTION_PROSE: dict[str, str] = {
     "abstract": (
-        "Neuromorphic computing demands hardware synapses capable of analog, "
-        "non-volatile resistance modulation with high endurance, low energy consumption, "
-        "and nanometer-scale dimensions. Memristors — two-terminal devices whose "
-        "conductance is controlled by the history of applied voltage — have emerged as "
-        "leading candidates for this role. Among fabrication techniques, atomic layer "
-        "deposition (ALD) offers unparalleled thickness control, step coverage, and the "
-        "ability to tune defect profiles at the atomic scale. This review surveys the "
-        "development of ALD-based memristors from early HfO2 resistive switching cells "
-        "through aluminium-doped and bilayer oxide structures to iron oxide and silicon "
-        "nitride synaptic devices. We discuss the relationship between ALD process "
-        "parameters, switching physics, and synaptic figures of merit, and we assess "
-        "integration strategies for crossbar neural network hardware. Outstanding "
-        "challenges — weight-update nonlinearity, variability, and large-scale "
-        "manufacturability — are identified alongside emerging directions including "
-        "three-dimensional integration and flexible substrates."
+        "Neuromorphic hardware requires synaptic elements capable of continuous, "
+        "non-volatile resistance modulation with nanometer-scale dimensions, high "
+        "endurance, and sub-femtojoule switching energy. Memristors satisfy these "
+        "requirements in principle, but their performance as analog synapses depends "
+        "critically on the quality and controllability of the switching dielectric. "
+        "Atomic layer deposition (ALD) provides the angstrom-level thickness control, "
+        "conformal coverage, and defect-engineering capability needed to translate "
+        "that principle into manufacturable devices. This review traces the development "
+        "of ALD-based memristors from the foundational HfO2 stacks of Matveyev et al. "
+        "[REF:Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2] "
+        "through aluminium-doped and bilayer oxide architectures, iron oxide and silicon "
+        "nitride alternatives, and ultimately to the 4,096-cell passive crossbar of "
+        "Kim et al. [REF:Kim 2021 - 4K-memristor analog-grade passive crossbar circuit] "
+        "and the stretchable bilayer device of Ma et al. "
+        "[REF:Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition]. "
+        "The relationship between ALD process parameters, conductive-filament physics, "
+        "and synaptic figures of merit is examined throughout. Key unresolved challenges "
+        "include weight-update nonlinearity, cycle-to-cycle variability, and scalable "
+        "three-dimensional integration."
     ),
     "introduction": (
-        "The von Neumann bottleneck — the energy cost of shuttling data between "
-        "physically separated processor and memory — dominates the power budget of "
-        "modern AI accelerators. Biological neural circuits avoid this bottleneck by "
-        "co-locating computation and memory in synaptic connections that modulate their "
-        "strength through experience. Translating this architecture into solid-state "
-        "hardware requires a device that (i) stores a continuous range of conductance "
-        "values, (ii) updates that conductance in response to local activity signals, "
-        "and (iii) retains the programmed state without power. The memristor, whose "
-        "theoretical existence was established by Chua (1971) as the fourth fundamental "
-        "circuit element linking charge and magnetic flux, satisfies all three criteria.\n\n"
-        "The first experimental demonstration of a physical memristor was reported by "
-        "Strukov et al. (2008) using a platinum–TiO2–platinum stack. In that device, "
-        "an oxygen-vacancy-rich TiO2−x layer drifts under an applied field, continuously "
-        "modulating the effective resistance — a direct analogue of synaptic long-term "
-        "potentiation and depression. Jo et al. (2010) subsequently demonstrated that a "
-        "Si-based memristor could emulate spike-timing-dependent plasticity (STDP), the "
-        "Hebbian learning rule observed in biological synapses, establishing the memristor "
-        "as a viable hardware synapse.\n\n"
-        "Fabricating memristors at the nanometer scale required by large crossbar arrays "
-        "demands deposition techniques with atomic-level precision. Atomic layer "
-        "deposition satisfies this requirement through its self-limiting half-reactions: "
-        "precursor and reactant doses are separated in time, producing conformal films "
-        "one monolayer at a time. ALD can deposit high-k dielectrics such as HfO2 with "
-        "sub-nanometer thickness uniformity across wafer-scale areas, and its low "
-        "deposition temperatures (often 150–300 °C) are compatible with back-end-of-line "
-        "CMOS integration. As reviewed by Sokolov et al. (2019), the intersection of "
-        "memristive physics and precision thin-film engineering has produced a rich "
-        "landscape of device demonstrations; this review focuses specifically on the role "
-        "of ALD in advancing that landscape."
+        "The energy cost of modern neural network inference is dominated not by "
+        "arithmetic but by data movement: in a von Neumann architecture, reading a "
+        "weight from DRAM consumes roughly 200 pJ, three orders of magnitude more than "
+        "the multiply-accumulate operation that uses it. Biological neural circuits "
+        "avoid this penalty by co-locating memory and computation at the synapse, where "
+        "conductance changes driven by pre- and post-synaptic activity encode learned "
+        "associations without moving data across a bus. A hardware synapse must "
+        "therefore store a continuous range of conductance values, update that value "
+        "under local voltage stimuli, and retain the programmed state without power. "
+        "The memristor, whose theoretical foundations were established by Chua "
+        "[REF:Chua 1971 - Memristor-The missing circuit element] as the fourth "
+        "fundamental passive circuit element linking charge and magnetic flux, fulfils "
+        "all three requirements.\n\n"
+        "Experimental confirmation arrived with the Pt/TiO2/Pt stack of Strukov et al. "
+        "[REF:Strukov 2008 - The missing memristor found], where drift of "
+        "oxygen-vacancy-rich TiO2-x under an applied field continuously modulates the "
+        "effective resistance. Jo et al. [REF:Jo 2010 - Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems] "
+        "subsequently demonstrated spike-timing-dependent plasticity (STDP) in a "
+        "Si-based memristor, establishing the conceptual bridge between resistive "
+        "switching physics and Hebbian learning. As comprehensively reviewed by Sokolov "
+        "et al. [REF:Sokolov 2019 - Memristor devices for neural networks], the "
+        "memristive device landscape now spans dozens of material systems, yet "
+        "fabricating the thin, uniform, defect-engineered switching layers required by "
+        "multi-level analog operation demands a deposition technique with sub-nanometer "
+        "precision.\n\n"
+        "Atomic layer deposition satisfies this requirement through sequential, "
+        "self-limiting half-reactions that deposit one monolayer per cycle. ALD yields "
+        "conformal films of HfO2, Fe2O3, Si3N4, and related dielectrics with thickness "
+        "uniformity better than 0.5% across wafer-scale areas, at temperatures "
+        "between 100 and 300 C compatible with back-end-of-line CMOS integration. "
+        "Critically, ALD pulse sequences can be adjusted to vary the oxygen "
+        "stoichiometry and dopant concentration within a single deposition run, giving "
+        "direct access to the defect profiles that govern switching kinetics. This "
+        "review surveys how ALD process parameters have been exploited to engineer the "
+        "synaptic properties of memristors, from the first all-ALD stacks to "
+        "flexible crossbar circuits operating under mechanical strain."
     ),
-    "memristor fundamentals": (
-        "A memristor is a passive two-terminal device whose instantaneous resistance — "
-        "or more generally, memristance — depends on the history of charge that has "
-        "flowed through it. Chua (1971) derived the memristor from symmetry arguments "
-        "applied to the four fundamental circuit variables (voltage, current, charge, and "
-        "flux linkage), predicting a device with a pinched, hysteretic current–voltage "
-        "characteristic whose loop area collapses to zero as frequency increases without "
-        "limit. This frequency-dependent hysteresis distinguishes memristors from "
-        "nonlinear resistors and capacitors.\n\n"
-        "The dominant physical mechanism in metal-oxide memristors is resistive "
-        "switching: the reversible formation and rupture of a nanoscale conductive "
-        "filament through a dielectric switching layer. In unipolar switching, both SET "
-        "(high-resistance to low-resistance) and RESET (low-resistance to high-resistance) "
-        "transitions occur under the same voltage polarity. Bipolar switching — more "
-        "common in ALD oxides — requires opposite polarities for SET and RESET, driven "
-        "by the drift of oxygen vacancies along the applied field. Strukov et al. (2008) "
-        "showed that this drift in TiO2 could be modelled as a moving boundary between "
-        "conducting and insulating phases, giving a closed-form expression for memristance "
-        "that reproduces the observed hysteresis.\n\n"
-        "Beyond binary switching, many memristors exhibit analogue resistance states "
-        "accessible by controlling the compliance current or pulse amplitude. This "
-        "multi-level behaviour is essential for synaptic applications, where each device "
-        "must store a weight from a near-continuous range rather than a simple on/off "
-        "state. Huh et al. (2020) noted that 2D materials offer switching layers only a "
-        "few atoms thick, potentially reducing the stochastic variability that plagues "
-        "filament formation in thicker oxides, though practical integration of 2D "
-        "memristors into crossbar arrays remains an active research challenge."
+    "results and discussion": (
+        "The following sections examine ALD-based memristors across four themes: "
+        "hafnium oxide devices and their doped variants, alternative switching-layer "
+        "chemistries, the analog synaptic figures of merit that determine neuromorphic "
+        "utility, and the crossbar array architectures that translate single-device "
+        "performance into system-level inference capability."
     ),
-    "ald for memristor fabrication": (
-        "Atomic layer deposition is uniquely suited to memristor fabrication for several "
-        "reasons. First, the self-limiting growth mechanism produces films of "
-        "precisely-controlled thickness, typically 0.05–0.15 nm per cycle for HfO2, "
-        "enabling the 3–10 nm switching layers required by low-voltage operation. Second, "
-        "ALD's exceptional step coverage — approaching 100% on high-aspect-ratio "
-        "structures — is essential for scaling crossbar arrays to three-dimensional "
-        "architectures. Third, by adjusting precursor chemistry, pulse timing, and "
-        "deposition temperature, ALD operators can tune the oxygen vacancy concentration "
-        "and spatial distribution that govern switching kinetics.\n\n"
-        "Matveyev et al. (2015) provided one of the earliest demonstrations of a fully "
-        "ALD-grown memristor stack: TiN electrodes deposited by ALD sandwiching a "
-        "10 nm HfO2 switching layer. The all-ALD approach eliminated interfacial "
-        "contamination and enabled systematic variation of HfO2 thickness. At compliance "
-        "currents below 10 μA, the devices exhibited gradual SET transitions amenable to "
-        "synaptic weight encoding, with switching energies estimated in the femtojoule "
-        "range — consistent with biological synapse energetics. Kim et al. (2019) extended "
-        "this approach by engineering oxygen vacancy profiles through controlled over- and "
-        "under-stoichiometry cycles, demonstrating that defect-engineered HfO2 could "
-        "access more than 32 resistance states with sub-5% cycle-to-cycle variability.\n\n"
-        "A significant advance was introduced by Chandrasekaran et al. (2019), who "
-        "incorporated aluminium into the HfO2 lattice by interleaving Al2O3 ALD "
-        "sub-cycles. The resulting Al:HfO2 films showed dramatically linearised "
-        "potentiation and depression curves — the nonlinearity factor dropped from "
-        "approximately 4 to below 1.5 — translating directly into higher accuracy when "
-        "the devices were used as weights in simulated neural network training. Liu et al. "
-        "(2020) further refined the bilayer concept by depositing a thin HfOx "
-        "oxygen-deficient cap atop a stoichiometric HfO2 layer; the cap scavenges "
-        "oxygen from the switching layer, pre-forming an oxygen-vacancy-rich region that "
-        "reduces the forming voltage and tightens the resistance window distribution. "
-        "Ma et al. (2025) pushed ALD-based memristors onto elastomeric substrates, "
-        "demonstrating that a bilayer ALD stack retains multi-level switching under "
-        "30% tensile strain — a milestone for flexible neuromorphic wearables."
-    ),
-    "hfo2-based devices": (
-        "Hafnium oxide occupies a privileged position among ALD switching oxides because "
-        "it is already a qualified high-k gate dielectric in CMOS manufacturing, meaning "
-        "ALD HfO2 processes are mature, reproducible, and readily available in "
-        "foundry environments. The binary HfO2 system switches through a hafnium "
-        "oxygen-vacancy filament that forms preferentially at grain boundaries in the "
-        "polycrystalline film. ALD growth temperature profoundly affects crystallinity: "
-        "films deposited below ~200 °C are amorphous and show higher forming voltages "
-        "but lower variability, while higher-temperature films crystallise into "
-        "monoclinic or orthorhombic phases with lower forming voltages but broader "
-        "resistance distributions.\n\n"
-        "Matveyev et al. (2015) established that the ratio of TiN electrode thickness "
-        "to HfO2 thickness controls the oxygen exchange at the interface, which in turn "
-        "determines whether switching is abrupt (high compliance) or gradual (low "
-        "compliance). At compliance currents of 1–5 μA, the TiN/HfO2/TiN cells "
-        "exhibited smooth potentiation over more than 100 pulses. Chandrasekaran et al. "
-        "(2019) demonstrated that replacing 10–15% of Hf atoms with Al moves trapping "
-        "sites to shallower energy levels, smoothing the discrete jumps seen in pure "
-        "HfO2 and yielding a nonlinearity figure of merit (NL) approaching unity. "
-        "Liu et al. (2020) showed that their HfO2/HfOx bilayer architecture achieved "
-        "eight clearly separated resistance levels with a window ratio exceeding 10× "
-        "and 10-year retention at 85 °C. Kim et al. (2021) scaled this approach to a "
-        "4096-cell passive crossbar in which each HfO2 cell was programmed to three-bit "
-        "resolution, achieving 91% accuracy on handwritten digit classification with "
-        "on-chip inference — a landmark for large-scale ALD memristor integration."
+    "hfo2-based memristive devices": (
+        "Hafnium oxide occupies a privileged position among ALD switching oxides "
+        "because it is a qualified high-k gate dielectric in CMOS manufacturing, "
+        "meaning deposition processes are mature and available in foundry environments. "
+        "Resistive switching in HfO2 proceeds through the reversible formation and "
+        "rupture of a hafnium oxygen-vacancy filament, whose nucleation preferentially "
+        "occurs at grain boundaries in polycrystalline films. ALD growth temperature "
+        "determines crystallinity: amorphous films deposited below 200 C show higher "
+        "forming voltages but narrower resistance distributions, while higher-temperature "
+        "monoclinic films switch at lower voltages with greater cell-to-cell spread.\n\n"
+        "The role of ALD process control in governing synaptic behavior was established "
+        "systematically by Yang et al. "
+        "[REF:Yang 2011 - Dopant Control by Atomic Layer Deposition in Oxide Films for Memristive Switches], "
+        "who showed that interleaving titanium ALD sub-cycles into a hafnium oxide matrix "
+        "shifts trap energy levels and modifies both the SET voltage and endurance. "
+        "Matveyev et al. "
+        "[REF:Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2] "
+        "fabricated the first all-ALD TiN/HfO2/TiN stack and demonstrated that "
+        "compliance currents below 5 uA switch the device to intermediate resistance "
+        "states accessible over more than 100 consecutive pulses, with estimated "
+        "switching energies in the femtojoule range. Kim et al. "
+        "[REF:Kim 2019 - HfO Memristor and Defect-Engineered Electroforming-Free Analog] "
+        "extended this principle by varying the HfO2/HfOx ALD cycle ratio to create "
+        "a graded oxygen-vacancy profile, demonstrating more than 32 distinguishable "
+        "resistance levels with sub-5% cycle-to-cycle variability and eliminating the "
+        "electroforming step that normally stresses device dielectrics.\n\n"
+        "Chemical doping within the ALD cycle sequence offers another dimension of "
+        "control. Chandrasekaran et al. "
+        "[REF:Chandrasekaran 2019 - Improving linearity by introducing Al in HfO2 as a memristor synapse device] "
+        "inserted Al2O3 sub-cycles to replace 10-15% of Hf sites with Al, producing "
+        "shallower, more uniformly distributed trap levels. The resulting nonlinearity "
+        "coefficient dropped from approximately 4 in undoped HfO2 to below 1.5 in "
+        "Al:HfO2, translating directly into higher simulated neural network accuracy. "
+        "Liu et al. "
+        "[REF:Liu 2020 - Optimization of oxygen vacancy concentration in HfO2HfOx bilayer] "
+        "refined the bilayer approach by depositing an oxygen-deficient HfOx cap "
+        "over stoichiometric HfO2; the cap pre-forms a vacancy-rich region that "
+        "reduces forming voltage and tightens the resistance window. Kim et al. "
+        "[REF:Kim 2021 - 4K-memristor analog-grade passive crossbar circuit] "
+        "scaled the technology to a 4,096-cell passive crossbar in which each HfO2 "
+        "cell was programmed to three-bit resolution, achieving 91% accuracy on "
+        "handwritten digit classification through a write-verify correction protocol."
     ),
     "alternative oxide systems": (
-        "While HfO2 dominates the ALD memristor literature, alternative switching "
-        "materials address specific limitations of hafnia, particularly its relatively "
-        "high intrinsic variability and the difficulty of achieving ultra-smooth "
-        "potentiation without doping. Iron oxide (Fe2O3) deposited by ALD has attracted "
-        "attention because iron's mixed valence states (Fe2+/Fe3+) create a richer "
-        "landscape of oxygen-vacancy configurations and switching paths. Porro et al. "
-        "(2018) demonstrated up to eight distinguishable resistance states in ALD-Fe2O3 "
-        "cells by ramping the compliance current in uniform steps, with each state "
-        "retaining its value for more than 10 hours at room temperature. Wan et al. "
-        "(2018) fabricated Fe2O3 memristors at a deposition temperature of 150 °C "
-        "— well below the threshold that damages polymer substrates — and demonstrated "
-        "faithful STDP emulation, opening a route to flexible neuromorphic patches.\n\n"
-        "Silicon nitride deposited by ALD provides yet another route to analogue "
-        "switching. Kim et al. (2017) reported SiNx memristors with more than 500 "
-        "distinct, stable conductance states, the highest count reported for any "
-        "ALD-grown device at that time. The switching mechanism in SiNx involves "
-        "trap-assisted tunnelling through silicon nitride rather than oxygen-vacancy "
-        "filament formation, giving the device a fundamentally different noise spectrum "
-        "and cycle-to-cycle variation profile. The potentiation and depression curves "
-        "showed near-linear weight updates with NL below 1, competitive with Al:HfO2.\n\n"
-        "Two-dimensional material memristors reviewed by Huh et al. (2020) offer "
-        "switching layers only a few atomic planes thick. Although these are typically "
-        "grown by CVD rather than ALD, hybrid stacks combining ALD electrodes or "
-        "barrier layers with 2D switching media have been proposed. Ma et al. (2025) "
-        "demonstrated that a stretchable bilayer ALD structure on an elastomeric "
-        "substrate retains analogue switching under mechanical deformation, a capability "
-        "that monolithic 2D-material devices have not yet matched at scale."
+        "Iron oxide deposited by ALD has attracted attention as an alternative to "
+        "hafnia because iron's accessible Fe2+/Fe3+ redox states create a richer "
+        "landscape of switching configurations. Porro et al. "
+        "[REF:Porro 2018 - A multi-level memristor based on atomic layer deposition of iron oxide] "
+        "demonstrated up to eight distinguishable conductance levels in ALD-Fe2O3 cells "
+        "by stepping the compliance current in uniform increments, with each state "
+        "retaining its value for more than 10 hours at room temperature. The multi-bit "
+        "storage capacity stems from the spatial distribution of iron redox fronts "
+        "across the film thickness, a degree of freedom that single-valence oxides "
+        "such as HfO2 cannot provide in the same way.\n\n"
+        "A key practical advantage of ALD Fe2O3 is its low deposition temperature. "
+        "Wan et al. "
+        "[REF:Wan 2018 - Bio-mimicked atomic-layer-deposited iron oxide-based memristor] "
+        "deposited iron oxide films at 150 C and fabricated synaptic memristors on "
+        "flexible substrates, demonstrating reliable analog switching, four-level "
+        "storage, and STDP emulation under repeated bending cycles. This places iron "
+        "oxide among the few ALD switching materials compatible with polymer and "
+        "textile substrates without requiring lamination onto rigid carriers.\n\n"
+        "Silicon nitride provides a mechanistically distinct route to analog switching. "
+        "Kim et al. "
+        "[REF:Kim 2017 - Analog Synaptic Behavior of a Silicon Nitride Memristor] "
+        "reported ALD SiNx memristors with more than 500 distinct, stable conductance "
+        "states through trap-assisted tunnelling rather than vacancy-filament formation, "
+        "giving a fundamentally different noise spectrum and nonlinearity profile. The "
+        "potentiation and depression curves showed a nonlinearity coefficient below 1, "
+        "the best reported for any ALD device at that time and competitive with the "
+        "Al:HfO2 results obtained two years later. Two-dimensional materials surveyed "
+        "by Huh et al. "
+        "[REF:Huh 2020 - Memristors Based on 2D Materials as an Artificial Synapse for Neuromorphic Electronics] "
+        "extend the materials palette to MoS2, h-BN, and graphene oxide, where "
+        "switching layers only a few atomic planes thick may suppress stochastic "
+        "filament nucleation. Ma et al. "
+        "[REF:Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition] "
+        "pushed this concept to elastomeric substrates with an ALD bilayer that retains "
+        "multi-level switching under 30% tensile strain, a benchmark that monolithic "
+        "2D-material devices have not yet matched at wafer scale."
     ),
-    "synaptic behavior and neuromorphic applications": (
-        "The utility of a memristor as a hardware synapse rests on three device-level "
-        "properties: (i) a large number of accessible, stable resistance states, "
-        "(ii) the ability to increment or decrement conductance by a controlled amount "
-        "in response to voltage pulses, and (iii) long-term retention of programmed "
-        "states without external power. Early work by Jo et al. (2010) demonstrated "
-        "that a Si-based memristor could implement STDP — the coincidence-detection "
-        "learning rule — by exploiting the temporal overlap of pre- and post-synaptic "
-        "voltage waveforms to drive net potentiation or depression. This result "
-        "established the conceptual link between memristive physics and biological "
-        "synaptic learning.\n\n"
-        "ALD-based memristors have since demonstrated all the key synaptic figures of "
-        "merit. Gao et al. (2014) showed that oxide-based synaptic devices could operate "
-        "at sub-femtojoule switching energies per pulse — within an order of magnitude "
-        "of biological synapses — when switching layer thickness was reduced to "
-        "below 5 nm, achievable only with ALD precision. Li et al. (2018) demonstrated "
-        "multi-layer neural network inference on a physical 1T1R crossbar array, "
-        "achieving pattern recognition accuracy within 2% of software simulation by "
-        "combining precise ALD thickness control with on-chip conductance verification "
-        "and correction protocols. Kim et al. (2021) scaled this to 4K cells with "
-        "three-bit precision per cell, the largest ALD HfO2 crossbar inference engine "
-        "reported to date."
+    "synaptic behavior and analog switching": (
+        "The utility of a memristor as a synaptic element rests on three measurable "
+        "quantities: the number of distinguishable conductance states (G-states), the "
+        "nonlinearity coefficient (NL) of the potentiation and depression curves, and "
+        "the symmetry between potentiation and depression under equal-amplitude pulses. "
+        "A perfectly linear, symmetric device has NL = 0; biological synapses operate "
+        "near NL = 1-2; most early oxide memristors exhibited NL above 5, causing "
+        "accuracy collapse during gradient-descent training.\n\n"
+        "Jo et al. "
+        "[REF:Jo 2010 - Nanoscale-memristor-device-as-synapse-in-neuromorphic-systems] "
+        "established the STDP paradigm using a two-terminal Si memristor, showing that "
+        "a 10 mV coincidence between pre- and post-synaptic pulses produces a "
+        "measurable 5% conductance change that decays with the temporal separation "
+        "between spikes, reproducing the classical STDP window. Gao et al. "
+        "[REF:Gao 2014 - Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses] "
+        "later demonstrated that reducing the switching-layer thickness below 5 nm in "
+        "three-dimensional oxide stacks achieves sub-femtojoule switching energies per "
+        "pulse while simultaneously linearising the gradual transition, because the "
+        "reduced volume available for filament growth distributes resistance changes "
+        "more uniformly. ALD is the only deposition technique capable of reproducibly "
+        "targeting such thicknesses across a full wafer.\n\n"
+        "Matveyev et al. "
+        "[REF:Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2] "
+        "quantified the thickness dependence of NL in all-ALD HfO2, measuring NL "
+        "decreasing from approximately 2.8 at 8 nm to 1.9 at 5 nm. Kim et al. "
+        "[REF:Kim 2017 - Analog Synaptic Behavior of a Silicon Nitride Memristor] "
+        "achieved NL below 1 in ALD SiNx by exploiting trap-assisted tunnelling, which "
+        "distributes conductance increments more uniformly than vacancy filament growth. "
+        "Chandrasekaran et al. "
+        "[REF:Chandrasekaran 2019 - Improving linearity by introducing Al in HfO2 as a memristor synapse device] "
+        "matched this figure in a CMOS-compatible stack by Al doping, reporting NL = "
+        "1.4 and 64 distinguishable states, making Al:HfO2 the reference material for "
+        "ALD neuromorphic memristors and demonstrating that defect engineering through "
+        "the ALD cycle sequence, rather than post-deposition annealing, is the "
+        "effective route to linear analog operation."
     ),
-    "analog synaptic properties": (
-        "Gradual, analog conductance modulation is the sine qua non of memristive "
-        "synapses used in gradient-based learning. The key figures of merit are: the "
-        "number of distinguishable conductance states (G-states), the nonlinearity "
-        "coefficient (NL) of the potentiation and depression curves, and the symmetry "
-        "between potentiation and depression. A perfectly linear, symmetric synapse has "
-        "NL = 0; biological synapses show NL ≈ 1–2; most early oxide memristors "
-        "exhibited NL > 5, causing catastrophic accuracy degradation during training.\n\n"
-        "Jo et al. (2010) established the STDP paradigm for memristive synapses, showing "
-        "that a 10 mV × 1 ms coincidence between pre- and post-synaptic pulses produced "
-        "a measurable 5% conductance increase — the first hardware STDP with a "
-        "two-terminal device. Gao et al. (2014) reported sub-femtojoule switching "
-        "in three-dimensional oxide stacks, and noted that a 3 nm switching layer "
-        "reduces the stochastic volume available for filament formation, inherently "
-        "linearising the gradual transition. Matveyev et al. (2015) confirmed this in "
-        "ALD HfO2, measuring NL ≈ 2.8 for 8 nm HfO2 decreasing to NL ≈ 1.9 for 5 nm "
-        "films. Kim et al. (2017) achieved NL < 1 with ALD SiNx owing to its "
-        "trap-assisted tunnelling mechanism, which distributes conductance changes more "
-        "uniformly than vacancy filament growth. Chandrasekaran et al. (2019) matched "
-        "this performance in HfO2 through Al doping, reporting NL = 1.4 and 64 "
-        "distinguishable states in a CMOS-compatible stack, making Al:HfO2 the "
-        "benchmark material for neuromorphic ALD memristors."
-    ),
-    "crossbar architectures": (
-        "Crossbar arrays place memristors at each intersection of horizontal word lines "
-        "and vertical bit lines, enabling analogue matrix-vector multiplication (MVM) "
-        "with O(1) time complexity per column: input voltages applied to word lines "
-        "produce output currents on bit lines proportional to the sum of conductances — "
-        "Kirchhoff's current law performing the dot product in hardware. Adam et al. "
-        "(2017) analysed three-dimensional stacking of crossbar tiers and showed that "
-        "ALD's conformality on three-dimensional topologies makes it the only deposition "
-        "method compatible with true 3D integration; sputtered or CVD films fail to "
-        "coat vertical sidewalls uniformly.\n\n"
-        "A fundamental challenge in passive (selector-free) crossbars is the sneak-path "
-        "current: unselected cells provide parasitic current paths that corrupt MVM "
-        "results and waste energy. Li et al. (2018) addressed this in a 1-transistor "
-        "1-memristor (1T1R) array by using the transistor gate as a current limiter "
-        "during programming and a sneak-path blocker during inference, achieving "
-        "in-situ training convergence on a multi-layer perceptron. Kim et al. (2021) "
-        "demonstrated that a 64×64 passive ALD HfO2 crossbar could perform digit "
-        "classification with 91% accuracy despite sneak-path currents, by applying a "
-        "write-verify scheme that iteratively corrects cell conductance.\n\n"
-        "Flexible crossbar arrays represent the frontier of neuromorphic hardware for "
-        "wearable applications. Ghoneim and Hussain (2014) demonstrated foldable "
-        "memristive neuromorphic circuits on ultrathin substrates, and Ma et al. (2025) "
-        "extended this to stretchable ALD bilayer crossbars that tolerate 30% strain. "
-        "These results suggest that ALD-fabricated memristor crossbars could eventually "
-        "be incorporated into skin-conformable sensing and edge-AI devices."
-    ),
-    "challenges and future directions": (
-        "Despite remarkable progress, several challenges must be overcome before "
-        "ALD-based memristors can replace digital SRAM weights in large-scale neural "
-        "network accelerators. The most critical is weight-update nonlinearity: even "
-        "the best ALD devices (Al:HfO2, SiNx) exhibit NL values of 1–2, causing accuracy "
-        "gaps of 1–5% relative to software-baseline on complex tasks such as ImageNet "
-        "classification. Sokolov et al. (2019) identified this as the primary bottleneck "
-        "and called for materials innovation — specifically switching layers with "
-        "multiple, energetically degenerate trap sites — to flatten potentiation and "
-        "depression curves.\n\n"
-        "Device-to-device and cycle-to-cycle variability remain significant obstacles "
-        "to manufacturing yield. Variability arises from the stochastic nucleation of "
-        "conductive filaments, which is intrinsically probabilistic even in atomically "
-        "smooth ALD films. Kim et al. (2021) showed that a write-verify correction "
-        "protocol can compensate up to 30% variability at the cost of additional write "
-        "cycles, but this solution does not scale to arrays of tens of millions of "
-        "synapses without unacceptable overhead. ALD process optimisation — particularly "
-        "controlling grain boundary density and interfacial oxygen reservoir thickness "
-        "— offers a path to inherently tighter distributions.\n\n"
-        "Three-dimensional integration and flexible deployment are promising future "
-        "directions. Adam et al. (2017) showed that 3D crossbar stacking can multiply "
-        "effective synaptic density by the number of tiers, and ALD's conformality "
-        "makes it the only realistic deposition method for true 3D vias. Ghoneim and "
-        "Hussain (2014) and Ma et al. (2025) have charted the path to flexible and "
-        "stretchable memristive systems, where ALD on polymer and elastomeric substrates "
-        "opens applications in implantable neural probes and epidermal AI. Scaling to "
-        "sub-5 nm switching layers — the regime where quantum tunnelling begins to "
-        "dominate — will require new ALD precursors with even higher conformality and "
-        "deposition temperatures below 120 °C to protect temperature-sensitive substrates."
+    "crossbar array architectures": (
+        "Crossbar arrays exploit Kirchhoff's current law to perform analog "
+        "matrix-vector multiplication in O(1) time per column: voltages applied to "
+        "word lines produce output currents on bit lines proportional to the sum of "
+        "programmed conductances along each column. The density and energy efficiency "
+        "advantages of this architecture motivate interest in memristor crossbars for "
+        "neural network weight storage. Adam et al. "
+        "[REF:Adam 2017 - 3-D Memristor Crossbars for Analog and Neuromorphic Computing Applications] "
+        "analysed three-dimensional tier stacking and showed that ALD is the only "
+        "deposition method with the conformality needed to coat vertical sidewalls in "
+        "true 3D vias; sputtered and CVD films fail on high-aspect-ratio structures "
+        "that ALD covers uniformly.\n\n"
+        "Passive crossbars without selector devices face the sneak-path problem: "
+        "unselected cells provide parasitic current paths that corrupt multiplication "
+        "results. Li et al. "
+        "[REF:Li 2018 - In-Memory Computing with Memristor Arrays] "
+        "addressed this in a 1-transistor 1-memristor array by using the transistor "
+        "gate as a current limiter during programming and as a sneak-path blocker "
+        "during inference, achieving in-situ training of a multi-layer perceptron to "
+        "accuracy within 2% of software simulation. Kim et al. "
+        "[REF:Kim 2021 - 4K-memristor analog-grade passive crossbar circuit] "
+        "demonstrated that a write-verify correction scheme can compensate the "
+        "remaining conductance errors in a 64x64 passive ALD HfO2 crossbar to deliver "
+        "91% digit classification accuracy despite sneak-path interference.\n\n"
+        "Flexible and stretchable crossbars represent a frontier application where ALD "
+        "confers unique advantages. Ghoneim and Hussain "
+        "[REF:Ghoneim 2014 - Foldable neuromorphic memristive electronics] "
+        "demonstrated foldable memristive circuits on ultrathin substrates with "
+        "retained switching after repeated mechanical cycling. Ma et al. "
+        "[REF:Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition] "
+        "extended this to elastomeric supports, showing that an ALD bilayer crossbar "
+        "maintains stable multi-level operation under 30% tensile strain. Together "
+        "these results chart a path from rigid CMOS integration to skin-conformable "
+        "edge-AI sensors and implantable neural probes."
     ),
     "conclusion": (
         "Atomic layer deposition has proven to be the enabling fabrication technology "
-        "for memristive synapses in neuromorphic computing. The combination of "
-        "angstrom-scale thickness control, high conformality, and tuneable defect "
-        "chemistry has allowed researchers to engineer switching layers — primarily "
-        "HfO2, but increasingly Fe2O3, SiNx, and bilayer composites — that meet the "
-        "stringent requirements of analogue synaptic operation: large numbers of stable "
-        "conductance states, near-linear weight updates, and sub-femtojoule energy "
-        "consumption. Large-scale demonstrations, including the 4K passive HfO2 "
-        "crossbar of Kim et al. (2021) and the stretchable bilayer device of Ma et al. "
-        "(2025), underscore the versatility and manufacturability of the ALD approach.\n\n"
-        "The outstanding challenges — nonlinearity, variability, and 3D integration — "
-        "are addressable through a combination of ALD process innovation and array-level "
-        "error correction. As the neuromorphic computing field matures from academic "
-        "demonstrations to commercial inference chips, the ability to co-optimise ALD "
-        "deposition recipes with circuit-level requirements will be decisive. The "
-        "trajectory traced by the papers reviewed here suggests that ALD-based "
-        "memristors will occupy a central role in next-generation edge-AI hardware, "
-        "from data-centre accelerators to wearable neural interfaces."
+        "for analog memristive synapses in neuromorphic computing. Angstrom-scale "
+        "thickness control, high step coverage, and tuneable defect chemistry have "
+        "allowed the engineering of switching layers that meet the stringent requirements "
+        "of multi-level analog operation: dozens to hundreds of stable conductance "
+        "states, near-linear weight updates, and sub-femtojoule switching energy. "
+        "The progression from early all-ALD HfO2 stacks "
+        "[REF:Matveyev 2015 - Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2] "
+        "through dopant-engineered Al:HfO2 "
+        "[REF:Chandrasekaran 2019 - Improving linearity by introducing Al in HfO2 as a memristor synapse device] "
+        "to alternative chemistries such as Fe2O3 "
+        "[REF:Porro 2018 - A multi-level memristor based on atomic layer deposition of iron oxide] "
+        "and SiNx "
+        "[REF:Kim 2017 - Analog Synaptic Behavior of a Silicon Nitride Memristor] "
+        "reflects systematic exploitation of ALD process parameters rather than "
+        "serendipitous materials discovery. Large-scale demonstrations confirm "
+        "manufacturability: the 4K passive crossbar of Kim et al. "
+        "[REF:Kim 2021 - 4K-memristor analog-grade passive crossbar circuit] "
+        "and the stretchable bilayer device of Ma et al. "
+        "[REF:Ma 2025 - Stable Synapse Function of Bilayer Stretchable Memristor via Atomic Layer Deposition] "
+        "represent the current state of the art in integration density and mechanical "
+        "flexibility, respectively.\n\n"
+        "Outstanding challenges remain tractable through continued ALD process "
+        "innovation. Weight-update nonlinearity, the primary accuracy bottleneck "
+        "identified by Sokolov et al. "
+        "[REF:Sokolov 2019 - Memristor devices for neural networks], "
+        "responds to both chemical doping strategies and thickness reduction to "
+        "below 5 nm. Device-to-device variability can be addressed through grain "
+        "boundary engineering and array-level write-verify protocols. "
+        "Three-dimensional integration, where ALD's conformality is without "
+        "peer among thin-film deposition methods "
+        "[REF:Adam 2017 - 3-D Memristor Crossbars for Analog and Neuromorphic Computing Applications], "
+        "will be required to achieve the synaptic densities of biological cortex. "
+        "The trajectory of the field positions ALD-based memristors as the most "
+        "mature candidate for analog weight storage in next-generation "
+        "neuromorphic processors."
     ),
 }
 
@@ -772,11 +722,6 @@ def mock_complete_json(
     max_tokens: int = 4096,
 ) -> dict | list:
     """Return the pre-built plan JSON when the planner calls complete_json."""
-    # The planner's system message contains the word "outline"
-    system_content = next((m["content"] for m in messages if m.get("role") == "system"), "")
-    if "outline" in system_content.lower():
-        return MOCK_PLAN
-    # Fallback — should not be reached in this script
     return MOCK_PLAN
 
 
@@ -790,7 +735,7 @@ def mock_complete(
     """Return pre-written prose matched to the section heading in the user message."""
     user_content = next((m["content"] for m in messages if m.get("role") == "user"), "")
 
-    # The writer encodes "Section: <heading>" in the user message (writer.py line 70)
+    # The writer encodes "Section: <heading>" in the user message
     section_heading = ""
     for line in user_content.splitlines():
         if line.startswith("Section:"):
@@ -815,23 +760,49 @@ def mock_complete(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5.  Main entry point
+# 5.  Sanity check — verify display_name() matches REF markers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _verify_display_names() -> None:
+    """Print display names to confirm they match the REF markers in SECTION_PROSE."""
+    papers = _make_papers()
+    print("\nDisplay names generated by Paper.display_name():")
+    for p in papers:
+        print(f"  {p.display_name()}")
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.  Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def main() -> None:
-    output_path = Path(__file__).parent.parent / "data" / "output" / "review_paper.md"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(__file__).parent.parent / "data" / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    md_path = output_dir / "review_paper.md"
+    docx_path = output_dir / "review_paper.docx"
+    pdf_path = output_dir / "review_paper.pdf"
+
+    # Show display names for verification
+    _verify_display_names()
+
+    # Load Advanced Functional Materials journal profile
+    journal_profile = load_journal_profile("Advanced Functional Materials")
+    print(f"Journal profile loaded: {journal_profile.name} ({journal_profile.publisher})")
+    print(f"  Citation style: {journal_profile.citation_style}")
+    print(f"  Required sections: {journal_profile.required_sections}\n")
 
     print("Building mock literature context...")
     context = build_mock_context()
     print(f"  {len(context.papers)} papers, {context.total_tokens} tokens of context")
 
     prompt = (
-        "Write a 10-page review paper on ALD-based memristors for neuromorphic computing. "
-        "Cover the memristor concept, ALD fabrication advantages, key oxide systems "
-        "(HfO2, Fe2O3, SiNx), synaptic behaviour, crossbar architectures, and "
-        "challenges/future directions."
+        "Write a review paper on ALD-based memristors for neuromorphic computing "
+        "targeting Advanced Functional Materials. Cover the memristor concept, "
+        "ALD fabrication advantages, key oxide systems (HfO2, Fe2O3, SiNx), "
+        "synaptic behaviour, crossbar architectures, and challenges/future directions."
     )
 
     print("Planning paper structure...")
@@ -839,21 +810,52 @@ def main() -> None:
         patch("scholarforge.generate.planner.complete_json", side_effect=mock_complete_json),
         patch("scholarforge.generate.writer.complete", side_effect=mock_complete),
     ):
-        plan = plan_paper(prompt, context, target_pages=10)
+        plan = plan_paper(prompt, context, target_pages=10, journal_profile=journal_profile)
         print(f"  Title: {plan.title}")
         print(f"  Sections: {len(plan.sections)}")
 
         print("Writing paper sections...")
-        paper_md = write_paper(plan, context)
+        result = write_paper(
+            plan, context, journal_profile=journal_profile, resolve_references=True
+        )
 
-    output_path.write_text(paper_md, encoding="utf-8")
+    # write_paper returns (numbered_markdown, ordered_papers) when resolve_references=True
+    numbered_md, ordered_papers = result
+    print(f"  References resolved: {len(ordered_papers)} cited papers")
 
-    word_count = len(paper_md.split())
-    line_count = paper_md.count("\n") + 1
-    print(
-        f"\nDone. {word_count} words (~{word_count // 250} pages), "
-        f"{line_count} lines -> {output_path}"
-    )
+    # Check for unresolved markers
+    import re
+
+    unresolved = re.findall(r"\[\?:([^\]]+)\]", numbered_md)
+    if unresolved:
+        print(f"\nWARNING: {len(unresolved)} unresolved REF markers:")
+        for u in unresolved:
+            print(f"  [?:{u}]")
+    else:
+        print("  All REF markers resolved successfully.")
+
+    # Export markdown
+    md_path.write_text(numbered_md, encoding="utf-8")
+    print(f"\nMarkdown written: {md_path} ({md_path.stat().st_size:,} bytes)")
+
+    # Export DOCX
+    print("Exporting DOCX...")
+    docx_exporter = DocxExporter(journal_profile)
+    docx_exporter.export(numbered_md, ordered_papers, docx_path)
+    print(f"DOCX written: {docx_path} ({docx_path.stat().st_size:,} bytes)")
+
+    # Export PDF
+    print("Exporting PDF...")
+    pdf_exporter = PdfExporter(journal_profile)
+    pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
+    print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+
+    word_count = len(numbered_md.split())
+    line_count = numbered_md.count("\n") + 1
+    print(f"\nDone. {word_count} words (~{word_count // 250} pages), {line_count} lines")
+    print("\n--- First 30 lines of review_paper.md ---")
+    for i, line in enumerate(numbered_md.splitlines()[:30], 1):
+        print(f"{i:3d}  {line}")
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ dependencies = [
     "rich>=13.7",
     "rapidocr-onnxruntime>=1.4.4",
     "mcp[cli]>=1.26.0",
+    "markdown>=3.10.2",
+    "xhtml2pdf>=0.2.17",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +56,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
