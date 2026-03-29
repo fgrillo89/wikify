@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlmodel import select
@@ -12,6 +13,10 @@ from scholarforge.store.models import PaperTopic
 if TYPE_CHECKING:
     from scholarforge.export.journal_profile import JournalProfile
     from scholarforge.retrieve.context import RetrievedContext
+
+_STYLE_GUIDE_PATH = (
+    Path(__file__).parent.parent.parent.parent / "docs" / "logic" / "academic_writing_style.md"
+)
 
 
 # Phrases that betray LLM-generated text — banned from output.
@@ -86,7 +91,19 @@ def build_persona(
         parts.append(journal_line)
     parts.append(style_block)
 
+    # Inject the full academic writing style guide if available
+    style_guide = _load_style_guide()
+    if style_guide:
+        parts.append(f"\n--- Academic Writing Style Guide ---\n{style_guide}")
+
     return "\n".join(parts)
+
+
+def _load_style_guide() -> str:
+    """Load the academic writing style guide if it exists."""
+    if _STYLE_GUIDE_PATH.exists():
+        return _STYLE_GUIDE_PATH.read_text(encoding="utf-8")
+    return ""
 
 
 def _get_top_topics(limit: int = 5) -> list[str]:
