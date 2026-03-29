@@ -17,37 +17,57 @@ def plan_paper(
     context: RetrievedContext,
     target_pages: int = 10,
     journal_profile: JournalProfile | None = None,
+    artifact_type_id: str = "lit_review",
 ) -> PaperPlan:
     """Generate a structured paper plan from a prompt and literature context.
 
     Returns a PaperPlan with sections, each mapped to source papers.
     """
+    from scholarforge.generate.artifact_types import get_artifact_type
+
     # ~250 words per page
     target_words = target_pages * 250
 
     paper_list = context.paper_summaries()
 
-    # Journal-specific section requirements
+    # Artifact type determines default structure
+    artifact = get_artifact_type(artifact_type_id)
     section_guidance = (
-        "Include: Abstract, Introduction, main thematic sections (3-5), "
-        "Discussion/Future Directions, Conclusion."
+        f"Document type: {artifact.name}. "
+        f"Required sections: {', '.join(artifact.sections)}. "
+        "Add 3-5 thematic body sections between Introduction and Conclusion."
     )
+
+    # Journal overrides sections if specified
     if journal_profile and journal_profile.required_sections:
         sections_list = ", ".join(journal_profile.required_sections)
-        section_guidance = f"Required sections for {journal_profile.name}: {sections_list}."
+        section_guidance = (
+            f"Document type: {artifact.name}. "
+            f"Required sections for {journal_profile.name}: {sections_list}."
+        )
         if journal_profile.word_limit:
             target_words = min(target_words, journal_profile.word_limit)
 
+    # Type-specific instructions for the planner
+    type_hint = ""
+    if artifact_type_id == "lit_review":
+        type_hint = (
+            "This is a LITERATURE REVIEW. Body sections must be organized by "
+            "themes/concepts, NOT by individual papers. Group related findings "
+            "across multiple papers in each section."
+        )
+
     system_msg = (
         "You are an academic writing assistant. Given a writing prompt and a list of "
-        "source papers, create a detailed outline for a review/survey paper.\n\n"
+        f"source papers, create a detailed outline for a {artifact.name}.\n\n"
         "Return a JSON object with this exact structure:\n"
-        '{"title": "...", "paper_type": "lit_review", '
+        f'{{"title": "...", "paper_type": "{artifact_type_id}", '
         f'"target_length": {target_words}, '
         '"sections": [{"heading": "...", "level": 1, "description": "what to cover", '
         '"target_tokens": N, "source_papers": ["Author Year - Title", ...], '
         '"subsections": [...]}]}\n\n'
         f"{section_guidance}\n"
+        f"{type_hint}\n"
         "Distribute the target word count across sections proportionally.\n"
         "Return ONLY valid JSON, no markdown fences."
     )

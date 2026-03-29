@@ -61,6 +61,7 @@ BANNED_PHRASES = [
 def build_persona(
     context: RetrievedContext | None = None,
     journal_profile: JournalProfile | None = None,
+    artifact_type_id: str = "lit_review",
 ) -> str:
     """Build a system prompt prefix that defines the writer's persona.
 
@@ -101,10 +102,17 @@ def build_persona(
         parts.append(journal_line)
     parts.append(style_block)
 
-    # Inject the full academic writing style guide if available
+    # Inject the combined writing guide: base style + artifact type rules
     style_guide = _load_style_guide()
     if style_guide:
-        parts.append(f"\n--- Academic Writing Style Guide ---\n{style_guide}")
+        from scholarforge.generate.artifact_types import get_artifact_type
+
+        try:
+            artifact = get_artifact_type(artifact_type_id)
+            combined = artifact.full_instructions(style_guide)
+        except ValueError:
+            combined = style_guide
+        parts.append(f"\n--- Writing Instructions ---\n{combined}")
 
     return "\n".join(parts)
 
