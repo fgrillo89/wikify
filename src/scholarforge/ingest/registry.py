@@ -281,9 +281,7 @@ def _run_batch_steps() -> None:
         for paper, text in papers_with_text:
             new_refs = extract_figure_refs(text, paper.id)
             # Clear old refs and insert new ones
-            old_refs = session.exec(
-                select(FigureRef).where(FigureRef.paper_id == paper.id)
-            ).all()
+            old_refs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
             for old in old_refs:
                 session.delete(old)
             for ref in new_refs:
@@ -330,7 +328,16 @@ def _run_batch_steps() -> None:
 
     write_topic_notes(topic_papers)
 
-    # ── 9. Regenerate all paper vault notes with full data ───────────────────
+    # ── 9. Clear author notes so they're rebuilt fresh (avoids stale wikilinks)
+    from scholarforge.vault.writer import vault_dir
+
+    authors_dir = vault_dir() / "authors"
+    if authors_dir.exists():
+        for f in authors_dir.iterdir():
+            if f.suffix == ".md":
+                f.unlink()
+
+    # ── 10. Regenerate all paper vault notes with full data ──────────────────
     with get_session() as session:
         for paper in papers:
             chunks_count = len(session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all())

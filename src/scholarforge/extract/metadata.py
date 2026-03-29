@@ -287,20 +287,43 @@ def _extract_abstract(md_text: str) -> str | None:
     label_re = re.compile(
         r"(?:^|\n)\s*(?:#+\s*)?"
         r"(?:abstract|summary|executive\s+summary)"
-        r"\s*[:\-—.]*\s*"
-        r"(.*?)(?=\n\s*\n|\n#+|\n\s*(?:keywords?|introduction|index\s+terms)\b|\Z)",
-        re.IGNORECASE | re.DOTALL,
+        r"\s*[:\-—.]*\s*",
+        re.IGNORECASE,
     )
     match = label_re.search(search_text)
     if match:
-        text = match.group(1).strip()
-        # Sometimes the label and text are on separate lines
-        if len(text) < 30:
-            # Try grabbing the next paragraph after the label
-            label_end = match.end()
-            next_para = re.search(r"\S.*?(?=\n\s*\n|\n#+|\Z)", search_text[label_end:], re.DOTALL)
-            if next_para:
-                text = next_para.group(0).strip()
+        # Grab text after the label up to a clear section boundary
+        after_label = search_text[match.end() :]
+        # End at: next heading, "Keywords", "Introduction", "Index Terms", or 2+ blank lines
+        end_re = re.compile(
+            r"\n\s*(?:#+\s+|(?:keywords?|introduction|index\s+terms|i\.\s+introduction)\b)",
+            re.IGNORECASE,
+        )
+        end_match = end_re.search(after_label)
+        if end_match:
+            text = after_label[: end_match.start()].strip()
+        else:
+            # Take up to ~500 words
+            text = after_label[:3000].strip()
+
+        # Clean up: collapse line breaks that aren't paragraph breaks
+        text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+        text = re.sub(r"\n{2,}", "\n\n", text)
+        # Take first paragraph if multiple
+        paragraphs_in_abstract = text.split("\n\n")
+        text = paragraphs_in_abstract[0].strip()
+
+        # If too short, concatenate more paragraphs
+        word_count = len(text.split())
+        if word_count < 50 and len(paragraphs_in_abstract) > 1:
+            for extra in paragraphs_in_abstract[1:]:
+                extra = extra.strip()
+                if _is_noise_paragraph(extra):
+                    break
+                text += " " + extra
+                if len(text.split()) >= 50:
+                    break
+
         if len(text) > 50 and not _is_noise_paragraph(text):
             return _clean_markdown(text)
 

@@ -1,0 +1,131 @@
+"""Plan document structure from a prompt and retrieved literature."""
+
+from __future__ import annotations
+
+import json
+
+from scholarforge.llm.client import complete
+from scholarforge.retrieve.context import RetrievedContext
+from scholarforge.store.models import PaperPlan, SectionPlan
+
+
+def plan_paper(
+    prompt: str,
+    context: RetrievedContext,
+    target_pages: int = 10,
+) -> PaperPlan:
+    """Generate a structured paper plan from a prompt and literature context.
+
+    Returns a PaperPlan with sections, each mapped to source papers.
+    """
+    # ~250 words per page
+    target_words = target_pages * 250
+
+    paper_list = context.paper_summaries()
+
+    system_msg = (
+        "You are an academic writing assistant. Given a writing prompt and a list of "
+        "source papers, create a detailed outline for a review/survey paper.\n\n"
+        "Return a JSON object with this exact structure:\n"
+        '{"title": "...", "paper_type": "lit_review", '
+        f'"target_length": {target_words}, '
+        '"sections": [{"heading": "...", "level": 1, "description": "what to cover", '
+        '"target_tokens": N, "source_papers": ["Author Year - Title", ...], '
+        '"subsections": [...]}]}\n\n'
+        "Include: Abstract, Introduction, main thematic sections (3-5), "
+        "Discussion/Future Directions, Conclusion.\n"
+        "Distribute the target word count across sections proportionally.\n"
+        "Return ONLY valid JSON, no markdown fences."
+    )
+
+    user_msg = f"Prompt: {prompt}\n\nAvailable papers:\n{paper_list}"
+
+    response = complete(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.3,
+        max_tokens=4096,
+    )
+
+    # Parse JSON response
+    # Strip markdown fences if present
+    text = response.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]
+        if text.endswith("```"):
+            text = text[:-3]
+
+    plan_data = json.loads(text)
+
+    # Build PaperPlan from response
+    sections = []
+    for s in plan_data.get("sections", []):
+        section = SectionPlan(
+            heading=s["heading"],
+            level=s.get("level", 1),
+            description=s.get("description", ""),
+            target_tokens=s.get("target_tokens", 300),
+            source_papers=s.get("source_papers", []),
+            subsections=[
+                SectionPlan(
+                    heading=sub["heading"],
+                    level=sub.get("level", 2),
+                    description=sub.get("description", ""),
+                    target_tokens=sub.get("target_tokens", 200),
+                    source_papers=sub.get("source_papers", []),
+                )
+                for sub in s.get("subsections", [])
+            ],
+        )
+        sections.append(section)
+
+    return PaperPlan(
+        title=plan_data.get("title", "Untitled Review"),
+        paper_type=plan_data.get("paper_type", "lit_review"),
+        target_length=plan_data.get("target_length", target_words),
+        sections=sections,
+    )
+
+
+def plan_slides(
+    prompt: str,
+    context: RetrievedContext,
+    num_slides: int = 10,
+) -> list[dict]:
+    """Generate a slide deck plan.
+
+    Returns a list of slide dicts: {"title": ..., "bullets": [...], "notes": ...}
+    """
+    paper_list = context.paper_summaries()
+
+    system_msg = (
+        "You are a presentation designer. Given a topic and source papers, "
+        f"create a {num_slides}-slide presentation outline.\n\n"
+        "Return a JSON array of slide objects:\n"
+        '[{"title": "Slide Title", "bullets": ["point 1", "point 2", ...], '
+        '"notes": "speaker notes", "source_papers": ["Author Year"]}]\n\n'
+        "Include: title slide, outline, 6-7 content slides, conclusion/future work.\n"
+        "Each slide should have 3-5 bullet points.\n"
+        "Return ONLY valid JSON, no markdown fences."
+    )
+
+    user_msg = f"Topic: {prompt}\n\nSource papers:\n{paper_list}"
+
+    response = complete(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.3,
+        max_tokens=4096,
+    )
+
+    text = response.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]
+        if text.endswith("```"):
+            text = text[:-3]
+
+    return json.loads(text)

@@ -58,5 +58,90 @@ def stats():
     console.print(f"Papers: {papers}  |  Chunks: {chunks}  |  Figures: {figures}")
 
 
+@app.command()
+def generate(
+    prompt: str = typer.Argument(
+        ..., help="Writing prompt, e.g. 'Review of memristor-based neuromorphic computing'"
+    ),
+    pages: int = typer.Option(10, "--pages", "-n", help="Target page count"),
+    output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
+):
+    """Generate a review paper from the literature corpus."""
+    import time
+    from pathlib import Path
+
+    from scholarforge.generate.planner import plan_paper
+    from scholarforge.generate.writer import write_paper
+    from scholarforge.retrieve.context import retrieve_all_papers
+
+    start = time.time()
+
+    console.print("[bold]Retrieving literature...[/bold]")
+    context = retrieve_all_papers()
+    console.print(f"  {len(context.papers)} papers, {context.total_tokens} tokens of context")
+
+    console.print("[bold]Planning paper structure...[/bold]")
+    plan = plan_paper(prompt, context, target_pages=pages)
+    console.print(f"  Title: {plan.title}")
+    console.print(f"  Sections: {len(plan.sections)}")
+
+    console.print("[bold]Writing paper...[/bold]")
+    paper_md = write_paper(plan, context)
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(paper_md, encoding="utf-8")
+
+    elapsed = time.time() - start
+    word_count = len(paper_md.split())
+    console.print(
+        f"[green]Generated {word_count} words ({word_count // 250} pages) "
+        f"in {elapsed:.1f}s → {out_path}[/green]"
+    )
+
+
+@app.command()
+def slides(
+    prompt: str = typer.Argument(..., help="Presentation topic"),
+    num_slides: int = typer.Option(10, "--slides", "-n", help="Number of slides"),
+    output: str = typer.Option(
+        "data/output/presentation.pptx", "--output", "-o", help="Output PPTX path"
+    ),
+):
+    """Generate a PowerPoint presentation from the literature corpus."""
+    import time
+    from pathlib import Path
+
+    from scholarforge.export.pptx_export import export_slides
+    from scholarforge.generate.planner import plan_slides
+    from scholarforge.retrieve.context import retrieve_all_papers
+
+    start = time.time()
+
+    console.print("[bold]Retrieving literature...[/bold]")
+    context = retrieve_all_papers()
+
+    console.print("[bold]Planning slides...[/bold]")
+    slide_plan = plan_slides(prompt, context, num_slides=num_slides)
+    console.print(f"  {len(slide_plan)} slides planned")
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    export_slides(slide_plan, out_path, title=prompt)
+
+    elapsed = time.time() - start
+    console.print(
+        f"[green]Generated {len(slide_plan)} slides in {elapsed:.1f}s → {out_path}[/green]"
+    )
+
+
+@app.command()
+def chat():
+    """Interactive chat with the literature corpus."""
+    from scholarforge.generate.chat import chat_interactive
+
+    chat_interactive()
+
+
 if __name__ == "__main__":
     app()
