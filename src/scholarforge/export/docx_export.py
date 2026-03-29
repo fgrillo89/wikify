@@ -120,10 +120,12 @@ class DocxExporter:
         if template:
             doc = Document(str(template))
             self._clear_body(doc)
+            self._using_template = True
             console.print(f"[dim]Using template: {template.name}[/dim]")
         else:
             doc = Document()
             self._configure_document(doc)
+            self._using_template = False
 
         self._parse_markdown(doc, numbered_markdown)
 
@@ -274,7 +276,10 @@ class DocxExporter:
             para = doc.add_paragraph(style=style_name)
         except KeyError:
             para = doc.add_paragraph(style="Normal")
-        _apply_paragraph_spacing(para, self.profile.line_spacing)
+        # Only override spacing when NOT using a template —
+        # template styles already define correct spacing
+        if not self._using_template:
+            _apply_paragraph_spacing(para, self.profile.line_spacing)
         self._fill_runs(para, text, superscript_citations=superscript_citations)
 
     def _fill_runs(self, para, text: str, *, superscript_citations: bool = True) -> None:
@@ -285,34 +290,34 @@ class DocxExporter:
         """
         tokens = _parse_inline(text, superscript_citations=superscript_citations)
         font = self.profile.font_family
-        size = self.profile.font_size_pt
+        size = self.profile.font_size_pt if not self._using_template else None
         for content, bold, italic, superscript in tokens:
             if superscript or bold or italic:
-                # Styled runs are emitted as-is (no chemistry splitting)
                 run = para.add_run(content)
                 run.bold = bold
                 run.italic = italic
-                _set_run_font(run, font, size)
+                if not self._using_template:
+                    _set_run_font(run, font, size)
                 if superscript:
                     _set_superscript(run)
             else:
-                # Plain text: split words to detect chemical formulas
                 self._fill_with_chemistry(para, content, font, size)
 
-    def _fill_with_chemistry(self, para, text: str, font: str, size: int) -> None:
+    def _fill_with_chemistry(
+        self, para, text: str, font: str, size: int | None
+    ) -> None:
         """Emit runs for plain text, subscripting digits in chemical formulas."""
-        # Split on word boundaries to check each word for formulas
         words = re.split(r"(\b\w+\b)", text)
         for word in words:
             formula_runs = split_formula_runs(word)
             if len(formula_runs) == 1 and not formula_runs[0][1]:
-                # Not a formula — emit as single plain run
                 run = para.add_run(word)
-                _set_run_font(run, font, size)
+                if not self._using_template:
+                    _set_run_font(run, font, size)
             else:
-                # Chemical formula — emit element/digit runs with subscripts
                 for part, is_subscript in formula_runs:
                     run = para.add_run(part)
-                    _set_run_font(run, font, size)
+                    if not self._using_template:
+                        _set_run_font(run, font, size)
                     if is_subscript:
                         _set_subscript(run)

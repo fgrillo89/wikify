@@ -847,11 +847,18 @@ def main() -> None:
     docx_exporter.export(numbered_md, ordered_papers, docx_path)
     print(f"DOCX written: {docx_path} ({docx_path.stat().st_size:,} bytes)")
 
-    # Export PDF
-    print("Exporting PDF...")
-    pdf_exporter = PdfExporter(journal_profile)
-    pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
-    print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+    # Export PDF (DOCX → PDF conversion preserves template formatting + logos)
+    print("Exporting PDF from DOCX...")
+    try:
+        from docx2pdf import convert
+
+        convert(str(docx_path.resolve()), str(pdf_path.resolve()))
+        print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
+    except Exception as e:
+        print(f"DOCX->PDF conversion failed ({e}), falling back to HTML->PDF...")
+        pdf_exporter = PdfExporter(journal_profile)
+        pdf_exporter.export(numbered_md, ordered_papers, pdf_path)
+        print(f"PDF written: {pdf_path} ({pdf_path.stat().st_size:,} bytes)")
 
     # Note: BibTeX library.bib is auto-generated at data/library.bib
     # during `scholarforge ingest` or `scholarforge refresh`, not here.
