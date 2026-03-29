@@ -11,7 +11,6 @@ from scholarforge.export.chemistry import (
     split_formula_runs,
 )
 
-
 # ── _is_chemical_formula ─────────────────────────────────────────────────────
 
 

@@ -20,7 +20,9 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt, RGBColor
 
-TEMPLATES_DIR = Path(__file__).parent.parent / "src" / "scholarforge" / "export" / "templates" / "docx"
+TEMPLATES_DIR = (
+    Path(__file__).parent.parent / "src" / "scholarforge" / "export" / "templates" / "docx"
+)
 
 
 def _set_style_font(doc, style_name: str, font_name: str, size_pt: int, **kwargs):

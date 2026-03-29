@@ -26,7 +26,7 @@ async def call_tool(session, name: str, args: dict | None = None) -> str:
         )
         return result.content[0].text if result.content else "(empty)"
     except asyncio.TimeoutError:
-        return f"(TIMEOUT after 30s)"
+        return "(TIMEOUT after 30s)"
     except Exception as e:
         return f"(ERROR: {e})"
 

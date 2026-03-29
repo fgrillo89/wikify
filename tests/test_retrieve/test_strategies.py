@@ -16,7 +16,6 @@ from scholarforge.retrieve.strategies import (
     list_strategies,
 )
 
-
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 

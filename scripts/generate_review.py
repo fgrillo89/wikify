@@ -878,9 +878,18 @@ def main() -> None:
         if soffice:
             try:
                 subprocess.run(
-                    [soffice, "--headless", "--convert-to", "pdf",
-                     "--outdir", str(pdf_path.parent), str(docx_path)],
-                    check=True, capture_output=True, timeout=60,
+                    [
+                        soffice,
+                        "--headless",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        str(pdf_path.parent),
+                        str(docx_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
                 )
                 pdf_done = True
                 print(f"PDF written (LibreOffice): {pdf_path} ({pdf_path.stat().st_size:,} bytes)")

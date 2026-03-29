@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
+from pathlib import Path
+
+_GUIDES_DIR = Path(__file__).resolve().parents[4] / "docs" / "logic" / "artifact_types"
 
 
 @dataclass
@@ -12,15 +16,24 @@ class ArtifactType:
     id: str
     name: str
     sections: list[str]  # required section headings in order
-    instructions: str  # type-specific writing rules (compact)
+    instructions_file: str  # filename inside docs/logic/artifact_types/
+
+    @cached_property
+    def instructions(self) -> str:
+        """Load instructions from the corresponding .md file."""
+        path = _GUIDES_DIR / self.instructions_file
+        return path.read_text(encoding="utf-8")
 
     def full_instructions(self, base_style_guide: str) -> str:
         """Combine base style guide with type-specific instructions."""
         return f"{base_style_guide}\n\n---\n\n{self.instructions}"
 
 
+# Tell dataclasses not to include cached_property in __eq__/__hash__
+ArtifactType.__hash__ = None  # type: ignore[assignment]
+
+
 # ── Literature Review ────────────────────────────────────────────────────────
-# Based on PMC3715443 "Ten Simple Rules for Writing a Literature Review"
 
 _LIT_REVIEW = ArtifactType(
     id="lit_review",
@@ -32,42 +45,7 @@ _LIT_REVIEW = ArtifactType(
         # the corpus structure — these are thematic, not prescribed
         "Conclusion",
     ],
-    instructions="""\
-## Literature Review Rules
-
-**Structure**: NOT standard IMRaD. Use: Introduction (context + gap), \
-thematic body sections (organized by concepts, not by paper), Conclusion \
-(synthesis + future directions).
-
-**Synthesize, don't summarize.** Never describe papers one-by-one. Group \
-findings by theme, compare across studies, identify agreements and \
-contradictions. A review that merely lists "Study A found X, Study B \
-found Y" is a bibliography, not a review.
-
-**Introduction**: Funnel from broad field to specific gap. State why this \
-review is needed now. End with scope statement.
-
-**Body sections**: Organize by concepts/themes, not chronologically. Each \
-section addresses a research question or debate. Within each section:
-- State the theme's current understanding
-- Present supporting evidence from multiple papers
-- Note contradictions or methodological differences
-- Identify what remains unresolved
-
-**Critical assessment**: For each major finding, evaluate: How robust is \
-the evidence? Do methods differ across studies? Are results reproducible? \
-What are the limitations?
-
-**Conclusion**: Do NOT restate the abstract. Synthesize: what does the \
-body of evidence collectively tell us? State 2-3 concrete open questions \
-or recommended next experiments.
-
-**Citations**: High density (1-3 per claim). Weave into narrative. Use \
-author names for key findings, numbers for background consensus.
-
-**Scope**: Stay focused. Discuss wider implications briefly but don't \
-attempt to cover adjacent fields in depth.\
-""",
+    instructions_file="lit_review.md",
 )
 
 # ── Research Article ─────────────────────────────────────────────────────────
@@ -83,29 +61,10 @@ _RESEARCH_ARTICLE = ArtifactType(
         "Discussion",
         "Conclusion",
     ],
-    instructions="""\
-## Research Article Rules
-
-**Structure**: Standard IMRaD (Introduction, Methods, Results, Discussion).
-
-**Abstract**: 4 moves — context, gap, approach+results, significance. \
-One paragraph, no citations.
-
-**Introduction**: Funnel to gap. End with "Here we show/report/demonstrate..."
-
-**Methods**: Past tense, enough detail for reproduction. Specific parameters.
-
-**Results**: Present findings in logical order. Lead with main finding per \
-subsection. "Figure N shows..." followed by interpretation.
-
-**Discussion**: Compare with prior work. Propose mechanisms. Acknowledge \
-limitations honestly. State implications.
-
-**Conclusion**: 1-2 paragraphs. Primary contribution + specific future work.\
-""",
+    instructions_file="research_article.md",
 )
 
-# ── Grant Proposal ───────────────────────────────────────────────────────────
+# ── Grant Proposal ──────────────────────────────────────────────────────────
 
 _GRANT_PROPOSAL = ArtifactType(
     id="grant_proposal",
@@ -117,31 +76,89 @@ _GRANT_PROPOSAL = ArtifactType(
         "Innovation",
         "Approach",
     ],
-    instructions="""\
-## Grant Proposal Rules
-
-**Structure**: Specific Aims (1 page), Significance, Innovation, Approach.
-
-**Specific Aims**: Hook (1-2 sentences), gap, long-term goal, objective, \
-central hypothesis, 2-3 specific aims with brief rationale.
-
-**Significance**: Why does this matter? What gap does it fill?
-
-**Innovation**: What's new about the approach?
-
-**Approach**: Detailed methods per aim. Include preliminary data, expected \
-outcomes, potential pitfalls and alternatives.
-
-**Tone**: Confident but not arrogant. "We will" not "We hope to".\
-""",
+    instructions_file="grant_proposal.md",
 )
 
-# ── Registry ─────────────────────────────────────────────────────────────────
+# ── Technical Report ────────────────────────────────────────────────────────
+
+_TECHNICAL_REPORT = ArtifactType(
+    id="technical_report",
+    name="Technical Report",
+    sections=[
+        "Abstract",
+        "Introduction",
+        "Background",
+        "Methods",
+        "Results",
+        "Analysis",
+        "Conclusions",
+        "Recommendations",
+    ],
+    instructions_file="technical_report.md",
+)
+
+# ── Master Thesis ───────────────────────────────────────────────────────────
+
+_MASTER_THESIS = ArtifactType(
+    id="master_thesis",
+    name="Master Thesis",
+    sections=[
+        "Abstract",
+        "Introduction",
+        "Literature Review",
+        "Methodology",
+        "Results",
+        "Discussion",
+        "Conclusions",
+    ],
+    instructions_file="master_thesis.md",
+)
+
+# ── PhD Thesis ──────────────────────────────────────────────────────────────
+
+_PHD_THESIS = ArtifactType(
+    id="phd_thesis",
+    name="PhD Thesis",
+    sections=[
+        "Abstract",
+        "Introduction",
+        "Literature Review",
+        "Theoretical Framework",
+        "Methodology",
+        "Results",
+        "Discussion",
+        "Conclusions",
+        "Future Work",
+    ],
+    instructions_file="phd_thesis.md",
+)
+
+# ── Undergraduate Research Paper ────────────────────────────────────────────
+
+_RESEARCH_PAPER_UNDERGRAD = ArtifactType(
+    id="research_paper_undergrad",
+    name="Undergraduate Research Paper",
+    sections=[
+        "Abstract",
+        "Introduction",
+        "Methods",
+        "Results",
+        "Discussion",
+        "Conclusion",
+    ],
+    instructions_file="research_paper_undergrad.md",
+)
+
+# ── Registry ────────────────────────────────────────────────────────────────
 
 ARTIFACT_TYPES: dict[str, ArtifactType] = {
     "lit_review": _LIT_REVIEW,
     "research_article": _RESEARCH_ARTICLE,
     "grant_proposal": _GRANT_PROPOSAL,
+    "technical_report": _TECHNICAL_REPORT,
+    "master_thesis": _MASTER_THESIS,
+    "phd_thesis": _PHD_THESIS,
+    "research_paper_undergrad": _RESEARCH_PAPER_UNDERGRAD,
 }
 
 
