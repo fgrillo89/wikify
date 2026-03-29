@@ -48,6 +48,15 @@ def paper_note(
 
     sections = [f"---\n{fm}---\n"]
 
+    # Link to open the original file
+    if source_path:
+        # Convert to absolute file:/// URI for clickable link in Obsidian
+        from pathlib import Path
+
+        abs_path = Path(source_path).resolve()
+        file_uri = abs_path.as_uri()
+        sections.append(f"[Open original file]({file_uri})\n")
+
     if abstract:
         sections.append(f"## Abstract\n\n{abstract}\n")
 

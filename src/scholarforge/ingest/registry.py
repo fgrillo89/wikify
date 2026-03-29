@@ -274,9 +274,23 @@ def _run_batch_steps() -> None:
     cite_count = sum(len(v) for v in citation_graph.values())
     console.print(f"[green]  Citation graph: {cite_count} cross-references resolved[/green]")
 
+    # ── 3b. Re-extract figure/table refs (picks up improved patterns) ─────────
+    from scholarforge.extract.figure_refs import extract_figure_refs
+
     with get_session() as session:
+        for paper, text in papers_with_text:
+            new_refs = extract_figure_refs(text, paper.id)
+            # Clear old refs and insert new ones
+            old_refs = session.exec(
+                select(FigureRef).where(FigureRef.paper_id == paper.id)
+            ).all()
+            for old in old_refs:
+                session.delete(old)
+            for ref in new_refs:
+                session.merge(ref)
+        session.commit()
         total_figure_refs = session.exec(select(func.count(FigureRef.id))).one()
-    console.print(f"[green]  Found {total_figure_refs} figure refs in DB[/green]")
+    console.print(f"[green]  Extracted {total_figure_refs} figure/table refs[/green]")
 
     # ── 4. Abstract embeddings ───────────────────────────────────────────────
     embedded = embed_abstracts(papers)
