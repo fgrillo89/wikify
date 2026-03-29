@@ -273,50 +273,55 @@ def _parse_author_line(line: str) -> list[str]:
 
 
 def _extract_summary(md_text: str) -> str | None:
-    """Extract abstract/summary from markdown text.
+    """Extract a document summary from markdown text.
 
-    Tries labeled sections first, then falls back to the first substantial
-    paragraph of body text. Works for papers, reports, grant proposals, etc.
+    Handles papers (abstract), reports (executive summary), slides
+    (concatenated slide titles + bullets), and unstructured notes
+    (first ~400 words of content).
+
+    Strategies tried in order:
+    1. Labeled section (Abstract, Summary, Executive Summary, Overview, Scope)
+    2. First substantial prose paragraph (>100 chars with sentence punctuation)
+    3. Slide-aware: concatenate slide titles and first bullets
+    4. Fallback: first ~400 words of body text
     """
     # Strip markdown formatting for matching purposes
     search_text = _clean_markdown(md_text[:10000])
 
     # ── Strategy 1: Labeled section ──────────────────────────────────────────
-    # Matches "Abstract", "Summary", "Executive Summary" as heading or inline label
-    # Handles: ## Abstract, ABSTRACT, **Abstract**—, _Abstract:_, etc.
+    # Matches heading or inline label for abstract-like sections
     label_re = re.compile(
         r"(?:^|\n)\s*(?:#+\s*)?"
-        r"(?:abstract|summary|executive\s+summary)"
+        r"(?:abstract|summary|executive\s+summary|overview|scope|synopsis"
+        r"|project\s+(?:summary|description)|purpose)"
         r"\s*[:\-—.]*\s*",
         re.IGNORECASE,
     )
     match = label_re.search(search_text)
     if match:
-        # Grab text after the label up to a clear section boundary
         after_label = search_text[match.end() :]
-        # End at: next heading, "Keywords", "Introduction", "Index Terms", or 2+ blank lines
+        # End at: next heading, Keywords, Introduction, Index Terms, or similar
         end_re = re.compile(
-            r"\n\s*(?:#+\s+|(?:keywords?|introduction|index\s+terms|i\.\s+introduction)\b)",
+            r"\n\s*(?:#+\s+|(?:keywords?|introduction|index\s+terms"
+            r"|i\.\s+introduction|table\s+of\s+contents|background)\b)",
             re.IGNORECASE,
         )
         end_match = end_re.search(after_label)
         if end_match:
             text = after_label[: end_match.start()].strip()
         else:
-            # Take up to ~500 words
             text = after_label[:3000].strip()
 
         # Clean up: collapse line breaks that aren't paragraph breaks
         text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
         text = re.sub(r"\n{2,}", "\n\n", text)
-        # Take first paragraph if multiple
-        paragraphs = text.split("\n\n")
-        text = paragraphs[0].strip()
+        paragraphs_in_abstract = text.split("\n\n")
+        text = paragraphs_in_abstract[0].strip()
 
         # If too short, concatenate more paragraphs
         word_count = len(text.split())
-        if word_count < 50 and len(paragraphs) > 1:
-            for extra in paragraphs[1:]:
+        if word_count < 50 and len(paragraphs_in_abstract) > 1:
+            for extra in paragraphs_in_abstract[1:]:
                 extra = extra.strip()
                 if _is_noise_paragraph(extra):
                     break
@@ -328,7 +333,6 @@ def _extract_summary(md_text: str) -> str | None:
             return _clean_markdown(text)
 
     # ── Strategy 2: First substantial prose paragraph ──────────────────────
-    # Skip title, author lines, metadata, and take the first real paragraph
     paragraphs = re.split(r"\n\s*\n", search_text)
     for para in paragraphs:
         para = para.strip()
@@ -336,12 +340,24 @@ def _extract_summary(md_text: str) -> str | None:
             continue
         if _is_noise_paragraph(para):
             continue
-        # Must look like prose: long enough and contains sentence-ending punctuation
         if len(para) > 100 and re.search(r"[.!?]", para):
             return _clean_markdown(para)
 
-    # ── Strategy 3: Fallback — first ~400 words of body text ─────────────
-    # Concatenate all non-noise, non-heading paragraphs up to ~400 words
+    # ── Strategy 3: Slide-aware synthesis ────────────────────────────────────
+    # For presentations: extract slide titles and first bullet from each slide
+    # Produces a synthetic summary like "Title. Outline: point 1, point 2. ..."
+    slide_headings = re.findall(r"^##\s+(?:Slide\s+\d+:\s*)?(.+)$", md_text, re.MULTILINE)
+    if len(slide_headings) >= 3:
+        # This looks like a slide deck — synthesize from headings + content
+        parts: list[str] = []
+        for heading in slide_headings[:8]:
+            cleaned = _clean_markdown(heading).strip()
+            if cleaned and not cleaned.lower().startswith("slide "):
+                parts.append(cleaned)
+        if parts:
+            return ". ".join(parts) + "."
+
+    # ── Strategy 4: Fallback — first ~400 words of body text ─────────────
     body_words: list[str] = []
     for para in paragraphs:
         para = para.strip()
@@ -349,16 +365,15 @@ def _extract_summary(md_text: str) -> str | None:
             continue
         if _is_noise_paragraph(para):
             continue
-        if len(para) < 30:
+        if len(para) < 10:
             continue
         body_words.extend(para.split())
         if len(body_words) >= 400:
             break
     if body_words:
         text = " ".join(body_words[:400])
-        # Try to cut at last sentence boundary
         last_period = max(text.rfind(". "), text.rfind(".\n"), text.rfind("."))
-        if last_period > 100:
+        if last_period > 50:
             text = text[: last_period + 1]
         return _clean_markdown(text)
 
