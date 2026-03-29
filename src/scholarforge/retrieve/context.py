@@ -46,7 +46,9 @@ class RetrievedContext:
         lines = []
         for p in self.papers:
             authors = p.parsed_authors
-            first = authors[0].split()[-1] if authors else "Unknown"
+            # Handle "Last, First" and "First Last" formats
+            raw = authors[0] if authors else "Unknown"
+            first = raw.split(",")[0].strip() if "," in raw else raw.split()[-1]
             abstract = (p.abstract or "")[:200]
             lines.append(f"- {first} {p.year}: {p.title}\n  {abstract}")
         return "\n".join(lines)

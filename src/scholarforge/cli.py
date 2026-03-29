@@ -189,5 +189,28 @@ def chat():
     chat_interactive()
 
 
+@app.command()
+def mcp(
+    library: str = typer.Option(
+        "default", "--library", "-l", help="Library name (for multi-domain research)"
+    ),
+):
+    """Start the ScholarForge MCP server (stdio transport for Claude Code / LLM clients).
+
+    Example usage in Claude Code settings:
+        {
+          "mcpServers": {
+            "scholarforge": {
+              "command": "scholarforge",
+              "args": ["mcp"]
+            }
+          }
+        }
+    """
+    from scholarforge.mcp_server import run_server
+
+    run_server(library=library)
+
+
 if __name__ == "__main__":
     app()
