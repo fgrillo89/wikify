@@ -43,7 +43,7 @@ def compute_coupling(paper_ids: list[str]) -> dict[str, list[str]]:
     dict[str, list[str]]
         Mapping from each paper_id to a list of coupled paper_ids, sorted by
         coupling strength (number of shared references) descending. Only pairs
-        with coupling_strength >= 2 are included. Each paper receives at most
+        with coupling_strength >= 3 are included. Each paper receives at most
         the top-5 coupled partners.
     """
     if not paper_ids:
@@ -74,7 +74,7 @@ def compute_coupling(paper_ids: list[str]) -> dict[str, list[str]]:
     # Accumulate (strength, other_paper) for each paper in the input set.
     paper_neighbours: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for (pa, pb), strength in pair_strength.items():
-        if strength < 2:
+        if strength < 3:
             continue
         if pa in paper_ids:
             paper_neighbours[pa].append((strength, pb))

@@ -79,7 +79,7 @@ def paper_note(
         sections.append(f"## Summary\n\n{note}\n")
 
     if cites:
-        links = "\n".join(f"- [[papers/{c}]]" for c in cites)
+        links = "\n".join(f"- [[papers/{c}]] `#edge/citation`" for c in cites)
         sections.append(f"## Cites\n\n{links}\n")
 
     if figure_refs:
@@ -89,11 +89,11 @@ def paper_note(
         sections.append(f"## Figure References\n\n{lines}\n")
 
     if similar_to:
-        links = "\n".join(f"- [[papers/{s}]]" for s in similar_to)
+        links = "\n".join(f"- [[papers/{s}]] `#edge/similarity`" for s in similar_to)
         sections.append(f"## Similar Papers\n\n{links}\n")
 
     if cites_same:
-        links = "\n".join(f"- [[papers/{c}]]" for c in cites_same)
+        links = "\n".join(f"- [[papers/{c}]] `#edge/coupling`" for c in cites_same)
         sections.append(f"## Bibliographic Coupling\n\n{links}\n")
 
     sections.append(
