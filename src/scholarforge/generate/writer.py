@@ -2,22 +2,38 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.console import Console
 from rich.progress import Progress
 
+from scholarforge.generate.persona import build_persona
+from scholarforge.generate.references import ReferenceResolver
 from scholarforge.llm.client import complete
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import PaperPlan, SectionPlan
 
+if TYPE_CHECKING:
+    from scholarforge.export.journal_profile import JournalProfile
+    from scholarforge.store.models import Paper
+
 console = Console()
 
 
-def write_paper(plan: PaperPlan, context: RetrievedContext) -> str:
+def write_paper(
+    plan: PaperPlan,
+    context: RetrievedContext,
+    journal_profile: JournalProfile | None = None,
+    resolve_references: bool = True,
+) -> str | tuple[str, list[Paper]]:
     """Generate a full paper from a plan and retrieved context.
 
     Writes section-by-section with running context to maintain coherence.
-    Returns the complete markdown document.
+
+    If resolve_references is True (default), returns (numbered_markdown, ordered_papers).
+    If False, returns raw markdown with [REF:...] markers (backward compat).
     """
+    persona = build_persona(context=context, journal_profile=journal_profile)
     lit_context = context.as_text()
     sections_written: list[str] = []
 
@@ -35,6 +51,8 @@ def write_paper(plan: PaperPlan, context: RetrievedContext) -> str:
                 plan=plan,
                 lit_context=lit_context,
                 prior_sections=prior_text,
+                persona=persona,
+                journal_profile=journal_profile,
             )
 
             sections_written.append(f"{prefix} {section.heading}\n\n{section_md}")
@@ -42,7 +60,18 @@ def write_paper(plan: PaperPlan, context: RetrievedContext) -> str:
 
     # Assemble full document
     title_block = f"# {plan.title}\n\n"
-    return title_block + "\n\n".join(sections_written)
+    raw_markdown = title_block + "\n\n".join(sections_written)
+
+    if not resolve_references:
+        return raw_markdown
+
+    # Resolve [REF:...] markers to numbered citations + build bibliography
+    resolver = ReferenceResolver(context.papers)
+    numbered_md, ordered_papers = resolver.resolve(raw_markdown)
+    bibliography = resolver.build_bibliography(ordered_papers)
+    full_document = f"{numbered_md}\n\n## References\n\n{bibliography}"
+
+    return full_document, ordered_papers
 
 
 def _write_section(
@@ -50,12 +79,18 @@ def _write_section(
     plan: PaperPlan,
     lit_context: str,
     prior_sections: str,
+    persona: str = "",
+    journal_profile: JournalProfile | None = None,
 ) -> str:
     """Generate a single section."""
+    persona_block = f"{persona}\n\n" if persona else ""
+
     system_msg = (
-        "You are an academic writer producing a review paper. "
-        "Write the following section based on the literature provided. "
-        "Use inline citations like (Author, Year). "
+        f"{persona_block}"
+        "Write the following section of a review paper based on the literature provided. "
+        "Cite sources using [REF:display_name] markers, where display_name matches "
+        "the identifier shown in each paper's context header "
+        "(e.g. [REF:Kim 2021 - 4K-memristor...]). "
         "Be precise, technical, and thorough. "
         "Do NOT include the section heading — just the body text. "
         f"Target approximately {section.target_tokens} words."

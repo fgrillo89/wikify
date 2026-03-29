@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from scholarforge.llm.client import complete_json
 from scholarforge.retrieve.context import RetrievedContext
 from scholarforge.store.models import PaperPlan, SectionPlan
+
+if TYPE_CHECKING:
+    from scholarforge.export.journal_profile import JournalProfile
 
 
 def plan_paper(
     prompt: str,
     context: RetrievedContext,
     target_pages: int = 10,
+    journal_profile: JournalProfile | None = None,
 ) -> PaperPlan:
     """Generate a structured paper plan from a prompt and literature context.
 
@@ -21,6 +27,17 @@ def plan_paper(
 
     paper_list = context.paper_summaries()
 
+    # Journal-specific section requirements
+    section_guidance = (
+        "Include: Abstract, Introduction, main thematic sections (3-5), "
+        "Discussion/Future Directions, Conclusion."
+    )
+    if journal_profile and journal_profile.required_sections:
+        sections_list = ", ".join(journal_profile.required_sections)
+        section_guidance = f"Required sections for {journal_profile.name}: {sections_list}."
+        if journal_profile.word_limit:
+            target_words = min(target_words, journal_profile.word_limit)
+
     system_msg = (
         "You are an academic writing assistant. Given a writing prompt and a list of "
         "source papers, create a detailed outline for a review/survey paper.\n\n"
@@ -30,8 +47,7 @@ def plan_paper(
         '"sections": [{"heading": "...", "level": 1, "description": "what to cover", '
         '"target_tokens": N, "source_papers": ["Author Year - Title", ...], '
         '"subsections": [...]}]}\n\n'
-        "Include: Abstract, Introduction, main thematic sections (3-5), "
-        "Discussion/Future Directions, Conclusion.\n"
+        f"{section_guidance}\n"
         "Distribute the target word count across sections proportionally.\n"
         "Return ONLY valid JSON, no markdown fences."
     )

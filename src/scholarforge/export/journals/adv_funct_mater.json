@@ -1,0 +1,21 @@
+{
+    "name": "Advanced Functional Materials",
+    "publisher": "Wiley",
+    "citation_style": "numbered",
+    "word_limit": null,
+    "abstract_word_limit": 250,
+    "required_sections": [
+        "Abstract",
+        "Introduction",
+        "Results and Discussion",
+        "Conclusion",
+        "Experimental Section"
+    ],
+    "font_family": "Times New Roman",
+    "font_size_pt": 12,
+    "line_spacing": 2.0,
+    "column_layout": "single",
+    "reference_format": "{number}. {authors}, {title}. {journal} {year}, {volume}, {pages}.",
+    "figure_min_dpi": 300,
+    "notes": "Wiley journal. Reviews welcome. Numbered citations in square brackets [1]. References: Author1, Author2, Title. Adv. Funct. Mater. YYYY, Vol, Pages. Supporting Information for methods details. Figures should be submitted as separate high-resolution files."
+}

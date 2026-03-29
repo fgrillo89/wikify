@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     chunk_max_tokens: int = 800
     chunk_overlap_tokens: int = 50
 
+    # Output
+    default_journal: str = ""  # Journal name for formatting (empty = generic)
+    output_style: str = "numbered"  # "numbered" or "author_year"
+
     # Zotero (optional)
     zotero_library_id: str = ""
     zotero_api_key: str = ""

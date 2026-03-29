@@ -111,28 +111,36 @@ def generate(
     ),
     pages: int = typer.Option(10, "--pages", "-n", help="Target page count"),
     output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
+    journal: str = typer.Option("", "--journal", "-j", help="Target journal for formatting"),
+    docx: bool = typer.Option(False, "--docx", help="Also export as DOCX"),
+    pdf: bool = typer.Option(False, "--pdf", help="Also export as PDF"),
 ):
     """Generate a review paper from the literature corpus."""
     import time
     from pathlib import Path
 
+    from scholarforge.export.journal_profile import load_journal_profile
     from scholarforge.generate.planner import plan_paper
     from scholarforge.generate.writer import write_paper
     from scholarforge.retrieve.context import retrieve_all_papers
 
     start = time.time()
+    journal_profile = load_journal_profile(journal)
+    if journal:
+        console.print(f"[dim]Journal: {journal_profile.name}[/dim]")
 
     console.print("[bold]Retrieving literature...[/bold]")
     context = retrieve_all_papers()
     console.print(f"  {len(context.papers)} papers, {context.total_tokens} tokens of context")
 
     console.print("[bold]Planning paper structure...[/bold]")
-    plan = plan_paper(prompt, context, target_pages=pages)
+    plan = plan_paper(prompt, context, target_pages=pages, journal_profile=journal_profile)
     console.print(f"  Title: {plan.title}")
     console.print(f"  Sections: {len(plan.sections)}")
 
     console.print("[bold]Writing paper...[/bold]")
-    paper_md = write_paper(plan, context)
+    result = write_paper(plan, context, journal_profile=journal_profile)
+    paper_md, ordered_papers = result  # type: ignore[misc]
 
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +152,23 @@ def generate(
         f"[green]Generated {word_count} words ({word_count // 250} pages) "
         f"in {elapsed:.1f}s → {out_path}[/green]"
     )
+    if ordered_papers:
+        console.print(f"  References: {len(ordered_papers)}")
+
+    # Export to additional formats
+    if docx:
+        from scholarforge.export.docx_export import DocxExporter
+
+        docx_path = out_path.with_suffix(".docx")
+        DocxExporter(journal_profile).export(paper_md, ordered_papers, docx_path)
+        console.print(f"[green]DOCX:[/green] {docx_path}")
+
+    if pdf:
+        from scholarforge.export.pdf_export import PdfExporter
+
+        pdf_path = out_path.with_suffix(".pdf")
+        PdfExporter(journal_profile).export(paper_md, ordered_papers, pdf_path)
+        console.print(f"[green]PDF:[/green] {pdf_path}")
 
 
 @app.command()

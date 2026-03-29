@@ -1,0 +1,21 @@
+{
+    "name": "Nature",
+    "publisher": "Springer Nature",
+    "citation_style": "numbered",
+    "word_limit": 5000,
+    "abstract_word_limit": 150,
+    "required_sections": [
+        "Abstract",
+        "Introduction",
+        "Results",
+        "Discussion",
+        "Methods"
+    ],
+    "font_family": "Times New Roman",
+    "font_size_pt": 12,
+    "line_spacing": 2.0,
+    "column_layout": "single",
+    "reference_format": "{number}. {authors}. {title}. {journal} {volume}, {pages} ({year}).",
+    "figure_min_dpi": 300,
+    "notes": "Nature format. Superscript numbered citations. Methods section at end. Abstract is a single paragraph, no heading. References: Author1, Author2 & Author3. Title. Journal Vol, Pages (Year). Max 50 references for Articles. Extended Data for supplementary figures."
+}
