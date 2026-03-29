@@ -239,3 +239,68 @@ def test_combined_ald_lit_review_afm():
 
     # Agent instructions present
     assert "deep_read" in prompt, "Missing agent instruction 'deep_read'"
+
+
+# ── Test 11: Generic fallback still produces useful prompt ──────────────────
+
+
+def test_generic_field_on_ambiguous_prompt():
+    """When the field can't be determined, generic guide is used."""
+    result = detect_field("Write an article about interdisciplinary approaches", [])
+    assert result == "generic"
+
+
+def test_generic_field_on_empty_input():
+    result = detect_field("", [])
+    assert result == "generic"
+
+
+def test_generic_field_on_single_common_word():
+    """A single keyword hit (below threshold of 2) should fall back to generic."""
+    result = detect_field("analysis of results", [])
+    assert result == "generic"
+
+
+def test_generic_guide_loaded_and_nonempty():
+    guide = load_field_guide("generic")
+    assert len(guide) > 100, "Generic guide should have substantial content"
+    assert "Cross-Field" in guide or "Universal" in guide
+
+
+# ── Test 12: Generic guide always included alongside specific field ─────────
+
+
+def test_specific_field_also_gets_generic_guide():
+    """When a specific field is detected, generic cross-field guide is ALSO included."""
+    from scholarforge.generate.field_guide import get_field_instructions
+
+    instructions = get_field_instructions("ALD thin film memristor nanoparticle", [])
+    # Should have both
+    assert "Cross-Field Best Practices" in instructions, (
+        "Generic guide should always be included as base layer"
+    )
+    assert "Field Guide: materials_science" in instructions, (
+        "Specific field guide should be layered on top"
+    )
+
+
+def test_generic_only_when_no_field_detected():
+    """When no field matches, only generic guide is included (no duplicate)."""
+    from scholarforge.generate.field_guide import get_field_instructions
+
+    instructions = get_field_instructions("random topic xyz", [])
+    assert "Cross-Field Best Practices" in instructions
+    assert "Field Guide:" not in instructions, (
+        "No specific field guide should appear when field is generic"
+    )
+
+
+def test_all_fields_include_generic_base():
+    """For every detectable field, the generic guide is always present."""
+    from scholarforge.generate.field_guide import get_field_instructions
+
+    for trigger in FIELD_TRIGGERS.values():
+        instructions = get_field_instructions(trigger, [])
+        assert "Cross-Field Best Practices" in instructions, (
+            f"Generic guide missing for trigger: {trigger}"
+        )

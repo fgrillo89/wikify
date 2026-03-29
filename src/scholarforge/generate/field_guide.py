@@ -365,13 +365,24 @@ def load_field_guide(field_id: str) -> str:
 
 
 def get_field_instructions(prompt: str, topics: list[str]) -> str:
-    """Detect field and return the combined field-specific instructions.
+    """Detect field and return combined generic + field-specific instructions.
 
-    Returns the guide content prefixed with a header, or an empty string
-    if no field-specific guide is available.
+    Always includes the generic cross-field guide as a base layer.
+    When a specific field is detected, its guide is appended on top.
     """
     field_id = detect_field(prompt, topics)
-    guide = load_field_guide(field_id)
-    if guide:
-        return f"\n--- Field-Specific Guide ({field_id}) ---\n{guide}"
-    return ""
+
+    parts: list[str] = []
+
+    # Always include generic as the base layer
+    generic = load_field_guide("generic")
+    if generic:
+        parts.append(f"\n--- Cross-Field Best Practices ---\n{generic}")
+
+    # Layer field-specific guide on top (if a specific field was detected)
+    if field_id != "generic":
+        specific = load_field_guide(field_id)
+        if specific:
+            parts.append(f"\n--- Field Guide: {field_id} ---\n{specific}")
+
+    return "\n".join(parts)
