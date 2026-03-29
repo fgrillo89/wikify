@@ -168,7 +168,12 @@ def persist_parsed(parsed: ParsedPaper) -> None:
             session.merge(fig_ref)
         session.commit()
 
-    write_paper_note(parsed.paper, len(parsed.chunks), len(parsed.figures))
+    write_paper_note(
+        parsed.paper,
+        len(parsed.chunks),
+        len(parsed.figures),
+        full_text=parsed.md_text,
+    )
 
 
 def ingest_pdf(path: Path, return_id: bool = False) -> int | str | None:

@@ -48,6 +48,7 @@ def write_paper_note(
     similar_to: list[str] | None = None,
     cites_same: list[str] | None = None,
     figure_refs: list[tuple[str, str]] | None = None,
+    full_text: str | None = None,
 ) -> Path:
     """Write a paper note to the vault. Returns the path of the written note."""
     ensure_vault_dirs()
@@ -71,6 +72,7 @@ def write_paper_note(
         figure_refs=figure_refs,
         chunks_count=chunks_count,
         figures_count=figures_count,
+        full_text=full_text,
     )
 
     note_path = vault_dir() / "papers" / f"{safe_name}.md"

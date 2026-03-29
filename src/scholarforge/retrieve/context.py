@@ -108,21 +108,56 @@ def retrieve_for_query(
     )
 
 
-def retrieve_all_papers(include_metrics: bool = True) -> RetrievedContext:
-    """Load all papers with their abstracts (for review-style generation)."""
+def retrieve_all_papers(
+    include_metrics: bool = True,
+    deep_read_top_n: int = 3,
+) -> RetrievedContext:
+    """Load all papers with their abstracts (for review-style generation).
+
+    Top N hub papers (by PageRank) get ALL chunks (deep read).
+    Remaining papers get first ~3 chunks (shallow read).
+    """
     from scholarforge.graph.metrics import compute_metrics
+
+    metrics = compute_metrics() if include_metrics else None
+
+    # Identify hub papers for deep reading
+    deep_read_ids: set[str] = set()
+    if metrics and metrics.hub_papers:
+        deep_read_ids = set(metrics.hub_papers[:deep_read_top_n])
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
-        # For review papers, we want abstracts + key chunks, not all chunks
         chunks: list[Chunk] = []
         for paper in papers:
             paper_chunks = session.exec(
                 select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
             ).all()
-            # Take first ~3 chunks per paper (abstract + intro + methods overview)
-            chunks.extend(paper_chunks[:3])
+            if paper.id in deep_read_ids:
+                chunks.extend(paper_chunks)  # Deep read for hub papers
+            else:
+                chunks.extend(paper_chunks[:3])  # Shallow for the rest
 
     total = sum(c.token_count for c in chunks)
-    metrics = compute_metrics() if include_metrics else None
     return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total, graph_metrics=metrics)
+
+
+def retrieve_deep(paper_ids: list[str]) -> RetrievedContext:
+    """Load ALL chunks for specific papers (deep read mode).
+
+    Use this when the user explicitly asks to read full papers.
+    This is expensive — only use for a small number of papers.
+    """
+    with get_session() as session:
+        papers = [session.get(Paper, pid) for pid in paper_ids]
+        papers = [p for p in papers if p is not None]
+
+        chunks: list[Chunk] = []
+        for pid in paper_ids:
+            paper_chunks = session.exec(
+                select(Chunk).where(Chunk.paper_id == pid).order_by(Chunk.chunk_index)
+            ).all()
+            chunks.extend(paper_chunks)
+
+    total = sum(c.token_count for c in chunks)
+    return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total)

@@ -36,6 +36,7 @@ def paper_note(
     summary: str | None = None,
     chunks_count: int = 0,
     figures_count: int = 0,
+    full_text: str | None = None,
 ) -> str:
     """Generate markdown for a paper note."""
     frontmatter: dict[str, Any] = {
@@ -98,6 +99,12 @@ def paper_note(
     sections.append(
         f"## Statistics\n\n- **Chunks**: {chunks_count}\n- **Figures**: {figures_count}\n"
     )
+
+    if full_text:
+        # Obsidian collapsible callout: collapsed by default, searchable
+        # The "-" after the type makes it collapsed
+        indented = "\n> ".join(full_text.split("\n"))
+        sections.append(f"> [!quote]- Full Text\n> {indented}\n")
 
     return "\n".join(sections)
 

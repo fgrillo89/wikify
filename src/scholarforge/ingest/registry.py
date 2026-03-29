@@ -204,6 +204,7 @@ def _run_incremental_steps(paper_id: str) -> None:
             topics=topics if topics else None,
             similar_to=similar_names if similar_names else None,
             figure_refs=figure_refs,
+            full_text=full_text,
         )
 
     console.print(
@@ -344,7 +345,9 @@ def run_batch_steps() -> None:
                 f.unlink()
 
     # ── 10. Regenerate all paper vault notes with full data ──────────────────
-    # Use already-loaded data instead of per-paper queries
+    # Build full text lookup for vault notes
+    text_by_paper = {p.id: t for p, t in papers_with_text}
+
     for paper in papers:
         chunks_count = len(chunks_by_paper.get(paper.id, []))
         figures_count = len(paper_figure_refs.get(paper.id, []))
@@ -373,6 +376,7 @@ def run_batch_steps() -> None:
             similar_to=similar_names if similar_names else None,
             cites_same=coupled_names if coupled_names else None,
             figure_refs=paper_figure_refs.get(paper.id) or None,
+            full_text=text_by_paper.get(paper.id),
         )
 
     console.print(
