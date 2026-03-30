@@ -91,8 +91,8 @@ def parse_pdf(path: Path) -> ParsedPaper:
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    # First pass: standard layout extraction
-    md_text = pymupdf4llm.to_markdown(str(path))
+    # First pass: fast layout extraction WITHOUT OCR (OCR is ~100x slower)
+    md_text = pymupdf4llm.to_markdown(str(path), use_ocr=False)
 
     doc = fitz.open(str(path))
 
@@ -100,7 +100,9 @@ def parse_pdf(path: Path) -> ParsedPaper:
     if action == "ocr":
         console.print(f"[yellow]  Scanned PDF detected, running OCR:[/yellow] {path.name}")
         try:
-            md_text = pymupdf4llm.to_markdown(str(path), force_ocr=True, ocr_language="eng")
+            md_text = pymupdf4llm.to_markdown(
+                str(path), use_ocr=True, force_ocr=True, ocr_language="eng"
+            )
         except Exception as e:
             console.print(f"[yellow]  OCR failed ({e}), using raw text fallback[/yellow]")
             md_text = _fitz_fallback_markdown(doc)
@@ -153,7 +155,9 @@ def parse_pdf(path: Path) -> ParsedPaper:
 def persist_parsed(parsed: ParsedPaper) -> None:
     """Persist a parsed paper to SQLite and vault."""
     from scholarforge.store.db import get_session
-    from scholarforge.vault.writer import write_paper_note
+    from scholarforge.vault.writer import ensure_vault_dirs, write_paper_note
+
+    ensure_vault_dirs()
 
     with get_session() as session:
         session.merge(parsed.paper)
