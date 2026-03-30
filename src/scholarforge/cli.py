@@ -28,7 +28,9 @@ def main(
 def ingest(
     path: str = typer.Argument(..., help="Path to a PDF file or directory of PDFs"),
     parallel: bool = typer.Option(False, "--parallel", "-p", help="Parse PDFs in parallel"),
-    workers: int = typer.Option(4, "--workers", "-w", help="Number of parallel workers"),
+    workers: int = typer.Option(
+        0, "--workers", "-w", help="Parallel workers (0 = 60%% of CPU cores)"
+    ),
 ):
     """Ingest PDF(s) into the knowledge base."""
     import time

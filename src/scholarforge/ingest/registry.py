@@ -22,8 +22,17 @@ console = Console()
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx"}
 
 
-def ingest_path(path: Path, parallel: bool = False, max_workers: int = 4) -> int:
+def _default_workers() -> int:
+    """60% of CPU cores, minimum 2."""
+    import os
+
+    return max(2, int(os.cpu_count() * 0.6))
+
+
+def ingest_path(path: Path, parallel: bool = False, max_workers: int = 0) -> int:
     """Ingest a file or directory. Returns count of documents ingested."""
+    if max_workers <= 0:
+        max_workers = _default_workers()
     if path.is_file():
         return _ingest_file(path)
     elif path.is_dir():
