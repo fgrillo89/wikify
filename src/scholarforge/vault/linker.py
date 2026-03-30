@@ -154,7 +154,10 @@ def _match_corpus_vocabulary(
 
 def _to_display(kw: str) -> str:
     """Convert a keyword to display form (title case, short words uppercase)."""
-    return kw.strip().title() if len(kw) > 4 else kw.strip().upper()
+    # Strip control characters that could break filenames
+    kw = re.sub(r"[\x00-\x1f\x7f]+", " ", kw).strip()
+    kw = re.sub(r"\s+", " ", kw)
+    return kw.title() if len(kw) > 4 else kw.upper()
 
 
 def extract_topics(

@@ -13,7 +13,11 @@ from scholarforge.vault.templates import author_note, paper_note
 
 def _sanitize_filename(name: str) -> str:
     """Remove characters invalid in filenames."""
+    # Strip control characters (newlines, tabs, etc.) first
+    name = re.sub(r"[\x00-\x1f\x7f]", " ", name)
     name = re.sub(r'[<>:"/\\|?*]', "", name)
+    # Collapse multiple spaces
+    name = re.sub(r"\s+", " ", name)
     name = name.strip(". ")
     return name[:200]
 
