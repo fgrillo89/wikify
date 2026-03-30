@@ -93,6 +93,16 @@ use MCP tools to read the corpus and write papers directly — no separate API k
 - [ ] Claims extraction (JIT)
 - [ ] Note model + FTS5 search
 
+### Future Phase: Output Promotion
+- [ ] **Promote generated output to corpus**: A `/promote` command that takes a
+  GeneratedOutput, flips its Paper.origin from "generated" to "corpus", embeds
+  its chunks into ChromaDB, and integrates it into the citation graph. This lets
+  a user's own draft become part of the knowledge base, enabling the agent to
+  cite and build upon previous writing. Requires: re-chunking the output as if
+  it were an ingested paper, updating the similarity graph, and refreshing vault
+  notes. The user should review the draft before promotion (the agent should not
+  auto-promote). Consider a "draft" intermediate state between generated and corpus.
+
 ## Benchmarks (20-Paper Test Corpus)
 
 | Metric | Value |
