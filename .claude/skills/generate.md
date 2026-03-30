@@ -16,6 +16,8 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 | `search_papers(query="...", top_k=N, max_tokens=N, reason="...")` | Semantic search across the corpus | Medium |
 | `get_sections(section_type="...", reason="...")` | Read specific sections (conclusion, methods, etc.) across all papers | Medium |
 | `get_paper(pattern="...")` | Detailed metadata + chunks for one paper | Medium |
+| `get_paper_vibes(top_k=5)` | Semantic similarity map: each paper's nearest neighbors by content | Medium |
+| `evaluate_coverage(review_text, threshold=0.5)` | Measure how well your review covers the corpus semantically | Medium |
 | `get_reading_log_text()` | View the current reading trace | Free |
 | `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
 

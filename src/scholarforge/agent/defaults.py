@@ -14,9 +14,11 @@ def get_default_tools() -> list[Callable]:
     """Return the standard set of KB tools for agent use."""
     from scholarforge.agent.tools import (
         deep_read,
+        evaluate_coverage,
         get_corpus_summary,
         get_graph_metrics,
         get_paper,
+        get_paper_vibes,
         get_reading_log_text,
         get_sections,
         list_papers,
@@ -33,9 +35,11 @@ def get_default_tools() -> list[Callable]:
         deep_read,
         get_paper,
         get_graph_metrics,
+        get_paper_vibes,
         get_sections,
         list_topics,
         get_corpus_summary,
+        evaluate_coverage,
         get_reading_log_text,
         save_reading_log,
     ]

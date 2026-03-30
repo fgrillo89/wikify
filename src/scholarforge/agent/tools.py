@@ -466,9 +466,7 @@ def read_paper_digest(
             chunks = session.exec(
                 select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
             ).all()
-            topics = session.exec(
-                select(PaperTopic).where(PaperTopic.paper_id == paper.id)
-            ).all()
+            topics = session.exec(select(PaperTopic).where(PaperTopic.paper_id == paper.id)).all()
 
         # Log this read
         if reason:
@@ -490,7 +488,7 @@ def read_paper_digest(
             section = (chunk.section_path or "").lower()
             is_priority = any(s in section for s in priority_sections)
             if is_priority and char_count < max_chars:
-                text = chunk.content[:max_chars - char_count]
+                text = chunk.content[: max_chars - char_count]
                 body_parts.append(f"[{chunk.section_path}] {text}")
                 char_count += len(text)
 
@@ -706,6 +704,76 @@ def get_sections(
         return header + "\n---\n\n".join(sections)
     except Exception as exc:  # noqa: BLE001
         return f"Error retrieving sections: {exc}"
+
+
+def get_paper_vibes(top_k: int = 5) -> str:
+    """Get the semantic "vibe map" of the corpus.
+
+    Computes a weighted centroid embedding for each paper from its chunk
+    content, then shows each paper's nearest semantic neighbors. Papers
+    with no close neighbors cover unique ground in the corpus.
+
+    Use this to understand which papers are semantically similar, which
+    are unique, and where the conceptual clusters are. This helps you
+    decide which papers to read and which to skip.
+
+    Args:
+        top_k: Number of nearest neighbors to show per paper.
+
+    Returns:
+        Markdown-formatted vibe map showing paper similarities.
+    """
+    try:
+        from scholarforge.evaluate.coverage import compute_paper_vibes, vibe_map_for_llm
+
+        vibes = compute_paper_vibes()
+        return vibe_map_for_llm(vibes, top_k=top_k)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error computing paper vibes: {exc}"
+
+
+def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
+    """Evaluate how well a review covers the corpus semantically.
+
+    Embeds both the review and all corpus chunks, then measures what
+    fraction of the corpus's semantic content has a nearby counterpart
+    in the review. This is an information-theoretic coverage metric,
+    not a citation count.
+
+    Args:
+        review_text: The full review markdown text.
+        threshold: Cosine distance threshold for "covered" (default 0.5).
+
+    Returns:
+        Coverage report with overall score, per-paper coverage, gaps, and redundancy.
+    """
+    try:
+        from scholarforge.evaluate.coverage import compute_coverage
+
+        result = compute_coverage(review_text, threshold=threshold)
+
+        lines = [result.summary(), ""]
+
+        # Per-paper coverage (sorted worst to best)
+        if result.paper_coverage:
+            lines += ["", "### Per-Paper Coverage"]
+            sorted_papers = sorted(result.paper_coverage.items(), key=lambda x: x[1])
+            for name, cov in sorted_papers:
+                bar = "#" * int(cov * 20)
+                lines.append(f"  {cov:5.1%} {bar:20s} {name}")
+
+        # Top gaps
+        if result.uncovered_chunks:
+            lines += ["", "### Biggest Gaps (uncovered corpus content)"]
+            for gap in result.uncovered_chunks[:10]:
+                lines.append(
+                    f"  [{gap['distance']:.2f}] {gap['paper']} / {gap['section']}: "
+                    f"{gap['preview'][:60]}..."
+                )
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error evaluating coverage: {exc}"
 
 
 def get_reading_log_text() -> str:
