@@ -15,7 +15,9 @@ def get_default_tools() -> list[Callable]:
     from scholarforge.agent.tools import (
         deep_read,
         evaluate_coverage,
+        find_jump_target,
         get_corpus_summary,
+        get_coverage_gaps,
         get_graph_metrics,
         get_paper,
         get_paper_vibes,
@@ -26,6 +28,7 @@ def get_default_tools() -> list[Callable]:
         read_paper_digest,
         save_reading_log,
         search_papers,
+        suggest_next_papers,
     )
 
     return [
@@ -36,6 +39,9 @@ def get_default_tools() -> list[Callable]:
         get_paper,
         get_graph_metrics,
         get_paper_vibes,
+        suggest_next_papers,
+        get_coverage_gaps,
+        find_jump_target,
         get_sections,
         list_topics,
         get_corpus_summary,

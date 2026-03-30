@@ -143,6 +143,74 @@ Agent Loop (primary)          MCP Server (external clients)
 Both call the same Python functions. Agent loop uses litellm's native
 tool_use. MCP server wraps them for external clients (Claude Code, Cursor).
 
+## Evaluate: Semantic Coverage & Paper Vibes
+
+```
+src/scholarforge/evaluate/
+├── __init__.py
+└── coverage.py          # compute_coverage(), compute_paper_vibes()
+```
+
+**Coverage metric**: Embeds both corpus chunks and review/output chunks into
+the same vector space (all-MiniLM-L6-v2, 384-dim), then measures what fraction
+of the corpus's semantic content has a nearby counterpart in the output. This
+approximates an information-theoretic compression quality metric: the review is
+a lossy compression of the corpus, and coverage measures signal retention.
+
+**Paper vibes**: Token-weighted centroid of chunk embeddings per paper. Produces
+a single 384-dim vector capturing the paper's semantic identity. Used for:
+- Orthogonal neighbor selection (read papers that cover *different* ground)
+- Subgraph exhaustion detection (all nearby papers are semantically similar)
+- Jump targeting (find the most uncovered distant region)
+
+## Iterative Write-Measure-Read Loop
+
+The agent's exploration strategy is coverage-driven:
+
+```
+get_graph_metrics() -> deep_read(hub_1..3) -> write draft
+                                                   |
+                                                   v
+                                        get_coverage_gaps(draft)
+                                                   |
+                                          delta >= 2%? ----YES----> suggest_next_papers()
+                                                   |                        |
+                                                  NO                  read 1-3 papers
+                                                   |                        |
+                                             gaps remain?             revise draft
+                                                   |                        |
+                                                  YES                       v
+                                                   |              get_coverage_gaps()
+                                                   v                  (loop back)
+                                          find_jump_target()
+                                                   |
+                                             target found? --NO--> STOP, export
+                                                   |
+                                                  YES -> read, revise, re-measure
+```
+
+Three navigation tools drive the loop:
+- `suggest_next_papers`: 0.7 * orthogonality + 0.3 * graph proximity
+- `get_coverage_gaps`: coverage delta + gap-to-paper mapping + convergence signal
+- `find_jump_target`: detects local exhaustion, jumps to most uncovered distant region
+
+## Dual-Mode Exploration: Generate & Talk
+
+The same exploration tools and coverage-driven navigation apply to both modes:
+
+1. **Generate mode** (`/generate`): Agent reads corpus, writes a paper, iterates
+   on coverage. Output is a document (markdown + DOCX + PDF).
+
+2. **Talk mode** (chat/Q&A): Agent uses the same tools to explore the corpus
+   in response to user questions. The coverage metric measures how well the
+   agent's answers span the relevant corpus content. The navigation tools
+   (`suggest_next_papers`, `find_jump_target`) help the agent discover papers
+   relevant to follow-up questions without re-reading already-covered ground.
+
+Both modes share: reading log, paper vibes, coverage metric, graph navigation.
+The difference is output format (document vs. conversational answers) and
+convergence criterion (coverage plateau vs. user satisfaction).
+
 ## Data Layout
 
 ```

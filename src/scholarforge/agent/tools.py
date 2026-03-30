@@ -706,6 +706,378 @@ def get_sections(
         return f"Error retrieving sections: {exc}"
 
 
+def _resolve_to_paper_ids(patterns: list[str]) -> list[str]:
+    """Resolve display name patterns to paper IDs (internal helper)."""
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Paper
+
+    with get_session() as session:
+        all_papers = session.exec(select(Paper)).all()
+
+    resolved = []
+    for pattern in patterns:
+        lower = pattern.lower()
+        for p in all_papers:
+            if lower in p.display_name().lower() or lower in p.title.lower():
+                resolved.append(p.id)
+                break
+    return resolved
+
+
+def _compute_read_centroid(
+    read_ids: list[str],
+    vibe_map: dict,
+):
+    """Token-weighted centroid of already-read papers (internal helper)."""
+    import numpy as np
+
+    vibes = [vibe_map[pid] for pid in read_ids if pid in vibe_map]
+    if not vibes:
+        return None
+    total_weight = sum(v.n_chunks for v in vibes)
+    if total_weight == 0:
+        return None
+    centroid = sum(v.centroid * (v.n_chunks / total_weight) for v in vibes)
+    norm = np.linalg.norm(centroid)
+    return centroid / norm if norm > 0 else centroid
+
+
+def suggest_next_papers(
+    already_read: list[str],
+    max_suggestions: int = 3,
+) -> str:
+    """Suggest papers to read next based on graph connectivity and semantic orthogonality.
+
+    Finds papers within 2 hops of what you have already read, then ranks
+    them by a combined score: 0.7 * orthogonality (semantic distance from
+    your read set) + 0.3 * graph proximity. Higher scores mean the paper
+    is connected to your reading but covers different ground.
+
+    Args:
+        already_read: List of paper display names or title patterns you have read.
+        max_suggestions: Maximum number of suggestions to return (default 3).
+
+    Returns:
+        Ranked list of suggested papers with scores and rationale.
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import compute_paper_vibes
+        from scholarforge.graph.metrics import build_corpus_graph
+
+        read_ids = _resolve_to_paper_ids(already_read)
+        if not read_ids:
+            return "Could not resolve any papers from the provided patterns."
+
+        graph = build_corpus_graph()
+        undirected = graph.to_undirected()
+        all_nodes = set(graph.nodes())
+        read_set = set(read_ids)
+        unread = all_nodes - read_set
+
+        # Find candidates within 2 hops
+        neighbors = set()
+        for rid in read_ids:
+            if rid not in undirected:
+                continue
+            for nb in undirected.neighbors(rid):
+                if nb in unread:
+                    neighbors.add(nb)
+            for nb in list(neighbors):
+                if nb in undirected:
+                    for nb2 in undirected.neighbors(nb):
+                        if nb2 in unread:
+                            neighbors.add(nb2)
+
+        if not neighbors:
+            return "No unread papers found within 2 hops. Try find_jump_target instead."
+
+        # Compute vibes and read centroid
+        vibes = compute_paper_vibes()
+        vibe_map = {v.paper_id: v for v in vibes}
+        read_centroid = _compute_read_centroid(read_ids, vibe_map)
+
+        if read_centroid is None:
+            return "Could not compute read centroid (no vibes for read papers)."
+
+        # Score candidates
+        scores = []
+        for cid in neighbors:
+            vibe = vibe_map.get(cid)
+            if not vibe:
+                continue
+
+            # Orthogonality: cosine distance from read centroid
+            sim = float(np.dot(vibe.centroid, read_centroid))
+            orthogonality = 1.0 - sim
+
+            # Graph proximity: inverse shortest path from nearest read paper
+            min_dist = 999
+            for rid in read_ids:
+                try:
+                    import networkx as nx
+
+                    d = nx.shortest_path_length(undirected, source=rid, target=cid)
+                    min_dist = min(min_dist, d)
+                except Exception:  # noqa: BLE001
+                    pass
+            proximity = 1.0 / (1.0 + min_dist)
+
+            score = 0.7 * orthogonality + 0.3 * proximity
+            scores.append((cid, score, orthogonality, proximity, min_dist, vibe))
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+        top = scores[:max_suggestions]
+
+        if not top:
+            return "No scoreable candidates found. Try find_jump_target."
+
+        lines = [f"## Suggested Next Papers ({len(top)} candidates)", ""]
+        for i, (cid, score, orth, prox, hops, vibe) in enumerate(top, 1):
+            lines.append(f"{i}. **{vibe.display_name}**")
+            lines.append(f"   Score: {score:.2f} | Orthogonality: {orth:.2f} | Hops: {hops}")
+            # Find which read papers it's connected to
+            connected_to = []
+            for rid in read_ids:
+                if rid in undirected and cid in undirected[rid]:
+                    rv = vibe_map.get(rid)
+                    if rv:
+                        connected_to.append(rv.display_name)
+            if connected_to:
+                lines.append(f"   Connected to: {', '.join(connected_to[:3])}")
+            lines.append("")
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error suggesting papers: {exc}"
+
+
+def get_coverage_gaps(
+    review_text: str,
+    already_read: list[str] | None = None,
+    previous_coverage: float = 0.0,
+    threshold: float = 0.5,
+) -> str:
+    """Compute coverage, map gaps to papers, and track improvement delta.
+
+    Call this after each draft revision to measure progress. The delta
+    tells you whether to keep iterating or stop.
+
+    Args:
+        review_text: Current draft text.
+        already_read: Papers you have read (to distinguish read vs unread gaps).
+        previous_coverage: Coverage score from the previous iteration (for delta).
+        threshold: Cosine distance threshold for "covered" (default 0.5).
+
+    Returns:
+        Coverage report with delta, per-paper gaps, and convergence signal.
+    """
+    try:
+        from collections import Counter
+
+        from sqlmodel import select
+
+        from scholarforge.evaluate.coverage import compute_coverage
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Paper
+
+        result = compute_coverage(review_text, threshold=threshold)
+        delta = result.coverage_ratio - previous_coverage
+        significant = abs(delta) >= 0.02
+
+        # Resolve read patterns for gap analysis
+        read_names = set()
+        if already_read:
+            with get_session() as session:
+                all_papers = session.exec(select(Paper)).all()
+            for pattern in already_read:
+                lower = pattern.lower()
+                for p in all_papers:
+                    if lower in p.display_name().lower() or lower in p.title.lower():
+                        read_names.add(p.display_name())
+                        break
+
+        lines = [
+            "## Coverage Report",
+            "",
+            f"**Overall coverage**: {result.coverage_ratio:.1%}",
+            f"**Delta from previous**: {delta:+.1%}",
+            f"**Corpus chunks**: {len(result.distances)}",
+            "",
+        ]
+
+        # Convergence signal
+        if previous_coverage > 0:
+            if significant:
+                lines.append("**Status**: Significant improvement, continue iterating")
+            else:
+                lines.append("**Status**: Coverage plateau (<2% gain), consider stopping")
+        lines.append("")
+
+        # Gap analysis: count uncovered chunks per paper
+        gap_counts: Counter = Counter()
+        for gap in result.uncovered_chunks:
+            gap_counts[gap["paper"]] += 1
+
+        # Split into read vs unread
+        unread_gaps = {n: c for n, c in gap_counts.items() if n not in read_names}
+        read_gaps = {n: c for n, c in gap_counts.items() if n in read_names}
+
+        if unread_gaps:
+            lines.append("### Unread papers with uncovered content (high priority)")
+            for name, count in sorted(unread_gaps.items(), key=lambda x: x[1], reverse=True)[:5]:
+                cov = result.paper_coverage.get(name, 0.0)
+                lines.append(f"  {count} gaps, {cov:.0%} covered -> **{name}**")
+            lines.append("")
+
+        if read_gaps:
+            lines.append("### Already-read papers with remaining gaps")
+            for name, count in sorted(read_gaps.items(), key=lambda x: x[1], reverse=True)[:3]:
+                cov = result.paper_coverage.get(name, 0.0)
+                lines.append(f"  {count} gaps, {cov:.0%} covered -> {name}")
+            lines.append("")
+
+        # Least covered papers overall
+        lines.append("### Least covered papers")
+        sorted_papers = sorted(result.paper_coverage.items(), key=lambda x: x[1])[:5]
+        for name, cov in sorted_papers:
+            tag = " (read)" if name in read_names else " **(unread)**"
+            lines.append(f"  {cov:5.1%} {name}{tag}")
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error computing coverage gaps: {exc}"
+
+
+def find_jump_target(
+    already_read: list[str],
+    review_text: str,
+    exhaustion_threshold: float = 0.75,
+) -> str:
+    """Find a paper in a disconnected graph region to break path dependency.
+
+    Use this when suggest_next_papers returns only high-similarity candidates,
+    indicating the local subgraph is exhausted. Identifies papers far from
+    your read set that address the biggest coverage gaps.
+
+    Args:
+        already_read: Papers you have read (display names or title patterns).
+        review_text: Current draft text (for coverage gap analysis).
+        exhaustion_threshold: Similarity above which local neighbors are
+            considered "exhausted" (default 0.75).
+
+    Returns:
+        Jump recommendation with rationale, or message that local
+        neighborhood is not yet exhausted.
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import compute_coverage, compute_paper_vibes
+        from scholarforge.graph.metrics import build_corpus_graph
+
+        read_ids = _resolve_to_paper_ids(already_read)
+        if not read_ids:
+            return "Could not resolve any papers from the provided patterns."
+
+        graph = build_corpus_graph()
+        undirected = graph.to_undirected()
+        read_set = set(read_ids)
+
+        # Find 2-hop neighborhood
+        near_set = set(read_ids)
+        for rid in read_ids:
+            if rid not in undirected:
+                continue
+            for nb in undirected.neighbors(rid):
+                near_set.add(nb)
+                for nb2 in undirected.neighbors(nb):
+                    near_set.add(nb2)
+
+        # Compute vibes
+        vibes = compute_paper_vibes()
+        vibe_map = {v.paper_id: v for v in vibes}
+        read_centroid = _compute_read_centroid(read_ids, vibe_map)
+
+        if read_centroid is None:
+            return "Could not compute read centroid."
+
+        # Check if local neighborhood is exhausted
+        local_unread = near_set - read_set
+        local_sims = []
+        for pid in local_unread:
+            vibe = vibe_map.get(pid)
+            if vibe is not None:
+                sim = float(np.dot(vibe.centroid, read_centroid))
+                local_sims.append(sim)
+
+        is_exhausted = len(local_sims) == 0 or min(local_sims) > exhaustion_threshold
+
+        if not is_exhausted and local_sims:
+            min_sim = min(local_sims)
+            return (
+                f"Local neighborhood NOT exhausted (min similarity: {min_sim:.2f}, "
+                f"threshold: {exhaustion_threshold}). "
+                f"Use suggest_next_papers instead."
+            )
+
+        # Find jump targets: papers outside 2-hop neighborhood
+        far_papers = set(graph.nodes()) - near_set
+
+        if not far_papers:
+            return "No jump targets: all papers are within 2 hops of your read set."
+
+        # Score by coverage gap
+        coverage_result = compute_coverage(review_text)
+        pid_cov = coverage_result.paper_id_coverage
+
+        jump_candidates = []
+        for pid in far_papers:
+            vibe = vibe_map.get(pid)
+            if not vibe:
+                continue
+            paper_cov = pid_cov.get(pid, 1.0)
+            # Score: uncovered fraction weighted by paper size
+            score = (1.0 - paper_cov) * vibe.n_chunks
+            sim = float(np.dot(vibe.centroid, read_centroid))
+            jump_candidates.append((pid, score, paper_cov, sim, vibe))
+
+        jump_candidates.sort(key=lambda x: x[1], reverse=True)
+
+        if not jump_candidates:
+            return "No scoreable jump targets found."
+
+        lines = [
+            "## Jump Recommendation",
+            "",
+            "Local subgraph EXHAUSTED: all 2-hop neighbors are semantically "
+            f"similar to your read set (>{exhaustion_threshold:.0%}).",
+            "",
+        ]
+
+        for i, (pid, score, cov, sim, vibe) in enumerate(jump_candidates[:3], 1):
+            marker = " <- RECOMMENDED" if i == 1 else ""
+            lines.append(f"{i}. **{vibe.display_name}**{marker}")
+            lines.append(
+                f"   Coverage: {cov:.0%} | Similarity to read set: {sim:.2f} "
+                f"| Chunks: {vibe.n_chunks}"
+            )
+            lines.append(f"   Gap score: {score:.1f} (higher = more uncovered content)")
+            lines.append("")
+
+        lines.append(
+            "After reading the jump target, call suggest_next_papers "
+            "to explore its local neighborhood."
+        )
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error finding jump target: {exc}"
+
+
 def get_paper_vibes(top_k: int = 5) -> str:
     """Get the semantic "vibe map" of the corpus.
 

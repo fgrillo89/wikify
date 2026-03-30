@@ -11,13 +11,16 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 | `get_corpus_summary()` | Corpus overview: paper count, top authors, hub papers, topics | Low |
 | `get_graph_metrics()` | PageRank, centrality — which papers are most connected/important | Low |
 | `list_papers(limit=N)` | Browse papers with metadata | Low |
-| `read_paper_digest(pattern="...")` | Condensed digest: metadata + abstract + key sections (~2KB) | **Low** |
-| `deep_read(pattern="...")` | Full text of a specific paper (~70KB) — reserve for 3-5 critical papers | **High** |
+| `read_paper_digest(pattern="...", reason="...")` | Condensed digest: metadata + abstract + key sections (~2KB) | **Low** |
+| `deep_read(pattern="...", reason="...")` | Full text of a specific paper (~70KB) — reserve for 3-5 critical papers | **High** |
 | `search_papers(query="...", top_k=N, max_tokens=N, reason="...")` | Semantic search across the corpus | Medium |
 | `get_sections(section_type="...", reason="...")` | Read specific sections (conclusion, methods, etc.) across all papers | Medium |
 | `get_paper(pattern="...")` | Detailed metadata + chunks for one paper | Medium |
 | `get_paper_vibes(top_k=5)` | Semantic similarity map: each paper's nearest neighbors by content | Medium |
-| `evaluate_coverage(review_text, threshold=0.5)` | Measure how well your review covers the corpus semantically | Medium |
+| `suggest_next_papers(already_read=[...], max_suggestions=3)` | Graph-connected but semantically orthogonal papers to read next | Medium |
+| `get_coverage_gaps(review_text, already_read=[...], previous_coverage=0.0)` | Coverage delta + gap-to-paper mapping | **Medium** |
+| `find_jump_target(already_read=[...], review_text)` | Break path dependency: jump to uncovered graph region | Medium |
+| `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
 | `get_reading_log_text()` | View the current reading trace | Free |
 | `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
 
@@ -26,37 +29,43 @@ Import from: `from scholarforge.agent.tools import <function_name>`
 ### Reading log — always use `reason`
 Every read tool has a `reason` parameter. **Always provide it** — explain in one sentence why you are reading this paper or running this search. This builds a reading trace the user can review to understand your research process and guide your exploration.
 
-At the end of generation, call `save_reading_log(output_dir)` to write the trace alongside the output files.
-
 ### Token-efficient reading strategy
 - Use `read_paper_digest` for most papers — returns metadata + abstract + intro/conclusion/results excerpts (~2KB). No LLM summarization; it's a cheap preview to decide if a full read is needed.
 - Only use `deep_read` for the 3-5 most critical papers that need full-text analysis (~70KB each)
 - Use `search_papers` with focused queries to find specific data points
 - Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
-- Batch multiple `read_paper_digest` calls in a single Python command to reduce overhead
 
-## Your Strategy
+## Your Strategy: Iterative Coverage-Driven Snowball
 
-**Default: Snowball** — Explore from both ends of the graph:
+**Write early, measure often, read to fill gaps.** Do NOT read the entire corpus before writing. A partial draft is more useful than comprehensive notes.
 
-1. **Seeds (hubs)**: Get `get_graph_metrics()`. Deep-read the top 2-3 hub papers (highest PageRank). These are the most-cited, most-connected works.
-2. **Outward rings**: Follow citation/similarity edges from seeds. For each neighbor: digest it first, then decide whether to deep-read, read specific sections (conclusion, results), or move on.
-3. **Frontier scan**: Also examine the peripheral/frontier papers (lowest connectivity). These are often newer, niche, or from adjacent fields. Digest each one and assess: is this relevant? Does it offer a contrasting perspective, an emerging technique, or an unexplored angle? If yes, read deeper (conclusions, methods, or full text). If not, note why and move on.
-4. **Bridge papers**: Check bridge papers (high betweenness centrality) — they connect different research clusters and often contain cross-disciplinary insights worth reading.
+### Phase 1 — Seed Read (Iteration 0)
 
-**Reading depth is your decision.** For each paper, choose the appropriate level:
+1. Call `get_graph_metrics()` to identify hub, bridge, and frontier papers.
+2. Deep-read the top 2-3 hub papers (highest PageRank).
+3. Write an initial draft (~60% of final length). Focus on the themes the hubs cover.
+
+### Phase 2 — Measure and Navigate (Iterations 1-5)
+
+After each draft revision, execute this decision loop:
+
+1. **Measure**: `get_coverage_gaps(review_text=draft, already_read=[...], previous_coverage=last_score)`
+
+2. **If delta >= 2%**: Continue. Call `suggest_next_papers(already_read=[...])` to find 1-3 papers that are graph-connected but semantically orthogonal to what you have read. Read them (digest first, deep-read if critical). Revise the draft. Re-measure.
+
+3. **If delta < 2% AND unread gaps remain**: Call `find_jump_target(already_read=[...], review_text=draft)`. If local subgraph is exhausted, jump to the recommended paper and continue from there.
+
+4. **If delta < 2% AND no significant gaps**: **Stop iterating.** The draft has converged.
+
+### Convergence Criteria (stop when ANY hold)
+- Coverage gain < 2% in the last iteration
+- 5 iterations completed (hard cap)
+- `find_jump_target` returns "no targets" AND `suggest_next_papers` candidates all have orthogonality < 0.3
+
+### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good enough for most papers.
-- `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion of a specific paper
-- `get_sections(section_type="results", paper_pattern="...")` — just the results
+- `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion
 - `deep_read` — full text (~70KB). Reserve for the 3-5 most critical papers.
-
-You decide how to explore — snowball is the default but you can mix in other approaches:
-
-- **Question-driven**: Formulate questions from the user's prompt, `search_papers` for answers
-- **Section-mining**: `get_sections(section_type="conclusion")` to quickly scan findings across all papers
-- **Breadth-first**: `list_papers()` to see everything, then digest selectively
-
-The goal is to understand the literature deeply enough to write about it with authority. You have full autonomy over which papers to read and how deeply — use your judgment.
 
 ## Writing
 
@@ -78,8 +87,6 @@ from scholarforge.agent.defaults import build_generation_prompt
 print(build_generation_prompt(artifact_type_id='lit_review', journal='...', field_hint='<topic>'))
 ```
 
-Read the output carefully before writing — it contains the banned words list, structural rules, and field-specific conventions.
-
 ## Export
 
 After writing, save and export (PDF is always generated by default):
@@ -87,8 +94,6 @@ After writing, save and export (PDF is always generated by default):
 from scholarforge.agent.workflows import export_paper
 outputs = export_paper(markdown_text, "data/output/paper.md", journal="...", docx=True, pdf=True)
 ```
-
-This resolves `[REF:...]` to numbered citations `[N]`, builds the bibliography, applies chemistry subscripts, and exports to DOCX + PDF.
 
 Then save the reading log alongside:
 ```python

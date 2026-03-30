@@ -45,8 +45,9 @@ class CoverageResult:
     # Redundancy — review chunks that overlap too much with each other
     redundant_pairs: list[tuple[int, int, float]] = field(default_factory=list)
 
-    # Paper-level coverage
-    paper_coverage: dict[str, float] = field(default_factory=dict)  # paper_id -> coverage ratio
+    # Paper-level coverage (keyed by display_name and by paper_id)
+    paper_coverage: dict[str, float] = field(default_factory=dict)  # display_name -> ratio
+    paper_id_coverage: dict[str, float] = field(default_factory=dict)  # paper_id -> ratio
 
     def summary(self) -> str:
         """Human-readable summary."""
@@ -177,17 +178,24 @@ def compute_coverage(
                 if dist < 0.1:  # very similar review chunks
                     redundant.append((i, j, float(dist)))
 
-    # 8. Per-paper coverage
-    paper_chunks: dict[str, list[int]] = {}
+    # 8. Per-paper coverage (both by display_name and by paper_id)
+    paper_chunks_by_name: dict[str, list[int]] = {}
+    paper_chunks_by_id: dict[str, list[int]] = {}
     for i, c in enumerate(chunks):
         paper = papers.get(c.paper_id)
         name = paper.display_name() if paper else c.paper_id[:16]
-        paper_chunks.setdefault(name, []).append(i)
+        paper_chunks_by_name.setdefault(name, []).append(i)
+        paper_chunks_by_id.setdefault(c.paper_id, []).append(i)
 
     paper_cov = {}
-    for name, indices in paper_chunks.items():
+    for name, indices in paper_chunks_by_name.items():
         paper_dists = nearest_distances[indices]
         paper_cov[name] = float(np.mean(paper_dists < threshold))
+
+    paper_id_cov = {}
+    for pid, indices in paper_chunks_by_id.items():
+        paper_dists = nearest_distances[indices]
+        paper_id_cov[pid] = float(np.mean(paper_dists < threshold))
 
     return CoverageResult(
         coverage_ratio=coverage_ratio,
@@ -198,6 +206,7 @@ def compute_coverage(
         uncovered_chunks=uncovered[:20],  # top 20 gaps
         redundant_pairs=redundant,
         paper_coverage=paper_cov,
+        paper_id_coverage=paper_id_cov,
     )
 
 
