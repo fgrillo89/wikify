@@ -35,14 +35,24 @@ At the end of generation, call `save_reading_log(output_dir)` to write the trace
 
 ## Your Strategy
 
-**Default: Snowball** — Start from 2-3 seed papers (highest PageRank from `get_graph_metrics()`), then follow citation chains outward. For each ring: digest the paper, decide if it's worth a full read, and track what you find. This mimics how researchers actually discover literature.
+**Default: Snowball** — Explore from both ends of the graph:
+
+1. **Seeds (hubs)**: Get `get_graph_metrics()`. Deep-read the top 2-3 hub papers (highest PageRank). These are the most-cited, most-connected works.
+2. **Outward rings**: Follow citation/similarity edges from seeds. For each neighbor: digest it first, then decide whether to deep-read, read specific sections (conclusion, results), or move on.
+3. **Frontier scan**: Also examine the peripheral/frontier papers (lowest connectivity). These are often newer, niche, or from adjacent fields. Digest each one and assess: is this relevant? Does it offer a contrasting perspective, an emerging technique, or an unexplored angle? If yes, read deeper (conclusions, methods, or full text). If not, note why and move on.
+4. **Bridge papers**: Check bridge papers (high betweenness centrality) — they connect different research clusters and often contain cross-disciplinary insights worth reading.
+
+**Reading depth is your decision.** For each paper, choose the appropriate level:
+- `read_paper_digest` — abstract + key section excerpts (~2KB). Good enough for most papers.
+- `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion of a specific paper
+- `get_sections(section_type="results", paper_pattern="...")` — just the results
+- `deep_read` — full text (~70KB). Reserve for the 3-5 most critical papers.
 
 You decide how to explore — snowball is the default but you can mix in other approaches:
 
-- **Hub-first**: Start with `get_graph_metrics()`, deep-read the most influential papers
-- **Breadth-first**: `list_papers()` to see everything, then digest selectively
 - **Question-driven**: Formulate questions from the user's prompt, `search_papers` for answers
-- **Section-mining**: `get_sections(section_type="conclusion")` to quickly scan findings
+- **Section-mining**: `get_sections(section_type="conclusion")` to quickly scan findings across all papers
+- **Breadth-first**: `list_papers()` to see everything, then digest selectively
 
 The goal is to understand the literature deeply enough to write about it with authority. You have full autonomy over which papers to read and how deeply — use your judgment.
 
