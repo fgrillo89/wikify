@@ -39,6 +39,19 @@ General rules for how Claude should operate in this project.
 
 - **Commit and push regularly**: Commit and push after every meaningful progress — don't batch up changes. This includes code changes, doc updates, and bug fixes. Small frequent commits are better than large infrequent ones.
 
+## Output Quality Review Criteria
+
+When scoring or reviewing generated text (strategy comparisons, quality assessments, etc.), always evaluate these criteria alongside thematic organization, citation density, and style guide compliance:
+
+| Criterion | What to measure |
+|-----------|----------------|
+| **Sentence simplicity** | Avg words per sentence; % of sentences > 30 words; are sentences parseable on first read? |
+| **Concept density** | New concepts introduced per sentence (target: 1). Flag sentences that stack 2+ unfamiliar terms. |
+| **Relative clause usage** | Count of which/that/who clauses; flag sentences with 2+ nested clauses. |
+| **Subordinate clause frequency** | % of sentences opening with although/because/while/since (target: <20%). |
+| **Abstract readability** | First sentence <15 words? One concept per sentence? Zero citations (unless foundational)? |
+| **Em-dash violations** | Count of " -- ", " --- ", unicode em/en-dashes used as parenthetical separators (target: 0). |
+
 ## Corrections & Lessons Learned
 
 When the user corrects a mistake or misinterpretation, **add an entry below** so the

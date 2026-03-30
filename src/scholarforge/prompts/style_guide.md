@@ -17,6 +17,12 @@
 
 **Vary sentence length.** Mix short (8-12 words) with long (20-30). Short sentences deliver emphasis. Never five consecutive sentences of similar length.
 
+**One new concept per sentence.** Each sentence should introduce at most one idea the reader has not seen before. If a sentence requires the reader to absorb two unfamiliar terms or relationships, split it. BAD: "The von Neumann bottleneck and the exponentially rising energy cost of conventional digital computing have driven intense research into neuromorphic hardware that co-locates memory and computation in the manner of biological neural circuits." GOOD: "Conventional computers shuttle data between separate memory and processing units. This data-transfer bottleneck limits both speed and energy efficiency. Neuromorphic hardware eliminates the bottleneck by computing directly where data is stored."
+
+**Minimize relative clauses.** Avoid stacking "which/that/who" clauses inside sentences. One relative clause per sentence maximum. If you need two, split the sentence. BAD: "HfO2, which is a high-k dielectric that exhibits resistive switching when deposited by ALD, which provides atomic-level thickness control, has attracted attention." GOOD: "HfO2 is a high-k dielectric that exhibits resistive switching. ALD deposits it with atomic-level thickness control."
+
+**Prefer main clauses.** Default to subject-verb-object. Subordinate clauses (although, because, while, since) should appear no more than once per sentence and should not open more than 20% of sentences in a section.
+
 **Be specific.** Numbers, not vague quantifiers. "Three samples" not "several." "At 350 K" not "at elevated temperature." Specificity is the strongest signal of human expertise.
 
 ## Paragraph Flow
