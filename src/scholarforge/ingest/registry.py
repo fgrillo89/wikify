@@ -200,8 +200,11 @@ def _run_incremental_steps(paper_id: str) -> None:
                 )
             topic_session.commit()
 
-        # ── Embed summary ───────────────────────────────────────────────────
+        # ── Embed summary + chunks ─────────────────────────────────────────
         embed_summaries([paper])
+        from scholarforge.store.embeddings import embed_chunks
+
+        embed_chunks(chunks)
 
         # ── k-NN similarity (query only this paper) ────────────────────────
         similar_pairs = query_similar(paper.id, n_results=5)
@@ -339,7 +342,11 @@ def run_batch_steps(new_paper_ids: set[str] | None = None) -> None:
             return sess.exec(select(func.count(FigureRef.id))).one()
 
     def _task_embed():
-        return embed_summaries(papers)
+        from scholarforge.store.embeddings import embed_chunks
+
+        n_summaries = embed_summaries(papers)
+        n_chunks = embed_chunks(all_chunks)
+        return {"summaries": n_summaries, "chunks": n_chunks}
 
     def _task_coupling():
         return compute_coupling(paper_ids)

@@ -90,10 +90,8 @@ def compute_coverage(
     from sqlmodel import select
 
     from scholarforge.store.db import get_session
-    from scholarforge.store.embeddings import _store
+    from scholarforge.store.embeddings import _store, get_chunk_embeddings
     from scholarforge.store.models import Chunk, Paper
-
-    model = _store.model
 
     # 1. Get all corpus chunks and their paper info
     with get_session() as session:
@@ -105,10 +103,19 @@ def compute_coverage(
             coverage_ratio=0.0, mean_distance=1.0, median_distance=1.0, threshold=threshold
         )
 
-    # 2. Embed corpus chunks (batch encode)
-    corpus_texts = [c.content for c in chunks]
-    corpus_embeddings = model.encode(corpus_texts, show_progress_bar=False, batch_size=64)
-    corpus_embeddings = np.array(corpus_embeddings)
+    # 2. Get corpus chunk embeddings (stored or re-encode)
+    all_ids = [c.id for c in chunks]
+    stored = get_chunk_embeddings(all_ids)
+
+    if stored and len(stored) >= len(chunks) * 0.9:
+        # Use stored embeddings
+        corpus_embeddings = np.array([stored[c.id] for c in chunks if c.id in stored])
+    else:
+        # Fallback: encode from scratch
+        model = _store.model
+        corpus_texts = [c.content for c in chunks]
+        corpus_embeddings = model.encode(corpus_texts, show_progress_bar=False, batch_size=64)
+        corpus_embeddings = np.array(corpus_embeddings)
 
     # Normalize for cosine similarity
     corpus_norms = np.linalg.norm(corpus_embeddings, axis=1, keepdims=True)
@@ -134,6 +141,7 @@ def compute_coverage(
             coverage_ratio=0.0, mean_distance=1.0, median_distance=1.0, threshold=threshold
         )
 
+    model = _store.model
     review_embeddings = model.encode(review_chunks, show_progress_bar=False, batch_size=64)
     review_embeddings = np.array(review_embeddings)
     review_norms = np.linalg.norm(review_embeddings, axis=1, keepdims=True)
@@ -243,10 +251,8 @@ def compute_paper_vibes() -> list[PaperVibe]:
     from sqlmodel import select
 
     from scholarforge.store.db import get_session
-    from scholarforge.store.embeddings import _store
+    from scholarforge.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
     from scholarforge.store.models import Chunk, Paper
-
-    model = _store.model
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -255,17 +261,50 @@ def compute_paper_vibes() -> list[PaperVibe]:
     if not chunks:
         return []
 
-    # Group chunks by paper
+    # Try stored vibe vectors first (fast path — no re-encoding)
+    stored_vibes = get_paper_vibe_vectors()
+
+    # Group chunks by paper for section info
     paper_chunks: dict[str, list[Chunk]] = {}
     for c in chunks:
         paper_chunks.setdefault(c.paper_id, []).append(c)
 
-    # Batch-encode all chunks at once for efficiency
-    all_texts = [c.content for c in chunks]
-    all_embeddings = model.encode(all_texts, show_progress_bar=False, batch_size=64)
+    # If stored vibes cover all papers, use them directly
+    if stored_vibes and len(stored_vibes) >= len(paper_chunks):
+        vibes = []
+        for paper_id, p_chunks in paper_chunks.items():
+            paper = papers.get(paper_id)
+            if not paper or paper_id not in stored_vibes:
+                continue
+            section_counter: Counter = Counter()
+            for c in p_chunks:
+                if c.section_type:
+                    section_counter[c.section_type] += 1
+            dominant = [s for s, _ in section_counter.most_common(3)]
+            vibes.append(
+                PaperVibe(
+                    paper_id=paper_id,
+                    display_name=paper.display_name(),
+                    centroid=np.array(stored_vibes[paper_id]),
+                    n_chunks=len(p_chunks),
+                    dominant_sections=dominant,
+                )
+            )
+        vibes.sort(key=lambda v: v.display_name)
+        return vibes
 
-    # Map chunk id -> embedding index
-    chunk_id_to_idx = {c.id: i for i, c in enumerate(chunks)}
+    # Fallback: compute from stored chunk embeddings
+    all_ids = [c.id for c in chunks]
+    stored_embs = get_chunk_embeddings(all_ids)
+
+    # If no chunk embeddings stored, encode from scratch
+    if not stored_embs:
+        from scholarforge.store.embeddings import _store
+
+        model = _store.model
+        all_texts = [c.content for c in chunks]
+        all_embeddings = model.encode(all_texts, show_progress_bar=False, batch_size=64)
+        stored_embs = {c.id: all_embeddings[i].tolist() for i, c in enumerate(chunks)}
 
     vibes = []
     for paper_id, p_chunks in paper_chunks.items():
@@ -276,14 +315,18 @@ def compute_paper_vibes() -> list[PaperVibe]:
         # Token-weighted centroid
         embeddings = []
         weights = []
-        section_counter: Counter = Counter()
+        section_counter_inner: Counter = Counter()
 
         for c in p_chunks:
-            idx = chunk_id_to_idx[c.id]
-            embeddings.append(all_embeddings[idx])
-            weights.append(c.token_count)
+            emb = stored_embs.get(c.id)
+            if emb is not None:
+                embeddings.append(emb)
+                weights.append(c.token_count)
             if c.section_type:
-                section_counter[c.section_type] += 1
+                section_counter_inner[c.section_type] += 1
+
+        if not embeddings:
+            continue
 
         emb_array = np.array(embeddings)
         weight_array = np.array(weights, dtype=float)
@@ -295,7 +338,7 @@ def compute_paper_vibes() -> list[PaperVibe]:
         if norm > 0:
             centroid = centroid / norm
 
-        dominant = [s for s, _ in section_counter.most_common(3)]
+        dominant = [s for s, _ in section_counter_inner.most_common(3)]
 
         vibes.append(
             PaperVibe(
