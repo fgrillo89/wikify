@@ -342,10 +342,17 @@ def run_batch_steps(new_paper_ids: set[str] | None = None) -> None:
             return sess.exec(select(func.count(FigureRef.id))).one()
 
     def _task_embed():
+        import logging
+
         from scholarforge.store.embeddings import embed_chunks
 
+        logger = logging.getLogger("scholarforge.ingest")
+        logger.info("Embedding %d paper summaries...", len(papers))
         n_summaries = embed_summaries(papers)
+        logger.info("Summaries embedded: %d", n_summaries)
+        logger.info("Embedding %d chunks...", len(all_chunks))
         n_chunks = embed_chunks(all_chunks)
+        logger.info("Chunks embedded: %d", n_chunks)
         return {"summaries": n_summaries, "chunks": n_chunks}
 
     def _task_coupling():

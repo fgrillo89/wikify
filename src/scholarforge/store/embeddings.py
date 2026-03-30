@@ -46,7 +46,11 @@ class EmbeddingStore:
 
     @property
     def model(self) -> SentenceTransformer:
-        """SentenceTransformer model, loaded on first access."""
+        """SentenceTransformer model, loaded on first access.
+
+        Uses ONNX quantized backend by default for ~20% faster CPU inference.
+        Set SCHOLARFORGE_EMBEDDING_BACKEND=torch to fall back to PyTorch.
+        """
         if self._model is None:
             import os
 
@@ -54,7 +58,20 @@ class EmbeddingStore:
 
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-            self._model = SentenceTransformer(self._model_name)
+
+            backend = settings.embedding_backend
+            model_kwargs = {}
+            if backend == "onnx":
+                model_kwargs["file_name"] = settings.embedding_onnx_file
+            try:
+                self._model = SentenceTransformer(
+                    self._model_name,
+                    backend=backend,
+                    model_kwargs=model_kwargs if backend == "onnx" else {},
+                )
+            except Exception:  # noqa: BLE001
+                # Fallback to PyTorch if ONNX fails
+                self._model = SentenceTransformer(self._model_name)
         return self._model
 
     @property

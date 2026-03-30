@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # LLM
     llm_model: str = "claude-sonnet-4-20250514"
     embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_backend: str = "onnx"  # "onnx" (faster) or "torch" (default)
+    embedding_onnx_file: str = "onnx/model_quint8_avx2.onnx"  # quantized for CPU
 
     # Chunking
     chunk_target_tokens: int = 600
