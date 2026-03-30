@@ -211,6 +211,59 @@ Both modes share: reading log, paper vibes, coverage metric, graph navigation.
 The difference is output format (document vs. conversational answers) and
 convergence criterion (coverage plateau vs. user satisfaction).
 
+## Scalability & Corpus Growth
+
+### What is incremental (adding a paper does not recompute the world)
+
+| Component | On new paper | On batch ingest |
+|-----------|-------------|-----------------|
+| **PDF parsing** | Parse 1 file (~3.5s) | Parallel across cores |
+| **Chunk embedding** | Embed ~25 chunks (~850ms) | Batch-encode all new chunks |
+| **Summary embedding** | Embed 1 summary (<100ms) | Batch-encode all new summaries |
+| **k-NN similarity** | Query ChromaDB for 1 paper | Batch query all new papers |
+| **Citation matching** | Match 1 paper's refs | Pre-compiled regex, index-based |
+| **Topic extraction** | Extract from 1 paper | Pre-compiled vocab patterns |
+| **Vault notes** | Write 1 note | Batch write new notes |
+
+ChromaDB's HNSW index supports incremental upsert — adding a paper does not
+rebuild the index. SQLite handles concurrent reads naturally.
+
+### What is recomputed on demand (not on every ingest)
+
+| Component | When | Cost at 500 papers |
+|-----------|------|-------------------|
+| **Graph metrics** (PageRank, centrality) | Before generation | <1s (NetworkX on ~500 nodes) |
+| **Paper vibe vectors** | Before generation | 0.4s from stored chunk embeddings |
+| **Greedy submodular order** | Before generation | ~3s (lazy greedy with pre-computed paper_sims) |
+| **Coverage metric** | After each draft revision | ~17s (encode review chunks + matrix ops) |
+
+These are intentionally not cached because they depend on the full corpus state.
+Adding paper #501 changes PageRank for all papers and shifts the greedy order.
+Recomputing is cheap enough that caching would add complexity without meaningful
+speedup.
+
+### Storage scaling
+
+| Papers | Chunks | SQLite | ChromaDB (summaries) | ChromaDB (chunks) | Total |
+|--------|--------|--------|---------------------|-------------------|-------|
+| 50 | ~1,300 | 5 MB | 1 MB | 6 MB | ~12 MB |
+| 200 | ~5,000 | 18 MB | 4 MB | 24 MB | ~46 MB |
+| 500 | ~12,500 | 45 MB | 10 MB | 60 MB | ~115 MB |
+| 1,000 | ~25,000 | 90 MB | 20 MB | 120 MB | ~230 MB |
+
+### Known scaling limits
+
+- **Coverage metric**: Encodes review chunks on every call (~2s for the encoding,
+  ~15s for the corpus matrix multiply at 1,300 chunks). At 25,000 chunks the
+  matrix multiply would take ~5min. Mitigation: approximate nearest neighbors
+  via ChromaDB query instead of brute-force matrix multiply.
+- **Greedy submodular phase 1**: Pre-computes paper_sims as N matrix multiplies
+  of (C, D) @ (K, D).T where C = corpus chunks. At 12,500 chunks this is ~2s
+  for 500 papers. Linear scaling, acceptable to 1,000+ papers.
+- **Graph construction**: Builds a NetworkX DiGraph with citation + similarity +
+  coupling edges. At 500 papers (~1,500 edges) this is <1s. NetworkX handles
+  10,000+ nodes without issue.
+
 ## Data Layout
 
 ```

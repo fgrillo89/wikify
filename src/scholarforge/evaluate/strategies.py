@@ -35,6 +35,16 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
     all_ids = [c.id for c in chunks]
     stored = get_chunk_embeddings(all_ids)
 
+    missing = len(all_ids) - len(stored)
+    if missing > 0:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "%d/%d chunks have no stored embedding — run `embed_chunks` first",
+            missing,
+            len(all_ids),
+        )
+
     # Group and normalize per-paper chunk embeddings
     paper_embs_raw: dict[str, list] = {}
     for c in chunks:
