@@ -57,12 +57,20 @@ Never use: "delve/delves/delving," "crucial," "pivotal," "paramount," "groundbre
 
 ## Structural LLM Tells
 
-- **No em-dashes as parenthetical separators.** Use commas or parentheses.
+- **ZERO em-dashes (--) or en-dashes (-) as parenthetical separators.** This is a hard ban. Never write " -- " or " - " to insert a relative clause or aside. Use commas or parentheses instead. Example: BAD: "ALD -- a technique for thin-film growth -- enables..." GOOD: "ALD, a technique for thin-film growth, enables..."
 - **No bullet points in paper body.** Flowing prose only. Lists acceptable only in Methods.
 - **No say-it-three-times pattern.** State things once. Introduction states the problem; Conclusion synthesizes. Do not echo.
 - **No rule-of-three reflexes.** Vary clause structures.
 - **No meta-commentary.** Never "This section discusses..." Just begin with content.
 - **No elegant variation.** "Growth rate" stays "growth rate," not "deposition velocity." Consistent terminology over stylistic variety.
+
+## Abstract and Introduction Readability
+
+- **Introduce one concept per sentence.** Do not stack multiple unfamiliar terms in a single sentence. If the reader needs to understand A to understand B, put them in separate sentences.
+- **Define before you use.** If a term is specialized (e.g., "von Neumann bottleneck"), either define it in the same sentence or replace it with a plain-language description. Never assume the reader knows jargon you have not introduced.
+- **Short opening sentences.** The first sentence of an abstract or introduction should be 15 words or fewer. Hook with a concrete fact, not a compound clause.
+- **Build complexity gradually.** Start each paragraph from what the reader already knows, then introduce the new concept. Do not front-load abstracts with dense, multi-clause sentences.
+- **No citations in abstracts.** The abstract must stand alone without numbered references. The only exception: truly foundational work known to the entire community by author name (e.g., "Watson and Crick" for DNA). If you would not recognize the name without the field, do not cite it in the abstract.
 
 ## Tone
 

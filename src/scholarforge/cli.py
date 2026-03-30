@@ -113,14 +113,14 @@ def generate(
     output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
     journal: str = typer.Option("", "--journal", "-j", help="Target journal for formatting"),
     strategy: str = typer.Option(
-        "flat",
+        "snowball",
         "--strategy",
         "-s",
         help="Retrieval strategy: flat, hub-spoke, topic-cluster, query-driven, snowball",
     ),
     token_budget: int = typer.Option(12000, "--token-budget", help="Max context tokens"),
-    docx: bool = typer.Option(False, "--docx", help="Also export as DOCX"),
-    pdf: bool = typer.Option(False, "--pdf", help="Also export as PDF"),
+    docx: bool = typer.Option(True, "--docx/--no-docx", help="Export DOCX"),
+    pdf: bool = typer.Option(True, "--pdf/--no-pdf", help="Export PDF"),
 ):
     """Generate a review paper from the literature corpus."""
     import time
@@ -198,7 +198,7 @@ def agent_generate(
     max_turns: int = typer.Option(30, "--max-turns", help="Max agent turns"),
     output: str = typer.Option("data/output/paper.md", "--output", "-o"),
     docx: bool = typer.Option(True, "--docx/--no-docx", help="Export DOCX"),
-    pdf: bool = typer.Option(False, "--pdf", help="Export PDF"),
+    pdf: bool = typer.Option(True, "--pdf/--no-pdf", help="Export PDF"),
 ):
     """Generate a paper using the agent loop (LLM explores corpus via tools)."""
     from scholarforge.agent.workflows import export_paper, generate_paper

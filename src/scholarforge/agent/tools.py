@@ -149,6 +149,7 @@ def search_papers(
     query: str,
     top_k: int = 10,
     max_tokens: int = 8000,
+    reason: str = "",
 ) -> str:
     """Semantic search across the literature corpus using embedding similarity.
 
@@ -159,6 +160,7 @@ def search_papers(
         query: Natural language search query.
         top_k: Maximum number of papers to return (default 10).
         max_tokens: Token budget for included text chunks (default 8000).
+        reason: Why you are searching for this (logged for the reading trace).
 
     Returns:
         Formatted text of relevant paper excerpts followed by a metadata summary line.
@@ -167,6 +169,14 @@ def search_papers(
         from scholarforge.retrieve.context import retrieve_for_query
 
         ctx = retrieve_for_query(query, max_papers=top_k, max_tokens=max_tokens)
+
+        # Log this search
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            get_reading_log().log(
+                paper=f"[search: {query}]", tool="search_papers", reason=reason, depth="search"
+            )
 
         text = ctx.as_text()
         if not text:
@@ -419,17 +429,105 @@ def list_topics() -> str:
         return json.dumps({"error": str(exc), "topics": [], "total_papers": 0})
 
 
+def read_paper_digest(
+    pattern: str,
+    max_chars: int = 3000,
+    reason: str = "",
+) -> str:
+    """Read a condensed digest of a paper: metadata + abstract + key sections.
+
+    Much cheaper than deep_read (~2KB vs ~70KB). Use this for broad coverage,
+    and reserve deep_read for the 3-5 most critical papers.
+
+    Args:
+        pattern: Substring to match in title or author list.
+        max_chars: Maximum characters of body text to include (default 3000).
+        reason: Why you are reading this paper (logged for the reading trace).
+
+    Returns:
+        Formatted markdown digest of the paper.
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Chunk, Paper, PaperTopic
+
+        lower = pattern.lower()
+        with get_session() as session:
+            all_papers = session.exec(select(Paper)).all()
+            matched = [
+                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
+            ]
+            if not matched:
+                return f"No paper found matching: {pattern!r}"
+
+            paper = matched[0]
+            chunks = session.exec(
+                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
+            ).all()
+            topics = session.exec(
+                select(PaperTopic).where(PaperTopic.paper_id == paper.id)
+            ).all()
+
+        # Log this read
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            get_reading_log().log(
+                paper=paper.display_name(), tool="read_paper_digest", reason=reason, depth="digest"
+            )
+
+        topic_list = [t.topic for t in topics]
+
+        # Build digest: abstract + intro + conclusion (most informative sections)
+        priority_sections = ["abstract", "introduction", "conclusion", "results", "discussion"]
+        abstract_text = paper.summary or ""
+        body_parts: list[str] = []
+        char_count = 0
+
+        for chunk in chunks:
+            section = (chunk.section_path or "").lower()
+            is_priority = any(s in section for s in priority_sections)
+            if is_priority and char_count < max_chars:
+                text = chunk.content[:max_chars - char_count]
+                body_parts.append(f"[{chunk.section_path}] {text}")
+                char_count += len(text)
+
+        lines = [
+            f"# {paper.title}",
+            f"**Authors**: {', '.join(paper.parsed_authors)}",
+            f"**Year**: {paper.year}",
+            f"**DOI**: {paper.doi or 'N/A'}",
+            f"**Display name**: {paper.display_name()}",
+            f"**Topics**: {', '.join(topic_list) if topic_list else 'N/A'}",
+            f"**Chunks**: {len(chunks)}",
+            "",
+            "## Abstract",
+            abstract_text,
+            "",
+            "## Key Sections",
+            "\n\n".join(body_parts) if body_parts else "(no priority sections found)",
+        ]
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error reading paper: {exc}"
+
+
 def deep_read(
     pattern: str,
+    reason: str = "",
 ) -> str:
     """Retrieve the complete full text of a paper by title/author pattern.
 
     Returns ALL chunks for the matched paper in reading order.
-    This is expensive -- prefer search_papers for exploratory queries.
-    Use this when you need to read an entire paper in detail.
+    This is expensive (~70KB per paper) -- prefer read_paper_digest for
+    broad coverage, and reserve deep_read for the 3-5 most critical papers.
 
     Args:
         pattern: Substring to match in title or author list.
+        reason: Why you are deep-reading this paper (logged for the reading trace).
 
     Returns:
         JSON string with keys:
@@ -468,6 +566,14 @@ def deep_read(
                 select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
             ).all()
 
+        # Log this read
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            get_reading_log().log(
+                paper=paper.display_name(), tool="deep_read", reason=reason, depth="full"
+            )
+
         full_text = "\n\n".join(
             f"[{c.section_path}]\n{c.content}" if c.section_path else c.content for c in chunks
         )
@@ -491,6 +597,7 @@ def deep_read(
 def get_sections(
     section_type: str,
     paper_pattern: str | None = None,
+    reason: str = "",
 ) -> str:
     """Retrieve specific section types across papers.
 
@@ -505,6 +612,7 @@ def get_sections(
         section_type: Canonical section type to retrieve.
         paper_pattern: Optional title/author filter. If None, searches
             all papers.
+        reason: Why you are reading these sections (logged for the reading trace).
 
     Returns:
         Formatted text with sections grouped by paper, or error message.
@@ -566,6 +674,15 @@ def get_sections(
         if not chunks:
             return f"No '{st}' sections match pattern '{paper_pattern}'."
 
+        # Log this section read
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            label = f"[sections: {st}]"
+            if paper_pattern:
+                label += f" filter={paper_pattern}"
+            get_reading_log().log(paper=label, tool="get_sections", reason=reason, depth="section")
+
         # Group by paper and format
         by_paper: dict[str, list] = defaultdict(list)
         for c in chunks:
@@ -589,6 +706,42 @@ def get_sections(
         return header + "\n---\n\n".join(sections)
     except Exception as exc:  # noqa: BLE001
         return f"Error retrieving sections: {exc}"
+
+
+def get_reading_log_text() -> str:
+    """Get the current reading log as markdown.
+
+    Returns the trace of all papers read during this session, including
+    which tool was used and the reason for each read. Returns empty
+    message if no papers have been read yet.
+    """
+    from scholarforge.agent.reading_log import get_reading_log
+
+    log = get_reading_log()
+    if not log.entries:
+        return "No papers have been read yet in this session."
+    return log.to_markdown()
+
+
+def save_reading_log(output_dir: str, basename: str = "reading_log") -> str:
+    """Save the reading log to disk alongside the output files.
+
+    Writes both .md (human-readable) and .json (machine-readable) versions.
+
+    Args:
+        output_dir: Directory to save the log files.
+        basename: Filename stem (default: "reading_log").
+
+    Returns:
+        Path to the saved markdown log.
+    """
+    from scholarforge.agent.reading_log import get_reading_log
+
+    log = get_reading_log()
+    if not log.entries:
+        return "No papers have been read yet — nothing to save."
+    path = log.save(output_dir, basename)
+    return f"Reading log saved: {path} ({len(log.entries)} entries)"
 
 
 def ingest_paper(file_path: str) -> str:

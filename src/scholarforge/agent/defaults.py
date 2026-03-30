@@ -17,21 +17,27 @@ def get_default_tools() -> list[Callable]:
         get_corpus_summary,
         get_graph_metrics,
         get_paper,
+        get_reading_log_text,
         get_sections,
         list_papers,
         list_topics,
+        read_paper_digest,
+        save_reading_log,
         search_papers,
     )
 
     return [
         list_papers,
         search_papers,
+        read_paper_digest,
         deep_read,
         get_paper,
         get_graph_metrics,
         get_sections,
         list_topics,
         get_corpus_summary,
+        get_reading_log_text,
+        save_reading_log,
     ]
 
 
