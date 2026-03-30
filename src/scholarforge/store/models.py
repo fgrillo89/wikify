@@ -23,6 +23,13 @@ class DocType(str, Enum):
     OTHER = "other"
 
 
+class PaperOrigin(str, Enum):
+    """Distinguishes ingested corpus papers from generated output."""
+
+    CORPUS = "corpus"  # Ingested from PDF/DOCX — part of the knowledge base
+    GENERATED = "generated"  # Produced by the writing pipeline — NOT part of corpus
+
+
 class Paper(SQLModel, table=True):
     """A research paper or document in the knowledge base."""
 
@@ -33,6 +40,7 @@ class Paper(SQLModel, table=True):
     year: Optional[int] = None
     doi: Optional[str] = None
     doc_type: str = DocType.PAPER  # paper, report, proposal, note, presentation
+    origin: str = PaperOrigin.CORPUS  # "corpus" or "generated"
     zotero_key: Optional[str] = None
     source_path: str = ""
     file_hash: str = ""  # For change detection on re-ingest
@@ -135,6 +143,56 @@ class JournalTemplate(SQLModel, table=True):
     source_url: str = ""  # where to download from
     imported_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     notes: str = ""
+
+
+# ── Project & Output models ──────────────────────────────────────────────────
+
+
+class Project(SQLModel, table=True):
+    """A research project — groups corpus papers and generated outputs.
+
+    Each project has its own corpus scope. Papers can belong to multiple
+    projects (many-to-many via ProjectPaper). Outputs belong to exactly
+    one project.
+    """
+
+    id: str = Field(primary_key=True)  # slug, e.g. "ald-memristors"
+    name: str  # human-readable, e.g. "ALD Memristors for Neuromorphic"
+    description: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ProjectPaper(SQLModel, table=True):
+    """Many-to-many: which papers belong to which project's corpus."""
+
+    project_id: str = Field(foreign_key="project.id", primary_key=True)
+    paper_id: str = Field(foreign_key="paper.id", primary_key=True)
+
+
+class GeneratedOutput(SQLModel, table=True):
+    """A generated document (review, paper, presentation, etc.).
+
+    Tracks the output separately from corpus papers. Stores the generation
+    context (strategy, reading log, coverage score) for reproducibility.
+    """
+
+    id: str = Field(primary_key=True)  # UUID
+    project_id: Optional[str] = Field(default=None, foreign_key="project.id")
+    title: str = ""
+    artifact_type: str = "lit_review"  # lit_review, research, abstract, etc.
+    strategy: str = ""  # snowball, greedy_submodular, etc.
+    journal: str = ""  # target journal for formatting
+    markdown_path: str = ""  # path to .md output
+    docx_path: str = ""
+    pdf_path: str = ""
+    reading_log_path: str = ""
+    coverage_score: Optional[float] = None
+    word_count: int = 0
+    citation_count: int = 0
+    token_cost: int = 0  # total tokens consumed during generation
+    duration_seconds: float = 0.0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata_json: str = "{}"  # flexible JSON for strategy-specific data
 
 
 # ── Knowledge Graph types ─────────────────────────────────────────────────────

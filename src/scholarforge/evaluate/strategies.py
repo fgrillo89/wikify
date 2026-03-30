@@ -23,14 +23,10 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
         (corpus_embs, paper_embs) where corpus_embs is (N, 384) normalized
         and paper_embs maps paper_id -> (K, 384) normalized chunk embeddings.
     """
-    from sqlmodel import select
-
-    from scholarforge.store.db import get_session
+    from scholarforge.evaluate.coverage import load_corpus_chunks
     from scholarforge.store.embeddings import get_chunk_embeddings
-    from scholarforge.store.models import Chunk
 
-    with get_session() as session:
-        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
+    chunks = load_corpus_chunks()
 
     all_ids = [c.id for c in chunks]
     stored = get_chunk_embeddings(all_ids)
@@ -322,14 +318,10 @@ def compute_cumulative_coverage(
 
     Returns a list of dicts with coverage metrics at each step.
     """
-    from sqlmodel import select
-
-    from scholarforge.store.db import get_session
+    from scholarforge.evaluate.coverage import load_corpus_chunks
     from scholarforge.store.embeddings import get_chunk_embeddings
-    from scholarforge.store.models import Chunk
 
-    with get_session() as session:
-        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
+    chunks = load_corpus_chunks()
 
     all_ids = [c.id for c in chunks]
     stored = get_chunk_embeddings(all_ids)

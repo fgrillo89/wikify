@@ -14,8 +14,11 @@ from scholarforge.config import settings
 from scholarforge.store.models import (  # noqa: F401 — ensure tables created
     Citation,
     FigureRef,
+    GeneratedOutput,
     JournalTemplate,
     PaperTopic,
+    Project,
+    ProjectPaper,
 )
 
 
@@ -39,11 +42,31 @@ class DatabaseManager:
             settings.ensure_dirs()
             self._engine = create_engine(f"sqlite:///{path}", echo=self._echo)
             SQLModel.metadata.create_all(self._engine)
+            _run_migrations(self._engine)
         return self._engine
 
     def session(self) -> Session:
         """Create a new session bound to this manager's engine."""
         return Session(self.engine)
+
+
+def _run_migrations(engine) -> None:
+    """Apply lightweight schema migrations for new columns.
+
+    SQLModel's create_all only creates missing tables, not columns.
+    This adds columns introduced after the initial schema.
+    """
+    import sqlalchemy
+
+    with engine.connect() as conn:
+        # Migration 1: Paper.origin column (added 2026-03-30)
+        try:
+            conn.execute(sqlalchemy.text("SELECT origin FROM paper LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text("ALTER TABLE paper ADD COLUMN origin VARCHAR DEFAULT 'corpus'")
+            )
+            conn.commit()
 
 
 # ── Module-level instance ─────────────────────────────────────────────────────

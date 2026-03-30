@@ -209,19 +209,16 @@ def get_paper_vibe_vectors() -> dict[str, list[float]]:
     Returns a dict mapping paper_id -> normalized 384-dim centroid vector.
     """
     import numpy as np
-    from sqlmodel import select
 
-    from scholarforge.store.db import get_session
-    from scholarforge.store.models import Chunk
+    from scholarforge.evaluate.coverage import load_corpus_chunks
 
-    with get_session() as session:
-        chunks = session.exec(select(Chunk)).all()
+    chunks = load_corpus_chunks()
 
     if not chunks:
         return {}
 
     # Group chunks by paper
-    paper_chunks: dict[str, list[Chunk]] = {}
+    paper_chunks: dict[str, list] = {}
     for c in chunks:
         paper_chunks.setdefault(c.paper_id, []).append(c)
 

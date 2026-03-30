@@ -23,7 +23,43 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    pass
+    from scholarforge.store.models import Chunk
+
+
+def get_corpus_paper_ids() -> set[str]:
+    """Return paper IDs that belong to the ingested corpus (not generated output).
+
+    Uses the Paper.origin field: "corpus" for ingested papers, "generated" for
+    writing pipeline output. This prevents generated content from contaminating
+    corpus metrics like coverage, vibe vectors, and strategy ordering.
+    """
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Paper, PaperOrigin
+
+    with get_session() as session:
+        papers = session.exec(
+            select(Paper).where(Paper.origin == PaperOrigin.CORPUS)
+        ).all()
+    return {p.id for p in papers}
+
+
+def load_corpus_chunks() -> list[Chunk]:
+    """Load only chunks belonging to ingested corpus papers.
+
+    Filters out any chunks from generated output or other non-corpus sources,
+    using the Paper.origin field as the authoritative source of truth.
+    """
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Chunk
+
+    corpus_pids = get_corpus_paper_ids()
+    with get_session() as session:
+        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
+    return [c for c in chunks if c.paper_id in corpus_pids]
 
 
 @dataclass
@@ -91,11 +127,11 @@ def compute_coverage(
 
     from scholarforge.store.db import get_session
     from scholarforge.store.embeddings import _store, get_chunk_embeddings
-    from scholarforge.store.models import Chunk, Paper
+    from scholarforge.store.models import Paper
 
-    # 1. Get all corpus chunks and their paper info
+    # 1. Get corpus chunks only (excludes generated output)
+    chunks = load_corpus_chunks()
     with get_session() as session:
-        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
 
     if not chunks:
@@ -252,11 +288,12 @@ def compute_paper_vibes() -> list[PaperVibe]:
 
     from scholarforge.store.db import get_session
     from scholarforge.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
-    from scholarforge.store.models import Chunk, Paper
+    from scholarforge.store.models import Paper
 
+    # Load only corpus chunks (excludes generated output)
+    chunks = load_corpus_chunks()
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
-        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
 
     if not chunks:
         return []

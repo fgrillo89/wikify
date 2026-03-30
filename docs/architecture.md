@@ -71,9 +71,9 @@ src/scholarforge/
 │   └── cite_match.py               # Fuzzy citation matching
 │
 ├── store/                          # SQLite + ChromaDB
-│   ├── models.py                   # Paper, Chunk, Citation, JournalTemplate, etc.
-│   ├── db.py                       # Engine + session management
-│   └── embeddings.py               # EmbeddingStore (DI-friendly)
+│   ├── models.py                   # Paper, Chunk, Citation, Project, GeneratedOutput, etc.
+│   ├── db.py                       # Engine + session management + migrations
+│   └── embeddings.py               # EmbeddingStore (summaries + chunks, DI-friendly)
 │
 ├── vault/                          # Obsidian vault (no LLM)
 │   ├── writer.py                   # Paper/author note generation
@@ -263,6 +263,62 @@ speedup.
 - **Graph construction**: Builds a NetworkX DiGraph with citation + similarity +
   coupling edges. At 500 papers (~1,500 edges) this is <1s. NetworkX handles
   10,000+ nodes without issue.
+
+## Data Model: Corpus vs Output Isolation
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                     SQLite (papers.db)                     │
+│                                                            │
+│  ┌─────────┐  origin="corpus"   ┌────────┐                │
+│  │  Paper   │──────────────────>│  Chunk  │                │
+│  │(ingested)│   1:many          │(corpus) │                │
+│  └────┬─────┘                   └─────────┘                │
+│       │                                                    │
+│       │ many:many                                          │
+│       │                                                    │
+│  ┌────┴──────────┐                                         │
+│  │ ProjectPaper   │                                        │
+│  └────┬──────────┘                                         │
+│       │                                                    │
+│  ┌────┴─────┐   1:many   ┌─────────────────┐              │
+│  │ Project   │──────────>│ GeneratedOutput   │              │
+│  │(scope)    │           │ (review, paper)   │              │
+│  └──────────┘            └──────────────────┘              │
+└──────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────┐
+│      ChromaDB (two collections)  │
+│                                  │
+│  document_summaries (per-paper)  │
+│  chunk_embeddings   (per-chunk)  │
+│                                  │
+│  Only corpus chunks are stored.  │
+│  Generated output is NEVER       │
+│  embedded into these collections.│
+└─────────────────────────────────┘
+```
+
+**Key separation rules:**
+
+1. **Paper.origin**: Every paper is either `"corpus"` (ingested from a file) or
+   `"generated"` (produced by the writing pipeline). All metric computations
+   (coverage, vibes, graph, strategies) filter on `origin="corpus"` only.
+
+2. **Project scoping**: A `Project` groups papers (via `ProjectPaper`) and owns
+   outputs (via `GeneratedOutput`). This supports multiple independent research
+   projects sharing the same database without cross-contamination. Metrics
+   can be scoped to a project's corpus subset.
+
+3. **GeneratedOutput**: Tracks each writing run with metadata (strategy, coverage
+   score, token cost, duration). Output files live in `data/output/` — they are
+   never ingested back into the corpus unless the user explicitly runs `/ingest`
+   on them (which would create a new Paper with `origin="corpus"`).
+
+4. **ChromaDB isolation**: The `chunk_embeddings` and `document_summaries`
+   collections store only corpus content. Generated output is never embedded
+   into these collections. Coverage is computed by encoding review chunks
+   on-the-fly and comparing against the stored corpus embeddings.
 
 ## Data Layout
 
