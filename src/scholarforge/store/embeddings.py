@@ -88,11 +88,23 @@ def _get_collection() -> Collection:
     return _store.collection
 
 
-def embed_summaries(papers: list[Paper]) -> int:
-    """Batch-upsert summary embeddings for a list of papers."""
+def embed_summaries(papers: list[Paper], force: bool = False) -> int:
+    """Batch-upsert summary embeddings for a list of papers.
+
+    When force=False (default), skips papers already present in ChromaDB
+    to avoid redundant SentenceTransformer inference.
+    """
     eligible = [p for p in papers if p.summary and p.summary.strip()]
     if not eligible:
         return 0
+
+    if not force:
+        all_ids = [p.id for p in eligible]
+        existing = _store.collection.get(ids=all_ids)
+        existing_ids = set(existing.get("ids") or [])
+        eligible = [p for p in eligible if p.id not in existing_ids]
+        if not eligible:
+            return 0
 
     summaries = [p.summary for p in eligible]  # type: ignore[misc]
     ids = [p.id for p in eligible]
@@ -112,7 +124,7 @@ def query_similar(paper_id: str, n_results: int = 5) -> list[tuple[str, float]]:
 
     result = collection.get(ids=[paper_id], include=["embeddings"])
     stored_embeddings = result.get("embeddings")
-    if not stored_embeddings or len(stored_embeddings) == 0:
+    if stored_embeddings is None or len(stored_embeddings) == 0:
         return []
 
     query_embedding = stored_embeddings[0]

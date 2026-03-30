@@ -113,20 +113,38 @@ def _deduplicate_topics(topics: list[str]) -> list[str]:
     return [t for t in surviving if t not in absorbed]
 
 
-def _match_corpus_vocabulary(text: str, vocabulary: list[str], max_matches: int = 8) -> list[str]:
+def _compile_vocabulary_patterns(
+    vocabulary: list[str],
+) -> list[tuple[str, re.Pattern[str]]]:
+    """Pre-compile vocabulary into (keyword, compiled_pattern) pairs.
+
+    Sorted by length descending so longer (more specific) terms match first.
+    """
+    pairs = []
+    for kw in sorted(vocabulary, key=len, reverse=True):
+        pattern = re.compile(r"\b" + re.escape(kw.lower()) + r"\b")
+        pairs.append((kw, pattern))
+    return pairs
+
+
+def _match_corpus_vocabulary(
+    text: str,
+    vocabulary: list[str],
+    max_matches: int = 8,
+    compiled_patterns: list[tuple[str, re.Pattern[str]]] | None = None,
+) -> list[str]:
     """Find which corpus keywords appear in this paper's text.
 
     Only matches whole-phrase occurrences (word boundaries).
     Returns up to max_matches keywords, ordered by specificity (longer first).
+    Pass compiled_patterns to avoid re-compiling on every call.
     """
     text_lower = text.lower()
     matches: list[str] = []
 
-    # Sort vocabulary by length descending — prefer specific terms
-    for kw in sorted(vocabulary, key=len, reverse=True):
-        # Word-boundary match to avoid partial hits
-        pattern = r"\b" + re.escape(kw.lower()) + r"\b"
-        if re.search(pattern, text_lower):
+    patterns = compiled_patterns or _compile_vocabulary_patterns(vocabulary)
+    for kw, pat in patterns:
+        if pat.search(text_lower):
             matches.append(kw)
             if len(matches) >= max_matches:
                 break
@@ -144,12 +162,14 @@ def extract_topics(
     text: str,
     corpus_vocabulary: list[str],
     canonical_map: dict[str, str] | None = None,
+    compiled_patterns: list[tuple[str, re.Pattern[str]]] | None = None,
 ) -> list[str]:
     """Extract topics for a paper.
 
     Uses declared keywords if available, otherwise matches against the corpus
     vocabulary (keywords declared by other papers). When canonical_map is
     provided, normalizes keywords to canonical forms (merging plurals etc.).
+    Pass compiled_patterns to avoid re-compiling vocabulary regex on each call.
     """
     declared = _extract_declared_keywords(text)
 
@@ -158,7 +178,9 @@ def extract_topics(
     else:
         # Fall back: match this paper's text against keywords from other papers
         search_text = f"{paper.title or ''} {paper.summary or ''} {text[:3000]}"
-        topics = _match_corpus_vocabulary(search_text, corpus_vocabulary)
+        topics = _match_corpus_vocabulary(
+            search_text, corpus_vocabulary, compiled_patterns=compiled_patterns
+        )
 
     # Normalize to canonical forms if available
     if canonical_map:
@@ -233,11 +255,16 @@ def compute_all_links(
     # Build canonical map: normalized_form → canonical_keyword
     canonical_map = dict(seen_norms)
 
+    # Pre-compile vocabulary patterns once (avoids n * V re-compilations)
+    compiled_patterns = _compile_vocabulary_patterns(corpus_vocabulary)
+
     # Pass 2: assign topics to each paper
     result: dict[str, dict[str, list[str]]] = {}
     for paper, text in papers_with_text:
         search_text = f"{paper.title or ''} {paper.summary or ''} {text}"
-        topics = extract_topics(paper, search_text, corpus_vocabulary, canonical_map)
+        topics = extract_topics(
+            paper, search_text, corpus_vocabulary, canonical_map, compiled_patterns
+        )
         result[paper.id] = {"topics": topics}
 
     # Pass 3: global normalization — merge plural variants only

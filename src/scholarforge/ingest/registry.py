@@ -99,7 +99,8 @@ def _ingest_parallel(files: list[Path], max_workers: int) -> int:
         )
 
     # Run batch steps: linking + embeddings + coupling + vault regeneration
-    run_batch_steps()
+    new_ids = {p.paper.id for p in parsed_results}
+    run_batch_steps(new_paper_ids=new_ids)
 
     # Process other files sequentially
     for f in other_files:
@@ -241,6 +242,11 @@ def _run_background_refresh() -> None:
     def _refresh() -> None:
         try:
             run_batch_steps()
+        except RuntimeError as e:
+            if "interpreter shutdown" in str(e) or "cannot schedule" in str(e):
+                pass  # CLI exited before refresh completed — harmless
+            else:
+                console.print(f"[yellow]Background refresh error:[/yellow] {e}")
         except Exception as e:
             console.print(f"[yellow]Background refresh error:[/yellow] {e}")
 
@@ -249,8 +255,12 @@ def _run_background_refresh() -> None:
     console.print("[dim]  Background corpus refresh started...[/dim]")
 
 
-def run_batch_steps() -> None:
-    """Run all batch post-ingestion steps: linking, embeddings, coupling, vault regen."""
+def run_batch_steps(new_paper_ids: set[str] | None = None) -> None:
+    """Run all batch post-ingestion steps: linking, embeddings, coupling, vault regen.
+
+    When new_paper_ids is provided, figure ref re-extraction is limited to those
+    papers only (unchanged papers keep their existing refs).
+    """
     from sqlmodel import func, select
 
     from scholarforge.store.db import get_session
@@ -285,32 +295,16 @@ def run_batch_steps() -> None:
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
-    # ── 2. Automatic topic extraction ─────────────────────────────────────────
-    per_paper_links, corpus_vocabulary, paper_declared = compute_all_links(papers_with_text)
-    _save_corpus_vocabulary(corpus_vocabulary)
+    # ── Phase 1: Run independent steps concurrently (2-3 threads) ────────────
+    # Steps: topics, citations, figure refs, embedding, coupling
+    # These write to disjoint tables/stores and produce disjoint result dicts.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Persist topics to PaperTopic table
+    from scholarforge.extract.cite_match import build_citation_graph
+    from scholarforge.extract.figure_refs import extract_figure_refs
     from scholarforge.store.models import PaperTopic
 
-    with get_session() as session:
-        # Clear existing entries
-        existing_topics = session.exec(select(PaperTopic)).all()
-        for pt in existing_topics:
-            session.delete(pt)
-        session.flush()
-        # Insert new ones
-        for paper in papers:
-            links = per_paper_links.get(paper.id, {"topics": []})
-            is_declared = bool(paper_declared.get(paper.id))
-            for topic in links["topics"]:
-                session.add(PaperTopic(paper_id=paper.id, topic=topic, is_declared=is_declared))
-        session.commit()
-
-    console.print("[green]  Topics extracted[/green]")
-
-    # ── 3. Citation graph: match bibliography entries to corpus papers ────────
-    from scholarforge.extract.cite_match import build_citation_graph
-
+    # Pre-load citations (DB read, needed by citation task)
     citations_by_paper: dict[str, list[str]] = {}
     with get_session() as session:
         for paper in papers:
@@ -318,38 +312,86 @@ def run_batch_steps() -> None:
             if cites:
                 citations_by_paper[paper.id] = [c.raw_text for c in cites]
 
-    citation_graph = build_citation_graph(papers, citations_by_paper)
-    cite_count = sum(len(v) for v in citation_graph.values())
-    console.print(f"[green]  Citation graph: {cite_count} cross-references resolved[/green]")
+    # Define independent tasks as functions
+    def _task_topics():
+        result = compute_all_links(papers_with_text)
+        _save_corpus_vocabulary(result[1])
+        return result
 
-    # ── 3b. Re-extract figure/table refs (picks up improved patterns) ─────────
-    from scholarforge.extract.figure_refs import extract_figure_refs
+    def _task_citations():
+        return build_citation_graph(papers, citations_by_paper)
 
+    def _task_figure_refs():
+        targets = (
+            [(p, t) for p, t in papers_with_text if p.id in new_paper_ids]
+            if new_paper_ids
+            else papers_with_text
+        )
+        with get_session() as sess:
+            for paper, text in targets:
+                new_refs = extract_figure_refs(text, paper.id)
+                old_refs = sess.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
+                for old in old_refs:
+                    sess.delete(old)
+                for ref in new_refs:
+                    sess.merge(ref)
+            sess.commit()
+            return sess.exec(select(func.count(FigureRef.id))).one()
+
+    def _task_embed():
+        return embed_summaries(papers)
+
+    def _task_coupling():
+        return compute_coupling(paper_ids)
+
+    # Use 3 workers (fraction of 16 logical cores)
+    results: dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="batch") as pool:
+        futures = {
+            pool.submit(_task_topics): "topics",
+            pool.submit(_task_citations): "citations",
+            pool.submit(_task_figure_refs): "figure_refs",
+            pool.submit(_task_embed): "embed",
+            pool.submit(_task_coupling): "coupling",
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                results[name] = future.result()
+                console.print(f"[green]  {name} done[/green]")
+            except Exception as e:
+                console.print(f"[red]  {name} failed: {e}[/red]")
+                raise
+
+    per_paper_links, corpus_vocabulary, paper_declared = results["topics"]  # type: ignore[misc]
+    citation_graph: dict[str, list[str]] = results["citations"]  # type: ignore[assignment]
+    total_figure_refs: int = results["figure_refs"]  # type: ignore[assignment]
+    embedded: int = results["embed"]  # type: ignore[assignment]
+    coupling_map: dict[str, list[str]] = results["coupling"]  # type: ignore[assignment]
+
+    # Persist topics to PaperTopic table (sequential — single DB table)
     with get_session() as session:
-        for paper, text in papers_with_text:
-            new_refs = extract_figure_refs(text, paper.id)
-            # Clear old refs and insert new ones
-            old_refs = session.exec(select(FigureRef).where(FigureRef.paper_id == paper.id)).all()
-            for old in old_refs:
-                session.delete(old)
-            for ref in new_refs:
-                session.merge(ref)
+        existing_topics = session.exec(select(PaperTopic)).all()
+        for pt in existing_topics:
+            session.delete(pt)
+        session.flush()
+        for paper in papers:
+            links = per_paper_links.get(paper.id, {"topics": []})
+            is_declared = bool(paper_declared.get(paper.id))
+            for topic in links["topics"]:
+                session.add(PaperTopic(paper_id=paper.id, topic=topic, is_declared=is_declared))
         session.commit()
-        total_figure_refs = session.exec(select(func.count(FigureRef.id))).one()
-    console.print(f"[green]  Extracted {total_figure_refs} figure/table refs[/green]")
 
-    # ── 4. Summary embeddings ────────────────────────────────────────────────
-    embedded = embed_summaries(papers)
-    console.print(f"[green]  Embedded {embedded} summaries into ChromaDB[/green]")
+    cite_count = sum(len(v) for v in citation_graph.values())
+    console.print(
+        f"[green]  Phase 1 complete: {len(corpus_vocabulary)} vocab, "
+        f"{cite_count} citations, {total_figure_refs} fig refs, "
+        f"{embedded} embedded[/green]"
+    )
 
-    # ── 5. k-NN similarity ──────────────────────────────────────────────────
+    # ── Phase 2: k-NN similarity (depends on embedding) ─────────────────────
     similar_map = get_all_similar(paper_ids, n_results=5)
     console.print("[green]  k-NN similarity computed[/green]")
-
-    # ── 6. Bibliographic coupling ────────────────────────────────────────────
-    coupling_map = compute_coupling(paper_ids)
-    coupled_count = sum(1 for v in coupling_map.values() if v)
-    console.print(f"[green]  Bibliographic coupling: {coupled_count} papers coupled[/green]")
 
     # ── 7. Build lookup helpers ──────────────────────────────────────────────
     # Map paper_id -> display_name for wikilink resolution
