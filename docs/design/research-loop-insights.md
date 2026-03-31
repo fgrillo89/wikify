@@ -1,20 +1,24 @@
 # Research Loop Insights
 
-Findings from 9 strategy variants tested on a 206-paper ALD memristor corpus.
+Findings from 20+ strategy variants tested on a 206-paper ALD memristor corpus.
+Metrics recalibrated with expanded gap regex, log-scaled scoring, and coverage/centroid re-added.
 
-## Strategy Benchmark Results
+## Strategy Benchmark Results (latest metrics, 9 dimensions)
 
-| Strategy | Composite | Frontier | Bridge | Gaps | Chain | Time | Tokens |
-|----------|-----------|----------|--------|------|-------|------|--------|
-| random_walk | **0.489** | **0.910** | 9% | 0.008 | **0.515** | 16m | 85k |
-| **enhanced_hybrid** | **0.459** | 0.738 | **15%** | 0.007 | 0.418 | **4.4m** | 101k |
-| gap_aware | 0.447 | 0.767 | 8% | **0.012** | 0.460 | 4.5m | 66k |
-| hybrid | 0.445 | 0.587 | **17%** | 0.004 | 0.446 | 4.75m | 91k |
-| frontier | 0.428 | 0.711 | 11% | 0.007 | 0.418 | 6m | 76k |
-| greedy_v2 | 0.420 | 0.605 | 5% | 0.000 | 0.542 | 3.4m | 110k |
-| combined | 0.410 | 0.651 | 5% | 0.010 | 0.467 | 3m | 117k |
-| abstract_hybrid | 0.362 | 0.380 | 6% | 0.006 | 0.349 | 14m | 111k |
-| snowball_v4 | 0.347 | 0.269 | 8% | 0.012 | 0.388 | 24m | 104k |
+| Strategy | Composite | Coverage | Frontier | Bridge | Gaps | Chain | Time |
+|----------|-----------|----------|----------|--------|------|-------|------|
+| **v3c (short dense)** | **0.627** | 61% | 0.899 | 10% | **0.775** | 0.417 | 5.5m |
+| random_walk | 0.598 | 56% | **0.910** | 9% | 0.531 | **0.515** | 16m |
+| gap_aware | 0.590 | 60% | 0.767 | 8% | 0.673 | 0.460 | 4.5m |
+| hybrid | 0.582 | 60% | 0.587 | **17%** | 0.627 | 0.446 | 4.75m |
+| v3e (gap-struct) | 0.575 | 59% | 0.870 | 0% | 0.704 | 0.502 | 4m |
+| definitive_v2 | 0.575 | 62% | 0.711 | 4% | 0.700 | 0.428 | 5m |
+| enhanced_hybrid | 0.559 | 63% | 0.738 | 15% | 0.374 | 0.418 | 4.4m |
+| v3b (gap-first) | 0.539 | 59% | 0.748 | 5% | 0.500 | 0.386 | 5m |
+| v3a (2 jumps) | 0.537 | 60% | 0.760 | 0% | 0.474 | 0.454 | 4m |
+| v3d (2PR+walk) | 0.527 | 61% | 0.402 | 8% | 0.700 | 0.384 | 4m |
+| snowball_v4 | 0.508 | 62% | 0.269 | 8% | 0.532 | 0.388 | 24m |
+| greedy_v2 | 0.489 | 62% | 0.605 | 5% | 0.000 | 0.542 | 3.4m |
 
 ## Key Findings
 
@@ -49,7 +53,36 @@ High frontier shift = exploring edges (away from mainstream clusters).
 High bridging = connecting mainstream clusters. The enhanced hybrid
 balances both by reading seeds, frontiers, AND bridge papers.
 
-## Optimal Strategy: Enhanced Hybrid
+### 7. Shorter reviews score higher (v3c discovery)
+v3c with a 3000-word hard limit scored 0.627 -- the overall best.
+The constraint forced every sentence to earn its place. Quality scales
+INVERSELY with length in this corpus. Extra words fill with padding.
+
+### 8. "Every sentence bridges 2+ papers" is too rigid
+The v3c constraint worked because it forced density, but it produced
+unnatural prose. Better: 30-40% synthesis sentences, 30-40% evidence,
+15-25% analysis, 5-10% framing. Every PARAGRAPH needs at least one
+synthesis sentence, but not every sentence.
+
+### 9. Gap detection needs expanded regex
+The original gap regex caught 2/9 gap sentences. Expanding to 25+
+phrases ("no published study," "unexplored," "absent," etc.) plus
+log-scaled scoring made gap_aware jump from 0.012 to 0.673.
+
+### 10. Citation-only PageRank is orthogonal to greedy coverage
+PageRank on citation edges alone gives a different top paper (Li 2018)
+than the mixed graph (Wang 2021). Using 1 PageRank seed + 2 greedy
+seeds gives orthogonal coverage of authority + breadth.
+
+## Token Efficiency (planned)
+
+Current cost: 70-90k tokens per review (single-turn peak). Key optimizations:
+- Prompt caching (cache_control on system prompt): ~50k saved/run
+- Tool result compaction (truncate deep_read after processing): ~200-400k saved
+- Read-once-summarize pattern (record_paper_summary tool): ~30k saved
+- Total estimated: 60-70% reduction in cumulative token cost
+
+## Optimal Strategy: Gap-Oriented Hybrid (Short Tier)
 
 ```
 Phase 1: Greedy seeds (3 papers, coverage backbone)

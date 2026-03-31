@@ -87,15 +87,72 @@ def export_paper(
         exporter.export(resolved_md, [], docx_path)
         outputs.append(docx_path)
 
-    # PDF
+    # PDF (prefer DOCX->PDF via LibreOffice/Word for native subscripts)
     if pdf:
-        from scholarforge.export.pdf_export import PdfExporter
-
         pdf_path = output.with_suffix(".pdf")
-        PdfExporter(profile).export(resolved_md, [], pdf_path)
+        docx_source = output.with_suffix(".docx")
+        pdf_generated = False
+
+        if docx and docx_source.exists():
+            pdf_generated = _docx_to_pdf(docx_source, pdf_path)
+
+        if not pdf_generated:
+            # Fallback to HTML->PDF (subscripts may render as rectangles)
+            from scholarforge.export.pdf_export import PdfExporter
+
+            PdfExporter(profile).export(resolved_md, [], pdf_path)
+
         outputs.append(pdf_path)
 
     return outputs
+
+
+def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
+    """Convert DOCX to PDF using LibreOffice or Word. Returns True if successful."""
+    import shutil
+    import subprocess
+
+    # Try LibreOffice first (cross-platform)
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice:
+        try:
+            subprocess.run(
+                [
+                    soffice,
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(pdf_path.parent),
+                    str(docx_path),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+            # LibreOffice names the output after the input file
+            lo_output = pdf_path.parent / docx_path.with_suffix(".pdf").name
+            if lo_output.exists() and lo_output != pdf_path:
+                lo_output.rename(pdf_path)
+            return pdf_path.exists()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Try Microsoft Word via COM automation (Windows only)
+    try:
+        import comtypes.client  # type: ignore[import-untyped]
+
+        word = comtypes.client.CreateObject("Word.Application")
+        word.Visible = False
+        doc = word.Documents.Open(str(docx_path.resolve()))
+        doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)  # 17 = wdFormatPDF
+        doc.Close()
+        word.Quit()
+        return pdf_path.exists()
+    except Exception:  # noqa: BLE001
+        pass
+
+    return False
 
 
 def _strip_emdashes(md: str) -> str:

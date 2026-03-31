@@ -112,8 +112,18 @@ class ReadingLog:
 
 # ── File-backed singleton for cross-process persistence ────────────────────
 
-_LOG_FILE = Path("data/output/.reading_log.jsonl")
+_LOG_DIR = Path("data/output")
 _current_log: ReadingLog | None = None
+_log_file: Path | None = None
+_seen_papers: set[str] = set()  # dedup: don't log the same paper+depth twice
+
+
+def _get_log_file() -> Path:
+    """Get the current session's JSONL file path."""
+    global _log_file  # noqa: PLW0603
+    if _log_file is None:
+        _log_file = _LOG_DIR / ".reading_log.jsonl"
+    return _log_file
 
 
 def get_reading_log() -> ReadingLog:
@@ -121,27 +131,40 @@ def get_reading_log() -> ReadingLog:
 
     The log is backed by a JSONL file so entries persist across
     separate Python process invocations (each `uv run python -c` call).
+    Deduplicates: same paper + same depth = logged only once.
     """
-    global _current_log  # noqa: PLW0603
+    global _current_log, _seen_papers  # noqa: PLW0603
     if _current_log is None:
         _current_log = ReadingLog()
-        # Load existing entries from file if present
-        if _LOG_FILE.exists():
+        _seen_papers = set()
+        log_file = _get_log_file()
+        if log_file.exists():
             try:
-                for line in _LOG_FILE.read_text(encoding="utf-8").splitlines():
+                for line in log_file.read_text(encoding="utf-8").splitlines():
                     line = line.strip()
                     if line:
                         data = json.loads(line)
-                        _current_log.entries.append(ReadingEntry(**data))
+                        entry = ReadingEntry(**data)
+                        key = f"{entry.paper}::{entry.depth}"
+                        if key not in _seen_papers:
+                            _current_log.entries.append(entry)
+                            _seen_papers.add(key)
             except Exception:  # noqa: BLE001
                 pass
     return _current_log
 
 
 def _persist_entry(entry: ReadingEntry) -> None:
-    """Append a single entry to the JSONL file."""
-    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_LOG_FILE, "a", encoding="utf-8") as f:
+    """Append a single entry to the JSONL file (deduplicated)."""
+    global _seen_papers  # noqa: PLW0603
+    key = f"{entry.paper}::{entry.depth}"
+    if key in _seen_papers:
+        return  # already logged
+    _seen_papers.add(key)
+
+    log_file = _get_log_file()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file, "a", encoding="utf-8") as f:
         f.write(
             json.dumps({
                 "paper": entry.paper,
@@ -157,9 +180,10 @@ def _persist_entry(entry: ReadingEntry) -> None:
 
 def reset_reading_log() -> ReadingLog:
     """Start a fresh reading log (e.g., for a new generation run)."""
-    global _current_log  # noqa: PLW0603
+    global _current_log, _seen_papers  # noqa: PLW0603
     _current_log = ReadingLog()
-    # Clear the backing file
-    if _LOG_FILE.exists():
-        _LOG_FILE.unlink()
+    _seen_papers = set()
+    log_file = _get_log_file()
+    if log_file.exists():
+        log_file.unlink()
     return _current_log

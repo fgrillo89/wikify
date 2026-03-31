@@ -60,10 +60,21 @@ class PdfExporter:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _markdown_to_html(self, md_text: str) -> str:
-        """Convert Markdown to HTML, then promote ``[N]`` markers to superscripts."""
+        """Convert Markdown to HTML, promote citations and fix subscripts."""
+        # Convert Unicode subscripts to HTML <sub> before markdown processing
+        # (xhtml2pdf can't render Unicode subscript chars like ₂ ₃)
+        unicode_subs = str.maketrans(
+            "₀₁₂₃₄₅₆₇₈₉", "0123456789"
+        )
+        # Find sequences of Unicode subscript digits and wrap in <sub>
+        md_text = re.sub(
+            r"[₀₁₂₃₄₅₆₇₈₉]+",
+            lambda m: "<sub>" + m.group().translate(unicode_subs) + "</sub>",
+            md_text,
+        )
+
         html = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
         # Replace bare [N] citation markers with superscript elements.
-        # The pattern avoids matching Markdown link remnants that include href text.
         html = re.sub(r"\[(\d+)\]", r"<sup>[\1]</sup>", html)
         return html
 
