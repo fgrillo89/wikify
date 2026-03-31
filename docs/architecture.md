@@ -143,25 +143,83 @@ Agent Loop (primary)          MCP Server (external clients)
 Both call the same Python functions. Agent loop uses litellm's native
 tool_use. MCP server wraps them for external clients (Claude Code, Cursor).
 
-## Evaluate: Semantic Coverage & Paper Vibes
+## Evaluate: Quality Metrics & Analysis Tools
 
 ```
 src/scholarforge/evaluate/
 ├── __init__.py
-└── coverage.py          # compute_coverage(), compute_paper_vibes()
+├── coverage.py          # compute_coverage(), compute_paper_vibes()
+├── quality.py           # 9 quality metrics + comprehensive_quality_report()
+└── strategies.py        # greedy_submodular, max_distance, spectral, hub_bfs
 ```
 
-**Coverage metric**: Embeds both corpus chunks and review/output chunks into
-the same vector space (all-MiniLM-L6-v2, 384-dim), then measures what fraction
-of the corpus's semantic content has a nearby counterpart in the output. This
-approximates an information-theoretic compression quality metric: the review is
-a lossy compression of the corpus, and coverage measures signal retention.
+### Three layers of quality measurement
 
-**Paper vibes**: Token-weighted centroid of chunk embeddings per paper. Produces
-a single 384-dim vector capturing the paper's semantic identity. Used for:
+**Layer 1 — Content presence** (does the review contain what's in the corpus?):
+- **Semantic coverage**: Chunk embedding proximity (what fraction is covered)
+- **Topic coverage gap**: Which corpus topics appear in the review text
+- **Cross-reference density**: How many distinct papers are semantically touched
+- **Thematic centroid**: Is the review's center of gravity aligned with the corpus
+
+**Layer 2 — Structural quality** (is the content well-organized?):
+- **Argumentative coherence**: Do consecutive corpus chunks (causal chains) map
+  to nearby positions in the review? A review that scatters related ideas across
+  sections scores low. Chain preservation ratio = ordered_matches / total_matches.
+- **Semantic span**: Convex hull volume ratio in PCA space + Hausdorff distance.
+  Measures whether the review spans the same semantic volume as the corpus.
+- **Information density**: Gzip compression ratio as Kolmogorov complexity proxy.
+- **Reconstruction fidelity (NCD)**: Normalized compression distance — how much
+  information the review shares with the corpus at the byte level.
+
+**Layer 3 — Intellectual contribution** (does the review go beyond the corpus?):
+- **Gap detection**: Identifies what's MISSING from the corpus — unexplored
+  intersections between topics, embedding space voids between research clusters,
+  contradictions between papers' conclusions. A good review should name these gaps.
+- **Novel synthesis**: Measures whether review chunks draw from multiple papers
+  simultaneously without closely copying any single one. A high synthesis score
+  means the review creates insights that emerge from combining sources — the
+  whole is greater than the sum of parts.
+
+### Gap detection (design)
+
+Two computable signals for gaps in the literature:
+
+1. **Topical intersection gaps**: For each pair of corpus topics (A, B), count
+   papers with both. If |A| > 10 and |B| > 10 but |A ∩ B| < 2, the intersection
+   is an unexplored gap. Example: "ALD" (45 papers) + "flexible substrates" (12)
+   but "ALD on flexible substrates" (2) — an opportunity.
+
+2. **Embedding space voids**: Cluster corpus chunk embeddings. Compute the
+   inter-cluster centroid distances. Large voids between clusters represent
+   conceptual territories between established themes. Review chunks that fall
+   in these voids are addressing gaps.
+
+Both are exposed as agent tools (`find_corpus_gaps`, `find_synthesis_opportunities`)
+so the model can discover gaps during exploration, not just have them measured
+post-hoc.
+
+### Novel synthesis scoring (design)
+
+For each review chunk r:
+1. Find top-k nearest corpus chunks c1..ck
+2. Count distinct source papers: source_diversity = |{paper(ci)}|
+3. Measure novelty: 1 - max_similarity_to_any_single_chunk
+4. Synthesis score = source_diversity * novelty * relevance
+
+A review chunk near 4 different papers at distance ~0.4 each is **synthesizing**.
+A chunk near 1 paper at distance ~0.05 is **paraphrasing**.
+A chunk far from all corpus chunks is **hallucinating** (or identifying a gap).
+
+The aggregate synthesis score = fraction of review chunks with high synthesis.
+
+### Paper vibes
+
+Token-weighted centroid of chunk embeddings per paper. Produces a single
+384-dim vector. Used for:
 - Orthogonal neighbor selection (read papers that cover *different* ground)
 - Subgraph exhaustion detection (all nearby papers are semantically similar)
 - Jump targeting (find the most uncovered distant region)
+- Greedy submodular paper ordering (marginal coverage gain per paper)
 
 ## Iterative Write-Measure-Read Loop
 

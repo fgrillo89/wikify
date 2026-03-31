@@ -77,9 +77,10 @@ use MCP tools to read the corpus and write papers directly — no separate API k
 ## Remaining Work
 
 ### High Priority
-- [ ] Test MCP-based generation end-to-end (restart Claude Code to activate .mcp.json)
-- [ ] Scale to full 206-paper corpus
-- [ ] Fix `list_topics` MCP tool (returns section headings, not real topics)
+- [ ] Implement gap detection tools (`find_corpus_gaps`, `find_synthesis_opportunities`)
+- [ ] Implement novel synthesis metric (source diversity * novelty * relevance per review chunk)
+- [ ] Add gap/synthesis instructions to /generate skill prompt
+- [ ] Re-run research loop with gap-aware strategy
 
 ### Medium Priority
 - [ ] LaTeX export with .cls files and BibTeX integration
@@ -103,17 +104,27 @@ use MCP tools to read the corpus and write papers directly — no separate API k
   notes. The user should review the draft before promotion (the agent should not
   auto-promote). Consider a "draft" intermediate state between generated and corpus.
 
-## Benchmarks (20-Paper Test Corpus)
+## Benchmarks (206-Paper Corpus)
 
 | Metric | Value |
 |---|---|
-| Papers | 20 (ALD/memristor, 1971-2025) |
-| Chunks | ~800 |
-| Figure/table refs | 195 |
-| Citation cross-refs | 21 |
-| Topics | 22 |
-| Authors | 91 |
-| Tests | 136 |
+| Papers | 206 (ALD/memristor/neuromorphic, 1971-2026) |
+| Chunks | 6,531 |
+| Chunk embeddings | 6,531 (ChromaDB) |
+| Figure/table refs | 2,730 |
+| Citation cross-refs | 936 |
+| Topics | 1,232 (268 vocabulary terms) |
+| Tests | 274 |
+
+### Quality Metrics (recalibrated, 9 dimensions)
+
+| Strategy | Time | Composite | Centroid | Topics | Coherence | Span | Factual |
+|----------|------|-----------|----------|--------|-----------|------|---------|
+| greedy_v2 | 3.4m | 0.525 | 0.904 | 0.232 | 0.525 | 0.231 | 0.974 |
+| greedy_v1 | 4m | 0.524 | 0.905 | 0.232 | 0.466 | 0.253 | 0.976 |
+| snowball_v4 | 24m | 0.521 | 0.925 | 0.300 | 0.433 | 0.221 | 0.910 |
+
+Key: greedy strategies achieve same quality in 3-4 min as snowball in 24 min.
 
 ## Resume Instructions
 
