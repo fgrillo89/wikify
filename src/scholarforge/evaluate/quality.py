@@ -1538,6 +1538,464 @@ def compute_novel_synthesis(review_text: str, top_k: int = 5) -> Optional[NovelS
         return None
 
 
+# ── Metric 12: Bridge Vectors (Cross-Cluster Connectivity) ──────────────────
+
+
+@dataclass
+class BridgeVectorResult:
+    """Measures review chunks that bridge disconnected corpus clusters."""
+
+    total_review_chunks: int
+    bridge_chunks: int  # high similarity to 2+ clusters
+    bridge_ratio: float
+    avg_clusters_bridged: float  # avg number of clusters each bridge chunk connects
+    max_clusters_bridged: int
+
+    def score(self) -> float:
+        """Higher bridge ratio = more cross-cluster synthesis."""
+        return min(self.bridge_ratio * 3, 1.0)  # scale: 33% bridge chunks = score 1.0
+
+    def interpretation(self) -> str:
+        lines = [
+            "Bridge Vectors (Cross-Cluster Connectivity):",
+            f"  Review chunks: {self.total_review_chunks}",
+            f"  Bridge chunks (connect 2+ clusters): {self.bridge_chunks}"
+            f" ({self.bridge_ratio:.1%})",
+            f"  Avg clusters bridged per bridge chunk: {self.avg_clusters_bridged:.1f}",
+            f"  Max clusters bridged by single chunk: {self.max_clusters_bridged}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.bridge_ratio > 0.2:
+            lines.append(
+                "  Interpretation: Strong cross-cluster synthesis -- review connects "
+                "disparate research themes."
+            )
+        elif self.bridge_ratio > 0.05:
+            lines.append(
+                "  Interpretation: Some cross-cluster bridging -- review makes "
+                "connections between a few themes."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Weak bridging -- review stays within established clusters."
+            )
+        return "\n".join(lines)
+
+
+def compute_bridge_vectors(
+    review_text: str,
+    n_clusters: int = 10,
+    bridge_threshold: float = 0.55,
+    chunk_size: int = 150,
+) -> Optional[BridgeVectorResult]:
+    """Find review chunks that bridge multiple corpus clusters.
+
+    A "bridge chunk" has cosine similarity >= bridge_threshold to the
+    centroids of 2+ different corpus clusters. This means it connects
+    ideas from different research sub-areas.
+
+    Args:
+        review_text: Full review markdown.
+        n_clusters: Number of clusters for K-Means on corpus chunks.
+        bridge_threshold: Min similarity to a cluster centroid to count
+            as "connected" to that cluster.
+        chunk_size: Words per review chunk.
+    """
+    try:
+        import numpy as np
+        from sklearn.cluster import KMeans
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # Cluster corpus
+        n_clusters = min(n_clusters, len(corpus_embs) // 10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans.fit(corpus_embs)
+        centroids = kmeans.cluster_centers_
+        c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+        c_norms[c_norms == 0] = 1
+        centroids = centroids / c_norms
+
+        # Embed review chunks
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[i : i + chunk_size])
+            for i in range(0, len(words), chunk_size)
+            if len(" ".join(words[i : i + chunk_size]).strip()) > 50
+        ]
+        if not review_chunk_texts:
+            return None
+
+        model = _store.model
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        rev_norms = np.linalg.norm(rev_embs, axis=1, keepdims=True)
+        rev_norms[rev_norms == 0] = 1
+        rev_embs = rev_embs / rev_norms
+
+        # For each review chunk, count how many cluster centroids it's close to
+        sim_to_centroids = rev_embs @ centroids.T  # (n_review, n_clusters)
+
+        bridge_chunks = 0
+        clusters_bridged_list = []
+        for i in range(len(rev_embs)):
+            connected_clusters = int(np.sum(sim_to_centroids[i] >= bridge_threshold))
+            if connected_clusters >= 2:
+                bridge_chunks += 1
+                clusters_bridged_list.append(connected_clusters)
+
+        total = len(rev_embs)
+        return BridgeVectorResult(
+            total_review_chunks=total,
+            bridge_chunks=bridge_chunks,
+            bridge_ratio=bridge_chunks / max(total, 1),
+            avg_clusters_bridged=(
+                float(np.mean(clusters_bridged_list)) if clusters_bridged_list else 0.0
+            ),
+            max_clusters_bridged=max(clusters_bridged_list) if clusters_bridged_list else 0,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── Metric 13: Semantic Residual (Value-Add Score) ──────────────────────────
+
+
+@dataclass
+class SemanticResidualResult:
+    """Measures the component of the review that can't be reconstructed from the corpus.
+
+    Projects each review chunk onto the subspace spanned by corpus chunks.
+    The residual (what's left over) represents genuinely novel content.
+    High residual + high relevance = synthesis. Low residual = summarization.
+    High residual + low relevance = hallucination.
+    """
+
+    avg_residual_norm: float  # avg magnitude of residual vectors
+    avg_projection_sim: float  # avg similarity between review chunk and its projection
+    avg_relevance: float  # avg similarity to nearest corpus chunk
+    synthesis_chunks: int  # high residual AND high relevance
+    summarization_chunks: int  # low residual (well-explained by corpus)
+    hallucination_chunks: int  # high residual AND low relevance
+    total_chunks: int
+
+    def score(self) -> float:
+        """Score: synthesis chunks as fraction, penalized by hallucination."""
+        if self.total_chunks == 0:
+            return 0.0
+        synth_ratio = self.synthesis_chunks / self.total_chunks
+        hallu_penalty = self.hallucination_chunks / self.total_chunks
+        return max(0.0, synth_ratio - hallu_penalty * 0.5)
+
+    def interpretation(self) -> str:
+        lines = [
+            "Semantic Residual (Value-Add Score):",
+            f"  Avg residual norm: {self.avg_residual_norm:.3f}",
+            f"  Avg projection similarity: {self.avg_projection_sim:.3f}",
+            f"  Avg corpus relevance: {self.avg_relevance:.3f}",
+            f"  Synthesis chunks (novel + relevant): {self.synthesis_chunks}/{self.total_chunks}",
+            f"  Summarization chunks: {self.summarization_chunks}/{self.total_chunks}",
+            f"  Hallucination chunks: {self.hallucination_chunks}/{self.total_chunks}",
+            f"  Score: {self.score():.3f}",
+        ]
+        s = self.score()
+        if s > 0.3:
+            lines.append(
+                "  Interpretation: Strong value-add -- review introduces perspectives "
+                "not reconstructible from corpus alone."
+            )
+        elif s > 0.1:
+            lines.append(
+                "  Interpretation: Moderate value-add -- mix of summarization and novel synthesis."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Primarily summarization -- review mostly "
+                "restates corpus content."
+            )
+        return "\n".join(lines)
+
+
+def compute_semantic_residual(
+    review_text: str,
+    n_basis: int = 50,
+    chunk_size: int = 150,
+) -> Optional[SemanticResidualResult]:
+    """Project review chunks onto corpus subspace and measure residuals.
+
+    Uses truncated SVD to find the principal subspace of the corpus,
+    then projects each review chunk and measures what's left over.
+
+    Args:
+        review_text: Full review markdown.
+        n_basis: Number of SVD components for the corpus subspace.
+        chunk_size: Words per review chunk.
+    """
+    try:
+        import numpy as np
+        from sklearn.decomposition import TruncatedSVD
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # Build corpus subspace via SVD
+        n_basis = min(n_basis, len(corpus_embs) - 1, corpus_embs.shape[1] - 1)
+        svd = TruncatedSVD(n_components=n_basis, random_state=42)
+        svd.fit(corpus_embs)
+        # The basis vectors (right singular vectors)
+        basis = svd.components_  # (n_basis, 384)
+
+        # Embed review chunks
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[i : i + chunk_size])
+            for i in range(0, len(words), chunk_size)
+            if len(" ".join(words[i : i + chunk_size]).strip()) > 50
+        ]
+        if not review_chunk_texts:
+            return None
+
+        model = _store.model
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        rev_norms = np.linalg.norm(rev_embs, axis=1, keepdims=True)
+        rev_norms[rev_norms == 0] = 1
+        rev_embs = rev_embs / rev_norms
+
+        # Project each review chunk onto corpus subspace
+        # projection = (R . B^T) . B  (project onto basis, then reconstruct)
+        coefficients = rev_embs @ basis.T  # (n_review, n_basis)
+        projections = coefficients @ basis  # (n_review, 384)
+
+        # Residual = R - projection
+        residuals = rev_embs - projections
+        residual_norms = np.linalg.norm(residuals, axis=1)
+
+        # Projection similarity (how well the projection matches the original)
+        proj_norms = np.linalg.norm(projections, axis=1, keepdims=True)
+        proj_norms[proj_norms == 0] = 1
+        proj_normed = projections / proj_norms
+        projection_sims = np.sum(rev_embs * proj_normed, axis=1)
+
+        # Relevance: similarity to nearest corpus chunk
+        sim_to_corpus = rev_embs @ corpus_embs.T
+        relevance = np.max(sim_to_corpus, axis=1)
+
+        # Classify chunks
+        synthesis = 0
+        summarization = 0
+        hallucination = 0
+        residual_threshold = float(np.median(residual_norms))  # adaptive threshold
+
+        for i in range(len(rev_embs)):
+            high_residual = residual_norms[i] > residual_threshold
+            high_relevance = relevance[i] > 0.5
+
+            if high_residual and high_relevance:
+                synthesis += 1
+            elif not high_residual:
+                summarization += 1
+            elif high_residual and not high_relevance:
+                hallucination += 1
+
+        return SemanticResidualResult(
+            avg_residual_norm=float(np.mean(residual_norms)),
+            avg_projection_sim=float(np.mean(projection_sims)),
+            avg_relevance=float(np.mean(relevance)),
+            synthesis_chunks=synthesis,
+            summarization_chunks=summarization,
+            hallucination_chunks=hallucination,
+            total_chunks=len(rev_embs),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── Metric 14: Frontier Shift (Centroid Direction Analysis) ─────────────────
+
+
+@dataclass
+class FrontierShiftResult:
+    """Measures the direction the review pushes relative to the corpus center.
+
+    If the shift vector points toward sparse regions of the corpus embedding
+    space, the review is pushing toward new frontiers. If it points toward
+    dense regions, it's restating consensus.
+    """
+
+    shift_magnitude: float  # distance between corpus and review centroids
+    shift_toward_sparse: float  # density at the shifted position (lower = more frontier)
+    corpus_center_density: float  # density at the corpus centroid (reference)
+    frontier_score: float  # how much the shift goes toward sparse territory
+
+    def score(self) -> float:
+        return max(0.0, min(1.0, self.frontier_score))
+
+    def interpretation(self) -> str:
+        lines = [
+            "Frontier Shift (Centroid Direction Analysis):",
+            f"  Shift magnitude: {self.shift_magnitude:.4f}",
+            f"  Density at shifted position: {self.shift_toward_sparse:.3f}",
+            f"  Density at corpus center: {self.corpus_center_density:.3f}",
+            f"  Frontier score: {self.frontier_score:.3f}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.frontier_score > 0.3:
+            lines.append(
+                "  Interpretation: Review pushes toward frontier -- centroid shift "
+                "aims at sparse, unexplored regions."
+            )
+        elif self.frontier_score > 0.1:
+            lines.append(
+                "  Interpretation: Moderate frontier push -- some movement toward new territory."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Review stays near consensus -- centroid shift "
+                "points toward dense, well-covered regions."
+            )
+        return "\n".join(lines)
+
+
+def compute_frontier_shift(
+    review_text: str, chunk_size: int = 150
+) -> Optional[FrontierShiftResult]:
+    """Measure the direction of the review's centroid shift relative to corpus density.
+
+    1. Compute corpus centroid and review centroid
+    2. Compute the shift vector (review - corpus centroid)
+    3. Measure corpus density at the shifted position vs. at corpus center
+    4. If density drops in the shift direction, the review is pushing toward frontiers
+
+    Args:
+        review_text: Full review markdown.
+        chunk_size: Words per review chunk.
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # Corpus centroid (token-weighted)
+        weights = np.array([c.token_count for c in chunks if c.id in stored], dtype=float)
+        weights /= weights.sum() + 1e-9
+        corpus_centroid = np.average(corpus_embs, axis=0, weights=weights)
+        corpus_centroid /= np.linalg.norm(corpus_centroid) + 1e-9
+
+        # Review centroid
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[i : i + chunk_size])
+            for i in range(0, len(words), chunk_size)
+            if len(" ".join(words[i : i + chunk_size]).strip()) > 50
+        ]
+        if not review_chunk_texts:
+            return None
+
+        model = _store.model
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        review_centroid = np.mean(rev_embs, axis=0)
+        review_centroid /= np.linalg.norm(review_centroid) + 1e-9
+
+        # Shift vector
+        shift = review_centroid - corpus_centroid
+        shift_magnitude = float(np.linalg.norm(shift))
+
+        if shift_magnitude < 1e-8:
+            return FrontierShiftResult(
+                shift_magnitude=0.0,
+                shift_toward_sparse=0.0,
+                corpus_center_density=0.0,
+                frontier_score=0.0,
+            )
+
+        # Density: average similarity of k-nearest corpus chunks to a point
+        k = 20
+
+        def density_at(point: np.ndarray) -> float:
+            point_normed = point / (np.linalg.norm(point) + 1e-9)
+            sims = corpus_embs @ point_normed
+            top_k = np.sort(sims)[-k:]
+            return float(np.mean(top_k))
+
+        corpus_density = density_at(corpus_centroid)
+        # Density at the shifted position (extrapolate slightly beyond review centroid)
+        shifted_point = corpus_centroid + shift * 2  # project further in shift direction
+        shifted_density = density_at(shifted_point)
+
+        # Frontier score: how much density drops in the shift direction
+        # Higher drop = more frontier-pushing
+        density_drop = corpus_density - shifted_density
+        # Normalize: a drop of 0.1 in avg-k-similarity is significant
+        frontier_score = max(0.0, density_drop / 0.15)
+
+        return FrontierShiftResult(
+            shift_magnitude=shift_magnitude,
+            shift_toward_sparse=shifted_density,
+            corpus_center_density=corpus_density,
+            frontier_score=frontier_score,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Corpus text helper ─────────────────────────────────────────────────────────
 
 
@@ -1589,6 +2047,9 @@ class QualityReport:
     argumentative_coherence: Optional[ArgumentativeCoherenceResult] = None
     gap_detection: Optional[GapDetectionResult] = None
     novel_synthesis: Optional[NovelSynthesisResult] = None
+    bridge_vectors: Optional[BridgeVectorResult] = None
+    semantic_residual: Optional[SemanticResidualResult] = None
+    frontier_shift: Optional[FrontierShiftResult] = None
 
     # Error info for corpus-dependent failures
     corpus_error: Optional[str] = None
@@ -1629,7 +2090,13 @@ class QualityReport:
         if self.gap_detection is not None:
             components.append((self.gap_detection.score(), 0.10))
         if self.novel_synthesis is not None:
-            components.append((self.novel_synthesis.score(), 0.15))
+            components.append((self.novel_synthesis.score(), 0.05))
+        if self.bridge_vectors is not None:
+            components.append((self.bridge_vectors.score(), 0.10))
+        if self.semantic_residual is not None:
+            components.append((self.semantic_residual.score(), 0.10))
+        if self.frontier_shift is not None:
+            components.append((self.frontier_shift.score(), 0.10))
 
         total_weight = sum(w for _, w in components)
         if total_weight == 0:
@@ -1659,6 +2126,12 @@ class QualityReport:
             lines += ["", self.gap_detection.interpretation()]
         if self.novel_synthesis is not None:
             lines += ["", self.novel_synthesis.interpretation()]
+        if self.bridge_vectors is not None:
+            lines += ["", self.bridge_vectors.interpretation()]
+        if self.semantic_residual is not None:
+            lines += ["", self.semantic_residual.interpretation()]
+        if self.frontier_shift is not None:
+            lines += ["", self.frontier_shift.interpretation()]
 
         lines += ["", self.factual_specificity.interpretation()]
         lines += ["", self.information_density.interpretation()]
@@ -1740,6 +2213,9 @@ def comprehensive_quality_report(
     coherence = compute_argumentative_coherence(review_text)
     gaps = compute_gap_detection(review_text)
     synthesis = compute_novel_synthesis(review_text)
+    bridges = compute_bridge_vectors(review_text)
+    residual = compute_semantic_residual(review_text)
+    frontier = compute_frontier_shift(review_text)
 
     return QualityReport(
         information_density=info_density,
@@ -1754,5 +2230,8 @@ def comprehensive_quality_report(
         argumentative_coherence=coherence,
         gap_detection=gaps,
         novel_synthesis=synthesis,
+        bridge_vectors=bridges,
+        semantic_residual=residual,
+        frontier_shift=frontier,
         corpus_error=corpus_error,
     )
