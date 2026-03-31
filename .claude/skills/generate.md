@@ -38,46 +38,48 @@ Every read tool has a `reason` parameter. **Always provide it** — explain in o
 - Use `search_papers` with focused queries to find specific data points
 - Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
 
-## Your Strategy: Hybrid Greedy-Frontier Exploration
+## Your Strategy: Gap-Oriented Hybrid
 
-**Read deeply from both mainstream and frontier, then synthesize.**
+**Read from both mainstream and frontier. Find gaps. Synthesize across them.**
 
-Do NOT scan all abstracts — it dilutes focus. The greedy order and frontier ranking already tell you what matters.
+Do NOT scan all abstracts — it dilutes focus. The precomputed order tells you what matters.
 
-### Phase 1 — Dual Seed: Greedy + Frontier (target: <2 min)
+### Phase 1 — Read the precomputed order (target: <2 min)
 
-1. Get the frontier exploration order:
+1. Get the exploration order (1 PageRank authority + 2 greedy coverage + 5 frontiers + 3 bridges + 1 serendipity — all precomputed via vector math):
 ```python
 from scholarforge.agent.tools import get_frontier_exploration_order
 print(get_frontier_exploration_order(max_papers=12))
 ```
-This gives 3 greedy seeds (coverage baseline) + 9 frontier papers (density-ranked).
 
-2. **Deep-read the 3 greedy seeds.**
-3. **Digest the top 5 frontier papers.** Pick 1-2 that surprise you and deep-read those.
+2. **Deep-read the 3 seeds** (PageRank + greedy).
+3. **Deep-read 1 frontier** that looks most interesting.
+4. **Digest all bridges + serendipity + remaining frontiers.**
 
-### Phase 2 — Concept Walk (bridge seeds to frontiers)
+### Phase 2 — Find gaps and do ONE directed search
 
-4. Pick a concept that connects a seed paper to a frontier paper — something neither discusses fully.
-5. Use `search_papers(query="that concept", reason="bridging seed X with frontier Y")` to find papers in between.
-6. Digest 2-3 bridging papers. This directed walk creates the material for cross-paper synthesis.
+5. Call gap and synthesis tools:
+```python
+from scholarforge.agent.tools import find_corpus_gaps, find_synthesis_opportunities
+print(find_corpus_gaps())
+print(find_synthesis_opportunities())
+```
 
-### Phase 3 — Gap-Aware Exploration
+6. Pick the single most promising gap. Use ONE `search_papers` call to find a paper addressing it. Digest that paper. This captures serendipitous discovery cheaply.
 
-7. Call `find_corpus_gaps()` and `find_synthesis_opportunities()`.
-8. Read 1-2 papers addressing the most promising gaps.
+### Phase 3 — Write with gap emphasis (~3500-4500 words)
 
-### Phase 4 — Write (~3500-4500 words, CONCISE)
-
-9. Write a FOCUSED review. Quality over length. Every paragraph should connect 2+ papers.
-10. Name gaps. State contradictions. Bridge mainstream with frontier findings.
-11. Future directions: 5+ specific research questions from gaps AND frontier papers.
+7. Write a FOCUSED review. Every paragraph bridges 2+ papers.
+8. **Name every gap explicitly**: "No studies have combined X with Y," "This intersection remains unexplored."
+9. **State contradictions**: if papers disagree, say so and analyze why.
+10. **Bridge mainstream to frontier**: each thematic section should connect seed findings with frontier observations.
+11. **Future directions**: 5+ specific research questions from gaps AND frontier papers. Propose concrete experiments.
 
 ### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
-- `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion
+- `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion.
 - `deep_read` — full text (~70KB). Reserve for 3-5 critical papers.
-- `scan_all_abstracts()` — available but use sparingly (dilutes focus at 400KB).
+- `search_papers` — use sparingly (1-2 targeted calls max, not broad scans).
 
 ## Writing
 
