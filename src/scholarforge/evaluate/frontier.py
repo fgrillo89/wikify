@@ -66,20 +66,28 @@ def compute_paper_density() -> list[tuple[str, float, str]]:
 
 def frontier_exploration_order(
     max_papers: int = 20,
-    n_greedy_seeds: int = 3,
+    n_pagerank_seeds: int = 1,
+    n_greedy_seeds: int = 2,
     n_frontiers: int = 5,
     n_bridges: int = 3,
 ) -> list[tuple[str, str, str]]:
-    """Hybrid exploration: greedy seeds + frontier papers + bridge papers.
+    """Hybrid exploration: PageRank authority + greedy coverage + frontiers + bridges.
 
-    Phase 1: Pick top n_greedy_seeds by marginal coverage gain (greedy).
+    Phase 1: Pick top n_pagerank_seeds by citation-only PageRank (authority).
+    Phase 1b: Pick top n_greedy_seeds by marginal coverage gain CONDITIONAL
+              on the PageRank seeds already in the baseline.
     Phase 2: Pick n_frontiers lowest-density papers (frontier).
     Phase 3: For each (seed, frontier) pair, find the paper closest to
-             their midpoint in vibe space — the natural "stepping stone"
-             that connects mainstream to edge. These are the bridge papers
-             that random walks discover by accident but we find in O(N).
-    Phase 4: One serendipity pick — the paper with highest dissimilarity
-             to everything already selected (controlled randomness).
+             their midpoint in vibe space (bridge papers).
+    Phase 4: One serendipity pick (most dissimilar to everything selected).
+
+    Args:
+        max_papers: Total papers to select.
+        n_pagerank_seeds: Number of top citation PageRank papers (default 1).
+        n_greedy_seeds: Number of greedy coverage papers conditional on
+            PageRank seeds (default 2).
+        n_frontiers: Number of frontier papers (default 5).
+        n_bridges: Number of bridge papers (default 3).
 
     Returns list of (paper_id, depth, rationale) tuples.
     """
@@ -99,15 +107,18 @@ def frontier_exploration_order(
     selected: list[tuple[str, str, str]] = []
     selected_ids: set[str] = set()
 
-    # Seed #1: highest citation-only PageRank (authority anchor)
-    if metrics.hub_papers:
-        pr_top = metrics.hub_papers[0]
-        if pr_top in paper_embs:
-            pr_score = metrics.pagerank.get(pr_top, 0)
-            selected.append((pr_top, "full", f"PageRank authority (PR: {pr_score:.4f})"))
-            selected_ids.add(pr_top)
+    # Phase 1a: Top PageRank seeds (citation authority)
+    sorted_pr = sorted(metrics.pagerank.items(), key=lambda x: x[1], reverse=True)
+    pr_count = 0
+    for pr_pid, pr_score in sorted_pr:
+        if pr_count >= n_pagerank_seeds:
+            break
+        if pr_pid in paper_embs:
+            selected.append((pr_pid, "full", f"PageRank authority (PR: {pr_score:.4f})"))
+            selected_ids.add(pr_pid)
+            pr_count += 1
 
-    # Seeds #2-3: top greedy coverage (excluding PageRank pick)
+    # Phase 1b: Greedy coverage seeds CONDITIONAL on PageRank picks
     paper_sims: dict[str, np.ndarray] = {}
     for pid, embs in paper_embs.items():
         paper_sims[pid] = np.max(corpus_embs @ embs.T, axis=1)
@@ -126,7 +137,7 @@ def frontier_exploration_order(
         heapq.heappush(heap, (-gain, 0, pid))
 
     iteration = 0
-    greedy_needed = max(0, n_greedy_seeds - len(selected_ids))
+    greedy_needed = n_greedy_seeds
     for _ in range(min(greedy_needed, len(paper_embs))):
         iteration += 1
         while heap:
