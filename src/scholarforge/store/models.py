@@ -66,7 +66,7 @@ class Paper(SQLModel, table=True):
         raw = f"{first_author} {year} - {title}"
         # Sanitize for filenames
         raw = re.sub(r'[<>:"/\\|?*]', "", raw)
-        raw = raw.strip(". ")
+        raw = raw.strip(". []")
         return raw[:200]
 
 

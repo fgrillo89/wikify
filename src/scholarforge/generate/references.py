@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scholarforge.store.models import Paper
+
+logger = logging.getLogger(__name__)
 
 
 class ReferenceResolver:
@@ -48,6 +51,7 @@ class ReferenceResolver:
             display_name = match.group(1).strip()
             paper = self._match_paper(display_name)
             if paper is None:
+                logger.warning("Could not resolve REF marker: %r", display_name)
                 return f"[?:{display_name}]"
             if paper.id not in seen_papers:
                 seen_papers[paper.id] = len(ordered) + 1
@@ -77,13 +81,25 @@ class ReferenceResolver:
         return "\n".join(lines)
 
     def _match_paper(self, display_name: str) -> Paper | None:
-        """Match a display_name string to a Paper. Exact first, then fuzzy."""
-        # Exact match (case-insensitive)
+        """Match a display_name string to a Paper. Exact first, then fuzzy.
+
+        Matching strategy (in order):
+        1. Exact case-insensitive match against display_name()
+        2. Prefix match: the LLM marker may be a prefix of a truncated display_name
+        3. Fuzzy: year + author last name + title word overlap (score >= 4 required)
+        """
         key = display_name.lower().strip()
+
+        # 1. Exact match (case-insensitive)
         if key in self._name_to_paper:
             return self._name_to_paper[key]
 
-        # Fuzzy: extract year and author from the marker
+        # 2. Prefix match: handle truncated display names (display_name caps at 200 chars)
+        for stored_key, paper in self._name_to_paper.items():
+            if stored_key.startswith(key) or key.startswith(stored_key):
+                return paper
+
+        # 3. Fuzzy: extract year and author from the marker
         year_match = re.search(r"\b((?:19|20)\d{2})\b", display_name)
         year = year_match.group(1) if year_match else ""
 
@@ -96,7 +112,8 @@ class ReferenceResolver:
                 author_word = cleaned.lower()
                 break
 
-        # Score each paper
+        # Score each paper — require at least year+author OR strong title overlap
+        stopwords = {"the", "of", "a", "an", "and", "in", "for", "on", "with", "by"}
         best: Paper | None = None
         best_score = 0
         for p_year, p_last, paper in self._fuzzy_index:
@@ -105,16 +122,20 @@ class ReferenceResolver:
                 score += 3
             if author_word and p_last and (author_word in p_last or p_last in author_word):
                 score += 3
-            # Title word overlap
-            title_words = set(paper.title.lower().split())
-            marker_words = set(display_name.lower().split())
-            overlap = len(title_words & marker_words - {"the", "of", "a", "an", "and", "in", "for"})
+            # Title word overlap (content words only)
+            title_words = set(paper.title.lower().split()) - stopwords
+            marker_words = set(display_name.lower().split()) - stopwords
+            overlap = len(title_words & marker_words)
             score += min(overlap, 3)
             if score > best_score:
                 best_score = score
                 best = paper
 
-        return best if best_score >= 3 else None
+        # Require score >= 4 to avoid year-only false positives
+        if best_score < 4:
+            logger.warning("REF marker unresolved (best_score=%d): %r", best_score, display_name)
+            return None
+        return best
 
 
 def _format_reference(

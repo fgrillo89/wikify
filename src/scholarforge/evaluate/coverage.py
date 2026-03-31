@@ -39,9 +39,7 @@ def get_corpus_paper_ids() -> set[str]:
     from scholarforge.store.models import Paper, PaperOrigin
 
     with get_session() as session:
-        papers = session.exec(
-            select(Paper).where(Paper.origin == PaperOrigin.CORPUS)
-        ).all()
+        papers = session.exec(select(Paper).where(Paper.origin == PaperOrigin.CORPUS)).all()
     return {p.id for p in papers}
 
 

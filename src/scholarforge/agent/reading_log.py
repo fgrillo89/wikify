@@ -42,9 +42,7 @@ class ReadingLog:
         depth: str = "digest",
     ) -> None:
         """Record a reading action."""
-        self.entries.append(
-            ReadingEntry(paper=paper, tool=tool, reason=reason, depth=depth)
-        )
+        self.entries.append(ReadingEntry(paper=paper, tool=tool, reason=reason, depth=depth))
 
     def to_markdown(self) -> str:
         """Render the log as a human-readable markdown document."""

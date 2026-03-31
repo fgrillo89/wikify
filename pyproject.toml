@@ -16,7 +16,7 @@ dependencies = [
     # Data layer
     "sqlmodel>=0.0.22",
     "chromadb>=0.5",
-    "sentence-transformers>=3.0",
+    "sentence-transformers[onnx]>=3.0",
     # LLM interface
     "litellm>=1.40",
     "tiktoken>=0.7",
@@ -41,6 +41,7 @@ dependencies = [
     "playwright>=1.58.0",
     "scrapling[all]>=0.4.2",
     "docx2pdf>=0.1.8",
+    "marker-pdf>=1.10.2",
 ]
 
 [project.optional-dependencies]
