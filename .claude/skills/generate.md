@@ -35,7 +35,13 @@ Import from: `from scholarforge.agent.tools import <function_name>`
 Every read tool has a `reason` parameter. **Always provide it** — explain in one sentence why you are reading this paper or running this search. This builds a reading trace the user can review to understand your research process and guide your exploration.
 
 ### Read-once-summarize pattern (MANDATORY)
-After EVERY `deep_read` or `read_paper_digest`, immediately call `record_paper_summary` to distill findings:
+After EVERY `deep_read` or `read_paper_digest`, immediately call `record_paper_summary` to distill findings. Set the `role` parameter based on WHY you read this paper — this shapes what you extract:
+
+- **role="hub"**: Extract the landscape this paper maps, key subfields it connects, core claims others build on. This anchors the review.
+- **role="frontier"**: Extract what's new/different, how it diverges from mainstream, why it matters for future directions.
+- **role="bridge"**: Extract the connection between research areas, what it borrows from each, the synthesis insight.
+- **role="standard"**: General extraction of findings and data.
+
 ```python
 record_paper_summary(
     paper_name="AuthorName Year - Title",
@@ -43,10 +49,11 @@ record_paper_summary(
     quantitative_data=["10^4 cycles endurance", "3.0 nm HfO2"],
     relevance="This paper shows...",
     gaps_noted=["No array-level data", "Missing reliability tests"],
-    read_depth="full"
+    read_depth="full",
+    role="hub"  # or "frontier", "bridge", "standard"
 )
 ```
-This builds your working memory. Later, call `get_session_context()` to recall all summaries instead of re-reading papers. Large tool results are automatically compacted after you process them.
+This builds your working memory. Call `get_session_context()` to recall all summaries instead of re-reading papers. Tool results are automatically compacted after you process them — papers with recorded summaries are compacted more aggressively since you've already extracted what you need.
 
 ### Token-efficient reading strategy
 - Use `read_paper_digest` for most papers (~2KB). No LLM summarization; a cheap preview.

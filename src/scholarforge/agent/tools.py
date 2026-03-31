@@ -1503,12 +1503,24 @@ def record_paper_summary(
     relevance: str,
     gaps_noted: list[str] | None = None,
     read_depth: str = "full",
+    role: str = "standard",
 ) -> str:
     """Record a structured summary of a paper after reading it.
 
     Call this IMMEDIATELY after deep_read or read_paper_digest to distill
     findings into compact form. This builds your working memory so you
     can refer back to papers without re-reading them.
+
+    The role parameter shapes what you should extract:
+    - "hub": This is a highly-cited authority paper. Extract the landscape
+      it maps, key subfields it connects, core claims other papers build on.
+      This anchors the review.
+    - "frontier": This is a niche/emerging paper. Extract what's new or
+      different, how it diverges from mainstream, why it matters for future
+      directions.
+    - "bridge": This connects two research areas. Extract the connection
+      it makes, what it borrows from each area, the synthesis insight.
+    - "standard": General paper. Extract findings and data normally.
 
     Args:
         paper_name: The paper's display_name as seen in tool results.
@@ -1517,6 +1529,7 @@ def record_paper_summary(
         relevance: 1-2 sentences explaining relevance to the review topic.
         gaps_noted: Limitations or gaps identified in this paper.
         read_depth: How the paper was read: "full", "digest", or "section".
+        role: Why this paper was read: "hub", "frontier", "bridge", or "standard".
 
     Returns:
         Confirmation with paper name and finding count.
@@ -1528,6 +1541,7 @@ def record_paper_summary(
         "relevance": relevance,
         "gaps_noted": gaps_noted or [],
         "read_depth": read_depth,
+        "role": role,
     }
     _paper_summaries.append(summary)
 
@@ -1562,7 +1576,9 @@ def get_session_context() -> str:
 
     lines = [f"## Session Context ({len(_paper_summaries)} papers)", ""]
     for i, s in enumerate(_paper_summaries, 1):
-        lines.append(f"### {i}. {s['paper_name']} [{s['read_depth']}]")
+        role = s.get("role", "standard")
+        role_tag = f" ({role})" if role != "standard" else ""
+        lines.append(f"### {i}. {s['paper_name']} [{s['read_depth']}{role_tag}]")
         lines.append(f"**Relevance**: {s['relevance']}")
         if s["key_findings"]:
             lines.append("**Findings**: " + "; ".join(s["key_findings"]))

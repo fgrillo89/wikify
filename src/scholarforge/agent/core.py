@@ -112,22 +112,21 @@ class AgentResult:
 
 
 def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
-    """Truncate large tool results from prior turns to save context tokens.
+    """Compact large tool results from prior turns to save context tokens.
 
-    After the LLM has responded to a tool result (i.e., an assistant message
-    follows the tool message), the full tool content is no longer needed —
-    the LLM already processed it. Replace it with a short stub.
+    Context-aware compaction:
+    - If the model called record_paper_summary after a deep_read, the summary
+      captures what's important. The raw text can be compacted aggressively.
+    - If no summary was recorded, keep more context (the model may still need it).
+    - The preview length is proportional to the original content, with a floor
+      and ceiling that depend on whether a summary exists.
 
-    This is model-agnostic: it modifies the message list before any LLM call.
-    The agent can use get_session_context() to recall paper summaries.
+    This is model-agnostic: modifies the message list before any LLM call.
 
     Args:
         messages: The conversation message list (modified in-place).
         threshold: Character count above which a tool result is compacted.
     """
-    # Walk messages and find tool messages that are followed by an assistant
-    # message (meaning the LLM already saw and responded to them).
-    # Don't compact the most recent tool messages (the LLM hasn't seen them yet).
     last_assistant_idx = -1
     for i in range(len(messages) - 1, -1, -1):
         if isinstance(messages[i], dict) and messages[i].get("role") == "assistant":
@@ -137,6 +136,33 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
     if last_assistant_idx < 0:
         return
 
+    # Check which tool calls were followed by a record_paper_summary call
+    # (meaning the model already extracted what it needs)
+    summarized_tool_ids: set[str] = set()
+    for i in range(len(messages)):
+        msg = messages[i]
+        if not isinstance(msg, dict):
+            continue
+        # Look for assistant messages that contain a record_paper_summary call
+        tool_calls = msg.get("tool_calls") or []
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                fn = tc if isinstance(tc, dict) else getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                name = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
+                if name == "record_paper_summary":
+                    # The tool call RIGHT BEFORE this assistant message was summarized
+                    # Mark all tool results between the previous assistant and this one
+                    for j in range(i - 1, -1, -1):
+                        prev = messages[j]
+                        if isinstance(prev, dict) and prev.get("role") == "tool":
+                            tid = prev.get("tool_call_id", "")
+                            if tid:
+                                summarized_tool_ids.add(tid)
+                        elif isinstance(prev, dict) and prev.get("role") == "assistant":
+                            break
+
     for i in range(last_assistant_idx):
         msg = messages[i]
         if not isinstance(msg, dict):
@@ -144,17 +170,28 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
         if msg.get("role") != "tool":
             continue
         content = msg.get("content", "")
-        if len(content) > threshold:
-            original_len = len(content)
-            # Proportional preview: keep ~10% of the content, with floor and ceiling
-            # Short results (2-5K): keep ~500 chars (enough for metadata + key info)
-            # Long results (70K+): keep ~2000 chars (paper metadata + abstract)
-            preview_len = max(500, min(2000, original_len // 10))
-            preview = content[:preview_len]
-            msg["content"] = (
-                f"{preview}\n\n[... compacted: {original_len} chars total. "
-                f"Use get_session_context() to recall paper summaries.]"
-            )
+        if len(content) <= threshold:
+            continue
+
+        original_len = len(content)
+        tool_id = msg.get("tool_call_id", "")
+        has_summary = tool_id in summarized_tool_ids
+
+        if has_summary:
+            # Model already extracted what it needs — compact aggressively
+            # Keep just enough for citation reference (metadata + first finding)
+            preview_len = max(300, min(1000, original_len // 20))
+            note = "Summary recorded via record_paper_summary."
+        else:
+            # No summary yet — keep more context (up to 20% for hub papers)
+            preview_len = max(1000, min(5000, original_len // 5))
+            note = "No summary recorded. Consider calling record_paper_summary."
+
+        preview = content[:preview_len]
+        msg["content"] = (
+            f"{preview}\n\n[... compacted: {original_len} chars. {note} "
+            f"Use get_session_context() for all summaries.]"
+        )
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
