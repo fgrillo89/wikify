@@ -931,10 +931,8 @@ class ArgumentativeCoherenceResult:
     citation_coherence_ratio: float
 
     def score(self) -> float:
-        """Weighted combination of chain preservation and citation coherence."""
-        chain = self.chain_preservation_ratio if self.chains_both_covered > 0 else 0.5
-        cite = self.citation_coherence_ratio if self.citation_edges_both_mentioned > 0 else 0.5
-        return 0.6 * chain + 0.4 * cite
+        """Chain preservation ratio (citation coherence removed — not reliable)."""
+        return self.chain_preservation_ratio if self.chains_both_covered > 0 else 0.5
 
     def interpretation(self) -> str:
         lines = [
@@ -1145,6 +1143,401 @@ def compute_argumentative_coherence(
         return None
 
 
+# ── Metric 10: Gap Detection ─────────────────────────────────────────────────
+
+
+@dataclass
+class GapDetectionResult:
+    """Identifies unexplored gaps in the corpus and checks if the review names them."""
+
+    # Topical intersection gaps (topic A + topic B rarely co-occur)
+    topical_gaps: list[dict]  # [{topic_a, topic_b, count_a, count_b, intersection, gap_score}]
+    total_topic_pairs_checked: int
+
+    # Embedding voids (low-density regions between clusters)
+    void_chunks: int  # review chunks in low-density corpus regions
+    total_review_chunks: int
+    void_ratio: float  # fraction of review addressing sparse corpus regions
+
+    # How many gaps the review explicitly discusses
+    gaps_addressed_in_review: int
+    gap_addressing_ratio: float
+
+    def score(self) -> float:
+        """Score: how well the review identifies and discusses corpus gaps."""
+        # Void ratio rewards reviews that venture into sparse territory
+        # Gap addressing ratio rewards explicitly naming gaps
+        return 0.5 * min(self.void_ratio * 5, 1.0) + 0.5 * self.gap_addressing_ratio
+
+    def interpretation(self) -> str:
+        lines = [
+            "Gap Detection:",
+            f"  Topical intersection gaps found: {len(self.topical_gaps)}",
+            f"  Review chunks in sparse regions: {self.void_chunks}/{self.total_review_chunks}"
+            f" ({self.void_ratio:.1%})",
+            f"  Gaps addressed in review: {self.gaps_addressed_in_review}/{len(self.topical_gaps)}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.topical_gaps:
+            lines.append("  Top gaps:")
+            for g in self.topical_gaps[:5]:
+                lines.append(
+                    f"    {g['topic_a']} + {g['topic_b']}: "
+                    f"{g['count_a']}+{g['count_b']} papers, {g['intersection']} overlap"
+                )
+        return "\n".join(lines)
+
+
+def compute_gap_detection(review_text: str) -> Optional[GapDetectionResult]:
+    """Detect corpus gaps and measure whether the review addresses them.
+
+    Embedding-led approach using ALL corpus chunk embeddings:
+    1. Cluster all corpus chunks to find research themes
+    2. Find inter-cluster voids (midpoints between clusters with no nearby chunks)
+    3. Check if review chunks venture into these void regions
+    4. Cross-validate with topical co-occurrence as secondary signal
+    """
+    try:
+        import numpy as np
+        from sklearn.cluster import KMeans
+        from sqlmodel import select
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.db import get_session
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+        from scholarforge.store.models import PaperTopic
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        # Use ALL chunk embeddings
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # 1. Cluster corpus chunks to find research themes
+        n_clusters = min(12, len(corpus_embs) // 10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans.fit_predict(corpus_embs)
+        centroids = kmeans.cluster_centers_
+        centroid_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+        centroid_norms[centroid_norms == 0] = 1
+        centroids = centroids / centroid_norms
+
+        # 2. Find inter-cluster voids: midpoints between cluster pairs
+        inter_cluster_voids = []
+        for i in range(n_clusters):
+            for j in range(i + 1, n_clusters):
+                midpoint = (centroids[i] + centroids[j]) / 2
+                midpoint /= np.linalg.norm(midpoint) + 1e-9
+                # How far is this midpoint from the nearest corpus chunk?
+                mid_sims = corpus_embs @ midpoint
+                nearest_sim = float(np.max(mid_sims))
+                if nearest_sim < 0.6:  # void = no chunk close to this region
+                    inter_cluster_voids.append(
+                        {
+                            "cluster_a": int(i),
+                            "cluster_b": int(j),
+                            "void_depth": round(1.0 - nearest_sim, 3),
+                            "midpoint": midpoint,
+                        }
+                    )
+        inter_cluster_voids.sort(key=lambda g: g["void_depth"], reverse=True)
+
+        # 3. Embed review chunks and check void coverage
+        model = _store.model
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[idx : idx + 150])
+            for idx in range(0, len(words), 150)
+            if len(" ".join(words[idx : idx + 150]).strip()) > 50
+        ]
+        if not review_chunk_texts:
+            return None
+
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        rev_norms = np.linalg.norm(rev_embs, axis=1, keepdims=True)
+        rev_norms[rev_norms == 0] = 1
+        rev_embs = rev_embs / rev_norms
+
+        # Density analysis: for each review chunk, avg sim to 10 nearest corpus chunks
+        k = 10
+        sim_matrix = rev_embs @ corpus_embs.T
+        top_k_sims = np.sort(sim_matrix, axis=1)[:, -k:]
+        avg_top_k = np.mean(top_k_sims, axis=1)
+
+        void_threshold = 0.5
+        void_chunks = int(np.sum(avg_top_k < void_threshold))
+        void_ratio = void_chunks / max(len(review_chunk_texts), 1)
+
+        # Check how many inter-cluster voids the review addresses
+        gaps_addressed = 0
+        for void in inter_cluster_voids[:20]:
+            rev_sims_to_mid = rev_embs @ void["midpoint"]
+            if float(np.max(rev_sims_to_mid)) > 0.5:
+                gaps_addressed += 1
+
+        # 4. Cross-validate with topical co-occurrence (secondary signal)
+        topical_gaps = []
+        try:
+            with get_session() as session:
+                all_paper_topics = session.exec(select(PaperTopic)).all()
+
+            topic_papers: dict[str, set[str]] = {}
+            for t in all_paper_topics:
+                if 3 <= len(t.topic) <= 60 and "<" not in t.topic:
+                    topic_papers.setdefault(t.topic, set()).add(t.paper_id)
+
+            sig_topics = {t: p for t, p in topic_papers.items() if len(p) >= 5}
+            t_names = sorted(sig_topics.keys())
+
+            if t_names:
+                t_embs = model.encode(t_names, show_progress_bar=False, batch_size=64)
+                t_norms = np.linalg.norm(t_embs, axis=1, keepdims=True) + 1e-9
+                t_embs_n = t_embs / t_norms
+                t_sim = t_embs_n @ t_embs_n.T
+
+                for ii in range(len(t_names)):
+                    for jj in range(ii + 1, len(t_names)):
+                        sim = float(t_sim[ii, jj])
+                        if sim < 0.3:
+                            continue
+                        pids_a = sig_topics[t_names[ii]]
+                        pids_b = sig_topics[t_names[jj]]
+                        inter = len(pids_a & pids_b)
+                        if inter < 2:
+                            topical_gaps.append(
+                                {
+                                    "topic_a": t_names[ii],
+                                    "topic_b": t_names[jj],
+                                    "count_a": len(pids_a),
+                                    "count_b": len(pids_b),
+                                    "intersection": inter,
+                                    "semantic_similarity": round(sim, 3),
+                                    "gap_score": sim * (len(pids_a) + len(pids_b)) / (inter + 1),
+                                }
+                            )
+                topical_gaps.sort(key=lambda g: g["gap_score"], reverse=True)
+                topical_gaps = topical_gaps[:20]
+        except Exception:  # noqa: BLE001
+            pass
+
+        gap_ratio = gaps_addressed / max(len(inter_cluster_voids[:20]), 1)
+
+        return GapDetectionResult(
+            topical_gaps=topical_gaps,
+            total_topic_pairs_checked=len(inter_cluster_voids),
+            void_chunks=void_chunks,
+            total_review_chunks=len(review_chunk_texts),
+            void_ratio=void_ratio,
+            gaps_addressed_in_review=gaps_addressed,
+            gap_addressing_ratio=gap_ratio,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── Metric 11: Novel Synthesis ───────────────────────────────────────────────
+
+
+@dataclass
+class NovelSynthesisResult:
+    """Measures whether review chunks synthesize across multiple papers.
+
+    A "synthetic" chunk draws from multiple papers simultaneously without
+    closely copying any single one. This captures the "whole > sum of parts"
+    quality of good academic synthesis.
+    """
+
+    total_review_chunks: int
+    paraphrasing_chunks: int  # near 1 paper, high similarity
+    synthesizing_chunks: int  # near 2+ papers, moderate similarity
+    novel_chunks: int  # in sparse corpus region (potential gap identification)
+    synthesis_ratio: float  # synthesizing / total
+    avg_source_diversity: float  # avg number of distinct papers per review chunk
+    avg_novelty: float  # avg (1 - max_sim) across review chunks
+
+    def score(self) -> float:
+        """Score: synthesis ratio weighted by avg source dissimilarity."""
+        # avg_source_diversity is now source_dissimilarity (0-1)
+        dissimilarity_bonus = min(self.avg_source_diversity * 5, 1.0)
+        return 0.6 * self.synthesis_ratio + 0.4 * dissimilarity_bonus
+
+    def interpretation(self) -> str:
+        lines = [
+            "Novel Synthesis:",
+            f"  Review chunks: {self.total_review_chunks}",
+            f"  Paraphrasing (1 source, high sim): {self.paraphrasing_chunks}",
+            f"  Synthesizing (2+ sources, moderate sim): {self.synthesizing_chunks}",
+            f"  Novel/gap-identifying (sparse region): {self.novel_chunks}",
+            f"  Synthesis ratio: {self.synthesis_ratio:.1%}",
+            f"  Avg source diversity: {self.avg_source_diversity:.1f} papers/chunk",
+            f"  Avg novelty: {self.avg_novelty:.3f}",
+            f"  Score: {self.score():.3f}",
+        ]
+        s = self.score()
+        if s > 0.5:
+            lines.append(
+                "  Interpretation: Strong synthesis -- review creates insights "
+                "by combining multiple sources."
+            )
+        elif s > 0.3:
+            lines.append(
+                "  Interpretation: Moderate synthesis -- mix of paraphrasing "
+                "and cross-paper integration."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Weak synthesis -- review mostly paraphrases individual papers."
+            )
+        return "\n".join(lines)
+
+
+def compute_novel_synthesis(review_text: str, top_k: int = 5) -> Optional[NovelSynthesisResult]:
+    """Measure per-chunk synthesis: source diversity * novelty * relevance.
+
+    For each review chunk:
+    1. Find top-k nearest corpus chunks
+    2. Count distinct source papers (source_diversity)
+    3. Compute novelty = 1 - max_similarity
+    4. Classify as paraphrasing / synthesizing / novel
+
+    Args:
+        review_text: Full review text.
+        top_k: Number of nearest corpus chunks to consider per review chunk.
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # Map corpus chunk index -> paper_id
+        chunk_to_paper = [c.paper_id for c in chunks if c.id in stored]
+
+        # Embed review chunks
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[j : j + 150])
+            for j in range(0, len(words), 150)
+            if len(" ".join(words[j : j + 150]).strip()) > 50
+        ]
+
+        if not review_chunk_texts:
+            return None
+
+        model = _store.model
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        rev_norms = np.linalg.norm(rev_embs, axis=1, keepdims=True)
+        rev_norms[rev_norms == 0] = 1
+        rev_embs = rev_embs / rev_norms
+
+        sim_matrix = rev_embs @ corpus_embs.T  # (n_review, n_corpus)
+
+        paraphrasing = 0
+        synthesizing = 0
+        novel = 0
+        diversities = []
+        novelties = []
+
+        # Pre-compute paper vibe vectors for source dissimilarity check
+        from scholarforge.store.embeddings import get_paper_vibe_vectors
+
+        paper_vibes = get_paper_vibe_vectors()
+
+        for i in range(len(rev_embs)):
+            # Top-k nearest corpus chunks
+            top_indices = np.argsort(sim_matrix[i])[-top_k:][::-1]
+            top_sims = sim_matrix[i][top_indices]
+            max_sim = float(top_sims[0])
+            novelty = 1.0 - max_sim
+
+            # Source diversity: distinct papers among top-k
+            source_paper_ids = list({chunk_to_paper[idx] for idx in top_indices})
+            diversity = len(source_paper_ids)
+
+            # True synthesis requires sources that are themselves dissimilar
+            # (not just 5 papers on the same subtopic)
+            source_dissimilarity = 0.0
+            if diversity >= 2 and paper_vibes:
+                sims_between_sources = []
+                for a_idx in range(len(source_paper_ids)):
+                    va = paper_vibes.get(source_paper_ids[a_idx])
+                    if va is None:
+                        continue
+                    for b_idx in range(a_idx + 1, len(source_paper_ids)):
+                        vb = paper_vibes.get(source_paper_ids[b_idx])
+                        if vb is None:
+                            continue
+                        s = float(np.dot(va, vb))
+                        sims_between_sources.append(s)
+                if sims_between_sources:
+                    # Dissimilarity = 1 - avg similarity between sources
+                    source_dissimilarity = 1.0 - float(np.mean(sims_between_sources))
+
+            diversities.append(source_dissimilarity)
+            novelties.append(novelty)
+
+            if max_sim < 0.4:
+                # Far from all corpus chunks -- novel territory or gap
+                novel += 1
+            elif diversity <= 1 or (diversity >= 2 and source_dissimilarity < 0.05):
+                # Close to one paper or multiple very similar papers -- paraphrasing
+                paraphrasing += 1
+            elif diversity >= 3 and source_dissimilarity >= 0.1:
+                # Drawing from 3+ dissimilar papers -- genuine synthesis
+                synthesizing += 1
+            elif diversity >= 2 and source_dissimilarity >= 0.05:
+                # Moderate synthesis (2 dissimilar sources)
+                synthesizing += 1
+            else:
+                paraphrasing += 1
+
+        total = len(rev_embs)
+        return NovelSynthesisResult(
+            total_review_chunks=total,
+            paraphrasing_chunks=paraphrasing,
+            synthesizing_chunks=synthesizing,
+            novel_chunks=novel,
+            synthesis_ratio=synthesizing / max(total, 1),
+            avg_source_diversity=float(np.mean(diversities)) if diversities else 0.0,
+            avg_novelty=float(np.mean(novelties)) if novelties else 0.0,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Corpus text helper ─────────────────────────────────────────────────────────
 
 
@@ -1194,6 +1587,8 @@ class QualityReport:
     reconstruction_fidelity: Optional[ReconstructionFidelityResult] = None
     semantic_span: Optional[SemanticSpanResult] = None
     argumentative_coherence: Optional[ArgumentativeCoherenceResult] = None
+    gap_detection: Optional[GapDetectionResult] = None
+    novel_synthesis: Optional[NovelSynthesisResult] = None
 
     # Error info for corpus-dependent failures
     corpus_error: Optional[str] = None
@@ -1230,7 +1625,11 @@ class QualityReport:
         if self.semantic_span is not None:
             components.append((self.semantic_span.score(), 0.10))
         if self.argumentative_coherence is not None:
-            components.append((self.argumentative_coherence.score(), 0.15))
+            components.append((self.argumentative_coherence.score(), 0.10))
+        if self.gap_detection is not None:
+            components.append((self.gap_detection.score(), 0.10))
+        if self.novel_synthesis is not None:
+            components.append((self.novel_synthesis.score(), 0.15))
 
         total_weight = sum(w for _, w in components)
         if total_weight == 0:
@@ -1256,6 +1655,10 @@ class QualityReport:
             lines += ["", self.semantic_span.interpretation()]
         if self.argumentative_coherence is not None:
             lines += ["", self.argumentative_coherence.interpretation()]
+        if self.gap_detection is not None:
+            lines += ["", self.gap_detection.interpretation()]
+        if self.novel_synthesis is not None:
+            lines += ["", self.novel_synthesis.interpretation()]
 
         lines += ["", self.factual_specificity.interpretation()]
         lines += ["", self.information_density.interpretation()]
@@ -1335,6 +1738,8 @@ def comprehensive_quality_report(
     recon = compute_reconstruction_fidelity(review_text, corpus_text)
     span = compute_semantic_span(review_text)
     coherence = compute_argumentative_coherence(review_text)
+    gaps = compute_gap_detection(review_text)
+    synthesis = compute_novel_synthesis(review_text)
 
     return QualityReport(
         information_density=info_density,
@@ -1347,5 +1752,7 @@ def comprehensive_quality_report(
         reconstruction_fidelity=recon,
         semantic_span=span,
         argumentative_coherence=coherence,
+        gap_detection=gaps,
+        novel_synthesis=synthesis,
         corpus_error=corpus_error,
     )
