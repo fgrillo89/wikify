@@ -76,14 +76,38 @@ print(find_synthesis_opportunities())
    - For the single most promising gap, use ONE `search_papers` call to find a paper addressing it. Digest that paper.
 7. The gap tool output MUST appear in the review. If `find_corpus_gaps()` lists "no studies combine X with Y," the review must contain a sentence like "No published study has combined X with Y, representing an opportunity for..."
 
-### Phase 3 — Write CONCISELY (~3500-4000 words HARD LIMIT)
+### Phase 3 — Write with a word budget
 
-7. **3500-4000 words maximum.** Shorter is better. Every sentence must add information. Cut anything that restates, summarizes without adding, or fills space. A 3500-word review with high bridge score beats a 5000-word review with diluted coherence.
-8. Every paragraph bridges 2+ papers.
-9. **Name gaps explicitly**: "No studies have combined X with Y."
-10. **State contradictions**: if papers disagree, say so and analyze why.
-11. **Bridge mainstream to frontier**: each section connects seed findings with frontier observations.
-12. **Future directions**: 5+ specific research questions. Propose experiments.
+7. **Set your target length, then assign section budgets.** Three tiers:
+
+   | Tier | Total | Intro | Each thematic section (5-7) | Gap analysis | Future directions | Conclusion |
+   |------|-------|-------|-----------------------------|--------------|-------------------|------------|
+   | Short | 3000-4000 | 300 | 350-450 | 300 | 350 | 250 |
+   | Medium | 5000-6000 | 400 | 600-750 | 500 | 500 | 300 |
+   | Long | 7000-8000 | 500 | 800-1000 | 700 | 700 | 400 |
+
+   Default to Short unless the user specifies otherwise. Section count stays the same across tiers (5-7 thematic sections). A longer review gets deeper sections, not more of them.
+
+8. **Depth scales, breadth does not.** When a section gets more words, spend them on:
+   - More quantitative detail per paper (specific process parameters, measured values, experimental conditions)
+   - Deeper mechanism comparisons between papers (why do two groups report different switching voltages?)
+   - Longer gap analysis with more specific reasoning about why the gap matters
+   - Do NOT cover more papers, add more sections, or lengthen transitions
+
+   The reading phase is identical regardless of target length. Same ~12 papers, same tools. Extra words come from extracting more from papers already read, not from reading new ones.
+
+9. **Sentence-type composition.** Every paragraph must contain at least one synthesis sentence. Across the full review, target this distribution:
+   - **30-40% synthesis sentences** — compare or contrast 2+ papers, draw a conclusion neither paper stated alone. "While Smith et al. achieved X at condition A, Zhao et al. found Y at condition B, suggesting the mechanism depends on C."
+   - **30-40% evidence sentences** — one specific finding from one paper with a citation. The citation earns its place by providing a concrete number, result, or observation.
+   - **15-25% analysis sentences** — your interpretation of what the evidence means, mechanism explanations, or implications. May or may not cite.
+   - **5-10% framing sentences** — transitions, scope statements, or context. No citation required; one or two per section at most.
+
+   A paragraph that contains only evidence sentences (single-paper summaries) must be revised: break it up and add at least one synthesis sentence connecting its findings to another paper.
+
+10. **Name gaps explicitly**: "No studies have combined X with Y."
+11. **State contradictions**: if papers disagree, say so and analyze why.
+12. **Bridge mainstream to frontier**: each section connects seed findings with frontier observations.
+13. **Future directions**: 5+ specific research questions. Propose experiments.
 
 ### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
