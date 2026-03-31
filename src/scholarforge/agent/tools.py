@@ -338,18 +338,19 @@ def get_graph_metrics() -> str:
 
 
 def scan_all_abstracts(max_papers: int = 50) -> str:
-    """Read paper abstracts from the corpus — a fast overview.
+    """Read the top paper abstracts ranked by citation PageRank.
 
-    Returns a compact listing of papers with display name and abstract.
-    Limited to max_papers to avoid context bloat. For the full corpus,
+    Returns a compact listing of papers with display name and abstract,
+    ordered by citation authority (most influential first). Capped at
+    max_papers (default 50) to avoid context bloat. For the full corpus,
     use get_corpus_summary() or list_papers() instead.
 
     Args:
         max_papers: Maximum number of papers to return (default 50).
-            Set higher for small corpora, lower for large ones.
 
     Returns:
-        Formatted text with one entry per paper (display_name + abstract).
+        Formatted text with one entry per paper (display_name + abstract),
+        ordered by citation PageRank descending.
     """
     try:
         from sqlmodel import select
@@ -358,11 +359,27 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
         from scholarforge.store.models import Paper
 
         with get_session() as session:
-            all_papers = session.exec(select(Paper).order_by(Paper.year)).all()
+            all_papers = session.exec(select(Paper)).all()
+
+        # Order by citation PageRank (most influential first)
+        try:
+            from scholarforge.graph.metrics import compute_metrics
+
+            metrics = compute_metrics()
+            all_papers.sort(
+                key=lambda p: metrics.pagerank.get(p.id, 0), reverse=True
+            )
+        except Exception:  # noqa: BLE001
+            # Fallback to year ordering if graph metrics unavailable
+            all_papers.sort(key=lambda p: p.year or 0, reverse=True)
 
         total = len(all_papers)
         subset = all_papers[:max_papers] if max_papers else all_papers
-        lines = [f"## Corpus Abstracts ({len(subset)}/{total} papers)", ""]
+        lines = [
+            f"## Top {len(subset)} Papers by Citation PageRank"
+            f" ({total} total in corpus)",
+            "",
+        ]
         for p in subset:
             abstract = (p.summary or "").strip()
             if not abstract:
