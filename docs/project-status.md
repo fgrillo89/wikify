@@ -1,108 +1,107 @@
-# ScholarForge — Project Status
+# ScholarForge -- Project Status
 
-## Current State (2026-03-29)
+## Current State (2026-03-31)
 
-ScholarForge is a working end-to-end pipeline. The ingestion pipeline is battle-tested
-on 20 ALD/memristor papers. Generation is implemented via MCP server (Claude Code agents
-use MCP tools to read the corpus and write papers directly — no separate API key needed).
+ScholarForge is a working end-to-end pipeline with a 206-paper ALD/memristor corpus.
+The exploration strategy has been optimized through 9 strategy variants benchmarked
+on 7 quality metrics. Reviews generate in 3-5 minutes with gap identification and
+cross-paper synthesis.
 
 ### What Works
 
-**Ingestion (Phase 1 — complete, no LLM):**
-- PDF/DOCX/PPTX parsing (pymupdf4llm + OCR fallback)
+**Ingestion (Phase 1 -- complete, no LLM):**
+- PDF/DOCX/PPTX parsing (pymupdf4llm + fitz fallback, no OCR by default)
 - Metadata extraction, section-aware chunking (600-token), figure/table refs
-- Bibliography extraction + fuzzy citation matching
-- ChromaDB embeddings + k-NN similarity, bibliographic coupling (threshold ≥ 3)
-- Obsidian vault: paper notes (papers-only graph), author notes, topic hubs, Dashboard
-- Incremental + parallel batch ingestion
-- Auto-generated `library.bib` on every ingest (Zotero/Mendeley/JabRef compatible)
+- Bibliography extraction + fuzzy citation matching (prefix + fuzzy scoring)
+- ChromaDB embeddings: per-paper summaries + per-chunk embeddings (ONNX quantized)
+- Paper vibe vectors: token-weighted chunk centroids (0.4s from stored embeddings)
+- Obsidian vault: paper notes, author notes, topic hubs, Dashboard
+- Incremental + parallel batch ingestion (60% of CPU cores by default)
+- Auto-generated `library.bib` on every ingest
+- Conclusion fallback: last section marked as conclusion if no heading matches
+- Corpus/output isolation: Paper.origin field, Project scoping, GeneratedOutput tracking
 
-**Generation (Phase 2 — implemented):**
-- 5 retrieval strategies: flat, hub-spoke, topic-cluster, query-driven, snowball
-  (selectable via `--strategy` flag)
+**Exploration & Quality (Phase 2 -- optimized):**
+- Enhanced hybrid strategy: greedy seeds + frontier papers + bridge papers + serendipity
+- Frontier detection: density-ranked papers in sparse embedding regions
+- Bridge computation: vibe midpoints between seed-frontier pairs (replaces random walks)
+- 7 quality metrics: frontier shift, bridge vectors, semantic residual, gap detection,
+  argumentative coherence, topic coverage, factual specificity
+- All metrics computable from stored embeddings in 4-5s per review
+- Gap detection: embedding voids + regex gap-claim detection
+- Agent tools: find_corpus_gaps, find_synthesis_opportunities, get_frontier_exploration_order,
+  suggest_next_papers, find_jump_target, evaluate_coverage, get_paper_vibes
+- Reading log: per-tool reason tracking for reproducibility
+- Greedy submodular paper ordering: lazy heap, O(N log N), 500 papers in 3s
+
+**Generation (Phase 2 -- implemented):**
+- Default strategy: enhanced hybrid (greedy + frontier + bridge + serendipity + gaps)
+- Snowball strategy as fallback (5 retrieval strategies available)
 - Artifact types: lit review, research article, grant proposal, technical report,
   master thesis, PhD thesis, undergrad research paper
-- Academic writing style guide (680 words) auto-injected into LLM persona
-- Field-specific guides (7 fields + generic) with auto-detection from corpus topics
-- Figure placeholders with detailed captions for downstream figure generation
-- Chemical formula subscripting (HfO₂ in markdown, native subscripts in DOCX)
-- Reference resolver with journal-specific formatting
-- Section-by-section writing with self-revision requirement
+- Academic writing style guide with sentence complexity rules
+- Hard bans: zero em-dashes, no abstract citations, one concept per sentence
+- Chemical formula subscripting (HfO2 in markdown, native subscripts in DOCX)
+- Reference resolver: prefix matching + fuzzy scoring, warns on unresolved refs
+- Post-processing: em-dash safety net, duplicate References section stripping
 
-**Export (Phase 3 — complete):**
-- DOCX with real publisher templates (Wiley AFM downloaded, style-mapped)
-  - Template cloning preserves exact formatting (spacing, fonts, headers, logos)
-  - SQLite-tracked template registry (`scholarforge templates` commands)
-  - User can import own paper as template
-- PDF via DOCX→PDF (Word/LibreOffice) or HTML fallback
+**Export (Phase 3 -- complete):**
+- DOCX with publisher templates (template cloning, SQLite registry)
+- PDF (default on) via DOCX->PDF or HTML fallback
 - PPTX with professional template
 - Markdown with Unicode chemical subscripts
 
-**MCP Server (Phase 4 — implemented):**
-- 9 tools: search_papers, get_paper, list_papers, list_topics, deep_read,
-  get_sections, get_graph_metrics, get_corpus_summary, ingest_paper
+**MCP Server (Phase 4 -- implemented):**
+- 20+ tools: search_papers, get_paper, list_papers, deep_read, get_sections,
+  get_graph_metrics, get_corpus_summary, scan_all_abstracts, read_paper_digest,
+  get_paper_vibes, find_corpus_gaps, find_synthesis_opportunities,
+  get_frontier_exploration_order, suggest_next_papers, find_jump_target,
+  evaluate_coverage, get_coverage_gaps, get_reading_log_text, save_reading_log,
+  ingest_paper
 - `.mcp.json` configured for Claude Code integration
-- Claude Code agents use MCP tools directly to explore corpus and write papers
 
-**Testing: 136 unit tests, all passing.**
+**Testing: 274 unit tests, all passing.**
 
 ### CLI Commands
 
 | Command | Status | Description |
 |---|---|---|
-| `scholarforge ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (supports --parallel) |
+| `scholarforge ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (--parallel, --workers) |
 | `scholarforge refresh` | Working | Recompute all batch signals + regenerate vault |
 | `scholarforge stats` | Working | Show paper/chunk/figure counts |
 | `scholarforge graph` | Working | Show PageRank, centrality, hub/bridge/frontier |
-| `scholarforge generate "prompt"` | Working | Generate paper (--strategy, --journal flags) |
+| `scholarforge generate "prompt"` | Working | Generate paper (--strategy snowball, --journal) |
 | `scholarforge slides "topic"` | Working | Generate PPTX presentation |
 | `scholarforge chat` | Working | Interactive literature Q&A |
 | `scholarforge mcp` | Working | Launch MCP server for Claude Code |
 | `scholarforge templates list` | Working | Show available DOCX/LaTeX templates |
 | `scholarforge templates import` | Working | Import a .docx as reusable template |
 | `scholarforge templates download` | Working | Auto-download publisher templates |
-| `scholarforge templates sources` | Working | Show publisher template URLs |
-| `scholarforge templates styles` | Working | Inspect styles in a .docx file |
-
-## Architecture Highlights
-
-- **Retrieval strategies**: 5 strategies behind `RetrievalStrategy` ABC, selected via `--strategy`
-- **Artifact types**: Each defines required sections + type-specific writing rules
-- **Field guides**: 8 field-specific .md files (materials science, CS, biology, medicine,
-  math, physics, social sciences, generic) auto-detected from corpus topics
-- **Writing pipeline**: base style guide → artifact type rules → field guide → figure instructions
-- **Template system**: SQLite-tracked, supports publisher templates + user papers as templates
-- **Chemical formulas**: Regex detection + validation against periodic table, subscript rendering
 
 ## Remaining Work
 
 ### High Priority
-- [ ] Implement gap detection tools (`find_corpus_gaps`, `find_synthesis_opportunities`)
-- [ ] Implement novel synthesis metric (source diversity * novelty * relevance per review chunk)
-- [ ] Add gap/synthesis instructions to /generate skill prompt
-- [ ] Re-run research loop with gap-aware strategy
+- [ ] Citation-only PageRank: separate citation authority from embedding similarity
+- [ ] Seed selection: #1 PageRank + #2-3 greedy coverage (orthogonal views)
+- [ ] Pass precomputed embeddings through all quality metrics (40s -> 5s)
+- [ ] Expert review: qualitative assessment of best reviews as materials scientist
 
 ### Medium Priority
 - [ ] LaTeX export with .cls files and BibTeX integration
-- [ ] Add journal/volume/pages fields to Paper model
-- [ ] N+1 query optimization in retrieval strategies (bulk-load chunks)
-- [ ] Thread-safe SQLite access (lock around run_batch_steps)
 - [ ] Ollama support for fully offline generation
+- [ ] Talk-to-corpus mode: same tools, conversational output
+- [ ] Coverage metric optimization: ANN query instead of brute-force at 25k+ chunks
 
 ### Low Priority
-- [ ] Section-level embeddings
 - [ ] Claims extraction (JIT)
 - [ ] Note model + FTS5 search
+- [ ] Attention pooling for paper vibes (learn which chunks matter)
+- [ ] GPU embedding support for 17x speedup
 
 ### Future Phase: Output Promotion
-- [ ] **Promote generated output to corpus**: A `/promote` command that takes a
-  GeneratedOutput, flips its Paper.origin from "generated" to "corpus", embeds
-  its chunks into ChromaDB, and integrates it into the citation graph. This lets
-  a user's own draft become part of the knowledge base, enabling the agent to
-  cite and build upon previous writing. Requires: re-chunking the output as if
-  it were an ingested paper, updating the similarity graph, and refreshing vault
-  notes. The user should review the draft before promotion (the agent should not
-  auto-promote). Consider a "draft" intermediate state between generated and corpus.
+- [ ] `/promote` command: flip Paper.origin from "generated" to "corpus"
+- [ ] Re-chunk, embed, integrate into citation graph
+- [ ] "Draft" intermediate state between generated and corpus
 
 ## Benchmarks (206-Paper Corpus)
 
@@ -110,28 +109,35 @@ use MCP tools to read the corpus and write papers directly — no separate API k
 |---|---|
 | Papers | 206 (ALD/memristor/neuromorphic, 1971-2026) |
 | Chunks | 6,531 |
-| Chunk embeddings | 6,531 (ChromaDB) |
+| Chunk embeddings | 6,531 (ChromaDB, ONNX quint8_avx2) |
+| Summary embeddings | 206 |
 | Figure/table refs | 2,730 |
 | Citation cross-refs | 936 |
 | Topics | 1,232 (268 vocabulary terms) |
 | Tests | 274 |
+| Ingestion time | ~10 min (206 papers, 10 workers) |
+| Review generation | 3-5 min (enhanced hybrid strategy) |
 
-### Quality Metrics (recalibrated, 9 dimensions)
+### Strategy Benchmark (7 quality metrics, 9 strategies tested)
 
-| Strategy | Time | Composite | Centroid | Topics | Coherence | Span | Factual |
-|----------|------|-----------|----------|--------|-----------|------|---------|
-| greedy_v2 | 3.4m | 0.525 | 0.904 | 0.232 | 0.525 | 0.231 | 0.974 |
-| greedy_v1 | 4m | 0.524 | 0.905 | 0.232 | 0.466 | 0.253 | 0.976 |
-| snowball_v4 | 24m | 0.521 | 0.925 | 0.300 | 0.433 | 0.221 | 0.910 |
+| Strategy | Composite | Frontier | Bridge | Gaps | Chain | Time |
+|----------|-----------|----------|--------|------|-------|------|
+| random_walk | **0.489** | **0.910** | 9% | 0.008 | **0.515** | 16m |
+| **enhanced_hybrid** | **0.459** | 0.738 | **15%** | 0.007 | 0.418 | **4.4m** |
+| gap_aware | 0.447 | 0.767 | 8% | **0.012** | 0.460 | 4.5m |
+| hybrid | 0.445 | 0.587 | **17%** | 0.004 | 0.446 | 4.75m |
+| greedy_v2 | 0.420 | 0.605 | 5% | 0.000 | 0.542 | 3.4m |
+| snowball_v4 | 0.347 | 0.269 | 8% | 0.012 | 0.388 | 24m |
 
-Key: greedy strategies achieve same quality in 3-4 min as snowball in 24 min.
+Key: enhanced hybrid achieves 94% of random walk quality in 28% of the time.
 
 ## Resume Instructions
 
 1. Read `CLAUDE.md` for working conventions
 2. Read this file for current status
-3. Code: `src/scholarforge/`; vault output: `data/vault/`
-4. MCP: restart Claude Code to load `.mcp.json`, then use MCP tools
-5. Templates: `scholarforge templates list` to see available templates
-6. Artifact types: `lit_review`, `research_article`, `grant_proposal`,
-   `technical_report`, `master_thesis`, `phd_thesis`, `research_paper_undergrad`
+3. Read `docs/architecture.md` for module layout and strategy design
+4. Read `docs/design/research-loop-insights.md` for benchmark details
+5. Code: `src/scholarforge/`; vault output: `data/vault/`
+6. MCP: restart Claude Code to load `.mcp.json`, then use MCP tools
+7. Key modules: `evaluate/quality.py` (metrics), `evaluate/frontier.py` (exploration),
+   `evaluate/strategies.py` (greedy/max-distance/spectral), `agent/tools.py` (20+ tools)
