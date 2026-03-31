@@ -37,37 +37,46 @@ Every read tool has a `reason` parameter. **Always provide it** — explain in o
 - Use `search_papers` with focused queries to find specific data points
 - Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
 
-## Your Strategy: Iterative Coverage-Driven Snowball
+## Your Strategy: Hybrid Greedy-Frontier Exploration
 
-**Write early, measure often, read to fill gaps.** Do NOT read the entire corpus before writing. A partial draft is more useful than comprehensive notes.
+**Write early, measure often, read to fill gaps.** Do NOT read the entire corpus before writing.
 
-### Phase 1 — Seed Read (Iteration 0)
+### Phase 1 — Dual Seed: Greedy + Frontier (target: <2 min)
 
-1. Call `get_graph_metrics()` to identify hub, bridge, and frontier papers.
-2. Deep-read the top 2-3 hub papers (highest PageRank).
-3. Write an initial draft (~60% of final length). Focus on the themes the hubs cover.
+1. Get the frontier exploration order (combines greedy seeds with frontier papers):
+```python
+from scholarforge.agent.tools import get_frontier_exploration_order
+print(get_frontier_exploration_order(max_papers=15))
+```
+This gives you 3 greedy seeds (coverage baseline) + 12 frontier papers (density-ranked, dissimilar to seeds).
 
-### Phase 2 — Measure and Navigate (Iterations 1-5)
+2. **Deep-read the 3 greedy seeds** (these cover ~90% of corpus semantic space).
+3. **Read abstracts/conclusions of the top 5 frontier papers** via `get_sections(section_type="conclusion", paper_pattern="...")` and `read_paper_digest`.
+4. **Decide from both ends**: based on what you read, pick 1-2 frontier papers for deep reading and 1-2 neighbors of the seeds for depth.
 
-After each draft revision, execute this decision loop:
+### Phase 2 — Gap-Aware Exploration
 
-1. **Measure**: `get_coverage_gaps(review_text=draft, already_read=[...], previous_coverage=last_score)`
+5. **Find gaps and synthesis opportunities**:
+```python
+from scholarforge.agent.tools import find_corpus_gaps, find_synthesis_opportunities
+print(find_corpus_gaps())
+print(find_synthesis_opportunities())
+```
 
-2. **If delta >= 2%**: Continue. Call `suggest_next_papers(already_read=[...])` to find 1-3 papers that are graph-connected but semantically orthogonal to what you have read. Read them (digest first, deep-read if critical). Revise the draft. Re-measure.
+6. Read 2-3 papers that address the most promising gaps (use `search_papers` or `suggest_next_papers`).
 
-3. **If delta < 2% AND unread gaps remain**: Call `find_jump_target(already_read=[...], review_text=draft)`. If local subgraph is exhausted, jump to the recommended paper and continue from there.
+### Phase 3 — Write with gap emphasis (~4000-5000 words)
 
-4. **If delta < 2% AND no significant gaps**: **Stop iterating.** The draft has converged.
-
-### Convergence Criteria (stop when ANY hold)
-- Coverage gain < 2% in the last iteration
-- 5 iterations completed (hard cap)
-- `find_jump_target` returns "no targets" AND `suggest_next_papers` candidates all have orthogonality < 0.3
+7. Write the review with these priorities:
+   - Name every gap you found
+   - Synthesize across mainstream seeds and frontier papers
+   - Future directions section with 3-5 specific research questions from the gaps
+   - Contradictions between papers should be stated explicitly
 
 ### Reading depth is your decision
-- `read_paper_digest` — abstract + key section excerpts (~2KB). Good enough for most papers.
+- `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
 - `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion
-- `deep_read` — full text (~70KB). Reserve for the 3-5 most critical papers.
+- `deep_read` — full text (~70KB). Reserve for 3-5 critical papers.
 
 ## Writing
 
