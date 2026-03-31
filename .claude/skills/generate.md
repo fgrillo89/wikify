@@ -24,6 +24,8 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 | `find_corpus_gaps()` | Find unexplored gaps: embedding voids between clusters + topical intersections | Medium |
 | `find_synthesis_opportunities()` | Find paper pairs with synthesis potential (related but different) | Medium |
 | `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
+| `record_paper_summary(paper_name, key_findings, ...)` | Distill findings after reading — builds working memory | Free |
+| `get_session_context()` | Recall all paper summaries (replaces re-reading) | Free |
 | `get_reading_log_text()` | View the current reading trace | Free |
 | `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
 
@@ -32,11 +34,25 @@ Import from: `from scholarforge.agent.tools import <function_name>`
 ### Reading log — always use `reason`
 Every read tool has a `reason` parameter. **Always provide it** — explain in one sentence why you are reading this paper or running this search. This builds a reading trace the user can review to understand your research process and guide your exploration.
 
+### Read-once-summarize pattern (MANDATORY)
+After EVERY `deep_read` or `read_paper_digest`, immediately call `record_paper_summary` to distill findings:
+```python
+record_paper_summary(
+    paper_name="AuthorName Year - Title",
+    key_findings=["finding 1 with numbers", "finding 2"],
+    quantitative_data=["10^4 cycles endurance", "3.0 nm HfO2"],
+    relevance="This paper shows...",
+    gaps_noted=["No array-level data", "Missing reliability tests"],
+    read_depth="full"
+)
+```
+This builds your working memory. Later, call `get_session_context()` to recall all summaries instead of re-reading papers. Large tool results are automatically compacted after you process them.
+
 ### Token-efficient reading strategy
-- Use `read_paper_digest` for most papers — returns metadata + abstract + intro/conclusion/results excerpts (~2KB). No LLM summarization; it's a cheap preview to decide if a full read is needed.
-- Only use `deep_read` for the 3-5 most critical papers that need full-text analysis (~70KB each)
+- Use `read_paper_digest` for most papers (~2KB). No LLM summarization; a cheap preview.
+- Only use `deep_read` for the 3-5 most critical papers (~70KB each)
 - Use `search_papers` with focused queries to find specific data points
-- Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
+- Use `get_sections(section_type="conclusion")` to quickly scan findings
 
 ## Your Strategy: Gap-Oriented Hybrid
 

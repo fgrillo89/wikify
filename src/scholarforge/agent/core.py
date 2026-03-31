@@ -108,6 +108,51 @@ class AgentResult:
     messages: list[dict] = field(default_factory=list)
 
 
+# ── Tool result compaction ────────────────────────────────────────────────────
+
+
+def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
+    """Truncate large tool results from prior turns to save context tokens.
+
+    After the LLM has responded to a tool result (i.e., an assistant message
+    follows the tool message), the full tool content is no longer needed —
+    the LLM already processed it. Replace it with a short stub.
+
+    This is model-agnostic: it modifies the message list before any LLM call.
+    The agent can use get_session_context() to recall paper summaries.
+
+    Args:
+        messages: The conversation message list (modified in-place).
+        threshold: Character count above which a tool result is compacted.
+    """
+    # Walk messages and find tool messages that are followed by an assistant
+    # message (meaning the LLM already saw and responded to them).
+    # Don't compact the most recent tool messages (the LLM hasn't seen them yet).
+    last_assistant_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], dict) and messages[i].get("role") == "assistant":
+            last_assistant_idx = i
+            break
+
+    if last_assistant_idx < 0:
+        return
+
+    for i in range(last_assistant_idx):
+        msg = messages[i]
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "tool":
+            continue
+        content = msg.get("content", "")
+        if len(content) > threshold:
+            original_len = len(content)
+            preview = content[:200]
+            msg["content"] = (
+                f"{preview}\n\n[... compacted: {original_len} chars processed. "
+                f"Call get_session_context() for paper summaries.]"
+            )
+
+
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
 
@@ -156,6 +201,10 @@ class ScholarForgeAgent:
         total_out = 0
 
         for turn in range(max_turns):
+            # Compact large tool results from prior turns to save tokens
+            if turn > 0 and settings.enable_tool_compaction:
+                _compact_tool_results(messages, settings.tool_compaction_threshold)
+
             event = LLMEvent(
                 messages=messages,
                 model=model,

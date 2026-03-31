@@ -3,13 +3,71 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from scholarforge.agent.core import AgentResult, ScholarForgeAgent
+
+if TYPE_CHECKING:
+    from scholarforge.agent.research_notes import ResearchNotes
 from scholarforge.agent.defaults import (
     build_generation_prompt,
     get_default_hooks,
     get_default_tools,
 )
+
+
+def explore_corpus(
+    prompt: str,
+    model: str | None = None,
+    token_budget: int = 130_000,
+    max_turns: int = 25,
+) -> "ResearchNotes":
+    """Run the explorer agent to build structured research notes.
+
+    The explorer reads the corpus, identifies gaps, and produces a
+    ResearchNotes object that can feed into any output format
+    (review, slides, abstract, Q&A).
+
+    Returns ResearchNotes built from recorded paper summaries.
+    """
+    from scholarforge.agent.defaults import build_explorer_prompt, get_explorer_tools
+    from scholarforge.agent.reading_log import reset_reading_log
+    from scholarforge.agent.research_notes import ResearchNotes
+    from scholarforge.agent.tools import reset_paper_summaries
+
+    reset_reading_log()
+    reset_paper_summaries()
+
+    system_prompt = build_explorer_prompt(prompt)
+    hooks = get_default_hooks(token_budget)
+
+    agent = ScholarForgeAgent(
+        model=model,
+        tools=get_explorer_tools(),
+        hooks=hooks,
+        system_prompt=system_prompt,
+    )
+
+    result = agent.run(prompt, max_turns=max_turns)
+
+    # Build notes from recorded summaries (the explorer called record_paper_summary)
+    notes = ResearchNotes.from_session(topic=prompt)
+
+    # Try to extract gap analysis and outline from the explorer's final message
+    if result.content:
+        content = result.content
+        if "gap" in content.lower() or "Gap" in content:
+            notes.gap_analysis = content
+        # The explorer's final message often contains the outline
+        if "outline" in content.lower() or "section" in content.lower():
+            # Extract lines that look like outline items
+            import re
+
+            outline_lines = re.findall(r"^\d+\.\s+.+$", content, re.MULTILINE)
+            if outline_lines:
+                notes.proposed_outline = outline_lines
+
+    return notes
 
 
 def generate_paper(
@@ -19,12 +77,25 @@ def generate_paper(
     journal: str = "",
     token_budget: int = 200_000,
     max_turns: int = 30,
+    two_agent: bool = False,
 ) -> tuple[str, AgentResult, list]:
     """Generate a paper using the agent loop.
+
+    Args:
+        two_agent: If True, runs explorer then writer as separate agents.
+            The writer receives structured ResearchNotes (~5KB) instead of
+            raw tool results (~280KB). Default False (single agent with
+            tool compaction).
 
     Returns (markdown_text, agent_result, hooks).
     The hooks list contains a CostTracker at index 0 with accumulated cost data.
     """
+    if two_agent:
+        return _generate_two_agent(
+            prompt, model, artifact_type_id, journal, token_budget, max_turns
+        )
+
+    # Single-agent mode (with tool compaction)
     system_prompt = build_generation_prompt(
         artifact_type_id=artifact_type_id,
         journal=journal,
@@ -42,6 +113,44 @@ def generate_paper(
 
     result = agent.run(prompt, max_turns=max_turns)
     return result.content, result, hooks
+
+
+def _generate_two_agent(
+    prompt: str,
+    model: str | None = None,
+    artifact_type_id: str = "lit_review",
+    journal: str = "",
+    token_budget: int = 200_000,
+    max_turns: int = 30,
+) -> tuple[str, AgentResult, list]:
+    """Two-agent generation: explorer builds notes, writer produces prose."""
+    from scholarforge.agent.defaults import build_writer_prompt, get_writer_tools
+
+    # Phase 1: Explore
+    explorer_budget = int(token_budget * 0.65)
+    notes = explore_corpus(prompt, model=model, token_budget=explorer_budget)
+
+    # Phase 2: Write
+    writer_budget = token_budget - explorer_budget
+    writer_system = build_writer_prompt(
+        artifact_type_id=artifact_type_id,
+        journal=journal,
+        field_hint=prompt,
+    )
+    writer_hooks = get_default_hooks(writer_budget)
+
+    writer = ScholarForgeAgent(
+        model=model,
+        tools=get_writer_tools(),
+        hooks=writer_hooks,
+        system_prompt=writer_system,
+    )
+
+    writer_prompt = notes.to_writer_prompt()
+    writer_max = max(5, max_turns - 25)  # writer needs fewer turns
+    result = writer.run(writer_prompt, max_turns=writer_max)
+
+    return result.content, result, writer_hooks
 
 
 def export_paper(

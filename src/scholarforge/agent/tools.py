@@ -1472,6 +1472,100 @@ def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
         return f"Error evaluating coverage: {exc}"
 
 
+# ── Session context: read-once-summarize pattern ─────────────────────────────
+
+_paper_summaries: list[dict] = []
+
+
+def reset_paper_summaries() -> None:
+    """Clear the session paper summary store. Call at the start of each run."""
+    _paper_summaries.clear()
+
+
+def get_paper_summaries() -> list[dict]:
+    """Return all recorded paper summaries (internal helper)."""
+    return list(_paper_summaries)
+
+
+def record_paper_summary(
+    paper_name: str,
+    key_findings: list[str],
+    quantitative_data: list[str],
+    relevance: str,
+    gaps_noted: list[str] | None = None,
+    read_depth: str = "full",
+) -> str:
+    """Record a structured summary of a paper after reading it.
+
+    Call this IMMEDIATELY after deep_read or read_paper_digest to distill
+    findings into compact form. This builds your working memory so you
+    can refer back to papers without re-reading them.
+
+    Args:
+        paper_name: The paper's display_name as seen in tool results.
+        key_findings: 3-5 specific findings (include numbers and measurements).
+        quantitative_data: Specific values, metrics, or statistics extracted.
+        relevance: 1-2 sentences explaining relevance to the review topic.
+        gaps_noted: Limitations or gaps identified in this paper.
+        read_depth: How the paper was read: "full", "digest", or "section".
+
+    Returns:
+        Confirmation with paper name and finding count.
+    """
+    summary = {
+        "paper_name": paper_name,
+        "key_findings": key_findings or [],
+        "quantitative_data": quantitative_data or [],
+        "relevance": relevance,
+        "gaps_noted": gaps_noted or [],
+        "read_depth": read_depth,
+    }
+    _paper_summaries.append(summary)
+
+    # Also log to reading log
+    from scholarforge.agent.reading_log import get_reading_log
+
+    get_reading_log().log(
+        paper=paper_name,
+        tool="record_paper_summary",
+        reason=f"Distilled {len(key_findings)} findings, {len(quantitative_data)} data points",
+        depth=read_depth,
+    )
+
+    return (
+        f"Recorded summary for '{paper_name}': "
+        f"{len(key_findings)} findings, {len(quantitative_data)} data points, "
+        f"{len(gaps_noted or [])} gaps noted."
+    )
+
+
+def get_session_context() -> str:
+    """Retrieve all recorded paper summaries as compact markdown.
+
+    Call this instead of re-reading papers. Returns a structured overview
+    of everything you have read and extracted so far.
+
+    Returns:
+        Markdown-formatted session context with all paper summaries.
+    """
+    if not _paper_summaries:
+        return "No paper summaries recorded yet. Use record_paper_summary after reading papers."
+
+    lines = [f"## Session Context ({len(_paper_summaries)} papers)", ""]
+    for i, s in enumerate(_paper_summaries, 1):
+        lines.append(f"### {i}. {s['paper_name']} [{s['read_depth']}]")
+        lines.append(f"**Relevance**: {s['relevance']}")
+        if s["key_findings"]:
+            lines.append("**Findings**: " + "; ".join(s["key_findings"]))
+        if s["quantitative_data"]:
+            lines.append("**Data**: " + "; ".join(s["quantitative_data"]))
+        if s["gaps_noted"]:
+            lines.append("**Gaps**: " + "; ".join(s["gaps_noted"]))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def get_reading_log_text() -> str:
     """Get the current reading log as markdown.
 

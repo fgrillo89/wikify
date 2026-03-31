@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     embedding_backend: str = "onnx"  # "onnx" (faster) or "torch" (default)
     embedding_onnx_file: str = "onnx/model_quint8_avx2.onnx"  # quantized for CPU
 
+    # Agent token efficiency
+    enable_tool_compaction: bool = True  # Truncate large tool results after LLM processes them
+    tool_compaction_threshold: int = 2000  # Chars above which to compact a tool result
+
     # Chunking
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 800
