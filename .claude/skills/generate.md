@@ -89,6 +89,7 @@ After exploring, write the paper as markdown. Follow these rules:
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators.** Never write " -- " or " - " to insert an aside. Use commas or parentheses instead. This is a hard ban.
 - **Readable abstracts**: introduce one concept per sentence, define jargon before using it, start with a short (<15 word) opening sentence. **No citations in abstracts** unless referencing truly foundational work (e.g., Watson and Crick for DNA)
+- **NEVER mention your exploration method.** No "random walk," "conceptual links," "traversal," "this exploration surfaced." Present findings as observations: "Several directions appear understudied" not "The random walk surfaced understudied directions." The reader must never suspect the text was generated.
 - Follow the structure appropriate for the document type (the user will specify or default to lit review)
 
 ### Gap identification and synthesis (required)
