@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -80,10 +79,7 @@ def complete(
     """
     model = model or settings.llm_model
 
-    # Check API key early
-    if "anthropic" in model or "claude" in model:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to .env or export it.")
+    # litellm handles API key validation for all providers — no provider-specific checks here
 
     cache_params = {"temperature": temperature, "max_tokens": max_tokens}
     key = _cache_key(model, messages, **cache_params)

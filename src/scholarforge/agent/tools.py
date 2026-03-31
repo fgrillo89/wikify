@@ -193,17 +193,20 @@ def search_papers(
 
 def get_paper(
     pattern: str,
+    reason: str = "",
 ) -> str:
-    """Get full details for a specific paper by title or author name pattern.
+    """Get metadata and abstract for a specific paper by title or author pattern.
 
     Performs a case-insensitive substring match against title and author fields.
-    Returns the best match with metadata and all chunks grouped by section.
+    Returns the best match with metadata and abstract. For full text, use
+    deep_read instead.
 
     Args:
         pattern: Substring to match in the paper title or author list.
+        reason: Why you are looking up this paper (logged for the reading trace).
 
     Returns:
-        Formatted text with paper metadata block followed by chunks grouped by section.
+        Formatted text with paper metadata and abstract. Use deep_read for full text.
     """
     try:
         from sqlmodel import select
@@ -221,11 +224,18 @@ def get_paper(
                 return f"No paper found matching: {pattern!r}"
 
             paper = matched[0]
-            chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
+            chunk_count = session.exec(
+                select(Chunk).where(Chunk.paper_id == paper.id)
             ).all()
 
-        # Build metadata block
+        # Log this read
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            get_reading_log().log(
+                paper=paper.display_name(), tool="get_paper", reason=reason, depth="metadata"
+            )
+
         authors = paper.parsed_authors
         authors_str = ", ".join(authors) if authors else "Unknown"
         lines = [
@@ -235,24 +245,15 @@ def get_paper(
             f"**Year**: {paper.year or 'Unknown'}",
             f"**DOI**: {paper.doi or 'N/A'}",
             f"**Type**: {paper.doc_type}",
+            f"**Display name**: {paper.display_name()}",
+            f"**Chunks**: {len(chunk_count)}",
         ]
         if paper.summary:
             lines += ["", "## Abstract", paper.summary]
 
         if len(matched) > 1:
             lines += ["", f"*Note: {len(matched)} papers matched; showing first result.*"]
-
-        # Group chunks by section
-        sections: dict[str, list] = {}
-        for chunk in chunks:
-            key = chunk.section_path or "(Unsectioned)"
-            sections.setdefault(key, []).append(chunk)
-
-        lines += ["", "## Full Text"]
-        for section_path, section_chunks in sections.items():
-            lines += ["", f"### {section_path}"]
-            for chunk in section_chunks:
-                lines.append(chunk.content)
+            lines.append("*Use deep_read for full text.*")
 
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001
@@ -336,12 +337,16 @@ def get_graph_metrics() -> str:
         return json.dumps({"error": str(exc), "hub_papers": [], "bridge_papers": []})
 
 
-def scan_all_abstracts() -> str:
-    """Read all paper abstracts in the corpus — a fast overview of everything.
+def scan_all_abstracts(max_papers: int = 50) -> str:
+    """Read paper abstracts from the corpus — a fast overview.
 
-    Returns a compact listing of every paper's display name and abstract.
-    Use this as the FIRST exploration step to understand the full corpus
-    before deciding which papers to read deeper. Cost: ~400KB for 200 papers.
+    Returns a compact listing of papers with display name and abstract.
+    Limited to max_papers to avoid context bloat. For the full corpus,
+    use get_corpus_summary() or list_papers() instead.
+
+    Args:
+        max_papers: Maximum number of papers to return (default 50).
+            Set higher for small corpora, lower for large ones.
 
     Returns:
         Formatted text with one entry per paper (display_name + abstract).
@@ -355,8 +360,10 @@ def scan_all_abstracts() -> str:
         with get_session() as session:
             all_papers = session.exec(select(Paper).order_by(Paper.year)).all()
 
-        lines = [f"## Corpus Abstracts ({len(all_papers)} papers)", ""]
-        for p in all_papers:
+        total = len(all_papers)
+        subset = all_papers[:max_papers] if max_papers else all_papers
+        lines = [f"## Corpus Abstracts ({len(subset)}/{total} papers)", ""]
+        for p in subset:
             abstract = (p.summary or "").strip()
             if not abstract:
                 abstract = "(no abstract)"
