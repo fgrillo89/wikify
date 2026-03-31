@@ -43,7 +43,7 @@
 
 ## Argumentation
 
-**Every claim needs support** — your data, a citation, or a logical derivation. Unsupported claims destroy credibility.
+**Every claim needs support**: a citation, data, or logical derivation. Unsupported claims destroy credibility. Especially dangerous: superlatives ("method of choice," "most promising," "superior to") and status claims ("has emerged as," "is widely recognized as") without a citation. If you cannot cite it, hedge it: "ALD offers several advantages for memristor fabrication" not "ALD has emerged as the fabrication method of choice."
 
 **Establish the conversation first** (Graff/Birkenstein "They Say / I Say"). State what is known, then what is missing or contested, then your contribution. Create instability: the reader must feel something is unresolved.
 
@@ -82,6 +82,15 @@ Never use: "delve/delves/delving," "crucial," "pivotal," "paramount," "groundbre
 ## Tone
 
 Write as a confident expert to peers. First person ("we") is appropriate. No grandiosity ("This groundbreaking study reveals" → "This study shows"). No false modesty. Let data speak; readers judge significance.
+
+---
+
+## Title
+
+- **Specific over generic.** "ALD-Grown HfO2 Memristors: Switching Mechanisms, Synaptic Functions, and Array Integration" beats "A Review of Memristors for Neuromorphic Computing." The title should tell the reader exactly what materials, methods, and scope are covered.
+- **No marketing language.** "Comprehensive," "state-of-the-art," "advances in" are vague. Name what the review actually covers.
+- **Structure**: `[Material/Method]: [What is covered], [What is covered], and [What is covered]` works well. Or `[Scope]: From [established] to [frontier]`.
+- **Length**: 10-15 words. Under 100 characters if possible (journal requirements vary).
 
 ---
 
