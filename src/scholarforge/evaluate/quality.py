@@ -901,6 +901,250 @@ def compute_semantic_span(
         return None
 
 
+# ── Metric 9: Argumentative Coherence ────────────────────────────────────────
+
+
+@dataclass
+class ArgumentativeCoherenceResult:
+    """Measures whether the review preserves causal/logical chains from the corpus.
+
+    In the corpus, consecutive chunks within a paper form an argumentative
+    chain (chunk_i argues/leads-to chunk_{i+1}). If the review covers both,
+    this metric checks whether the matching review positions are also nearby,
+    preserving the logical flow.
+
+    Additionally measures "citation graph coherence": when the corpus has
+    paper A citing paper B, the review should discuss B's findings before
+    or alongside A's — not scatter them arbitrarily.
+    """
+
+    # Chain preservation
+    total_chains: int  # consecutive chunk pairs in corpus
+    chains_both_covered: int  # both chunks matched by review
+    chains_order_preserved: int  # matched AND review positions are sequential
+    chain_preservation_ratio: float  # order_preserved / both_covered
+
+    # Citation coherence
+    total_citation_edges: int
+    citation_edges_both_mentioned: int
+    citation_order_preserved: int
+    citation_coherence_ratio: float
+
+    def score(self) -> float:
+        """Weighted combination of chain preservation and citation coherence."""
+        chain = self.chain_preservation_ratio if self.chains_both_covered > 0 else 0.5
+        cite = self.citation_coherence_ratio if self.citation_edges_both_mentioned > 0 else 0.5
+        return 0.6 * chain + 0.4 * cite
+
+    def interpretation(self) -> str:
+        lines = [
+            "Argumentative Coherence:",
+            f"  Corpus argument chains: {self.total_chains}",
+            f"  Chains both covered in review: {self.chains_both_covered}",
+            f"  Chains with preserved order: {self.chains_order_preserved}",
+            f"  Chain preservation ratio: {self.chain_preservation_ratio:.3f}",
+            f"  Citation edges in corpus: {self.total_citation_edges}",
+            f"  Citation edges both mentioned: {self.citation_edges_both_mentioned}",
+            f"  Citation order preserved: {self.citation_order_preserved}",
+            f"  Citation coherence: {self.citation_coherence_ratio:.3f}",
+            f"  Score: {self.score():.3f}",
+        ]
+        s = self.score()
+        if s > 0.7:
+            lines.append(
+                "  Interpretation: Strong coherence -- review preserves logical "
+                "flow and citation relationships."
+            )
+        elif s > 0.4:
+            lines.append(
+                "  Interpretation: Moderate coherence -- some argumentative "
+                "chains are preserved, others scattered."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Weak coherence -- review scatters related "
+                "ideas without preserving logical connections."
+            )
+        return "\n".join(lines)
+
+
+def compute_argumentative_coherence(
+    review_text: str,
+    proximity_window: int = 3,
+    similarity_threshold: float = 0.5,
+) -> Optional[ArgumentativeCoherenceResult]:
+    """Measure how well the review preserves argumentative chains from the corpus.
+
+    Algorithm:
+    1. For each corpus paper, take consecutive chunk pairs (c_i, c_{i+1})
+    2. Find the nearest review chunk to each corpus chunk
+    3. If both are matched (above similarity threshold), check if the
+       matching review chunks are within `proximity_window` positions
+       of each other — preserving the sequential relationship
+    4. Also check citation graph edges: if paper A cites paper B, and
+       the review discusses both, does B's content appear before A's?
+
+    Args:
+        review_text: The full review text.
+        proximity_window: Max position gap between matched review chunks
+            to consider the argument chain "preserved" (default 3).
+        similarity_threshold: Min cosine similarity to consider a corpus
+            chunk "covered" by a review chunk (default 0.5).
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        # Get corpus chunk embeddings
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        # Group chunks by paper, preserving order
+        paper_chunks: dict[str, list] = {}
+        paper_chunk_embs: dict[str, list] = {}
+        for c in chunks:
+            emb = stored.get(c.id)
+            if emb is not None:
+                paper_chunks.setdefault(c.paper_id, []).append(c)
+                paper_chunk_embs.setdefault(c.paper_id, []).append(emb)
+
+        # Embed review chunks
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunk_texts = [
+            " ".join(words[i : i + 150])
+            for i in range(0, len(words), 150)
+            if len(" ".join(words[i : i + 150]).strip()) > 50
+        ]
+        if not review_chunk_texts:
+            return None
+
+        model = _store.model
+        rev_embs = np.array(
+            model.encode(review_chunk_texts, show_progress_bar=False, batch_size=64)
+        )
+        rev_norms = np.linalg.norm(rev_embs, axis=1, keepdims=True)
+        rev_norms[rev_norms == 0] = 1
+        rev_embs = rev_embs / rev_norms
+
+        # For each corpus chunk, find nearest review chunk position
+        total_chains = 0
+        chains_both_covered = 0
+        chains_order_preserved = 0
+
+        for paper_id, p_embs_list in paper_chunk_embs.items():
+            if len(p_embs_list) < 2:
+                continue
+
+            p_embs = np.array(p_embs_list)
+            p_norms = np.linalg.norm(p_embs, axis=1, keepdims=True)
+            p_norms[p_norms == 0] = 1
+            p_embs = p_embs / p_norms
+
+            # Similarity matrix: (n_corpus_chunks, n_review_chunks)
+            sim_matrix = p_embs @ rev_embs.T
+
+            # For each corpus chunk, best matching review position
+            best_review_pos = np.argmax(sim_matrix, axis=1)
+            best_review_sim = np.max(sim_matrix, axis=1)
+
+            # Check consecutive pairs
+            for i in range(len(p_embs_list) - 1):
+                total_chains += 1
+                sim_i = best_review_sim[i]
+                sim_next = best_review_sim[i + 1]
+
+                if sim_i >= similarity_threshold and sim_next >= similarity_threshold:
+                    chains_both_covered += 1
+                    pos_i = best_review_pos[i]
+                    pos_next = best_review_pos[i + 1]
+                    # Check if review positions are nearby AND in order
+                    gap = abs(int(pos_next) - int(pos_i))
+                    if gap <= proximity_window:
+                        chains_order_preserved += 1
+
+        chain_ratio = (
+            chains_order_preserved / max(chains_both_covered, 1) if chains_both_covered > 0 else 0.0
+        )
+
+        # Citation graph coherence
+        total_cite_edges = 0
+        cite_both_mentioned = 0
+        cite_order_preserved = 0
+
+        try:
+            from sqlmodel import select
+
+            from scholarforge.store.db import get_session
+            from scholarforge.store.models import Citation
+
+            with get_session() as session:
+                citations = session.exec(select(Citation)).all()
+
+            # For each citation edge where both papers are in corpus
+            for cit in citations:
+                if (
+                    cit.cited_paper_id
+                    and cit.paper_id in paper_chunk_embs
+                    and cit.cited_paper_id in paper_chunk_embs
+                ):
+                    total_cite_edges += 1
+
+                    # Find average review position for each paper's content
+                    citing_embs = np.array(paper_chunk_embs[cit.paper_id])
+                    c_norms = np.linalg.norm(citing_embs, axis=1, keepdims=True)
+                    c_norms[c_norms == 0] = 1
+                    citing_embs = citing_embs / c_norms
+                    citing_sims = np.max(citing_embs @ rev_embs.T, axis=1)
+
+                    cited_embs = np.array(paper_chunk_embs[cit.cited_paper_id])
+                    cd_norms = np.linalg.norm(cited_embs, axis=1, keepdims=True)
+                    cd_norms[cd_norms == 0] = 1
+                    cited_embs = cited_embs / cd_norms
+                    cited_sims = np.max(cited_embs @ rev_embs.T, axis=1)
+
+                    citing_covered = np.any(citing_sims >= similarity_threshold)
+                    cited_covered = np.any(cited_sims >= similarity_threshold)
+
+                    if citing_covered and cited_covered:
+                        cite_both_mentioned += 1
+                        # Check if cited paper appears before citing paper in review
+                        citing_pos = float(np.mean(np.argmax(citing_embs @ rev_embs.T, axis=1)))
+                        cited_pos = float(np.mean(np.argmax(cited_embs @ rev_embs.T, axis=1)))
+                        # Cited work should appear before or near the citing work
+                        if cited_pos <= citing_pos + proximity_window:
+                            cite_order_preserved += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+        cite_ratio = (
+            cite_order_preserved / max(cite_both_mentioned, 1) if cite_both_mentioned > 0 else 0.0
+        )
+
+        return ArgumentativeCoherenceResult(
+            total_chains=total_chains,
+            chains_both_covered=chains_both_covered,
+            chains_order_preserved=chains_order_preserved,
+            chain_preservation_ratio=chain_ratio,
+            total_citation_edges=total_cite_edges,
+            citation_edges_both_mentioned=cite_both_mentioned,
+            citation_order_preserved=cite_order_preserved,
+            citation_coherence_ratio=cite_ratio,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Corpus text helper ─────────────────────────────────────────────────────────
 
 
@@ -949,6 +1193,7 @@ class QualityReport:
     topic_coverage: Optional[TopicCoverageResult] = None
     reconstruction_fidelity: Optional[ReconstructionFidelityResult] = None
     semantic_span: Optional[SemanticSpanResult] = None
+    argumentative_coherence: Optional[ArgumentativeCoherenceResult] = None
 
     # Error info for corpus-dependent failures
     corpus_error: Optional[str] = None
@@ -984,6 +1229,8 @@ class QualityReport:
             components.append((self.reconstruction_fidelity.score(), 0.15))
         if self.semantic_span is not None:
             components.append((self.semantic_span.score(), 0.10))
+        if self.argumentative_coherence is not None:
+            components.append((self.argumentative_coherence.score(), 0.15))
 
         total_weight = sum(w for _, w in components)
         if total_weight == 0:
@@ -1007,6 +1254,8 @@ class QualityReport:
             lines += ["", self.reconstruction_fidelity.interpretation()]
         if self.semantic_span is not None:
             lines += ["", self.semantic_span.interpretation()]
+        if self.argumentative_coherence is not None:
+            lines += ["", self.argumentative_coherence.interpretation()]
 
         lines += ["", self.factual_specificity.interpretation()]
         lines += ["", self.information_density.interpretation()]
@@ -1085,6 +1334,7 @@ def comprehensive_quality_report(
     topics = compute_topic_coverage(review_text)
     recon = compute_reconstruction_fidelity(review_text, corpus_text)
     span = compute_semantic_span(review_text)
+    coherence = compute_argumentative_coherence(review_text)
 
     return QualityReport(
         information_density=info_density,
@@ -1096,5 +1346,6 @@ def comprehensive_quality_report(
         topic_coverage=topics,
         reconstruction_fidelity=recon,
         semantic_span=span,
+        argumentative_coherence=coherence,
         corpus_error=corpus_error,
     )
