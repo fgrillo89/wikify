@@ -1120,6 +1120,35 @@ def find_jump_target(
         return f"Error finding jump target: {exc}"
 
 
+def get_frontier_exploration_order(max_papers: int = 15) -> str:
+    """Get a reading order that combines coverage seeds with frontier papers.
+
+    Phase 1: 3 greedy seeds (highest marginal coverage gain) for baseline.
+    Phase 2: Remaining papers ranked by low embedding density (frontier)
+    AND dissimilarity to already-selected papers (anti-greedy).
+
+    This systematically finds papers like "ALD for space applications"
+    that live in sparse regions of the embedding space, rather than
+    discovering them by random walk.
+
+    Args:
+        max_papers: Total papers to select (default 15).
+
+    Returns:
+        Ordered list of papers with depth (full/digest) and rationale.
+    """
+    try:
+        from scholarforge.evaluate.frontier import (
+            format_frontier_order_for_agent,
+            frontier_exploration_order,
+        )
+
+        order = frontier_exploration_order(max_papers=max_papers)
+        return format_frontier_order_for_agent(order)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error computing frontier order: {exc}"
+
+
 def find_corpus_gaps() -> str:
     """Find unexplored gaps in the corpus using embedding analysis.
 
