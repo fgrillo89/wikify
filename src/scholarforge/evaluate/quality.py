@@ -437,40 +437,24 @@ class BridgeVectorResult:
 
 def compute_bridge_vectors(
     ctx: EmbeddingContext,
-    n_clusters: int = 10,
-    cluster_sim_threshold: float = 0.65,
+    paper_dissim_threshold: float = 0.80,
+    min_review_sim: float = 0.45,
+    min_secondary_sim: float = 0.35,
 ) -> BridgeVectorResult:
-    """Find review chunks bridging DISTANT corpus clusters.
+    """Find review chunks that bridge dissimilar papers.
 
-    Algorithm:
-    1. K-Means cluster the corpus embeddings.
-    2. Compute pairwise cosine distances between cluster centroids.
-    3. Compute the median inter-cluster distance as the "far apart" threshold.
-    4. For each review chunk, find which clusters it is similar to
-       (similarity >= cluster_sim_threshold).
-    5. Among those connected clusters, check if any PAIR has inter-cluster
-       cosine distance > median.  If yes, the chunk is a genuine bridge.
+    Paper-level approach: for each review chunk, find the two nearest
+    papers (by vibe vector). If both are reasonably close AND the two
+    papers are themselves dissimilar (similarity < threshold), the chunk
+    is synthesizing across different works.
+
+    This avoids the cluster-centroid problem where no chunk can be
+    geometrically close to two distant centroids.
     """
-    from sklearn.cluster import KMeans
+    from scholarforge.store.embeddings import get_paper_vibe_vectors
 
-    n_clusters = min(n_clusters, len(ctx.corpus_embs) // 10, len(ctx.corpus_embs))
-    n_clusters = max(n_clusters, 2)
-
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    kmeans.fit(ctx.corpus_embs)
-    centroids = kmeans.cluster_centers_
-    c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
-    c_norms[c_norms == 0] = 1
-    centroids = centroids / c_norms
-
-    # Pairwise cosine DISTANCE between cluster centroids (1 - similarity)
-    centroid_sims = centroids @ centroids.T  # (k, k)
-    centroid_dists = 1.0 - centroid_sims
-
-    # Collect all off-diagonal distances to find the median
-    k = n_clusters
-    off_diag = [centroid_dists[i, j] for i in range(k) for j in range(i + 1, k)]
-    if not off_diag:
+    vibes = get_paper_vibe_vectors()
+    if not vibes:
         return BridgeVectorResult(
             total_review_chunks=len(ctx.review_embs),
             bridge_chunks=0,
@@ -478,39 +462,45 @@ def compute_bridge_vectors(
             median_inter_cluster_distance=0.0,
             avg_clusters_bridged=0.0,
         )
-    median_dist = float(np.median(off_diag))
 
-    # For each review chunk: which clusters is it close to?
-    sim_to_centroids = ctx.review_embs @ centroids.T  # (n_review, k)
+    pids = list(vibes.keys())
+    vibe_matrix = np.array([vibes[pid] for pid in pids])
+    paper_sims = vibe_matrix @ vibe_matrix.T
+
+    # Review chunk similarity to each paper vibe
+    rev_to_papers = ctx.review_embs @ vibe_matrix.T  # (n_review, n_papers)
 
     bridge_chunks = 0
-    clusters_bridged_list: list[int] = []
+    dissimilarities: list[float] = []
 
     for i in range(len(ctx.review_embs)):
-        connected = [c for c in range(k) if sim_to_centroids[i, c] >= cluster_sim_threshold]
-        if len(connected) < 2:
+        top2_indices = np.argsort(rev_to_papers[i])[-2:][::-1]
+        top2_sims = rev_to_papers[i][top2_indices]
+
+        # Both papers must be reasonably similar to the review chunk
+        if top2_sims[0] < min_review_sim or top2_sims[1] < min_secondary_sim:
             continue
-        # Check if any pair of connected clusters is itself "far apart"
-        is_bridge = False
-        pair_count = 0
-        for a in range(len(connected)):
-            for b in range(a + 1, len(connected)):
-                if centroid_dists[connected[a], connected[b]] > median_dist:
-                    is_bridge = True
-                    pair_count += 1
-        if is_bridge:
+
+        # The two papers must be dissimilar to each other
+        inter_paper_sim = float(paper_sims[top2_indices[0], top2_indices[1]])
+        if inter_paper_sim < paper_dissim_threshold:
             bridge_chunks += 1
-            clusters_bridged_list.append(len(connected))
+            dissimilarities.append(1.0 - inter_paper_sim)
 
     total = len(ctx.review_embs)
+    # Compute median inter-paper distance for context
+    all_paper_sims = []
+    for i in range(len(pids)):
+        for j in range(i + 1, len(pids)):
+            all_paper_sims.append(paper_sims[i, j])
+    median_dist = float(1.0 - np.median(all_paper_sims)) if all_paper_sims else 0.0
+
     return BridgeVectorResult(
         total_review_chunks=total,
         bridge_chunks=bridge_chunks,
         bridge_ratio=bridge_chunks / max(total, 1),
         median_inter_cluster_distance=median_dist,
-        avg_clusters_bridged=float(np.mean(clusters_bridged_list))
-        if clusters_bridged_list
-        else 0.0,
+        avg_clusters_bridged=float(np.mean(dissimilarities)) if dissimilarities else 0.0,
     )
 
 
