@@ -509,12 +509,20 @@ def compute_bridge_vectors(
 # ---------------------------------------------------------------------------
 
 _GAP_PHRASES = re.compile(
-    r"remains?\s+unexplored|no\s+studies?\s+have|future\s+work\s+should|"
-    r"not\s+yet\s+investigated|gap\s+between|little\s+is\s+known\s+about|"
-    r"no\s+systematic\s+study|has\s+not\s+been\s+examined|open\s+question|"
-    r"remains?\s+unclear|remains?\s+to\s+be\s+(?:studied|investigated|explored)|"
+    r"remains?\s+unexplored|no\s+(?:published\s+)?stud(?:y|ies)\s+ha(?:s|ve)|"
+    r"future\s+work\s+should|not\s+yet\s+(?:been\s+)?investigated|"
+    r"gap\s+(?:between|in)|little\s+is\s+known|no\s+systematic\s+study|"
+    r"has\s+not\s+been\s+(?:examined|reported|demonstrated)|open\s+question|"
+    r"remains?\s+(?:unclear|unknown)|"
+    r"remains?\s+to\s+be\s+(?:studied|investigated|explored)|"
     r"lack(?:s|ing)?\s+of\s+(?:studies|research|data|evidence)|"
-    r"insufficient(?:ly)?\s+(?:studied|explored|investigated)",
+    r"insufficient(?:ly)?\s+(?:studied|explored|investigated)|"
+    r"\bunexplored\b|\bunderexplored\b|\boverlooked\b|\bunanswered\b|"
+    r"\bunderst(?:udied|ood)\b|yet\s+to\s+be\s+\w+ed|"
+    r"no\s+report\b|not\s+been\s+reported|warrant(?:s)?\s+further|"
+    r"deserves?\s+(?:further\s+)?(?:attention|investigation|study)|"
+    r"\babsent\b.*(?:data|studies|evidence|report)|"
+    r"represent(?:s|ing)?\s+an?\s+(?:open|unexplored|untapped)",
     re.IGNORECASE,
 )
 
@@ -525,7 +533,8 @@ class GapDetectionResult:
 
     void_ratio: fraction of review chunks in sparse corpus regions.
     gap_claim_ratio: fraction of review sentences containing gap-indicating language.
-    Score = 0.3 * void_ratio + 0.7 * gap_claim_ratio.
+    Score combines void exploration and gap claim density.
+    A review with 5+ gap sentences in 200 total sentences (~2.5%) scores well.
     """
 
     void_chunks: int
@@ -536,7 +545,12 @@ class GapDetectionResult:
     gap_claim_ratio: float
 
     def score(self) -> float:
-        return max(0.0, min(1.0, 0.3 * self.void_ratio + 0.7 * self.gap_claim_ratio))
+        # Scale gap_claim_ratio: 5% gap sentences = score 1.0
+        # (9 gaps in 200 sentences = 4.5% -> score ~0.9)
+        import math
+
+        claim_score = min(1.0, math.log1p(self.gap_claim_ratio * 100) / math.log1p(5))
+        return max(0.0, 0.3 * min(self.void_ratio * 5, 1.0) + 0.7 * claim_score)
 
     def interpretation(self) -> str:
         lines = [
@@ -770,13 +784,15 @@ def compute_factual_specificity(review_text: str) -> FactualSpecificityResult:
 
 # Composite weights — must sum to 1.0
 _WEIGHTS: dict[str, float] = {
-    "frontier_shift": 0.20,
-    "bridge_vectors": 0.15,
-    "semantic_residual": 0.15,
-    "gap_detection": 0.15,
-    "argumentative_coherence": 0.15,
+    "semantic_coverage": 0.10,
+    "centroid_alignment": 0.08,
+    "frontier_shift": 0.14,
+    "bridge_vectors": 0.10,
+    "semantic_residual": 0.10,
+    "gap_detection": 0.14,
+    "argumentative_coherence": 0.12,
     "topic_coverage": 0.10,
-    "factual_specificity": 0.10,
+    "factual_specificity": 0.12,
 }
 assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
@@ -794,6 +810,8 @@ class QualityReport:
     factual_specificity: FactualSpecificityResult
 
     # Require corpus + embeddings
+    semantic_coverage: Optional[float] = None  # fraction of corpus chunks covered
+    centroid_alignment: Optional[float] = None  # cosine sim between review and corpus centroids
     frontier_shift: Optional[FrontierShiftResult] = None
     bridge_vectors: Optional[BridgeVectorResult] = None
     semantic_residual: Optional[SemanticResidualResult] = None
@@ -812,6 +830,10 @@ class QualityReport:
         available: dict[str, float] = {
             "factual_specificity": self.factual_specificity.score(),
         }
+        if self.semantic_coverage is not None:
+            available["semantic_coverage"] = min(self.semantic_coverage, 1.0)
+        if self.centroid_alignment is not None:
+            available["centroid_alignment"] = max(0.0, self.centroid_alignment)
         if self.frontier_shift is not None:
             available["frontier_shift"] = self.frontier_shift.score()
         if self.bridge_vectors is not None:
@@ -838,6 +860,18 @@ class QualityReport:
             "=" * 60,
         ]
 
+        if self.semantic_coverage is not None:
+            lines += [
+                "",
+                f"Semantic Coverage: {self.semantic_coverage:.1%}",
+                "  Fraction of corpus chunks with a nearby review counterpart.",
+            ]
+        if self.centroid_alignment is not None:
+            lines += [
+                "",
+                f"Centroid Alignment: {self.centroid_alignment:.3f}",
+                "  Cosine similarity between review and corpus centroids.",
+            ]
         if self.frontier_shift is not None:
             lines += ["", self.frontier_shift.interpretation()]
         if self.bridge_vectors is not None:
@@ -906,6 +940,23 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
             corpus_error=corpus_error or "Corpus unavailable or empty",
         )
 
+    # --- Semantic coverage + centroid alignment (from shared context, cheap) ---
+    coverage_ratio: Optional[float] = None
+    centroid_align: Optional[float] = None
+    try:
+        sim_matrix = ctx.review_embs @ ctx.corpus_embs.T
+        nearest_sims = np.max(sim_matrix, axis=0)  # per corpus chunk, nearest review chunk
+        coverage_ratio = float(np.mean(nearest_sims > 0.5))
+
+        # Centroid alignment
+        corpus_centroid = np.mean(ctx.corpus_embs, axis=0)
+        corpus_centroid /= np.linalg.norm(corpus_centroid) + 1e-9
+        review_centroid = np.mean(ctx.review_embs, axis=0)
+        review_centroid /= np.linalg.norm(review_centroid) + 1e-9
+        centroid_align = float(np.dot(corpus_centroid, review_centroid))
+    except Exception:  # noqa: BLE001
+        pass
+
     # --- Embedding-dependent metrics (all receive the same ctx) --------------
     frontier = compute_frontier_shift(ctx)
     coherence = compute_argumentative_coherence(ctx)
@@ -915,6 +966,8 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
 
     return QualityReport(
         factual_specificity=factual,
+        semantic_coverage=coverage_ratio,
+        centroid_alignment=centroid_align,
         frontier_shift=frontier,
         bridge_vectors=bridges,
         semantic_residual=residual,
