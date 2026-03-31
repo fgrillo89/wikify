@@ -44,6 +44,12 @@ Every read tool has a `reason` parameter. **Always provide it** — explain in o
 
 Do NOT scan all abstracts — it dilutes focus. The precomputed order tells you what matters.
 
+### Phase 0 — Reset reading log
+```python
+from scholarforge.agent.reading_log import reset_reading_log
+reset_reading_log()
+```
+
 ### Phase 1 — Read the precomputed order (target: <2 min)
 
 1. Get the exploration order (1 PageRank authority + 2 greedy coverage + 5 frontiers + 3 bridges + 1 serendipity — all precomputed via vector math):
@@ -65,7 +71,10 @@ print(find_corpus_gaps())
 print(find_synthesis_opportunities())
 ```
 
-6. Pick the single most promising gap. Use ONE `search_papers` call to find a paper addressing it. Digest that paper. This captures serendipitous discovery cheaply.
+6. **READ THE GAP OUTPUT CAREFULLY.** For each gap listed, decide: is this a genuine blind spot or just a topic outside scope? For the 3-5 most important gaps:
+   - Note them for explicit mention in the review
+   - For the single most promising gap, use ONE `search_papers` call to find a paper addressing it. Digest that paper.
+7. The gap tool output MUST appear in the review. If `find_corpus_gaps()` lists "no studies combine X with Y," the review must contain a sentence like "No published study has combined X with Y, representing an opportunity for..."
 
 ### Phase 3 — Write CONCISELY (~3500-4000 words HARD LIMIT)
 

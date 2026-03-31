@@ -41,8 +41,10 @@ class ReadingLog:
         reason: str,
         depth: str = "digest",
     ) -> None:
-        """Record a reading action."""
-        self.entries.append(ReadingEntry(paper=paper, tool=tool, reason=reason, depth=depth))
+        """Record a reading action (also persists to disk for cross-process use)."""
+        entry = ReadingEntry(paper=paper, tool=tool, reason=reason, depth=depth)
+        self.entries.append(entry)
+        _persist_entry(entry)
 
     def to_markdown(self) -> str:
         """Render the log as a human-readable markdown document."""
@@ -108,20 +110,56 @@ class ReadingLog:
         return md_path
 
 
-# ── Module-level singleton for the current session ─────────────────────────
+# ── File-backed singleton for cross-process persistence ────────────────────
+
+_LOG_FILE = Path("data/output/.reading_log.jsonl")
 _current_log: ReadingLog | None = None
 
 
 def get_reading_log() -> ReadingLog:
-    """Get or create the current session's reading log."""
+    """Get or create the current session's reading log.
+
+    The log is backed by a JSONL file so entries persist across
+    separate Python process invocations (each `uv run python -c` call).
+    """
     global _current_log  # noqa: PLW0603
     if _current_log is None:
         _current_log = ReadingLog()
+        # Load existing entries from file if present
+        if _LOG_FILE.exists():
+            try:
+                for line in _LOG_FILE.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        data = json.loads(line)
+                        _current_log.entries.append(ReadingEntry(**data))
+            except Exception:  # noqa: BLE001
+                pass
     return _current_log
+
+
+def _persist_entry(entry: ReadingEntry) -> None:
+    """Append a single entry to the JSONL file."""
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps({
+                "paper": entry.paper,
+                "tool": entry.tool,
+                "reason": entry.reason,
+                "contribution": entry.contribution,
+                "timestamp": entry.timestamp,
+                "depth": entry.depth,
+            })
+            + "\n"
+        )
 
 
 def reset_reading_log() -> ReadingLog:
     """Start a fresh reading log (e.g., for a new generation run)."""
     global _current_log  # noqa: PLW0603
     _current_log = ReadingLog()
+    # Clear the backing file
+    if _LOG_FILE.exists():
+        _LOG_FILE.unlink()
     return _current_log
