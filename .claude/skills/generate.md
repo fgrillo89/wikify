@@ -67,13 +67,14 @@ print(find_synthesis_opportunities())
 
 6. Pick the single most promising gap. Use ONE `search_papers` call to find a paper addressing it. Digest that paper. This captures serendipitous discovery cheaply.
 
-### Phase 3 — Write with gap emphasis (~3500-4500 words)
+### Phase 3 — Write CONCISELY (~3500-4000 words HARD LIMIT)
 
-7. Write a FOCUSED review. Every paragraph bridges 2+ papers.
-8. **Name every gap explicitly**: "No studies have combined X with Y," "This intersection remains unexplored."
-9. **State contradictions**: if papers disagree, say so and analyze why.
-10. **Bridge mainstream to frontier**: each thematic section should connect seed findings with frontier observations.
-11. **Future directions**: 5+ specific research questions from gaps AND frontier papers. Propose concrete experiments.
+7. **3500-4000 words maximum.** Shorter is better. Every sentence must add information. Cut anything that restates, summarizes without adding, or fills space. A 3500-word review with high bridge score beats a 5000-word review with diluted coherence.
+8. Every paragraph bridges 2+ papers.
+9. **Name gaps explicitly**: "No studies have combined X with Y."
+10. **State contradictions**: if papers disagree, say so and analyze why.
+11. **Bridge mainstream to frontier**: each section connects seed findings with frontier observations.
+12. **Future directions**: 5+ specific research questions. Propose experiments.
 
 ### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
