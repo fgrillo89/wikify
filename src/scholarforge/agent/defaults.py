@@ -30,11 +30,13 @@ def get_default_tools() -> list[Callable]:
         list_topics,
         read_paper_digest,
         save_reading_log,
+        scan_all_abstracts,
         search_papers,
         suggest_next_papers,
     )
 
     return [
+        scan_all_abstracts,
         list_papers,
         search_papers,
         read_paper_digest,

@@ -336,6 +336,42 @@ def get_graph_metrics() -> str:
         return json.dumps({"error": str(exc), "hub_papers": [], "bridge_papers": []})
 
 
+def scan_all_abstracts() -> str:
+    """Read all paper abstracts in the corpus — a fast overview of everything.
+
+    Returns a compact listing of every paper's display name and abstract.
+    Use this as the FIRST exploration step to understand the full corpus
+    before deciding which papers to read deeper. Cost: ~400KB for 200 papers.
+
+    Returns:
+        Formatted text with one entry per paper (display_name + abstract).
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Paper
+
+        with get_session() as session:
+            all_papers = session.exec(select(Paper).order_by(Paper.year)).all()
+
+        lines = [f"## Corpus Abstracts ({len(all_papers)} papers)", ""]
+        for p in all_papers:
+            abstract = (p.summary or "").strip()
+            if not abstract:
+                abstract = "(no abstract)"
+            # Truncate very long abstracts
+            if len(abstract) > 500:
+                abstract = abstract[:500] + "..."
+            lines.append(f"### {p.display_name()}")
+            lines.append(abstract)
+            lines.append("")
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error scanning abstracts: {exc}"
+
+
 def list_papers(
     limit: int | None = None,
 ) -> str:

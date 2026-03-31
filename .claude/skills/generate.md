@@ -8,6 +8,7 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 
 | Function | Purpose | Cost |
 |----------|---------|------|
+| `scan_all_abstracts()` | Read ALL paper abstracts — fast overview of entire corpus (~400KB) | **Medium** |
 | `get_corpus_summary()` | Corpus overview: paper count, top authors, hub papers, topics | Low |
 | `get_graph_metrics()` | PageRank, centrality — which papers are most connected/important | Low |
 | `list_papers(limit=N)` | Browse papers with metadata | Low |
@@ -37,41 +38,41 @@ Every read tool has a `reason` parameter. **Always provide it** — explain in o
 - Use `search_papers` with focused queries to find specific data points
 - Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
 
-## Your Strategy: Hybrid Greedy-Frontier Exploration
+## Your Strategy: Hybrid Greedy-Frontier with Abstract Scan
 
-**Write early, measure often, read to fill gaps.** Do NOT read the entire corpus before writing.
+**Scan everything first, then explore from both seeds and frontiers.**
 
-### Phase 1 — Dual Seed: Greedy + Frontier (target: <2 min)
+### Phase 0 — Scan all abstracts (fast overview)
 
-1. Get the frontier exploration order (combines greedy seeds with frontier papers):
+1. Read every abstract in the corpus:
+```python
+from scholarforge.agent.tools import scan_all_abstracts
+print(scan_all_abstracts())
+```
+This costs ~400KB but gives you a complete map of the corpus. Note which papers seem most interesting, surprising, or at the frontier.
+
+2. Get the frontier exploration order:
 ```python
 from scholarforge.agent.tools import get_frontier_exploration_order
 print(get_frontier_exploration_order(max_papers=15))
 ```
-This gives you 3 greedy seeds (coverage baseline) + 12 frontier papers (density-ranked, dissimilar to seeds).
 
-2. **Deep-read the 3 greedy seeds** (these cover ~90% of corpus semantic space).
-3. **Read abstracts/conclusions of the top 5 frontier papers** via `get_sections(section_type="conclusion", paper_pattern="...")` and `read_paper_digest`.
-4. **Decide from both ends**: based on what you read, pick 1-2 frontier papers for deep reading and 1-2 neighbors of the seeds for depth.
+### Phase 1 — Deep read from both ends
+
+3. **Deep-read the 3 greedy seeds** (highest coverage gain papers).
+4. **Based on abstracts you scanned**, pick 1-2 frontier papers to deep-read. Choose the ones that surprised you or covered topics no other paper addresses.
+5. **Explore outward from both**: use `suggest_next_papers` to find neighbors of your read set, but also follow citation chains from the frontier papers.
 
 ### Phase 2 — Gap-Aware Exploration
 
-5. **Find gaps and synthesis opportunities**:
-```python
-from scholarforge.agent.tools import find_corpus_gaps, find_synthesis_opportunities
-print(find_corpus_gaps())
-print(find_synthesis_opportunities())
-```
+6. Call `find_corpus_gaps()` and `find_synthesis_opportunities()`.
+7. Read 2-3 papers addressing the most promising gaps. Use `search_papers` with concepts from the gap analysis.
 
-6. Read 2-3 papers that address the most promising gaps (use `search_papers` or `suggest_next_papers`).
+### Phase 3 — Write (~4000-5000 words)
 
-### Phase 3 — Write with gap emphasis (~4000-5000 words)
-
-7. Write the review with these priorities:
-   - Name every gap you found
-   - Synthesize across mainstream seeds and frontier papers
-   - Future directions section with 3-5 specific research questions from the gaps
-   - Contradictions between papers should be stated explicitly
+8. Write the review covering BOTH mainstream (seeds) and emerging (frontiers).
+9. Name every gap explicitly. Synthesize across seeds and frontiers.
+10. Future directions: 5+ specific research questions from gaps AND frontier papers.
 
 ### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
