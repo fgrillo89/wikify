@@ -189,9 +189,63 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
 
         preview = content[:preview_len]
         msg["content"] = (
-            f"{preview}\n\n[... compacted: {original_len} chars. {note} "
-            f"Use get_session_context() for all summaries.]"
+            f"{preview}\n\n[... compacted: {original_len} chars. {note}]"
         )
+
+    # After compaction, inject session context once so the model has all
+    # summaries available without needing to call get_session_context()
+    _inject_session_context(messages)
+
+
+_SESSION_CONTEXT_MARKER = "[Session context: paper summaries]"
+
+
+def _inject_session_context(messages: list[dict]) -> None:
+    """Inject or update the session context summary in the message list.
+
+    Replaces any prior session context message with an updated version
+    containing all paper summaries recorded so far. This ensures the
+    model always has access to its structured notes without needing
+    to call get_session_context() explicitly.
+
+    Injected as a system message so it doesn't break assistant/user alternation.
+    """
+    try:
+        from scholarforge.agent.tools import get_paper_summaries, get_session_context
+
+        summaries = get_paper_summaries()
+        if len(summaries) < 2:
+            return
+
+        ctx = get_session_context()
+        if not ctx or "No paper summaries" in ctx:
+            return
+
+        ctx_message = {
+            "role": "system",
+            "content": f"{_SESSION_CONTEXT_MARKER}\n\n{ctx}",
+        }
+
+        # Replace existing session context message if present
+        for i, msg in enumerate(messages):
+            if (
+                isinstance(msg, dict)
+                and msg.get("role") == "system"
+                and _SESSION_CONTEXT_MARKER in msg.get("content", "")
+            ):
+                messages[i] = ctx_message
+                return
+
+        # Insert after the first system message (the main prompt)
+        insert_idx = 1
+        for i, msg in enumerate(messages):
+            if isinstance(msg, dict) and msg.get("role") == "system":
+                insert_idx = i + 1
+                break
+        messages.insert(insert_idx, ctx_message)
+
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
