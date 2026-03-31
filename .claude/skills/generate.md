@@ -93,6 +93,13 @@ After exploring, write the paper as markdown. Follow these rules:
 - **ZERO em-dashes or en-dashes as parenthetical separators.** Never write " -- " or " - " to insert an aside. Use commas or parentheses instead. This is a hard ban.
 - **Readable abstracts**: introduce one concept per sentence, define jargon before using it, start with a short (<15 word) opening sentence. **No citations in abstracts** unless referencing truly foundational work (e.g., Watson and Crick for DNA)
 - **NEVER mention your exploration method.** No "random walk," "conceptual links," "traversal," "this exploration surfaced." Present findings as observations: "Several directions appear understudied" not "The random walk surfaced understudied directions." The reader must never suspect the text was generated.
+- **Include 3-5 figure placeholders with detailed captions.** Use the format:
+  ```
+  ![Figure N: short caption](figure_N_placeholder.png)
+  **Figure N.** Full caption describing what the figure shows, what data it contains,
+  and what conclusion the reader should draw from it. Captions must be self-contained.
+  ```
+  Typical figures for a review: (1) comparison table of device metrics across papers, (2) schematic of switching mechanisms, (3) performance chart (endurance, retention, linearity), (4) timeline or taxonomy of materials/approaches. Place each figure at the point of need in the text and reference it in the prose.
 - Follow the structure appropriate for the document type (the user will specify or default to lit review)
 
 ### Gap identification and synthesis (required)
