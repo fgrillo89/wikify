@@ -38,46 +38,46 @@ Every read tool has a `reason` parameter. **Always provide it** — explain in o
 - Use `search_papers` with focused queries to find specific data points
 - Use `get_sections(section_type="conclusion")` to quickly scan findings across papers
 
-## Your Strategy: Hybrid Greedy-Frontier with Abstract Scan
+## Your Strategy: Hybrid Greedy-Frontier Exploration
 
-**Scan everything first, then explore from both seeds and frontiers.**
+**Read deeply from both mainstream and frontier, then synthesize.**
 
-### Phase 0 — Scan all abstracts (fast overview)
+Do NOT scan all abstracts — it dilutes focus. The greedy order and frontier ranking already tell you what matters.
 
-1. Read every abstract in the corpus:
-```python
-from scholarforge.agent.tools import scan_all_abstracts
-print(scan_all_abstracts())
-```
-This costs ~400KB but gives you a complete map of the corpus. Note which papers seem most interesting, surprising, or at the frontier.
+### Phase 1 — Dual Seed: Greedy + Frontier (target: <2 min)
 
-2. Get the frontier exploration order:
+1. Get the frontier exploration order:
 ```python
 from scholarforge.agent.tools import get_frontier_exploration_order
-print(get_frontier_exploration_order(max_papers=15))
+print(get_frontier_exploration_order(max_papers=12))
 ```
+This gives 3 greedy seeds (coverage baseline) + 9 frontier papers (density-ranked).
 
-### Phase 1 — Deep read from both ends
+2. **Deep-read the 3 greedy seeds.**
+3. **Digest the top 5 frontier papers.** Pick 1-2 that surprise you and deep-read those.
 
-3. **Deep-read the 3 greedy seeds** (highest coverage gain papers).
-4. **Based on abstracts you scanned**, pick 1-2 frontier papers to deep-read. Choose the ones that surprised you or covered topics no other paper addresses.
-5. **Explore outward from both**: use `suggest_next_papers` to find neighbors of your read set, but also follow citation chains from the frontier papers.
+### Phase 2 — Concept Walk (bridge seeds to frontiers)
 
-### Phase 2 — Gap-Aware Exploration
+4. Pick a concept that connects a seed paper to a frontier paper — something neither discusses fully.
+5. Use `search_papers(query="that concept", reason="bridging seed X with frontier Y")` to find papers in between.
+6. Digest 2-3 bridging papers. This directed walk creates the material for cross-paper synthesis.
 
-6. Call `find_corpus_gaps()` and `find_synthesis_opportunities()`.
-7. Read 2-3 papers addressing the most promising gaps. Use `search_papers` with concepts from the gap analysis.
+### Phase 3 — Gap-Aware Exploration
 
-### Phase 3 — Write (~4000-5000 words)
+7. Call `find_corpus_gaps()` and `find_synthesis_opportunities()`.
+8. Read 1-2 papers addressing the most promising gaps.
 
-8. Write the review covering BOTH mainstream (seeds) and emerging (frontiers).
-9. Name every gap explicitly. Synthesize across seeds and frontiers.
-10. Future directions: 5+ specific research questions from gaps AND frontier papers.
+### Phase 4 — Write (~3500-4500 words, CONCISE)
+
+9. Write a FOCUSED review. Quality over length. Every paragraph should connect 2+ papers.
+10. Name gaps. State contradictions. Bridge mainstream with frontier findings.
+11. Future directions: 5+ specific research questions from gaps AND frontier papers.
 
 ### Reading depth is your decision
 - `read_paper_digest` — abstract + key section excerpts (~2KB). Good for most papers.
 - `get_sections(section_type="conclusion", paper_pattern="...")` — just the conclusion
 - `deep_read` — full text (~70KB). Reserve for 3-5 critical papers.
+- `scan_all_abstracts()` — available but use sparingly (dilutes focus at 400KB).
 
 ## Writing
 
