@@ -26,6 +26,9 @@ def chunk_sections(md_text: str, section_tree: dict, paper_id: str) -> list[Chun
     - Target chunk size: settings.chunk_target_tokens.
     - Keep equations and citations intact (don't split mid-line).
     - Overlap between consecutive chunks within a section.
+    - Fallback: if no conclusion chunk is produced, the last non-references/
+      non-acknowledgments section is re-typed as "conclusion" (papers without
+      explicit headings still have concluding paragraphs).
     """
     sections = _split_into_sections(md_text)
     chunks = []
@@ -53,7 +56,109 @@ def chunk_sections(md_text: str, section_tree: dict, paper_id: str) -> list[Chun
                 )
             )
 
+    _apply_conclusion_fallback(chunks)
     return chunks
+
+
+# Section types that are never the "concluding body" of a paper.
+_NON_CONCLUSION_TYPES = frozenset({"references", "acknowledgments", "appendix", "abstract"})
+
+
+def _apply_conclusion_fallback(chunks: list[Chunk]) -> None:
+    """If no chunk is typed 'conclusion', retype the last substantive section.
+
+    Mutates chunks in-place.  Skips trailing references / acknowledgments /
+    appendix sections, then marks the last remaining section as 'conclusion'.
+    This handles papers where PDF extraction produced no heading text.
+    """
+    has_conclusion = any(c.section_type == "conclusion" for c in chunks)
+    if has_conclusion:
+        return
+
+    # Walk backwards through unique section_paths (preserving order).
+    seen: set[str] = set()
+    ordered_paths: list[str] = []
+    for c in reversed(chunks):
+        if c.section_path not in seen:
+            seen.add(c.section_path)
+            ordered_paths.append(c.section_path)
+
+    # Find the last section path whose type is not a trailing non-body section.
+    target_path: str | None = None
+    for path in ordered_paths:
+        st = classify_section_path(path).value
+        if st not in _NON_CONCLUSION_TYPES:
+            target_path = path
+            break
+
+    if target_path is None:
+        return  # All sections are references/acks — nothing useful to promote.
+
+    for c in chunks:
+        if c.section_path == target_path:
+            c.section_type = "conclusion"
+
+
+def migrate_section_types() -> dict[str, int]:
+    """Reclassify section_type for all existing DB chunks.
+
+    Re-runs ``classify_section_path`` on every chunk's ``section_path``
+    and applies the conclusion fallback per paper.  Updates the DB in-place.
+
+    Returns:
+        A dict with keys ``total``, ``reclassified``, ``conclusion_fallbacks``.
+    """
+    from collections import defaultdict
+
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Chunk
+
+    with get_session() as session:
+        all_chunks: list[Chunk] = list(session.exec(select(Chunk)).all())
+
+    # Group by paper
+    by_paper: dict[str, list[Chunk]] = defaultdict(list)
+    for c in all_chunks:
+        by_paper[c.paper_id].append(c)
+
+    reclassified = 0
+    conclusion_fallbacks = 0
+
+    for paper_id, paper_chunks in by_paper.items():
+        # Re-run classifier on each chunk
+        for c in paper_chunks:
+            new_type = classify_section_path(c.section_path).value
+            if new_type != c.section_type:
+                c.section_type = new_type
+                reclassified += 1
+
+        # Apply conclusion fallback for this paper's chunks
+        had_conclusion_before = any(c.section_type == "conclusion" for c in paper_chunks)
+        _apply_conclusion_fallback(paper_chunks)
+        has_conclusion_after = any(c.section_type == "conclusion" for c in paper_chunks)
+        if not had_conclusion_before and has_conclusion_after:
+            conclusion_fallbacks += 1
+            # Count all the chunks that were changed by the fallback
+            reclassified += sum(
+                1
+                for c in paper_chunks
+                if c.section_type == "conclusion"
+                # (already mutated in place above)
+            )
+
+    # Bulk-write updates back to DB
+    with get_session() as session:
+        for c in all_chunks:
+            session.add(c)
+        session.commit()
+
+    return {
+        "total": len(all_chunks),
+        "reclassified": reclassified,
+        "conclusion_fallbacks": conclusion_fallbacks,
+    }
 
 
 def _split_into_sections(md_text: str) -> list[tuple[str, str]]:

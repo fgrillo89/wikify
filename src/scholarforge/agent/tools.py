@@ -646,10 +646,52 @@ def get_sections(
                 .where(Chunk.section_type == st)
                 .order_by(Chunk.paper_id, Chunk.chunk_index)
             )
-            chunks = session.exec(query).all()
+            chunks = list(session.exec(query).all())
+
+            # For "results": also include "discussion" chunks from papers that
+            # have no results chunks (handles "Results and Discussion" papers
+            # where only a standalone "Discussion" section exists).
+            if st == "results":
+                paper_ids_with_results = {c.paper_id for c in chunks}
+                discussion_chunks = list(
+                    session.exec(
+                        select(Chunk)
+                        .where(Chunk.section_type == "discussion")
+                        .order_by(Chunk.paper_id, Chunk.chunk_index)
+                    ).all()
+                )
+                for dc in discussion_chunks:
+                    if dc.paper_id not in paper_ids_with_results:
+                        chunks.append(dc)
 
             if not chunks:
                 return f"No '{st}' sections found in the corpus."
+
+            # For "conclusion": for papers that still have no conclusion chunk,
+            # fall back to the last 3 chunks of that paper ordered by chunk_index.
+            if st == "conclusion":
+                paper_ids_with_conclusion = {c.paper_id for c in chunks}
+                all_papers = session.exec(select(Paper)).all()
+                missing_paper_ids = [
+                    p.id for p in all_papers if p.id not in paper_ids_with_conclusion
+                ]
+                for pid in missing_paper_ids:
+                    fallback = list(
+                        session.exec(
+                            select(Chunk)
+                            .where(Chunk.paper_id == pid)
+                            .where(
+                                Chunk.section_type.not_in(  # type: ignore[attr-defined]
+                                    ["references", "acknowledgments", "appendix", "abstract"]
+                                )
+                            )
+                            .order_by(Chunk.chunk_index.desc())  # type: ignore[attr-defined]
+                            .limit(3)
+                        ).all()
+                    )
+                    # Re-sort ascending so content reads in order
+                    fallback.sort(key=lambda c: c.chunk_index)
+                    chunks.extend(fallback)
 
             # Filter by paper pattern if given
             paper_ids = {c.paper_id for c in chunks}
