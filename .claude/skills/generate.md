@@ -20,6 +20,8 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 | `suggest_next_papers(already_read=[...], max_suggestions=3)` | Graph-connected but semantically orthogonal papers to read next | Medium |
 | `get_coverage_gaps(review_text, already_read=[...], previous_coverage=0.0)` | Coverage delta + gap-to-paper mapping | **Medium** |
 | `find_jump_target(already_read=[...], review_text)` | Break path dependency: jump to uncovered graph region | Medium |
+| `find_corpus_gaps()` | Find unexplored gaps: embedding voids between clusters + topical intersections | Medium |
+| `find_synthesis_opportunities()` | Find paper pairs with synthesis potential (related but different) | Medium |
 | `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
 | `get_reading_log_text()` | View the current reading trace | Free |
 | `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
@@ -78,6 +80,13 @@ After exploring, write the paper as markdown. Follow these rules:
 - **ZERO em-dashes or en-dashes as parenthetical separators.** Never write " -- " or " - " to insert an aside. Use commas or parentheses instead. This is a hard ban.
 - **Readable abstracts**: introduce one concept per sentence, define jargon before using it, start with a short (<15 word) opening sentence. **No citations in abstracts** unless referencing truly foundational work (e.g., Watson and Crick for DNA)
 - Follow the structure appropriate for the document type (the user will specify or default to lit review)
+
+### Gap identification and synthesis (required)
+Before writing, call `find_corpus_gaps()` and `find_synthesis_opportunities()`. Use these to:
+- **Name gaps explicitly** in the review: "No studies have combined X with Y" or "The intersection of A and B remains unexplored"
+- **Synthesize across papers**: When two papers approach the same problem differently, compare them and draw a conclusion that neither paper stated individually
+- **Future directions**: Identify 2-3 specific research questions that arise from the gaps
+- The review's value comes from what it adds beyond summarizing — identifying patterns, contradictions, and unexplored territory that individual papers cannot see
 
 ## Loading Context
 

@@ -15,7 +15,9 @@ def get_default_tools() -> list[Callable]:
     from scholarforge.agent.tools import (
         deep_read,
         evaluate_coverage,
+        find_corpus_gaps,
         find_jump_target,
+        find_synthesis_opportunities,
         get_corpus_summary,
         get_coverage_gaps,
         get_graph_metrics,
@@ -39,6 +41,8 @@ def get_default_tools() -> list[Callable]:
         get_paper,
         get_graph_metrics,
         get_paper_vibes,
+        find_corpus_gaps,
+        find_synthesis_opportunities,
         suggest_next_papers,
         get_coverage_gaps,
         find_jump_target,

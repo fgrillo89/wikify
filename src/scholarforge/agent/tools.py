@@ -1120,6 +1120,223 @@ def find_jump_target(
         return f"Error finding jump target: {exc}"
 
 
+def find_corpus_gaps() -> str:
+    """Find unexplored gaps in the corpus using embedding analysis.
+
+    Identifies two types of gaps:
+    1. Embedding voids: regions between research clusters where no papers
+       exist. These represent unexplored conceptual territory.
+    2. Topical intersection gaps: pairs of topics that are semantically
+       related but rarely appear together in the same paper.
+
+    Use this during exploration to identify what's MISSING from the
+    literature — potential contributions for a review's "future directions"
+    section or for identifying novel research questions.
+
+    Returns:
+        Formatted report of corpus gaps with actionable descriptions.
+    """
+    try:
+        import numpy as np
+        from sklearn.cluster import KMeans
+        from sqlmodel import select
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.db import get_session
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+        from scholarforge.store.models import Paper, PaperTopic
+
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return "No corpus chunks available."
+
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        corpus_norms = np.linalg.norm(corpus_embs, axis=1, keepdims=True)
+        corpus_norms[corpus_norms == 0] = 1
+        corpus_embs = corpus_embs / corpus_norms
+
+        # Cluster corpus to find themes
+        n_clusters = min(10, len(corpus_embs) // 20)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(corpus_embs)
+        centroids = kmeans.cluster_centers_
+        c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+        c_norms[c_norms == 0] = 1
+        centroids = centroids / c_norms
+
+        # Get paper info for labeling clusters
+        with get_session() as session:
+            papers = {p.id: p for p in session.exec(select(Paper)).all()}
+
+        # Label each cluster by its most representative papers
+        {c.id: c.paper_id for c in chunks}
+        cluster_papers: dict[int, dict[str, int]] = {}
+        for idx, c in enumerate(chunks):
+            if c.id in stored:
+                label = int(labels[idx] if idx < len(labels) else 0)
+                pid = c.paper_id
+                cluster_papers.setdefault(label, {}).setdefault(pid, 0)
+                cluster_papers[label][pid] += 1
+
+        # Find inter-cluster voids
+        voids = []
+        for i in range(n_clusters):
+            for j in range(i + 1, n_clusters):
+                midpoint = (centroids[i] + centroids[j]) / 2
+                midpoint /= np.linalg.norm(midpoint) + 1e-9
+                mid_sims = corpus_embs @ midpoint
+                nearest_sim = float(np.max(mid_sims))
+                if nearest_sim < 0.55:
+                    # Get cluster labels
+                    top_papers_i = sorted(
+                        cluster_papers.get(i, {}).items(), key=lambda x: x[1], reverse=True
+                    )[:2]
+                    top_papers_j = sorted(
+                        cluster_papers.get(j, {}).items(), key=lambda x: x[1], reverse=True
+                    )[:2]
+                    label_i = ", ".join(
+                        papers[pid].display_name()[:40] for pid, _ in top_papers_i if pid in papers
+                    )
+                    label_j = ", ".join(
+                        papers[pid].display_name()[:40] for pid, _ in top_papers_j if pid in papers
+                    )
+                    voids.append({
+                        "void_depth": round(1.0 - nearest_sim, 3),
+                        "cluster_a": label_i or f"Cluster {i}",
+                        "cluster_b": label_j or f"Cluster {j}",
+                    })
+        voids.sort(key=lambda v: v["void_depth"], reverse=True)
+
+        # Topical gaps (secondary signal)
+        topical_gaps = []
+        try:
+            all_topics = session.exec(select(PaperTopic)).all()
+            topic_papers: dict[str, set[str]] = {}
+            for t in all_topics:
+                if 3 <= len(t.topic) <= 60 and "<" not in t.topic:
+                    topic_papers.setdefault(t.topic, set()).add(t.paper_id)
+
+            sig = {t: p for t, p in topic_papers.items() if len(p) >= 5}
+            t_names = sorted(sig.keys())
+            if t_names:
+                model = _store.model
+                t_embs = model.encode(t_names, show_progress_bar=False, batch_size=64)
+                t_norms = np.linalg.norm(t_embs, axis=1, keepdims=True) + 1e-9
+                t_embs = t_embs / t_norms
+                t_sim = t_embs @ t_embs.T
+                for ii in range(len(t_names)):
+                    for jj in range(ii + 1, len(t_names)):
+                        sim = float(t_sim[ii, jj])
+                        if sim < 0.3:
+                            continue
+                        inter = len(sig[t_names[ii]] & sig[t_names[jj]])
+                        if inter < 2:
+                            topical_gaps.append({
+                                "topics": f"{t_names[ii]} + {t_names[jj]}",
+                                "papers": f"{len(sig[t_names[ii]])}+{len(sig[t_names[jj]])}",
+                                "overlap": inter,
+                                "similarity": round(sim, 2),
+                            })
+                topical_gaps.sort(key=lambda g: g["similarity"], reverse=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+        lines = ["## Corpus Gaps", ""]
+        if voids:
+            lines.append("### Embedding Voids (unexplored regions between research clusters)")
+            for v in voids[:10]:
+                lines.append(
+                    f"- **{v['cluster_a']}** <-> **{v['cluster_b']}** "
+                    f"(void depth: {v['void_depth']:.2f})"
+                )
+            lines.append("")
+
+        if topical_gaps:
+            lines.append("### Topical Intersection Gaps (related topics rarely studied together)")
+            for g in topical_gaps[:10]:
+                lines.append(
+                    f"- {g['topics']} ({g['papers']} papers, {g['overlap']} overlap, "
+                    f"sim: {g['similarity']})"
+                )
+
+        if not voids and not topical_gaps:
+            lines.append("No significant gaps detected in the corpus.")
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error finding gaps: {exc}"
+
+
+def find_synthesis_opportunities() -> str:
+    """Find opportunities for novel synthesis across corpus papers.
+
+    Identifies pairs/groups of papers that are semantically related but
+    approach the topic from different angles. These are opportunities for
+    a review to create insights that don't exist in any single paper.
+
+    Returns:
+        Formatted list of synthesis opportunities with paper pairs and
+        their semantic relationship.
+    """
+    try:
+        import numpy as np
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.embeddings import get_paper_vibe_vectors
+        from scholarforge.store.models import Paper
+
+        vibes = get_paper_vibe_vectors()
+        if not vibes:
+            return "No paper vibes available."
+
+        with get_session() as session:
+            papers = {p.id: p for p in session.exec(select(Paper)).all()}
+
+        pids = list(vibes.keys())
+        vibe_matrix = np.array([vibes[pid] for pid in pids])
+        sim = vibe_matrix @ vibe_matrix.T
+
+        # Find paper pairs with moderate similarity (0.65-0.80):
+        # related enough to synthesize, different enough to add value
+        opportunities = []
+        for i in range(len(pids)):
+            for j in range(i + 1, len(pids)):
+                s = float(sim[i, j])
+                if 0.65 <= s <= 0.82:
+                    pa = papers.get(pids[i])
+                    pb = papers.get(pids[j])
+                    if pa and pb:
+                        opportunities.append({
+                            "paper_a": pa.display_name()[:60],
+                            "paper_b": pb.display_name()[:60],
+                            "similarity": round(s, 3),
+                            "synthesis_potential": round(1.0 - abs(s - 0.73) / 0.1, 3),
+                        })
+
+        opportunities.sort(key=lambda o: o["synthesis_potential"], reverse=True)
+
+        lines = [
+            "## Synthesis Opportunities",
+            "",
+            "Paper pairs with moderate semantic similarity (related but different).",
+            "These are good candidates for cross-paper insights.",
+            "",
+        ]
+        for o in opportunities[:15]:
+            lines.append(
+                f"- **{o['paper_a']}** + **{o['paper_b']}** "
+                f"(sim: {o['similarity']}, potential: {o['synthesis_potential']})"
+            )
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error finding synthesis opportunities: {exc}"
+
+
 def get_paper_vibes(top_k: int = 5) -> str:
     """Get the semantic "vibe map" of the corpus.
 
