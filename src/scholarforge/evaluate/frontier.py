@@ -89,32 +89,52 @@ def frontier_exploration_order(
     if not paper_embs:
         return []
 
-    # Phase 1: Greedy seeds
+    # Phase 1: Seeds = #1 citation PageRank + #2-3 greedy coverage
     import heapq
 
+    from scholarforge.graph.metrics import compute_metrics
+
+    metrics = compute_metrics()
+
+    selected: list[tuple[str, str, str]] = []
+    selected_ids: set[str] = set()
+
+    # Seed #1: highest citation-only PageRank (authority anchor)
+    if metrics.hub_papers:
+        pr_top = metrics.hub_papers[0]
+        if pr_top in paper_embs:
+            pr_score = metrics.pagerank.get(pr_top, 0)
+            selected.append((pr_top, "full", f"PageRank authority (PR: {pr_score:.4f})"))
+            selected_ids.add(pr_top)
+
+    # Seeds #2-3: top greedy coverage (excluding PageRank pick)
     paper_sims: dict[str, np.ndarray] = {}
     for pid, embs in paper_embs.items():
         paper_sims[pid] = np.max(corpus_embs @ embs.T, axis=1)
 
     baseline = np.zeros(len(corpus_embs))
+    # Include PageRank seed in baseline
+    for pid in selected_ids:
+        if pid in paper_sims:
+            baseline = np.maximum(baseline, paper_sims[pid])
+
     heap: list[tuple[float, int, str]] = []
     for pid in paper_embs:
-        gain = float(np.mean(paper_sims[pid] > 0.5))
+        if pid in selected_ids:
+            continue
+        gain = float(np.mean(np.maximum(baseline, paper_sims[pid]) > 0.5) - np.mean(baseline > 0.5))
         heapq.heappush(heap, (-gain, 0, pid))
 
-    selected: list[tuple[str, str, str]] = []
-    selected_ids: set[str] = set()
     iteration = 0
-
-    # Greedy phase
-    for _ in range(min(n_greedy_seeds, len(paper_embs))):
+    greedy_needed = max(0, n_greedy_seeds - len(selected_ids))
+    for _ in range(min(greedy_needed, len(paper_embs))):
         iteration += 1
         while heap:
             neg_gain, comp_at, pid = heapq.heappop(heap)
             if pid in selected_ids:
                 continue
             if comp_at == iteration:
-                selected.append((pid, "full", f"greedy seed (coverage gain: {-neg_gain:.1%})"))
+                selected.append((pid, "full", f"greedy coverage (gain: {-neg_gain:.1%})"))
                 selected_ids.add(pid)
                 baseline = np.maximum(baseline, paper_sims[pid])
                 break

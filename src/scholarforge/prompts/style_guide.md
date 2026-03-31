@@ -68,6 +68,7 @@ Never use: "delve/delves/delving," "crucial," "pivotal," "paramount," "groundbre
 - **No say-it-three-times pattern.** State things once. Introduction states the problem; Conclusion synthesizes. Do not echo.
 - **No rule-of-three reflexes.** Vary clause structures.
 - **No meta-commentary.** Never "This section discusses..." Just begin with content.
+- **No methodology disclosure.** Never reveal HOW you explored the literature. Phrases like "following conceptual links," "tracing citation chains," "using a greedy algorithm," or "guided by embedding similarity" betray the generation method. A human author would not describe their search process in the review itself. You may say the review "traces unconventional paths" but not HOW those paths were found.
 - **No elegant variation.** "Growth rate" stays "growth rate," not "deposition velocity." Consistent terminology over stylistic variety.
 
 ## Abstract and Introduction Readability

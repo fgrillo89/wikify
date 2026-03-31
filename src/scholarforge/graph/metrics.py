@@ -20,12 +20,13 @@ from scholarforge.store.models import Paper
 class GraphMetrics:
     """Metrics computed for each paper in the corpus graph."""
 
-    # Paper ID → metric value
-    pagerank: dict[str, float] = field(default_factory=dict)
+    # Paper ID -> metric value
+    pagerank: dict[str, float] = field(default_factory=dict)  # citations-only PageRank
+    pagerank_mixed: dict[str, float] = field(default_factory=dict)  # mixed graph PageRank
     degree_centrality: dict[str, float] = field(default_factory=dict)
     betweenness_centrality: dict[str, float] = field(default_factory=dict)
     # Classified roles
-    hub_papers: list[str] = field(default_factory=list)  # Top PageRank
+    hub_papers: list[str] = field(default_factory=list)  # Top citation PageRank
     bridge_papers: list[str] = field(default_factory=list)  # Top betweenness
     peripheral_papers: list[str] = field(default_factory=list)  # Low degree, frontier topics
 
@@ -67,11 +68,43 @@ class GraphMetrics:
         return "\n".join(lines)
 
 
+def build_citation_only_graph() -> nx.DiGraph:
+    """Build a directed graph from citation links ONLY.
+
+    No similarity or coupling edges. Used for pure citation-based
+    PageRank as an orthogonal signal to embedding-based metrics.
+    """
+    from scholarforge.extract.cite_match import build_citation_graph
+    from scholarforge.store.models import Citation
+
+    graph = nx.DiGraph()
+
+    with get_session() as session:
+        papers = session.exec(select(Paper)).all()
+
+    for p in papers:
+        graph.add_node(p.id, title=p.title, year=p.year)
+
+    citations_by_paper: dict[str, list[str]] = {}
+    with get_session() as session:
+        for p in papers:
+            cites = session.exec(select(Citation).where(Citation.paper_id == p.id)).all()
+            if cites:
+                citations_by_paper[p.id] = [c.raw_text for c in cites]
+
+    citation_graph = build_citation_graph(papers, citations_by_paper)
+    for citing_id, cited_ids in citation_graph.items():
+        for cited_id in cited_ids:
+            graph.add_edge(citing_id, cited_id, weight=1.0)
+
+    return graph
+
+
 def build_corpus_graph() -> nx.DiGraph:
     """Build a directed graph from citation links + undirected similarity edges.
 
     Nodes are papers. Edges come from:
-    1. Direct citations (directed: A→B means A cites B)
+    1. Direct citations (directed: A cites B)
     2. k-NN similarity (undirected, lower weight)
     3. Bibliographic coupling (undirected)
     """
@@ -126,7 +159,12 @@ def build_corpus_graph() -> nx.DiGraph:
 
 
 def compute_metrics(corpus_graph: nx.DiGraph | None = None) -> GraphMetrics:
-    """Compute all graph metrics. Builds graph if not provided."""
+    """Compute all graph metrics. Builds graph if not provided.
+
+    PageRank is computed on CITATIONS ONLY (directed A-cites-B edges),
+    giving a pure academic authority signal orthogonal to embedding-based
+    metrics. The mixed graph is used for degree and betweenness centrality.
+    """
     if corpus_graph is None:
         corpus_graph = build_corpus_graph()
 
@@ -134,8 +172,22 @@ def compute_metrics(corpus_graph: nx.DiGraph | None = None) -> GraphMetrics:
     if n == 0:
         return GraphMetrics()
 
-    # PageRank (works on directed graphs)
-    pagerank = nx.pagerank(corpus_graph, weight="weight")
+    # Citation-only PageRank (pure authority signal)
+    # Extract citation-only subgraph from the corpus graph
+    cite_graph = nx.DiGraph()
+    cite_graph.add_nodes_from(corpus_graph.nodes(data=True))
+    for u, v, data in corpus_graph.edges(data=True):
+        if data.get("type") == "cites":
+            cite_graph.add_edge(u, v, weight=data.get("weight", 1.0))
+
+    if cite_graph.number_of_edges() > 0:
+        pagerank_cite = nx.pagerank(cite_graph, weight="weight")
+    else:
+        # Fallback to mixed if no citation edges
+        pagerank_cite = nx.pagerank(corpus_graph, weight="weight")
+
+    # Mixed-graph PageRank (for reference / backward compatibility)
+    pagerank_mixed = nx.pagerank(corpus_graph, weight="weight")
 
     # Degree centrality (on undirected view for overall connectivity)
     undirected = corpus_graph.to_undirected()
@@ -145,9 +197,9 @@ def compute_metrics(corpus_graph: nx.DiGraph | None = None) -> GraphMetrics:
     betweenness = nx.betweenness_centrality(undirected, weight="weight")
 
     # Classify papers
-    # Hubs: top 20% by PageRank
+    # Hubs: top 20% by CITATION PageRank (pure authority)
     hub_threshold = max(1, n // 5)
-    sorted_pr = sorted(pagerank.items(), key=lambda x: x[1], reverse=True)
+    sorted_pr = sorted(pagerank_cite.items(), key=lambda x: x[1], reverse=True)
     hub_papers = [pid for pid, _ in sorted_pr[:hub_threshold]]
 
     # Bridges: top 20% by betweenness (excluding hubs to avoid overlap)
@@ -161,7 +213,8 @@ def compute_metrics(corpus_graph: nx.DiGraph | None = None) -> GraphMetrics:
     peripheral_papers = [pid for pid, _ in sorted_dc[:peripheral_threshold]]
 
     return GraphMetrics(
-        pagerank=pagerank,
+        pagerank=pagerank_cite,
+        pagerank_mixed=pagerank_mixed,
         degree_centrality=degree_cent,
         betweenness_centrality=betweenness,
         hub_papers=hub_papers,
