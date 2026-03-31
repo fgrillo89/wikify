@@ -146,10 +146,14 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
         content = msg.get("content", "")
         if len(content) > threshold:
             original_len = len(content)
-            preview = content[:200]
+            # Proportional preview: keep ~10% of the content, with floor and ceiling
+            # Short results (2-5K): keep ~500 chars (enough for metadata + key info)
+            # Long results (70K+): keep ~2000 chars (paper metadata + abstract)
+            preview_len = max(500, min(2000, original_len // 10))
+            preview = content[:preview_len]
             msg["content"] = (
-                f"{preview}\n\n[... compacted: {original_len} chars processed. "
-                f"Call get_session_context() for paper summaries.]"
+                f"{preview}\n\n[... compacted: {original_len} chars total. "
+                f"Use get_session_context() to recall paper summaries.]"
             )
 
 

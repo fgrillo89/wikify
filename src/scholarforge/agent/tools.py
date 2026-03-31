@@ -613,11 +613,20 @@ def deep_read(
         )
         total_tokens = sum(c.token_count for c in chunks)
 
+        # Return paper metadata (without summary — it's already in the chunks)
+        # and full_text only (no chunks array — it duplicates full_text)
+        meta = {
+            "title": paper.title,
+            "authors": paper.parsed_authors,
+            "year": paper.year,
+            "doi": paper.doi,
+            "display_name": paper.display_name(),
+        }
+
         return json.dumps(
             {
-                "paper": _paper_to_dict(paper),
+                "paper": meta,
                 "full_text": full_text,
-                "chunks": [_chunk_to_dict(c) for c in chunks],
                 "token_count": total_tokens,
                 "match_count": len(matched),
             },
