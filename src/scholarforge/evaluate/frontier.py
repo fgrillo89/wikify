@@ -67,15 +67,19 @@ def compute_paper_density() -> list[tuple[str, float, str]]:
 def frontier_exploration_order(
     max_papers: int = 20,
     n_greedy_seeds: int = 3,
+    n_frontiers: int = 5,
+    n_bridges: int = 3,
 ) -> list[tuple[str, str, str]]:
-    """Hybrid exploration: greedy seeds for baseline, then frontier papers.
+    """Hybrid exploration: greedy seeds + frontier papers + bridge papers.
 
-    Phase 1: Pick top n_greedy_seeds by marginal coverage gain (greedy)
-    Phase 2: From remaining papers, pick the ones with LOWEST density that
-    are also LEAST similar to already-selected papers (anti-greedy).
-
-    This combines the coverage guarantee of greedy with the frontier-pushing
-    of density-ranked exploration.
+    Phase 1: Pick top n_greedy_seeds by marginal coverage gain (greedy).
+    Phase 2: Pick n_frontiers lowest-density papers (frontier).
+    Phase 3: For each (seed, frontier) pair, find the paper closest to
+             their midpoint in vibe space — the natural "stepping stone"
+             that connects mainstream to edge. These are the bridge papers
+             that random walks discover by accident but we find in O(N).
+    Phase 4: One serendipity pick — the paper with highest dissimilarity
+             to everything already selected (controlled randomness).
 
     Returns list of (paper_id, depth, rationale) tuples.
     """
@@ -117,47 +121,112 @@ def frontier_exploration_order(
             fresh = _marginal_gain(corpus_embs, baseline, paper_embs[pid])
             heapq.heappush(heap, (-fresh, iteration, pid))
 
-    # Phase 2: Frontier exploration (density-ranked, anti-greedy)
-    density_ranked = compute_paper_density()
-
-    # Get vibe vectors for similarity check
+    # Get vibe vectors for all remaining phases
     from scholarforge.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
+    seed_ids = [pid for pid, _, _ in selected]
 
-    # Compute selected centroid
-    selected_vibe_list = [vibes[pid] for pid, _, _ in selected if pid in vibes]
-    if selected_vibe_list:
-        selected_centroid = np.mean(selected_vibe_list, axis=0)
-        selected_centroid /= np.linalg.norm(selected_centroid) + 1e-9
-    else:
-        selected_centroid = None
+    # Phase 2: Frontier papers (density-ranked, anti-greedy)
+    density_ranked = compute_paper_density()
+    frontier_ids: list[str] = []
 
     frontier_count = 0
     for pid, density, display_name in density_ranked:
         if pid in selected_ids:
             continue
-        if frontier_count >= max_papers - n_greedy_seeds:
+        if frontier_count >= n_frontiers:
             break
 
-        # Anti-greedy: skip if too similar to what we already have
-        if selected_centroid is not None and pid in vibes:
-            sim_to_selected = float(np.dot(vibes[pid], selected_centroid))
-            if sim_to_selected > 0.85:
-                continue  # too similar, not frontier enough
+        # Anti-greedy: skip if too similar to seeds
+        if pid in vibes:
+            seed_vibes = [vibes[s] for s in seed_ids if s in vibes]
+            if seed_vibes:
+                max_sim = max(float(np.dot(vibes[pid], sv)) for sv in seed_vibes)
+                if max_sim > 0.85:
+                    continue
 
-        depth = "full" if frontier_count < 2 else "digest"
+        depth = "full" if frontier_count < 1 else "digest"
         selected.append(
             (pid, depth, f"frontier (density: {density:.3f}, rank: {frontier_count + 1})")
         )
         selected_ids.add(pid)
+        frontier_ids.append(pid)
         frontier_count += 1
 
-        # Update centroid with each selection
-        if pid in vibes:
-            all_selected_vibes = [vibes[p] for p, _, _ in selected if p in vibes]
-            selected_centroid = np.mean(all_selected_vibes, axis=0)
+    # Phase 3: Bridge papers — for each (seed, frontier) pair, find the paper
+    # closest to their midpoint in vibe space. This is the "stepping stone"
+    # that random walks discover by accident.
+    bridge_candidates: list[tuple[str, float, str]] = []  # (pid, score, rationale)
+    all_pids = list(vibes.keys())
+    all_vibe_matrix = np.array([vibes[pid] for pid in all_pids])
+
+    for seed_id in seed_ids:
+        if seed_id not in vibes:
+            continue
+        seed_vibe = np.array(vibes[seed_id])
+        for front_id in frontier_ids:
+            if front_id not in vibes:
+                continue
+            front_vibe = np.array(vibes[front_id])
+
+            # Midpoint between seed and frontier
+            midpoint = (seed_vibe + front_vibe) / 2
+            midpoint /= np.linalg.norm(midpoint) + 1e-9
+
+            # Find the unselected paper closest to the midpoint
+            sims_to_mid = all_vibe_matrix @ midpoint
+            for idx in np.argsort(sims_to_mid)[::-1]:
+                candidate_pid = all_pids[idx]
+                if candidate_pid in selected_ids:
+                    continue
+                # Must be genuinely "in between" — not too close to either end
+                sim_to_seed = float(np.dot(vibes[candidate_pid], seed_vibe))
+                sim_to_front = float(np.dot(vibes[candidate_pid], front_vibe))
+                if sim_to_seed < 0.9 and sim_to_front < 0.9:
+                    mid_sim = float(sims_to_mid[idx])
+                    bridge_candidates.append(
+                        (
+                            candidate_pid,
+                            mid_sim,
+                            f"bridge (mid_sim: {mid_sim:.2f})",
+                        )
+                    )
+                    break
+
+    # Deduplicate and pick top n_bridges
+    seen_bridge_ids: set[str] = set()
+    for pid, score, rationale in sorted(bridge_candidates, key=lambda x: x[1], reverse=True):
+        if pid in selected_ids or pid in seen_bridge_ids:
+            continue
+        if len(seen_bridge_ids) >= n_bridges:
+            break
+        selected.append((pid, "digest", rationale))
+        selected_ids.add(pid)
+        seen_bridge_ids.add(pid)
+
+    # Phase 4: Serendipity pick — most dissimilar to everything selected
+    if len(selected_ids) < max_papers:
+        selected_vibes = np.array([vibes[pid] for pid, _, _ in selected if pid in vibes])
+        if len(selected_vibes) > 0:
+            selected_centroid = np.mean(selected_vibes, axis=0)
             selected_centroid /= np.linalg.norm(selected_centroid) + 1e-9
+
+            sims_to_centroid = all_vibe_matrix @ selected_centroid
+            # Pick the LEAST similar unselected paper
+            for idx in np.argsort(sims_to_centroid):
+                candidate_pid = all_pids[idx]
+                if candidate_pid not in selected_ids:
+                    sim = float(sims_to_centroid[idx])
+                    selected.append(
+                        (
+                            candidate_pid,
+                            "digest",
+                            f"serendipity (most dissimilar to read set, sim: {sim:.2f})",
+                        )
+                    )
+                    selected_ids.add(candidate_pid)
+                    break
 
     return selected
 
