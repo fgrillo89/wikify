@@ -178,11 +178,13 @@ class FactualSpecificityResult:
     def score(self) -> float:
         """Normalized specificity score per 1,000 words.
 
-        Each type of evidence is weighted and summed, then normalised.
-        Weights reflect how strongly each marker indicates factual density.
+        Uses log scaling so high-specificity reviews are differentiated
+        rather than all capping at 1.0.
         """
         if self.word_count == 0:
             return 0.0
+        import math
+
         raw = (
             self.numeric_with_units * 2.0
             + self.chemical_formulas * 1.5
@@ -190,8 +192,10 @@ class FactualSpecificityResult:
             + self.comparative_sentences * 1.5
             + self.technical_acronyms * 0.5
         )
-        # Normalise per 1,000 words and cap at 1.0 at 40 weighted markers/1k words
-        return min(raw / max(self.word_count, 1) * 1000 / 40.0, 1.0)
+        per_1k = raw / max(self.word_count, 1) * 1000
+        # Log scale: score = log(1 + per_1k) / log(1 + 80)
+        # At 10 markers/1kw: 0.53, at 20: 0.69, at 40: 0.84, at 80: 1.0
+        return min(math.log1p(per_1k) / math.log1p(80), 1.0)
 
     def interpretation(self) -> str:
         wc = max(self.word_count, 1)
@@ -490,6 +494,413 @@ def compute_cross_reference_density(
     )
 
 
+# ── Metric 5: Thematic Centroid Correlation ──────────────────────────────────
+
+
+@dataclass
+class ThematicCentroidResult:
+    """Measures alignment between review's semantic center and corpus's center."""
+
+    cosine_similarity: float  # review centroid vs corpus centroid
+    thematic_drift: float  # 1 - similarity (0 = perfect alignment)
+
+    def score(self) -> float:
+        """Score: high similarity = good alignment."""
+        return max(0.0, self.cosine_similarity)
+
+    def interpretation(self) -> str:
+        lines = [
+            "Thematic Centroid Correlation:",
+            f"  Cosine similarity (review vs corpus center): {self.cosine_similarity:.3f}",
+            f"  Thematic drift: {self.thematic_drift:.3f}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.thematic_drift < 0.15:
+            lines.append("  Interpretation: Review is tightly aligned with corpus themes.")
+        elif self.thematic_drift < 0.30:
+            lines.append("  Interpretation: Review is well-aligned with moderate drift.")
+        else:
+            lines.append(
+                "  Interpretation: Significant thematic drift -- review may focus on a niche."
+            )
+        return "\n".join(lines)
+
+
+def compute_thematic_centroid(review_text: str) -> Optional[ThematicCentroidResult]:
+    """Compare the semantic centroid of the review to the corpus centroid.
+
+    Both centroids are weighted averages of chunk embeddings. A high cosine
+    similarity means the review's "center of gravity" matches the corpus.
+    Low similarity indicates thematic drift (the review focuses on a niche
+    rather than the corpus as a whole).
+    """
+    try:
+        import numpy as np
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        # Corpus centroid from stored embeddings
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+        corpus_embs = [stored[c.id] for c in chunks if c.id in stored]
+        if not corpus_embs:
+            return None
+        corpus_weights = [c.token_count for c in chunks if c.id in stored]
+
+        corpus_arr = np.array(corpus_embs)
+        w = np.array(corpus_weights, dtype=float)
+        w /= w.sum() + 1e-9
+        corpus_centroid = np.average(corpus_arr, axis=0, weights=w)
+        corpus_centroid /= np.linalg.norm(corpus_centroid) + 1e-9
+
+        # Review centroid from on-the-fly encoding
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunks = [
+            " ".join(words[i : i + 200])
+            for i in range(0, len(words), 200)
+            if len(" ".join(words[i : i + 200]).strip()) > 50
+        ]
+        if not review_chunks:
+            return None
+
+        model = _store.model
+        rev_embs = model.encode(review_chunks, show_progress_bar=False, batch_size=64)
+        rev_centroid = np.mean(rev_embs, axis=0)
+        rev_centroid /= np.linalg.norm(rev_centroid) + 1e-9
+
+        sim = float(np.dot(corpus_centroid, rev_centroid))
+        return ThematicCentroidResult(cosine_similarity=sim, thematic_drift=1.0 - sim)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── Metric 6: Topic Coverage Gap Analysis ────────────────────────────────────
+
+
+@dataclass
+class TopicCoverageResult:
+    """Topic-level coverage analysis — which corpus topics appear in the review."""
+
+    topics_in_corpus: int
+    topics_covered: int
+    topics_omitted: list[str]
+    coverage_ratio: float
+    topic_detail: dict[str, str]  # topic -> "covered" | "mentioned" | "omitted"
+
+    def score(self) -> float:
+        return self.coverage_ratio
+
+    def interpretation(self) -> str:
+        lines = [
+            "Topic Coverage Gap Analysis:",
+            f"  Corpus topics: {self.topics_in_corpus}",
+            f"  Topics covered in review: {self.topics_covered}",
+            f"  Coverage ratio: {self.coverage_ratio:.1%}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.topics_omitted:
+            lines.append(f"  Omitted topics: {', '.join(self.topics_omitted[:10])}")
+        return "\n".join(lines)
+
+
+def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
+    """Check which corpus topics appear in the review text.
+
+    Uses the extracted topic vocabulary from the corpus (PaperTopic table)
+    and checks for case-insensitive substring matches in the review.
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import PaperTopic
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        with get_session() as session:
+            all_topics = session.exec(select(PaperTopic)).all()
+
+        # Get unique topic names, filter junk (HTML artifacts, too short, too long)
+        topic_names = sorted(
+            {
+                t.topic
+                for t in all_topics
+                if len(t.topic) >= 3
+                and len(t.topic) <= 60
+                and "<" not in t.topic
+                and "|" not in t.topic
+                and "." not in t.topic[:3]  # skip numbered sections
+            }
+        )
+        if not topic_names:
+            return None
+
+        review_lower = review_text.lower()
+        detail = {}
+        covered = 0
+        omitted = []
+
+        for topic in topic_names:
+            topic_lower = topic.lower()
+            if topic_lower in review_lower:
+                # Check if it's substantially mentioned (>1 occurrence or >3 words around it)
+                count = review_lower.count(topic_lower)
+                if count >= 2:
+                    detail[topic] = "covered"
+                    covered += 1
+                else:
+                    detail[topic] = "mentioned"
+                    covered += 1
+            else:
+                detail[topic] = "omitted"
+                omitted.append(topic)
+
+        return TopicCoverageResult(
+            topics_in_corpus=len(topic_names),
+            topics_covered=covered,
+            topics_omitted=omitted,
+            coverage_ratio=covered / max(len(topic_names), 1),
+            topic_detail=detail,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── Metric 7: Reconstruction Fidelity (Compression Quality) ─────────────────
+
+
+@dataclass
+class ReconstructionFidelityResult:
+    """Measures how well the review can 'reconstruct' corpus findings.
+
+    Uses the normalized compression distance (NCD) between review and corpus
+    as a proxy for mutual information. Lower NCD = review captures more of
+    the corpus's information content.
+    """
+
+    ncd: float  # Normalized compression distance [0, 1]
+    review_self_info: int  # compressed size of review alone
+    corpus_self_info: int  # compressed size of corpus sample alone
+    joint_info: int  # compressed size of concatenation
+
+    def score(self) -> float:
+        """Score: 1 - NCD. Higher = better reconstruction fidelity."""
+        return max(0.0, min(1.0, 1.0 - self.ncd))
+
+    def interpretation(self) -> str:
+        lines = [
+            "Reconstruction Fidelity (NCD proxy):",
+            f"  Normalized Compression Distance: {self.ncd:.3f}",
+            f"  Review self-info: {self.review_self_info:,} bytes",
+            f"  Corpus self-info: {self.corpus_self_info:,} bytes",
+            f"  Joint info: {self.joint_info:,} bytes",
+            f"  Score (1 - NCD): {self.score():.3f}",
+        ]
+        if self.ncd < 0.7:
+            lines.append(
+                "  Interpretation: High fidelity -- review captures substantial "
+                "corpus information (low NCD)."
+            )
+        elif self.ncd < 0.85:
+            lines.append(
+                "  Interpretation: Moderate fidelity -- review shares some information with corpus."
+            )
+        else:
+            lines.append(
+                "  Interpretation: Low fidelity -- review and corpus share "
+                "little compressed information."
+            )
+        return "\n".join(lines)
+
+
+def compute_reconstruction_fidelity(
+    review_text: str,
+    corpus_text: str,
+) -> ReconstructionFidelityResult:
+    """Compute Normalized Compression Distance between review and corpus.
+
+    NCD(x, y) = (C(xy) - min(C(x), C(y))) / max(C(x), C(y))
+
+    To handle size asymmetry (3KB review vs 170KB+ corpus), we sample
+    the corpus to be within 3x of the review length. This makes NCD
+    comparable across reviews of different lengths.
+    """
+    review_bytes = review_text.encode("utf-8", errors="replace")
+
+    # Sample corpus to be within 3x of review length for fair NCD
+    corpus_bytes_full = corpus_text.encode("utf-8", errors="replace")
+    max_corpus_len = len(review_bytes) * 3
+    if len(corpus_bytes_full) > max_corpus_len:
+        corpus_bytes = corpus_bytes_full[:max_corpus_len]
+    else:
+        corpus_bytes = corpus_bytes_full
+
+    combined = review_bytes + b"\n\n" + corpus_bytes
+
+    c_review = len(zlib.compress(review_bytes, level=9))
+    c_corpus = len(zlib.compress(corpus_bytes, level=9))
+    c_combined = len(zlib.compress(combined, level=9))
+
+    ncd = (c_combined - min(c_review, c_corpus)) / max(c_review, c_corpus, 1)
+
+    return ReconstructionFidelityResult(
+        ncd=ncd,
+        review_self_info=c_review,
+        corpus_self_info=c_corpus,
+        joint_info=c_combined,
+    )
+
+
+# ── Metric 8: Semantic Span (Convex Hull Volume Ratio) ───────────────────────
+
+
+@dataclass
+class SemanticSpanResult:
+    """Measures whether the review spans the same semantic volume as the corpus.
+
+    Projects embeddings to a low-dimensional space (PCA), computes convex hull
+    volumes for both corpus and review, and reports the ratio. Also measures
+    the Hausdorff distance (worst-case gap between the two point clouds).
+    """
+
+    corpus_volume: float  # convex hull volume of corpus in PCA space
+    review_volume: float  # convex hull volume of review in PCA space
+    volume_ratio: float  # review / corpus (1.0 = same span)
+    hausdorff_distance: float  # max distance from any corpus point to nearest review point
+    pca_dims: int  # number of PCA dimensions used
+
+    def score(self) -> float:
+        """Score based on volume ratio and Hausdorff distance.
+
+        Volume ratio near 1.0 is ideal. Hausdorff penalizes reviews that
+        miss entire regions of the corpus space.
+        """
+        # Volume component: penalize both too small (narrow) and too large (hallucinating)
+        vol_score = min(self.volume_ratio, 1.0)
+        # Hausdorff component: lower is better (inverse, capped)
+        haus_score = max(0.0, 1.0 - self.hausdorff_distance / 2.0)
+        return 0.5 * vol_score + 0.5 * haus_score
+
+    def interpretation(self) -> str:
+        lines = [
+            "Semantic Span (Convex Hull in PCA space):",
+            f"  PCA dimensions: {self.pca_dims}",
+            f"  Corpus hull volume: {self.corpus_volume:.4f}",
+            f"  Review hull volume: {self.review_volume:.4f}",
+            f"  Volume ratio (review/corpus): {self.volume_ratio:.3f}",
+            f"  Hausdorff distance: {self.hausdorff_distance:.3f}",
+            f"  Score: {self.score():.3f}",
+        ]
+        if self.volume_ratio < 0.3:
+            lines.append("  Interpretation: Review covers a narrow slice of the corpus space.")
+        elif self.volume_ratio < 0.7:
+            lines.append("  Interpretation: Review spans a moderate portion of corpus space.")
+        else:
+            lines.append("  Interpretation: Review spans most of the corpus semantic space.")
+        return "\n".join(lines)
+
+
+def compute_semantic_span(
+    review_text: str,
+    n_components: int = 5,
+    chunk_size: int = 200,
+) -> Optional[SemanticSpanResult]:
+    """Compare convex hull volumes of review vs corpus in PCA-projected space.
+
+    Projects both corpus and review chunk embeddings into a shared PCA space,
+    then computes convex hull volumes and Hausdorff distance.
+
+    Args:
+        review_text: The full review text.
+        n_components: PCA dimensions (default 5; higher = more precise but
+            convex hull computation is exponential in dimensions).
+        chunk_size: Words per review chunk.
+    """
+    try:
+        import numpy as np
+        from scipy.spatial import ConvexHull
+        from sklearn.decomposition import PCA
+
+        from scholarforge.evaluate.coverage import load_corpus_chunks
+        from scholarforge.store.embeddings import _store, get_chunk_embeddings
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        chunks = load_corpus_chunks()
+        if not chunks:
+            return None
+
+        # Get corpus embeddings
+        all_ids = [c.id for c in chunks]
+        stored = get_chunk_embeddings(all_ids)
+        corpus_embs = np.array([stored[c.id] for c in chunks if c.id in stored])
+        if len(corpus_embs) < n_components + 1:
+            return None
+
+        # Embed review chunks
+        review_body = re.split(r"\n## References\n", review_text)[0]
+        review_body = re.sub(r"^#+.*$", "", review_body, flags=re.MULTILINE).strip()
+        words = review_body.split()
+        review_chunks = [
+            " ".join(words[i : i + chunk_size])
+            for i in range(0, len(words), chunk_size)
+            if len(" ".join(words[i : i + chunk_size]).strip()) > 50
+        ]
+        if len(review_chunks) < n_components + 1:
+            return None
+
+        model = _store.model
+        review_embs = np.array(model.encode(review_chunks, show_progress_bar=False, batch_size=64))
+
+        # PCA: fit on corpus, transform both
+        pca = PCA(n_components=n_components)
+        corpus_pca = pca.fit_transform(corpus_embs)
+        review_pca = pca.transform(review_embs)
+
+        # Convex hull volumes
+        try:
+            corpus_hull = ConvexHull(corpus_pca)
+            corpus_vol = corpus_hull.volume
+        except Exception:  # noqa: BLE001
+            corpus_vol = 0.0
+
+        try:
+            review_hull = ConvexHull(review_pca)
+            review_vol = review_hull.volume
+        except Exception:  # noqa: BLE001
+            review_vol = 0.0
+
+        vol_ratio = review_vol / max(corpus_vol, 1e-12)
+
+        # Hausdorff distance: max over corpus points of min distance to review
+        from scipy.spatial.distance import cdist
+
+        dists = cdist(corpus_pca, review_pca)
+        hausdorff = float(np.max(np.min(dists, axis=1)))
+
+        return SemanticSpanResult(
+            corpus_volume=corpus_vol,
+            review_volume=review_vol,
+            volume_ratio=vol_ratio,
+            hausdorff_distance=hausdorff,
+            pca_dims=n_components,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Corpus text helper ─────────────────────────────────────────────────────────
 
 
@@ -531,9 +942,13 @@ class QualityReport:
     factual_specificity: FactualSpecificityResult
 
     # Require corpus access
-    coverage_ratio: Optional[float] = None  # from existing compute_coverage
+    coverage_ratio: Optional[float] = None
     semantic_efficiency: Optional[SemanticEfficiencyResult] = None
     cross_reference_density: Optional[CrossReferenceDensityResult] = None
+    thematic_centroid: Optional[ThematicCentroidResult] = None
+    topic_coverage: Optional[TopicCoverageResult] = None
+    reconstruction_fidelity: Optional[ReconstructionFidelityResult] = None
+    semantic_span: Optional[SemanticSpanResult] = None
 
     # Error info for corpus-dependent failures
     corpus_error: Optional[str] = None
@@ -541,23 +956,34 @@ class QualityReport:
     def composite_score(self) -> float:
         """Weighted average of all available sub-scores.
 
-        Weights:
-          - Information density: 0.20
-          - Factual specificity: 0.25
-          - Coverage ratio:      0.25  (if available)
-          - Semantic efficiency: 0.15  (if available)
-          - Cross-ref density:   0.15  (if available)
+        Weights chosen so no single metric dominates:
+          - Thematic centroid:       0.15 (alignment check)
+          - Topic coverage:          0.15 (breadth check)
+          - Reconstruction fidelity: 0.15 (compression quality)
+          - Factual specificity:     0.15 (data richness)
+          - Semantic coverage:       0.15 (chunk-level coverage)
+          - Semantic efficiency:     0.10 (coverage per word)
+          - Information density:     0.10 (compression ratio)
+          - Cross-ref density:       0.05 (paper-level breadth)
         """
         components: list[tuple[float, float]] = [
-            (self.information_density.score(), 0.20),
-            (self.factual_specificity.score(), 0.25),
+            (self.information_density.score(), 0.10),
+            (self.factual_specificity.score(), 0.15),
         ]
         if self.coverage_ratio is not None:
-            components.append((min(self.coverage_ratio, 1.0), 0.25))
+            components.append((min(self.coverage_ratio, 1.0), 0.15))
         if self.semantic_efficiency is not None:
-            components.append((self.semantic_efficiency.score(), 0.15))
+            components.append((self.semantic_efficiency.score(), 0.10))
         if self.cross_reference_density is not None:
-            components.append((self.cross_reference_density.score(), 0.15))
+            components.append((self.cross_reference_density.score(), 0.05))
+        if self.thematic_centroid is not None:
+            components.append((self.thematic_centroid.score(), 0.15))
+        if self.topic_coverage is not None:
+            components.append((self.topic_coverage.score(), 0.15))
+        if self.reconstruction_fidelity is not None:
+            components.append((self.reconstruction_fidelity.score(), 0.15))
+        if self.semantic_span is not None:
+            components.append((self.semantic_span.score(), 0.10))
 
         total_weight = sum(w for _, w in components)
         if total_weight == 0:
@@ -570,19 +996,23 @@ class QualityReport:
             "=" * 60,
             "COMPREHENSIVE REVIEW QUALITY REPORT",
             "=" * 60,
-            "",
-            self.information_density.interpretation(),
-            "",
-            self.factual_specificity.interpretation(),
         ]
+
+        # New metrics first (most informative)
+        if self.thematic_centroid is not None:
+            lines += ["", self.thematic_centroid.interpretation()]
+        if self.topic_coverage is not None:
+            lines += ["", self.topic_coverage.interpretation()]
+        if self.reconstruction_fidelity is not None:
+            lines += ["", self.reconstruction_fidelity.interpretation()]
+        if self.semantic_span is not None:
+            lines += ["", self.semantic_span.interpretation()]
+
+        lines += ["", self.factual_specificity.interpretation()]
+        lines += ["", self.information_density.interpretation()]
 
         if self.semantic_efficiency is not None:
             lines += ["", self.semantic_efficiency.interpretation()]
-        elif self.coverage_ratio is not None:
-            lines += [
-                "",
-                f"Semantic Coverage (no efficiency breakdown): {self.coverage_ratio:.1%}",
-            ]
 
         if self.cross_reference_density is not None:
             lines += ["", self.cross_reference_density.interpretation()]
@@ -592,9 +1022,9 @@ class QualityReport:
 
         lines += [
             "",
-            "-" * 60,
+            "=" * 60,
             f"COMPOSITE QUALITY SCORE: {self.composite_score():.3f} / 1.000",
-            "-" * 60,
+            "=" * 60,
         ]
         return "\n".join(lines)
 
@@ -647,9 +1077,14 @@ def comprehensive_quality_report(
             threshold=coverage_threshold,
         )
 
-    xref = compute_cross_reference_density(review_text, threshold=coverage_threshold)
-    if xref is None and corpus_error is None:
-        corpus_error = "cross_reference_density: corpus unavailable"
+    # Tighter threshold for cross-ref density (0.3 cosine distance) so it discriminates
+    xref = compute_cross_reference_density(review_text, threshold=0.3)
+
+    # New metrics
+    centroid = compute_thematic_centroid(review_text)
+    topics = compute_topic_coverage(review_text)
+    recon = compute_reconstruction_fidelity(review_text, corpus_text)
+    span = compute_semantic_span(review_text)
 
     return QualityReport(
         information_density=info_density,
@@ -657,5 +1092,9 @@ def comprehensive_quality_report(
         coverage_ratio=coverage_ratio,
         semantic_efficiency=efficiency,
         cross_reference_density=xref,
+        thematic_centroid=centroid,
+        topic_coverage=topics,
+        reconstruction_fidelity=recon,
+        semantic_span=span,
         corpus_error=corpus_error,
     )
