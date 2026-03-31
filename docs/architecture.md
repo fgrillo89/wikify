@@ -82,7 +82,7 @@ src/scholarforge/
 │   └── coupler.py                  # Bibliographic coupling
 │
 ├── graph/                          # NetworkX graph analysis
-│   └── metrics.py                  # PageRank, centrality, hub/bridge/frontier
+│   └── metrics.py                  # PageRank (citations-only), centrality, hub/bridge/frontier
 │
 ├── retrieve/                       # Context assembly
 │   ├── context.py                  # RetrievedContext, SectionContext
@@ -221,36 +221,54 @@ Token-weighted centroid of chunk embeddings per paper. Produces a single
 - Jump targeting (find the most uncovered distant region)
 - Greedy submodular paper ordering (marginal coverage gain per paper)
 
-## Iterative Write-Measure-Read Loop
+## Exploration Strategy: Enhanced Hybrid
 
-The agent's exploration strategy is coverage-driven:
+The agent's exploration uses a 4-phase precomputed reading order (7.4s for 206 papers):
 
 ```
-get_graph_metrics() -> deep_read(hub_1..3) -> write draft
-                                                   |
-                                                   v
-                                        get_coverage_gaps(draft)
-                                                   |
-                                          delta >= 2%? ----YES----> suggest_next_papers()
-                                                   |                        |
-                                                  NO                  read 1-3 papers
-                                                   |                        |
-                                             gaps remain?             revise draft
-                                                   |                        |
-                                                  YES                       v
-                                                   |              get_coverage_gaps()
-                                                   v                  (loop back)
-                                          find_jump_target()
-                                                   |
-                                             target found? --NO--> STOP, export
-                                                   |
-                                                  YES -> read, revise, re-measure
+┌─────────────────────────────────────────────────────────┐
+│  Phase 1: GREEDY SEEDS (3 papers)                       │
+│  - #1: highest PageRank (citation authority)            │
+│  - #2-3: top greedy coverage (excluding #1)             │
+│  Purpose: coverage backbone + authoritative anchor      │
+├─────────────────────────────────────────────────────────┤
+│  Phase 2: FRONTIER PAPERS (5 papers)                    │
+│  - Density-ranked: lowest k-NN density in vibe space    │
+│  - Anti-greedy: must be dissimilar to seeds             │
+│  Purpose: emerging themes, niche applications           │
+├─────────────────────────────────────────────────────────┤
+│  Phase 3: BRIDGE PAPERS (3 papers)                      │
+│  - For each (seed, frontier) pair: paper closest to     │
+│    their vibe midpoint                                  │
+│  Purpose: stepping stones that connect mainstream       │
+│    to edge (what random walks find by accident)         │
+├─────────────────────────────────────────────────────────┤
+│  Phase 4: SERENDIPITY (1 paper)                         │
+│  - Most dissimilar to everything already selected       │
+│  Purpose: controlled randomness, breaks path dependency │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Three navigation tools drive the loop:
-- `suggest_next_papers`: 0.7 * orthogonality + 0.3 * graph proximity
-- `get_coverage_gaps`: coverage delta + gap-to-paper mapping + convergence signal
-- `find_jump_target`: detects local exhaustion, jumps to most uncovered distant region
+After reading, the agent calls `find_corpus_gaps()` and
+`find_synthesis_opportunities()`, then writes with explicit gap
+identification and cross-paper synthesis.
+
+### Seed Selection: Citation PageRank + Greedy Coverage
+
+PageRank should run on **citations only** (directed A-cites-B edges),
+not the mixed graph. This gives a pure "academic authority" signal
+orthogonal to embedding-based coverage. Seed selection:
+
+1. **#1 seed**: highest citation-only PageRank (most influential paper)
+2. **#2-3 seeds**: top 2 from greedy submodular coverage (excluding #1)
+
+This ensures 1 authority anchor + 2 coverage-optimal papers.
+
+### Navigation tools
+- `get_frontier_exploration_order`: precomputed 4-phase reading order
+- `suggest_next_papers`: orthogonal neighbors for ad-hoc exploration
+- `find_corpus_gaps` / `find_synthesis_opportunities`: gap analysis
+- `find_jump_target`: escape exhausted local neighborhoods
 
 ## Dual-Mode Exploration: Generate & Talk
 
