@@ -105,6 +105,8 @@ class AgentResult:
     total_turns: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_write_tokens: int = 0
     messages: list[dict] = field(default_factory=list)
 
 
@@ -198,6 +200,78 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
 
 
 _SESSION_CONTEXT_MARKER = "[Session context: paper summaries]"
+def _session_level_compaction(messages: list[dict]) -> None:
+    """Drop old turns when total message size is excessive.
+
+    Adaptive threshold: triggers when total chars exceed 3x the system
+    prompt size (the static content). This scales naturally — a long
+    system prompt (detailed style guide) gets more room; a short one
+    triggers compaction earlier.
+
+    Keeps: system messages, session context, and enough recent messages
+    to maintain conversation coherence (at least the last assistant +
+    tool exchange cycle).
+    """
+    # Compute total and system-only sizes
+    total_chars = 0
+    system_chars = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content", "") or ""
+        size = len(content)
+        total_chars += size
+        if m.get("role") == "system":
+            system_chars += size
+
+    # Adaptive threshold: 3x system prompt size, minimum 80K chars
+    threshold = max(80_000, system_chars * 3)
+    if total_chars < threshold:
+        return
+
+    # Adaptive keep_recent: keep more if messages are short, fewer if large
+    non_system_count = sum(
+        1 for m in messages if isinstance(m, dict) and m.get("role") != "system"
+    )
+    non_system_chars = total_chars - system_chars
+    avg_msg_size = non_system_chars / max(non_system_count, 1)
+
+    # Small messages (tool confirmations, short responses): keep 8
+    # Large messages (deep reads still in context): keep 4
+    keep_recent = 8 if avg_msg_size < 2000 else 4
+
+    # Identify system messages (always keep)
+    system_indices = [
+        i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system"
+    ]
+
+    if len(messages) <= len(system_indices) + keep_recent:
+        return
+
+    cutoff = len(messages) - keep_recent
+    keep_indices = set(system_indices) | set(range(cutoff, len(messages)))
+
+    dropped_count = sum(1 for i in range(len(messages)) if i not in keep_indices)
+    if dropped_count == 0:
+        return
+
+    new_messages = []
+    dropped = False
+    for i, msg in enumerate(messages):
+        if i in keep_indices:
+            new_messages.append(msg)
+        elif not dropped:
+            new_messages.append({
+                "role": "user",
+                "content": (
+                    f"[{dropped_count} earlier messages compacted. "
+                    f"Paper summaries preserved in session context above.]"
+                ),
+            })
+            dropped = True
+
+    messages.clear()
+    messages.extend(new_messages)
 
 
 def _inject_session_context(messages: list[dict]) -> None:
@@ -294,11 +368,14 @@ class ScholarForgeAgent:
         all_tool_calls: list[ToolCallRecord] = []
         total_in = 0
         total_out = 0
+        total_cache_read = 0
+        total_cache_write = 0
 
         for turn in range(max_turns):
             # Compact large tool results from prior turns to save tokens
             if turn > 0 and settings.enable_tool_compaction:
                 _compact_tool_results(messages, settings.tool_compaction_threshold)
+                _session_level_compaction(messages)
 
             event = LLMEvent(
                 messages=messages,
@@ -328,8 +405,14 @@ class ScholarForgeAgent:
             usage = response.usage
             input_tokens: int = usage.prompt_tokens if usage else 0
             output_tokens: int = usage.completion_tokens if usage else 0
+            cache_read: int = getattr(usage, "cache_read_input_tokens", 0) or 0
+            cache_write: int = (
+                getattr(usage, "cache_creation_input_tokens", 0) or 0
+            )
             total_in += input_tokens
             total_out += output_tokens
+            total_cache_read += cache_read
+            total_cache_write += cache_write
 
             event.raw_response = message.content or ""
             event.input_tokens = input_tokens
@@ -357,6 +440,8 @@ class ScholarForgeAgent:
                     total_turns=turn + 1,
                     total_input_tokens=total_in,
                     total_output_tokens=total_out,
+                    total_cache_read_tokens=total_cache_read,
+                    total_cache_write_tokens=total_cache_write,
                     messages=messages,
                 )
 
@@ -411,6 +496,8 @@ class ScholarForgeAgent:
             total_turns=max_turns,
             total_input_tokens=total_in,
             total_output_tokens=total_out,
+            total_cache_read_tokens=total_cache_read,
+            total_cache_write_tokens=total_cache_write,
             messages=messages,
         )
 
