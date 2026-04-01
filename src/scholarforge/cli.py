@@ -236,6 +236,60 @@ def agent_generate(
         console.print(f"  Written: {p} ({p.stat().st_size:,} bytes)")
 
 
+@app.command("scripted-generate")
+def scripted_generate(
+    prompt: str = typer.Argument("ALD memristors for neuromorphic computing", help="Review topic"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model (litellm format)"),
+    summarize_model: str = typer.Option(
+        None, "--summarize-model", help="Model for paper summarization (default: same as --model)"
+    ),
+    write_model: str = typer.Option(
+        None, "--write-model", help="Model for review writing (default: same as --model)"
+    ),
+    journal: str = typer.Option("", "--journal", "-j", help="Target journal"),
+    artifact_type: str = typer.Option("lit_review", "--type", "-t", help="Document type"),
+    output: str = typer.Option("data/output/review_scripted.md", "--output", "-o"),
+    max_papers: int = typer.Option(12, "--max-papers", help="Papers in exploration order"),
+    n_deep: int = typer.Option(3, "--n-deep", help="Papers to deep-read"),
+    word_target: int = typer.Option(4000, "--words", "-w", help="Target word count"),
+):
+    """Generate a review using scripted exploration + LLM writing.
+
+    Unlike agent-generate, the exploration is deterministic Python code.
+    The LLM is used only for paper summarization and final writing.
+    Supports local models (e.g., ollama/qwen2.5:14b).
+    """
+    from scholarforge.agent.scripted import run_scripted
+
+    console.print("[bold]Scripted generation[/bold]")
+    console.print(f"  Topic: {prompt}")
+    console.print(f"  Model: {write_model or model or 'default'}")
+    console.print(f"  Papers: {max_papers} ({n_deep} deep reads)")
+    console.print(f"  Target: {word_target} words")
+
+    result = run_scripted(
+        topic=prompt,
+        model=model,
+        summarize_model=summarize_model,
+        write_model=write_model,
+        max_papers=max_papers,
+        n_deep=n_deep,
+        word_target=word_target,
+        artifact_type_id=artifact_type,
+        journal=journal,
+        output_path=output,
+    )
+
+    console.print("\n[green]Scripted generation complete:[/green]")
+    console.print(f"  Papers read: {result.papers_read}")
+    console.print(f"  Explore: {result.explore_time_s:.0f}s")
+    console.print(f"  Summarize: {result.summarize_time_s:.0f}s")
+    console.print(f"  Write: {result.write_time_s:.0f}s")
+    console.print(f"  Total: {result.total_time_s:.0f}s ({result.total_time_s / 60:.1f}m)")
+    console.print(f"  Words: {len(result.review_text.split())}")
+    console.print(f"  Tokens: {result.tokens_in:,} in + {result.tokens_out:,} out")
+
+
 @app.command()
 def slides(
     prompt: str = typer.Argument(..., help="Presentation topic"),
