@@ -493,6 +493,14 @@ def run_batch_steps(new_paper_ids: set[str] | None = None) -> None:
 
     rebuild_bibtex_library(papers, settings.data_dir)
 
+    # ── 12. Pre-compute cached artifacts for fast generation ────────────────
+    try:
+        from scholarforge.store.precompute import precompute_all
+
+        precompute_all()
+    except Exception as e:
+        console.print(f"[yellow]Precompute cache warning: {e}[/yellow]")
+
     console.print(
         f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"
     )

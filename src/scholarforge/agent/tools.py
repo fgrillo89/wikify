@@ -1318,14 +1318,25 @@ def find_corpus_gaps() -> str:
         corpus_norms[corpus_norms == 0] = 1
         corpus_embs = corpus_embs / corpus_norms
 
-        # Cluster corpus to find themes
-        n_clusters = min(10, len(corpus_embs) // 20)
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(corpus_embs)
-        centroids = kmeans.cluster_centers_
-        c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
-        c_norms[c_norms == 0] = 1
-        centroids = centroids / c_norms
+        # Try cached KMeans first (computed at ingest time)
+        from scholarforge.store.precompute import load_kmeans
+
+        cached = load_kmeans()
+        if cached is not None:
+            centroids, labels = cached
+            n_clusters = len(centroids)
+            c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+            c_norms[c_norms == 0] = 1
+            centroids = centroids / c_norms
+        else:
+            # Fall back to computing KMeans (~20s)
+            n_clusters = min(10, len(corpus_embs) // 20)
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(corpus_embs)
+            centroids = kmeans.cluster_centers_
+            c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+            c_norms[c_norms == 0] = 1
+            centroids = centroids / c_norms
 
         # Get paper info for labeling clusters
         with get_session() as session:
@@ -1372,14 +1383,30 @@ def find_corpus_gaps() -> str:
                     )
         voids.sort(key=lambda v: v["void_depth"], reverse=True)
 
-        # Topical gaps (secondary signal)
+        # Topical gaps (secondary signal, with plural normalization)
         topical_gaps = []
         try:
             all_topics = session.exec(select(PaperTopic)).all()
+            # Normalize topics: merge plurals (synapses→synapse, etc.)
             topic_papers: dict[str, set[str]] = {}
             for t in all_topics:
-                if 3 <= len(t.topic) <= 60 and "<" not in t.topic:
-                    topic_papers.setdefault(t.topic, set()).add(t.paper_id)
+                if not (3 <= len(t.topic) <= 60) or "<" in t.topic:
+                    continue
+                # Normalize plural forms
+                key = t.topic.strip()
+                key_lower = key.lower()
+                if key_lower.endswith("ies") and len(key_lower) > 5:
+                    key_lower = key_lower[:-3] + "y"
+                elif (
+                    key_lower.endswith("s")
+                    and not key_lower.endswith("ss")
+                    and not key_lower.endswith("us")
+                    and len(key_lower) > 4
+                ):
+                    key_lower = key_lower[:-1]
+                # Use normalized form as key, title-case for display
+                display = key_lower.title() if len(key_lower) > 4 else key_lower.upper()
+                topic_papers.setdefault(display, set()).add(t.paper_id)
 
             sig = {t: p for t, p in topic_papers.items() if len(p) >= 5}
             t_names = sorted(sig.keys())

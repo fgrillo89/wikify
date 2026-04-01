@@ -642,17 +642,25 @@ def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
         with get_session() as session:
             all_topics = session.exec(select(PaperTopic)).all()
 
-        topic_names = sorted(
-            {
-                t.topic
-                for t in all_topics
-                if len(t.topic) >= 3
-                and len(t.topic) <= 60
-                and "<" not in t.topic
-                and "|" not in t.topic
-                and "." not in t.topic[:3]
-            }
-        )
+        # Normalize topics: merge plurals before dedup
+        raw_topics: set[str] = set()
+        for t in all_topics:
+            if not (3 <= len(t.topic) <= 60):
+                continue
+            if "<" in t.topic or "|" in t.topic or "." in t.topic[:3]:
+                continue
+            key = t.topic.strip().lower()
+            if key.endswith("ies") and len(key) > 5:
+                key = key[:-3] + "y"
+            elif (
+                key.endswith("s")
+                and not key.endswith("ss")
+                and not key.endswith("us")
+                and len(key) > 4
+            ):
+                key = key[:-1]
+            raw_topics.add(key.title() if len(key) > 4 else key.upper())
+        topic_names = sorted(raw_topics)
         if not topic_names:
             return None
 

@@ -222,10 +222,21 @@ def get_chunk_embeddings(chunk_ids: list[str]) -> dict[str, list[float]]:
 def get_paper_vibe_vectors() -> dict[str, list[float]]:
     """Compute paper vibe vectors as token-weighted centroids of chunk embeddings.
 
-    Uses stored chunk embeddings from ChromaDB (no re-encoding needed).
+    Uses cached vibes from disk if available (computed at ingest time).
+    Falls back to computing from ChromaDB chunk embeddings.
     Returns a dict mapping paper_id -> normalized 384-dim centroid vector.
     """
     import numpy as np
+
+    # Try cached vibes first (computed at ingest time)
+    try:
+        from scholarforge.store.precompute import load_vibe_vectors
+
+        cached = load_vibe_vectors()
+        if cached:
+            return cached
+    except Exception:  # noqa: BLE001
+        pass
 
     from scholarforge.evaluate.coverage import load_corpus_chunks
 
