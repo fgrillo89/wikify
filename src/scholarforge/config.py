@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Agent token efficiency
     enable_tool_compaction: bool = True  # Truncate large tool results after LLM processes them
     tool_compaction_threshold: int = 2000  # Chars above which to compact a tool result
-    inject_concept_graph: bool = True  # Auto-inject concept graph into session context
+    inject_concept_graph: bool = False  # Tools-only mode produces better chain coherence
 
     # Chunking
     chunk_target_tokens: int = 600
