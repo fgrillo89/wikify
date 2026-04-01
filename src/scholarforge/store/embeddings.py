@@ -279,6 +279,82 @@ def get_paper_vibe_vectors() -> dict[str, list[float]]:
     return vibes
 
 
+_SCIENCE_SECTION_TYPES = frozenset({"results", "discussion", "conclusion", "body"})
+
+
+def get_science_vibe_vectors() -> dict[str, list[float]]:
+    """Paper centroids using only substantive sections (results/discussion/conclusion/body).
+
+    Excludes acknowledgments, references, appendix, abstract, introduction, methods.
+    This gives a "what did this paper find?" signal rather than "what is this paper about?".
+    Falls back to full vibes if a paper has no science-section chunks.
+    """
+    import numpy as np
+
+    # Try cache first
+    try:
+        from scholarforge.store.precompute import load_science_vibes
+
+        cached = load_science_vibes()
+        if cached:
+            return cached
+    except Exception:  # noqa: BLE001
+        pass
+
+    from scholarforge.evaluate.coverage import load_corpus_chunks
+
+    chunks = load_corpus_chunks()
+    if not chunks:
+        return {}
+
+    # Filter to science sections
+    science_chunks = [c for c in chunks if c.section_type in _SCIENCE_SECTION_TYPES]
+
+    # Group by paper
+    paper_chunks: dict[str, list] = {}
+    for c in science_chunks:
+        paper_chunks.setdefault(c.paper_id, []).append(c)
+
+    # Also track papers with NO science chunks (fallback to full vibes)
+    all_paper_ids = {c.paper_id for c in chunks}
+    papers_without_science = all_paper_ids - set(paper_chunks.keys())
+
+    # Fetch embeddings
+    all_ids = [c.id for c in science_chunks]
+    stored = get_chunk_embeddings(all_ids)
+
+    vibes: dict[str, list[float]] = {}
+    for paper_id, p_chunks in paper_chunks.items():
+        embeddings = []
+        weights = []
+        for c in p_chunks:
+            emb = stored.get(c.id)
+            if emb is not None:
+                embeddings.append(emb)
+                weights.append(c.token_count)
+
+        if not embeddings:
+            continue
+
+        emb_array = np.array(embeddings)
+        weight_array = np.array(weights, dtype=float)
+        weight_array /= weight_array.sum() + 1e-9
+        centroid = np.average(emb_array, axis=0, weights=weight_array)
+        norm = np.linalg.norm(centroid)
+        if norm > 0:
+            centroid = centroid / norm
+        vibes[paper_id] = centroid.tolist()
+
+    # Fallback: papers without science sections use full vibes
+    if papers_without_science:
+        full_vibes = get_paper_vibe_vectors()
+        for pid in papers_without_science:
+            if pid in full_vibes:
+                vibes[pid] = full_vibes[pid]
+
+    return vibes
+
+
 def query_similar(paper_id: str, n_results: int = 5) -> list[tuple[str, float]]:
     """Query ChromaDB for papers similar to the given paper."""
     collection = _store.collection

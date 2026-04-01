@@ -30,20 +30,21 @@ def _fingerprint(raw_text: str) -> str:
     return text[:80]
 
 
-def compute_coupling(paper_ids: list[str]) -> dict[str, list[str]]:
+def compute_coupling(paper_ids: list[str], min_strength: int = 3) -> dict[str, list[str]]:
     """Compute bibliographic coupling for the given papers.
 
     Parameters
     ----------
     paper_ids:
         IDs of the papers to analyse.
+    min_strength:
+        Minimum number of shared references to count as coupled (default 3).
 
     Returns
     -------
     dict[str, list[str]]
         Mapping from each paper_id to a list of coupled paper_ids, sorted by
-        coupling strength (number of shared references) descending. Only pairs
-        with coupling_strength >= 3 are included. Each paper receives at most
+        coupling strength descending. Each paper receives at most
         the top-5 coupled partners.
     """
     if not paper_ids:
@@ -74,7 +75,7 @@ def compute_coupling(paper_ids: list[str]) -> dict[str, list[str]]:
     # Accumulate (strength, other_paper) for each paper in the input set.
     paper_neighbours: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for (pa, pb), strength in pair_strength.items():
-        if strength < 3:
+        if strength < min_strength:
             continue
         if pa in paper_ids:
             paper_neighbours[pa].append((strength, pb))

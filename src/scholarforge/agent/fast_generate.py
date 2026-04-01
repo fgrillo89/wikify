@@ -133,7 +133,23 @@ def precompute_context(
 
 
 def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
-    """Build concept links from chunk embedding similarity. No LLM."""
+    """Load cached concept links or compute from chunk embedding similarity."""
+    # Try cached links first (section-filtered, boilerplate-free)
+    try:
+        from scholarforge.store.precompute import load_concept_links
+
+        links = load_concept_links()
+        if links:
+            formatted = [
+                f"  {link['paper_a'][:40]} <-> {link['paper_b'][:40]} "
+                f"(sim={link['chunk_sim']}): {link['shared_label']}"
+                for link in links[:max_links]
+            ]
+            return "## Concept Links (shared scientific content)\n" + "\n".join(formatted)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fall back to original computation
     import numpy as np
 
     from scholarforge.evaluate.coverage import load_corpus_chunks

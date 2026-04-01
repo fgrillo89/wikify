@@ -1281,7 +1281,14 @@ def get_frontier_exploration_order(max_papers: int = 15) -> str:
 
 
 def find_corpus_gaps() -> str:
-    """Find unexplored gaps in the corpus using embedding analysis.
+    """Find research gaps: papers sharing citation context but diverging in conclusions.
+
+    Returns coupled-but-divergent paper pairs — papers that cite the same
+    sources but reach different conclusions. Each gap represents an unreconciled
+    divergence in the literature that a review should address.
+
+    Pre-computed at ingest time from the citation graph and conclusion embeddings.
+    Falls back to embedding void detection if no cached gaps are available.
 
     Identifies two types of gaps:
     1. Embedding voids: regions between research clusters where no papers
@@ -1296,6 +1303,30 @@ def find_corpus_gaps() -> str:
     Returns:
         Formatted report of corpus gaps with actionable descriptions.
     """
+    # Try cached divergent gaps first (computed at ingest time)
+    try:
+        from scholarforge.store.precompute import load_divergent_gaps
+
+        gaps = load_divergent_gaps()
+        if gaps:
+            lines = [
+                "## Research Gaps (Coupled-but-Divergent Pairs)",
+                "",
+                "Papers sharing the same citation context but reaching different conclusions.",
+                "",
+            ]
+            for g in gaps[:10]:
+                lines.append(
+                    f"- **{g['paper_a']}** vs **{g['paper_b']}** "
+                    f"(coupling={g['coupling_strength']}, "
+                    f"conclusion distance={g['conclusion_distance']})"
+                )
+                lines.append(f"  {g['rationale']}")
+            return "\n".join(lines)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fall back to embedding void + topical intersection approach
     try:
         import numpy as np
         from sklearn.cluster import KMeans
@@ -1472,6 +1503,28 @@ def find_synthesis_opportunities() -> str:
         Formatted list of synthesis opportunities with paper pairs and
         their semantic relationship.
     """
+    # Try cached concept links first (section-filtered, boilerplate-free)
+    try:
+        from scholarforge.store.precompute import load_concept_links
+
+        links = load_concept_links()
+        if links:
+            lines = [
+                "## Concept Links (Shared Results/Discussion Content)",
+                "",
+                "Paper pairs sharing substantive scientific content.",
+                "",
+            ]
+            for link in links[:15]:
+                lines.append(
+                    f"- **{link['paper_a']}** <-> **{link['paper_b']}** "
+                    f"(sim={link['chunk_sim']}): *{link['shared_label']}*"
+                )
+            return "\n".join(lines)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fall back to vibe-based pair selection
     try:
         import numpy as np
         from sqlmodel import select
