@@ -409,9 +409,7 @@ class ScholarForgeAgent:
 
             # Telemetry: measure context size at start of turn
             ctx_chars = sum(
-                len(m.get("content", "") or "")
-                for m in messages
-                if isinstance(m, dict)
+                len(m.get("content", "") or "") for m in messages if isinstance(m, dict)
             )
             turn_telem = TurnTelemetry(turn=turn, context_chars=ctx_chars)
 

@@ -21,9 +21,13 @@ class SectionContext:
     synthesis_notes: str = ""  # LLM-generated synthesis (for agent strategies)
     token_count: int = 0
 
-    def as_text(self) -> str:
-        """Format section-specific context for the LLM prompt."""
+    def as_text(self, paper_map: dict[str, Paper] | None = None) -> str:
+        """Format section-specific context for the LLM prompt.
 
+        Args:
+            paper_map: If provided, emit [REF:display_name] headers per paper
+                       so the writer can cite sources. Backwards-compatible.
+        """
         parts: list[str] = []
         if self.synthesis_notes:
             parts.append(f"--- Synthesis ---\n{self.synthesis_notes}")
@@ -35,7 +39,11 @@ class SectionContext:
 
         if chunks_by_paper:
             parts.append("--- Source excerpts ---")
-            for _pid, pchunks in chunks_by_paper.items():
+            for pid, pchunks in chunks_by_paper.items():
+                paper = paper_map.get(pid) if paper_map else None
+                if paper:
+                    marker = paper.display_name()
+                    parts.append(f"[REF:{marker}] ({paper.year or '?'})")
                 body = "\n\n".join(c.content for c in pchunks)
                 parts.append(body)
 
@@ -100,15 +108,17 @@ def retrieve_for_query(
 ) -> RetrievedContext:
     """Retrieve relevant papers and chunks for a text query.
 
-    Uses embedding similarity to find papers, then pulls chunks
-    up to the token budget.
+    Uses paper-level embedding similarity to find papers, then
+    semantic chunk search within those papers for precise retrieval.
     """
+    from scholarforge.store.embeddings import query_chunks
+
     model = _get_model()
     collection = _get_collection()
 
     query_embedding = model.encode([query])[0]
 
-    # Query ChromaDB for similar paper summaries
+    # Step 1: Find relevant papers via summary embeddings
     results = collection.query(
         query_embeddings=[query_embedding.tolist()],
         n_results=min(max_papers, collection.count()),
@@ -120,25 +130,34 @@ def retrieve_for_query(
     if not paper_ids:
         return RetrievedContext()
 
-    # Load papers and chunks from DB
+    # Load papers
     with get_session() as session:
         papers = [session.get(Paper, pid) for pid in paper_ids]
         papers = [p for p in papers if p is not None]
 
-        # Get chunks for these papers, ordered by relevance
-        all_chunks: list[Chunk] = []
-        for pid in paper_ids:
-            chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == pid).order_by(Chunk.chunk_index)
-            ).all()
-            all_chunks.extend(chunks)
+    # Step 2: Semantic chunk retrieval within matched papers
+    max_chunks = max(max_tokens // 150, 20)  # ~150 tokens avg per chunk
+    chunk_results = query_chunks(query, n_results=max_chunks, paper_ids=paper_ids)
 
-    # Budget: pack chunks up to token limit
+    if not chunk_results:
+        return RetrievedContext(papers=papers, chunks=[], total_tokens=0)
+
+    # Load chunks by ID, preserving similarity order
+    chunk_ids = [cid for cid, _ in chunk_results]
+    with get_session() as session:
+        db_chunks = session.exec(
+            select(Chunk).where(Chunk.id.in_(chunk_ids))  # type: ignore[union-attr]
+        ).all()
+        chunks_by_id = {c.id: c for c in db_chunks}
+
     selected_chunks: list[Chunk] = []
     total = 0
-    for chunk in all_chunks:
-        if total + chunk.token_count > max_tokens:
+    for cid, _ in chunk_results:
+        chunk = chunks_by_id.get(cid)
+        if not chunk:
             continue
+        if total + chunk.token_count > max_tokens:
+            continue  # skip oversized, try next
         selected_chunks.append(chunk)
         total += chunk.token_count
 

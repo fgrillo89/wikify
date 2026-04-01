@@ -68,6 +68,17 @@ def _run_migrations(engine) -> None:
             )
             conn.commit()
 
+        # Migration 2: Paper.section_summaries column (added 2026-04-02)
+        try:
+            conn.execute(sqlalchemy.text("SELECT section_summaries FROM paper LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE paper ADD COLUMN section_summaries VARCHAR DEFAULT '{}'"
+                )
+            )
+            conn.commit()
+
 
 # ── Module-level instance ─────────────────────────────────────────────────────
 

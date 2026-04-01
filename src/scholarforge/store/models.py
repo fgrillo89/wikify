@@ -46,6 +46,7 @@ class Paper(SQLModel, table=True):
     file_hash: str = ""  # For change detection on re-ingest
     ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     section_tree: str = "{}"  # JSON: nested TOC structure
+    section_summaries: str = "{}"  # JSON: {"section_path": "1-2 sentence summary"}
 
     @property
     def parsed_authors(self) -> list[str]:

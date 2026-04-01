@@ -11,6 +11,21 @@ import json
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _format_section_toc(tree: dict, indent: int = 0) -> str:
+    """Format a section tree dict as an indented table of contents."""
+    lines: list[str] = []
+    for child in tree.get("children", []):
+        title = child.get("title", "")
+        if not title:
+            continue
+        prefix = "  " * indent
+        page = child.get("page")
+        page_str = f" (p.{page})" if page else ""
+        lines.append(f"{prefix}- {title}{page_str}")
+        lines.append(_format_section_toc(child, indent + 1))
+    return "\n".join(line for line in lines if line)
+
+
 def _paper_to_dict(paper) -> dict:
     """Serialize a Paper SQLModel to a plain dict for JSON output."""
     return {
@@ -600,19 +615,45 @@ def read_paper_digest(
 
         topic_list = [t.topic for t in topics]
 
+        # Format section tree as TOC if available
+        toc_text = ""
+        try:
+            tree = json.loads(paper.section_tree) if paper.section_tree else {}
+            toc_text = _format_section_toc(tree)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Use section summaries if available, otherwise fall back to chunks
+        section_summaries_text = ""
+        try:
+            summaries = (
+                json.loads(paper.section_summaries)
+                if hasattr(paper, "section_summaries") and paper.section_summaries
+                else {}
+            )
+            if summaries and summaries != {}:
+                parts = []
+                for path, summary in summaries.items():
+                    parts.append(f"**{path}**: {summary}")
+                section_summaries_text = "\n".join(parts)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
         # Build digest: abstract + intro + conclusion (most informative sections)
         priority_sections = ["abstract", "introduction", "conclusion", "results", "discussion"]
         abstract_text = paper.summary or ""
         body_parts: list[str] = []
         char_count = 0
 
-        for chunk in chunks:
-            section = (chunk.section_path or "").lower()
-            is_priority = any(s in section for s in priority_sections)
-            if is_priority and char_count < max_chars:
-                text = chunk.content[: max_chars - char_count]
-                body_parts.append(f"[{chunk.section_path}] {text}")
-                char_count += len(text)
+        # If we have section summaries, skip raw chunk text (summaries are better)
+        if not section_summaries_text:
+            for chunk in chunks:
+                section = (chunk.section_path or "").lower()
+                is_priority = any(s in section for s in priority_sections)
+                if is_priority and char_count < max_chars:
+                    text = chunk.content[: max_chars - char_count]
+                    body_parts.append(f"[{chunk.section_path}] {text}")
+                    char_count += len(text)
 
         lines = [
             f"# {paper.title}",
@@ -622,13 +663,23 @@ def read_paper_digest(
             f"**Display name**: {paper.display_name()}",
             f"**Topics**: {', '.join(topic_list) if topic_list else 'N/A'}",
             f"**Chunks**: {len(chunks)}",
-            "",
-            "## Abstract",
-            abstract_text,
-            "",
-            "## Key Sections",
-            "\n\n".join(body_parts) if body_parts else "(no priority sections found)",
         ]
+
+        if toc_text:
+            lines.extend(["", "## Structure", toc_text])
+
+        lines.extend(["", "## Abstract", abstract_text])
+
+        if section_summaries_text:
+            lines.extend(["", "## Section Summaries", section_summaries_text])
+        else:
+            lines.extend(
+                [
+                    "",
+                    "## Key Sections",
+                    "\n\n".join(body_parts) if body_parts else "(no priority sections found)",
+                ]
+            )
 
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001
@@ -721,6 +772,80 @@ def deep_read(
         )
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": str(exc), "paper": None, "full_text": "", "chunks": []})
+
+
+def read_section(
+    pattern: str,
+    section: str,
+    reason: str = "",
+) -> str:
+    """Read the full text of a specific section of a paper.
+
+    Targeted retrieval: returns all chunks matching a section path.
+    Use after read_paper_digest to drill into a specific section.
+    Much cheaper than deep_read (~5KB vs ~70KB).
+
+    Args:
+        pattern: Paper title/author substring.
+        section: Section path or keyword (e.g., "methods", "3.2", "Results").
+        reason: Why you are reading this section (logged for the reading trace).
+
+    Returns:
+        Formatted markdown with the section text, or error message.
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Chunk, Paper
+
+        lower = pattern.lower()
+        with get_session() as session:
+            all_papers = session.exec(select(Paper)).all()
+            matched = [
+                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
+            ]
+            if not matched:
+                return f"No paper found matching: {pattern!r}"
+
+            paper = matched[0]
+            chunks = session.exec(
+                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
+            ).all()
+
+        # Match section by substring (case-insensitive)
+        section_lower = section.lower()
+        matching_chunks = [c for c in chunks if section_lower in (c.section_path or "").lower()]
+
+        if not matching_chunks:
+            # List available sections to help the user
+            available = sorted({c.section_path for c in chunks if c.section_path})
+            return (
+                f"No section matching '{section}' in {paper.display_name()}.\n"
+                f"Available sections: {', '.join(available)}"
+            )
+
+        # Log this read
+        if reason:
+            from scholarforge.agent.reading_log import get_reading_log
+
+            get_reading_log().log(
+                paper=paper.display_name(),
+                tool="read_section",
+                reason=reason,
+                depth="section",
+            )
+
+        body = "\n\n".join(f"[{c.section_path}]\n{c.content}" for c in matching_chunks)
+        total_tokens = sum(c.token_count for c in matching_chunks)
+
+        return (
+            f"# {paper.display_name()} -- {matching_chunks[0].section_path}\n"
+            f"**Chunks**: {len(matching_chunks)} | **Tokens**: {total_tokens}\n\n"
+            f"{body}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Error reading section: {exc}"
 
 
 def get_sections(

@@ -161,14 +161,16 @@ def _persist_entry(entry: ReadingEntry) -> None:
     _session.log_file.parent.mkdir(parents=True, exist_ok=True)
     with open(_session.log_file, "a", encoding="utf-8") as f:
         f.write(
-            json.dumps({
-                "paper": entry.paper,
-                "tool": entry.tool,
-                "reason": entry.reason,
-                "contribution": entry.contribution,
-                "timestamp": entry.timestamp,
-                "depth": entry.depth,
-            })
+            json.dumps(
+                {
+                    "paper": entry.paper,
+                    "tool": entry.tool,
+                    "reason": entry.reason,
+                    "contribution": entry.contribution,
+                    "timestamp": entry.timestamp,
+                    "depth": entry.depth,
+                }
+            )
             + "\n"
         )
 

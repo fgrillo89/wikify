@@ -63,9 +63,7 @@ class PdfExporter:
         """Convert Markdown to HTML, promote citations and fix subscripts."""
         # Convert Unicode subscripts to HTML <sub> before markdown processing
         # (xhtml2pdf can't render Unicode subscript chars like ₂ ₃)
-        unicode_subs = str.maketrans(
-            "₀₁₂₃₄₅₆₇₈₉", "0123456789"
-        )
+        unicode_subs = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
         # Find sequences of Unicode subscript digits and wrap in <sub>
         md_text = re.sub(
             r"[₀₁₂₃₄₅₆₇₈₉]+",

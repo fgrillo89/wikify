@@ -1,7 +1,7 @@
-"""Query-driven retrieval strategy — per-section ChromaDB queries.
+"""Query-driven retrieval strategy — per-section semantic chunk queries.
 
 Uses each section's heading and description as a query to retrieve the
-most relevant papers and chunks for that specific section.  Produces
+most semantically relevant chunks for that specific section.  Produces
 different context per section rather than a single global context.
 No LLM calls.
 
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 
 class QueryDrivenStrategy(RetrievalStrategy):
-    """Per-section ChromaDB retrieval using section heading + description."""
+    """Per-section semantic chunk retrieval using section heading + description."""
 
     name = "query-driven"
     expensive = False
-    description = "Per-section retrieval using section descriptions as queries."
+    description = "Per-section retrieval using section descriptions as semantic chunk queries."
 
     def retrieve(
         self,
@@ -36,13 +36,12 @@ class QueryDrivenStrategy(RetrievalStrategy):
         from scholarforge.graph.metrics import compute_metrics
         from scholarforge.retrieve.context import RetrievedContext, SectionContext
         from scholarforge.store.db import get_session
-        from scholarforge.store.embeddings import _get_collection, _get_model
+        from scholarforge.store.embeddings import _get_collection, _get_model, query_chunks
         from scholarforge.store.models import Chunk, Paper
 
         metrics = graph_metrics or compute_metrics()
 
         if not plan:
-            # No plan yet — fall back to flat
             from scholarforge.retrieve.strategies.flat import FlatStrategy
 
             return FlatStrategy(self.config).retrieve(graph_metrics=metrics)
@@ -58,41 +57,57 @@ class QueryDrivenStrategy(RetrievalStrategy):
         seen_chunk_ids: set[str] = set()
         total_tokens = 0
 
-        # Flatten sections
         sections = plan.flat_sections()
         per_section_budget = self.config.token_budget // max(len(sections), 1)
 
+        # Step 1: Find relevant papers via paper-level summary embeddings
+        # (same as before — paper-level search is the right first filter)
         for section in sections:
             query = f"{section.heading}: {section.description}"
             query_embedding = model.encode([query])[0]
 
-            results = collection.query(
+            paper_results = collection.query(
                 query_embeddings=[query_embedding.tolist()],
                 n_results=min(10, collection.count()),
                 include=["distances"],
             )
+            paper_ids = paper_results["ids"][0] if paper_results["ids"] else []
 
-            paper_ids = results["ids"][0] if results["ids"] else []
+            if not paper_ids:
+                section_contexts[section.heading] = SectionContext(
+                    section_heading=section.heading,
+                )
+                continue
+
+            # Step 2: Semantic chunk retrieval within matched papers
+            # Estimate how many chunks we can fit in the budget (~150 tokens avg)
+            max_chunks = max(per_section_budget // 150, 5)
+            chunk_results = query_chunks(query, n_results=max_chunks, paper_ids=paper_ids)
+
             sec_chunks: list[Chunk] = []
             sec_tokens = 0
 
-            with get_session() as session:
-                for i, pid in enumerate(paper_ids):
-                    paper_chunks = session.exec(
-                        select(Chunk).where(Chunk.paper_id == pid).order_by(Chunk.chunk_index)
+            if chunk_results:
+                chunk_ids = [cid for cid, _ in chunk_results]
+                with get_session() as session:
+                    db_chunks = session.exec(
+                        select(Chunk).where(Chunk.id.in_(chunk_ids))  # type: ignore[union-attr]
                     ).all()
+                    chunks_by_id = {c.id: c for c in db_chunks}
 
-                    # Top match gets more chunks
-                    limit = 5 if i == 0 else self.config.shallow_chunk_count
-                    for c in paper_chunks[:limit]:
-                        if sec_tokens + c.token_count > per_section_budget:
-                            break
-                        sec_chunks.append(c)
-                        sec_tokens += c.token_count
-                        if c.id not in seen_chunk_ids:
-                            all_chunks.append(c)
-                            seen_chunk_ids.add(c.id)
-                            total_tokens += c.token_count
+                # Maintain similarity order from query_chunks
+                for cid, _ in chunk_results:
+                    c = chunks_by_id.get(cid)
+                    if not c:
+                        continue
+                    if sec_tokens + c.token_count > per_section_budget:
+                        continue  # skip oversized, try next
+                    sec_chunks.append(c)
+                    sec_tokens += c.token_count
+                    if c.id not in seen_chunk_ids:
+                        all_chunks.append(c)
+                        seen_chunk_ids.add(c.id)
+                        total_tokens += c.token_count
 
             section_contexts[section.heading] = SectionContext(
                 section_heading=section.heading,

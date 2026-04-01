@@ -29,8 +29,19 @@ def chunk_sections(md_text: str, section_tree: dict, paper_id: str) -> list[Chun
     - Fallback: if no conclusion chunk is produced, the last non-references/
       non-acknowledgments section is re-typed as "conclusion" (papers without
       explicit headings still have concluding paragraphs).
+
+    When the section_tree was built from PDF TOC (has page-mapped entries),
+    "root" sections get reassigned to the nearest TOC section title.
     """
     sections = _split_into_sections(md_text)
+
+    # If section_tree has TOC-sourced entries, build a fallback map
+    # to rescue chunks stuck in "root" (no heading detected by pymupdf4llm).
+    toc_titles = _extract_toc_titles(section_tree) if section_tree.get("source") == "toc" else []
+
+    if toc_titles and any(sp == "root" for sp, _ in sections):
+        sections = _reassign_root_sections(sections, toc_titles)
+
     chunks = []
 
     for section_path, section_text in sections:
@@ -159,6 +170,68 @@ def migrate_section_types() -> dict[str, int]:
         "reclassified": reclassified,
         "conclusion_fallbacks": conclusion_fallbacks,
     }
+
+
+def _extract_toc_titles(tree: dict) -> list[str]:
+    """Extract section titles from a TOC-sourced section tree (DFS order)."""
+    titles: list[str] = []
+    for child in tree.get("children", []):
+        if child.get("title"):
+            titles.append(child["title"])
+        titles.extend(_extract_toc_titles(child))
+    return titles
+
+
+def _reassign_root_sections(
+    sections: list[tuple[str, str]],
+    toc_titles: list[str],
+) -> list[tuple[str, str]]:
+    """Reassign 'root' sections using TOC titles matched against content.
+
+    When pymupdf4llm fails to detect headings but the PDF has a TOC,
+    we scan the root text for TOC title strings and split accordingly.
+    """
+    result: list[tuple[str, str]] = []
+    # Lowercase TOC titles for matching, but keep originals for section paths
+    toc_lower = [(t, t.lower()) for t in toc_titles]
+
+    for section_path, text in sections:
+        if section_path != "root":
+            result.append((section_path, text))
+            continue
+
+        # Try to find TOC titles within the root text and split
+        lines = text.split("\n")
+        current_path = "root"
+        current_lines: list[str] = []
+
+        for line in lines:
+            line_lower = line.strip().lower()
+            matched_title = None
+            for orig, lower in toc_lower:
+                # Match if the line is (approximately) just the title
+                if line_lower and lower and (line_lower == lower or line_lower.startswith(lower)):
+                    matched_title = orig
+                    break
+
+            if matched_title:
+                # Flush current section
+                if current_lines:
+                    joined = "\n".join(current_lines).strip()
+                    if joined:
+                        result.append((current_path, joined))
+                current_path = matched_title
+                current_lines = []
+            else:
+                current_lines.append(line)
+
+        # Flush final section
+        if current_lines:
+            joined = "\n".join(current_lines).strip()
+            if joined:
+                result.append((current_path, joined))
+
+    return result
 
 
 def _split_into_sections(md_text: str) -> list[tuple[str, str]]:

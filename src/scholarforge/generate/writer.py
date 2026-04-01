@@ -136,6 +136,7 @@ def write_paper(
 
     persona = build_persona(context=context, journal_profile=journal_profile)
     lit_context = context.as_text()
+    paper_map = {p.id: p for p in context.papers}
     sections_written: list[str] = []
     source_paper_names = [p.display_name() for p in context.papers]
 
@@ -161,6 +162,7 @@ def write_paper(
                 persona=persona,
                 journal_profile=journal_profile,
                 section_context=sec_ctx,
+                paper_map=paper_map,
             )
 
             # Plan verification loop (P0): check compliance, retry once if issues
@@ -182,6 +184,7 @@ def write_paper(
                     journal_profile=journal_profile,
                     section_context=sec_ctx,
                     plan_feedback=feedback,
+                    paper_map=paper_map,
                 )
 
             sections_written.append(f"{prefix} {section.heading}\n\n{section_md}")
@@ -234,6 +237,7 @@ def _write_section(
     journal_profile: JournalProfile | None = None,
     section_context: SectionContext | None = None,
     plan_feedback: str = "",
+    paper_map: dict[str, Paper] | None = None,
 ) -> str:
     """Generate a single section.
 
@@ -289,7 +293,7 @@ def _write_section(
 
     # Prefer per-section context if available
     if section_context and (section_context.chunks or section_context.synthesis_notes):
-        effective_context = section_context.as_text()[:8000]
+        effective_context = section_context.as_text(paper_map=paper_map)[:8000]
     else:
         effective_context = lit_context[:8000]
 

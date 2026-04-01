@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 _COLLECTION_NAME = "document_summaries"
 _CHUNK_COLLECTION_NAME = "chunk_embeddings"
+_SECTION_COLLECTION_NAME = "section_summaries"
 
 
 class EmbeddingStore:
@@ -88,6 +89,21 @@ class EmbeddingStore:
                 metadata={"hnsw:space": "cosine"},
             )
         return self._collection
+
+    @property
+    def section_collection(self) -> Collection:
+        """ChromaDB collection for section-level summary embeddings."""
+        if not hasattr(self, "_section_collection") or self._section_collection is None:
+            from pathlib import Path
+
+            Path(self._chromadb_dir).mkdir(parents=True, exist_ok=True)
+            if self._client is None:
+                self._client = chromadb.PersistentClient(path=self._chromadb_dir)
+            self._section_collection = self._client.get_or_create_collection(
+                name=_SECTION_COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine"},
+            )
+        return self._section_collection
 
     @property
     def chunk_collection(self) -> Collection:
@@ -353,6 +369,122 @@ def get_science_vibe_vectors() -> dict[str, list[float]]:
                 vibes[pid] = full_vibes[pid]
 
     return vibes
+
+
+def query_chunks(
+    query_text: str,
+    n_results: int = 20,
+    paper_ids: list[str] | None = None,
+) -> list[tuple[str, float]]:
+    """Semantic chunk search via chunk_embeddings collection.
+
+    Args:
+        query_text: Natural language query to match against chunks.
+        n_results: Max number of results.
+        paper_ids: If provided, restrict to chunks from these papers.
+
+    Returns:
+        List of (chunk_id, cosine_distance) sorted by similarity.
+    """
+    collection = _store.chunk_collection
+    if collection.count() == 0:
+        return []
+
+    query_embedding = _store.model.encode([query_text])[0]
+
+    where_filter = None
+    if paper_ids:
+        if len(paper_ids) == 1:
+            where_filter = {"paper_id": paper_ids[0]}
+        else:
+            where_filter = {"paper_id": {"$in": paper_ids}}
+
+    raw = collection.query(
+        query_embeddings=[query_embedding.tolist()],
+        n_results=min(n_results, collection.count()),
+        include=["distances"],
+        where=where_filter,
+    )
+
+    result_ids: list[str] = raw["ids"][0] if raw["ids"] else []
+    distances: list[float] = raw["distances"][0] if raw["distances"] else []
+    return list(zip(result_ids, distances))
+
+
+def embed_section_summaries(paper_id: str, summaries: dict[str, str]) -> int:
+    """Embed section summaries into the section_summaries ChromaDB collection.
+
+    Args:
+        paper_id: Paper ID these sections belong to.
+        summaries: Dict mapping section_path -> summary text.
+
+    Returns:
+        Number of sections embedded.
+    """
+    if not summaries:
+        return 0
+
+    ids = [f"{paper_id}::{path}" for path in summaries]
+    texts = list(summaries.values())
+    metadatas = [{"paper_id": paper_id, "section_path": path} for path in summaries]
+
+    embeddings = _store.model.encode(texts, batch_size=64, show_progress_bar=False)
+
+    _store.section_collection.upsert(
+        ids=ids,
+        embeddings=embeddings,  # type: ignore[arg-type]
+        metadatas=metadatas,
+        documents=texts,
+    )
+    return len(ids)
+
+
+def query_sections(
+    query_text: str,
+    n_results: int = 10,
+    paper_ids: list[str] | None = None,
+) -> list[tuple[str, str, float]]:
+    """Query section summaries by semantic similarity.
+
+    Args:
+        query_text: Natural language query.
+        n_results: Max results.
+        paper_ids: If provided, restrict to sections from these papers.
+
+    Returns:
+        List of (paper_id, section_path, cosine_distance) sorted by similarity.
+    """
+    collection = _store.section_collection
+    if collection.count() == 0:
+        return []
+
+    query_embedding = _store.model.encode([query_text])[0]
+
+    where_filter = None
+    if paper_ids:
+        if len(paper_ids) == 1:
+            where_filter = {"paper_id": paper_ids[0]}
+        else:
+            where_filter = {"paper_id": {"$in": paper_ids}}
+
+    raw = collection.query(
+        query_embeddings=[query_embedding.tolist()],
+        n_results=min(n_results, collection.count()),
+        include=["distances", "metadatas"],
+        where=where_filter,
+    )
+
+    result_ids: list[str] = raw["ids"][0] if raw["ids"] else []
+    distances: list[float] = raw["distances"][0] if raw["distances"] else []
+    metadatas: list[dict] = raw["metadatas"][0] if raw["metadatas"] else []
+
+    results = []
+    for _rid, dist, meta in zip(result_ids, distances, metadatas):
+        pid = meta.get("paper_id", "")
+        section_path = meta.get("section_path", "")
+        results.append((pid, section_path, dist))
+
+    return results
 
 
 def query_similar(paper_id: str, n_results: int = 5) -> list[tuple[str, float]]:

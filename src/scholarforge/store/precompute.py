@@ -735,5 +735,34 @@ def precompute_all() -> None:
     except Exception as exc:
         logger.warning("Concept link computation failed: %s", exc)
 
+    # 9. Section summaries (LLM via Haiku, ~$0.002/paper)
+    try:
+        from scholarforge.extract.section_summarizer import summarize_sections_batch
+        from scholarforge.store.embeddings import embed_section_summaries
+
+        n_summarized = summarize_sections_batch(force=False)
+        if n_summarized > 0:
+            logger.info("Generated section summaries for %d papers", n_summarized)
+
+        # Embed all section summaries
+        from scholarforge.store.models import Paper as PaperModel
+
+        with get_session() as session:
+            all_papers = session.exec(select(PaperModel)).all()
+
+        n_embedded = 0
+        for p in all_papers:
+            if p.section_summaries and p.section_summaries != "{}":
+                try:
+                    sums = json.loads(p.section_summaries)
+                    if sums:
+                        n_embedded += embed_section_summaries(p.id, sums)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        if n_embedded:
+            logger.info("Embedded %d section summaries", n_embedded)
+    except Exception as exc:
+        logger.warning("Section summary computation failed: %s", exc)
+
     elapsed = time.time() - start
     logger.info("Precompute_all completed in %.1fs", elapsed)

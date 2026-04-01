@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from scholarforge.retrieve.strategies.base import RetrievalStrategy, StrategyConfig
 from scholarforge.retrieve.strategies.flat import FlatStrategy
+from scholarforge.retrieve.strategies.hierarchical import HierarchicalStrategy
 from scholarforge.retrieve.strategies.hub_spoke import HubAndSpokeStrategy
 from scholarforge.retrieve.strategies.query_driven import QueryDrivenStrategy
 from scholarforge.retrieve.strategies.snowball import SnowballStrategy
@@ -19,6 +20,7 @@ STRATEGY_REGISTRY: dict[str, type[RetrievalStrategy]] = {
     "topic-cluster": TopicClusteredStrategy,
     "query-driven": QueryDrivenStrategy,
     "snowball": SnowballStrategy,
+    "hierarchical": HierarchicalStrategy,
 }
 
 DEFAULT_STRATEGY = "flat"
@@ -50,6 +52,7 @@ __all__ = [
     "DEFAULT_STRATEGY",
     "STRATEGY_REGISTRY",
     "FlatStrategy",
+    "HierarchicalStrategy",
     "HubAndSpokeStrategy",
     "QueryDrivenStrategy",
     "RetrievalStrategy",

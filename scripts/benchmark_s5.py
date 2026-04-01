@@ -36,7 +36,7 @@ def main() -> None:
     # ── Step 0: Imports ──────────────────────────────────────────────────────
     from scholarforge.agent.core import ScholarForgeAgent
     from scholarforge.agent.defaults import get_default_hooks
-    from scholarforge.agent.reading_log import get_reading_log, reset_reading_log
+    from scholarforge.agent.reading_log import reset_reading_log
     from scholarforge.agent.tools import (
         deep_read,
         find_corpus_gaps,
@@ -50,8 +50,8 @@ def main() -> None:
         search_papers,
     )
     from scholarforge.agent.workflows import export_paper
-    from scholarforge.generate.persona import build_persona
     from scholarforge.export.journal_profile import load_journal_profile
+    from scholarforge.generate.persona import build_persona
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -107,11 +107,13 @@ def main() -> None:
             elif "(serendipity)" in line:
                 role = "frontier"
 
-            papers_to_read.append({
-                "name": paper_name,
-                "depth": depth,
-                "role": role,
-            })
+            papers_to_read.append(
+                {
+                    "name": paper_name,
+                    "depth": depth,
+                    "role": role,
+                }
+            )
 
     print(f"  Papers to read: {len(papers_to_read)}")
     for p in papers_to_read:
@@ -127,9 +129,9 @@ def main() -> None:
                 seeds.append(p)
 
     for i, seed in enumerate(seeds):
-        print(f"  Seed {i+1}/3: {seed['name'][:60]}...")
+        print(f"  Seed {i + 1}/3: {seed['name'][:60]}...")
         t_read = time.time()
-        result = deep_read(seed["name"], reason=f"Hub paper for S5 benchmark (seed {i+1})")
+        result = deep_read(seed["name"], reason=f"Hub paper for S5 benchmark (seed {i + 1})")
         print(f"    Read in {time.time() - t_read:.1f}s, {len(result)} chars")
 
         # Parse the result to extract data for summary
@@ -178,7 +180,7 @@ def main() -> None:
     remaining = [p for p in papers_to_read if p["name"] not in already_read]
 
     for i, paper in enumerate(remaining):
-        print(f"  Digest {i+1}/{len(remaining)}: {paper['name'][:60]}...")
+        print(f"  Digest {i + 1}/{len(remaining)}: {paper['name'][:60]}...")
         t_read = time.time()
         result = read_paper_digest(
             paper["name"],
@@ -212,9 +214,9 @@ def main() -> None:
                     gap_queries.append(clean)
 
     for i, query in enumerate(gap_queries[:2]):
-        print(f"  Search {i+1}/2: {query[:60]}...")
+        print(f"  Search {i + 1}/2: {query[:60]}...")
         t_search = time.time()
-        result = search_papers(query, top_k=8, reason=f"Gap-targeted search {i+1} for S5")
+        result = search_papers(query, top_k=8, reason=f"Gap-targeted search {i + 1} for S5")
         print(f"    Found in {time.time() - t_search:.1f}s, {len(result)} chars")
 
     # ── Step 8: Get session context ──────────────────────────────────────────
@@ -237,7 +239,9 @@ def main() -> None:
     )
 
     # Craft the S5-specific writing prompt
-    s5_system = persona + """
+    s5_system = (
+        persona
+        + """
 
 ## CRITICAL INSTRUCTION: Gap-Structured Review (Strategy S5)
 
@@ -276,6 +280,7 @@ Example: [REF:Smith 2020 - Title of Paper]
 - No meta-commentary about methodology
 - No "In recent years" as opener
 """
+    )
 
     # Build the user prompt with all exploration data
     user_prompt = f"""Write a review paper on ALD for memristors targeting Advanced Functional Materials.
@@ -312,6 +317,8 @@ Start with the title, then write each section in order. Use [REF:DisplayName] ci
     # in case it needs to look up more details
     from scholarforge.agent.tools import (
         read_paper_digest as rpd,
+    )
+    from scholarforge.agent.tools import (
         search_papers as sp,
     )
 
@@ -363,7 +370,7 @@ Start with the title, then write each section in order. Use [REF:DisplayName] ci
     # ── Summary ──────────────────────────────────────────────────────────────
     total_time = time.time() - start
     print("\n" + "=" * 60)
-    print(f"TOTAL TIME: {total_time:.1f}s ({total_time/60:.1f} min)")
+    print(f"TOTAL TIME: {total_time:.1f}s ({total_time / 60:.1f} min)")
     print(f"  Exploration: {explore_time:.1f}s")
     print(f"  Writing: {write_time:.1f}s")
     print(f"  Words: {word_count}")

@@ -112,10 +112,12 @@ def parse_pdf(path: Path) -> ParsedPaper:
 
     # Extract metadata
     metadata = extract_metadata(doc, md_text, path.name)
-    doc.close()
 
-    # Build section tree
-    section_tree = _parse_section_tree(md_text)
+    # Build section tree: prefer PDF TOC bookmarks over markdown headings
+    md_tree = _parse_section_tree(md_text)
+    section_tree = _merge_toc_into_tree(doc, md_tree)
+
+    doc.close()
 
     # Create paper record
     paper = Paper(
@@ -204,6 +206,58 @@ def ingest_pdf(path: Path, return_id: bool = False) -> int | str | None:
         f"({len(parsed.chunks)} chunks, {len(parsed.figures)} figures)"
     )
     return parsed.paper.id if return_id else 1
+
+
+def _build_tree_from_toc(toc: list[list]) -> dict:
+    """Build a nested section tree from fitz TOC entries.
+
+    Args:
+        toc: List of [level, title, page_number] from doc.get_toc().
+
+    Returns:
+        Nested dict with same format as _parse_section_tree output,
+        plus "page" on each node and "source": "toc" on root.
+    """
+    tree: dict = {"title": "", "children": [], "source": "toc"}
+    stack = [tree]
+
+    for level, title, page in toc:
+        title = title.strip()
+        if not title:
+            continue
+        node = {"title": title, "level": level, "page": page, "children": []}
+
+        while len(stack) > 1 and stack[-1].get("level", 0) >= level:
+            stack.pop()
+
+        stack[-1]["children"].append(node)
+        stack.append(node)
+
+    return tree
+
+
+def _merge_toc_into_tree(doc: fitz.Document, md_tree: dict) -> dict:
+    """Merge PDF TOC bookmarks with markdown-detected headings.
+
+    PDF TOC (from doc.get_toc()) is preferred when available because
+    it comes from the document's structural metadata. Falls back to
+    md_tree when TOC is empty or too short.
+
+    Returns:
+        Section tree dict with "source" key ("toc" or "markdown").
+    """
+    try:
+        toc = doc.get_toc()
+    except Exception:  # noqa: BLE001
+        toc = []
+
+    if len(toc) >= 3:
+        tree = _build_tree_from_toc(toc)
+        return tree
+
+    # Mark markdown-sourced tree
+    md_tree["source"] = "markdown"
+    return md_tree
 
 
 def _parse_section_tree(md_text: str) -> dict:

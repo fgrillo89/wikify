@@ -34,14 +34,21 @@ def test_get_strategy_unknown_raises_value_error():
         get_strategy("unknown")
 
 
-def test_list_strategies_returns_all_five():
+def test_list_strategies_returns_all():
     strategies = list_strategies()
-    assert len(strategies) == 5
+    assert len(strategies) == 6
 
 
 def test_list_strategies_contains_expected_names():
     names = {s["name"] for s in list_strategies()}
-    assert names == {"flat", "hub-spoke", "topic-cluster", "query-driven", "snowball"}
+    assert names == {
+        "flat",
+        "hub-spoke",
+        "topic-cluster",
+        "query-driven",
+        "snowball",
+        "hierarchical",
+    }
 
 
 # ── StrategyConfig defaults ───────────────────────────────────────────────────

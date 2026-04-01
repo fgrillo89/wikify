@@ -292,14 +292,10 @@ def scripted_generate(
 
 @app.command("fast-generate")
 def fast_generate_cmd(
-    prompt: str = typer.Argument(
-        "ALD memristors for neuromorphic computing", help="Review topic"
-    ),
+    prompt: str = typer.Argument("ALD memristors for neuromorphic computing", help="Review topic"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
     journal: str = typer.Option("", "--journal", "-j", help="Target journal"),
-    output: str = typer.Option(
-        "data/output/review_fast.md", "--output", "-o"
-    ),
+    output: str = typer.Option("data/output/review_fast.md", "--output", "-o"),
     max_papers: int = typer.Option(15, "--max-papers"),
     word_target: int = typer.Option(4000, "--words", "-w"),
 ):
