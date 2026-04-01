@@ -26,6 +26,7 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 | `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
 | `record_paper_summary(paper_name, key_findings, ...)` | Distill findings after reading — builds working memory | Free |
 | `get_session_context()` | Recall all paper summaries (replaces re-reading) | Free |
+| `lookup_citation(pattern, max_results=5)` | Get display_name + BibTeX for citing (no abstract, very cheap) | **Free** |
 | `get_reading_log_text()` | View the current reading trace | Free |
 | `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
 
