@@ -2,7 +2,14 @@
 
 Findings from 20+ strategy variants on a 206-paper ALD memristor corpus.
 
-## Best on Metrics: One-Shot with Pre-Computed Context (content quality TBD)
+## Best on Metrics (NOT best prose): One-Shot with Pre-Computed Context
+
+**WARNING**: High metric scores do not guarantee good writing. The one-shot
+approach scores well on bridge/coverage/gaps but produces soulless paper-by-paper
+catalogs. The multi-turn agent loop (S5 gap-structured) writes substantially
+better prose because the model builds understanding incrementally rather than
+regurgitating a data dump. Metrics need a "prose quality" dimension that captures
+cohesion, narrative flow, and argumentative depth — currently missing.
 
 **Composite 0.615, 58 refs, 15% bridge, 6 min, 58K tokens.**
 

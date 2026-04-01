@@ -8,7 +8,7 @@ Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 
 | Function | Purpose | Cost |
 |----------|---------|------|
-| `scan_all_abstracts()` | Read ALL paper abstracts — fast overview of entire corpus (~400KB) | **Medium** |
+| `scan_all_abstracts(max_papers=50)` | Paper abstracts ranked by citation authority. Choose how many to read based on need. | **Medium** |
 | `get_corpus_summary()` | Corpus overview: paper count, top authors, hub papers, topics | Low |
 | `get_graph_metrics()` | PageRank, centrality — which papers are most connected/important | Low |
 | `list_papers(limit=N)` | Browse papers with metadata | Low |
@@ -128,8 +128,8 @@ print(find_synthesis_opportunities())
 
    A paragraph that contains only evidence sentences (single-paper summaries) must be revised: break it up and add at least one synthesis sentence connecting its findings to another paper.
 
-10. **Name gaps explicitly**: "No studies have combined X with Y."
-11. **State contradictions**: if papers disagree, say so and analyze why.
+10. **Name gaps explicitly** in flowing prose: "Despite extensive work on X, no study has combined it with Y." NEVER use scaffolding labels (Known/Missing/Question/Contradictions) as headings or bold markers.
+11. **State contradictions** in context: "Smith et al. report X, while Zhao et al. find the opposite under similar conditions, suggesting the mechanism depends on Z."
 12. **Bridge mainstream to frontier**: each section connects seed findings with frontier observations.
 13. **Future directions**: 5+ specific research questions. Propose experiments.
 
@@ -148,8 +148,9 @@ After exploring, write the paper as markdown. Follow these rules:
 - Be precise: cite specific numbers, measurements, and results from the papers you read
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators.** Never write " -- " or " - " to insert an aside. Use commas or parentheses instead. This is a hard ban.
-- **Readable abstracts**: introduce one concept per sentence, define jargon before using it, start with a short (<15 word) opening sentence. **No citations in abstracts** unless referencing truly foundational work (e.g., Watson and Crick for DNA)
-- **NEVER mention your exploration method.** No "random walk," "conceptual links," "traversal," "this exploration surfaced." Present findings as observations: "Several directions appear understudied" not "The random walk surfaced understudied directions." The reader must never suspect the text was generated.
+- **Abstracts**: 150-200 words. First sentence <15 words. One concept per sentence. No citations. No source counts ("we draw on N papers"). Structure: problem (1-2 sentences), what this review covers (1-2 sentences), key findings (2-3 sentences), open questions (1 sentence).
+- **NEVER mention your exploration method or source counts.** No "random walk," "conceptual links," "we draw on 50 sources," "spanning N papers." Never count your sources in the text. Present findings as observations. The reader must never suspect the text was generated.
+- **No structural scaffolding visible to reader.** Never write "Known:", "Missing:", "Open Question:", "Contradictions:" as labels. Weave gap-structured logic into flowing prose.
 - **Include 3-5 figure placeholders with detailed captions.** Use the format:
   ```
   ![Figure N: short caption](figure_N_placeholder.png)

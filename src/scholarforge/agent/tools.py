@@ -439,7 +439,7 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
         total = len(all_papers)
         subset = all_papers[:max_papers] if max_papers else all_papers
         lines = [
-            f"## Top {len(subset)} Papers by Citation PageRank ({total} total in corpus)",
+            f"## Paper Abstracts (ranked by citation authority, {total} in corpus)",
             "",
         ]
         for p in subset:
