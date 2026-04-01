@@ -97,6 +97,19 @@ class ToolCallRecord:
 
 
 @dataclass
+class TurnTelemetry:
+    """Per-turn timing and token data for profiling."""
+
+    turn: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
+    tool_names: list[str] = field(default_factory=list)
+    tool_durations_ms: list[float] = field(default_factory=list)
+    context_chars: int = 0  # total message chars at start of turn
+
+
+@dataclass
 class AgentResult:
     """Result of an agent run."""
 
@@ -107,6 +120,7 @@ class AgentResult:
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
     total_cache_write_tokens: int = 0
+    turn_telemetry: list[TurnTelemetry] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
 
 
@@ -380,6 +394,7 @@ class ScholarForgeAgent:
         messages.append({"role": "user", "content": prompt})
 
         all_tool_calls: list[ToolCallRecord] = []
+        all_telemetry: list[TurnTelemetry] = []
         total_in = 0
         total_out = 0
         total_cache_read = 0
@@ -389,7 +404,16 @@ class ScholarForgeAgent:
             # Compact large tool results from prior turns to save tokens
             if turn > 0 and settings.enable_tool_compaction:
                 _compact_tool_results(messages, settings.tool_compaction_threshold)
+
                 _session_level_compaction(messages)
+
+            # Telemetry: measure context size at start of turn
+            ctx_chars = sum(
+                len(m.get("content", "") or "")
+                for m in messages
+                if isinstance(m, dict)
+            )
+            turn_telem = TurnTelemetry(turn=turn, context_chars=ctx_chars)
 
             event = LLMEvent(
                 messages=messages,
@@ -426,6 +450,10 @@ class ScholarForgeAgent:
             total_cache_read += cache_read
             total_cache_write += cache_write
 
+            turn_telem.input_tokens = input_tokens
+            turn_telem.output_tokens = output_tokens
+            turn_telem.latency_ms = latency
+
             event.raw_response = message.content or ""
             event.input_tokens = input_tokens
             event.output_tokens = output_tokens
@@ -446,6 +474,7 @@ class ScholarForgeAgent:
 
             # No tool calls — agent is done
             if not message.tool_calls:
+                all_telemetry.append(turn_telem)
                 return AgentResult(
                     content=message.content or "",
                     tool_calls=all_tool_calls,
@@ -454,6 +483,7 @@ class ScholarForgeAgent:
                     total_output_tokens=total_out,
                     total_cache_read_tokens=total_cache_read,
                     total_cache_write_tokens=total_cache_write,
+                    turn_telemetry=all_telemetry,
                     messages=messages,
                 )
 
@@ -485,6 +515,9 @@ class ScholarForgeAgent:
                     )
                 )
 
+                turn_telem.tool_names.append(tc.function.name)
+                turn_telem.tool_durations_ms.append(duration)
+
                 messages.append(
                     {
                         "role": "tool",
@@ -492,6 +525,8 @@ class ScholarForgeAgent:
                         "content": tool_result,
                     }
                 )
+
+            all_telemetry.append(turn_telem)
 
         # Max turns exhausted — return last available content
         last_content = ""
@@ -510,6 +545,7 @@ class ScholarForgeAgent:
             total_output_tokens=total_out,
             total_cache_read_tokens=total_cache_read,
             total_cache_write_tokens=total_cache_write,
+            turn_telemetry=all_telemetry,
             messages=messages,
         )
 
