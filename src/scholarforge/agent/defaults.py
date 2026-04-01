@@ -15,6 +15,7 @@ def get_default_tools() -> list[Callable]:
     from scholarforge.agent.tools import (
         deep_read,
         evaluate_coverage,
+        find_citation_for,
         find_corpus_gaps,
         find_jump_target,
         find_synthesis_opportunities,
@@ -30,6 +31,7 @@ def get_default_tools() -> list[Callable]:
         list_papers,
         list_topics,
         lookup_citation,
+        query_concept_graph,
         read_paper_digest,
         record_paper_summary,
         save_reading_log,
@@ -46,6 +48,8 @@ def get_default_tools() -> list[Callable]:
         deep_read,
         record_paper_summary,
         get_session_context,
+        query_concept_graph,
+        find_citation_for,
         get_paper,
         lookup_citation,
         get_graph_metrics,
@@ -147,12 +151,20 @@ def get_explorer_tools() -> list[Callable]:
 def get_writer_tools() -> list[Callable]:
     """Limited tools for the writer agent (rarely needed, notes should suffice)."""
     from scholarforge.agent.tools import (
+        find_citation_for,
         lookup_citation,
+        query_concept_graph,
         read_paper_digest,
         search_papers,
     )
 
-    return [read_paper_digest, search_papers, lookup_citation]
+    return [
+        find_citation_for,
+        query_concept_graph,
+        lookup_citation,
+        read_paper_digest,
+        search_papers,
+    ]
 
 
 def build_explorer_prompt(topic: str) -> str:

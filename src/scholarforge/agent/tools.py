@@ -1593,6 +1593,7 @@ def record_paper_summary(
     key_findings: list[str],
     quantitative_data: list[str],
     relevance: str,
+    concept_links: list[dict] | None = None,
     gaps_noted: list[str] | None = None,
     read_depth: str = "full",
     role: str = "standard",
@@ -1600,31 +1601,30 @@ def record_paper_summary(
     """Record a structured summary of a paper after reading it.
 
     Call this IMMEDIATELY after deep_read or read_paper_digest to distill
-    findings into compact form. This builds your working memory so you
-    can refer back to papers without re-reading them.
+    findings into compact form. This builds your working memory AND the
+    concept graph for citation lookup.
 
-    The role parameter shapes what you should extract:
-    - "hub": This is a highly-cited authority paper. Extract the landscape
-      it maps, key subfields it connects, core claims other papers build on.
-      This anchors the review.
-    - "frontier": This is a niche/emerging paper. Extract what's new or
-      different, how it diverges from mainstream, why it matters for future
-      directions.
-    - "bridge": This connects two research areas. Extract the connection
-      it makes, what it borrows from each area, the synthesis insight.
-    - "standard": General paper. Extract findings and data normally.
+    The concept_links parameter captures HOW concepts in this paper relate
+    to each other. Each link is a dict with:
+      {"from": "HfO2", "to": "10^4 endurance", "relation": "achieves",
+       "evidence": "6nm film, TiN electrodes"}
+
+    These become edges in the concept graph. When you later need a citation
+    for "HfO2 endurance," the graph returns this paper's display_name.
 
     Args:
         paper_name: The paper's display_name as seen in tool results.
-        key_findings: 3-5 specific findings (include numbers and measurements).
-        quantitative_data: Specific values, metrics, or statistics extracted.
+        key_findings: 3-5 specific findings (include numbers).
+        quantitative_data: Specific values, metrics, or statistics.
         relevance: 1-2 sentences explaining relevance to the review topic.
+        concept_links: Relationship triples extracted from the paper.
+            Each dict: {"from": str, "to": str, "relation": str, "evidence": str}.
         gaps_noted: Limitations or gaps identified in this paper.
         read_depth: How the paper was read: "full", "digest", or "section".
-        role: Why this paper was read: "hub", "frontier", "bridge", or "standard".
+        role: Why this paper was read: "hub", "frontier", "bridge", "standard".
 
     Returns:
-        Confirmation with paper name and finding count.
+        Confirmation with paper name, finding count, and concept links added.
     """
     summary = {
         "paper_name": paper_name,
@@ -1637,20 +1637,31 @@ def record_paper_summary(
     }
     _paper_summaries.append(summary)
 
+    # Build concept graph edges
+    n_links = 0
+    if concept_links:
+        from scholarforge.agent.concept_graph import get_concept_graph
+
+        graph = get_concept_graph()
+        n_links = graph.add_from_summary(paper_name, concept_links)
+
     # Also log to reading log
     from scholarforge.agent.reading_log import get_reading_log
 
     get_reading_log().log(
         paper=paper_name,
         tool="record_paper_summary",
-        reason=f"Distilled {len(key_findings)} findings, {len(quantitative_data)} data points",
+        reason=(
+            f"Distilled {len(key_findings)} findings, "
+            f"{len(quantitative_data)} data points, {n_links} concept links"
+        ),
         depth=read_depth,
     )
 
     return (
         f"Recorded summary for '{paper_name}': "
         f"{len(key_findings)} findings, {len(quantitative_data)} data points, "
-        f"{len(gaps_noted or [])} gaps noted."
+        f"{n_links} concept links, {len(gaps_noted or [])} gaps."
     )
 
 
@@ -1681,6 +1692,96 @@ def get_session_context() -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def query_concept_graph(concept: str) -> str:
+    """Query the concept graph for a concept's neighbors and papers.
+
+    Returns all concepts connected to the given concept and the papers
+    that establish each connection. Use this to understand how a concept
+    fits into the research landscape and which papers to cite.
+
+    Args:
+        concept: A concept to look up (e.g., "HfO2", "endurance", "STDP").
+
+    Returns:
+        List of connected concepts with papers and evidence.
+    """
+    from scholarforge.agent.concept_graph import get_concept_graph
+
+    graph = get_concept_graph()
+    neighbors = graph.neighbors(concept)
+
+    if not neighbors:
+        # Try fuzzy: check if concept is a substring of any node
+        fuzzy = [n for n in graph.concepts if concept.lower() in n]
+        if fuzzy:
+            return f"No exact match for '{concept}'. Similar concepts: {', '.join(fuzzy[:5])}"
+        return (
+            f"Concept '{concept}' not in graph "
+            f"({len(graph.concepts)} concepts, {len(graph.edges)} edges)."
+        )
+
+    lines = [f"## Concept: {concept}", f"Connected to {len(neighbors)} concepts:", ""]
+    for neighbor, relation, paper, evidence in neighbors:
+        ev = f" -- {evidence}" if evidence else ""
+        lines.append(f"- {concept} --[{relation}]--> {neighbor}{ev}")
+        lines.append(f"  Paper: [REF:{paper}]")
+
+    return "\n".join(lines)
+
+
+def find_citation_for(claim: str) -> str:
+    """Find the best paper to cite for a given claim or concept.
+
+    Searches the concept graph first (exact/substring match on concepts),
+    then falls back to embedding similarity search across corpus chunks.
+    Returns the display_name ready for a [REF:...] marker.
+
+    Args:
+        claim: The claim or concept that needs a citation
+            (e.g., "HfO2 endurance exceeds 10^4 cycles").
+
+    Returns:
+        Best matching paper with display_name and evidence.
+    """
+    from scholarforge.agent.concept_graph import get_concept_graph
+
+    graph = get_concept_graph()
+
+    # Strategy 1: concept graph lookup (fast, exact)
+    # Split claim into words and check each against graph concepts
+    claim_words = [w.lower().strip(".,;:") for w in claim.split() if len(w) > 2]
+    best_matches: list[tuple[str, str]] = []
+
+    for word in claim_words:
+        for concept in graph.concepts:
+            if word in concept or concept in word:
+                citations = graph.find_citation(concept)
+                for paper, evidence in citations:
+                    best_matches.append((paper, evidence or concept))
+
+    if best_matches:
+        # Deduplicate, prefer matches with evidence
+        seen: set[str] = set()
+        unique: list[tuple[str, str]] = []
+        for paper, ev in best_matches:
+            if paper not in seen:
+                seen.add(paper)
+                unique.append((paper, ev))
+
+        lines = [f"Citations for: '{claim}'", ""]
+        for paper, ev in unique[:3]:
+            lines.append(f"- [REF:{paper}]")
+            lines.append(f"  Evidence: {ev}")
+        return "\n".join(lines)
+
+    # Strategy 2: fall back to embedding search across corpus chunks
+    try:
+        result = search_papers(query=claim, top_k=3, max_tokens=500)
+        return f"No concept graph match. Semantic search results:\n{result}"
+    except Exception:  # noqa: BLE001
+        return f"No citation found for: '{claim}'"
 
 
 def get_reading_log_text() -> str:

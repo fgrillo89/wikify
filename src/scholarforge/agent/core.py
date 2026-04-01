@@ -190,9 +190,7 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
             note = "No summary recorded. Consider calling record_paper_summary."
 
         preview = content[:preview_len]
-        msg["content"] = (
-            f"{preview}\n\n[... compacted: {original_len} chars. {note}]"
-        )
+        msg["content"] = f"{preview}\n\n[... compacted: {original_len} chars. {note}]"
 
     # After compaction, inject session context once so the model has all
     # summaries available without needing to call get_session_context()
@@ -200,6 +198,8 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
 
 
 _SESSION_CONTEXT_MARKER = "[Session context: paper summaries]"
+
+
 def _session_level_compaction(messages: list[dict]) -> None:
     """Drop old turns when total message size is excessive.
 
@@ -230,9 +230,7 @@ def _session_level_compaction(messages: list[dict]) -> None:
         return
 
     # Adaptive keep_recent: keep more if messages are short, fewer if large
-    non_system_count = sum(
-        1 for m in messages if isinstance(m, dict) and m.get("role") != "system"
-    )
+    non_system_count = sum(1 for m in messages if isinstance(m, dict) and m.get("role") != "system")
     non_system_chars = total_chars - system_chars
     avg_msg_size = non_system_chars / max(non_system_count, 1)
 
@@ -261,13 +259,15 @@ def _session_level_compaction(messages: list[dict]) -> None:
         if i in keep_indices:
             new_messages.append(msg)
         elif not dropped:
-            new_messages.append({
-                "role": "user",
-                "content": (
-                    f"[{dropped_count} earlier messages compacted. "
-                    f"Paper summaries preserved in session context above.]"
-                ),
-            })
+            new_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[{dropped_count} earlier messages compacted. "
+                        f"Paper summaries preserved in session context above.]"
+                    ),
+                }
+            )
             dropped = True
 
     messages.clear()
@@ -295,9 +295,20 @@ def _inject_session_context(messages: list[dict]) -> None:
         if not ctx or "No paper summaries" in ctx:
             return
 
+        # Include concept graph if it has edges
+        graph_text = ""
+        try:
+            from scholarforge.agent.concept_graph import get_concept_graph
+
+            graph = get_concept_graph()
+            if graph.edges:
+                graph_text = "\n\n" + graph.to_compact_text()
+        except Exception:  # noqa: BLE001
+            pass
+
         ctx_message = {
             "role": "system",
-            "content": f"{_SESSION_CONTEXT_MARKER}\n\n{ctx}",
+            "content": f"{_SESSION_CONTEXT_MARKER}\n\n{ctx}{graph_text}",
         }
 
         # Replace existing session context message if present
@@ -406,9 +417,7 @@ class ScholarForgeAgent:
             input_tokens: int = usage.prompt_tokens if usage else 0
             output_tokens: int = usage.completion_tokens if usage else 0
             cache_read: int = getattr(usage, "cache_read_input_tokens", 0) or 0
-            cache_write: int = (
-                getattr(usage, "cache_creation_input_tokens", 0) or 0
-            )
+            cache_write: int = getattr(usage, "cache_creation_input_tokens", 0) or 0
             total_in += input_tokens
             total_out += output_tokens
             total_cache_read += cache_read
