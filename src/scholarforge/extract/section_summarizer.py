@@ -1,32 +1,112 @@
-"""Generate per-section summaries using Haiku for cost-efficient indexing.
+"""Per-section summaries for hierarchical retrieval.
 
-Produces 1-2 factual sentences per section, stored in Paper.section_summaries.
-Cost: ~$0.002 per paper (3-5 Haiku calls for a typical 15-section paper).
+Two modes:
+- **Extractive** (default): First 1-2 sentences of each section. Free, instant.
+- **LLM** (opt-in): Haiku-generated factual summaries. ~$0.002/paper.
+
+Stored in Paper.section_summaries as JSON: {"section_path": "summary", ...}.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
-# Sections smaller than this get their raw text as the summary (no LLM call).
+# Sections smaller than this threshold use full text as summary.
 _SMALL_SECTION_THRESHOLD = 300  # tokens
 
-# Adjacent small sections are batched into a single LLM call up to this limit.
+# Adjacent small sections batched into a single LLM call up to this limit.
 _BATCH_TOKEN_LIMIT = 4000
 
+# Section types not worth summarizing.
+_SKIP_TYPES = frozenset({"references", "acknowledgments", "appendix"})
 
-def summarize_sections(
+
+def _extract_lead_sentences(text: str, max_sentences: int = 2) -> str:
+    """Extract the first 1-2 sentences from text (extractive summary)."""
+    # Split on sentence boundaries (period/question/exclamation followed by space+capital)
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text.strip())
+    lead = " ".join(sentences[:max_sentences])
+    # Cap at 300 chars to keep summaries concise
+    if len(lead) > 300:
+        lead = lead[:297] + "..."
+    return lead.strip()
+
+
+def summarize_sections_extractive(paper_id: str, force: bool = False) -> dict[str, str]:
+    """Generate extractive section summaries (first 1-2 sentences per section).
+
+    Free, instant, no API calls. Good enough for navigation and embedding.
+
+    Args:
+        paper_id: Paper ID to summarize.
+        force: If True, re-summarize even if summaries already exist.
+
+    Returns:
+        Dict mapping section_path -> summary string.
+    """
+    from sqlmodel import select
+
+    from scholarforge.extract.section_classifier import classify_section_path
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Chunk, Paper
+
+    with get_session() as session:
+        paper = session.get(Paper, paper_id)
+        if not paper:
+            logger.warning("Paper %s not found", paper_id)
+            return {}
+
+        if not force and paper.section_summaries and paper.section_summaries != "{}":
+            try:
+                existing = json.loads(paper.section_summaries)
+                if existing:
+                    return existing
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        chunks = session.exec(
+            select(Chunk).where(Chunk.paper_id == paper_id).order_by(Chunk.chunk_index)
+        ).all()
+
+    if not chunks:
+        return {}
+
+    # Group chunks by section_path, preserving order
+    sections_ordered: list[str] = []
+    section_texts: dict[str, str] = {}
+
+    for c in chunks:
+        path = c.section_path or "root"
+        if path not in section_texts:
+            sections_ordered.append(path)
+            section_texts[path] = c.content
+        else:
+            section_texts[path] += "\n\n" + c.content
+
+    summaries: dict[str, str] = {}
+    for path in sections_ordered:
+        sec_type = classify_section_path(path).value
+        if sec_type in _SKIP_TYPES:
+            continue
+        summaries[path] = _extract_lead_sentences(section_texts[path])
+
+    _persist_summaries(paper_id, summaries)
+    logger.info("Generated %d extractive section summaries for %s", len(summaries), paper_id[:16])
+    return summaries
+
+
+def summarize_sections_llm(
     paper_id: str,
     model: str = "claude-haiku-4-5-20251001",
     force: bool = False,
 ) -> dict[str, str]:
-    """Generate 1-2 sentence summaries for each section of a paper.
+    """Generate LLM-based section summaries (1-2 factual sentences per section).
 
-    Groups chunks by section_path, batches small sections, and calls
-    the LLM to produce factual summaries with specific findings/numbers.
+    Uses Haiku for cost efficiency (~$0.002 per paper). Opt-in for benchmarking.
 
     Args:
         paper_id: Paper ID to summarize.
@@ -38,6 +118,7 @@ def summarize_sections(
     """
     from sqlmodel import select
 
+    from scholarforge.extract.section_classifier import classify_section_path
     from scholarforge.store.db import get_session
     from scholarforge.store.models import Chunk, Paper
 
@@ -77,20 +158,14 @@ def summarize_sections(
             section_texts[path] += "\n\n" + c.content
             section_tokens[path] += c.token_count
 
-    # Skip references/acknowledgments — not worth summarizing
-    skip_types = {"references", "acknowledgments", "appendix"}
-    from scholarforge.extract.section_classifier import classify_section_path
-
     summaries: dict[str, str] = {}
-
-    # For small sections, use the text directly (trimmed)
     sections_needing_llm: list[str] = []
+
     for path in sections_ordered:
         sec_type = classify_section_path(path).value
-        if sec_type in skip_types:
+        if sec_type in _SKIP_TYPES:
             continue
         if section_tokens[path] <= _SMALL_SECTION_THRESHOLD:
-            # Use first 200 chars as summary for tiny sections
             summaries[path] = section_texts[path][:200].strip()
         else:
             sections_needing_llm.append(path)
@@ -99,7 +174,7 @@ def summarize_sections(
         _persist_summaries(paper_id, summaries)
         return summaries
 
-    # Batch adjacent small-ish sections, send larger ones individually
+    # Batch adjacent sections for LLM calls
     batches: list[list[str]] = []
     current_batch: list[str] = []
     current_tokens = 0
@@ -116,7 +191,6 @@ def summarize_sections(
     if current_batch:
         batches.append(current_batch)
 
-    # Call LLM for each batch
     import litellm
 
     for batch in batches:
@@ -145,7 +219,6 @@ def summarize_sections(
                 temperature=0.0,
             )
             raw = response.choices[0].message.content.strip()
-            # Extract JSON from response (handle markdown code blocks)
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -154,20 +227,29 @@ def summarize_sections(
             summaries.update(batch_summaries)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Section summary LLM call failed: %s", exc)
-            # Fallback: use first 200 chars of each section
             for path in batch:
-                summaries[path] = section_texts[path][:200].strip()
+                summaries[path] = _extract_lead_sentences(section_texts[path])
 
     _persist_summaries(paper_id, summaries)
-    logger.info("Generated %d section summaries for %s", len(summaries), paper_id[:16])
+    logger.info("Generated %d LLM section summaries for %s", len(summaries), paper_id[:16])
     return summaries
 
 
+# Keep backwards-compatible name
+summarize_sections = summarize_sections_extractive
+
+
 def summarize_sections_batch(
+    mode: str = "extractive",
     model: str = "claude-haiku-4-5-20251001",
     force: bool = False,
 ) -> int:
     """Generate section summaries for all papers that don't have them yet.
+
+    Args:
+        mode: "extractive" (free, default) or "llm" (Haiku, ~$0.002/paper).
+        model: LLM model (only used when mode="llm").
+        force: If True, re-summarize all papers.
 
     Returns:
         Number of papers summarized.
@@ -177,6 +259,8 @@ def summarize_sections_batch(
     from scholarforge.store.db import get_session
     from scholarforge.store.models import Paper
 
+    fn = summarize_sections_llm if mode == "llm" else summarize_sections_extractive
+
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
 
@@ -185,12 +269,15 @@ def summarize_sections_batch(
         if not force and paper.section_summaries and paper.section_summaries != "{}":
             continue
         try:
-            summarize_sections(paper.id, model=model, force=force)
+            if mode == "llm":
+                fn(paper.id, model=model, force=force)
+            else:
+                fn(paper.id, force=force)
             count += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to summarize %s: %s", paper.id[:16], exc)
 
-    logger.info("Summarized sections for %d papers", count)
+    logger.info("Summarized sections for %d papers (mode=%s)", count, mode)
     return count
 
 

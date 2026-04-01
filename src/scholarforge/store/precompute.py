@@ -735,12 +735,12 @@ def precompute_all() -> None:
     except Exception as exc:
         logger.warning("Concept link computation failed: %s", exc)
 
-    # 9. Section summaries (LLM via Haiku, ~$0.002/paper)
+    # 9. Section summaries (extractive by default, free and instant)
     try:
         from scholarforge.extract.section_summarizer import summarize_sections_batch
         from scholarforge.store.embeddings import embed_section_summaries
 
-        n_summarized = summarize_sections_batch(force=False)
+        n_summarized = summarize_sections_batch(mode="extractive", force=False)
         if n_summarized > 0:
             logger.info("Generated section summaries for %d papers", n_summarized)
 

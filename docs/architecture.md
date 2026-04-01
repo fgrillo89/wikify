@@ -44,25 +44,38 @@ src/scholarforge/
 └── llm/                      # litellm client + hooks
 ```
 
-## Four Generation Modes
+## Five Generation Modes
 
 ```
-┌─────────────────────────────────────────────────────┐
-│              scholarforge generate                    │
-├──────────┬──────────┬──────────┬───────────────────┤
-│  Skill   │ Scripted │ Two-Agent│  Fast (exp.)      │
-│  Route   │  Route   │  Route   │  One-Shot         │
-│          │          │          │                   │
-│ LLM runs │ Python   │ Explorer │ Pre-compute all   │
-│ the whole│ explores,│ LLM ->   │ context (10s),    │
-│ loop via │ LLM just │ Notes -> │ single LLM call   │
-│ tool_use │ writes   │ Writer   │ (~5 min)          │
-│          │          │ LLM      │                   │
-│ 25 min   │ 4 min    │ 8 min    │ 6 min             │
-│ 133K tok │ 6K tok   │ 70K tok  │ 58K tok           │
-└──────────┴──────────┴──────────┴───────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│              scholarforge generate                                │
+├──────────┬──────────┬──────────┬───────────┬────────────────────┤
+│  Skill   │ Skill    │ Scripted │ Two-Agent │  Fast (exp.)       │
+│  Route   │ Hierarchi│  Route   │  Route    │  One-Shot          │
+│  (v1)    │ cal (v2) │          │           │                    │
+│          │          │          │           │                    │
+│ LLM runs │ LLM uses │ Python   │ Explorer  │ Pre-compute all    │
+│ the whole│ 4-level  │ explores,│ LLM ->    │ context (10s),     │
+│ loop via │ progres- │ LLM just │ Notes ->  │ single LLM call    │
+│ tool_use │ sive     │ writes   │ Writer    │ (~5 min)           │
+│ deep+dig │ disclosure│          │ LLM      │                    │
+│          │          │          │           │                    │
+│ 25 min   │ ~10 min  │ 4 min    │ 8 min     │ 6 min              │
+│ 133K tok │ ~80K tok │ 6K tok   │ 70K tok   │ 58K tok            │
+└──────────┴──────────┴──────────┴───────────┴────────────────────┘
               All share: tools, export, quality metrics
 ```
+
+### Hierarchical Skill (v2) -- Progressive Disclosure
+
+Uses 4 reading levels instead of binary deep/digest:
+1. `get_paper` (~200 chars) -- what is this paper about?
+2. `read_paper_digest` (~1.5KB) -- TOC + section summaries
+3. `read_section` (~5KB) -- full text of one section
+4. `deep_read` (~70KB) -- full paper (rarely needed)
+
+Strategy: digest all 15 papers, then drill into 8-12 specific sections
+from 5-7 key papers. More papers at useful depth within the same budget.
 
 ## Pre-Compute Cache (built at ingest, loaded at generation)
 
@@ -76,6 +89,7 @@ src/scholarforge/
 | Boilerplate IDs | 304 chunks appearing in 5+ papers (k-NN detected) | <0.1s |
 | Divergent gaps | 17 coupled-but-divergent paper pairs | <0.1s |
 | Concept links | 30 section-filtered, IDF-labeled paper connections | <0.1s |
+| Section summaries | Extractive (first 1-2 sentences per section) | <0.1s |
 
 Cache location: `data/cache/precomputed/`. Invalidated on every `run_batch_steps`.
 
@@ -111,7 +125,7 @@ review — the model reads the output and scores it as a senior reviewer would.
 - **Paper.origin**: `"corpus"` (ingested) vs `"generated"` (output). All metrics filter on corpus only.
 - **Project** + **ProjectPaper**: many-to-many scoping for multi-project support.
 - **GeneratedOutput**: tracks each writing run (strategy, cost, coverage).
-- **ChromaDB**: two collections (summaries + chunks). Only corpus content embedded.
+- **ChromaDB**: three collections (summaries + chunks + section_summaries). Only corpus content embedded.
 - **Concept graph**: per-session, saved as JSON alongside output. Never in corpus DB.
 
 ## Data Layout

@@ -13,7 +13,7 @@ cross-paper synthesis.
 - PDF/DOCX/PPTX parsing (pymupdf4llm + fitz fallback, no OCR by default)
 - Metadata extraction, section-aware chunking (600-token), figure/table refs
 - Bibliography extraction + fuzzy citation matching (prefix + fuzzy scoring)
-- ChromaDB embeddings: per-paper summaries + per-chunk embeddings (ONNX quantized)
+- ChromaDB embeddings: per-paper summaries + per-chunk + per-section (ONNX quantized)
 - Paper vibe vectors: token-weighted chunk centroids (0.4s from stored embeddings)
 - Obsidian vault: paper notes, author notes, topic hubs, Dashboard
 - Incremental + parallel batch ingestion (60% of CPU cores by default)
@@ -51,10 +51,20 @@ cross-paper synthesis.
 - PPTX with professional template
 - Markdown with Unicode chemical subscripts
 
+**Hierarchical Retrieval (Phase 2b -- implemented, PageIndex-inspired):**
+- PDF TOC extraction via fitz.get_toc() for better section structure
+- Chunk-level semantic queries (query_chunks) on existing ChromaDB collection
+- Section summaries: extractive (default, free) or LLM (opt-in, ~$0.002/paper)
+- Section summary embeddings in dedicated ChromaDB collection
+- `read_section` tool: mid-granularity reading (~5KB per section)
+- Progressive disclosure: get_paper (200 chars) -> digest (1.5KB) -> read_section (5KB) -> deep_read (70KB)
+- `--strategy hierarchical`: 3-level cascade (paper -> section -> chunk)
+- `/generate-hierarchical` skill: digest all, drill selectively
+
 **MCP Server (Phase 4 -- implemented):**
-- 20+ tools: search_papers, get_paper, list_papers, deep_read, get_sections,
-  get_graph_metrics, get_corpus_summary, scan_all_abstracts, read_paper_digest,
-  get_paper_vibes, find_corpus_gaps, find_synthesis_opportunities,
+- 25+ tools: search_papers, get_paper, list_papers, deep_read, read_section,
+  get_sections, get_graph_metrics, get_corpus_summary, scan_all_abstracts,
+  read_paper_digest, get_paper_vibes, find_corpus_gaps, find_synthesis_opportunities,
   get_frontier_exploration_order, suggest_next_papers, find_jump_target,
   evaluate_coverage, get_coverage_gaps, get_reading_log_text, save_reading_log,
   ingest_paper
