@@ -787,19 +787,246 @@ def compute_factual_specificity(review_text: str) -> FactualSpecificityResult:
 
 
 # ---------------------------------------------------------------------------
+# Prose Quality Metrics (5 new metrics from PI review)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProseQualityResult:
+    """Five metrics that capture writing quality beyond content presence.
+
+    These detect the difference between a soulless paper catalog and
+    genuine analytical prose — what the previous 9 metrics missed.
+    """
+
+    # 1. Citation Clustering: multi-cite sentences vs one-cite-per-sentence
+    citation_clustering_ratio: float  # unique_refs / cited_sentences (>1.5 = synthesis)
+    multi_cite_fraction: float  # fraction of cited sentences with 2+ refs
+
+    # 2. Argument Progression: do paragraphs narrow toward section topic?
+    avg_progression_rho: float  # mean Spearman rho across sections (<-0.3 = good)
+
+    # 3. Sentence-Opening Entropy: diversity of first-3-token patterns
+    opening_entropy: float  # normalized Shannon entropy (>0.7 = varied)
+    author_et_al_fraction: float  # fraction starting with "[Name] et al." pattern
+
+    # 4. Evaluative Language Density: opinion/judgment markers
+    evaluative_density: float  # fraction of sentences with evaluative markers
+
+    # 5. Cross-Section Reference Density: internal coherence
+    cross_refs_per_section: float  # explicit/implicit cross-references per section
+
+    # 6. Comparative Specificity (insightfulness proxy)
+    comparative_specific_fraction: float  # sentences with citation + number + comparison
+
+    def score(self) -> float:
+        """Composite prose quality score [0, 1]."""
+        # Citation clustering: 0 at ratio 1.0, 1 at ratio 2.0+
+        cite_score = min(1.0, max(0.0, (self.citation_clustering_ratio - 1.0)))
+
+        # Progression: 0 at rho=0, 1 at rho=-0.5
+        prog_score = min(1.0, max(0.0, -self.avg_progression_rho * 2))
+
+        # Opening entropy: direct map (already 0-1)
+        entropy_score = self.opening_entropy
+
+        # Author et al penalty: subtract from score
+        author_penalty = min(0.5, self.author_et_al_fraction * 2)
+
+        # Evaluative: 0 at 0%, 1 at 20%+
+        eval_score = min(1.0, self.evaluative_density / 0.20)
+
+        # Cross-refs: 0 at 0/section, 1 at 2+/section
+        xref_score = min(1.0, self.cross_refs_per_section / 2.0)
+
+        # Comparative specificity: 0 at 0%, 1 at 10%+
+        insight_score = min(1.0, self.comparative_specific_fraction / 0.10)
+
+        return (
+            0.18 * cite_score
+            + 0.15 * prog_score
+            + 0.12 * max(0, entropy_score - author_penalty)
+            + 0.18 * eval_score
+            + 0.18 * xref_score
+            + 0.19 * insight_score
+        )
+
+    def interpretation(self) -> str:
+        lines = [
+            "Prose Quality:",
+            f"  Citation clustering: {self.citation_clustering_ratio:.2f}"
+            f" (multi-cite: {self.multi_cite_fraction:.0%})",
+            f"  Argument progression: rho={self.avg_progression_rho:.3f}",
+            f"  Sentence-opening entropy: {self.opening_entropy:.3f}"
+            f" (author-et-al: {self.author_et_al_fraction:.0%})",
+            f"  Evaluative language: {self.evaluative_density:.1%}",
+            f"  Cross-section refs: {self.cross_refs_per_section:.1f}/section",
+            f"  Comparative specificity: {self.comparative_specific_fraction:.1%}",
+            f"  Score: {self.score():.3f}",
+        ]
+        s = self.score()
+        if s > 0.5:
+            lines.append("  Interpretation: Analytical prose with synthesis and voice.")
+        elif s > 0.25:
+            lines.append("  Interpretation: Mixed — some synthesis but paper-listing tendencies.")
+        else:
+            lines.append("  Interpretation: Paper-listing mode with repetitive patterns.")
+        return "\n".join(lines)
+
+
+def compute_prose_quality(review_text: str) -> ProseQualityResult:
+    """Compute 5 prose quality metrics from review text (no embeddings needed)."""
+    body = re.split(r"\n## References\n", review_text)[0]
+    body = re.sub(r"^#+\s.*$", "", body, flags=re.MULTILINE)  # strip headings
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body) if len(s.strip()) > 15]
+    total_sentences = max(len(sentences), 1)
+
+    # --- 1. Citation Clustering ---
+    cited_sentences = [s for s in sentences if re.search(r"\[\d+\]", s)]
+    total_cited = max(len(cited_sentences), 1)
+
+    multi_cite = sum(1 for s in cited_sentences if len(re.findall(r"\[\d+\]", s)) >= 2)
+    total_refs_in_cited = sum(len(re.findall(r"\[\d+\]", s)) for s in cited_sentences)
+
+    clustering_ratio = total_refs_in_cited / total_cited
+    multi_cite_frac = multi_cite / total_cited
+
+    # --- 2. Argument Progression (simplified: no embeddings, use paragraph length trend) ---
+    # Split by sections (## headings)
+    sections = re.split(r"\n##\s+", review_text)
+    rhos = []
+    for section in sections[1:]:  # skip pre-first-heading content
+        paragraphs = [p.strip() for p in section.split("\n\n") if len(p.strip()) > 50]
+        if len(paragraphs) < 3:
+            continue
+        # Proxy: do paragraphs get more specific (shorter, more citations)?
+        # Use citation density per paragraph as specificity proxy
+        cite_densities = []
+        for p in paragraphs:
+            words = len(p.split())
+            cites = len(re.findall(r"\[\d+\]", p))
+            cite_densities.append(cites / max(words, 1) * 100)
+
+        if len(cite_densities) >= 3:
+            # Spearman rank correlation: does cite density increase?
+            n = len(cite_densities)
+            ranks_x = list(range(n))
+            ranks_y = [sorted(range(n), key=lambda i: cite_densities[i]).index(j) for j in range(n)]
+            # Simple Spearman: correlation of ranks
+            mean_x = sum(ranks_x) / n
+            mean_y = sum(ranks_y) / n
+            num = sum((x - mean_x) * (y - mean_y) for x, y in zip(ranks_x, ranks_y))
+            den_x = sum((x - mean_x) ** 2 for x in ranks_x) ** 0.5
+            den_y = sum((y - mean_y) ** 2 for y in ranks_y) ** 0.5
+            rho = num / (den_x * den_y + 1e-9)
+            rhos.append(rho)
+
+    avg_rho = sum(rhos) / max(len(rhos), 1) if rhos else 0.0
+
+    # --- 3. Sentence-Opening Entropy ---
+    openings = []
+    author_et_al = 0
+    _author_pattern = re.compile(
+        r"^[A-Z][a-z]+\s+(?:and\s+colleagues|et\s+al\.?|and\s+co-?workers)",
+        re.IGNORECASE,
+    )
+    for s in sentences:
+        tokens = s.split()[:3]
+        if tokens:
+            openings.append(" ".join(tokens).lower())
+        if _author_pattern.match(s):
+            author_et_al += 1
+
+    # Shannon entropy
+    from collections import Counter
+
+    opening_counts = Counter(openings)
+    total_openings = max(sum(opening_counts.values()), 1)
+    entropy = 0.0
+    for count in opening_counts.values():
+        p = count / total_openings
+        if p > 0:
+            entropy -= p * math.log2(p)
+    max_entropy = math.log2(max(len(opening_counts), 1)) if opening_counts else 1
+    normalized_entropy = entropy / max(max_entropy, 1e-9)
+
+    author_et_al_frac = author_et_al / total_sentences
+
+    # --- 4. Evaluative Language Density ---
+    _evaluative = re.compile(
+        r"\b(?:surprisingly|notably|importantly|unfortunately|crucially|"
+        r"remarkably|strikingly|intriguingly|paradoxically|"
+        r"superior|inferior|outperform|fall(?:s|ing)?\s+short|"
+        r"more\s+promising|less\s+effective|"
+        r"we\s+(?:argue|contend|propose|suggest\s+that)|"
+        r"this\s+(?:suggests|implies|indicates|raises)|"
+        r"a\s+(?:key|major|critical|fundamental)\s+(?:limitation|challenge|question|gap)|"
+        r"despite|contrary\s+to|inconsistent\s+with|"
+        r"remain(?:s)?\s+(?:unclear|unresolved|unknown|open)|"
+        r"underexplored|overlooked|understudied)\b",
+        re.IGNORECASE,
+    )
+    evaluative_count = sum(1 for s in sentences if _evaluative.search(s))
+    eval_density = evaluative_count / total_sentences
+
+    # --- 5. Cross-Section Reference Density ---
+    _xref_pattern = re.compile(
+        r"as\s+(?:discussed|noted|described|shown)\s+(?:in\s+Section|above|earlier|below)|"
+        r"(?:Section|section)\s+\d|"
+        r"(?:the|this)\s+\w+\s+(?:discussed|described|noted)\s+(?:above|earlier|in\s+Section)|"
+        r"echoes\s+the|connects?\s+to\s+the|as\s+we\s+(?:saw|noted|discussed)",
+        re.IGNORECASE,
+    )
+    section_count = max(len(re.findall(r"\n##\s+", review_text)), 1)
+    xref_count = len(_xref_pattern.findall(body))
+    xrefs_per_section = xref_count / section_count
+
+    # --- 6. Comparative Specificity (insightfulness proxy) ---
+    # Sentences with: citation + number/measurement + comparison word
+    _comparison = re.compile(
+        r"\b(?:while|whereas|compared|unlike|in\s+contrast|conversely|"
+        r"however|on\s+the\s+other\s+hand|relative\s+to|"
+        r"outperform|exceed|fall\s+short|higher\s+than|lower\s+than)\b",
+        re.IGNORECASE,
+    )
+    _has_number = re.compile(r"\d+\.?\d*\s*(?:nm|V|eV|Hz|cycles?|%|K|s|W|A|ohm)")
+    _has_cite = re.compile(r"\[\d+\]")
+
+    comparative_specific = sum(
+        1
+        for s in sentences
+        if _comparison.search(s) and _has_number.search(s) and _has_cite.search(s)
+    )
+    comp_spec_frac = comparative_specific / total_sentences
+
+    return ProseQualityResult(
+        citation_clustering_ratio=round(clustering_ratio, 3),
+        multi_cite_fraction=round(multi_cite_frac, 3),
+        avg_progression_rho=round(avg_rho, 3),
+        opening_entropy=round(normalized_entropy, 3),
+        author_et_al_fraction=round(author_et_al_frac, 3),
+        evaluative_density=round(eval_density, 3),
+        cross_refs_per_section=round(xrefs_per_section, 2),
+        comparative_specific_fraction=round(comp_spec_frac, 3),
+    )
+
+
+# ---------------------------------------------------------------------------
 # QualityReport and comprehensive_quality_report
 # ---------------------------------------------------------------------------
 
 # Composite weights — must sum to 1.0
 _WEIGHTS: dict[str, float] = {
-    "semantic_coverage": 0.10,
-    "centroid_alignment": 0.08,
-    "frontier_shift": 0.14,
-    "bridge_vectors": 0.10,
-    "semantic_residual": 0.10,
-    "gap_detection": 0.14,
-    "argumentative_coherence": 0.12,
-    "topic_coverage": 0.10,
+    "prose_quality": 0.20,  # NEW: captures what the PI sees immediately
+    "semantic_coverage": 0.06,
+    "centroid_alignment": 0.06,
+    "frontier_shift": 0.10,
+    "bridge_vectors": 0.08,
+    "semantic_residual": 0.08,
+    "gap_detection": 0.12,
+    "argumentative_coherence": 0.10,
+    "topic_coverage": 0.08,
     "factual_specificity": 0.12,
 }
 assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
@@ -814,8 +1041,9 @@ class QualityReport:
     metrics that are present.
     """
 
-    # Always computed
+    # Always computed (no corpus needed)
     factual_specificity: FactualSpecificityResult
+    prose_quality: Optional[ProseQualityResult] = None
 
     # Require corpus + embeddings
     semantic_coverage: Optional[float] = None  # fraction of corpus chunks covered
@@ -838,6 +1066,8 @@ class QualityReport:
         available: dict[str, float] = {
             "factual_specificity": self.factual_specificity.score(),
         }
+        if self.prose_quality is not None:
+            available["prose_quality"] = self.prose_quality.score()
         if self.semantic_coverage is not None:
             available["semantic_coverage"] = min(self.semantic_coverage, 1.0)
         if self.centroid_alignment is not None:
@@ -867,6 +1097,9 @@ class QualityReport:
             "COMPREHENSIVE REVIEW QUALITY REPORT",
             "=" * 60,
         ]
+
+        if self.prose_quality is not None:
+            lines += ["", self.prose_quality.interpretation()]
 
         if self.semantic_coverage is not None:
             lines += [
@@ -923,6 +1156,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
     """
     # --- Always-available metric (no corpus needed) --------------------------
     factual = compute_factual_specificity(review_text)
+    prose = compute_prose_quality(review_text)
 
     # --- Topic coverage (SQLite only, no embeddings) -------------------------
     topics: Optional[TopicCoverageResult] = None
@@ -944,6 +1178,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
     if ctx is None:
         return QualityReport(
             factual_specificity=factual,
+            prose_quality=prose,
             topic_coverage=topics,
             corpus_error=corpus_error or "Corpus unavailable or empty",
         )
@@ -974,6 +1209,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
 
     return QualityReport(
         factual_specificity=factual,
+        prose_quality=prose,
         semantic_coverage=coverage_ratio,
         centroid_alignment=centroid_align,
         frontier_shift=frontier,
