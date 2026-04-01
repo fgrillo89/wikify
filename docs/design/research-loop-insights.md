@@ -2,7 +2,7 @@
 
 Findings from 20+ strategy variants on a 206-paper ALD memristor corpus.
 
-## Current SOTA: One-Shot with Pre-Computed Context
+## Best on Metrics: One-Shot with Pre-Computed Context (content quality TBD)
 
 **Composite 0.615, 58 refs, 15% bridge, 6 min, 58K tokens.**
 
