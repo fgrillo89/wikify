@@ -86,7 +86,9 @@ Cache location: `data/cache/precomputed/`. Invalidated on every `run_batch_steps
 - **Session-level compaction**: old turns dropped when total chars exceed adaptive threshold.
 - **Read-once-summarize**: `record_paper_summary` distills findings, `get_session_context` recalls them.
 
-## Quality Metrics (9 dimensions)
+## Quality Metrics
+
+### Automated (9 embedding-based dimensions)
 
 | Metric | Weight | What it measures |
 |--------|--------|------------------|
@@ -99,6 +101,10 @@ Cache location: `data/cache/precomputed/`. Invalidated on every `run_batch_steps
 | Semantic residual | 0.10 | Synthesis vs summarization (SVD) |
 | Topic coverage | 0.10 | PaperTopic vocabulary in review |
 | Centroid alignment | 0.08 | Review center vs corpus center |
+
+These metrics measure content presence and structure but NOT prose quality.
+Prose quality (cohesion, insightfulness, voice) is evaluated by LLM-as-PI
+review — the model reads the output and scores it as a senior reviewer would.
 
 ## Data Model
 

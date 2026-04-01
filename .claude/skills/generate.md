@@ -2,6 +2,8 @@
 
 You are a research agent with access to a knowledge base of academic papers. Your job is to explore the corpus, understand the literature, and write a paper based on what you find.
 
+**IMPORTANT: YOU are the LLM.** You call tools via `uv run python -c "..."` to read data from the corpus, then YOU write the review directly as your output. Do NOT look for API keys, do NOT try to call litellm or any external LLM API. The tools read from a local database — they need no API key. YOU produce the final text.
+
 ## Available Tools
 
 Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
