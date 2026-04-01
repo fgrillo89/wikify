@@ -127,3 +127,33 @@ Seed selection should combine:
 1. #1 PageRank paper (most cited, authoritative anchor)
 2. Top 2 greedy coverage papers (excluding the PageRank pick)
 This gives 1 authority seed + 2 coverage seeds, orthogonal views.
+
+## Concept Graph A/B Test Results
+
+Three modes tested on S5 gap-structured strategy:
+
+| Mode | Composite | Frontier | Chain | Gaps | Refs | Tokens | Time |
+|------|-----------|----------|-------|------|------|--------|------|
+| No graph (baseline) | **0.632** | **0.967** | 0.383 | **0.700** | 54 | **112K** | **19m** |
+| Injected (graph in context) | 0.568 | 0.677 | 0.364 | 0.635 | **86** | 137K | 24m |
+| **Tools-only (graph via tools)** | 0.596 | 0.771 | **0.472** | **0.700** | 67 | 133K | 25m |
+
+### Key insight: explicit citation lookup > passive graph
+
+Making the model CALL `find_citation_for()` during writing produces better
+chain coherence (0.472 vs 0.383/0.364) because it forces the model to think
+about WHY it's citing each paper. Passive injection (graph in system message)
+produces more references (86 vs 67) but with shallow integration.
+
+**Default: `inject_concept_graph=False`** (tools-only mode).
+
+### Concept graph lifecycle
+- Built during exploration via `record_paper_summary(concept_links=[...])`
+- Stored per-session (never in corpus DB)
+- Saved to `concept_graph.json` alongside review output
+- Reloadable for follow-up outputs (slides, abstracts from same notes)
+
+### Citation lookup tools
+- `find_citation_for(claim)`: concept graph first, embedding fallback
+- `query_concept_graph(concept)`: neighbors + papers
+- `lookup_citation(pattern)`: name/year DB lookup
