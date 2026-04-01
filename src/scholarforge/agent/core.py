@@ -295,14 +295,17 @@ def _inject_session_context(messages: list[dict]) -> None:
         if not ctx or "No paper summaries" in ctx:
             return
 
-        # Include concept graph if it has edges
+        # Include concept graph if enabled and has edges
         graph_text = ""
         try:
-            from scholarforge.agent.concept_graph import get_concept_graph
+            from scholarforge.config import settings as _cfg
 
-            graph = get_concept_graph()
-            if graph.edges:
-                graph_text = "\n\n" + graph.to_compact_text()
+            if _cfg.inject_concept_graph:
+                from scholarforge.agent.concept_graph import get_concept_graph
+
+                graph = get_concept_graph()
+                if graph.edges:
+                    graph_text = "\n\n" + graph.to_compact_text()
         except Exception:  # noqa: BLE001
             pass
 
