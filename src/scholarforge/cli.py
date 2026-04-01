@@ -290,6 +290,50 @@ def scripted_generate(
     console.print(f"  Tokens: {result.tokens_in:,} in + {result.tokens_out:,} out")
 
 
+@app.command("fast-generate")
+def fast_generate_cmd(
+    prompt: str = typer.Argument(
+        "ALD memristors for neuromorphic computing", help="Review topic"
+    ),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    journal: str = typer.Option("", "--journal", "-j", help="Target journal"),
+    output: str = typer.Option(
+        "data/output/review_fast.md", "--output", "-o"
+    ),
+    max_papers: int = typer.Option(15, "--max-papers"),
+    word_target: int = typer.Option(4000, "--words", "-w"),
+):
+    """EXPERIMENTAL: Fast one-shot generation (pre-compute + single LLM call).
+
+    Pre-computes all context offline (frontier order, gaps, digests, concept
+    links), then writes the review in a single LLM call. Much faster than
+    agent-generate but may produce lower quality. Use for rapid iteration.
+    """
+    from scholarforge.agent.fast_generate import fast_generate
+
+    console.print("[bold]Fast generation (experimental)[/bold]")
+    console.print(f"  Topic: {prompt}")
+    console.print(f"  Model: {model or 'default'}")
+
+    result = fast_generate(
+        topic=prompt,
+        model=model,
+        word_target=word_target,
+        max_papers=max_papers,
+        journal=journal,
+        output_path=output,
+    )
+
+    console.print("\n[green]Fast generation complete:[/green]")
+    console.print(f"  Pre-compute: {result.precompute_time_s:.0f}s")
+    console.print(f"  LLM write: {result.llm_time_s:.0f}s")
+    console.print(f"  Total: {result.total_time_s:.0f}s ({result.total_time_s / 60:.1f}m)")
+    console.print(f"  Context: {result.context_chars:,} chars")
+    console.print(f"  Words: {len(result.review_text.split())}")
+    console.print(f"  Tokens: {result.tokens_in:,} in + {result.tokens_out:,} out")
+    console.print(f"  Papers: {result.papers_used}")
+
+
 @app.command()
 def slides(
     prompt: str = typer.Argument(..., help="Presentation topic"),
