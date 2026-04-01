@@ -157,3 +157,32 @@ produces more references (86 vs 67) but with shallow integration.
 - `find_citation_for(claim)`: concept graph first, embedding fallback
 - `query_concept_graph(concept)`: neighbors + papers
 - `lookup_citation(pattern)`: name/year DB lookup
+
+## Embedding-First Gap Detection (replacing regex/topic approach)
+
+### Before (broken):
+- Embedding voids: found nothing (focused corpus has no absolute voids)
+- Topical gaps: "Artificial Synapse" vs "Artificial Synapses" (terminology noise)
+- Concept links: "authors declare no competing interest" (boilerplate matching)
+
+### After (embedding-first):
+- **Coupled-but-divergent gaps**: papers sharing 2+ cited references but with
+  conclusion embedding distance > 0.3. Found 17 real gaps.
+  Example: "Wang 2022 vs Zhou 2023 (coupling=2, conclusion distance=0.87)"
+- **Section-filtered concept links**: only results/discussion/conclusion chunks
+  compared, 304 boilerplate chunks excluded, IDF-weighted token labels.
+  Found 30 links with scientific content.
+- **Science vibes**: paper centroids from only substantive sections (not
+  acknowledgments/references/abstract). Used for pair selection.
+
+### Pre-compute cache (built at ingest time):
+| Artifact | Size | Load time |
+|----------|------|-----------|
+| Science vibes | 206 papers | <0.1s |
+| Boilerplate IDs | 304 chunk IDs | <0.1s |
+| Divergent gaps | 17 pairs | <0.1s |
+| Concept links | 30 links | <0.1s |
+| KMeans centroids | 12 clusters | <0.1s |
+| Topic embeddings | 56 topics | <0.1s |
+
+Total runtime for find_corpus_gaps: 26s -> 0.6s.
