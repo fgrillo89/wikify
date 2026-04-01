@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scholarforge.agent.research_notes import ResearchNotes
+
     pass
 
 logger = logging.getLogger(__name__)
@@ -295,13 +296,20 @@ def scripted_write(
     )
 
     writer_input = notes.to_writer_prompt()
+
+    # Build explicit citation reference list so small models can copy exact names
+    cite_list = "\n".join(f"- [REF:{s.display_name}]" for s in notes.source_summaries)
+
     writer_input += (
-        f"\n\n## Instructions\n"
-        f"Write a {word_target}-word review. Use [REF:DisplayName] citations "
-        f"matching the paper names in the notes above.\n"
+        f"\n\n## Available Citations (copy these EXACTLY)\n"
+        f"{cite_list}\n\n"
+        f"## Instructions\n"
+        f"Write a {word_target}-word review.\n"
+        f"CITATION FORMAT: Use [REF:DisplayName] where DisplayName is "
+        f"copied exactly from the list above.\n"
         f"Required sections: Introduction, ALD Fundamentals, Materials, "
         f"Switching Mechanisms, Gaps/Future Directions, Conclusion.\n"
-        f"Include 3-5 figure placeholders. No em-dashes. One concept per sentence.\n"
+        f"No em-dashes. One concept per sentence. Every claim needs a citation.\n"
     )
 
     resp = litellm.completion(

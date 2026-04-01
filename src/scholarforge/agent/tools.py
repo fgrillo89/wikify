@@ -191,6 +191,73 @@ def search_papers(
         return f"Search error: {exc}"
 
 
+def lookup_citation(
+    pattern: str,
+    max_results: int = 5,
+) -> str:
+    """Look up citation metadata for papers by title, author, or year.
+
+    Returns display_name (for [REF:...] markers), authors, year, DOI,
+    and BibTeX for each match. Lightweight — no abstract or full text.
+    Use this when you need to cite a paper but don't need to read it.
+
+    Args:
+        pattern: Substring to match in title, author list, or year.
+        max_results: Maximum matches to return (default 5).
+
+    Returns:
+        Citation metadata for all matches, or error if none found.
+    """
+    try:
+        from sqlmodel import select
+
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Paper
+
+        lower = pattern.lower()
+        with get_session() as session:
+            all_papers = session.exec(select(Paper)).all()
+            matched = [
+                p
+                for p in all_papers
+                if lower in p.title.lower()
+                or lower in p.authors.lower()
+                or lower in str(p.year or "")
+            ]
+            if not matched:
+                return f"No paper found matching: {pattern!r}"
+
+        lines = [f"Found {len(matched)} matches (showing {min(len(matched), max_results)}):", ""]
+
+        for paper in matched[:max_results]:
+            authors = paper.parsed_authors
+            authors_str = ", ".join(authors) if authors else "Unknown"
+            first_author = authors[0].split()[-1] if authors else "Unknown"
+
+            bibtex_key = f"{first_author.lower()}{paper.year or 'YYYY'}"
+            bibtex = (
+                f"@article{{{bibtex_key},\n"
+                f"  author = {{{authors_str}}},\n"
+                f"  title = {{{paper.title}}},\n"
+                f"  year = {{{paper.year or 'N/A'}}},\n"
+                f"  doi = {{{paper.doi or 'N/A'}}},\n"
+                f"}}"
+            )
+
+            lines += [
+                f"### {paper.display_name()}",
+                f"  authors: {authors_str}",
+                f"  year: {paper.year or 'Unknown'}",
+                f"  doi: {paper.doi or 'N/A'}",
+                f"  bibtex: {bibtex}",
+                "",
+            ]
+
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error looking up citation: {exc}"
+
+
 def get_paper(
     pattern: str,
     reason: str = "",
@@ -224,9 +291,7 @@ def get_paper(
                 return f"No paper found matching: {pattern!r}"
 
             paper = matched[0]
-            chunk_count = session.exec(
-                select(Chunk).where(Chunk.paper_id == paper.id)
-            ).all()
+            chunk_count = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
 
         # Log this read
         if reason:
@@ -366,9 +431,7 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
             from scholarforge.graph.metrics import compute_metrics
 
             metrics = compute_metrics()
-            all_papers.sort(
-                key=lambda p: metrics.pagerank.get(p.id, 0), reverse=True
-            )
+            all_papers.sort(key=lambda p: metrics.pagerank.get(p.id, 0), reverse=True)
         except Exception:  # noqa: BLE001
             # Fallback to year ordering if graph metrics unavailable
             all_papers.sort(key=lambda p: p.year or 0, reverse=True)
@@ -376,8 +439,7 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
         total = len(all_papers)
         subset = all_papers[:max_papers] if max_papers else all_papers
         lines = [
-            f"## Top {len(subset)} Papers by Citation PageRank"
-            f" ({total} total in corpus)",
+            f"## Top {len(subset)} Papers by Citation PageRank ({total} total in corpus)",
             "",
         ]
         for p in subset:
@@ -1301,11 +1363,13 @@ def find_corpus_gaps() -> str:
                     label_j = ", ".join(
                         papers[pid].display_name()[:40] for pid, _ in top_papers_j if pid in papers
                     )
-                    voids.append({
-                        "void_depth": round(1.0 - nearest_sim, 3),
-                        "cluster_a": label_i or f"Cluster {i}",
-                        "cluster_b": label_j or f"Cluster {j}",
-                    })
+                    voids.append(
+                        {
+                            "void_depth": round(1.0 - nearest_sim, 3),
+                            "cluster_a": label_i or f"Cluster {i}",
+                            "cluster_b": label_j or f"Cluster {j}",
+                        }
+                    )
         voids.sort(key=lambda v: v["void_depth"], reverse=True)
 
         # Topical gaps (secondary signal)
@@ -1332,12 +1396,14 @@ def find_corpus_gaps() -> str:
                             continue
                         inter = len(sig[t_names[ii]] & sig[t_names[jj]])
                         if inter < 2:
-                            topical_gaps.append({
-                                "topics": f"{t_names[ii]} + {t_names[jj]}",
-                                "papers": f"{len(sig[t_names[ii]])}+{len(sig[t_names[jj]])}",
-                                "overlap": inter,
-                                "similarity": round(sim, 2),
-                            })
+                            topical_gaps.append(
+                                {
+                                    "topics": f"{t_names[ii]} + {t_names[jj]}",
+                                    "papers": f"{len(sig[t_names[ii]])}+{len(sig[t_names[jj]])}",
+                                    "overlap": inter,
+                                    "similarity": round(sim, 2),
+                                }
+                            )
                 topical_gaps.sort(key=lambda g: g["similarity"], reverse=True)
         except Exception:  # noqa: BLE001
             pass
@@ -1408,12 +1474,14 @@ def find_synthesis_opportunities() -> str:
                     pa = papers.get(pids[i])
                     pb = papers.get(pids[j])
                     if pa and pb:
-                        opportunities.append({
-                            "paper_a": pa.display_name()[:60],
-                            "paper_b": pb.display_name()[:60],
-                            "similarity": round(s, 3),
-                            "synthesis_potential": round(1.0 - abs(s - 0.73) / 0.1, 3),
-                        })
+                        opportunities.append(
+                            {
+                                "paper_a": pa.display_name()[:60],
+                                "paper_b": pb.display_name()[:60],
+                                "similarity": round(s, 3),
+                                "synthesis_potential": round(1.0 - abs(s - 0.73) / 0.1, 3),
+                            }
+                        )
 
         opportunities.sort(key=lambda o: o["synthesis_potential"], reverse=True)
 
