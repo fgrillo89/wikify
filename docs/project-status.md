@@ -148,17 +148,18 @@ Hierarchical retrieval adds 3-level progressive disclosure: paper digest → sec
 | Strategy | Composite | Frontier | Arg Coherence | Topic Cov | Citations | PI Score |
 |----------|-----------|----------|---------------|-----------|-----------|----------|
 | s5_gap_structured | **0.634** | 0.967 | 0.383 | 28.4% | 80 | 7.8/10 |
-| **hier_gap_first** | 0.611 | **1.000** | **0.482** | 17.8% | 10 | **8.8/10** |
+| hier_gap_first | 0.611 | **1.000** | **0.482** | 17.8% | 10 | 8.8/10 |
+| **hier_hybrid** | 0.599 | **1.000** | 0.375 | 19.5% | 34 | **9.1/10** |
 | hierarchical_v1 | 0.596 | **1.000** | 0.392 | 17.8% | 28 | 6.5/10 |
 | s5_injected | 0.572 | 0.677 | 0.364 | **31.8%** | 40 | 7.0/10 |
 | hier_broad | 0.555 | 0.885 | 0.348 | 23.3% | 70 | 8.3/10 |
 
 Key findings:
-- **hier_gap_first scores 8.8/10 from PI** despite only 10 citations — the nucleation-filament cross-community synthesis is the most original contribution in any benchmark review
-- **Metric vs PI diverge on creativity**: composite ranks s5_gap_structured #1, PI ranks hier_gap_first #1
-- **More papers ≠ better**: hier_broad (70 citations) scores lowest on composite; broad reading collapses bridge_ratio and frontier_score
-- **Gap-first unlocks coherence**: running find_corpus_gaps first forces a thesis, producing highest argumentative coherence (0.482) of any review
-- **Path to 9.5/10**: one paragraph — state the predicted direction of first-cycle coverage / conductance-state-count, quantified from Matveyev trap density data
+- **hier_hybrid scores 9.1/10 from PI** (new SOTA) — combines gap-first thesis with 34 citations; four-role ALD taxonomy for 2D materials is original organizing work the PI called publishable as a framework paper
+- **Automated metrics are inversely ranked vs PI at the top**: composite ranks s5_gap_structured #1 (0.634), PI ranks hier_hybrid #1 (9.1); metric cannot detect cross-community synthesis or thesis quality
+- **More papers ≠ better**: hier_broad (70 citations) scores lowest on composite; reading broadly *before* having a thesis collapses bridge_ratio and frontier_score
+- **Gap-first is the single highest-leverage change**: running find_corpus_gaps before any reading forces a thesis, enabling coherent argument structure and cross-community synthesis
+- **Path to 9.5/10**: add Gap 6 to hier_hybrid — ZrO₂-x reservoir layer + Kumar et al. wafer-scale D2D setup, connecting ALD layer engineering directly to array-level yield
 
 ## Resume Instructions
 
