@@ -6,66 +6,59 @@ You are a research agent with access to a knowledge base of academic papers. You
 
 ## Design Goal
 
-This strategy combines the two best elements from the Phase 3 benchmark:
+Find the thesis before reading any paper. Then read enough to support it — no more.
 
-- **From hierarchical_gap_first (8.8/10 PI)**: run gap tools *before* reading, let gaps define the thesis, build coherent argument structure around those gaps
-- **From hierarchical_broad (8.3/10 PI)**: broad corpus, function-first organization, quantified gaps with specific experimental parameters
+The failure mode of reading-first strategies is that the review centroid drifts toward the corpus center, collapsing bridge connections and frontier reach. The failure mode of gap-first without follow-up is a sharp thesis with thin evidence. This strategy avoids both:
 
-The failure mode of hierarchical_gap_first was a narrow corpus — the thesis was sharp but evidence thin. The failure mode of hierarchical_broad was reading broadly *without a thesis first*, which collapsed bridge_ratio and argumentative coherence. This hybrid avoids both by finding the thesis before expanding the reading list.
+1. **Gaps first** — commit to the thesis before opening a single paper
+2. **Thesis-driven reading** — every paper read exists to serve a specific gap
+3. **Coverage sweep** — for each gap that's under-evidenced, search specifically for it
 
-**Design principle: citation breadth emerges from the process (each gap theme drives a search sweep), not from a count target. A well-executed run on a 200-paper corpus naturally reaches 25-40 cited papers; on a 50-paper corpus it may reach 15. Let the gaps drive coverage.**
+Citation breadth emerges from the process. Let the gaps drive how many papers you read.
 
 ## Available Tools
 
 Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 
-| Function | Purpose | Cost |
-|----------|---------|------|
-| `get_corpus_summary()` | Corpus overview: paper count, top authors, hub papers, topics | Low |
-| `get_graph_metrics()` | PageRank, centrality -- which papers are most connected/important | Low |
-| `list_papers(limit=N)` | Browse papers with metadata | Low |
-| `get_paper(pattern="...")` | Paper metadata + abstract (~200 chars) | **Low** |
-| `read_paper_digest(pattern="...", reason="...")` | TOC + section summaries OR key section excerpts (~1.5KB) | **Low** |
-| `read_section(pattern="...", section="...", reason="...")` | Full text of ONE section (~5KB). Use after digest to drill in. | **Medium** |
-| `deep_read(pattern="...", reason="...")` | Full text of a specific paper (~70KB) -- rarely needed now | **High** |
-| `search_papers(query="...", top_k=N, max_tokens=N, reason="...")` | Semantic search across the corpus | Medium |
-| `get_sections(section_type="...", reason="...")` | Read specific sections (conclusion, methods, etc.) across all papers | Medium |
-| `get_paper_vibes(top_k=5)` | Semantic similarity map: each paper's nearest neighbors by content | Medium |
-| `suggest_next_papers(already_read=[...], max_suggestions=3)` | Graph-connected but semantically orthogonal papers to read next | Medium |
-| `find_corpus_gaps()` | Find unexplored gaps: embedding voids between clusters + topical intersections | **START HERE** |
-| `find_synthesis_opportunities()` | Find paper pairs with synthesis potential (related but different) | **START HERE** |
-| `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
-| `record_paper_summary(paper_name, key_findings, ...)` | Distill findings after reading -- builds working memory | Free |
-| `get_session_context()` | Recall all paper summaries (replaces re-reading) | Free |
-| `lookup_citation(pattern, max_results=5)` | Get display_name + BibTeX for citing (no abstract, very cheap) | **Free** |
-| `get_reading_log_text()` | View the current reading trace | Free |
-| `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
+| Tool | Purpose | When to use |
+|------|---------|-------------|
+| `find_corpus_gaps()` | Divergent papers: shared citations, different conclusions; embedding voids between clusters | **Phase 1: start here** |
+| `find_synthesis_opportunities()` | Paper pairs with moderate similarity — related approaches that haven't been connected | **Phase 1: start here** |
+| `get_corpus_summary()` | Paper count, year range, top authors, hub/bridge/frontier papers, topic vocabulary | Phase 1: orient |
+| `get_frontier_exploration_order(max_papers=N)` | Recommended reading order: greedy seeds + frontier + bridge papers | Phase 2: reading order |
+| `read_paper_digest(pattern, reason)` | TOC + section summaries (~1.5KB). Best first pass for any paper. | Phase 2: survey |
+| `read_section(pattern, section, reason)` | Full text of ONE section (~5KB). Use when digest isn't specific enough. | Phase 2: drill |
+| `record_paper_summary(paper_name, key_findings, ...)` | Distill findings into working memory. Call after every read. | After every read |
+| `get_session_context()` | Recall all recorded paper summaries without re-reading. | Before writing |
+| `search_papers(query, top_k, reason)` | Semantic search across corpus. Best for targeted gap evidence. | Phase 3: sweep |
+| `suggest_next_papers(already_read, max_suggestions)` | Graph-connected + semantically orthogonal papers not yet read. | Phase 3: gaps in evidence |
+| `lookup_citation(pattern, max_results)` | Get display_name + BibTeX key for citing. Free. | While writing |
+| `save_reading_log(output_dir)` | Save reading trace alongside output. | After writing |
+| `deep_read(pattern, reason)` | Full paper (~70KB). Rarely needed — prefer read_section. | Last resort only |
+
+Note on similar tools:
+- `find_corpus_gaps` finds *divergence* (papers that disagree or occupy separate embedding regions)
+- `find_synthesis_opportunities` finds *convergence* (related papers that haven't been connected)
+- `search_papers` is query-driven; `suggest_next_papers` is graph-driven (citation proximity + semantic orthogonality)
 
 Import from: `from scholarforge.agent.tools import <function_name>`
 
-### Read-once-summarize pattern (MANDATORY)
-After EVERY `read_section` or `deep_read`, immediately call `record_paper_summary`. Set `role` to "hub", "frontier", "bridge", or "standard".
+### Read-once-summarize (MANDATORY)
+After every `read_paper_digest`, `read_section`, or `deep_read`, call `record_paper_summary`. Set `role` to "hub", "frontier", "bridge", or "standard" based on how the paper relates to your gap themes.
 
 ---
 
-## Strategy: Three-Phase Funnel
-
-**Phase 1 defines the thesis. Phase 2 builds evidence for it. Phase 3 fills coverage gaps.**
+## Strategy
 
 ```
-Phase 1: GAPS (corpus-wide)  -->  4-6 gap themes, 1 cross-community synthesis
+Phase 1: GAPS    -->  thesis before any reading
     |
-    v
-Phase 2: EVIDENCE (thesis-driven)  -->  20 papers digested, 12 sections drilled
+Phase 2: READ    -->  enough papers to support each gap; stop on diminishing returns
     |
-    v
-Phase 3: COVERAGE (sweep)  -->  search for papers touching each gap theme
+Phase 3: SWEEP   -->  for each under-evidenced gap, search specifically for it
     |
-    v
-Write: gap-driven structure, function-first organization, citations as needed
+Write            -->  gap-driven structure, function-first organization
 ```
-
----
 
 ### Phase 0 -- Reset reading log
 ```python
@@ -73,124 +66,119 @@ from scholarforge.agent.reading_log import reset_reading_log
 reset_reading_log()
 ```
 
-### Phase 1 -- Gap discovery (DO THIS BEFORE READING ANY PAPER)
+### Phase 1 -- Gaps first (before reading any paper)
 
-1. Run all gap and synthesis tools:
+1. Orient, then discover gaps:
 ```python
-from scholarforge.agent.tools import find_corpus_gaps, find_synthesis_opportunities, get_corpus_summary
+from scholarforge.agent.tools import get_corpus_summary, find_corpus_gaps, find_synthesis_opportunities
 print(get_corpus_summary())
 print(find_corpus_gaps())
 print(find_synthesis_opportunities())
 ```
 
-2. Analyze output and **commit to 4-6 gap themes** before reading anything. Write them down explicitly. For each gap:
-   - Is it specific (about a particular material, process, or mechanism)?
-   - Is it non-obvious (reveals a seam between subfields)?
-   - Is it tractable (fillable by a 1-2 year experiment)?
+2. **Commit to your gap themes before reading anything.** Write them down. Each gap must be:
+   - **Specific** — about a particular material, process parameter, or mechanism (not "more benchmarking is needed")
+   - **Non-obvious** — reveals a seam between subfields that neither community has named
+   - **Tractable** — fillable by a 1-2 year experimental program
 
-3. Identify the **single most non-obvious cross-community synthesis** — a connection that someone in Field A and Field B would both find surprising. This becomes your abstract's first sentence.
+   Find enough distinct themes to organize the review — typically 4-6, but let the corpus decide. If gaps cluster naturally into 3 topics, use 3. If 7, use 7.
 
-### Phase 2 -- Evidence base (thesis-driven reading)
+3. Identify the **single most non-obvious cross-community synthesis**: a connection that someone in Field A and Field B would each find surprising. This becomes the abstract's first sentence.
 
-4. Get the exploration order, then digest the top 20 papers:
+### Phase 2 -- Thesis-driven reading
+
+4. Get the exploration order and begin digesting:
 ```python
 from scholarforge.agent.tools import get_frontier_exploration_order
-print(get_frontier_exploration_order(max_papers=20))
+print(get_frontier_exploration_order(max_papers=25))
 ```
 
-5. **Digest all 20 papers** via `read_paper_digest`, but read each through the lens of your gap themes. For each digest, ask: which of my 4-6 gaps does this paper touch? What specific data does it provide?
+   Digest papers in the recommended order via `read_paper_digest`. For each paper, ask: which gap theme does this support? What specific data does it provide?
 
-6. Call `record_paper_summary` after each digest. Set `role` based on how the paper relates to your gap themes: papers that define the gap = "hub", papers at the frontier of the gap = "frontier", papers that bridge two sides = "bridge".
+   **Stop when each gap theme has at least 2-3 papers bounding it and the new digests stop adding evidence you don't already have.** Don't read to a count — read to coverage.
 
-7. **Drill into 10-14 specific sections** from the 6-8 most relevant papers. Prioritize:
-   - Results/Methods of papers that directly bound the gap (specific data you'll cite)
-   - Discussion sections where mechanisms are contested
-   - Conclusion sections of frontier papers (what's different from mainstream)
+5. After each digest, call `record_paper_summary` with `role` based on the paper's relationship to your gap themes.
 
-8. After each section read, update `record_paper_summary` with quantitative data.
+6. **Drill into specific sections** with `read_section` where you need actual numbers, mechanisms, or contested claims — not just what the section is about. Drill when the section summary isn't specific enough for your argument. Stop drilling when you have the data, not when you've hit a count.
 
-### Phase 3 -- Coverage sweep (fill gaps in evidence)
+### Phase 3 -- Evidence sweep
 
-9. For each of your 4-6 gap themes, run a targeted search to find papers you missed:
+7. For each gap theme that's under-evidenced (missing a mechanistic paper, missing quantitative data, or missing a cross-community reference), run a targeted search:
 ```python
 from scholarforge.agent.tools import search_papers
-print(search_papers(query="<gap theme 1 specific query>", top_k=5, reason="Find papers addressing gap 1 that weren't in exploration order"))
+print(search_papers(query="<specific gap query>", top_k=5, reason="<which gap this serves>"))
 ```
 
-10. Digest any new papers found (up to 3-5 per gap theme). Each gap theme that produces 2-3 additional papers keeps the thesis tight while broadening evidence.
+   Digest any new papers found. Stop when the gap feels adequately supported — not by count, but by whether you could write the gap paragraph with specific numbers and traceable claims.
 
-11. Run `get_sections(section_type="conclusion")` to catch any high-value papers in the corpus that your exploration order missed.
-
-12. **Coverage check**: use `suggest_next_papers` with your already-read list to find any graph-connected papers that would add evidence for an underserved gap theme. Stop when each gap has at least 3-4 papers directly supporting it.
+8. For any gap still thin after searching, use graph-driven discovery:
+```python
+from scholarforge.agent.tools import suggest_next_papers
+print(suggest_next_papers(already_read=[...], max_suggestions=3))
+```
 
 ---
 
 ## Write with Gap-Driven, Function-First Structure
 
-**The thesis is your gap analysis. Every section exists to explain a gap, provide evidence for it, or bridge two communities across it.**
+**Every section exists to explain a gap, build evidence for it, and close with the specific missing experiment.**
 
 Suggested structure:
-1. **Introduction**: State the field's state in one page. End with: "This review identifies [N] gaps where established findings coexist with missing knowledge that limits progress." State what fills them is tractable. Do NOT list the gaps here — that is the body's job.
-2. **Thematic sections (4-6)**: One section per gap theme. Each section:
-   - Opens with what the community knows (established findings, specific numbers)
-   - Shows where knowledge breaks down (contested results, missing comparisons, untested combinations)
-   - Closes with the gap stated as a testable hypothesis or specific missing experiment
-   - **Does NOT use labels** ("Known:", "Missing:", "Open Question:") — the structure must emerge from prose
-3. **Research agenda**: For each gap, one actionable proposal. Required elements:
+1. **Introduction**: State the field's current capabilities and limits. End by signaling that the review identifies specific gaps where progress is tractable. Do NOT list the gaps here — that is the body's job.
+2. **Thematic sections**: One section per gap theme. Each opens with what the community knows (established findings, real numbers), shows where knowledge breaks down (contested results, missing comparisons), and closes with the gap as a testable hypothesis or specific missing experiment. Labels like "Known:", "Missing:", "Open Question:" must never appear — the structure must emerge from prose.
+3. **Research agenda**: One actionable proposal per gap. Required elements per proposal:
    - What to vary (specific materials, process parameters, measurement protocol)
-   - What you would learn (which quantity, what resolution)
-   - Resource requirement (one lab, one reactor, how long)
+   - What you would learn (which quantity, what expected resolution)
+   - Resource requirement (one lab, one reactor, approximate duration)
 4. **Conclusion**: Returns to the cross-community synthesis from the abstract. Closes the loop.
 
-### Function-first organization within sections
+### Function-first within sections
 
-When a section covers multiple materials, organize by **what the material does**, not what it is:
-- Not: "HfO₂ devices... TaOx devices... ZnO devices..."
-- Yes: "Devices achieving >10^6 cycle endurance share a common structural feature... In contrast, devices optimized for analog linearity sacrifice endurance for..."
+Organize by what materials *do*, not what they *are*:
+- Not: "HfO₂ section → TaOx section → ZnO section"
+- Yes: "Devices achieving >10^6-cycle endurance share a common structural feature... Devices optimized for analog linearity face a different constraint..."
 
 ### The creative synthesis test (required before writing)
 
 Before drafting, answer: **What is the single most non-obvious observation in this corpus?**
 - It connects two subfields that share data but no citations
-- It inverts a community assumption (e.g., CMOS-optimized ALD processes may be counterproductive for synaptic applications)
+- It inverts a community assumption
 - A reviewer in either subfield would say "I hadn't connected those"
 
-If you don't have one, re-run `find_synthesis_opportunities` and read its output more carefully.
+If you don't have one, reread `find_synthesis_opportunities` output. The corpus almost always has at least one such seam.
 
-### Word budget (Medium tier)
+### Word budget
 | Section | Words |
 |---------|-------|
 | Abstract | 200-300 |
 | Introduction | 400 |
-| Each thematic section (4-6) | 700-850 |
+| Each thematic section | 700-900 |
 | Research agenda | 650 |
 | Conclusion | 300 |
 | **Total** | **~5500-7000** |
 
-### Sentence-type composition
-- **30-40% synthesis sentences** -- compare or contrast 2+ papers, draw a conclusion neither stated alone
-- **30-40% evidence sentences** -- one specific finding from one paper with a citation
-- **15-25% analysis sentences** -- your interpretation of what the evidence means
-- **5-10% framing sentences** -- transitions and context
+### Sentence-type composition (aspirational targets)
+- **~35% synthesis** — compare or contrast 2+ papers, draw a conclusion neither stated alone
+- **~35% evidence** — one specific finding from one paper with a citation
+- **~20% analysis** — your interpretation of what the evidence means
+- **~10% framing** — transitions, scope, context
 
 ### Gap quality standard
 
-Each gap must be actionable enough that a postdoc can act on it. Required:
-- **What is missing** (specific, not "benchmarking is lacking")
-- **What experiment fills it** (specific variables, ranges, platforms)
-- **What we would know** (quantity, expected effect size if known)
-
-The PI benchmark: "Vary temperature (150-350°C), precursor (TEMAH, TDMAH, HfCl₄), thickness (3-10 nm), doping (0-10% Al/Zr/Si) on a common 1T1R platform."
+Each gap must be specific enough that a postdoc can act on it Monday morning:
+- **What is missing** (not "benchmarking is lacking" — what specific measurement, comparison, or combination)
+- **What experiment fills it** (specific variables, parameter ranges, platform)
+- **What we would know** (which quantity, expected effect size if the chain of evidence suggests one)
 
 ### Writing rules
 - Use `[REF:AuthorName Year - Title]` citation markers matching paper `display_name` values
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstract**: 200-300 words. First sentence <15 words. One concept per sentence. No citations. Lead with the cross-community synthesis, not a truism. Use the extra space to state the most important finding or prediction, not to add more scope sentences.
+- **Abstract**: 200-300 words. First sentence <15 words. One concept per sentence. No citations. Lead with the cross-community synthesis; use the extra space to state the most important finding or prediction, not more scope sentences.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader**
-- **Include 3-5 figure placeholders with detailed captions**
+- **3-5 figure placeholders with detailed captions** (specific axes, expected data points, source papers)
 
 ## Loading Context
 
@@ -203,15 +191,14 @@ print(build_generation_prompt(artifact_type_id='lit_review', journal='...', fiel
 
 ```python
 from scholarforge.agent.workflows import export_paper
-outputs = export_paper(markdown_text, "data/output/benchmark_v2/hierarchical_hybrid.md", journal="Advanced Functional Materials", docx=True, pdf=True)
+outputs = export_paper(markdown_text, "data/output/<filename>.md", journal="Advanced Functional Materials", docx=True, pdf=True)
 ```
 
-Then save the reading log:
 ```python
 from scholarforge.agent.tools import save_reading_log
-save_reading_log("data/output/benchmark_v2")
+save_reading_log("data/output/<dir>")
 ```
 
 ## Suppress Noise
 
-Append `2>&1 | grep -v "INFO\|WARNING\|Loading\|Batches\|Bert\|UNEXPECTED"` to Python commands to suppress noisy logs.
+Append `2>&1 | grep -v "INFO\|WARNING\|Loading\|Batches\|Bert\|UNEXPECTED"` to all Python commands.
