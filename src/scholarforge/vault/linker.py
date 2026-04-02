@@ -19,6 +19,205 @@ from scholarforge.vault.writer import _sanitize_filename, vault_dir
 
 # ── Keyword extraction ───────────────────────────────────────────────────────
 
+# First word of a keyword phrase must not be a function word, conjunction,
+# preposition, or participial opener — these indicate sentence fragments, not topics.
+_KEYWORD_BAD_STARTERS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "based",
+        "being",
+        "both",
+        "but",
+        "by",
+        "can",
+        "closely",
+        "demonstrating",
+        "developing",
+        "due",
+        "each",
+        "exhibiting",
+        "for",
+        "from",
+        "furthermore",
+        "however",
+        "in",
+        "including",
+        "inspired",
+        "it",
+        "its",
+        "notably",
+        "of",
+        "offering",
+        "on",
+        "or",
+        "originally",
+        "our",
+        "providing",
+        "showing",
+        "such",
+        "the",
+        "these",
+        "this",
+        "through",
+        "to",
+        "toward",
+        "thus",
+        "using",
+        "via",
+        "we",
+        "where",
+        "which",
+        "while",
+        "with",
+    }
+)
+
+# Single-word strings that are clearly not academic topics
+_KEYWORD_SINGLE_STOP: frozenset[str] = frozenset(
+    {
+        "abstract",
+        "additionally",
+        "also",
+        "although",
+        "and",
+        "both",
+        "figure",
+        "furthermore",
+        "here",
+        "however",
+        "importantly",
+        "initially",
+        "introduction",
+        "journal",
+        "keywords",
+        "likewise",
+        "moreover",
+        "notably",
+        "or",
+        "previously",
+        "references",
+        "respectively",
+        "similarly",
+        "subsequently",
+        "table",
+        "therefore",
+        "thus",
+        "vol",
+    }
+)
+
+# Month names — dates are not topics
+_MONTH_NAMES: frozenset[str] = frozenset(
+    {
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "jan",
+        "feb",
+        "mar",
+        "apr",
+        "jun",
+        "jul",
+        "aug",
+        "sep",
+        "oct",
+        "nov",
+        "dec",
+    }
+)
+
+# Inner-phrase words that indicate a sentence fragment, not a noun phrase
+_FRAGMENT_MARKERS: tuple[str, ...] = (
+    " this ",
+    " these ",
+    " our ",
+    " their ",
+    " is ",
+    " are ",
+    " was ",
+    " were ",
+    " has ",
+    " have ",
+    " had ",
+    " its ",
+    " from ",  # copyright / provenance phrases ("content from X")
+)
+
+# Any word in this set appearing anywhere in the phrase signals bibliographic metadata
+_METADATA_WORDS: frozenset[str] = frozenset(
+    {
+        "doi",
+        "issn",
+        "isbn",
+        "arxiv",
+        "preprint",
+        "citation",
+        "copyright",
+        "licence",
+        "license",
+        "cc-by",
+        "vol",
+        "issue",
+        "pp",
+        "pages",
+    }
+)
+
+
+def _is_valid_keyword(kw: str) -> bool:
+    """Return True if kw looks like an academic keyword, not a sentence fragment.
+
+    Applies structural checks that generalize across all research domains:
+    - Length and word count bounds
+    - First word must not be a function word / conjunction / participial opener
+    - Single-word stop terms rejected
+    - Inner-phrase sentence markers rejected
+    - Date-like patterns rejected
+    """
+    if len(kw) < 3 or len(kw) > 50:
+        return False
+    words = kw.split()
+    if not words or len(words) > 5:
+        return False
+    if words[0][0].isdigit():
+        return False
+    first = words[0].lower()
+    if first in _KEYWORD_BAD_STARTERS:
+        return False
+    if len(words) == 1 and first in _KEYWORD_SINGLE_STOP:
+        return False
+    if len(words) == 1 and first in _MONTH_NAMES:
+        return False
+    # Reject "month year" date fragments
+    if len(words) == 2 and words[0].lower() in _MONTH_NAMES and words[1].isdigit():
+        return False
+    # Reject unbalanced parentheses / bracket artifacts from PDF extraction
+    if kw.count("(") != kw.count(")"):
+        return False
+    # Reject sentence fragments indicated by inner function words
+    kw_padded = f" {kw.lower()} "
+    if any(marker in kw_padded for marker in _FRAGMENT_MARKERS):
+        return False
+    # Reject phrases containing bibliographic metadata words
+    kw_words = set(kw.lower().split())
+    if kw_words & _METADATA_WORDS:
+        return False
+    return True
+
 
 def _extract_declared_keywords(text: str) -> list[str]:
     """Extract keywords from a 'Keywords:' or 'Index Terms:' section."""
@@ -43,7 +242,7 @@ def _extract_declared_keywords(text: str) -> list[str]:
         kw = part.strip().rstrip(".")
         kw = re.sub(r"^\d+[.)]\s*", "", kw)
         kw = kw.strip()
-        if 2 < len(kw) < 60 and not kw[0].isdigit() and len(kw.split()) <= 5:
+        if _is_valid_keyword(kw):
             keywords.append(kw.lower())
     return keywords
 

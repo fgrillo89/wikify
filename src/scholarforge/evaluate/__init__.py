@@ -7,6 +7,7 @@ from scholarforge.evaluate.coverage import (
     load_corpus_chunks,
     vibe_map_for_llm,
 )
+from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_scores
 from scholarforge.evaluate.quality import (
     ArgumentativeCoherenceResult,
     BridgeVectorResult,
@@ -36,6 +37,9 @@ __all__ = [
     "get_corpus_paper_ids",
     "load_corpus_chunks",
     "vibe_map_for_llm",
+    # pi review
+    "evaluate_pi",
+    "parse_pi_scores",
     # quality
     "ArgumentativeCoherenceResult",
     "BridgeVectorResult",

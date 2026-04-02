@@ -374,6 +374,55 @@ def chat():
 
 
 @app.command()
+def evaluate(
+    review_path: str = typer.Argument(..., help="Path to the review markdown file"),
+    pi: bool = typer.Option(False, "--pi", help="Run LLM-as-PI qualitative scoring"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model (litellm format)"),
+    domain: str = typer.Option(
+        "", "--domain", "-d", help="One-line field description for PI context"
+    ),
+):
+    """Evaluate a generated review with automated metrics and/or LLM-as-PI scoring."""
+    from pathlib import Path
+
+    path = Path(review_path)
+    if not path.exists():
+        console.print(f"[red]File not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    review_text = path.read_text(encoding="utf-8")
+
+    if not pi:
+        # Automated metrics only
+        from scholarforge.evaluate.quality import comprehensive_quality_report
+
+        console.print("[bold]Running automated quality metrics...[/bold]")
+        report = comprehensive_quality_report(review_text)
+        console.print(report.summary())
+    else:
+        # LLM-as-PI qualitative scoring
+        from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_scores
+
+        console.print("[bold]Running LLM-as-PI review...[/bold]")
+        if domain:
+            console.print(f"  Domain hint: {domain}")
+
+        pi_report = evaluate_pi(review_text, domain_hint=domain, model=model)
+        console.print(pi_report)
+
+        scores = parse_pi_scores(pi_report)
+        if "overall" in scores:
+            overall = scores["overall"]
+            color = "green" if overall >= 8 else "yellow" if overall >= 6 else "red"
+            console.print(f"\n[{color}]Overall PI score: {overall}/10[/{color}]")
+
+        # Optionally save alongside the review
+        out_path = path.with_suffix(".pi_review.md")
+        out_path.write_text(pi_report, encoding="utf-8")
+        console.print(f"[dim]Saved PI review to: {out_path}[/dim]")
+
+
+@app.command()
 def mcp(
     library: str = typer.Option(
         "default", "--library", "-l", help="Library name (for multi-domain research)"

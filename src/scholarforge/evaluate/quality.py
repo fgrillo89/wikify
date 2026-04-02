@@ -643,29 +643,54 @@ def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
             all_topics = session.exec(select(PaperTopic)).all()
 
         # English filler words and metadata noise that slip into paper keyword fields
-        _topic_stop_words: frozenset[str] = frozenset({
-            "abstract", "additionally", "also", "although", "august 2020",
-            "based on this extensive study",
-            "by applying different conditional stimuli",
-            "closely resembling long-term potentiation",
-            "exhibiting reliable bipolar resistive switching",
-            "for this purpose", "furthermore", "here", "however", "importantly",
-            "in addition", "in this study", "in this work", "including forming-free",
-            "including potentiation", "including spike-amplitude-",
-            "including ultra-fast switching",
-            "initially", "inspired by biological synapse",
-            "it faces challenges with uniformity",
-            "journal citation and doi", "journalcitation and doi",
-            "notably", "offering energy effciency",
-            "original content from resistive switching",
-            "outstanding 10 7 pulse endurance", "respectively",
-            "showing its excellent per-formance characteristics",
-            "sndp)", "srdp", "such as long-term potentiation (ltp)",
-            "such as potentiation/depression",
-            "swdp", "therefore", "through careful analysi",
-            "through conductance modulation",
-            "thus", "to address these issue", "training effect", "vol",
-        })
+        _topic_stop_words: frozenset[str] = frozenset(
+            {
+                "abstract",
+                "additionally",
+                "also",
+                "although",
+                "august 2020",
+                "based on this extensive study",
+                "by applying different conditional stimuli",
+                "closely resembling long-term potentiation",
+                "exhibiting reliable bipolar resistive switching",
+                "for this purpose",
+                "furthermore",
+                "here",
+                "however",
+                "importantly",
+                "in addition",
+                "in this study",
+                "in this work",
+                "including forming-free",
+                "including potentiation",
+                "including spike-amplitude-",
+                "including ultra-fast switching",
+                "initially",
+                "inspired by biological synapse",
+                "it faces challenges with uniformity",
+                "journal citation and doi",
+                "journalcitation and doi",
+                "notably",
+                "offering energy effciency",
+                "original content from resistive switching",
+                "outstanding 10 7 pulse endurance",
+                "respectively",
+                "showing its excellent per-formance characteristics",
+                "sndp)",
+                "srdp",
+                "such as long-term potentiation (ltp)",
+                "such as potentiation/depression",
+                "swdp",
+                "therefore",
+                "through careful analysi",
+                "through conductance modulation",
+                "thus",
+                "to address these issue",
+                "training effect",
+                "vol",
+            }
+        )
 
         # Normalize topics: merge plurals before dedup
         raw_topics: set[str] = set()
@@ -903,12 +928,15 @@ def compute_prose_quality(review_text: str) -> ProseQualityResult:
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body) if len(s.strip()) > 15]
     total_sentences = max(len(sentences), 1)
 
+    # Citation pattern: numbered refs [1] or author-year refs [REF:Smith 2020 - Title]
+    _cite_pat = re.compile(r"\[\d+\]|\[REF:[^\]]+\]")
+
     # --- 1. Citation Clustering ---
-    cited_sentences = [s for s in sentences if re.search(r"\[\d+\]", s)]
+    cited_sentences = [s for s in sentences if _cite_pat.search(s)]
     total_cited = max(len(cited_sentences), 1)
 
-    multi_cite = sum(1 for s in cited_sentences if len(re.findall(r"\[\d+\]", s)) >= 2)
-    total_refs_in_cited = sum(len(re.findall(r"\[\d+\]", s)) for s in cited_sentences)
+    multi_cite = sum(1 for s in cited_sentences if len(_cite_pat.findall(s)) >= 2)
+    total_refs_in_cited = sum(len(_cite_pat.findall(s)) for s in cited_sentences)
 
     clustering_ratio = total_refs_in_cited / total_cited
     multi_cite_frac = multi_cite / total_cited
@@ -924,13 +952,14 @@ def compute_prose_quality(review_text: str) -> ProseQualityResult:
         r"depend(?:s|ing)\s+on|correlat(?:e|es|ion))\b",
         re.IGNORECASE,
     )
-    _multi_cite = re.compile(r"\[\d+\].*\[\d+\]")
+    # Multi-cite: two or more citation markers (any style) in one sentence
+    _multi_cite = re.compile(r"(?:\[\d+\]|\[REF:[^\]]+\]).*?(?:\[\d+\]|\[REF:[^\]]+\])")
 
     deep_synthesis = sum(1 for s in sentences if _multi_cite.search(s) and _causal.search(s))
     surface_comparison = sum(
         1 for s in sentences if _multi_cite.search(s) and not _causal.search(s)
     )
-    single_paper = sum(1 for s in sentences if len(re.findall(r"\[\d+\]", s)) == 1)
+    single_paper = sum(1 for s in sentences if len(_cite_pat.findall(s)) == 1)
 
     deep_synth_frac = deep_synthesis / total_sentences
     surface_comp_frac = surface_comparison / total_sentences

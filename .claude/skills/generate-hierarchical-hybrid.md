@@ -128,12 +128,11 @@ print(search_papers(query="<result that would undermine gap X>", top_k=5, reason
 
    If you find papers that partially address a gap you thought was open, update your gap formulation — either tighten the scope ("X is addressed for binary switching but not for analog") or replace it.
 
-10. Ask: **What important territory does my current corpus not cover?** Common blind spots for ALD/memristor reviews:
-    - Device-level → array-level fidelity (single-device performance vs crossbar yield)
-    - Unconventional substrates or 2D material hybrid stacks
-    - Long-term reliability at scale (endurance, retention, drift)
-
-    If any of these are relevant to your gap themes but missing from your reading, run one targeted search per territory and digest any key papers found.
+10. Ask: **What important territory does my current corpus not cover?** Use the corpus itself to find your blind spots — don't rely on domain intuition:
+```python
+print(find_synthesis_opportunities())
+```
+    Review the output: any synthesis opportunity that the tool identifies but that your current gap themes don't address is a potential blind spot. For each such territory, run one targeted search and digest any key papers found. Stop when you can answer: "I have read the papers that would most challenge my framing."
 
 ---
 
@@ -156,14 +155,26 @@ Organize by what materials *do*, not what they *are*:
 - Not: "HfO₂ section → TaOx section → ZnO section"
 - Yes: "Devices achieving >10^6-cycle endurance share a common structural feature... Devices optimized for analog linearity face a different constraint..."
 
-### The creative synthesis test (required before writing)
+### Pre-writing checklist (required before drafting)
 
-Before drafting, answer: **What is the single most non-obvious observation in this corpus?**
+Before writing the first sentence, answer both questions explicitly:
+
+**1. The creative synthesis test**
+
+What is the single most non-obvious observation in this corpus?
 - It connects two subfields that share data but no citations
 - It inverts a community assumption
 - A reviewer in either subfield would say "I hadn't connected those"
 
 If you don't have one, reread `find_synthesis_opportunities` output. The corpus almost always has at least one such seam.
+
+**2. The falsifiable prediction (required)**
+
+State one quantitative prediction from the evidence you have read:
+
+> "If [specific variable or process parameter], then [specific outcome metric] changes by [magnitude or direction] because [mechanistic reason], and this prediction is falsifiable by [the specific experiment in the research agenda]."
+
+This sentence must appear in the research agenda section. It distinguishes a review that generates hypotheses from one that merely summarizes findings. If the evidence does not support a quantitative estimate, a directional prediction with a stated mechanism is acceptable. Do not write the review until you have this sentence.
 
 ### Word budget
 | Section | Words |
