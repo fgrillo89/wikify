@@ -168,9 +168,10 @@ After exploring, write the paper as markdown. Follow these rules:
 
 ### Gap identification and synthesis (required)
 Before writing, call `find_corpus_gaps()` and `find_synthesis_opportunities()`. Use these to:
-- **Name gaps explicitly** in the review: "No studies have combined X with Y" or "The intersection of A and B remains unexplored"
+- **Name gaps explicitly** in the review: "No work has combined X with Y" or "The relationship between A and B has not been examined"
+- **Look for a synthesizing observation**: an inter-field connection if the corpus spans multiple communities; a productive contradiction, inversion, or convergence if it is monolithic. Use what the corpus actually offers — do not force an inter-field framing onto a single-community corpus.
 - **Synthesize across papers**: When two papers approach the same problem differently, compare them and draw a conclusion that neither paper stated individually
-- **Future directions**: Identify 2-3 specific research questions that arise from the gaps
+- **Forward-looking section**: Identify 2-3 specific open problems with enough detail to act on — study design, argument, or model, as appropriate for the field
 - The review's value comes from what it adds beyond summarizing — identifying patterns, contradictions, and unexplored territory that individual papers cannot see
 
 ## Loading Context

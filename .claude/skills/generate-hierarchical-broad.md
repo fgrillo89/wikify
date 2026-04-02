@@ -118,27 +118,27 @@ Digest any papers found that aren't already in your notes.
 ### Suggested structure
 
 1. **Introduction**: What does the field currently achieve? What does it not yet achieve? End with a signal that the review will identify where progress is most tractable — but do not list the gaps here.
-2. **Thematic sections** (organized by function, not by material): 4-6 sections. Each opens with what the community knows (established findings with numbers), shows where knowledge is contested or incomplete, and closes by naming what is still missing. These transitions must emerge from prose — never as labeled headings.
-3. **Gaps and open problems**: Specific, actionable problems. Each gap must state what is missing, what experiment fills it, and what we would learn. Not field-level truisms.
-4. **Conclusion**: Returns to the inter-field observation (if one exists) or the most surprising finding. Shows what has changed in the reader's understanding.
+2. **Thematic sections** (organized by function or theme, not by object or author): 4-6 sections. Each opens with what the community knows (established findings with specific numbers or claims), shows where knowledge is contested or incomplete, and closes by naming what is still missing. These transitions must emerge from prose — never as labeled headings.
+3. **Gaps and open problems** (or "future directions", "open questions" — name it as appropriate for the field): Specific, actionable problems. Each gap must state what is missing, what study or argument fills it, and what we would learn. Not field-level truisms.
+4. **Conclusion**: If the review found a strong synthesizing observation (inter-field, contradiction, convergence), close by returning to it. If the corpus was monolithic, close by naming the single most important open problem and what resolving it would change. Shows what has changed in the reader's understanding from beginning to end.
 
 ### Gap quality standard
 
 Each gap must be precise enough to act on:
-- **What is missing**: a specific measurement, comparison, or combination — not "benchmarking is lacking"
-- **What experiment fills it**: specific variables, parameter ranges, platform
-- **What we would learn**: which quantity, in what direction, why it matters
+- **What is missing**: a specific measurement, comparison, argument, or combination — not "more research is needed"
+- **What fills it**: a specific study, model, dataset, or argument — whatever is appropriate for the field
+- **What we would learn**: which question gets answered; what it settles in the broader debate
 
 BAD: "Standardized benchmarking protocols remain an unmet need."
-GOOD: "No study has compared process parameter X across systems A, B, and C on a common test platform. Such a study would determine whether the performance gap is intrinsic to the material or an artifact of deposition conditions."
+GOOD: "No study has compared approach X and approach Y under controlled conditions. Such a comparison would determine whether the observed performance difference is intrinsic to the method or an artifact of evaluation setup."
 
 ### Pre-writing checklist
 
 Before drafting, answer:
 
-**What is the single most non-obvious observation in this corpus?** State it as a fact about the world — not as a description of what this review does. BAD: "This review identifies a connection between X and Y communities." GOOD: "The precision engineers use to suppress X is the same precision biologists need to create it." If you cannot find one, reread `find_synthesis_opportunities` output.
+**What is the single most non-obvious observation in this corpus?** This may be an inter-field connection, a productive contradiction, a convergence of two approaches, or (in a monolithic field) the most important unresolved tension within a single community. State it as a fact about the literature — not as a description of what this review does. BAD: "This review identifies a connection between X and Y communities." GOOD: "The evidence that community A uses to support claim P is the same evidence community B uses to argue against it." If you cannot find one, reread `find_synthesis_opportunities` output.
 
-**What is one quantitative prediction the evidence supports?** "If [parameter], then [metric] changes by [magnitude or direction] because [mechanism]." This must appear in the gaps section. A directional prediction with a stated mechanism is acceptable if the evidence does not support a magnitude estimate.
+**What is one specific claim the evidence supports but the field has not yet made explicitly?** "If [variable or condition], then [outcome] changes by [direction or magnitude] because [mechanism or reason] — and this is testable by [study, analysis, or argument]." For non-experimental fields, a directional claim with a stated mechanism is acceptable. This must appear in the gaps/forward-looking section.
 
 ### Word budget
 | Section | Words |

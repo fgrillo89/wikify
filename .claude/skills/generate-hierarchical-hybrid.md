@@ -77,13 +77,19 @@ print(find_synthesis_opportunities())
 ```
 
 2. **Commit to your gap themes before reading anything.** Write them down. Each gap must be:
-   - **Specific** — about a particular material, process parameter, or mechanism (not "more benchmarking is needed")
-   - **Non-obvious** — reveals a seam between subfields that neither community has named
-   - **Tractable** — fillable by a 1-2 year experimental program
+   - **Specific** — about a particular concept, variable, claim, or mechanism (not "more research is needed")
+   - **Non-obvious** — something the community has not yet named or addressed, not a restatement of the field's own agenda
+   - **Tractable** — addressable by a targeted study, experiment, argument, or synthesis
 
    Find enough distinct themes to organize the review — typically 4-6, but let the corpus decide. If gaps cluster naturally into 3 topics, use 3. If 7, use 7.
 
-3. Identify the **single most non-obvious inter-field connection**: a finding that someone in Field A and someone in Field B would each find surprising. State it as an observation about what the literature shows, not as a description of your synthesis process. This becomes the abstract's **second** sentence (sentence 1 sets context for non-specialists; sentence 2 delivers the surprise).
+3. **Look for a structural pattern in the corpus** — the strongest synthesizing move available to you. In order of preference:
+   - Two subfields or communities share data but don't cite each other, or reach opposite conclusions from similar evidence → an inter-field observation
+   - A community assumption is inverted by a minority of papers that the mainstream hasn't engaged with → a productive contradiction
+   - Two lines of work address the same phenomenon from different angles without knowing it → a convergence
+   - None of the above: the corpus is relatively monolithic → your synthesizing move is identifying the single most important unresolved tension within the field
+
+   **Only use the inter-field framing if the corpus actually has inter-field structure.** Do not force it. If the synthesis is within a single community, state it within that community's terms. Whatever form the synthesis takes, state it as an observation about what the literature shows — not as a description of your process. If a synthesis exists, it becomes the abstract's **second** sentence (sentence 1 sets accessible context; sentence 2 delivers the insight).
 
 ### Phase 2 -- Thesis-driven reading
 
@@ -136,47 +142,52 @@ print(find_synthesis_opportunities())
 
 ---
 
-## Write with Gap-Driven, Function-First Structure
+## Write with Gap-Driven Structure
 
-**Every section exists to explain a gap, build evidence for it, and close with the specific missing experiment.**
+**Every section exists to explain a gap, build evidence for it, and close with the specific missing study, test, or argument.**
 
 Suggested structure:
-1. **Introduction**: State the field's current capabilities and limits. End by signaling that the review identifies specific gaps where progress is tractable. Do NOT list the gaps here — that is the body's job.
-2. **Thematic sections**: One section per gap theme. Each opens with what the community knows (established findings, real numbers), shows where knowledge breaks down (contested results, missing comparisons), and closes with the gap as a testable hypothesis or specific missing experiment. Labels like "Known:", "Missing:", "Open Question:" must never appear — the structure must emerge from prose.
-3. **Research agenda**: One actionable proposal per gap. Required elements per proposal:
-   - What to vary (specific materials, process parameters, measurement protocol)
-   - What you would learn (which quantity, what expected resolution)
-   - Resource requirement (one lab, one reactor, approximate duration)
-4. **Conclusion**: Returns to the inter-field observation introduced in the abstract. Closes the loop by showing what has changed in the reader's understanding from the beginning to the end.
+1. **Introduction**: State what the field currently knows and where it falls short. End by signaling that specific, addressable gaps exist — but do not list them here. That is the body's job.
+2. **Thematic sections**: One section per gap theme. Each opens with what the community knows (established findings, specific numbers or claims), shows where knowledge breaks down (contested results, missing comparisons, unresolved tensions), and closes with the gap stated as a testable hypothesis, specific missing study, or unresolved question. Labels like "Known:", "Missing:", "Open Question:" must never appear — the structure must emerge from prose.
+3. **Forward-looking section** (research agenda, open problems, or future directions — name it as appropriate for the field): One actionable proposal per gap. Required elements per proposal:
+   - What would be studied or argued, and how
+   - What we would learn (which question gets answered, what the resolution tells us)
+   - What makes it tractable now (what capability, dataset, or method exists that didn't before)
+4. **Conclusion**: Shows what has changed in the reader's understanding from the beginning to the end. If the review found a strong synthesizing observation (inter-field, contradiction, convergence), close by returning to it and stating its implication. If the corpus was monolithic, close by naming the single most important thing the field now needs to do.
 
-### Function-first within sections
+### Organize by function, not by category
 
-Organize by what materials *do*, not what they *are*:
-- Not: "HfO₂ section → TaOx section → ZnO section"
-- Yes: "Devices achieving >10^6-cycle endurance share a common structural feature... Devices optimized for analog linearity face a different constraint..."
+Within thematic sections, organize by what findings *do* or *enable* — not by what objects, methods, or authors *are*:
+- NOT: "Group A's approach → Group B's approach → Group C's approach"
+- YES: "Approaches that achieve outcome X share property P... Approaches optimized for outcome Y face a different constraint..."
+
+This applies regardless of field: the principle is to group by explanatory power, not by taxonomy.
 
 ### Pre-writing checklist (required before drafting)
 
 Before writing the first sentence, answer both questions explicitly:
 
-**1. The creative synthesis test**
+**1. The synthesizing observation test**
 
-What is the single most non-obvious observation in this corpus?
-- It connects two subfields that share data but no citations
-- It inverts a community assumption
-- A reviewer in either subfield would say "I hadn't connected those"
+What is the single most non-obvious observation in this corpus? It should be one of:
+- A connection between two areas that share evidence but haven't cited each other
+- An inversion of a community assumption — the mainstream says X, but the data supports not-X
+- A convergence: two approaches solving the same problem from different angles without knowing it
+- In a monolithic field: the single most important unresolved tension — where the community's own evidence contradicts its own consensus
 
-State it as a fact about the world, not as a description of what this review does. BAD: "This review identifies a connection between X and Y communities." GOOD: "The precision engineers use to eliminate X is the same precision biologists need to create it."
+State it as a fact about the literature, not as a description of what this review does. GOOD: "The same variable that community A minimizes is the variable community B needs to maximize." GOOD (monolithic): "The leading explanation for X predicts Y, but three independent studies report the opposite."
 
-If you don't have one, reread `find_synthesis_opportunities` output. The corpus almost always has at least one such seam.
+**Not every corpus has a cross-field synthesis.** If the corpus is within a single community, the strongest observation may simply be a productive contradiction or an overlooked implication. Use what the corpus actually offers. If `find_synthesis_opportunities` shows no meaningful inter-area connections, look for within-field inversions instead.
 
-**2. The falsifiable prediction (required)**
+**2. The forward-looking claim (required)**
 
-State one quantitative prediction from the evidence you have read:
+State one specific claim the evidence supports but the field has not yet made explicitly:
 
-> "If [specific variable or process parameter], then [specific outcome metric] changes by [magnitude or direction] because [mechanistic reason], and this prediction is falsifiable by [the specific experiment in the research agenda]."
+> "If [variable or condition], then [outcome] changes by [direction or magnitude] because [mechanism or reason] — and this is testable by [specific study, analysis, or experiment in the research agenda]."
 
-This sentence must appear in the research agenda section. It distinguishes a review that generates hypotheses from one that merely summarizes findings. If the evidence does not support a quantitative estimate, a directional prediction with a stated mechanism is acceptable. Do not write the review until you have this sentence.
+For non-experimental fields (theoretical, computational, qualitative), the form is: "The evidence suggests that [claim], which implies [consequence] — testable by [argument, model, or dataset]."
+
+This sentence must appear in the forward-looking section. If the evidence does not support a quantitative estimate, a directional claim with a stated mechanism is acceptable. Do not write the review until you have this sentence.
 
 ### Word budget
 | Section | Words |
@@ -196,23 +207,22 @@ This sentence must appear in the research agenda section. It distinguishes a rev
 
 ### Gap quality standard
 
-Each gap must be specific enough that a postdoc can act on it Monday morning:
-- **What is missing** (not "benchmarking is lacking" — what specific measurement, comparison, or combination)
-- **What experiment fills it** (specific variables, parameter ranges, platform)
-- **What we would know** (which quantity, expected effect size if the chain of evidence suggests one)
+Each gap must be specific enough to act on immediately:
+- **What is missing**: a specific measurement, comparison, argument, or combination — not a field-level truism ("more research is needed")
+- **What fills it**: a specific study design, theoretical argument, dataset, or experiment — whatever is appropriate for the field
+- **What we would learn**: which question gets answered; what the resolution tells us about the field's broader debate
 
 ### Writing rules
 - Use `[REF:AuthorName Year - Title]` citation markers matching paper `display_name` values
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstract** (200-300 words, one concept per sentence, no citations): follow the sentence order in the style guide (accessible context → inter-field observation → key quantitative evidence → reader capability). Hard bans:
-  - Never write "This review maps/identifies/proposes/examines/organizes/structures" — or ANY sentence whose subject is "this review" or "this section" and whose predicate describes what the document does. This ban covers all verbs, not only the listed ones.
-  - Never use "cross-community synthesis" or "cross-community" in output — these are internal planning terms. Use the actual observation.
-  - Never use "postdoc to begin Monday" or similar informal shorthand from planning notes.
-  - Never describe the review's process or method.
-  - Final sentence: state what the reader now understands or can now do — not what the review contains. BAD: "Each gap is specific enough to resolve within a two-year program." GOOD: "Researchers now have a clear map of which experiments will have the highest marginal return, and why the order matters."
-- **Section continuity**: each thematic section must open with a sentence naming something concrete from the previous section's closing, before introducing the new topic. BAD: "ALD's conformality on non-planar surfaces is its most distinctive property." GOOD: "The array-level variability described above all trace back to filament nucleation scatter — and ALD's conformality on non-planar substrates offers one direct route to controlling it."
+- **Abstract** (200-300 words, one concept per sentence, no citations): follow the sentence order in the style guide — accessible context first, then the most important observation, then key evidence, then what the reader gains. Hard bans:
+  - Never write any sentence whose subject is "this review" or "this section" and whose predicate describes what the document does. This ban covers all verbs.
+  - Never use internal planning vocabulary in output ("cross-community synthesis", "inter-field", "gap-first", or similar process terms).
+  - Never describe the review's method or structure.
+  - Final sentence: state what the reader understands or can now do. BAD: "Each problem is specific enough to resolve within two years." GOOD: "Researchers can now identify which open problem carries the highest leverage, and why addressing it first changes the field's trajectory."
+- **Section continuity**: each thematic section must open with a sentence naming something concrete from the previous section's closing, before introducing the new topic. BAD: "Method B addresses a related challenge." GOOD: "The variability problem described above compounds at scale — and Method B's precision advantage is precisely what makes it a candidate for addressing it."
 - **Meta-commentary ban (all sections, not just abstract)**: never write a sentence whose grammatical subject is "this review," "this section," "the sections above," or equivalent, where the predicate describes what the document does rather than what the field shows. This applies to introductions, section openers, and conclusions.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader**
