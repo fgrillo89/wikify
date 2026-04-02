@@ -19,44 +19,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from scholarforge.agent.research_notes import ResearchNotes
+from scholarforge.agent.run_context import create_run_context, record_phase_usage, use_run_context
+from scholarforge.agent.writer_input import DEFAULT_TOPIC, build_writer_input, normalize_topic
+
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TOPIC = "research topic"
-
-
-def _normalize_topic(topic: str | None) -> str:
-    """Return a safe topic label for prompts and metadata."""
-    value = (topic or "").strip()
-    return value or DEFAULT_TOPIC
-
-
-def _artifact_section_guidance(artifact_type_id: str, topic: str) -> str:
-    """Build artifact-driven section guidance without hardcoded domain taxonomies."""
-    from scholarforge.generate.artifact_types import get_artifact_type
-
-    artifact = get_artifact_type(artifact_type_id)
-    required_sections = ", ".join(artifact.sections)
-    lines = [
-        f"Document type: {artifact.name}. Follow the high-level structure: {required_sections}.",
-    ]
-
-    if artifact_type_id == "lit_review":
-        lines.append(
-            "Use 4-6 thematic body sections between Introduction and Conclusion. "
-            "Name those sections from the evidence and the topic, "
-            "not from a fixed subject taxonomy."
-        )
-    else:
-        lines.append(
-            "Adapt the middle sections to the evidence and the topic instead of forcing a "
-            "domain-specific outline."
-        )
-
-    lines.append(f"Keep the writing focused on: {topic}.")
-    return " ".join(lines)
 
 
 @dataclass
@@ -101,7 +71,7 @@ def precompute_context(
     )
     from scholarforge.evaluate.frontier import frontier_exploration_order
 
-    topic = _normalize_topic(topic)
+    topic = normalize_topic(topic)
     start = time.time()
 
     # 1. Frontier order
@@ -271,8 +241,13 @@ def build_one_shot_prompt(
     """
     from scholarforge.agent.defaults import build_writer_prompt
 
-    resolved_topic = _normalize_topic(context.get("topic") or topic)
-    artifact_guidance = _artifact_section_guidance(artifact_type_id, resolved_topic)
+    resolved_topic = normalize_topic(context.get("topic") or topic)
+    notes = ResearchNotes.from_precomputed_context(
+        topic=resolved_topic,
+        papers=context["papers"],
+        gap_analysis=context["gaps"],
+        synthesis_opportunities=context["synthesis"],
+    )
 
     system_prompt = build_writer_prompt(
         artifact_type_id=artifact_type_id,
@@ -280,40 +255,19 @@ def build_one_shot_prompt(
         field_hint=resolved_topic,
     )
 
-    # Build the user prompt with ALL context
-    sections = [f"# Write a {word_target}-word review on: {resolved_topic}\n"]
-
-    # Citation reference list
-    citations = "\n".join(f"- [REF:{p['display_name']}]" for p in context["papers"])
-    sections.append(f"## Available Citations (copy EXACTLY)\n{citations}\n")
-
-    # Paper summaries
-    sections.append("## Paper Summaries\n")
-    for p in context["papers"]:
-        sections.append(
-            f"### {p['display_name']} [{p['depth']}]\nRole: {p['role']}\n{p['content'][:2000]}\n"
-        )
-
-    # Gaps
-    sections.append(f"## Gaps in the Literature\n{context['gaps']}\n")
-
-    # Concept links
-    if context["concept_links"]:
-        sections.append(f"{context['concept_links']}\n")
-
-    # Writing instructions
-    sections.append(
-        f"## Instructions\n"
-        f"Write exactly {word_target} words.\n"
-        f"{artifact_guidance}\n"
-        f"If the artifact is a literature review, keep the body thematic and gap-aware.\n"
-        f"Use [REF:DisplayName] citations from the list above.\n"
-        f"Include 3-5 figure placeholders where they strengthen the argument.\n"
-        f"No em-dashes. One concept per sentence. Every claim cited.\n"
-        f"No method disclosure. No banned words.\n"
+    user_prompt = build_writer_input(
+        notes,
+        word_target=word_target,
+        artifact_type_id=artifact_type_id,
+        extra_sections=[context["concept_links"]] if context["concept_links"] else [],
+        additional_instructions=[
+            "If the artifact is a literature review, keep the body thematic and gap-aware.",
+            "Include 3-5 figure placeholders where they strengthen the argument.",
+            "No method disclosure. No banned words.",
+        ],
     )
 
-    return system_prompt, "\n".join(sections)
+    return system_prompt, user_prompt
 
 
 def fast_generate(
@@ -335,42 +289,58 @@ def fast_generate(
     from scholarforge.config import settings
 
     model = model or settings.llm_model
-    topic = _normalize_topic(topic)
+    topic = normalize_topic(topic)
     total_start = time.time()
+    run_context = create_run_context(topic=topic, strategy="fast_generate")
 
-    # Phase 1: Pre-compute (no LLM)
-    context = precompute_context(max_papers=max_papers, topic=topic)
-    precompute_time = context["precompute_time"]
+    with use_run_context(run_context):
+        # Phase 1: Pre-compute (no LLM)
+        context = precompute_context(max_papers=max_papers, topic=topic)
+        precompute_time = context["precompute_time"]
+        record_phase_usage(
+            "fast_precompute",
+            duration_s=precompute_time,
+            metadata={"papers": len(context["papers"])},
+            run_context=run_context,
+        )
 
-    # Phase 2: Build prompt
-    system_prompt, user_prompt = build_one_shot_prompt(
-        context,
-        topic=topic,
-        word_target=word_target,
-        artifact_type_id=artifact_type_id,
-        journal=journal,
-    )
-    context_chars = len(system_prompt) + len(user_prompt)
+        # Phase 2: Build prompt
+        system_prompt, user_prompt = build_one_shot_prompt(
+            context,
+            topic=topic,
+            word_target=word_target,
+            artifact_type_id=artifact_type_id,
+            journal=journal,
+        )
+        context_chars = len(system_prompt) + len(user_prompt)
 
-    # Phase 3: One-shot LLM call
-    llm_start = time.time()
-    resp = litellm.completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_tokens=min(16384, word_target * 3),
-    )
-    llm_time = time.time() - llm_start
+        # Phase 3: One-shot LLM call
+        llm_start = time.time()
+        resp = litellm.completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=min(16384, word_target * 3),
+        )
+        llm_time = time.time() - llm_start
 
-    review_text = resp.choices[0].message.content or ""
-    tokens_in = resp.usage.prompt_tokens if resp.usage else 0
-    tokens_out = resp.usage.completion_tokens if resp.usage else 0
+        review_text = resp.choices[0].message.content or ""
+        tokens_in = resp.usage.prompt_tokens if resp.usage else 0
+        tokens_out = resp.usage.completion_tokens if resp.usage else 0
+        record_phase_usage(
+            "fast_write",
+            duration_s=llm_time,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            metadata={"context_chars": context_chars},
+            run_context=run_context,
+        )
 
-    # Phase 4: Export
-    if review_text:
-        export_paper(review_text, output_path, journal=journal, docx=True, pdf=True)
+        # Phase 4: Export
+        if review_text:
+            export_paper(review_text, output_path, journal=journal, docx=True, pdf=True)
 
     total_time = time.time() - total_start
 

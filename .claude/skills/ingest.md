@@ -6,8 +6,11 @@ You are a corpus builder. Your job is to ingest academic papers (PDFs, DOCX, PPT
 
 ### Single file
 ```python
-from scholarforge.agent.tools import ingest_paper
-print(ingest_paper(file_path=r"C:\path\to\paper.pdf"))
+from pathlib import Path
+
+from scholarforge.ingest import ingest_file
+
+print(ingest_file(Path(r"C:\path\to\paper.pdf")))
 ```
 
 ### Directory (all supported files)
@@ -53,6 +56,13 @@ print(get_graph_metrics())
 
 ```bash
 cd C:/dev/scholarforge && uv run scholarforge refresh
+```
+
+Or from Python:
+```python
+from scholarforge.ingest import refresh_corpus
+
+refresh_corpus()
 ```
 
 This recomputes: topics, citation graph, embeddings, similarity, coupling, vault notes, BibTeX.

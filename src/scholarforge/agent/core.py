@@ -357,6 +357,24 @@ def _inject_session_context(
         pass
 
 
+def _serialize_tool_result(result: Any) -> str:
+    """Serialize tool output into a stable string for the tool message."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (dict, list)):
+        return json.dumps(result, ensure_ascii=False, default=str)
+    return str(result)
+
+
+def _tool_error_payload(tool_name: str, message: str, **extra: Any) -> str:
+    """Standardized JSON error payload for tool execution failures."""
+    return json.dumps(
+        {"ok": False, "tool": tool_name, "error": message, **extra},
+        ensure_ascii=False,
+        default=str,
+    )
+
+
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
 
@@ -513,16 +531,23 @@ class ScholarForgeAgent:
                     duration = 0.0
                     args: dict[str, Any] = {}
                     if fn is None:
-                        tool_result = json.dumps({"error": f"Unknown tool: {tc.function.name}"})
+                        tool_result = _tool_error_payload(
+                            tc.function.name,
+                            f"Unknown tool: {tc.function.name}",
+                        )
                     else:
                         try:
                             args = json.loads(tc.function.arguments)
                             t_start = time.time()
                             raw_result = fn(**args)
                             duration = (time.time() - t_start) * 1000
-                            tool_result = str(raw_result)
+                            tool_result = _serialize_tool_result(raw_result)
                         except Exception as exc:
-                            tool_result = json.dumps({"error": str(exc)})
+                            tool_result = _tool_error_payload(
+                                tc.function.name,
+                                str(exc),
+                                arguments=args,
+                            )
                             duration = 0.0
 
                     all_tool_calls.append(

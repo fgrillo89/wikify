@@ -36,7 +36,7 @@ def ingest(
     import time
     from pathlib import Path
 
-    from scholarforge.ingest.registry import ingest_path
+    from scholarforge.ingest.service import ingest_path
 
     p = Path(path)
     if not p.exists():
@@ -53,9 +53,9 @@ def ingest(
 @app.command()
 def refresh():
     """Full refresh: recompute all topics, embeddings, similarity, coupling, and vault notes."""
-    from scholarforge.ingest.registry import run_batch_steps
+    from scholarforge.ingest.corpus_refresh import refresh_corpus
 
-    run_batch_steps()
+    refresh_corpus()
 
 
 @app.command()

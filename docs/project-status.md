@@ -1,6 +1,6 @@
 # ScholarForge -- Project Status
 
-## Current State (2026-03-31)
+## Current State (2026-04-02)
 
 ScholarForge is a working end-to-end pipeline with a 206-paper ALD/memristor corpus.
 The exploration strategy has been optimized through 9 strategy variants benchmarked
@@ -25,8 +25,10 @@ cross-paper synthesis.
 - Enhanced hybrid strategy: greedy seeds + frontier papers + bridge papers + serendipity
 - Frontier detection: density-ranked papers in sparse embedding regions
 - Bridge computation: vibe midpoints between seed-frontier pairs (replaces random walks)
-- 7 quality metrics: frontier shift, bridge vectors, semantic residual, gap detection,
-  argumentative coherence, topic coverage, factual specificity
+- Composite quality report now includes prose quality alongside corpus-grounded metrics
+- Automated evaluation now covers prose quality, frontier shift, bridge vectors,
+  semantic residual, gap detection, argumentative coherence, topic coverage,
+  factual specificity, semantic coverage, and centroid alignment
 - All metrics computable from stored embeddings in 4-5s per review
 - Gap detection: embedding voids + regex gap-claim detection
 - Agent tools: find_corpus_gaps, find_synthesis_opportunities, get_frontier_exploration_order,
@@ -36,6 +38,8 @@ cross-paper synthesis.
 
 **Generation (Phase 2 -- implemented):**
 - Default strategy: enhanced hybrid (greedy + frontier + bridge + serendipity + gaps)
+- Default prompt guidance is now hierarchical: digest first, section drill-down second,
+  `deep_read` as last resort
 - Snowball strategy as fallback (5 retrieval strategies available)
 - Artifact types: lit review, research article, grant proposal, technical report,
   master thesis, PhD thesis, undergrad research paper
@@ -70,7 +74,26 @@ cross-paper synthesis.
   ingest_paper
 - `.mcp.json` configured for Claude Code integration
 
-**Testing: 274 unit tests, all passing.**
+**Refactor progress (current wave):**
+- Run-scoped state via `RunContext`: reading log, paper summaries, and concept graph
+  no longer rely on process-global mutable session state
+- `deep_read` / digest lookup made more robust against display-name matching
+- JSON-oriented tools now expose clearer `ok/error` envelopes, including `ingest_paper`
+- The two-agent, scripted, and fast generation routes now share the same
+  writer handoff built from `ResearchNotes` plus a common citation/instruction layer
+- Fast generation now converts precomputed paper context into `ResearchNotes`
+  with evidence excerpts instead of using its own writer-only prompt format
+- Export logs an explicit warning when DOCX-to-PDF conversion fails and the
+  workflow falls back to HTML-to-PDF
+- Ingestion now has a public service boundary: CLI and agent tools call
+  `ingest/service.py` and `ingest/corpus_refresh.py` instead of reaching
+  into private helpers in `ingest/registry.py`
+- `ingest/registry.py` now behaves as a compatibility shim rather than the
+  primary orchestration surface
+- `RunContext` now records phase-level usage telemetry and run warnings so
+  token/time behavior is attributable across agent, scripted, and fast routes
+
+**Testing: 303 unit tests, all passing.**
 
 ### CLI Commands
 
@@ -129,7 +152,7 @@ cross-paper synthesis.
 | Figure/table refs | 2,730 |
 | Citation cross-refs | 936 |
 | Topics | 1,232 (268 vocabulary terms) |
-| Tests | 274 |
+| Tests | 303 |
 | Ingestion time | ~10 min (206 papers, 10 workers) |
 | Review generation | 3-5 min (enhanced hybrid strategy) |
 

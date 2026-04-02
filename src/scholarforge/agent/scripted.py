@@ -22,46 +22,15 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from scholarforge.agent.run_context import record_phase_usage
+from scholarforge.agent.writer_input import DEFAULT_TOPIC, build_writer_input, normalize_topic
+
 if TYPE_CHECKING:
     from scholarforge.agent.research_notes import ResearchNotes
 
     pass
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TOPIC = "research topic"
-
-
-def _normalize_topic(topic: str | None) -> str:
-    """Return a safe topic label for prompts and notes."""
-    value = (topic or "").strip()
-    return value or DEFAULT_TOPIC
-
-
-def _artifact_section_guidance(artifact_type_id: str, topic: str) -> str:
-    """Build artifact-driven section guidance without domain-specific hardcoding."""
-    from scholarforge.generate.artifact_types import get_artifact_type
-
-    artifact = get_artifact_type(artifact_type_id)
-    required_sections = ", ".join(artifact.sections)
-    lines = [
-        f"Document type: {artifact.name}. Follow the high-level structure: {required_sections}.",
-    ]
-
-    if artifact_type_id == "lit_review":
-        lines.append(
-            "Use 4-6 thematic body sections between Introduction and Conclusion. "
-            "Name those sections from the evidence and the topic, "
-            "not from a fixed subject taxonomy."
-        )
-    else:
-        lines.append(
-            "Adapt the middle sections to the evidence and the topic instead of forcing a "
-            "domain-specific outline."
-        )
-
-    lines.append(f"Keep the writing focused on: {topic}.")
-    return " ".join(lines)
 
 
 @dataclass
@@ -109,7 +78,7 @@ def scripted_explore(
     )
     from scholarforge.evaluate.frontier import frontier_exploration_order
 
-    topic = _normalize_topic(topic)
+    topic = normalize_topic(topic)
     context = run_context or create_run_context(topic=topic, strategy="scripted_explore")
     logger.info(
         "Scripted exploration: topic=%s, %d papers, %d deep reads", topic, max_papers, n_deep
@@ -305,7 +274,7 @@ def scripted_summarize(
 
     # Build ResearchNotes
     notes = ResearchNotes(
-        topic=_normalize_topic(exploration.get("topic")),
+        topic=normalize_topic(exploration.get("topic")),
         source_summaries=summaries,
         gap_analysis=exploration["gaps"],
         synthesis_opportunities=exploration["synthesis"],
@@ -352,22 +321,14 @@ def scripted_write(
         field_hint=notes.topic,
     )
 
-    writer_input = notes.to_writer_prompt()
-    topic = _normalize_topic(notes.topic)
-    artifact_guidance = _artifact_section_guidance(artifact_type_id, topic)
-
-    # Build explicit citation reference list so small models can copy exact names
-    cite_list = "\n".join(f"- [REF:{s.display_name}]" for s in notes.source_summaries)
-
-    writer_input += (
-        f"\n\n## Available Citations (copy these EXACTLY)\n"
-        f"{cite_list}\n\n"
-        f"## Instructions\n"
-        f"Write a {word_target}-word review focused on: {topic}.\n"
-        f"CITATION FORMAT: Use [REF:DisplayName] where DisplayName is "
-        f"copied exactly from the list above.\n"
-        f"{artifact_guidance}\n"
-        f"No em-dashes. One concept per sentence. Every claim needs a citation.\n"
+    writer_input = build_writer_input(
+        notes,
+        word_target=word_target,
+        artifact_type_id=artifact_type_id,
+        additional_instructions=[
+            "Name every gap from the gap analysis explicitly.",
+            "State contradictions between papers when the notes support them.",
+        ],
     )
 
     resp = litellm.completion(
@@ -424,11 +385,25 @@ def run_scripted(
 
     # Phase 1: Explore (no LLM)
     exploration = scripted_explore(max_papers=max_papers, n_deep=n_deep, topic=topic)
+    record_phase_usage(
+        "scripted_explore",
+        duration_s=exploration["explore_time"],
+        metadata={"papers": len(exploration["papers"]), "deep_reads": n_deep},
+        run_context=exploration["run_context"],
+    )
 
     # Phase 2: Summarize (LLM extracts structured notes)
     sum_model = summarize_model or model
     summarization = scripted_summarize(exploration, model=sum_model)
     notes = summarization["notes"]
+    record_phase_usage(
+        "scripted_summarize",
+        duration_s=summarization["summarize_time"],
+        tokens_in=summarization["tokens_in"],
+        tokens_out=summarization["tokens_out"],
+        metadata={"papers": len(exploration["papers"])},
+        run_context=exploration["run_context"],
+    )
 
     # Phase 3: Write (LLM writes prose from notes)
     wr_model = write_model or model
@@ -438,6 +413,14 @@ def run_scripted(
         word_target=word_target,
         artifact_type_id=artifact_type_id,
         journal=journal,
+    )
+    record_phase_usage(
+        "scripted_write",
+        duration_s=writing["write_time"],
+        tokens_in=writing["tokens_in"],
+        tokens_out=writing["tokens_out"],
+        metadata={"word_target": word_target},
+        run_context=exploration["run_context"],
     )
 
     # Phase 4: Export

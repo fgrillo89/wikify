@@ -212,6 +212,8 @@ class TestAgentUnknownTool:
         assert len(result.tool_calls) == 1
         record = result.tool_calls[0]
         error_payload = json.loads(record.result)
+        assert error_payload["ok"] is False
+        assert error_payload["tool"] == "nonexistent_tool"
         assert "error" in error_payload
         assert "nonexistent_tool" in error_payload["error"]
 
@@ -226,6 +228,24 @@ class TestAgentUnknownTool:
             result = agent.run("Try it")  # Should not raise
 
         assert result.content == "OK"
+
+    def test_tool_exception_returns_structured_error_payload(self):
+        def boom() -> str:
+            raise RuntimeError("kaboom")
+
+        tool_call = _make_tool_call("boom", {})
+        first_resp = _make_response(tool_calls=[tool_call])
+        second_resp = _make_response(content="Recovered")
+
+        agent = ScholarForgeAgent(model="test-model", tools=[boom])
+
+        with patch("litellm.completion", side_effect=[first_resp, second_resp]):
+            result = agent.run("Explode")
+
+        payload = json.loads(result.tool_calls[0].result)
+        assert payload["ok"] is False
+        assert payload["tool"] == "boom"
+        assert payload["error"] == "kaboom"
 
 
 class TestAgentTokenTracking:

@@ -1,10 +1,7 @@
-"""Dispatcher: file extension -> parser.
+"""Legacy ingest entry points kept as a compatibility layer.
 
-Two ingestion modes:
-- Single file: fast incremental (process only the new paper), then background
-  refresh of cross-paper signals (topics, similarity, coupling).
-- Batch (--parallel): parse all PDFs in parallel, then one synchronous full
-  refresh at the end.
+Prefer `scholarforge.ingest.service` for ingestion and
+`scholarforge.ingest.corpus_refresh` for post-ingest refresh work.
 """
 
 from __future__ import annotations
@@ -30,29 +27,10 @@ def _default_workers() -> int:
 
 
 def ingest_path(path: Path, parallel: bool = False, max_workers: int = 0) -> int:
-    """Ingest a file or directory. Returns count of documents ingested."""
-    if max_workers <= 0:
-        max_workers = _default_workers()
-    if path.is_file():
-        return _ingest_file(path)
-    elif path.is_dir():
-        files = []
-        for ext in SUPPORTED_EXTENSIONS:
-            files.extend(sorted(path.rglob(f"*{ext}")))
-        if not files:
-            return 0
+    """Compatibility wrapper for the public ingestion service."""
+    from scholarforge.ingest.service import ingest_path as _public_ingest_path
 
-        if parallel and len(files) > 1:
-            return _ingest_parallel(files, max_workers)
-        else:
-            count = 0
-            for file in files:
-                count += _ingest_file(file, background_refresh=False)
-            # After sequential batch, do one full refresh (not N background refreshes)
-            if count > 0:
-                run_batch_steps()
-            return count
-    return 0
+    return _public_ingest_path(path, parallel=parallel, max_workers=max_workers)
 
 
 def _ingest_parallel(files: list[Path], max_workers: int) -> int:
@@ -273,6 +251,10 @@ def run_batch_steps(new_paper_ids: set[str] | None = None) -> None:
     When new_paper_ids is provided, figure ref re-extraction is limited to those
     papers only (unchanged papers keep their existing refs).
     """
+    from scholarforge.ingest.corpus_refresh import refresh_corpus
+
+    return refresh_corpus(new_paper_ids=new_paper_ids)
+
     from sqlmodel import func, select
 
     from scholarforge.store.db import get_session
@@ -542,3 +524,23 @@ def _ingest_file(path: Path, background_refresh: bool = True) -> int:
         _run_background_refresh()
 
     return 1
+
+
+# Prefer the public service modules. Keep these names for compatibility with
+# older imports until callers have fully migrated.
+from scholarforge.ingest import corpus_refresh as _refresh  # noqa: E402
+from scholarforge.ingest import service as _service  # noqa: E402
+
+SUPPORTED_EXTENSIONS = _service.SUPPORTED_EXTENSIONS
+_default_workers = _service.default_workers
+_ingest_file = _service.ingest_file
+_get_vocab_cache_path = _refresh.get_vocab_cache_path
+_load_corpus_vocabulary = _refresh.load_corpus_vocabulary
+_save_corpus_vocabulary = _refresh.save_corpus_vocabulary
+_run_incremental_steps = _refresh.run_incremental_refresh
+_run_background_refresh = _refresh.run_background_refresh
+
+
+def ingest_file(path: Path, background_refresh: bool = True) -> int:
+    """Compatibility wrapper for single-file ingestion."""
+    return _ingest_file(path, background_refresh=background_refresh)

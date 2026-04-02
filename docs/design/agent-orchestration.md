@@ -11,17 +11,19 @@ User prompt: "Write a review on ALD memristors"
     ScholarForgeAgent (all tools, 30 turns max)
               |
     Turn 1:   get_frontier_exploration_order() -> reading order
-    Turn 2:   deep_read(seed_1) -> 70KB text
-    Turn 3:   record_paper_summary(seed_1, findings, data) -> 50 bytes
-              [Turn 2 tool result compacted to 200 bytes]
-    Turn 4:   deep_read(seed_2) -> 70KB text
-    Turn 5:   record_paper_summary(seed_2, ...) -> 50 bytes
-              [Turn 4 compacted]
-    Turn 6-10: read_paper_digest(frontiers) + record_paper_summary each
-    Turn 11:  find_corpus_gaps() -> gap analysis
-    Turn 12:  find_synthesis_opportunities() -> synthesis pairs
-    Turn 13:  search_papers(gap_query) -> 1 targeted search
-    Turn 14:  [no tool call] -> writes the review as final output
+    Turn 2:   read_paper_digest(seed_1) -> 1.5KB digest
+    Turn 3:   read_section(seed_1, "results") -> targeted detail
+    Turn 4:   record_paper_summary(seed_1, findings, data) -> 50 bytes
+              [Turns 2-3 compacted after use]
+    Turn 5:   read_paper_digest(seed_2) -> 1.5KB digest
+    Turn 6:   read_section(seed_2, "methods/results") -> targeted detail
+    Turn 7:   record_paper_summary(seed_2, ...) -> 50 bytes
+    Turn 8-12: read_paper_digest(frontiers) + record_paper_summary each
+    Turn 13:  find_corpus_gaps() -> gap analysis
+    Turn 14:  find_synthesis_opportunities() -> synthesis pairs
+    Turn 15:  search_papers(gap_query) -> 1 targeted search
+    Turn 16:  deep_read(seed_x) only if digest + sections were insufficient
+    Turn 17:  [no tool call] -> writes the review as final output
               |
               v
          export_paper() -> .md + .docx + .pdf
@@ -32,22 +34,24 @@ User prompt: "Write a review on ALD memristors"
 Without compaction: each turn resends ALL prior tool results.
 ```
 Turn  1:  3.8K (system) + 0.5K (user) = 4.3K
-Turn  2:  4.3K + 70K (deep_read_1) = 74.3K
-Turn  5:  4.3K + 70K + 70K + ... = 214K (growing)
-Turn 14:  4.3K + 280K (4 deep reads) + 50K (digests) = 334K  <- peak
+Turn  2:  4.3K + 1.5K (digest_1) = 5.8K
+Turn  3:  5.8K + 5K (section_1) = 10.8K
+Turn 10:  4.3K + multiple digests + sections = 40-60K
+Turn 17:  only rare deep_read calls push the run toward the old 70K spikes
 ```
 
 With compaction: tool results truncated after the LLM responds.
 ```
 Turn  1:  4.3K
-Turn  2:  4.3K + 70K = 74.3K (deep_read in context)
-Turn  3:  4.3K + 0.2K (compacted) + 0.05K (summary) = 4.6K  <- dropped!
-Turn  5:  4.6K + 70K = 74.6K (next deep_read)
-Turn  6:  4.6K + 0.4K (2 compacted) + 0.1K (2 summaries) = 5.1K
-Turn 14:  ~15K total (all compacted, summaries in context)
+Turn  2:  4.3K + 1.5K = 5.8K
+Turn  4:  summaries persist, digest/section text is compacted
+Turn 10:  active context is mostly summaries + recent targeted reads
+Turn 17:  final write turn stays close to summaries-in-context rather than raw-read replay
 ```
 
-Peak context drops from ~334K to ~75K. Cumulative tokens saved: ~300K per run.
+Peak context now depends much more on how often `deep_read` is invoked. The
+default hierarchical path keeps most runs in digest/section territory and only
+hits the old 70KB spikes when a true full-paper escalation is warranted.
 
 ## Two-Agent Mode (Optional)
 
@@ -59,11 +63,12 @@ EXPLORER AGENT                          WRITER AGENT
 (all reading/search/gap tools)          (read_paper_digest + search_papers only)
     |                                        |
     |  1. get_frontier_order()               |
-    |  2. deep_read + record_summary (x3)   |
-    |  3. digest + record_summary (x7)      |
-    |  4. find_corpus_gaps()                 |
-    |  5. find_synthesis_opportunities()     |
-    |  6. search_papers(gap)                 |
+    |  2. digest + targeted sections         |
+    |  3. record_summary after each read     |
+    |  4. rare deep_read escalation          |
+    |  5. find_corpus_gaps()                 |
+    |  6. find_synthesis_opportunities()     |
+    |  7. search_papers(gap)                 |
     |                                        |
     v                                        |
 ResearchNotes (~5KB)  ------------------>    |
@@ -82,12 +87,33 @@ ResearchNotes (~5KB)  ------------------>    |
 The writer's context is ~5KB of structured notes instead of ~280KB of raw text.
 Token budget: explorer 65%, writer 35% of total.
 
+The writer handoff is now shared across routes. The two-agent, scripted, and
+fast one-shot modes all build the final writer request from `ResearchNotes`
+plus the same citation list and artifact guidance, rather than each route
+carrying its own prompt format.
+
+## Run Context
+
+Every generation or exploration run now has its own `RunContext`.
+
+That context owns:
+
+- the reading log
+- paper summaries
+- the concept graph
+- phase-level usage telemetry
+- non-fatal run warnings
+
+This is important for orchestration because compaction and summary reinjection
+now operate on run-local state rather than ambient process globals.
+
 ## Read-Once-Summarize Pattern
 
-The key efficiency mechanism. After every deep_read:
+The key efficiency mechanism. After every substantive read:
 
 ```
-Agent: deep_read("Li 2018") -> 70KB response
+Agent: read_paper_digest("Li 2018") -> 1.5KB response
+Agent: read_section("Li 2018", "results") -> targeted detail
 Agent: record_paper_summary(
     paper_name="Li 2018 - In-Memory Computing",
     key_findings=["128x64 Ta/HfO2 1T1R array", "91.7% MNIST accuracy", ...],
@@ -96,13 +122,13 @@ Agent: record_paper_summary(
     gaps_noted=["No endurance data beyond 10^4 cycles"],
 ) -> 50 bytes confirmation
 
-[deep_read result compacted on next turn]
+[digest/section results compacted on next turn]
 
 Later:
 Agent: get_session_context() -> all summaries in ~2KB
 ```
 
-The 70KB is consumed once and discarded. The 200-byte summary persists.
+Large reads are consumed once and discarded. The compact summary persists.
 
 ## Tool Result Compaction
 
@@ -113,10 +139,26 @@ Implemented in `core.py::_compact_tool_results()`:
 3. For all tool messages BEFORE that assistant message with content > threshold:
    - Keeps first 200 chars as preview
    - Replaces rest with compaction notice
-4. The agent can call `get_session_context()` to recall summaries
+4. The agent can call `get_session_context()` to recall summaries from the active run
 
 Configurable via `settings.enable_tool_compaction` (default True) and
 `settings.tool_compaction_threshold` (default 2000 chars).
+
+## Structured Tool Errors
+
+JSON-oriented tools now return stable envelopes with `ok: true/false`.
+Agent-side tool execution failures are also normalized to JSON with:
+
+- `ok`
+- `tool`
+- `error`
+
+That makes a lookup failure or execution failure machine-distinguishable from a
+weak-but-valid retrieval result.
+
+`ingest_paper` follows the same contract, and export now logs an explicit
+warning when DOCX-to-PDF conversion fails and the workflow falls back to
+HTML-to-PDF.
 
 ## Extensibility Beyond Papers
 

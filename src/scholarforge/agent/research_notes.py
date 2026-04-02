@@ -38,6 +38,12 @@ class SourceSummary(BaseModel):
         default_factory=list,
         description="Limitations, missing experiments, or open questions in this source",
     )
+    source_excerpt: str = Field(
+        default="",
+        description=(
+            "Optional verbatim digest or metadata excerpt when structured extraction is thin"
+        ),
+    )
     read_depth: str = Field(default="digest", description="full | digest | section | search")
 
 
@@ -108,6 +114,9 @@ class ResearchNotes(BaseModel):
                 lines.append("**Data**: " + "; ".join(s.quantitative_data))
             if s.gaps_noted:
                 lines.append("**Gaps**: " + "; ".join(s.gaps_noted))
+            if s.source_excerpt:
+                lines.append("**Evidence Excerpt**:")
+                lines.append(s.source_excerpt)
             lines.append("")
 
         # Gap analysis
@@ -155,3 +164,32 @@ class ResearchNotes(BaseModel):
             for s in summaries
         ]
         return cls(topic=topic, source_summaries=source_summaries)
+
+    @classmethod
+    def from_precomputed_context(
+        cls,
+        topic: str,
+        papers: list[dict],
+        gap_analysis: str = "",
+        synthesis_opportunities: str = "",
+        key_contradictions: list[str] | None = None,
+        proposed_outline: list[str] | None = None,
+    ) -> ResearchNotes:
+        """Build ResearchNotes from deterministic precomputed paper contexts."""
+        source_summaries = [
+            SourceSummary(
+                display_name=paper["display_name"],
+                relevance=paper.get("role", ""),
+                source_excerpt=paper.get("content", ""),
+                read_depth=paper.get("depth", "digest"),
+            )
+            for paper in papers
+        ]
+        return cls(
+            topic=topic,
+            source_summaries=source_summaries,
+            gap_analysis=gap_analysis,
+            synthesis_opportunities=synthesis_opportunities,
+            key_contradictions=key_contradictions or [],
+            proposed_outline=proposed_outline or [],
+        )

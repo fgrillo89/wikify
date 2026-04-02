@@ -2,19 +2,49 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scholarforge.agent.core import AgentResult, ScholarForgeAgent
-from scholarforge.agent.run_context import RunContext, create_run_context, use_run_context
-
-if TYPE_CHECKING:
-    from scholarforge.agent.research_notes import ResearchNotes
 from scholarforge.agent.defaults import (
     build_generation_prompt,
     get_default_hooks,
     get_default_tools,
 )
+from scholarforge.agent.run_context import (
+    RunContext,
+    add_run_warning,
+    create_run_context,
+    record_phase_usage,
+    use_run_context,
+)
+from scholarforge.agent.writer_input import build_writer_input
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from scholarforge.agent.research_notes import ResearchNotes
+
+
+def _record_agent_phase_usage(
+    phase: str,
+    result,
+    run_context: RunContext,
+) -> None:
+    """Capture phase telemetry defensively for real and stubbed agent results."""
+    turn_telemetry = getattr(result, "turn_telemetry", []) or []
+    record_phase_usage(
+        phase,
+        duration_s=sum(getattr(t, "latency_ms", 0.0) for t in turn_telemetry) / 1000,
+        tokens_in=getattr(result, "total_input_tokens", 0),
+        tokens_out=getattr(result, "total_output_tokens", 0),
+        metadata={
+            "turns": getattr(result, "total_turns", 0),
+            "tool_calls": len(getattr(result, "tool_calls", []) or []),
+        },
+        run_context=run_context,
+    )
 
 
 def explore_corpus(
@@ -56,6 +86,7 @@ def explore_corpus(
         )
 
         result = agent.run(prompt, max_turns=max_turns)
+        _record_agent_phase_usage("explore", result, context)
 
         # Build notes from recorded summaries (the explorer called record_paper_summary)
         notes = ResearchNotes.from_session(topic=prompt, run_context=context)
@@ -122,6 +153,7 @@ def generate_paper(
     )
 
     result = agent.run(prompt, max_turns=max_turns)
+    _record_agent_phase_usage("draft_single_agent", result, context)
     return result.content, result, hooks
 
 
@@ -165,9 +197,17 @@ def _generate_two_agent(
         run_context=context,
     )
 
-    writer_prompt = notes.to_writer_prompt()
+    writer_prompt = build_writer_input(
+        notes,
+        artifact_type_id=artifact_type_id,
+        additional_instructions=[
+            "Use the proposed outline unless the notes clearly justify a better structure.",
+            "Keep the draft grounded in the supplied notes before reaching for tools.",
+        ],
+    )
     writer_max = max(5, max_turns - 25)  # writer needs fewer turns
     result = writer.run(writer_prompt, max_turns=writer_max)
+    _record_agent_phase_usage("draft_writer", result, context)
 
     return result.content, result, writer_hooks
 
@@ -225,6 +265,14 @@ def export_paper(
             pdf_generated = _docx_to_pdf(docx_source, pdf_path)
 
         if not pdf_generated:
+            if docx and docx_source.exists():
+                logger.warning(
+                    "DOCX to PDF conversion failed for %s; falling back to HTML->PDF export",
+                    docx_source,
+                )
+                add_run_warning(
+                    f"PDF export fell back to HTML for {docx_source.name}",
+                )
             # Fallback to HTML->PDF (subscripts may render as rectangles)
             from scholarforge.export.pdf_export import PdfExporter
 
@@ -263,8 +311,8 @@ def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
             if lo_output.exists() and lo_output != pdf_path:
                 lo_output.rename(pdf_path)
             return pdf_path.exists()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LibreOffice PDF conversion failed for %s: %s", docx_path, exc)
 
     # Try Microsoft Word via COM automation (Windows only)
     # Attempt win32com first (pywin32), then comtypes as fallback
@@ -286,8 +334,13 @@ def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
             word.Quit()
             if pdf_path.exists():
                 return True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Word PDF conversion via %s failed for %s: %s",
+                _com_backend,
+                docx_path,
+                exc,
+            )
 
     return False
 

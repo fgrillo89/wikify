@@ -18,6 +18,17 @@ if TYPE_CHECKING:
     from scholarforge.agent.reading_log import ReadingLog
 
 
+@dataclass
+class PhaseUsage:
+    """Lightweight runtime telemetry for one pipeline phase."""
+
+    name: str
+    duration_s: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    metadata: dict[str, str | int | float | bool] = field(default_factory=dict)
+
+
 def _new_reading_log():
     from scholarforge.agent.reading_log import ReadingLog
 
@@ -48,6 +59,8 @@ class RunContext:
     reading_log_loaded: bool = False
     paper_summaries: list[dict] = field(default_factory=list)
     concept_graph: ConceptGraph = field(default_factory=_new_concept_graph)
+    phase_usage: list[PhaseUsage] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 _CURRENT_RUN_CONTEXT: ContextVar[RunContext | None] = ContextVar(
@@ -94,6 +107,34 @@ def restore_run_context(token: Token) -> None:
 def reset_current_run_context() -> None:
     """Drop any ambient run context for the calling context."""
     _CURRENT_RUN_CONTEXT.set(None)
+
+
+def record_phase_usage(
+    phase: str,
+    *,
+    duration_s: float = 0.0,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    metadata: dict[str, str | int | float | bool] | None = None,
+    run_context: RunContext | None = None,
+) -> PhaseUsage:
+    """Append phase-level telemetry to the active run context."""
+    ctx = run_context or get_current_run_context()
+    usage = PhaseUsage(
+        name=phase,
+        duration_s=duration_s,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        metadata=metadata or {},
+    )
+    ctx.phase_usage.append(usage)
+    return usage
+
+
+def add_run_warning(message: str, run_context: RunContext | None = None) -> None:
+    """Record a non-fatal warning on the active run context."""
+    ctx = run_context or get_current_run_context()
+    ctx.warnings.append(message)
 
 
 @contextmanager

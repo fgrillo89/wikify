@@ -70,6 +70,7 @@ def test_deep_read_matches_truncated_display_name(monkeypatch, tmp_path):
     assert data["paper"]["display_name"] == paper["display_name"]
     assert "Introduction text with edge-AI context." in data["full_text"]
     assert data["match_count"] == 1
+    assert data["ok"] is True
     assert "error" not in data
 
 
@@ -91,6 +92,7 @@ def test_deep_read_reports_lookup_failures_explicitly(monkeypatch, tmp_path):
     assert data["paper"] is None
     assert data["full_text"] == ""
     assert data["match_count"] == 0
+    assert data["ok"] is False
     assert data["error"] == "No paper found matching: 'paper that is not here'"
 
 

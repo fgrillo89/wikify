@@ -56,6 +56,16 @@ def _chunk_to_dict(chunk) -> dict:
     }
 
 
+def _tool_json_success(**payload) -> str:
+    """Return a standard JSON success envelope for tool outputs."""
+    return json.dumps({"ok": True, **payload}, ensure_ascii=False, default=str)
+
+
+def _tool_json_error(error: str, **payload) -> str:
+    """Return a standard JSON error envelope for tool outputs."""
+    return json.dumps({"ok": False, "error": error, **payload}, ensure_ascii=False, default=str)
+
+
 def _normalize_paper_lookup(text: str) -> str:
     """Normalize paper lookup text for resilient matching."""
     lowered = (text or "").casefold().strip()
@@ -115,7 +125,7 @@ def _build_corpus_summary() -> str:
 
     from sqlmodel import select
 
-    from scholarforge.ingest.registry import _load_corpus_vocabulary
+    from scholarforge.ingest.corpus_refresh import load_corpus_vocabulary
     from scholarforge.store.db import get_session
     from scholarforge.store.models import Paper
 
@@ -183,7 +193,7 @@ def _build_corpus_summary() -> str:
 
     # Topics from corpus vocabulary
     try:
-        vocab = _load_corpus_vocabulary()
+        vocab = load_corpus_vocabulary()
         if vocab:
             topic_count = len(vocab)
             topic_preview = ", ".join(vocab[:20])
@@ -447,18 +457,20 @@ def get_graph_metrics() -> str:
             for pid, pr in sorted_pr
         ]
 
-        return json.dumps(
-            {
-                "hub_papers": hub_entries,
-                "bridge_papers": bridge_entries,
-                "frontier_papers": frontier_entries,
-                "full_ranking": full_ranking,
-            },
-            ensure_ascii=False,
-            default=str,
+        return _tool_json_success(
+            hub_papers=hub_entries,
+            bridge_papers=bridge_entries,
+            frontier_papers=frontier_entries,
+            full_ranking=full_ranking,
         )
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "hub_papers": [], "bridge_papers": []})
+        return _tool_json_error(
+            str(exc),
+            hub_papers=[],
+            bridge_papers=[],
+            frontier_papers=[],
+            full_ranking=[],
+        )
 
 
 def scan_all_abstracts(max_papers: int = 50) -> str:
@@ -545,16 +557,12 @@ def list_papers(
 
         total = len(all_papers)
         subset = all_papers if limit is None else all_papers[:limit]
-        return json.dumps(
-            {
-                "papers": [_paper_to_dict(p) for p in subset],
-                "total": total,
-            },
-            ensure_ascii=False,
-            default=str,
+        return _tool_json_success(
+            papers=[_paper_to_dict(p) for p in subset],
+            total=total,
         )
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "papers": [], "total": 0})
+        return _tool_json_error(str(exc), papers=[], total=0)
 
 
 def list_topics() -> str:
@@ -598,16 +606,12 @@ def list_topics() -> str:
             for topic, pids in sorted(topic_papers.items(), key=lambda x: len(x[1]), reverse=True)
         ]
 
-        return json.dumps(
-            {
-                "topics": topics_list,
-                "total_papers": len(papers),
-            },
-            ensure_ascii=False,
-            default=str,
+        return _tool_json_success(
+            topics=topics_list,
+            total_papers=len(papers),
         )
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "topics": [], "total_papers": 0})
+        return _tool_json_error(str(exc), topics=[], total_papers=0)
 
 
 def read_paper_digest(
@@ -760,15 +764,13 @@ def deep_read(
             all_papers = session.exec(select(Paper)).all()
             matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
-                return json.dumps(
-                    {
-                        "paper": None,
-                        "full_text": "",
-                        "chunks": [],
-                        "token_count": 0,
-                        "match_count": 0,
-                        "error": f"No paper found matching: {pattern!r}",
-                    }
+                return _tool_json_error(
+                    f"No paper found matching: {pattern!r}",
+                    paper=None,
+                    full_text="",
+                    chunks=[],
+                    token_count=0,
+                    match_count=0,
                 )
 
             paper = matched[0]
@@ -799,18 +801,21 @@ def deep_read(
             "display_name": paper.display_name(),
         }
 
-        return json.dumps(
-            {
-                "paper": meta,
-                "full_text": full_text,
-                "token_count": total_tokens,
-                "match_count": len(matched),
-            },
-            ensure_ascii=False,
-            default=str,
+        return _tool_json_success(
+            paper=meta,
+            full_text=full_text,
+            token_count=total_tokens,
+            match_count=len(matched),
         )
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc), "paper": None, "full_text": "", "chunks": []})
+        return _tool_json_error(
+            str(exc),
+            paper=None,
+            full_text="",
+            chunks=[],
+            token_count=0,
+            match_count=0,
+        )
 
 
 def read_section(
@@ -2084,31 +2089,52 @@ def ingest_paper(file_path: str) -> str:
 
         from sqlmodel import select
 
-        from scholarforge.ingest.registry import _ingest_file
+        from scholarforge.ingest.service import ingest_file
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Chunk, Paper
 
         path = Path(file_path)
         if not path.exists():
-            return f"Error: file not found: {file_path}"
+            return _tool_json_error(
+                f"File not found: {file_path}",
+                status="missing_file",
+                file_path=file_path,
+            )
 
         supported = {".pdf", ".docx", ".pptx"}
         if path.suffix.lower() not in supported:
             supported_str = ", ".join(sorted(supported))
-            return f"Error: unsupported format {path.suffix!r}. Supported: {supported_str}"
+            return _tool_json_error(
+                f"Unsupported format {path.suffix!r}. Supported: {supported_str}",
+                status="unsupported_format",
+                file_path=file_path,
+                supported_formats=sorted(supported),
+            )
 
         # Compute the paper ID (SHA256) before ingestion so we can look it up after
         file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
-        result = _ingest_file(path, background_refresh=True)
+        result = ingest_file(path, background_refresh=True)
 
         if result == 0:
             # May have been skipped (already ingested) or failed
             with get_session() as session:
                 existing = session.get(Paper, file_hash)
             if existing:
-                return f"Already ingested: {existing.display_name()} (no changes detected)"
-            return f"Ingestion failed or skipped for: {path.name}"
+                message = f"Already ingested: {existing.display_name()} (no changes detected)"
+                return _tool_json_success(
+                    status="already_ingested",
+                    message=message,
+                    file_path=file_path,
+                    paper=_paper_to_dict(existing),
+                    chunk_count=None,
+                    background_refresh=False,
+                )
+            return _tool_json_error(
+                f"Ingestion failed or skipped for: {path.name}",
+                status="skipped",
+                file_path=file_path,
+            )
 
         # Retrieve paper details from DB
         with get_session() as session:
@@ -2116,12 +2142,32 @@ def ingest_paper(file_path: str) -> str:
             if paper:
                 chunks = session.exec(select(Chunk).where(Chunk.paper_id == paper.id)).all()
                 n_chunks = len(chunks)
-                return (
+                message = (
                     f"Ingested: {paper.display_name()} "
                     f"({n_chunks} chunks) -- background corpus refresh started"
                 )
+                return _tool_json_success(
+                    status="ingested",
+                    message=message,
+                    file_path=file_path,
+                    paper=_paper_to_dict(paper),
+                    chunk_count=n_chunks,
+                    background_refresh=True,
+                )
 
-        return f"Ingested: {path.name} -- background corpus refresh started"
+        message = f"Ingested: {path.name} -- background corpus refresh started"
+        return _tool_json_success(
+            status="ingested",
+            message=message,
+            file_path=file_path,
+            paper=None,
+            chunk_count=None,
+            background_refresh=True,
+        )
 
     except Exception as exc:  # noqa: BLE001
-        return f"Ingestion error: {exc}"
+        return _tool_json_error(
+            f"Ingestion error: {exc}",
+            status="error",
+            file_path=file_path,
+        )
