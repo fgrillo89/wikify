@@ -642,6 +642,31 @@ def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
         with get_session() as session:
             all_topics = session.exec(select(PaperTopic)).all()
 
+        # English filler words and metadata noise that slip into paper keyword fields
+        _topic_stop_words: frozenset[str] = frozenset({
+            "abstract", "additionally", "also", "although", "august 2020",
+            "based on this extensive study",
+            "by applying different conditional stimuli",
+            "closely resembling long-term potentiation",
+            "exhibiting reliable bipolar resistive switching",
+            "for this purpose", "furthermore", "here", "however", "importantly",
+            "in addition", "in this study", "in this work", "including forming-free",
+            "including potentiation", "including spike-amplitude-",
+            "including ultra-fast switching",
+            "initially", "inspired by biological synapse",
+            "it faces challenges with uniformity",
+            "journal citation and doi", "journalcitation and doi",
+            "notably", "offering energy effciency",
+            "original content from resistive switching",
+            "outstanding 10 7 pulse endurance", "respectively",
+            "showing its excellent per-formance characteristics",
+            "sndp)", "srdp", "such as long-term potentiation (ltp)",
+            "such as potentiation/depression",
+            "swdp", "therefore", "through careful analysi",
+            "through conductance modulation",
+            "thus", "to address these issue", "training effect", "vol",
+        })
+
         # Normalize topics: merge plurals before dedup
         raw_topics: set[str] = set()
         for t in all_topics:
@@ -650,6 +675,12 @@ def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
             if "<" in t.topic or "|" in t.topic or "." in t.topic[:3]:
                 continue
             key = t.topic.strip().lower()
+            # Skip filler words and metadata noise
+            if key in _topic_stop_words:
+                continue
+            # Skip conjunctive fragments ("And X", "Or X") — partial keyword extractions
+            if key.startswith(("and ", "or ", "but ", "with ", "for ")):
+                continue
             if key.endswith("ies") and len(key) > 5:
                 key = key[:-3] + "y"
             elif (

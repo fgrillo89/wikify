@@ -90,13 +90,18 @@ cross-paper synthesis.
 
 ## Remaining Work
 
-### High Priority
+### High Priority (from hierarchical benchmark findings)
+- [ ] **Corpus expansion**: ingest 15-20 papers in 2D material + ALD memristor space (MoS₂/WS₂/MoTe₂ + ALD). Phase 4 devil's advocate consistently finds this territory but corpus is too thin to fill it.
+- [ ] **Falsifiable prediction in skill**: add required step before writing -- "state one quantitative prediction: if X (ALD parameter), then Y (neuromorphic metric) changes by Z because (mechanism), falsifiable by the experiment in the research agenda." PI flagged this as the gap between 8.9 and 9.5.
+- [ ] **LLM-as-PI as standard eval step**: automate as `scholarforge evaluate --pi <review.md>` or integrate into `comprehensive_quality_report()`. Automated metrics miss #1 review by PI score -- PI eval must be first-class.
+- [ ] **Metric recalibration**: topic_coverage is overweighted; bridge_vectors underweighted. Add synthesis sentence density metric (sentences citing 2+ papers with a conclusion neither stated alone) -- this directly measures what the PI scores highest.
 - [ ] Citation-only PageRank: separate citation authority from embedding similarity
 - [ ] Seed selection: #1 PageRank + #2-3 greedy coverage (orthogonal views)
-- [ ] Pass precomputed embeddings through all quality metrics (40s -> 5s)
-- [ ] Expert review: qualitative assessment of best reviews as materials scientist
 
 ### Medium Priority
+- [ ] **Phase 4 domain-aware pre-seeding**: derive blind spots from corpus (missing topics in top papers) rather than generic list. Promise-delivery check: verify each announced territory is actually populated before finalising draft.
+- [ ] **Iterative section refinement**: generate full draft → LLM-as-PI → identify weakest section → targeted rewrite with search_papers → re-evaluate. Feasible with existing tools.
+- [ ] **Topic coverage vocabulary audit**: current 236-topic vocabulary contains noise (filler phrases, DOI fragments, duplicate concepts). Needs cleaning before metric weight changes.
 - [ ] LaTeX export with .cls files and BibTeX integration
 - [ ] Ollama support for fully offline generation
 - [ ] Talk-to-corpus mode: same tools, conversational output
