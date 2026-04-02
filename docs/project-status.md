@@ -141,6 +141,25 @@ cross-paper synthesis.
 
 Key: enhanced hybrid achieves 94% of random walk quality in 28% of the time.
 
+### PageIndex Hierarchical Benchmark (5 strategies, automated + PI scores)
+
+Hierarchical retrieval adds 3-level progressive disclosure: paper digest → section summary → full section.
+
+| Strategy | Composite | Frontier | Arg Coherence | Topic Cov | Citations | PI Score |
+|----------|-----------|----------|---------------|-----------|-----------|----------|
+| s5_gap_structured | **0.634** | 0.967 | 0.383 | 28.4% | 80 | 7.8/10 |
+| **hier_gap_first** | 0.611 | **1.000** | **0.482** | 17.8% | 10 | **8.8/10** |
+| hierarchical_v1 | 0.596 | **1.000** | 0.392 | 17.8% | 28 | 6.5/10 |
+| s5_injected | 0.572 | 0.677 | 0.364 | **31.8%** | 40 | 7.0/10 |
+| hier_broad | 0.555 | 0.885 | 0.348 | 23.3% | 70 | 8.3/10 |
+
+Key findings:
+- **hier_gap_first scores 8.8/10 from PI** despite only 10 citations — the nucleation-filament cross-community synthesis is the most original contribution in any benchmark review
+- **Metric vs PI diverge on creativity**: composite ranks s5_gap_structured #1, PI ranks hier_gap_first #1
+- **More papers ≠ better**: hier_broad (70 citations) scores lowest on composite; broad reading collapses bridge_ratio and frontier_score
+- **Gap-first unlocks coherence**: running find_corpus_gaps first forces a thesis, producing highest argumentative coherence (0.482) of any review
+- **Path to 9.5/10**: one paragraph — state the predicted direction of first-cycle coverage / conductance-state-count, quantified from Matveyev trap density data
+
 ## Resume Instructions
 
 1. Read `CLAUDE.md` for working conventions
