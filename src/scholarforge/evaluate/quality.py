@@ -17,9 +17,9 @@ Metrics (8 total):
   8. FactualSpecificity      -- numeric/chem/acronym density (log-scaled)
 
 Composite weights:
-  Prose quality: 0.20 | Frontier shift: 0.10 | Bridge: 0.08
+  Prose quality: 0.20 | Frontier shift: 0.10 | Bridge: 0.11
   Semantic residual: 0.08 | Gap detection: 0.12 | Coherence: 0.10
-  Topic coverage: 0.08 | Factual specificity: 0.12 | Semantic coverage: 0.06
+  Topic coverage: 0.05 | Factual specificity: 0.12 | Semantic coverage: 0.06
   Centroid alignment: 0.06
 """
 
@@ -1013,15 +1013,15 @@ def compute_prose_quality(review_text: str) -> ProseQualityResult:
 
 # Composite weights — must sum to 1.0
 _WEIGHTS: dict[str, float] = {
-    "prose_quality": 0.20,  # NEW: captures what the PI sees immediately
+    "prose_quality": 0.20,  # captures what the PI sees immediately
     "semantic_coverage": 0.06,
     "centroid_alignment": 0.06,
     "frontier_shift": 0.10,
-    "bridge_vectors": 0.08,
+    "bridge_vectors": 0.11,  # raised: best predictor of cross-community synthesis quality
     "semantic_residual": 0.08,
     "gap_detection": 0.12,
     "argumentative_coherence": 0.10,
-    "topic_coverage": 0.08,
+    "topic_coverage": 0.05,  # lowered: noisy vocabulary reduces signal-to-noise
     "factual_specificity": 0.12,
 }
 assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"

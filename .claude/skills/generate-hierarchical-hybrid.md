@@ -179,15 +179,17 @@ State it as a fact about the literature, not as a description of what this revie
 
 **Not every corpus has a cross-field synthesis.** If the corpus is within a single community, the strongest observation may simply be a productive contradiction or an overlooked implication. Use what the corpus actually offers. If `find_synthesis_opportunities` shows no meaningful inter-area connections, look for within-field inversions instead.
 
-**2. The forward-looking claim (required)**
+**2. The forward-looking claim (required — quantitative if evidence supports it)**
 
-State one specific claim the evidence supports but the field has not yet made explicitly:
+State one specific falsifiable prediction the evidence supports but the field has not yet made explicitly:
 
-> "If [variable or condition], then [outcome] changes by [direction or magnitude] because [mechanism or reason] — and this is testable by [specific study, analysis, or experiment in the research agenda]."
+> "If [variable or condition], then [outcome] changes by [quantitative direction or magnitude] because [mechanism or reason] — and this is testable by [specific study, analysis, or experiment in the research agenda]."
+
+**Quantitative first.** If the corpus contains numerical data for the relevant variables, the prediction must include a number or range (e.g., "retention improves by 40-60%" not "retention improves"). If numbers are absent, a directional claim with a stated mechanism is acceptable, but explain why a quantitative estimate is not yet possible.
 
 For non-experimental fields (theoretical, computational, qualitative), the form is: "The evidence suggests that [claim], which implies [consequence] — testable by [argument, model, or dataset]."
 
-This sentence must appear in the forward-looking section. If the evidence does not support a quantitative estimate, a directional claim with a stated mechanism is acceptable. Do not write the review until you have this sentence.
+This sentence must appear in the forward-looking section. Do not write the review until you have this sentence — the gap between a 8.9 and a 9.5 PI score is almost always whether the forward-looking section delivers a falsifiable prediction with a mechanism, or only a research suggestion.
 
 ### Word budget
 | Section | Words |

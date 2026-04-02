@@ -401,25 +401,97 @@ def evaluate(
         console.print(report.summary())
     else:
         # LLM-as-PI qualitative scoring
-        from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_scores
+        from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_review
 
         console.print("[bold]Running LLM-as-PI review...[/bold]")
         if domain:
             console.print(f"  Domain hint: {domain}")
 
         pi_report = evaluate_pi(review_text, domain_hint=domain, model=model)
-        console.print(pi_report)
+        result = parse_pi_review(pi_report)
 
-        scores = parse_pi_scores(pi_report)
-        if "overall" in scores:
-            overall = scores["overall"]
+        console.print(result.report)
+
+        if result.overall_score is not None:
+            overall = result.overall_score
             color = "green" if overall >= 8 else "yellow" if overall >= 6 else "red"
             console.print(f"\n[{color}]Overall PI score: {overall}/10[/{color}]")
+
+        if result.weakest_section:
+            console.print(f"[dim]Weakest section: {result.weakest_section}[/dim]")
 
         # Optionally save alongside the review
         out_path = path.with_suffix(".pi_review.md")
         out_path.write_text(pi_report, encoding="utf-8")
         console.print(f"[dim]Saved PI review to: {out_path}[/dim]")
+
+
+@app.command()
+def revise(
+    review_path: str = typer.Argument(..., help="Path to the review markdown file to revise"),
+    topic: str = typer.Option("", "--topic", "-t", help="Topic/prompt that generated the review"),
+    domain: str = typer.Option(
+        "", "--domain", "-d", help="One-line field description for PI context"
+    ),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model (litellm format)"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output path (default: <review>.revised.md)"
+    ),
+):
+    """Run PI review on a generated review, then rewrite its weakest section.
+
+    Steps:
+      1. Run LLM-as-PI evaluation.
+      2. Identify the weakest section.
+      3. Fetch targeted corpus evidence for that section.
+      4. Rewrite the section with fresh evidence.
+      5. Save the revised review.
+    """
+    from pathlib import Path
+
+    from scholarforge.agent.revision import revise_weakest_section
+    from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_review
+
+    path = Path(review_path)
+    if not path.exists():
+        console.print(f"[red]File not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    review_text = path.read_text(encoding="utf-8")
+
+    console.print("[bold]Step 1: Running LLM-as-PI review...[/bold]")
+    pi_report = evaluate_pi(review_text, domain_hint=domain, model=model)
+    pi_result = parse_pi_review(pi_report)
+
+    if pi_result.overall_score is not None:
+        overall = pi_result.overall_score
+        color = "green" if overall >= 8 else "yellow" if overall >= 6 else "red"
+        console.print(f"[{color}]PI score: {overall}/10[/{color}]")
+
+    if not pi_result.weakest_section:
+        console.print("[yellow]PI review did not identify a weakest section.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[bold]Step 2: Revising section:[/bold] {pi_result.weakest_section}")
+
+    revised = revise_weakest_section(
+        review_text,
+        pi_result,
+        topic=topic,
+        model=model,
+    )
+
+    out_path = Path(output) if output else path.with_suffix(".revised.md")
+    out_path.write_text(revised, encoding="utf-8")
+
+    word_delta = len(revised.split()) - len(review_text.split())
+    console.print(f"[green]Revised review saved to: {out_path}[/green]")
+    console.print(f"[dim]Word count delta: {word_delta:+d}[/dim]")
+
+    # Save PI review alongside
+    pi_path = path.with_suffix(".pi_review.md")
+    pi_path.write_text(pi_report, encoding="utf-8")
+    console.print(f"[dim]PI review saved to: {pi_path}[/dim]")
 
 
 @app.command()

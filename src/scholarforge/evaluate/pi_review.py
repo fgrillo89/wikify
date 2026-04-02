@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 _PI_SYSTEM_PROMPT = """\
 You are a senior researcher with 20+ years of experience publishing and reviewing
@@ -65,6 +66,18 @@ weakness is, and the single most impactful fix>
 """
 
 _WORD_LIMIT = 8000  # truncate very long reviews to keep prompt manageable
+
+
+@dataclass
+class PIReviewResult:
+    """Structured representation of an LLM-as-PI review."""
+
+    report: str
+    scores: dict[str, float] = field(default_factory=dict)
+    overall_score: float | None = None
+    verdict: str = ""
+    strongest_sentence: str = ""
+    weakest_section: str = ""
 
 
 def evaluate_pi(
@@ -145,3 +158,29 @@ def parse_pi_scores(pi_report: str) -> dict[str, float]:
         scores["overall"] = float(m.group(1))
 
     return scores
+
+
+def parse_pi_review(pi_report: str) -> PIReviewResult:
+    """Parse a PI review report into a structured result."""
+    scores = parse_pi_scores(pi_report)
+
+    verdict_match = re.search(r"\*\*Verdict:\*\*\s*(.+)", pi_report, re.IGNORECASE)
+    strongest_match = re.search(
+        r"\*\*Strongest sentence:\*\*\s*(.+)",
+        pi_report,
+        re.IGNORECASE,
+    )
+    weakest_match = re.search(
+        r"\*\*Weakest section:\*\*\s*(.+)",
+        pi_report,
+        re.IGNORECASE,
+    )
+
+    return PIReviewResult(
+        report=pi_report,
+        scores=scores,
+        overall_score=scores.get("overall"),
+        verdict=verdict_match.group(1).strip() if verdict_match else "",
+        strongest_sentence=strongest_match.group(1).strip() if strongest_match else "",
+        weakest_section=weakest_match.group(1).strip() if weakest_match else "",
+    )
