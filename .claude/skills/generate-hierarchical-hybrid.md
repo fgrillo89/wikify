@@ -9,11 +9,11 @@ You are a research agent with access to a knowledge base of academic papers. You
 This strategy combines the two best elements from the Phase 3 benchmark:
 
 - **From hierarchical_gap_first (8.8/10 PI)**: run gap tools *before* reading, let gaps define the thesis, build coherent argument structure around those gaps
-- **From hierarchical_broad (8.3/10 PI)**: 30-40 citations, function-first organization, quantified gaps with specific experimental parameters
+- **From hierarchical_broad (8.3/10 PI)**: broad corpus, function-first organization, quantified gaps with specific experimental parameters
 
-The failure mode of hierarchical_gap_first was narrow corpus (10 citations). The failure mode of hierarchical_broad was reading broadly *without a thesis first*, which collapsed bridge_ratio and argumentative coherence. This hybrid avoids both by finding the thesis before expanding the reading list.
+The failure mode of hierarchical_gap_first was a narrow corpus — the thesis was sharp but evidence thin. The failure mode of hierarchical_broad was reading broadly *without a thesis first*, which collapsed bridge_ratio and argumentative coherence. This hybrid avoids both by finding the thesis before expanding the reading list.
 
-**Target: 30-40 unique citations, gap-first thesis, high argumentative coherence.**
+**Design principle: citation breadth emerges from the process (each gap theme drives a search sweep), not from a count target. A well-executed run on a 200-paper corpus naturally reaches 25-40 cited papers; on a 50-paper corpus it may reach 15. Let the gaps drive coverage.**
 
 ## Available Tools
 
@@ -62,7 +62,7 @@ Phase 2: EVIDENCE (thesis-driven)  -->  20 papers digested, 12 sections drilled
 Phase 3: COVERAGE (sweep)  -->  search for papers touching each gap theme
     |
     v
-Write: gap-driven structure, function-first organization, 30-40 citations
+Write: gap-driven structure, function-first organization, citations as needed
 ```
 
 ---
@@ -117,11 +117,11 @@ from scholarforge.agent.tools import search_papers
 print(search_papers(query="<gap theme 1 specific query>", top_k=5, reason="Find papers addressing gap 1 that weren't in exploration order"))
 ```
 
-10. Digest any new papers found (limit to 3-5 additional papers per gap theme). This is where your citation count grows from 20 to 30-40 without diluting the thesis.
+10. Digest any new papers found (up to 3-5 per gap theme). Each gap theme that produces 2-3 additional papers keeps the thesis tight while broadening evidence.
 
 11. Run `get_sections(section_type="conclusion")` to catch any high-value papers in the corpus that your exploration order missed.
 
-12. **Check citation count**: if below 25 unique papers cited in your notes, use `suggest_next_papers` to find more.
+12. **Coverage check**: use `suggest_next_papers` with your already-read list to find any graph-connected papers that would add evidence for an underserved gap theme. Stop when each gap has at least 3-4 papers directly supporting it.
 
 ---
 
@@ -160,12 +160,12 @@ If you don't have one, re-run `find_synthesis_opportunities` and read its output
 ### Word budget (Medium tier)
 | Section | Words |
 |---------|-------|
-| Abstract | 150-200 |
+| Abstract | 200-300 |
 | Introduction | 400 |
 | Each thematic section (4-6) | 700-850 |
 | Research agenda | 650 |
 | Conclusion | 300 |
-| **Total** | **~5000-6500** |
+| **Total** | **~5500-7000** |
 
 ### Sentence-type composition
 - **30-40% synthesis sentences** -- compare or contrast 2+ papers, draw a conclusion neither stated alone
@@ -187,7 +187,7 @@ The PI benchmark: "Vary temperature (150-350°C), precursor (TEMAH, TDMAH, HfCl�
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstract**: 150-200 words. First sentence <15 words. One concept per sentence. No citations. Lead with the cross-community synthesis, not a truism.
+- **Abstract**: 200-300 words. First sentence <15 words. One concept per sentence. No citations. Lead with the cross-community synthesis, not a truism. Use the extra space to state the most important finding or prediction, not to add more scope sentences.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader**
 - **Include 3-5 figure placeholders with detailed captions**
