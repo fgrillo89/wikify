@@ -29,6 +29,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TOPIC = "research topic"
+
+
+def _normalize_topic(topic: str | None) -> str:
+    """Return a safe topic label for prompts and notes."""
+    value = (topic or "").strip()
+    return value or DEFAULT_TOPIC
+
+
+def _artifact_section_guidance(artifact_type_id: str, topic: str) -> str:
+    """Build artifact-driven section guidance without domain-specific hardcoding."""
+    from scholarforge.generate.artifact_types import get_artifact_type
+
+    artifact = get_artifact_type(artifact_type_id)
+    required_sections = ", ".join(artifact.sections)
+    lines = [
+        f"Document type: {artifact.name}. Follow the high-level structure: {required_sections}.",
+    ]
+
+    if artifact_type_id == "lit_review":
+        lines.append(
+            "Use 4-6 thematic body sections between Introduction and Conclusion. "
+            "Name those sections from the evidence and the topic, "
+            "not from a fixed subject taxonomy."
+        )
+    else:
+        lines.append(
+            "Adapt the middle sections to the evidence and the topic instead of forcing a "
+            "domain-specific outline."
+        )
+
+    lines.append(f"Keep the writing focused on: {topic}.")
+    return " ".join(lines)
+
 
 @dataclass
 class ScriptedRunResult:
@@ -51,6 +85,8 @@ class ScriptedRunResult:
 def scripted_explore(
     max_papers: int = 12,
     n_deep: int = 3,
+    topic: str = DEFAULT_TOPIC,
+    run_context=None,
 ) -> dict:
     """Phase 1: Python-scripted exploration. No LLM needed.
 
@@ -61,7 +97,9 @@ def scripted_explore(
         max_papers: Total papers in the frontier order.
         n_deep: Number of papers to deep-read (rest are digested).
     """
+    from scholarforge.agent.concept_graph import reset_concept_graph
     from scholarforge.agent.reading_log import reset_reading_log
+    from scholarforge.agent.run_context import create_run_context, use_run_context
     from scholarforge.agent.tools import (
         deep_read,
         find_corpus_gaps,
@@ -71,63 +109,80 @@ def scripted_explore(
     )
     from scholarforge.evaluate.frontier import frontier_exploration_order
 
-    reset_reading_log()
-    reset_paper_summaries()
-
-    logger.info("Scripted exploration: %d papers, %d deep reads", max_papers, n_deep)
+    topic = _normalize_topic(topic)
+    context = run_context or create_run_context(topic=topic, strategy="scripted_explore")
+    logger.info(
+        "Scripted exploration: topic=%s, %d papers, %d deep reads", topic, max_papers, n_deep
+    )
     start = time.time()
 
-    # Get optimal reading order
-    order = frontier_exploration_order(max_papers=max_papers)
+    with use_run_context(context):
+        reset_reading_log()
+        reset_paper_summaries()
+        reset_concept_graph()
 
-    # Resolve paper IDs to display names
-    from sqlmodel import select
+        # Get optimal reading order
+        order = frontier_exploration_order(max_papers=max_papers)
 
-    from scholarforge.store.db import get_session
-    from scholarforge.store.models import Paper
+        # Resolve paper IDs to display names
+        from sqlmodel import select
 
-    with get_session() as session:
-        papers_db = {p.id: p for p in session.exec(select(Paper)).all()}
+        from scholarforge.store.db import get_session
+        from scholarforge.store.models import Paper
 
-    # Read papers
-    papers_content: list[dict] = []
-    for i, (pid, depth, rationale) in enumerate(order):
-        paper = papers_db.get(pid)
-        if not paper:
-            continue
+        with get_session() as session:
+            papers_db = {p.id: p for p in session.exec(select(Paper)).all()}
 
-        name = paper.display_name()
-        if i < n_deep:
-            # Deep read for seeds
-            raw = deep_read(name[:40], reason=rationale)
-            try:
-                data = json.loads(raw)
-                text = data.get("full_text", "")[:5000]  # cap for summarization
-            except (json.JSONDecodeError, TypeError):
-                text = raw[:5000]
-            papers_content.append(
-                {
-                    "name": name,
-                    "depth": "full",
-                    "role": rationale,
-                    "text": text,
-                }
-            )
-        else:
-            # Digest for the rest
-            raw = read_paper_digest(name[:40], reason=rationale)
-            papers_content.append(
-                {
-                    "name": name,
-                    "depth": "digest",
-                    "role": rationale,
-                    "text": raw[:3000],
-                }
-            )
+        # Read papers
+        papers_content: list[dict] = []
+        for i, (pid, depth, rationale) in enumerate(order):
+            paper = papers_db.get(pid)
+            if not paper:
+                continue
 
-    # Gap analysis
-    gaps = find_corpus_gaps()
-    synthesis = find_synthesis_opportunities()
+            name = paper.display_name()
+            pattern = paper.title[:40] if paper.title else name[:40]
+            if i < n_deep:
+                # Deep read for seeds
+                raw = deep_read(pattern, reason=rationale)
+                actual_depth = "full"
+                warning = ""
+                try:
+                    data = json.loads(raw)
+                    if data.get("error"):
+                        actual_depth = "digest"
+                        warning = data["error"]
+                        text = read_paper_digest(
+                            pattern, reason=f"{rationale} (deep_read fallback)"
+                        )[:3000]
+                    else:
+                        text = data.get("full_text", "")[:5000]  # cap for summarization
+                except (json.JSONDecodeError, TypeError):
+                    text = raw[:5000]
+                papers_content.append(
+                    {
+                        "name": name,
+                        "depth": actual_depth,
+                        "role": rationale,
+                        "text": text,
+                        "warning": warning,
+                    }
+                )
+            else:
+                # Digest for the rest
+                raw = read_paper_digest(pattern, reason=rationale)
+                papers_content.append(
+                    {
+                        "name": name,
+                        "depth": "digest",
+                        "role": rationale,
+                        "text": raw[:3000],
+                    }
+                )
+
+        # Gap analysis
+        gaps = find_corpus_gaps()
+        synthesis = find_synthesis_opportunities()
 
     elapsed = time.time() - start
     logger.info("Exploration complete: %d papers in %.0fs", len(papers_content), elapsed)
@@ -136,7 +191,9 @@ def scripted_explore(
         "papers": papers_content,
         "gaps": gaps,
         "synthesis": synthesis,
+        "topic": topic,
         "explore_time": elapsed,
+        "run_context": context,
     }
 
 
@@ -172,7 +229,7 @@ def scripted_summarize(
             f"Text:\n{paper['text'][:3000]}\n\n"
             f"Return a JSON object with these fields:\n"
             f'{{"key_findings": ["finding 1", "finding 2", ...], '
-            f'"quantitative_data": ["10nm HfO2", "10^4 cycles", ...], '
+            f'"quantitative_data": ["specific number", "measurement", ...], '
             f'"relevance": "one sentence", '
             f'"gaps_noted": ["gap 1", ...]}}'
         )
@@ -248,7 +305,7 @@ def scripted_summarize(
 
     # Build ResearchNotes
     notes = ResearchNotes(
-        topic="ALD memristors",
+        topic=_normalize_topic(exploration.get("topic")),
         source_summaries=summaries,
         gap_analysis=exploration["gaps"],
         synthesis_opportunities=exploration["synthesis"],
@@ -296,6 +353,8 @@ def scripted_write(
     )
 
     writer_input = notes.to_writer_prompt()
+    topic = _normalize_topic(notes.topic)
+    artifact_guidance = _artifact_section_guidance(artifact_type_id, topic)
 
     # Build explicit citation reference list so small models can copy exact names
     cite_list = "\n".join(f"- [REF:{s.display_name}]" for s in notes.source_summaries)
@@ -304,11 +363,10 @@ def scripted_write(
         f"\n\n## Available Citations (copy these EXACTLY)\n"
         f"{cite_list}\n\n"
         f"## Instructions\n"
-        f"Write a {word_target}-word review.\n"
+        f"Write a {word_target}-word review focused on: {topic}.\n"
         f"CITATION FORMAT: Use [REF:DisplayName] where DisplayName is "
         f"copied exactly from the list above.\n"
-        f"Required sections: Introduction, ALD Fundamentals, Materials, "
-        f"Switching Mechanisms, Gaps/Future Directions, Conclusion.\n"
+        f"{artifact_guidance}\n"
         f"No em-dashes. One concept per sentence. Every claim needs a citation.\n"
     )
 
@@ -337,7 +395,7 @@ def scripted_write(
 
 
 def run_scripted(
-    topic: str = "ALD memristors for neuromorphic computing",
+    topic: str = DEFAULT_TOPIC,
     model: str | None = None,
     summarize_model: str | None = None,
     write_model: str | None = None,
@@ -365,7 +423,7 @@ def run_scripted(
     total_start = time.time()
 
     # Phase 1: Explore (no LLM)
-    exploration = scripted_explore(max_papers=max_papers, n_deep=n_deep)
+    exploration = scripted_explore(max_papers=max_papers, n_deep=n_deep, topic=topic)
 
     # Phase 2: Summarize (LLM extracts structured notes)
     sum_model = summarize_model or model

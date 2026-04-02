@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from scholarforge.agent.run_context import get_current_run_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -232,22 +234,13 @@ class ConceptGraph:
 # ── Module-level session graph ───────────────────────────────────────────────
 
 
-class _GraphSession:
-    """Container for the session-level concept graph."""
-
-    def __init__(self) -> None:
-        self.graph = ConceptGraph()
-
-
-_session = _GraphSession()
-
-
 def get_concept_graph() -> ConceptGraph:
-    """Get the current session's concept graph."""
-    return _session.graph
+    """Get the current run's concept graph."""
+    return get_current_run_context().concept_graph
 
 
 def reset_concept_graph() -> ConceptGraph:
-    """Start a fresh concept graph."""
-    _session.graph = ConceptGraph()
-    return _session.graph
+    """Start a fresh concept graph for the current run."""
+    ctx = get_current_run_context()
+    ctx.concept_graph = ConceptGraph()
+    return ctx.concept_graph

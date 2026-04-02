@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from scholarforge.agent.run_context import RunContext, get_current_run_context
+
 
 class SourceSummary(BaseModel):
     """Structured extraction from a single source document.
@@ -130,16 +132,17 @@ class ResearchNotes(BaseModel):
         return "\n".join(lines)
 
     @classmethod
-    def from_session(cls, topic: str) -> ResearchNotes:
+    def from_session(
+        cls,
+        topic: str,
+        run_context: RunContext | None = None,
+    ) -> ResearchNotes:
         """Build ResearchNotes from the current session's paper summaries.
 
-        Pulls from the module-level _paper_summaries in tools.py,
-        useful when the explorer ran as a single agent (not via
-        run_structured) and we need to construct notes post-hoc.
+        Pulls from the active run context unless one is provided explicitly.
         """
-        from scholarforge.agent.tools import get_paper_summaries
-
-        summaries = get_paper_summaries()
+        ctx = run_context or get_current_run_context()
+        summaries = list(ctx.paper_summaries)
         source_summaries = [
             SourceSummary(
                 display_name=s["paper_name"],

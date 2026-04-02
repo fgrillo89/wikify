@@ -7,6 +7,7 @@ They can be used directly by agent loops without going through MCP.
 from __future__ import annotations
 
 import json
+import re
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,59 @@ def _chunk_to_dict(chunk) -> dict:
         "has_citations": chunk.has_citations,
         "has_equations": chunk.has_equations,
     }
+
+
+def _normalize_paper_lookup(text: str) -> str:
+    """Normalize paper lookup text for resilient matching."""
+    lowered = (text or "").casefold().strip()
+    lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return " ".join(lowered.split())
+
+
+def _match_papers_by_pattern(all_papers: list, pattern: str) -> list:
+    """Resolve a paper pattern against title, authors, display name, year, and id."""
+    raw = (pattern or "").strip()
+    if not raw:
+        return []
+
+    raw_lower = raw.casefold()
+    raw_normalized = _normalize_paper_lookup(raw)
+    ranked: list[tuple[int, object]] = []
+
+    for paper in all_papers:
+        candidates = [
+            (paper.title or "", 40),
+            (paper.display_name(), 35),
+            (paper.authors or "", 30),
+            (str(paper.year or ""), 20),
+            (paper.id or "", 10),
+        ]
+
+        score = 0
+        for candidate, weight in candidates:
+            candidate_lower = candidate.casefold()
+            candidate_normalized = _normalize_paper_lookup(candidate)
+
+            if raw_lower == candidate_lower:
+                score = max(score, 400 + weight)
+            elif raw_normalized and raw_normalized == candidate_normalized:
+                score = max(score, 380 + weight)
+            elif raw_lower in candidate_lower:
+                score = max(score, 300 + weight)
+            elif raw_normalized and raw_normalized in candidate_normalized:
+                score = max(score, 280 + weight)
+
+        if score:
+            ranked.append((score, paper))
+
+    ranked.sort(
+        key=lambda item: (
+            -item[0],
+            -(item[1].year or 0),
+            (item[1].title or "").casefold(),
+        )
+    )
+    return [paper for _, paper in ranked]
 
 
 def _build_corpus_summary() -> str:
@@ -229,16 +283,9 @@ def lookup_citation(
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Paper
 
-        lower = pattern.lower()
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p
-                for p in all_papers
-                if lower in p.title.lower()
-                or lower in p.authors.lower()
-                or lower in str(p.year or "")
-            ]
+            matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
                 return f"No paper found matching: {pattern!r}"
 
@@ -277,14 +324,14 @@ def get_paper(
     pattern: str,
     reason: str = "",
 ) -> str:
-    """Get metadata and abstract for a specific paper by title or author pattern.
+    """Get metadata and abstract for a specific paper by title, author, or display-name pattern.
 
     Performs a case-insensitive substring match against title and author fields.
     Returns the best match with metadata and abstract. For full text, use
     deep_read instead.
 
     Args:
-        pattern: Substring to match in the paper title or author list.
+        pattern: Substring to match in the paper title, author list, display name, year, or id.
         reason: Why you are looking up this paper (logged for the reading trace).
 
     Returns:
@@ -296,12 +343,9 @@ def get_paper(
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Chunk, Paper
 
-        lower = pattern.lower()
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
+            matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
                 return f"No paper found matching: {pattern!r}"
 
@@ -577,7 +621,7 @@ def read_paper_digest(
     and reserve deep_read for the 3-5 most critical papers.
 
     Args:
-        pattern: Substring to match in title or author list.
+        pattern: Substring to match in title, author list, display name, year, or id.
         max_chars: Maximum characters of body text to include (default 3000).
         reason: Why you are reading this paper (logged for the reading trace).
 
@@ -590,12 +634,9 @@ def read_paper_digest(
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Chunk, Paper, PaperTopic
 
-        lower = pattern.lower()
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
+            matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
                 return f"No paper found matching: {pattern!r}"
 
@@ -690,14 +731,14 @@ def deep_read(
     pattern: str,
     reason: str = "",
 ) -> str:
-    """Retrieve the complete full text of a paper by title/author pattern.
+    """Retrieve the complete full text of a paper by title, author, or display-name pattern.
 
     Returns ALL chunks for the matched paper in reading order.
     This is expensive (~70KB per paper) -- prefer read_paper_digest for
     broad coverage, and reserve deep_read for the 3-5 most critical papers.
 
     Args:
-        pattern: Substring to match in title or author list.
+        pattern: Substring to match in title, author list, display name, year, or id.
         reason: Why you are deep-reading this paper (logged for the reading trace).
 
     Returns:
@@ -707,7 +748,7 @@ def deep_read(
             - chunks: all text chunks in reading order
             - token_count: total token count
             - match_count: how many papers matched (first one is returned)
-            - error: present only if something went wrong
+            - error: present when no paper matched or something went wrong
     """
     try:
         from sqlmodel import select
@@ -715,12 +756,9 @@ def deep_read(
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Chunk, Paper
 
-        lower = pattern.lower()
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
+            matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
                 return json.dumps(
                     {
@@ -729,6 +767,7 @@ def deep_read(
                         "chunks": [],
                         "token_count": 0,
                         "match_count": 0,
+                        "error": f"No paper found matching: {pattern!r}",
                     }
                 )
 
@@ -786,7 +825,7 @@ def read_section(
     Much cheaper than deep_read (~5KB vs ~70KB).
 
     Args:
-        pattern: Paper title/author substring.
+        pattern: Paper title, author, display-name, year, or id substring.
         section: Section path or keyword (e.g., "methods", "3.2", "Results").
         reason: Why you are reading this section (logged for the reading trace).
 
@@ -799,12 +838,9 @@ def read_section(
         from scholarforge.store.db import get_session
         from scholarforge.store.models import Chunk, Paper
 
-        lower = pattern.lower()
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
-            matched = [
-                p for p in all_papers if lower in p.title.lower() or lower in p.authors.lower()
-            ]
+            matched = _match_papers_by_pattern(all_papers, pattern)
             if not matched:
                 return f"No paper found matching: {pattern!r}"
 
@@ -1780,17 +1816,18 @@ def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
 
 # ── Session context: read-once-summarize pattern ─────────────────────────────
 
-_paper_summaries: list[dict] = []
-
-
 def reset_paper_summaries() -> None:
     """Clear the session paper summary store. Call at the start of each run."""
-    _paper_summaries.clear()
+    from scholarforge.agent.run_context import get_current_run_context
+
+    get_current_run_context().paper_summaries.clear()
 
 
 def get_paper_summaries() -> list[dict]:
     """Return all recorded paper summaries (internal helper)."""
-    return list(_paper_summaries)
+    from scholarforge.agent.run_context import get_current_run_context
+
+    return list(get_current_run_context().paper_summaries)
 
 
 def record_paper_summary(
@@ -1840,7 +1877,9 @@ def record_paper_summary(
         "read_depth": read_depth,
         "role": role,
     }
-    _paper_summaries.append(summary)
+    from scholarforge.agent.run_context import get_current_run_context
+
+    get_current_run_context().paper_summaries.append(summary)
 
     # Build concept graph edges
     n_links = 0
@@ -1879,11 +1918,12 @@ def get_session_context() -> str:
     Returns:
         Markdown-formatted session context with all paper summaries.
     """
-    if not _paper_summaries:
+    summaries = get_paper_summaries()
+    if not summaries:
         return "No paper summaries recorded yet. Use record_paper_summary after reading papers."
 
-    lines = [f"## Session Context ({len(_paper_summaries)} papers)", ""]
-    for i, s in enumerate(_paper_summaries, 1):
+    lines = [f"## Session Context ({len(summaries)} papers)", ""]
+    for i, s in enumerate(summaries, 1):
         role = s.get("role", "standard")
         role_tag = f" ({role})" if role != "standard" else ""
         lines.append(f"### {i}. {s['paper_name']} [{s['read_depth']}{role_tag}]")

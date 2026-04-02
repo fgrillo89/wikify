@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scholarforge.agent.run_context import (
+    default_reading_log_file,
+    get_current_run_context,
+)
+
 
 @dataclass
 class ReadingEntry:
@@ -42,6 +47,10 @@ class ReadingLog:
         depth: str = "digest",
     ) -> None:
         """Record a reading action (also persists to disk for cross-process use)."""
+        ctx = get_current_run_context()
+        key = f"{paper}::{depth}"
+        if key in ctx.reading_log_seen:
+            return
         entry = ReadingEntry(paper=paper, tool=tool, reason=reason, depth=depth)
         self.entries.append(entry)
         _persist_entry(entry)
@@ -113,16 +122,20 @@ class ReadingLog:
 # ── File-backed session state (no globals — uses container class) ────────────
 
 
-class _LogSession:
-    """Container for reading log session state. Avoids banned `global` keyword."""
+def configure_reading_log(log_file: str | Path | None = None) -> Path:
+    """Set the backing JSONL path for subsequent reading-log operations.
 
-    def __init__(self) -> None:
-        self.log: ReadingLog | None = None
-        self.log_file: Path = Path("data/output") / ".reading_log.jsonl"
-        self.seen: set[str] = set()
-
-
-_session = _LogSession()
+    This is a bridge toward fully run-scoped state: callers can now isolate
+    log persistence per run instead of sharing one fixed process-wide path.
+    Existing in-memory state is cleared so the next access reloads from the
+    configured path.
+    """
+    ctx = get_current_run_context()
+    ctx.reading_log_file = Path(log_file) if log_file is not None else default_reading_log_file()
+    ctx.reading_log = ReadingLog(strategy=ctx.strategy, topic=ctx.topic)
+    ctx.reading_log_seen = set()
+    ctx.reading_log_loaded = False
+    return ctx.reading_log_file
 
 
 def get_reading_log() -> ReadingLog:
@@ -132,34 +145,39 @@ def get_reading_log() -> ReadingLog:
     separate Python process invocations (each `uv run python -c` call).
     Deduplicates: same paper + same depth = logged only once.
     """
-    if _session.log is None:
-        _session.log = ReadingLog()
-        _session.seen = set()
-        if _session.log_file.exists():
+    ctx = get_current_run_context()
+    if not ctx.reading_log_loaded:
+        ctx.reading_log.entries = []
+        ctx.reading_log.strategy = ctx.strategy
+        ctx.reading_log.topic = ctx.topic
+        ctx.reading_log_seen = set()
+        if ctx.reading_log_file.exists():
             try:
-                for line in _session.log_file.read_text(encoding="utf-8").splitlines():
+                for line in ctx.reading_log_file.read_text(encoding="utf-8").splitlines():
                     line = line.strip()
                     if line:
                         data = json.loads(line)
                         entry = ReadingEntry(**data)
                         key = f"{entry.paper}::{entry.depth}"
-                        if key not in _session.seen:
-                            _session.log.entries.append(entry)
-                            _session.seen.add(key)
+                        if key not in ctx.reading_log_seen:
+                            ctx.reading_log.entries.append(entry)
+                            ctx.reading_log_seen.add(key)
             except Exception:  # noqa: BLE001
                 pass
-    return _session.log
+        ctx.reading_log_loaded = True
+    return ctx.reading_log
 
 
 def _persist_entry(entry: ReadingEntry) -> None:
     """Append a single entry to the JSONL file (deduplicated)."""
+    ctx = get_current_run_context()
     key = f"{entry.paper}::{entry.depth}"
-    if key in _session.seen:
+    if key in ctx.reading_log_seen:
         return
-    _session.seen.add(key)
+    ctx.reading_log_seen.add(key)
 
-    _session.log_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(_session.log_file, "a", encoding="utf-8") as f:
+    ctx.reading_log_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(ctx.reading_log_file, "a", encoding="utf-8") as f:
         f.write(
             json.dumps(
                 {
@@ -175,10 +193,17 @@ def _persist_entry(entry: ReadingEntry) -> None:
         )
 
 
-def reset_reading_log() -> ReadingLog:
+def reset_reading_log(log_file: str | Path | None = None) -> ReadingLog:
     """Start a fresh reading log (e.g., for a new generation run)."""
-    _session.log = ReadingLog()
-    _session.seen = set()
-    if _session.log_file.exists():
-        _session.log_file.unlink()
-    return _session.log
+    ctx = get_current_run_context()
+    if log_file is not None:
+        configure_reading_log(log_file)
+    elif ctx.reading_log_file == Path("data/output") / ".reading_log.jsonl":
+        # Migrate old default lazily for existing long-lived interpreters.
+        ctx.reading_log_file = default_reading_log_file()
+    ctx.reading_log = ReadingLog(strategy=ctx.strategy, topic=ctx.topic)
+    ctx.reading_log_seen = set()
+    ctx.reading_log_loaded = True
+    if ctx.reading_log_file.exists():
+        ctx.reading_log_file.unlink()
+    return ctx.reading_log

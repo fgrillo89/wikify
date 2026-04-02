@@ -159,9 +159,28 @@ def test_generation_prompt_contains_list_papers():
     from scholarforge.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
-    assert "list_papers" in prompt, (
-        "Expected 'list_papers' exploration instruction in generation prompt"
+    assert "get_frontier_exploration_order" in prompt, (
+        "Expected hierarchical exploration instruction in generation prompt"
     )
+
+
+def test_generation_prompt_contains_digest_first_guidance():
+    from scholarforge.agent.defaults import build_generation_prompt
+
+    prompt = build_generation_prompt(field_hint="ALD memristors")
+    assert "read_paper_digest" in prompt, (
+        "Expected digest-first instruction in generation prompt"
+    )
+    assert "read_section" in prompt, "Expected section drill-down instruction in prompt"
+
+
+def test_explorer_prompt_prefers_hierarchical_reads():
+    from scholarforge.agent.defaults import build_explorer_prompt
+
+    prompt = build_explorer_prompt("ALD memristors")
+    assert "read_paper_digest" in prompt
+    assert "read_section" in prompt
+    assert "last resort" in prompt or "only as a last resort" in prompt
 
 
 # ── Test 7: All artifact type .md files exist and are non-empty ───────────────
@@ -238,6 +257,8 @@ def test_combined_ald_lit_review_afm():
     )
 
     # Agent instructions present
+    assert "read_paper_digest" in prompt, "Missing agent instruction 'read_paper_digest'"
+    assert "read_section" in prompt, "Missing agent instruction 'read_section'"
     assert "deep_read" in prompt, "Missing agent instruction 'deep_read'"
 
 

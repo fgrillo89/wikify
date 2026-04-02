@@ -6,19 +6,21 @@ Architecture: precompute-once, share everywhere.
 model) and passes it to every metric.  No individual metric loads the corpus
 or calls the model independently.
 
-Metrics (7 total):
-  1. FrontierShift          -- centroid shift toward sparse regions
-  2. ArgumentativeCoherence -- consecutive corpus-chunk-pair order preservation
-  3. SemanticResidual        -- SVD projection: synthesis vs summarization
-  4. BridgeVectors           -- chunks connecting DISTANT clusters
-  5. GapDetection            -- void signal + gap-claim regex
-  6. TopicCoverage           -- PaperTopic table coverage
-  7. FactualSpecificity      -- numeric/chem/acronym density (log-scaled)
+Metrics (8 total):
+  1. ProseQuality            -- citation clustering, synthesis depth, voice
+  2. FrontierShift           -- centroid shift toward sparse regions
+  3. ArgumentativeCoherence  -- consecutive corpus-chunk-pair order preservation
+  4. SemanticResidual        -- SVD projection: synthesis vs summarization
+  5. BridgeVectors           -- chunks connecting DISTANT clusters
+  6. GapDetection            -- void signal + gap-claim regex
+  7. TopicCoverage           -- PaperTopic table coverage
+  8. FactualSpecificity      -- numeric/chem/acronym density (log-scaled)
 
 Composite weights:
-  Frontier shift: 0.20 | Bridge: 0.15 | Semantic residual: 0.15
-  Gap detection:  0.15 | Coherence: 0.15 | Topic coverage: 0.10
-  Factual spec:   0.10
+  Prose quality: 0.20 | Frontier shift: 0.10 | Bridge: 0.08
+  Semantic residual: 0.08 | Gap detection: 0.12 | Coherence: 0.10
+  Topic coverage: 0.08 | Factual specificity: 0.12 | Semantic coverage: 0.06
+  Centroid alignment: 0.06
 """
 
 from __future__ import annotations
@@ -1029,12 +1031,13 @@ assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 class QualityReport:
     """Full quality analysis of a literature review.
 
-    All corpus-dependent metrics are Optional and None when the corpus is
-    unavailable.  ``composite_score()`` re-normalizes weights to those
-    metrics that are present.
+    Prose quality and factual specificity are always computed. Corpus-dependent
+    metrics are Optional and None when the corpus is unavailable.
+    ``composite_score()`` re-normalizes weights to those metrics that are present.
     """
 
     # Always computed (no corpus needed)
+    prose_quality: ProseQualityResult
     factual_specificity: FactualSpecificityResult
 
     # Require corpus + embeddings
@@ -1056,6 +1059,7 @@ class QualityReport:
         so a missing corpus does not artificially deflate the score.
         """
         available: dict[str, float] = {
+            "prose_quality": self.prose_quality.score(),
             "factual_specificity": self.factual_specificity.score(),
         }
         if self.semantic_coverage is not None:
@@ -1087,6 +1091,8 @@ class QualityReport:
             "COMPREHENSIVE REVIEW QUALITY REPORT",
             "=" * 60,
         ]
+
+        lines += ["", self.prose_quality.interpretation()]
 
         if self.semantic_coverage is not None:
             lines += [
@@ -1128,7 +1134,7 @@ class QualityReport:
 
 
 def comprehensive_quality_report(review_text: str) -> QualityReport:
-    """Run all 7 quality metrics on a review and return a structured report.
+    """Run all 8 quality metrics on a review and return a structured report.
 
     Builds ``EmbeddingContext`` once (the only expensive step: corpus lookup
     from ChromaDB + ONNX encoding of ~20 review chunks), then passes it to
@@ -1142,6 +1148,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
         QualityReport with all available metrics populated.
     """
     # --- Always-available metric (no corpus needed) --------------------------
+    prose = compute_prose_quality(review_text)
     factual = compute_factual_specificity(review_text)
 
     # --- Topic coverage (SQLite only, no embeddings) -------------------------
@@ -1163,6 +1170,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
 
     if ctx is None:
         return QualityReport(
+            prose_quality=prose,
             factual_specificity=factual,
             topic_coverage=topics,
             corpus_error=corpus_error or "Corpus unavailable or empty",
@@ -1193,6 +1201,7 @@ def comprehensive_quality_report(review_text: str) -> QualityReport:
     gaps = compute_gap_detection(ctx, review_text)
 
     return QualityReport(
+        prose_quality=prose,
         factual_specificity=factual,
         semantic_coverage=coverage_ratio,
         centroid_alignment=centroid_align,

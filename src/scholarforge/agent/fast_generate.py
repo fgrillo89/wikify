@@ -24,6 +24,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TOPIC = "research topic"
+
+
+def _normalize_topic(topic: str | None) -> str:
+    """Return a safe topic label for prompts and metadata."""
+    value = (topic or "").strip()
+    return value or DEFAULT_TOPIC
+
+
+def _artifact_section_guidance(artifact_type_id: str, topic: str) -> str:
+    """Build artifact-driven section guidance without hardcoded domain taxonomies."""
+    from scholarforge.generate.artifact_types import get_artifact_type
+
+    artifact = get_artifact_type(artifact_type_id)
+    required_sections = ", ".join(artifact.sections)
+    lines = [
+        f"Document type: {artifact.name}. Follow the high-level structure: {required_sections}.",
+    ]
+
+    if artifact_type_id == "lit_review":
+        lines.append(
+            "Use 4-6 thematic body sections between Introduction and Conclusion. "
+            "Name those sections from the evidence and the topic, "
+            "not from a fixed subject taxonomy."
+        )
+    else:
+        lines.append(
+            "Adapt the middle sections to the evidence and the topic instead of forcing a "
+            "domain-specific outline."
+        )
+
+    lines.append(f"Keep the writing focused on: {topic}.")
+    return " ".join(lines)
+
 
 @dataclass
 class FastGenerateResult:
@@ -42,6 +76,7 @@ class FastGenerateResult:
 def precompute_context(
     max_papers: int = 15,
     n_deep_digest: int = 5,
+    topic: str = DEFAULT_TOPIC,
 ) -> dict:
     """Pre-compute all context needed for review writing. No LLM.
 
@@ -66,6 +101,7 @@ def precompute_context(
     )
     from scholarforge.evaluate.frontier import frontier_exploration_order
 
+    topic = _normalize_topic(topic)
     start = time.time()
 
     # 1. Frontier order
@@ -128,6 +164,7 @@ def precompute_context(
         "gaps": gaps[:3000],
         "synthesis": synthesis[:2000],
         "concept_links": concept_links,
+        "topic": topic,
         "precompute_time": elapsed,
     }
 
@@ -223,7 +260,7 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
 
 def build_one_shot_prompt(
     context: dict,
-    topic: str = "ALD memristors for neuromorphic computing",
+    topic: str = DEFAULT_TOPIC,
     word_target: int = 4000,
     artifact_type_id: str = "lit_review",
     journal: str = "",
@@ -234,14 +271,17 @@ def build_one_shot_prompt(
     """
     from scholarforge.agent.defaults import build_writer_prompt
 
+    resolved_topic = _normalize_topic(context.get("topic") or topic)
+    artifact_guidance = _artifact_section_guidance(artifact_type_id, resolved_topic)
+
     system_prompt = build_writer_prompt(
         artifact_type_id=artifact_type_id,
         journal=journal,
-        field_hint=topic,
+        field_hint=resolved_topic,
     )
 
     # Build the user prompt with ALL context
-    sections = [f"# Write a {word_target}-word review on: {topic}\n"]
+    sections = [f"# Write a {word_target}-word review on: {resolved_topic}\n"]
 
     # Citation reference list
     citations = "\n".join(f"- [REF:{p['display_name']}]" for p in context["papers"])
@@ -265,12 +305,10 @@ def build_one_shot_prompt(
     sections.append(
         f"## Instructions\n"
         f"Write exactly {word_target} words.\n"
-        f"Required sections: Introduction, ALD Fundamentals, Materials "
-        f"(HfO2, Al2O3, TaOx, ZnO, nitrides, 2D), Switching Mechanisms, "
-        f"Gaps/Future Directions, Conclusion.\n"
-        f"Gap-structured: each section ends with what's missing + open question.\n"
+        f"{artifact_guidance}\n"
+        f"If the artifact is a literature review, keep the body thematic and gap-aware.\n"
         f"Use [REF:DisplayName] citations from the list above.\n"
-        f"Include 4 figure placeholders.\n"
+        f"Include 3-5 figure placeholders where they strengthen the argument.\n"
         f"No em-dashes. One concept per sentence. Every claim cited.\n"
         f"No method disclosure. No banned words.\n"
     )
@@ -279,7 +317,7 @@ def build_one_shot_prompt(
 
 
 def fast_generate(
-    topic: str = "ALD memristors for neuromorphic computing",
+    topic: str = DEFAULT_TOPIC,
     model: str | None = None,
     word_target: int = 4000,
     max_papers: int = 15,
@@ -297,10 +335,11 @@ def fast_generate(
     from scholarforge.config import settings
 
     model = model or settings.llm_model
+    topic = _normalize_topic(topic)
     total_start = time.time()
 
     # Phase 1: Pre-compute (no LLM)
-    context = precompute_context(max_papers=max_papers)
+    context = precompute_context(max_papers=max_papers, topic=topic)
     precompute_time = context["precompute_time"]
 
     # Phase 2: Build prompt

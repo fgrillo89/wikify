@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
+    from scholarforge.agent.run_context import RunContext
     from scholarforge.llm.hooks import LLMHook
 
 
@@ -122,12 +123,17 @@ class AgentResult:
     total_cache_write_tokens: int = 0
     turn_telemetry: list[TurnTelemetry] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
+    run_context: RunContext | None = None
 
 
 # ── Tool result compaction ────────────────────────────────────────────────────
 
 
-def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
+def _compact_tool_results(
+    messages: list[dict],
+    threshold: int = 2000,
+    run_context: RunContext | None = None,
+) -> None:
     """Compact large tool results from prior turns to save context tokens.
 
     Context-aware compaction:
@@ -208,7 +214,7 @@ def _compact_tool_results(messages: list[dict], threshold: int = 2000) -> None:
 
     # After compaction, inject session context once so the model has all
     # summaries available without needing to call get_session_context()
-    _inject_session_context(messages)
+    _inject_session_context(messages, run_context=run_context)
 
 
 _SESSION_CONTEXT_MARKER = "[Session context: paper summaries]"
@@ -288,7 +294,10 @@ def _session_level_compaction(messages: list[dict]) -> None:
     messages.extend(new_messages)
 
 
-def _inject_session_context(messages: list[dict]) -> None:
+def _inject_session_context(
+    messages: list[dict],
+    run_context: RunContext | None = None,
+) -> None:
     """Inject or update the session context summary in the message list.
 
     Replaces any prior session context message with an updated version
@@ -299,14 +308,16 @@ def _inject_session_context(messages: list[dict]) -> None:
     Injected as a system message so it doesn't break assistant/user alternation.
     """
     try:
-        from scholarforge.agent.tools import get_paper_summaries, get_session_context
+        from scholarforge.agent.run_context import get_current_run_context
+        from scholarforge.agent.tools import get_session_context
 
-        summaries = get_paper_summaries()
+        active_context = run_context or get_current_run_context()
+        summaries = list(active_context.paper_summaries)
         if len(summaries) < 2:
             return
 
-        ctx = get_session_context()
-        if not ctx or "No paper summaries" in ctx:
+        context_text = get_session_context()
+        if not context_text or "No paper summaries" in context_text:
             return
 
         # Include concept graph if enabled and has edges
@@ -314,18 +325,14 @@ def _inject_session_context(messages: list[dict]) -> None:
         try:
             from scholarforge.config import settings as _cfg
 
-            if _cfg.inject_concept_graph:
-                from scholarforge.agent.concept_graph import get_concept_graph
-
-                graph = get_concept_graph()
-                if graph.edges:
-                    graph_text = "\n\n" + graph.to_compact_text()
+            if _cfg.inject_concept_graph and active_context.concept_graph.edges:
+                graph_text = "\n\n" + active_context.concept_graph.to_compact_text()
         except Exception:  # noqa: BLE001
             pass
 
         ctx_message = {
             "role": "system",
-            "content": f"{_SESSION_CONTEXT_MARKER}\n\n{ctx}{graph_text}",
+            "content": f"{_SESSION_CONTEXT_MARKER}\n\n{context_text}{graph_text}",
         }
 
         # Replace existing session context message if present
@@ -368,6 +375,7 @@ class ScholarForgeAgent:
         system_prompt: str = "",
         max_tokens_per_turn: int = 4096,
         temperature: float = 0.3,
+        run_context: RunContext | None = None,
     ) -> None:
         self.model = model
         self.tools_list: list[Callable] = tools or []
@@ -375,15 +383,22 @@ class ScholarForgeAgent:
         self.system_prompt = system_prompt
         self.max_tokens_per_turn = max_tokens_per_turn
         self.temperature = temperature
+        self.run_context = run_context
 
     def run(self, prompt: str, max_turns: int = 20) -> AgentResult:
         """Execute the agent loop until LLM stops calling tools or max_turns."""
         import litellm
 
+        from scholarforge.agent.run_context import (
+            create_run_context,
+            restore_run_context,
+            set_current_run_context,
+        )
         from scholarforge.config import settings
         from scholarforge.llm.hooks import LLMEvent
 
         model = self.model or settings.llm_model
+        run_context = self.run_context or create_run_context(topic=prompt)
 
         tool_schemas = fns_to_tool_schemas(self.tools_list) if self.tools_list else []
         tool_map: dict[str, Callable] = {fn.__name__: fn for fn in self.tools_list}
@@ -399,132 +414,142 @@ class ScholarForgeAgent:
         total_out = 0
         total_cache_read = 0
         total_cache_write = 0
+        token = set_current_run_context(run_context)
 
-        for turn in range(max_turns):
-            # Compact large tool results from prior turns to save tokens
-            if turn > 0 and settings.enable_tool_compaction:
-                _compact_tool_results(messages, settings.tool_compaction_threshold)
-
-                _session_level_compaction(messages)
-
-            # Telemetry: measure context size at start of turn
-            ctx_chars = sum(
-                len(m.get("content", "") or "") for m in messages if isinstance(m, dict)
-            )
-            turn_telem = TurnTelemetry(turn=turn, context_chars=ctx_chars)
-
-            event = LLMEvent(
-                messages=messages,
-                model=model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens_per_turn,
-                attempt=turn,
-            )
-            for hook in self.hooks:
-                event = hook.before_call(event)
-
-            t0 = time.time()
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": self.max_tokens_per_turn,
-            }
-            if tool_schemas:
-                kwargs["tools"] = tool_schemas
-
-            response = litellm.completion(**kwargs)
-            latency = (time.time() - t0) * 1000
-
-            choice = response.choices[0]
-            message = choice.message
-
-            usage = response.usage
-            input_tokens: int = usage.prompt_tokens if usage else 0
-            output_tokens: int = usage.completion_tokens if usage else 0
-            cache_read: int = getattr(usage, "cache_read_input_tokens", 0) or 0
-            cache_write: int = getattr(usage, "cache_creation_input_tokens", 0) or 0
-            total_in += input_tokens
-            total_out += output_tokens
-            total_cache_read += cache_read
-            total_cache_write += cache_write
-
-            turn_telem.input_tokens = input_tokens
-            turn_telem.output_tokens = output_tokens
-            turn_telem.latency_ms = latency
-
-            event.raw_response = message.content or ""
-            event.input_tokens = input_tokens
-            event.output_tokens = output_tokens
-            event.latency_ms = latency
-            for hook in self.hooks:
-                event = hook.after_call(event)
-
-            # Append the assistant message — convert to dict if needed
-            try:
-                msg_dict = message.model_dump()
-            except AttributeError:
-                msg_dict = {
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": message.tool_calls,
-                }
-            messages.append(msg_dict)
-
-            # No tool calls — agent is done
-            if not message.tool_calls:
-                all_telemetry.append(turn_telem)
-                return AgentResult(
-                    content=message.content or "",
-                    tool_calls=all_tool_calls,
-                    total_turns=turn + 1,
-                    total_input_tokens=total_in,
-                    total_output_tokens=total_out,
-                    total_cache_read_tokens=total_cache_read,
-                    total_cache_write_tokens=total_cache_write,
-                    turn_telemetry=all_telemetry,
-                    messages=messages,
-                )
-
-            # Execute each tool call
-            for tc in message.tool_calls:
-                fn = tool_map.get(tc.function.name)
-                duration = 0.0
-                args: dict[str, Any] = {}
-                if fn is None:
-                    tool_result = json.dumps({"error": f"Unknown tool: {tc.function.name}"})
-                else:
-                    try:
-                        args = json.loads(tc.function.arguments)
-                        t_start = time.time()
-                        raw_result = fn(**args)
-                        duration = (time.time() - t_start) * 1000
-                        tool_result = str(raw_result)
-                    except Exception as exc:
-                        tool_result = json.dumps({"error": str(exc)})
-                        duration = 0.0
-
-                all_tool_calls.append(
-                    ToolCallRecord(
-                        tool_name=tc.function.name,
-                        arguments=args,
-                        result=tool_result[:500],
-                        duration_ms=duration,
-                        turn=turn,
+        try:
+            for turn in range(max_turns):
+                # Compact large tool results from prior turns to save tokens
+                if turn > 0 and settings.enable_tool_compaction:
+                    _compact_tool_results(
+                        messages,
+                        settings.tool_compaction_threshold,
+                        run_context=run_context,
                     )
+
+                    _session_level_compaction(messages)
+
+                # Telemetry: measure context size at start of turn
+                ctx_chars = sum(
+                    len(m.get("content", "") or "") for m in messages if isinstance(m, dict)
                 )
+                turn_telem = TurnTelemetry(turn=turn, context_chars=ctx_chars)
 
-                turn_telem.tool_names.append(tc.function.name)
-                turn_telem.tool_durations_ms.append(duration)
+                event = LLMEvent(
+                    messages=messages,
+                    model=model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens_per_turn,
+                    attempt=turn,
+                )
+                for hook in self.hooks:
+                    event = hook.before_call(event)
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": tool_result,
+                t0 = time.time()
+                kwargs: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": self.max_tokens_per_turn,
+                }
+                if tool_schemas:
+                    kwargs["tools"] = tool_schemas
+
+                response = litellm.completion(**kwargs)
+                latency = (time.time() - t0) * 1000
+
+                choice = response.choices[0]
+                message = choice.message
+
+                usage = response.usage
+                input_tokens: int = usage.prompt_tokens if usage else 0
+                output_tokens: int = usage.completion_tokens if usage else 0
+                cache_read: int = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_write: int = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                total_in += input_tokens
+                total_out += output_tokens
+                total_cache_read += cache_read
+                total_cache_write += cache_write
+
+                turn_telem.input_tokens = input_tokens
+                turn_telem.output_tokens = output_tokens
+                turn_telem.latency_ms = latency
+
+                event.raw_response = message.content or ""
+                event.input_tokens = input_tokens
+                event.output_tokens = output_tokens
+                event.latency_ms = latency
+                for hook in self.hooks:
+                    event = hook.after_call(event)
+
+                # Append the assistant message - convert to dict if needed
+                try:
+                    msg_dict = message.model_dump()
+                except AttributeError:
+                    msg_dict = {
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": message.tool_calls,
                     }
-                )
+                messages.append(msg_dict)
 
-            all_telemetry.append(turn_telem)
+                # No tool calls - agent is done
+                if not message.tool_calls:
+                    all_telemetry.append(turn_telem)
+                    return AgentResult(
+                        content=message.content or "",
+                        tool_calls=all_tool_calls,
+                        total_turns=turn + 1,
+                        total_input_tokens=total_in,
+                        total_output_tokens=total_out,
+                        total_cache_read_tokens=total_cache_read,
+                        total_cache_write_tokens=total_cache_write,
+                        turn_telemetry=all_telemetry,
+                        messages=messages,
+                        run_context=run_context,
+                    )
+
+                # Execute each tool call
+                for tc in message.tool_calls:
+                    fn = tool_map.get(tc.function.name)
+                    duration = 0.0
+                    args: dict[str, Any] = {}
+                    if fn is None:
+                        tool_result = json.dumps({"error": f"Unknown tool: {tc.function.name}"})
+                    else:
+                        try:
+                            args = json.loads(tc.function.arguments)
+                            t_start = time.time()
+                            raw_result = fn(**args)
+                            duration = (time.time() - t_start) * 1000
+                            tool_result = str(raw_result)
+                        except Exception as exc:
+                            tool_result = json.dumps({"error": str(exc)})
+                            duration = 0.0
+
+                    all_tool_calls.append(
+                        ToolCallRecord(
+                            tool_name=tc.function.name,
+                            arguments=args,
+                            result=tool_result[:500],
+                            duration_ms=duration,
+                            turn=turn,
+                        )
+                    )
+
+                    turn_telem.tool_names.append(tc.function.name)
+                    turn_telem.tool_durations_ms.append(duration)
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_result,
+                        }
+                    )
+
+                all_telemetry.append(turn_telem)
+
+        finally:
+            restore_run_context(token)
 
         # Max turns exhausted — return last available content
         last_content = ""
@@ -545,6 +570,7 @@ class ScholarForgeAgent:
             total_cache_write_tokens=total_cache_write,
             turn_telemetry=all_telemetry,
             messages=messages,
+            run_context=run_context,
         )
 
     def run_structured(

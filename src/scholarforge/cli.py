@@ -109,7 +109,7 @@ def graph():
 @app.command()
 def generate(
     prompt: str = typer.Argument(
-        ..., help="Writing prompt, e.g. 'Review of memristor-based neuromorphic computing'"
+        ..., help="Writing prompt, e.g. 'Review of a research topic'"
     ),
     pages: int = typer.Option(10, "--pages", "-n", help="Target page count"),
     output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
@@ -238,7 +238,7 @@ def agent_generate(
 
 @app.command("scripted-generate")
 def scripted_generate(
-    prompt: str = typer.Argument("ALD memristors for neuromorphic computing", help="Review topic"),
+    prompt: str = typer.Argument("research topic", help="Review topic"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model (litellm format)"),
     summarize_model: str = typer.Option(
         None, "--summarize-model", help="Model for paper summarization (default: same as --model)"
@@ -292,7 +292,7 @@ def scripted_generate(
 
 @app.command("fast-generate")
 def fast_generate_cmd(
-    prompt: str = typer.Argument("ALD memristors for neuromorphic computing", help="Review topic"),
+    prompt: str = typer.Argument("research topic", help="Review topic"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
     journal: str = typer.Option("", "--journal", "-j", help="Target journal"),
     output: str = typer.Option("data/output/review_fast.md", "--output", "-o"),

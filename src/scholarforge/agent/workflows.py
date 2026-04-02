@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scholarforge.agent.core import AgentResult, ScholarForgeAgent
+from scholarforge.agent.run_context import RunContext, create_run_context, use_run_context
 
 if TYPE_CHECKING:
     from scholarforge.agent.research_notes import ResearchNotes
@@ -21,6 +22,7 @@ def explore_corpus(
     model: str | None = None,
     token_budget: int = 130_000,
     max_turns: int = 25,
+    run_context: RunContext | None = None,
 ) -> "ResearchNotes":
     """Run the explorer agent to build structured research notes.
 
@@ -30,28 +32,33 @@ def explore_corpus(
 
     Returns ResearchNotes built from recorded paper summaries.
     """
+    from scholarforge.agent.concept_graph import reset_concept_graph
     from scholarforge.agent.defaults import build_explorer_prompt, get_explorer_tools
     from scholarforge.agent.reading_log import reset_reading_log
     from scholarforge.agent.research_notes import ResearchNotes
     from scholarforge.agent.tools import reset_paper_summaries
 
-    reset_reading_log()
-    reset_paper_summaries()
+    context = run_context or create_run_context(topic=prompt, strategy="explore_corpus")
+    with use_run_context(context):
+        reset_reading_log()
+        reset_paper_summaries()
+        reset_concept_graph()
 
-    system_prompt = build_explorer_prompt(prompt)
-    hooks = get_default_hooks(token_budget)
+        system_prompt = build_explorer_prompt(prompt)
+        hooks = get_default_hooks(token_budget)
 
-    agent = ScholarForgeAgent(
-        model=model,
-        tools=get_explorer_tools(),
-        hooks=hooks,
-        system_prompt=system_prompt,
-    )
+        agent = ScholarForgeAgent(
+            model=model,
+            tools=get_explorer_tools(),
+            hooks=hooks,
+            system_prompt=system_prompt,
+            run_context=context,
+        )
 
-    result = agent.run(prompt, max_turns=max_turns)
+        result = agent.run(prompt, max_turns=max_turns)
 
-    # Build notes from recorded summaries (the explorer called record_paper_summary)
-    notes = ResearchNotes.from_session(topic=prompt)
+        # Build notes from recorded summaries (the explorer called record_paper_summary)
+        notes = ResearchNotes.from_session(topic=prompt, run_context=context)
 
     # Try to extract gap analysis and outline from the explorer's final message
     if result.content:
@@ -78,6 +85,7 @@ def generate_paper(
     token_budget: int = 200_000,
     max_turns: int = 30,
     two_agent: bool = False,
+    run_context: RunContext | None = None,
 ) -> tuple[str, AgentResult, list]:
     """Generate a paper using the agent loop.
 
@@ -92,7 +100,7 @@ def generate_paper(
     """
     if two_agent:
         return _generate_two_agent(
-            prompt, model, artifact_type_id, journal, token_budget, max_turns
+            prompt, model, artifact_type_id, journal, token_budget, max_turns, run_context
         )
 
     # Single-agent mode (with tool compaction)
@@ -104,11 +112,13 @@ def generate_paper(
 
     hooks = get_default_hooks(token_budget)
 
+    context = run_context or create_run_context(topic=prompt, strategy="generate_paper")
     agent = ScholarForgeAgent(
         model=model,
         tools=get_default_tools(),
         hooks=hooks,
         system_prompt=system_prompt,
+        run_context=context,
     )
 
     result = agent.run(prompt, max_turns=max_turns)
@@ -122,13 +132,21 @@ def _generate_two_agent(
     journal: str = "",
     token_budget: int = 200_000,
     max_turns: int = 30,
+    run_context: RunContext | None = None,
 ) -> tuple[str, AgentResult, list]:
     """Two-agent generation: explorer builds notes, writer produces prose."""
     from scholarforge.agent.defaults import build_writer_prompt, get_writer_tools
 
+    context = run_context or create_run_context(topic=prompt, strategy="generate_paper_two_agent")
+
     # Phase 1: Explore
     explorer_budget = int(token_budget * 0.65)
-    notes = explore_corpus(prompt, model=model, token_budget=explorer_budget)
+    notes = explore_corpus(
+        prompt,
+        model=model,
+        token_budget=explorer_budget,
+        run_context=context,
+    )
 
     # Phase 2: Write
     writer_budget = token_budget - explorer_budget
@@ -144,6 +162,7 @@ def _generate_two_agent(
         tools=get_writer_tools(),
         hooks=writer_hooks,
         system_prompt=writer_system,
+        run_context=context,
     )
 
     writer_prompt = notes.to_writer_prompt()
