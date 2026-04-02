@@ -1,166 +1,175 @@
-# /generate-hierarchical-broad -- Write a paper with broad corpus coverage + hierarchical retrieval
+# /generate-hierarchical-broad -- Comprehensive coverage with hierarchical retrieval
 
 You are a research agent with access to a knowledge base of academic papers. Your job is to explore the corpus, understand the literature, and write a paper based on what you find.
 
-**IMPORTANT: YOU are the LLM.** You call tools via `uv run python -c "..."` to read data from the corpus, then YOU write the review directly as your output. Do NOT look for API keys, do NOT try to call litellm or any external LLM API. The tools read from a local database -- they need no API key. YOU produce the final text.
+**IMPORTANT: YOU are the LLM.** You call tools via `uv run python -c "..."` to read data from the corpus, then YOU write the review directly as your output. Do NOT look for API keys, do NOT try to call litellm or any external LLM API. The tools read from a local database — they need no API key. YOU produce the final text.
 
-## Variation Goal
+## When to use this skill
 
-This variant addresses the **narrow corpus problem** identified in hierarchical_v1: ~12 citations vs 54-80 in comparable reviews. The fix: survey 30 papers at digest level, use `get_sections` for cross-corpus conclusions scan, target **40+ unique citations**.
+Use this when breadth of citation coverage matters more than thesis sharpness. It surveys the full corpus at digest level, runs targeted gap analysis, and targets the widest possible evidence base. Trade-off: argument coherence is lower than `/generate-hierarchical-hybrid`; citation count is higher.
 
-The risk in hierarchical retrieval is that focused reading produces brilliant depth on a small set but misses the field-level landscape. This variation preserves the progressive disclosure efficiency while dramatically expanding coverage.
+Use `/generate-hierarchical-hybrid` when you want the best thesis. Use this skill when you want maximum field coverage (comprehensive reviews, survey articles).
 
 ## Available Tools
 
 Call these via `uv run python -c "..."` (always set `PYTHONIOENCODING=utf-8`):
 
-| Function | Purpose | Cost |
-|----------|---------|------|
-| `get_corpus_summary()` | Corpus overview: paper count, top authors, hub papers, topics | Low |
-| `get_graph_metrics()` | PageRank, centrality -- which papers are most connected/important | Low |
-| `list_papers(limit=N)` | Browse papers with metadata | Low |
-| `get_paper(pattern="...")` | Paper metadata + abstract (~200 chars) | **Low** |
-| `read_paper_digest(pattern="...", reason="...")` | TOC + section summaries OR key section excerpts (~1.5KB) | **Low** |
-| `read_section(pattern="...", section="...", reason="...")` | Full text of ONE section (~5KB). Use after digest to drill in. | **Medium** |
-| `deep_read(pattern="...", reason="...")` | Full text of a specific paper (~70KB) -- rarely needed now | **High** |
-| `search_papers(query="...", top_k=N, max_tokens=N, reason="...")` | Semantic search across the corpus | Medium |
-| `get_sections(section_type="...", reason="...")` | Read specific sections (conclusion, methods, etc.) across all papers | Medium |
-| `get_paper_vibes(top_k=5)` | Semantic similarity map: each paper's nearest neighbors by content | Medium |
-| `suggest_next_papers(already_read=[...], max_suggestions=3)` | Graph-connected but semantically orthogonal papers to read next | Medium |
-| `find_corpus_gaps()` | Find unexplored gaps: embedding voids between clusters + topical intersections | Medium |
-| `find_synthesis_opportunities()` | Find paper pairs with synthesis potential (related but different) | Medium |
-| `evaluate_coverage(review_text, threshold=0.5)` | Raw semantic coverage metric | Medium |
-| `record_paper_summary(paper_name, key_findings, ...)` | Distill findings after reading -- builds working memory | Free |
-| `get_session_context()` | Recall all paper summaries (replaces re-reading) | Free |
-| `lookup_citation(pattern, max_results=5)` | Get display_name + BibTeX for citing (no abstract, very cheap) | **Free** |
-| `get_reading_log_text()` | View the current reading trace | Free |
-| `save_reading_log(output_dir="...")` | Save reading log (.md + .json) alongside output | Free |
+| Tool | Purpose | When to use |
+|------|---------|-------------|
+| `get_corpus_summary()` | Paper count, year range, top authors, hub/bridge/frontier papers, topic vocabulary | Phase 0: orient |
+| `get_frontier_exploration_order(max_papers=N)` | Recommended reading order: greedy seeds + frontier + bridge papers | Phase 1: survey order |
+| `read_paper_digest(pattern, reason)` | TOC + section summaries (~1.5KB). Best first pass for any paper. | Phase 1: survey all |
+| `get_sections(section_type, reason)` | Cross-corpus section scan (e.g., all conclusions) | Phase 2: catch stragglers |
+| `read_section(pattern, section, reason)` | Full text of ONE section (~5KB). Use for quantitative detail. | Phase 3: drill |
+| `find_corpus_gaps()` | Divergent papers; embedding voids between clusters | Phase 4: gap analysis |
+| `find_synthesis_opportunities()` | Paper pairs with moderate similarity; unconnected related work | Phase 4: gap analysis |
+| `search_papers(query, top_k, reason)` | Semantic search. Use for any gap still thin after the survey. | Phase 4: targeted fill |
+| `record_paper_summary(paper_name, key_findings, ...)` | Distill into working memory. Call after every read. | After every read |
+| `get_session_context()` | Recall all recorded summaries. Use before writing. | Before writing |
+| `suggest_next_papers(already_read, max_suggestions)` | Graph-connected + semantically orthogonal papers not yet read. | If coverage still thin |
+| `lookup_citation(pattern, max_results)` | Get display_name + BibTeX key. Free. | While writing |
+| `save_reading_log(output_dir)` | Save reading trace alongside output. | After writing |
 
 Import from: `from scholarforge.agent.tools import <function_name>`
 
-### Reading log -- always use `reason`
-Every read tool has a `reason` parameter. **Always provide it** -- explain in one sentence why you are reading this paper or running this search.
-
-### Read-once-summarize pattern (MANDATORY)
-After EVERY `read_section` or `deep_read`, immediately call `record_paper_summary` to distill findings. Set `role` to "hub", "frontier", "bridge", or "standard".
+### Read-once-summarize (MANDATORY)
+After every `read_paper_digest`, `read_section`, or `deep_read`, call `record_paper_summary`. Set `role` to "hub", "frontier", "bridge", or "standard".
 
 ---
 
-## Your Strategy: Broad Coverage + Selective Depth
+## Strategy: Survey First, Then Organize
 
-**Key principle: survey the entire corpus at abstract/digest level first, THEN drill into key sections. You must reach 40+ unique citations to cover the field adequately.**
+```
+Phase 0: ORIENT   --> corpus summary
+Phase 1: SURVEY   --> digest every paper in the exploration order (stop when diminishing returns)
+Phase 2: SWEEP    --> cross-corpus conclusions scan to catch stragglers
+Phase 3: DRILL    --> targeted section reads for quantitative evidence
+Phase 4: GAPS     --> find synthesis opportunities; fill any under-evidenced territory
+Write             --> function-first structure, organized by what findings enable, not by material class
+```
 
-### Phase 0 -- Reset reading log
+### Phase 0 — Reset and orient
+
 ```python
 from scholarforge.agent.reading_log import reset_reading_log
 reset_reading_log()
+
+from scholarforge.agent.tools import get_corpus_summary
+print(get_corpus_summary())
 ```
 
-### Phase 1 -- Field-wide survey (EXPANDED: 30 papers)
+### Phase 1 — Field-wide survey
 
-1. Get the precomputed exploration order -- use **max_papers=30** (not 15):
+Get the exploration order and digest papers:
 ```python
 from scholarforge.agent.tools import get_frontier_exploration_order
 print(get_frontier_exploration_order(max_papers=30))
 ```
 
-2. **Digest ALL 30 papers** via `read_paper_digest`. Section summaries give a structured overview of each paper's contributions in ~1.5KB each. Total: ~45KB for 30 papers.
+Digest papers via `read_paper_digest`. For each paper: what function does it address? What specific numbers does it report? Stop when new digests stop adding evidence you don't already have — this is the stopping criterion, not a count.
 
-3. After each digest, call `record_paper_summary` with findings. For hub/seed papers, set `role="hub"`. For frontiers, `role="frontier"`. For bridges, `role="bridge"`.
+Call `record_paper_summary` after each digest.
 
-### Phase 2 -- Cross-corpus conclusions scan
+### Phase 2 — Cross-corpus conclusions scan
 
-4. After digesting 30 papers, run a cross-corpus conclusions survey to catch papers that ranked below 30 but have important findings:
+After the survey, run a conclusions sweep to catch papers that ranked below the cutoff but have important findings:
 ```python
 from scholarforge.agent.tools import get_sections
-print(get_sections(section_type="conclusion", reason="Survey conclusions across all papers to catch findings not in top-30"))
+print(get_sections(section_type="conclusion", reason="Catch papers with important findings not in top exploration order"))
 ```
 
-5. From the conclusions survey, identify any additional papers with findings that should be cited. Add them to your notes.
+Add any new papers to your reading notes.
 
-### Phase 3 -- Targeted section reads (8-15 papers, function-first)
+### Phase 3 — Targeted section reads
 
-6. Based on the digests and conclusions survey, identify which **specific sections** contain evidence you need. Organize by **function** (what the device does), not by material class:
-   - **Switching mechanisms**: which mechanisms explain filament formation, vacancy dynamics, interface effects?
-   - **Synaptic functions**: LTP/LTD, STDP, multi-level states, analog linearity
-   - **Array integration**: yield, crosstalk, scaling, 3D architecture
-   - **Unconventional substrates**: flexible, textile, low-temperature
+For 6-12 papers where the digest wasn't specific enough, drill into relevant sections:
+```python
+from scholarforge.agent.tools import read_section
+print(read_section(pattern="...", section="results", reason="Get quantitative data for comparison X vs Y"))
+```
 
-Use `read_section` to drill into 8-15 sections from 5-10 papers. Each call gives ~5KB of targeted content.
+Organize by **function** (what the device or method does), not by material class. The goal is to be able to write comparative sentences like "Method A achieves X under condition C; Method B achieves Y under condition D because of mechanism Z."
 
-7. After each section read, update `record_paper_summary`.
+### Phase 4 — Gap analysis and targeted fill
 
-### Phase 4 -- Gaps and synthesis
-
-8. Run gap and synthesis tools:
 ```python
 from scholarforge.agent.tools import find_corpus_gaps, find_synthesis_opportunities
 print(find_corpus_gaps())
 print(find_synthesis_opportunities())
 ```
 
-9. For the 3-5 most important gaps, use `search_papers` to find any papers in the corpus that address those gaps (may not be in your top-30).
+For each identified gap or synthesis opportunity not covered by your current evidence, run a targeted search:
+```python
+from scholarforge.agent.tools import search_papers
+print(search_papers(query="<gap-specific query>", top_k=5, reason="Fill gap: <what is missing>"))
+```
 
-### Phase 5 -- Pre-write coverage check
-
-10. **BEFORE writing, verify you have sufficient citations.** Count unique paper names in your session context. If fewer than 35, use `suggest_next_papers` with your already-read list to find missed papers, then digest them.
+Digest any papers found that aren't already in your notes.
 
 ---
 
 ## Write with Function-First Structure
 
-**DO NOT organize by material class (HfO₂ section → Al₂O₃ section → TaOx section).** This creates a catalog, not a synthesis.
+**Organize by what findings enable, not by what materials exist.** A section titled by material class produces a catalog; a section titled by function produces analysis.
 
-**ORGANIZE BY FUNCTION.** Each thematic section should ask: "What does this material or process enable?"
+- NOT: "Section 3: HfO₂ — Section 4: TaOx — Section 5: ZnO"
+- YES: "Section 3: Devices achieving endurance > 10⁶ cycles share a structural feature... Section 4: Devices optimized for analog linearity face a different constraint..."
 
-Suggested structure (adapt to content):
-1. Introduction: ALD as an enabling technology for memristors; why precision matters
-2. Switching mechanisms: what controls filament formation and dissolution (process → mechanism → performance)
-3. Synaptic function: which architectures achieve the best linearity, retention, and analog weight precision
-4. Array-level integration: from single device to crossbar to 3D (where does ALD uniformity matter most?)
-5. Unconventional applications: flexible, bio-integrated, opto-electronic, radiation-hard
-6. Gaps and open questions: specific DOE proposals, not field-level truisms
-7. Future directions: prioritized research agenda based on impact vs tractability
-8. Conclusion
+### Suggested structure
 
-**Within each section, cross-compare materials quantitatively.** If HfO₂ gives 10^8 on/off ratio and TaOx gives 10^4, say so and explain why. The reader needs to choose.
+1. **Introduction**: What does the field currently achieve? What does it not yet achieve? End with a signal that the review will identify where progress is most tractable — but do not list the gaps here.
+2. **Thematic sections** (organized by function, not by material): 4-6 sections. Each opens with what the community knows (established findings with numbers), shows where knowledge is contested or incomplete, and closes by naming what is still missing. These transitions must emerge from prose — never as labeled headings.
+3. **Gaps and open problems**: Specific, actionable problems. Each gap must state what is missing, what experiment fills it, and what we would learn. Not field-level truisms.
+4. **Conclusion**: Returns to the inter-field observation (if one exists) or the most surprising finding. Shows what has changed in the reader's understanding.
 
-### Word budget (Medium tier)
+### Gap quality standard
+
+Each gap must be precise enough to act on:
+- **What is missing**: a specific measurement, comparison, or combination — not "benchmarking is lacking"
+- **What experiment fills it**: specific variables, parameter ranges, platform
+- **What we would learn**: which quantity, in what direction, why it matters
+
+BAD: "Standardized benchmarking protocols remain an unmet need."
+GOOD: "No study has compared process parameter X across systems A, B, and C on a common test platform. Such a study would determine whether the performance gap is intrinsic to the material or an artifact of deposition conditions."
+
+### Pre-writing checklist
+
+Before drafting, answer:
+
+**What is the single most non-obvious observation in this corpus?** State it as a fact about the world — not as a description of what this review does. BAD: "This review identifies a connection between X and Y communities." GOOD: "The precision engineers use to suppress X is the same precision biologists need to create it." If you cannot find one, reread `find_synthesis_opportunities` output.
+
+**What is one quantitative prediction the evidence supports?** "If [parameter], then [metric] changes by [magnitude or direction] because [mechanism]." This must appear in the gaps section. A directional prediction with a stated mechanism is acceptable if the evidence does not support a magnitude estimate.
+
+### Word budget
 | Section | Words |
 |---------|-------|
-| Abstract | 150-200 |
+| Abstract | 200-300 |
 | Introduction | 400 |
-| Each thematic section (5-6) | 650-800 |
-| Gap analysis | 600 |
-| Future directions | 600 |
-| Conclusion | 350 |
-| **Total** | **~5500-6500** |
+| Each thematic section | 650-800 |
+| Gaps and open problems | 600 |
+| Conclusion | 300 |
+| **Total** | **~5000-6500** |
 
-### Sentence-type composition
-- **30-40% synthesis sentences** -- compare or contrast 2+ papers, draw a conclusion neither paper stated alone
-- **30-40% evidence sentences** -- one specific finding from one paper with a citation
-- **15-25% analysis sentences** -- your interpretation of what the evidence means
-- **5-10% framing sentences** -- transitions, scope statements, context
-
-### Gap identification standard (high bar)
-
-Each gap must be specific enough that a postdoc could act on it Monday morning. Required format:
-- **What is missing** (specific, not "benchmarking is lacking")
-- **Why it matters quantitatively** (what would we know, and how much better would devices be?)
-- **What experiment would fill it** (specific variables: materials, temperature ranges, measurement protocols)
-
-Bad gap: "Standardized benchmarking protocols remain an unmet need."
-Good gap: "No published study has swept ALD temperature (150-350°C), precursor (TEMAH, TDMAH, HfCl₄), and doping level (0-10% Al) in a full factorial design on a common 1T1R platform. Such a study would allow direct comparison of process-switching performance tradeoffs across the entire HfO₂ design space."
+### Sentence-type composition (aspirational targets)
+- **~35% synthesis** — compare or contrast 2+ papers, draw a conclusion neither stated alone
+- **~35% evidence** — one specific finding from one paper with a citation
+- **~20% analysis** — your interpretation of what the evidence means
+- **~10% framing** — transitions, scope, context
 
 ### Writing rules
 - Use `[REF:AuthorName Year - Title]` citation markers matching paper `display_name` values
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstracts**: 150-200 words. First sentence <15 words. One concept per sentence. No citations.
+- **Abstract** (200-300 words, one concept per sentence, no citations): follow the sentence order in the style guide (accessible context → inter-field observation → key quantitative evidence → reader capability). Hard bans:
+  - Never write a sentence whose subject is "this review" or "this section" where the predicate describes what the document does. This ban covers all verbs.
+  - Never use internal planning vocabulary in output ("cross-community synthesis", "gap-first", "postdoc to begin Monday", or similar).
+  - Final sentence: state what the reader understands or can now do. BAD: "Each section addresses one open problem." GOOD: "Researchers can now identify which parameter has the highest leverage on device behavior and why."
+- **Section continuity**: each section must open by naming something concrete from the previous section's closing. BAD: "Array integration is the next challenge." GOOD: "The single-device precision described above degrades at array scale — cross-talk and non-uniform current paths reintroduce the variability that careful deposition eliminated."
+- **Meta-commentary ban**: never write a sentence whose subject is "this review," "this section," or "the sections above," where the predicate describes what the document does rather than what the field shows. This applies everywhere, not just the abstract.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader** (no "Known:", "Missing:", "Open Question:" labels in final text)
-- **Include 3-5 figure placeholders with detailed captions**
+- **3-5 figure placeholders with detailed captions** (specific axes, expected data points, source papers)
 
 ## Loading Context
 
@@ -173,15 +182,14 @@ print(build_generation_prompt(artifact_type_id='lit_review', journal='...', fiel
 
 ```python
 from scholarforge.agent.workflows import export_paper
-outputs = export_paper(markdown_text, "data/output/benchmark_v2/hierarchical_broad.md", journal="Advanced Functional Materials", docx=True, pdf=True)
+outputs = export_paper(markdown_text, "data/output/<filename>.md", journal="<journal>", docx=True, pdf=True)
 ```
 
-Then save the reading log:
 ```python
 from scholarforge.agent.tools import save_reading_log
-save_reading_log("data/output/benchmark_v2")
+save_reading_log("data/output/<dir>")
 ```
 
 ## Suppress Noise
 
-Append `2>&1 | grep -v "INFO\|WARNING\|Loading\|Batches\|Bert\|UNEXPECTED"` to Python commands to suppress noisy logs.
+Append `2>&1 | grep -v "INFO\|WARNING\|Loading\|Batches\|Bert\|UNEXPECTED"` to all Python commands.

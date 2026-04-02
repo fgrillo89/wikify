@@ -150,8 +150,12 @@ After exploring, write the paper as markdown. Follow these rules:
 - Be precise: cite specific numbers, measurements, and results from the papers you read
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators.** Never write " -- " or " - " to insert an aside. Use commas or parentheses instead. This is a hard ban.
-- **Abstracts**: 150-200 words. First sentence <15 words. One concept per sentence. No citations. No source counts ("we draw on N papers"). Structure: problem (1-2 sentences), what this review covers (1-2 sentences), key findings (2-3 sentences), open questions (1 sentence).
-- **NEVER mention your exploration method or source counts.** No "random walk," "conceptual links," "we draw on 50 sources," "spanning N papers." Never count your sources in the text. Present findings as observations. The reader must never suspect the text was generated.
+- **Abstract** (150-200 words, one concept per sentence, no citations): follow the sentence order in the style guide — accessible context → most surprising observation → key quantitative evidence → what the reader can now do. Hard bans:
+  - Never write a sentence whose subject is "this review" or "this section" where the predicate describes what the document does. This applies to all verbs ("maps", "identifies", "organizes", "proposes", "structures", etc.).
+  - Never use internal planning vocabulary in output ("cross-community synthesis", "gap-first", etc.).
+  - Final sentence: state what the reader understands or can do — not what the review contains.
+- **Section continuity**: each section must open by naming something concrete from the previous section's closing, before introducing the new topic. The reader should never be surprised by a section change.
+- **NEVER mention your exploration method or source counts.** No "random walk," "conceptual links," "we draw on 50 sources," "spanning N papers." Never count your sources. Present findings as observations.
 - **No structural scaffolding visible to reader.** Never write "Known:", "Missing:", "Open Question:", "Contradictions:" as labels. Weave gap-structured logic into flowing prose.
 - **Include 3-5 figure placeholders with detailed captions.** Use the format:
   ```

@@ -83,7 +83,7 @@ print(find_synthesis_opportunities())
 
    Find enough distinct themes to organize the review — typically 4-6, but let the corpus decide. If gaps cluster naturally into 3 topics, use 3. If 7, use 7.
 
-3. Identify the **single most non-obvious cross-community synthesis**: a connection that someone in Field A and Field B would each find surprising. This becomes the abstract's first sentence.
+3. Identify the **single most non-obvious inter-field connection**: a finding that someone in Field A and someone in Field B would each find surprising. State it as an observation about what the literature shows, not as a description of your synthesis process. This becomes the abstract's **second** sentence (sentence 1 sets context for non-specialists; sentence 2 delivers the surprise).
 
 ### Phase 2 -- Thesis-driven reading
 
@@ -147,7 +147,7 @@ Suggested structure:
    - What to vary (specific materials, process parameters, measurement protocol)
    - What you would learn (which quantity, what expected resolution)
    - Resource requirement (one lab, one reactor, approximate duration)
-4. **Conclusion**: Returns to the cross-community synthesis from the abstract. Closes the loop.
+4. **Conclusion**: Returns to the inter-field observation introduced in the abstract. Closes the loop by showing what has changed in the reader's understanding from the beginning to the end.
 
 ### Function-first within sections
 
@@ -165,6 +165,8 @@ What is the single most non-obvious observation in this corpus?
 - It connects two subfields that share data but no citations
 - It inverts a community assumption
 - A reviewer in either subfield would say "I hadn't connected those"
+
+State it as a fact about the world, not as a description of what this review does. BAD: "This review identifies a connection between X and Y communities." GOOD: "The precision engineers use to eliminate X is the same precision biologists need to create it."
 
 If you don't have one, reread `find_synthesis_opportunities` output. The corpus almost always has at least one such seam.
 
@@ -204,13 +206,14 @@ Each gap must be specific enough that a postdoc can act on it Monday morning:
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstract** (200-300 words, one concept per sentence, no citations):
-  1. First sentence (<15 words): accessible context — what problem does the field face, and why does it matter? This sentence must be readable by an educated non-specialist. Do NOT open with a technical claim, a method name, or a material.
-  2. Second sentence: the most surprising connection or inversion — stated as an observation, not as a description of what this review does.
-  3. Middle sentences: the most important quantitative findings with numbers.
-  4. Final sentence: what the reader now understands or can do — stated as an insight or capability, not as a description of the review's structure.
-  **Hard bans in the abstract**: never write "This review maps/identifies/proposes/examines"; never use the phrase "cross-community synthesis" (it is internal planning language — use the actual observation); never use "postdoc to begin Monday" or any similar informal shorthand from planning notes; never describe the review's structure or method ("we followed X strategy").
-- **Section continuity**: each thematic section should open with a sentence that connects it to the section before, and close with a sentence that creates a logical need for what comes next. The reader should always understand why they are reading this section now.
+- **Abstract** (200-300 words, one concept per sentence, no citations): follow the sentence order in the style guide (accessible context → inter-field observation → key quantitative evidence → reader capability). Hard bans:
+  - Never write "This review maps/identifies/proposes/examines/organizes/structures" — or ANY sentence whose subject is "this review" or "this section" and whose predicate describes what the document does. This ban covers all verbs, not only the listed ones.
+  - Never use "cross-community synthesis" or "cross-community" in output — these are internal planning terms. Use the actual observation.
+  - Never use "postdoc to begin Monday" or similar informal shorthand from planning notes.
+  - Never describe the review's process or method.
+  - Final sentence: state what the reader now understands or can now do — not what the review contains. BAD: "Each gap is specific enough to resolve within a two-year program." GOOD: "Researchers now have a clear map of which experiments will have the highest marginal return, and why the order matters."
+- **Section continuity**: each thematic section must open with a sentence naming something concrete from the previous section's closing, before introducing the new topic. BAD: "ALD's conformality on non-planar surfaces is its most distinctive property." GOOD: "The array-level variability described above all trace back to filament nucleation scatter — and ALD's conformality on non-planar substrates offers one direct route to controlling it."
+- **Meta-commentary ban (all sections, not just abstract)**: never write a sentence whose grammatical subject is "this review," "this section," "the sections above," or equivalent, where the predicate describes what the document does rather than what the field shows. This applies to introductions, section openers, and conclusions.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader**
 - **3-5 figure placeholders with detailed captions** (specific axes, expected data points, source papers)
