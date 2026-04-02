@@ -117,6 +117,24 @@ from scholarforge.agent.tools import suggest_next_papers
 print(suggest_next_papers(already_read=[...], max_suggestions=3))
 ```
 
+### Phase 4 -- Devil's advocate (challenge your framing)
+
+This phase prevents the gap-first strategy from terminating before it encounters results that challenge its own framing.
+
+9. For each gap theme you've committed to, ask: **What result would make this gap less important or already solved?** Then search for it explicitly:
+```python
+print(search_papers(query="<result that would undermine gap X>", top_k=5, reason="Challenge my framing of gap X"))
+```
+
+   If you find papers that partially address a gap you thought was open, update your gap formulation — either tighten the scope ("X is addressed for binary switching but not for analog") or replace it.
+
+10. Ask: **What important territory does my current corpus not cover?** Common blind spots for ALD/memristor reviews:
+    - Device-level → array-level fidelity (single-device performance vs crossbar yield)
+    - Unconventional substrates or 2D material hybrid stacks
+    - Long-term reliability at scale (endurance, retention, drift)
+
+    If any of these are relevant to your gap themes but missing from your reading, run one targeted search per territory and digest any key papers found.
+
 ---
 
 ## Write with Gap-Driven, Function-First Structure
