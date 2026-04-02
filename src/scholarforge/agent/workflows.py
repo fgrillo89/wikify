@@ -248,18 +248,27 @@ def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
             pass
 
     # Try Microsoft Word via COM automation (Windows only)
-    try:
-        import comtypes.client  # type: ignore[import-untyped]
+    # Attempt win32com first (pywin32), then comtypes as fallback
+    for _com_backend in ("win32com", "comtypes"):
+        try:
+            if _com_backend == "win32com":
+                import win32com.client  # type: ignore[import-untyped]
 
-        word = comtypes.client.CreateObject("Word.Application")
-        word.Visible = False
-        doc = word.Documents.Open(str(docx_path.resolve()))
-        doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)  # 17 = wdFormatPDF
-        doc.Close()
-        word.Quit()
-        return pdf_path.exists()
-    except Exception:  # noqa: BLE001
-        pass
+                word = win32com.client.Dispatch("Word.Application")
+            else:
+                import comtypes.client  # type: ignore[import-untyped]
+
+                word = comtypes.client.CreateObject("Word.Application")
+
+            word.Visible = False
+            doc = word.Documents.Open(str(docx_path.resolve()))
+            doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)  # 17 = wdFormatPDF
+            doc.Close()
+            word.Quit()
+            if pdf_path.exists():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
 
     return False
 

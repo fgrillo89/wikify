@@ -42,6 +42,7 @@ dependencies = [
     "scrapling[all]>=0.4.2",
     "docx2pdf>=0.1.8",
     "marker-pdf>=1.10.2",
+    "pywin32>=311",
 ]
 
 [project.optional-dependencies]

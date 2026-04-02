@@ -67,7 +67,7 @@ Never use: "delve/delves/delving," "crucial," "pivotal," "paramount," "groundbre
 - **No bullet points in paper body.** Flowing prose only. Lists acceptable only in Methods.
 - **No say-it-three-times pattern.** State things once. Introduction states the problem; Conclusion synthesizes. Do not echo.
 - **No rule-of-three reflexes.** Vary clause structures.
-- **No meta-commentary.** Never "This section discusses..." Just begin with content.
+- **No meta-commentary.** Never "This section discusses...", "This review maps...", "This review identifies...", "This review proposes..." Just begin with content. Describe what the field knows and where it fails — not what your document contains.
 - **No methodology disclosure.** Never reveal HOW you explored the literature. This is the most important rule for authenticity. Banned phrases include: "random walk through the literature," "following conceptual links," "tracing citation chains," "this exploration surfaced," "our traversal revealed," "guided by embedding similarity," "we draw on N sources," "spanning N papers." A human author would NEVER describe their search algorithm or count their sources in the abstract. Present findings as observations, not as outputs of a process. The reader should never suspect the text was generated.
 - **No structural scaffolding visible to the reader.** The gap-structured approach (known → contradictions → missing → question) is an INTERNAL writing principle. It must NEVER appear as headings, labels, bold markers, or schematic patterns in the text. Never write "**Known:**", "**Missing:**", "**Contradictions:**", "**Open Question:**" or any variation. Never start a paragraph with "What is missing:" or "The open question is:". Instead, weave these transitions into flowing prose. BAD: "**Missing.** No study has combined X with Y." GOOD: "Despite extensive work on X and Y individually, no study has combined them." The reader should experience a smooth argumentative flow, not a checklist.
 - **No elegant variation.** "Growth rate" stays "growth rate," not "deposition velocity." Consistent terminology over stylistic variety.
@@ -78,7 +78,9 @@ Never use: "delve/delves/delving," "crucial," "pivotal," "paramount," "groundbre
 - **Define before you use.** If a term is specialized (e.g., "von Neumann bottleneck"), either define it in the same sentence or replace it with a plain-language description. Never assume the reader knows jargon you have not introduced.
 - **Short opening sentences.** The first sentence of an abstract or introduction should be 15 words or fewer. Hook with a concrete fact, not a compound clause.
 - **Build complexity gradually.** Start each paragraph from what the reader already knows, then introduce the new concept. Do not front-load abstracts with dense, multi-clause sentences.
+- **Abstract sentence order**: (1) accessible context — what problem the field faces and why it matters, readable by a non-specialist; (2) the most surprising finding or synthesis; (3) key quantitative evidence; (4) what the review enables. Never lead sentence 1 with a technical claim; context always comes first.
 - **No citations in abstracts.** The abstract must stand alone without numbered references. The only exception: truly foundational work known to the entire community by author name (e.g., "Watson and Crick" for DNA). If you would not recognize the name without the field, do not cite it in the abstract.
+- **Section continuity.** Each section should open by connecting to the previous section and close by creating a logical need for what comes next. The reader should always understand why they are reading this section now, not only what it contains.
 
 ## Tone
 

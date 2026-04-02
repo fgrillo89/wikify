@@ -204,7 +204,13 @@ Each gap must be specific enough that a postdoc can act on it Monday morning:
 - Be precise: cite specific numbers, measurements, results
 - No bullet points in prose sections
 - **ZERO em-dashes or en-dashes as parenthetical separators** (hard ban)
-- **Abstract**: 200-300 words. First sentence <15 words. One concept per sentence. No citations. Lead with the cross-community synthesis; use the extra space to state the most important finding or prediction, not more scope sentences.
+- **Abstract** (200-300 words, one concept per sentence, no citations):
+  1. First sentence (<15 words): accessible context — what problem does the field face, and why does it matter? This sentence must be readable by an educated non-specialist. Do NOT open with a technical claim, a method name, or a material.
+  2. Second sentence: the most surprising connection or inversion — stated as an observation, not as a description of what this review does.
+  3. Middle sentences: the most important quantitative findings with numbers.
+  4. Final sentence: what the reader now understands or can do — stated as an insight or capability, not as a description of the review's structure.
+  **Hard bans in the abstract**: never write "This review maps/identifies/proposes/examines"; never use the phrase "cross-community synthesis" (it is internal planning language — use the actual observation); never use "postdoc to begin Monday" or any similar informal shorthand from planning notes; never describe the review's structure or method ("we followed X strategy").
+- **Section continuity**: each thematic section should open with a sentence that connects it to the section before, and close with a sentence that creates a logical need for what comes next. The reader should always understand why they are reading this section now.
 - **NEVER mention your exploration method or source counts**
 - **No structural scaffolding visible to reader**
 - **3-5 figure placeholders with detailed captions** (specific axes, expected data points, source papers)
