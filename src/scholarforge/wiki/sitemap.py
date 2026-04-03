@@ -34,14 +34,14 @@ class SitemapEntry:
 
     title: str
     slug: str
-    category: ArticleCategory          # theme | concept | synthesis | query
-    scope: str                         # one-sentence description of what this article covers
-    parent_slug: str | None            # slug of the parent theme article, or None for themes
-    key_source_ids: list[str]          # Paper.id values most relevant to this article
-    related_slugs: list[str]           # other articles to cross-link to
-    depth: ArticleDepth                # stub | draft | full
-    source_types: list[str]            # e.g. ["paper", "web_article", "markdown"]
-    notes: str = ""                    # LLM's reasoning about scope/gaps for this article
+    category: ArticleCategory  # theme | concept | synthesis | query
+    scope: str  # one-sentence description of what this article covers
+    parent_slug: str | None  # slug of the parent theme article, or None for themes
+    key_source_ids: list[str]  # Paper.id values most relevant to this article
+    related_slugs: list[str]  # other articles to cross-link to
+    depth: ArticleDepth  # stub | draft | full
+    source_types: list[str]  # e.g. ["paper", "web_article", "markdown"]
+    notes: str = ""  # LLM's reasoning about scope/gaps for this article
 
 
 @dataclass
@@ -50,7 +50,7 @@ class WikiSitemap:
 
     entries: list[SitemapEntry]
     generated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    corpus_summary: str = ""           # snapshot of corpus shape at generation time
+    corpus_summary: str = ""  # snapshot of corpus shape at generation time
     model: str = ""
 
     # ------------------------------------------------------------------
