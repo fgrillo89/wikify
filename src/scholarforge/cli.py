@@ -108,9 +108,7 @@ def graph():
 
 @app.command()
 def generate(
-    prompt: str = typer.Argument(
-        ..., help="Writing prompt, e.g. 'Review of a research topic'"
-    ),
+    prompt: str = typer.Argument(..., help="Writing prompt, e.g. 'Review of a research topic'"),
     pages: int = typer.Option(10, "--pages", "-n", help="Target page count"),
     output: str = typer.Option("data/output/review.md", "--output", "-o", help="Output file path"),
     journal: str = typer.Option("", "--journal", "-j", help="Target journal for formatting"),
@@ -634,6 +632,358 @@ def templates_styles(
     console.print("\n[bold]Suggested style_map:[/bold]")
     for role, style in suggested.items():
         console.print(f"  {role}: {style}")
+
+
+# ── Wiki commands ─────────────────────────────────────────────────────────────
+
+wiki_app = typer.Typer(name="wiki", help="Build and maintain the curated wiki layer.")
+app.add_typer(wiki_app)
+
+
+@wiki_app.command("init")
+def wiki_init(
+    top_n: int = typer.Option(20, "--top-n", help="Number of concepts to bootstrap"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+):
+    """Bootstrap wiki stubs from top-N concepts in the corpus."""
+    import json
+
+    from scholarforge.agent.tools import find_synthesis_opportunities, get_corpus_summary
+    from scholarforge.config import settings
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import WikiArticle
+    from scholarforge.wiki.agent import build_wiki_article
+    from scholarforge.wiki.builder import article_path, generate_wiki_index, slugify, write_article
+
+    wiki_dir = settings.data_dir / "wiki"
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print("[bold]Bootstrapping wiki...[/bold]")
+    summary = get_corpus_summary()
+    opportunities = find_synthesis_opportunities()
+    console.print(f"[dim]Corpus summary: {len(summary)} chars[/dim]")
+
+    # Extract concept titles from synthesis opportunities (one per line starting with a number or -)
+    import re
+
+    concept_lines: list[str] = []
+    for line in opportunities.splitlines():
+        line = line.strip()
+        if re.match(r"^(\d+\.|\-|\*)\s+", line):
+            concept = re.sub(r"^(\d+\.|\-|\*)\s+", "", line).strip()
+            if concept:
+                concept_lines.append(concept)
+
+    concepts = concept_lines[:top_n]
+    if not concepts:
+        console.print("[yellow]No synthesis opportunities found. Check corpus size.[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Creating {len(concepts)} stubs...[/bold]")
+    created = 0
+
+    with get_session() as session:
+        for concept in concepts:
+            slug = slugify(concept)
+            path = article_path(wiki_dir, "concepts", slug)
+            rel_path = str(path.relative_to(settings.data_dir))
+
+            existing = session.get(WikiArticle, slug)
+            if existing:
+                console.print(f"[dim]Already exists: {slug}[/dim]")
+                continue
+
+            console.print(f"  Stub: {concept}")
+            try:
+                content, source_ids = build_wiki_article(
+                    concept, concept, status="stub", model=model, top_k=5
+                )
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]  Failed ({exc})[/red]")
+                continue
+
+            write_article(
+                path=path,
+                title=concept,
+                content=content,
+                sources=source_ids,
+                topics=[concept],
+                status="stub",
+                model=model or "",
+            )
+
+            row = WikiArticle(
+                id=slug,
+                title=concept,
+                status="stub",
+                file_path=rel_path,
+                source_ids=json.dumps(source_ids),
+                topic_keys=json.dumps([concept]),
+                model=model or "",
+            )
+            session.add(row)
+            created += 1
+
+        session.commit()
+
+    # Write index
+    index_path = wiki_dir / "_index.md"
+    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
+
+    console.print(f"[green]Created {created} stubs. Index: {index_path}[/green]")
+
+
+@wiki_app.command("expand")
+def wiki_expand(
+    concept: str = typer.Argument(
+        "", help="Concept slug or title to expand (empty = expand all stubs)"
+    ),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+):
+    """Expand stub article(s) to full articles."""
+    import json
+
+    from sqlmodel import select
+
+    from scholarforge.config import settings
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import WikiArticle
+    from scholarforge.wiki.agent import build_wiki_article
+    from scholarforge.wiki.builder import generate_wiki_index, write_article
+
+    wiki_dir = settings.data_dir / "wiki"
+
+    with get_session() as session:
+        if concept:
+            # Find by slug or title match
+            from scholarforge.wiki.builder import slugify
+
+            slug = slugify(concept)
+            article = session.get(WikiArticle, slug)
+            if not article:
+                # Try title match
+                all_articles = session.exec(select(WikiArticle)).all()
+                matches = [a for a in all_articles if concept.lower() in a.title.lower()]
+                if not matches:
+                    console.print(f"[red]No wiki article found for: {concept}[/red]")
+                    raise typer.Exit(1)
+                article = matches[0]
+            targets = [article]
+        else:
+            targets = list(
+                session.exec(select(WikiArticle).where(WikiArticle.status == "stub")).all()
+            )
+
+        if not targets:
+            console.print("[yellow]No stubs to expand.[/yellow]")
+            return
+
+        console.print(f"[bold]Expanding {len(targets)} article(s)...[/bold]")
+
+        for article in targets:
+            console.print(f"  Expanding: {article.title}")
+            try:
+                content, source_ids = build_wiki_article(
+                    article.title, article.title, status="full", model=model, top_k=8
+                )
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]  Failed ({exc})[/red]")
+                continue
+
+            path = settings.data_dir / article.file_path
+            existing_sources = json.loads(article.source_ids or "[]")
+            all_sources = list(dict.fromkeys(existing_sources + source_ids))
+
+            write_article(
+                path=path,
+                title=article.title,
+                content=content,
+                sources=all_sources,
+                topics=json.loads(article.topic_keys or "[]"),
+                status="full",
+                model=model or "",
+            )
+
+            from datetime import datetime, timezone
+
+            article.status = "full"
+            article.source_ids = json.dumps(all_sources)
+            article.model = model or article.model
+            article.updated_at = datetime.now(timezone.utc)
+            session.add(article)
+
+        session.commit()
+
+    # Regenerate index
+    index_path = wiki_dir / "_index.md"
+    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
+    console.print(f"[green]Expansion complete. Index updated: {index_path}[/green]")
+
+
+@wiki_app.command("sync")
+def wiki_sync(
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+):
+    """Update stale wiki articles (needs_update=True) with new corpus evidence."""
+    import json
+    from datetime import datetime, timezone
+
+    from sqlmodel import select
+
+    from scholarforge.agent.tools import read_paper_digest
+    from scholarforge.config import settings
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import WikiArticle
+    from scholarforge.wiki.agent import update_wiki_article
+    from scholarforge.wiki.builder import generate_wiki_index, write_article
+
+    wiki_dir = settings.data_dir / "wiki"
+
+    with get_session() as session:
+        stale = list(session.exec(select(WikiArticle).where(WikiArticle.needs_update)).all())
+
+        if not stale:
+            console.print("[green]All wiki articles are up to date.[/green]")
+            return
+
+        console.print(f"[bold]Syncing {len(stale)} stale article(s)...[/bold]")
+
+        for article in stale:
+            console.print(f"  Syncing: {article.title}")
+            path = settings.data_dir / article.file_path
+            if not path.exists():
+                console.print(f"[yellow]  File missing, skipping: {path}[/yellow]")
+                continue
+
+            # Read current content (strip frontmatter)
+            text = path.read_text(encoding="utf-8", errors="replace")
+            # Find end of frontmatter block
+            parts = text.split("---\n", 2)
+            body = parts[2].strip() if len(parts) >= 3 else text
+
+            # Fetch digests for known source IDs
+            source_ids = json.loads(article.source_ids or "[]")
+            digests: list[str] = []
+            for pid in source_ids[:5]:
+                try:
+                    digest = read_paper_digest(pid[:16], reason=f"wiki sync: {article.title}")
+                    if digest:
+                        digests.append(digest)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            try:
+                revised_body = update_wiki_article(body, digests, model=model)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]  LLM update failed ({exc}), skipping[/red]")
+                continue
+
+            write_article(
+                path=path,
+                title=article.title,
+                content=revised_body,
+                sources=source_ids,
+                topics=json.loads(article.topic_keys or "[]"),
+                status=article.status,
+                model=model or article.model,
+            )
+
+            article.needs_update = False
+            article.updated_at = datetime.now(timezone.utc)
+            session.add(article)
+
+        session.commit()
+
+    index_path = wiki_dir / "_index.md"
+    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
+    console.print(f"[green]Sync complete. Index updated: {index_path}[/green]")
+
+
+@wiki_app.command("health")
+def wiki_health():
+    """Report orphans, stale articles, and synthesis gaps."""
+    from datetime import datetime, timezone
+
+    from sqlmodel import select
+
+    from scholarforge.agent.tools import find_synthesis_opportunities
+    from scholarforge.config import settings
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import WikiArticle
+    from scholarforge.wiki.builder import find_stale_articles, slugify
+
+    wiki_dir = settings.data_dir / "wiki"
+
+    with get_session() as session:
+        all_articles = session.exec(select(WikiArticle)).all()
+
+    # Stale count
+    needs_update = [a for a in all_articles if a.needs_update]
+
+    # Find stale by age (older than 30 days)
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    age_stale = find_stale_articles(list(all_articles), cutoff)
+
+    # Orphaned: file path doesn't exist on disk
+    orphans = [a for a in all_articles if not (settings.data_dir / a.file_path).exists()]
+
+    # Missing: synthesis opportunities not yet in wiki
+    try:
+        opportunities = find_synthesis_opportunities()
+        import re
+
+        opp_concepts: list[str] = []
+        for line in opportunities.splitlines():
+            line = line.strip()
+            if re.match(r"^(\d+\.|\-|\*)\s+", line):
+                concept = re.sub(r"^(\d+\.|\-|\*)\s+", "", line).strip()
+                if concept:
+                    opp_concepts.append(concept)
+        existing_slugs = {a.id for a in all_articles}
+        missing = [c for c in opp_concepts if slugify(c) not in existing_slugs]
+    except Exception:  # noqa: BLE001
+        missing = []
+
+    # Build health report
+    lines: list[str] = [
+        "# Wiki Health Report",
+        "",
+        f"- Total articles: {len(all_articles)}",
+        f"- Needs update (flag): {len(needs_update)}",
+        f"- Age-stale (>30 days): {len(age_stale)}",
+        f"- Orphaned (file missing): {len(orphans)}",
+        f"- Missing synthesis opportunities: {len(missing)}",
+        "",
+    ]
+
+    if needs_update:
+        lines += ["## Needs Update", ""]
+        for a in needs_update:
+            lines.append(f"- {a.title} (status: {a.status})")
+        lines.append("")
+
+    if orphans:
+        lines += ["## Orphaned Articles", ""]
+        for a in orphans:
+            lines.append(f"- {a.title} ({a.file_path})")
+        lines.append("")
+
+    if missing:
+        lines += ["## Missing Articles (synthesis opportunities)", ""]
+        for c in missing[:20]:
+            lines.append(f"- {c}")
+        lines.append("")
+
+    report = "\n".join(lines)
+
+    health_path = wiki_dir / "_health.md"
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    health_path.write_text(report, encoding="utf-8")
+
+    console.print(report)
+    console.print(f"[dim]Saved: {health_path}[/dim]")
 
 
 if __name__ == "__main__":
