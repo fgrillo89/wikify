@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from sqlmodel import select
@@ -38,6 +39,9 @@ _STAGING_COLLECTION = "concept_staging"
 _VALID_CONCEPT_TYPES = frozenset(
     {"technique", "material", "phenomenon", "method", "theory", "dataset"}
 )
+
+# Sections that rarely contain extractable domain concepts — skip to save LLM calls
+_SKIP_SECTIONS = frozenset({"references", "acknowledgments", "appendix"})
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -165,10 +169,26 @@ def extract_concepts_from_source(
     Returns:
         All ConceptRecord objects extracted across every chunk.
     """
+    # Pre-filter: skip sections that rarely yield extractable domain concepts
+    relevant_chunks = [c for c in chunks if c.section_type not in _SKIP_SECTIONS]
+    # Also skip very short chunks (usually metadata/headers, not substantive content)
+    relevant_chunks = [c for c in relevant_chunks if len(c.content) > 50]
+
+    if not relevant_chunks:
+        logger.debug("extract_concepts_from_source(%s): all chunks filtered out", source_id[:16])
+        return []
+
+    logger.info(
+        "extract_concepts_from_source(%s): %d/%d chunks after pre-filter",
+        source_id[:16],
+        len(relevant_chunks),
+        len(chunks),
+    )
+
     prior_concepts: list[str] = []
     all_records: list[ConceptRecord] = []
 
-    for chunk in chunks:
+    for chunk in relevant_chunks:
         chunk_records = _extract_from_chunk(chunk, prior_context=prior_concepts, model=model)
         all_records.extend(chunk_records)
         # Thread names forward so the next chunk prompt knows what was already seen
@@ -182,7 +202,7 @@ def extract_concepts_from_source(
     logger.info(
         "extract_concepts_from_source(%s): %d chunks -> %d concepts",
         source_id[:16],
-        len(chunks),
+        len(relevant_chunks),
         len(all_records),
     )
     return all_records
@@ -446,13 +466,22 @@ def discover_concepts(
     """
     resolved_model = model or HAIKU_MODEL
 
-    for paper_id in paper_ids:
+    # Determine worker count: 60% of CPU cores, min 2, max 8
+    max_workers = max(2, min(8, int((os.cpu_count() or 1) * 0.6)))
+    logger.info(
+        "discover_concepts: epoch %d, %d papers, %d workers",
+        epoch,
+        len(paper_ids),
+        max_workers,
+    )
+
+    def _process_paper(paper_id: str) -> None:
+        """Process one paper: load chunks, extract concepts, stage."""
         with get_session() as session:
             paper = session.get(Paper, paper_id)
             if paper is None:
-                logger.warning("discover_concepts: paper %s not found, skipping", paper_id)
-                continue
-
+                logger.warning("discover_concepts: paper %s not found", paper_id[:16])
+                return
             chunks: list[Chunk] = list(
                 session.exec(
                     select(Chunk).where(Chunk.paper_id == paper_id).order_by(Chunk.chunk_index)  # type: ignore[arg-type]
@@ -461,22 +490,31 @@ def discover_concepts(
 
         if not chunks:
             logger.debug("discover_concepts: paper %s has no chunks, skipping", paper_id[:16])
-            continue
+            return
 
         logger.info(
             "discover_concepts: processing paper %s (%d chunks)",
             paper_id[:16],
             len(chunks),
         )
-
         extractions = extract_concepts_from_source(
             source_id=paper_id,
             chunks=chunks,
             epoch=epoch,
             model=resolved_model,
         )
-
         stage_extractions(epoch=epoch, source_id=paper_id, extractions=extractions)
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_process_paper, pid): pid for pid in paper_ids}
+        for future in as_completed(futures):
+            pid = futures[future]
+            try:
+                future.result()
+            except Exception:
+                logger.exception("discover_concepts: failed on paper %s", pid[:16])
 
     commit_staged_extractions(epoch)
 

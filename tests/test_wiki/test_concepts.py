@@ -11,12 +11,13 @@ from wikify.store.models import ConceptRecord
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
 
 
-def _make_chunk(chunk_id="chunk1", paper_id="paper1", content="Some text about ALD.", chunk_index=0):
+def _make_chunk(chunk_id="chunk1", paper_id="paper1", content="Some text about ALD techniques and HfO2 thin film deposition methods used in research.", chunk_index=0):
     c = MagicMock()
     c.id = chunk_id
     c.paper_id = paper_id
     c.content = content
     c.chunk_index = chunk_index
+    c.section_type = "body"
     return c
 
 
@@ -157,7 +158,7 @@ def test_extract_from_chunk_skips_items_missing_name():
 def test_extract_concepts_from_source_threads_context():
     """prior_context passed to each chunk should be the names from the previous chunk."""
     chunks = [
-        _make_chunk(chunk_id=f"c{i}", chunk_index=i, content=f"Chunk {i} text")
+        _make_chunk(chunk_id=f"c{i}", chunk_index=i, content=f"Chunk {i} discusses atomic layer deposition of HfO2 thin films for memristor applications")
         for i in range(3)
     ]
 

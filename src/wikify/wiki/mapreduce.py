@@ -252,23 +252,22 @@ def map_chunks_to_topic(
         all_papers_list = session.exec(select(Paper)).all()
     paper_by_id: dict[str, Paper] = {p.id: p for p in all_papers_list}
 
-    # ── Step 3: Haiku map ─────────────────────────────────────────────────────
-    extractions: list[SourceExtraction] = []
+    # ── Step 3: Haiku map (parallel) ─────────────────────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    for pid in candidate_set:
+    def _map_one_source(pid: str) -> SourceExtraction | None:
+        """Extract claims from one source for the topic (thread-safe)."""
         paper = paper_by_id.get(pid)
         if paper is None:
-            logger.debug("map_chunks_to_topic: paper %s not found in DB, skipping", pid)
-            continue
+            logger.debug("map_chunks_to_topic: paper %s not found, skipping", pid)
+            return None
 
-        # Get digest text
         digest_text = read_paper_digest(
             pid[:16],
             max_chars=800,
             reason=f"map for wiki: {topic_query}",
         )
 
-        # Build haiku prompt
         map_prompt = (
             f"Source: {paper.display_name()} ({paper.doc_type})\n"
             f"Summary: {digest_text[:800]}\n\n"
@@ -290,23 +289,34 @@ def map_chunks_to_topic(
         response_stripped = response.strip()
         is_relevant = response_stripped.upper().startswith("YES")
 
-        # Determine graph role and pagerank
         graph_info = graph_lookup.get(pid, {})
         graph_role = graph_info.get("role", "standard")
         pagerank = graph_info.get("pagerank", 0.0)
 
-        extractions.append(
-            SourceExtraction(
-                source_id=pid,
-                display_name=paper.display_name(),
-                doc_type=paper.doc_type,
-                graph_role=graph_role,
-                pagerank_score=pagerank,
-                extraction=response_stripped,
-                is_relevant=is_relevant,
-                key_source_ids=key_source_ids or [],
-            )
+        return SourceExtraction(
+            source_id=pid,
+            display_name=paper.display_name(),
+            doc_type=paper.doc_type,
+            graph_role=graph_role,
+            pagerank_score=pagerank,
+            extraction=response_stripped,
+            is_relevant=is_relevant,
+            key_source_ids=key_source_ids or [],
         )
+
+    max_workers = min(8, len(candidate_set))
+    extractions: list[SourceExtraction] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_map_one_source, pid): pid for pid in candidate_set}
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result is not None:
+                    extractions.append(result)
+            except Exception:
+                pid = futures[future]
+                logger.exception("map_chunks_to_topic: failed on paper %s", pid[:16])
 
     # Sort: relevant first, then by role priority, then by pagerank
     role_order = {"hub": 0, "bridge": 1, "frontier": 2, "standard": 3}
