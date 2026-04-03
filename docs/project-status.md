@@ -129,9 +129,10 @@ these exist yet -- see "Not Started" below.
 | Module | Purpose | Key classes/functions |
 |--------|---------|----------------------|
 | `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline | `discover_concepts(paper_ids)`, `merge_concept_records()` |
-| `wiki/concept_graph.py` | Co-occurrence graph, importance scoring, relation classification | `build_concept_graph()`, `score_importance()`, `classify_relations()` |
+| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification | `build_concept_graph()`, `score_importance()`, `classify_relations()` |
 | `wiki/article.py` | Wikipedia-format article writer (concept-aware, uses `ConceptRecord` + graph neighbors) | `write_concept_article(concept_record, neighbors, domain)` |
-| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, convergence tracking, trigger hooks | `run_epoch()`, `run_until_convergence()`, `check_convergence()` |
+| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks | `run_epoch()`, `run_until_convergence()`, `check_convergence()`, `compute_loss()` |
+| `wiki/dashboard.py` | FastAPI dashboard: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard | `app: FastAPI`, `/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient` |
 
 ### CLI
 
@@ -140,11 +141,24 @@ these exist yet -- see "Not Started" below.
 - `wikify wiki epoch --until-convergence` -- run until convergence criteria met
 - `wikify wiki epoch --status` -- show epoch log
 - `wikify wiki epoch --on-ingest` -- auto-trigger epoch after ingest
+- `wikify wiki dashboard` -- launch local convergence/coverage/graph dashboard
 
 ### Ingest Hook
 
 - Bump epoch counter when new files are ingested
 - Optionally auto-trigger a new epoch pass
+
+### Dashboard and Visualization
+
+- `wiki/dashboard.py` -- FastAPI application serving convergence curve (Plotly), force-directed concept graph (D3.js), coverage heatmap (sources x domains from SourceCoverage), epoch log table, gradient leaderboard (top 20 concepts by information gradient), and domain health charts. Reads EpochLog, ConceptRecord, and SourceCoverage from SQLite only; no LLM calls.
+- Obsidian-layer: auto-generated `_dashboard.md` per domain with live Dataview queries (stubs by domain, top concepts by importance, momentum-active concepts, recent-epoch updates). Written by Pass 5 each epoch.
+
+### ML-Style Convergence Tracking
+
+- Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and `EpochLog.loss_delta`. Formula: `L = 0.3*stub_ratio + 0.2*orphan_concept_rate + 0.3*contradiction_density - 0.2*cross_ref_density`. Coefficients tunable in project config.
+- Information gradient per concept: `new_evidence_tokens / existing_article_tokens`. Used to prioritise Pass 3 ordering and skip near-zero-gradient concepts that have stabilised.
+- Momentum tracking: concepts with high gradient for 3+ consecutive epochs flagged `momentum: active` in YAML frontmatter (active research fronts); near-zero-gradient concepts for 3+ epochs skipped in Pass 3 unless new sources arrive.
+- Model-selection schedule: haiku used for Pass 3 drafting while L >= 0.3; sonnet used once L < 0.3 (learning rate decay analog). Transition epoch recorded in EpochLog.
 
 ---
 

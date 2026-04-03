@@ -182,6 +182,8 @@ class EpochLog(SQLModel, table=True):
     contradictions_flagged: int
     cross_refs_added: int
     converged: bool
+    loss_score: float = 0.0   # L computed after Pass 5
+    loss_delta: float = 0.0   # |L(epoch_n) - L(epoch_n-1)|
 ```
 
 **Key functions in `wiki/concepts.py`:**
@@ -269,22 +271,73 @@ hooks. The primary entry point for the Wikipedia pipeline.
     3. For each concept ranked by importance: `write_concept_article()` or `upgrade_concept_article()`
     4. `cross_link_articles()` -- local, scans all articles for concept name mentions
     5. `generate_library_catalog()` + domain/theme indexes -- local
+  - Computes loss score after Pass 5 (see Convergence Algorithm below)
   - Writes `EpochLog` row on completion
   - Returns the completed `EpochLog`
 - `run_until_convergence(domain: str, max_epochs: int, model: str | None) -> list[EpochLog]`
   - Calls `run_epoch()` repeatedly until `check_convergence()` returns True
   - Returns list of all `EpochLog` rows
 - `check_convergence(recent_logs: list[EpochLog]) -> bool`
-  - Convergence criteria (all three must hold):
+  - Convergence criteria (all must hold):
     1. New concepts/epoch < 2% of total concept count
     2. Stub ratio < 10%
     3. No new contradictions flagged in last epoch
+    4. `loss_delta` < epsilon (default 0.01)
+- `compute_loss(epoch: int) -> tuple[float, float]`
+  - Reads current wiki state from SQLite; returns `(loss_score, loss_delta)`
+  - See Convergence Algorithm below for the formula
 - `get_epoch_status() -> dict` -- returns current epoch number + convergence metrics
 
 **Inputs:** corpus (via `ConceptRecord` table + corpus embeddings)
 **Outputs:** updated wiki articles in `data/wiki/`, `EpochLog` row in SQLite
 
-### 5. CLI -- `wikify wiki epoch`
+#### Convergence Algorithm
+
+After Pass 5 completes each epoch, `compute_loss()` evaluates the following formula
+using current counts read from SQLite:
+
+```
+L = alpha * stub_ratio
+  + beta  * orphan_concept_rate
+  + gamma * contradiction_density
+  - delta * cross_ref_density
+```
+
+where `stub_ratio = stubs / total_concepts`, `orphan_concept_rate = concepts_with_no_refs /
+total_concepts`, `contradiction_density = flagged_claims / total_claims`, and
+`cross_ref_density = total_cross_refs / total_articles`. Default weights: alpha=0.3,
+beta=0.2, gamma=0.3, delta=0.2 (stored in project config, not hardcoded).
+
+`loss_delta` is `|L(epoch_n) - L(epoch_n-1)|`. Both values are written to the `EpochLog`
+row before it is committed. The convergence check fails if `loss_delta >= epsilon`
+even when the three threshold criteria above are met.
+
+The model selected for Pass 3 is also determined here: if the previous epoch's
+`loss_score >= 0.3`, haiku is used for article drafting; if `loss_score < 0.3`,
+sonnet is used. This transition is logged and visible in `wikify wiki epoch --status`.
+
+### 5. `wiki/dashboard.py` -- convergence and coverage dashboard
+
+**Purpose:** FastAPI application serving a local web dashboard for quantitative monitoring
+of epoch convergence, concept graph state, and corpus coverage. All data is read from
+SQLite -- no LLM calls are made. Launched via `wikify wiki dashboard`.
+
+**Key components:**
+
+- `app: FastAPI` -- module-level FastAPI instance
+- `GET /api/epochs` -- returns all `EpochLog` rows as JSON (loss_score, loss_delta, counts, duration)
+- `GET /api/concepts` -- returns all `ConceptRecord` rows (name, status, importance, domain)
+- `GET /api/coverage` -- returns `SourceCoverage` aggregated as sources x domains matrix
+- `GET /api/gradient` -- returns top-N concepts by information gradient (new_evidence_tokens / existing_article_tokens)
+- `GET /` -- serves the single-page HTML/JS application
+
+The frontend uses Plotly (via CDN) for the convergence curve and domain health charts,
+and D3.js (via CDN) for the force-directed concept graph. No build step is required.
+
+**Inputs:** SQLite database (EpochLog, ConceptRecord, SourceCoverage tables)
+**Outputs:** local HTTP server; no files written
+
+### 6. CLI -- `wikify wiki epoch` and `wikify wiki dashboard`
 
 Add to `src/wikify/cli.py`:
 
@@ -295,9 +348,10 @@ wikify wiki epoch --until-convergence    # run until converged
 wikify wiki epoch --status               # show epoch log
 wikify wiki epoch --domain DOMAIN        # restrict to one domain
 wikify wiki epoch --on-ingest            # auto-trigger on next ingest
+wikify wiki dashboard                    # launch local convergence/coverage dashboard
 ```
 
-### 6. Ingest hook
+### 7. Ingest hook
 
 After `ingest/corpus_refresh.py` completes a refresh:
 - Increment epoch counter (or mark epoch as stale) in `_epoch.json`
@@ -312,6 +366,7 @@ The modules have hard dependencies in this order:
 ```
 1. ConceptRecord / ConceptRelation / EpochLog models
    (add to store/models.py + register in store/db.py)
+   Note: EpochLog must include loss_score and loss_delta fields
         |
         v
 2. wiki/concepts.py
@@ -327,7 +382,8 @@ The modules have hard dependencies in this order:
         |
         v
 5. wiki/epoch.py
-   (orchestrates all four above + builder.py + linker.py)
+   (orchestrates all four above + builder.py + linker.py;
+    implements compute_loss() after Pass 5)
         |
         v
 6. CLI: wikify wiki epoch
@@ -336,10 +392,14 @@ The modules have hard dependencies in this order:
         v
 7. Ingest hook
    (corpus_refresh.py bumps epoch counter; optional auto-trigger)
+        |
+        v
+8. wiki/dashboard.py
+   (depends on EpochLog + SourceCoverage being populated by at least one epoch)
 ```
 
 Steps 1-4 can be worked in parallel by independent agents once the models are added.
-Steps 5-7 depend on 1-4 being complete.
+Steps 5-7 depend on 1-4 being complete. Step 8 depends on step 5.
 
 ---
 

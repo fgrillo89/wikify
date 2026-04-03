@@ -2,16 +2,25 @@
 
 General rules for how Claude should operate in this project.
 
+**What this project is**: Wikify turns any corpus (PDFs, notes, web articles, READMEs) into
+a concept-first, self-correcting personal Wikipedia. It also contains a writing pipeline
+(generate → evaluate → revise) for producing literature reviews and research papers.
+
 **Key docs (read in order):**
-1. `docs/project-status.md` — current state, what works, remaining work
-2. `docs/architecture.md` — module layout, writing pipeline, data flow
+1. `docs/project-status.md` — current state, what works, what is planned, known issues
+2. `docs/architecture.md` — module layout, both pipelines, data model, file layout
+3. `docs/design/wiki-wikipedia-model.md` — authoritative spec for the Wikipedia/epoch pipeline
 
 **Runtime prompts** (loaded by code, NOT documentation):
 - `src/wikify/prompts/style_guide.md` — base writing style
 - `src/wikify/prompts/artifact_types/` — per-document-type rules
 - `src/wikify/prompts/fields/` — per-field writing guides
 
-**Design docs**: `docs/design/` — architecture decisions, design plans (reference only)
+**Design docs**: `docs/design/` — architecture decisions and design plans (reference only)
+
+**Two pipelines — do not confuse them:**
+- **Writing pipeline**: `wikify generate` → `wikify evaluate` → `wikify revise` (fully working)
+- **Wikipedia pipeline**: `wikify wiki epoch` — concept discovery → graph → articles → cross-ref (in design; building-block modules exist, epoch orchestrator not yet implemented)
 
 ## Agent Usage
 
@@ -70,3 +79,7 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **No silent error swallowing**: NEVER use bare `except: pass` or `try/except` that hides failures. If something fails, log it or raise it. Silent swallowing is obfuscation by design. If ChromaDB fails, the user needs to know and fix it, not get silently degraded results.
 - **Module-level instances are fine, mutable globals are not**: A module-level constant like `_db = DatabaseManager()` (assigned once, never reassigned) is acceptable — same pattern as `settings = Settings()`. The `global` keyword for mutation (`global _foo; _foo = ...`) is banned. Prefer dependency injection (pass the instance as a constructor/function argument) when the instance needs to be swapped in tests.
 - **Performance-critical paths**: Consider whether hot paths (embedding, graph computation, chunk retrieval) should eventually be compiled (Rust via PyO3/maturin, or Cython). Python's GIL and startup cost are real bottlenecks for a responsive app.
+- **Wikipedia pipeline is concept-first**: The wiki is built by discovering concepts from the corpus (haiku extraction), not from a pre-planned sitemap. `sitemap.py` is a secondary tool for user-directed focus, not the primary pipeline. Never make the sitemap the entry point for new wiki work.
+- **Epoch model for convergence**: Wiki building is iterative. Each epoch runs 5 passes: discovery → graph → article writing → cross-reference → index rebuild. Convergence is tracked via a scalar loss L and per-concept information gradient. See `wiki-wikipedia-model.md` for formulas.
+- **Model selection in epochs**: Use haiku for Pass 1 (extraction) always. Use haiku for Pass 3 (article writing) while L >= 0.3; switch to sonnet once L < 0.3. Reserve opus only for structural audit or complex synthesis.
+- **Package name**: The Python package is `wikify` (renamed from `scholarforge`). CLI command is `wikify`. GitHub repo is `github.com/fgrillo89/wikify`. Project root directory is still `C:\dev\scholarforge`.
