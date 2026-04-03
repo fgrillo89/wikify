@@ -110,6 +110,17 @@ def _run_migrations(engine) -> None:
             )
             conn.commit()
 
+        # Migration 5: EpochLog.template_delta column (added 2026-04-03)
+        try:
+            conn.execute(sqlalchemy.text("SELECT template_delta FROM epochlog LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE epochlog ADD COLUMN template_delta FLOAT DEFAULT 0.0"
+                )
+            )
+            conn.commit()
+
 
 # ── Module-level instance ─────────────────────────────────────────────────────
 

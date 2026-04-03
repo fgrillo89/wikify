@@ -265,6 +265,7 @@ class EpochLog(SQLModel, table=True):
     converged: bool = False
     loss_score: float = 0.0  # L computed after Pass 5
     loss_delta: float = 0.0  # |L(epoch_n) - L(epoch_n-1)|
+    template_delta: float = 0.0  # |sections_added| / total_sections
 
 
 class ChunkMiningLog(SQLModel, table=True):

@@ -48,13 +48,18 @@ from wikify.wiki.concept_graph import (
 )
 from wikify.wiki.concepts import (
     HAIKU_MODEL,
+    clear_rich_extractions,
     clear_staged_extractions,
     discover_concepts,
+    get_rich_extractions,
     list_concepts,
+    store_evidence,
+    store_gaps,
 )
 from wikify.wiki.domains import discover_domains
 from wikify.wiki.linker import cross_link_articles
 from wikify.wiki.mapreduce import SourceExtraction, map_chunks_to_topic
+from wikify.wiki.template import refine_template
 
 logger = logging.getLogger(__name__)
 
@@ -540,11 +545,18 @@ def run_epoch(
     logger.info("--- Pass 1: Concept Discovery (epoch=%d) ---", epoch)
 
     clear_staged_extractions(epoch)
+    clear_rich_extractions()
     paper_ids = _get_all_paper_ids()
     logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
 
     new_concepts = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
     log.concepts_discovered = len(new_concepts)
+
+    # Store evidence and gaps from rich extraction results
+    rich = get_rich_extractions()
+    if rich:
+        store_evidence(rich, epoch)
+        store_gaps(rich, epoch)
 
     logger.info(
         "Pass 1 complete in %.1fs: %d concepts discovered",
@@ -790,6 +802,10 @@ def run_epoch(
     logger.info("--- Pass 5: Index Rebuild + Loss (epoch=%d) ---", epoch)
 
     generate_wiki_index(_WIKI_DIR)
+
+    # Template refinement: evolve the extraction template based on gap feedback
+    _, template_delta = refine_template(_WIKI_DIR, epoch, model=HAIKU_MODEL)
+    log.template_delta = template_delta
 
     loss_score, loss_delta = compute_loss(epoch)
     log.loss_score = loss_score

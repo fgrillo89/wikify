@@ -13,10 +13,13 @@ Functions:
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 _TEMPLATE_FILENAME = "_template.md"
 _VERSIONS_DIR = "_template_versions"
@@ -133,3 +136,184 @@ def build_extraction_prompt(
     )
 
     return [{"role": "user", "content": user_msg}]
+
+
+def _count_template_sections(template: str) -> int:
+    """Count the number of ## sections in a template."""
+    return len(re.findall(r"^## ", template, re.MULTILINE))
+
+
+def refine_template(
+    wiki_dir: Path,
+    epoch: int,
+    model: str | None = None,
+) -> tuple[str, float]:
+    """Revise the extraction template based on accumulated gaps.
+
+    Algorithm:
+    1. Load all ExtractionGap rows from the last 3 epochs.
+    2. Cluster by suggested_type (simple grouping).
+    3. For clusters with 5+ gaps: generate a proposed template addition
+       via a haiku call.
+    4. Test the proposed section on 5 sample chunks -- if it produces
+       meaningful output from at least 3, accept it.
+    5. Save the new template version.
+
+    Args:
+        wiki_dir: Root wiki directory.
+        epoch: Current epoch number.
+        model: LLM model for proposal generation (default haiku).
+
+    Returns:
+        (new_template_content, template_delta) where template_delta is
+        |sections_added| / total_sections. A delta of 0.0 means no change.
+    """
+    from collections import defaultdict
+
+    from sqlmodel import select
+
+    from wikify.llm.client import complete
+    from wikify.store.db import get_session
+    from wikify.store.models import Chunk, ExtractionGap
+
+    resolved_model = model or HAIKU_MODEL
+
+    current_template = load_template(wiki_dir)
+    original_section_count = _count_template_sections(current_template)
+
+    # Step 1: Load gaps from last 3 epochs
+    min_epoch = max(1, epoch - 2)
+    with get_session() as session:
+        gaps: list[ExtractionGap] = list(
+            session.exec(select(ExtractionGap).where(ExtractionGap.epoch >= min_epoch)).all()
+        )
+
+    if not gaps:
+        logger.info(
+            "refine_template: no gaps in epochs %d-%d, no changes",
+            min_epoch,
+            epoch,
+        )
+        return current_template, 0.0
+
+    # Step 2: Cluster by suggested_type
+    clusters: dict[str, list[ExtractionGap]] = defaultdict(list)
+    for gap in gaps:
+        key = (gap.suggested_type or "unclassified").strip().lower()
+        clusters[key].append(gap)
+
+    # Step 3: For clusters with 5+ gaps, propose template additions
+    proposals: list[str] = []
+    for stype, cluster_gaps in clusters.items():
+        if len(cluster_gaps) < 5:
+            continue
+
+        descriptions = "\n".join(f"- {g.description}" for g in cluster_gaps[:20])
+
+        prompt = (
+            "You are refining an extraction template for scientific text.\n"
+            "The following knowledge items were found in the text but "
+            "could not be classified by the current template:\n\n"
+            f"{descriptions}\n\n"
+            f"Suggested category: {stype}\n\n"
+            "Write a new template section in this format:\n"
+            "## section_name\n"
+            "Array of objects: {field1, field2, ...}\n"
+            "- Brief instruction for each field\n\n"
+            "Return ONLY the template section, no other text."
+        )
+
+        try:
+            section_text = complete(
+                messages=[{"role": "user", "content": prompt}],
+                model=resolved_model,
+                temperature=0.2,
+                max_tokens=300,
+            )
+            section_text = section_text.strip()
+            if section_text.startswith("##"):
+                proposals.append(section_text)
+                logger.info(
+                    "refine_template: proposed section for %r (%d gaps)",
+                    stype,
+                    len(cluster_gaps),
+                )
+        except Exception:
+            logger.exception(
+                "refine_template: failed to generate proposal for %r",
+                stype,
+            )
+
+    if not proposals:
+        logger.info("refine_template: no proposals generated")
+        return current_template, 0.0
+
+    # Step 4: Test proposals on sample chunks
+    accepted: list[str] = []
+    with get_session() as session:
+        sample_chunks: list[Chunk] = list(session.exec(select(Chunk).limit(5)).all())
+
+    for proposal in proposals:
+        if not sample_chunks:
+            # No chunks to test against; accept optimistically
+            accepted.append(proposal)
+            continue
+
+        # Quick validation: ask if the section would extract anything
+        # from at least 3 of 5 sample chunks
+        hits = 0
+        for chunk in sample_chunks:
+            test_prompt = (
+                f"Given this extraction template section:\n{proposal}\n\n"
+                f"Would you find extractable content in this text?\n"
+                f"{chunk.content[:500]}\n\n"
+                "Answer YES or NO only."
+            )
+            try:
+                response = complete(
+                    messages=[{"role": "user", "content": test_prompt}],
+                    model=resolved_model,
+                    temperature=0.0,
+                    max_tokens=8,
+                )
+                if "YES" in response.upper():
+                    hits += 1
+            except Exception:
+                logger.debug("refine_template: test call failed, skipping")
+
+        if hits >= 3:
+            accepted.append(proposal)
+            logger.info(
+                "refine_template: accepted proposal (%d/5 hits)",
+                hits,
+            )
+        else:
+            logger.info(
+                "refine_template: rejected proposal (%d/5 hits)",
+                hits,
+            )
+
+    if not accepted:
+        logger.info("refine_template: no proposals passed testing")
+        return current_template, 0.0
+
+    # Step 5: Append accepted sections to template and save
+    new_template = current_template.rstrip() + "\n"
+    for section in accepted:
+        new_template += "\n" + section + "\n"
+
+    save_template(wiki_dir, new_template, epoch)
+
+    new_section_count = _count_template_sections(new_template)
+    total = max(new_section_count, 1)
+    template_delta = len(accepted) / total
+
+    logger.info(
+        "refine_template: epoch %d -> %d sections added, delta=%.4f (%d -> %d sections)",
+        epoch,
+        len(accepted),
+        template_delta,
+        original_section_count,
+        new_section_count,
+    )
+    return new_template, template_delta
