@@ -17,7 +17,7 @@ from scholarforge.ingest.corpus_refresh import (
 
 console = Console()
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".md", ".txt", ".html", ".htm"}
 
 
 def default_workers() -> int:
@@ -53,7 +53,15 @@ def ingest_path(path: Path, parallel: bool = False, max_workers: int = 0) -> int
 
 
 def ingest_file(path: Path, background_refresh: bool = True) -> int:
-    """Ingest a single file based on extension."""
+    """Ingest a single file based on extension.
+
+    Dispatches by suffix:
+      .pdf              -> pdf ingester
+      .docx             -> docx ingester
+      .pptx             -> pptx ingester
+      .md, .txt         -> markdown ingester
+      .html, .htm       -> html ingester
+    """
     ext = path.suffix.lower()
     paper_id: str | None = None
 
@@ -69,6 +77,14 @@ def ingest_file(path: Path, background_refresh: bool = True) -> int:
         from scholarforge.ingest.pptx import ingest_pptx
 
         paper_id = ingest_pptx(path, return_id=True)
+    elif ext in {".md", ".txt"}:
+        from scholarforge.ingest.markdown import ingest_markdown
+
+        paper_id = ingest_markdown(path, return_id=True)
+    elif ext in {".html", ".htm"}:
+        from scholarforge.ingest.html import ingest_html
+
+        paper_id = ingest_html(path, return_id=True)
     else:
         console.print(f"[yellow]Unsupported format:[/yellow] {path.name}")
         return 0

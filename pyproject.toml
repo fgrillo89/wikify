@@ -43,6 +43,8 @@ dependencies = [
     "docx2pdf>=0.1.8",
     "marker-pdf>=1.10.2",
     "pywin32>=311",
+    "trafilatura>=2.0.0",
+    "python-frontmatter>=1.1.0",
 ]
 
 [project.optional-dependencies]

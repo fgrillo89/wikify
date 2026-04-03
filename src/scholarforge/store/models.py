@@ -21,6 +21,13 @@ class DocType(str, Enum):
     NOTE = "note"
     PRESENTATION = "presentation"
     OTHER = "other"
+    # Web / Knowledge
+    WEB_ARTICLE = "web_article"
+    MARKDOWN = "markdown"
+    WIKI_ARTICLE = "wiki_article"
+    # Rich media / Code
+    IMAGE = "image"
+    REPO_README = "repo_readme"
 
 
 class PaperOrigin(str, Enum):
@@ -131,6 +138,21 @@ class PaperTopic(SQLModel, table=True):
     paper_id: str = Field(foreign_key="paper.id", primary_key=True)
     topic: str = Field(primary_key=True)  # canonical display form
     is_declared: bool = False  # True = from paper's own keywords
+
+
+class WikiArticle(SQLModel, table=True):
+    """A curated wiki article authored or updated by the LLM."""
+
+    id: str = Field(primary_key=True)  # slug, e.g. "HfO2_ALD_memristors"
+    title: str
+    status: str = "stub"  # stub | draft | full
+    file_path: str  # relative to data/wiki/, e.g. "concepts/HfO2.md"
+    source_ids: str = Field(default="[]")  # JSON list of Paper.id values
+    topic_keys: str = Field(default="[]")  # JSON list of topic vocab keys
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    model: str = ""
+    needs_update: bool = False
 
 
 class JournalTemplate(SQLModel, table=True):

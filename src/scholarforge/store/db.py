@@ -19,6 +19,7 @@ from scholarforge.store.models import (  # noqa: F401 — ensure tables created
     PaperTopic,
     Project,
     ProjectPaper,
+    WikiArticle,
 )
 
 
