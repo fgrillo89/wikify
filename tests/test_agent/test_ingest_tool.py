@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from scholarforge.agent.tools import ingest_paper
-from scholarforge.store.models import Paper
+from wikify.agent.tools import ingest_paper
+from wikify.store.models import Paper
 
 
 def test_ingest_paper_returns_structured_missing_file_error(tmp_path):
@@ -40,7 +40,7 @@ def test_ingest_paper_returns_structured_already_ingested(monkeypatch, tmp_path)
         source_path=str(file_path),
     )
 
-    monkeypatch.setattr("scholarforge.ingest.service.ingest_file", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("wikify.ingest.service.ingest_file", lambda *args, **kwargs: 0)
 
     class _Session:
         def __enter__(self):
@@ -52,7 +52,7 @@ def test_ingest_paper_returns_structured_already_ingested(monkeypatch, tmp_path)
         def get(self, model, key):
             return paper
 
-    monkeypatch.setattr("scholarforge.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
 
     data = json.loads(ingest_paper(str(file_path)))
 
@@ -74,7 +74,7 @@ def test_ingest_paper_returns_structured_success(monkeypatch, tmp_path):
         source_path=str(file_path),
     )
 
-    monkeypatch.setattr("scholarforge.ingest.service.ingest_file", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("wikify.ingest.service.ingest_file", lambda *args, **kwargs: 1)
 
     class _ExecResult:
         def all(self):
@@ -93,7 +93,7 @@ def test_ingest_paper_returns_structured_success(monkeypatch, tmp_path):
         def exec(self, query):
             return _ExecResult()
 
-    monkeypatch.setattr("scholarforge.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
 
     data = json.loads(ingest_paper(str(file_path)))
 

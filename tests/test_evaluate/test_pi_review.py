@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scholarforge.evaluate.pi_review import (
+from wikify.evaluate.pi_review import (
     PIReviewResult,
     parse_pi_review,
     parse_pi_scores,

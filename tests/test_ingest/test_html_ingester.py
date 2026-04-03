@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scholarforge.ingest.html import (
+from wikify.ingest.html import (
     _extract_author,
     _extract_title,
     _extract_year,
@@ -100,7 +100,7 @@ def test_strip_html_fallback_removes_scripts():
 def test_parse_html_basic(tmp_path, monkeypatch):
     """parse_html returns a Paper with correct metadata."""
     monkeypatch.setattr(
-        "scholarforge.ingest.html.chunk_sections",
+        "wikify.ingest.html.chunk_sections",
         lambda text, tree, pid: [],
     )
 
@@ -133,7 +133,7 @@ def test_parse_html_basic(tmp_path, monkeypatch):
 def test_parse_html_fallback_title(tmp_path, monkeypatch):
     """parse_html falls back to stem when no title found."""
     monkeypatch.setattr(
-        "scholarforge.ingest.html.chunk_sections",
+        "wikify.ingest.html.chunk_sections",
         lambda text, tree, pid: [],
     )
 
@@ -149,7 +149,7 @@ def test_parse_html_fallback_title(tmp_path, monkeypatch):
 
 def test_ingest_html_skips_existing(tmp_path, monkeypatch):
     """ingest_html returns 0 when paper already in DB."""
-    from scholarforge.ingest.html import ingest_html
+    from wikify.ingest.html import ingest_html
 
     html_file = tmp_path / "dup.html"
     html_file.write_text("<html><body><p>Duplicate.</p></body></html>", encoding="utf-8")
@@ -167,7 +167,7 @@ def test_ingest_html_skips_existing(tmp_path, monkeypatch):
         def get(self, model, key):
             return FakePaper()
 
-    monkeypatch.setattr("scholarforge.store.db.get_session", lambda: FakeSession())
+    monkeypatch.setattr("wikify.store.db.get_session", lambda: FakeSession())
 
     result = ingest_html(html_file)
     assert result == 0

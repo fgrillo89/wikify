@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from scholarforge.wiki.builder import generate_wiki_index, write_article
-from scholarforge.wiki.linker import (
+from wikify.wiki.builder import generate_wiki_index, write_article
+from wikify.wiki.linker import (
     _slug_to_title,
     cross_link_articles,
     ensure_parent_backlinks,
 )
-from scholarforge.wiki.sitemap import SitemapEntry, WikiSitemap
-
+from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
 
 # ---------------------------------------------------------------------------
 # Helpers

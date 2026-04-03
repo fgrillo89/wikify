@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scholarforge.ingest import corpus_refresh, registry, service
+from wikify.ingest import corpus_refresh, registry, service
 
 
 def test_registry_reexports_public_ingest_api():
@@ -24,8 +24,8 @@ def test_registry_public_wrappers_delegate_to_service_modules(monkeypatch, tmp_p
     def fake_refresh(new_paper_ids=None) -> None:
         seen["refresh"] = new_paper_ids
 
-    monkeypatch.setattr("scholarforge.ingest.service.ingest_path", fake_ingest_path)
-    monkeypatch.setattr("scholarforge.ingest.corpus_refresh.refresh_corpus", fake_refresh)
+    monkeypatch.setattr("wikify.ingest.service.ingest_path", fake_ingest_path)
+    monkeypatch.setattr("wikify.ingest.corpus_refresh.refresh_corpus", fake_refresh)
 
     assert registry.ingest_path(file_path, parallel=True, max_workers=4) == 1
     registry.run_batch_steps({"paper-1"})
@@ -46,7 +46,7 @@ def test_registry_ingest_file_wrapper_calls_public_service(monkeypatch, tmp_path
         seen["background_refresh"] = background_refresh
         return 1
 
-    monkeypatch.setattr("scholarforge.ingest.registry._ingest_file", fake_ingest_file)
+    monkeypatch.setattr("wikify.ingest.registry._ingest_file", fake_ingest_file)
 
     result = registry.ingest_file(file_path, background_refresh=False)
 

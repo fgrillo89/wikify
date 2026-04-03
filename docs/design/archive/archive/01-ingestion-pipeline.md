@@ -5,7 +5,7 @@ Takes a PDF/DOCX/PPTX and turns it into structured data: metadata, chunks, figur
 
 ## Two modes
 
-**Single file** (`scholarforge ingest paper.pdf`):
+**Single file** (`wikify ingest paper.pdf`):
 1. Parse file -> markdown text (~2s for PDF)
 2. Extract metadata (title, authors, abstract, DOI, year)
 3. Chunk text into ~600-token sections
@@ -14,7 +14,7 @@ Takes a PDF/DOCX/PPTX and turns it into structured data: metadata, chunks, figur
 6. Run fast incremental steps for this paper only (topics, embedding, k-NN)
 7. Spawn background thread to refresh all cross-paper signals
 
-**Batch** (`scholarforge ingest ./papers/ --parallel`):
+**Batch** (`wikify ingest ./papers/ --parallel`):
 1. Parse all PDFs in parallel (ProcessPoolExecutor)
 2. Persist sequentially (SQLite isn't concurrent)
 3. Run ONE batch refresh at the end (not N individual refreshes)

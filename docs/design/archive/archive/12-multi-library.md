@@ -7,8 +7,8 @@ A researcher works across multiple domains (e.g., ALD thin films and memristor d
 `--library` flag scopes all data paths:
 
 ```
-scholarforge --library ald ingest ./ald-papers/
-scholarforge --library memristors ingest ./memristor-papers/
+wikify --library ald ingest ./ald-papers/
+wikify --library memristors ingest ./memristor-papers/
 ```
 
 ## How it works
@@ -27,7 +27,7 @@ data/libraries/memristors/     # memristors library
 Each library gets its own SQLite DB, ChromaDB collection, vault, and cache.
 
 ## MCP server
-The MCP server accepts `--library` too: `scholarforge mcp --library ald`
+The MCP server accepts `--library` too: `wikify mcp --library ald`
 
 ## Where the code lives
 - `config.py` — Settings with library-scoped properties

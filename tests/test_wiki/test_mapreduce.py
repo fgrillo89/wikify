@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import scholarforge.wiki.mapreduce as mr_mod
-
+import wikify.wiki.mapreduce as mr_mod
 
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
 

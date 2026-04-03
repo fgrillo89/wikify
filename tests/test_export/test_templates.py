@@ -1,10 +1,10 @@
-"""Tests for scholarforge.vault.templates."""
+"""Tests for wikify.vault.templates."""
 
 from __future__ import annotations
 
 import yaml
 
-from scholarforge.vault.templates import (
+from wikify.vault.templates import (
     _strip_citation_brackets,
     author_note,
     paper_note,

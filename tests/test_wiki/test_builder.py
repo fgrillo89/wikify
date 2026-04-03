@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from scholarforge.wiki.builder import (
+from wikify.wiki.builder import (
     article_path,
     find_stale_articles,
     generate_wiki_index,

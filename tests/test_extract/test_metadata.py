@@ -1,10 +1,10 @@
-"""Tests for scholarforge.extract.metadata."""
+"""Tests for wikify.extract.metadata."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from scholarforge.extract.metadata import (
+from wikify.extract.metadata import (
     _extract_doi,
     _is_garbled_title,
     _parse_authors,

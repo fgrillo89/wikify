@@ -29,9 +29,9 @@ The agent should autonomously:
 ## How to Run
 
 ```python
-from scholarforge.agent import ScholarForgeAgent, get_default_tools
-from scholarforge.agent.defaults import build_generation_prompt
-from scholarforge.llm.hooks import CostTracker, TokenBudget
+from wikify.agent import ScholarForgeAgent, get_default_tools
+from wikify.agent.defaults import build_generation_prompt
+from wikify.llm.hooks import CostTracker, TokenBudget
 
 agent = ScholarForgeAgent(
     model="claude-haiku-4-5-20251001",

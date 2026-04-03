@@ -1,10 +1,10 @@
-"""Tests for scholarforge.export.chemistry."""
+"""Tests for wikify.export.chemistry."""
 
 from __future__ import annotations
 
 import pytest
 
-from scholarforge.export.chemistry import (
+from wikify.export.chemistry import (
     _is_chemical_formula,
     format_formulas_markdown,
     format_formulas_unicode,

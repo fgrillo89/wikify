@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from scholarforge.wiki.builder import (
+from wikify.wiki.builder import (
     append_unanswered_question,
     generate_domain_index,
     generate_library_catalog,
@@ -16,8 +13,7 @@ from scholarforge.wiki.builder import (
     generate_wiki_index,
     write_article,
 )
-from scholarforge.wiki.sitemap import SitemapEntry, WikiSitemap
-
+from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -81,14 +77,14 @@ def _graph_with_data() -> dict:
 def _patch_no_graph():
     """Patch _load_graph_metrics to return empty (no graph data available)."""
     return patch(
-        "scholarforge.wiki.builder._load_graph_metrics", return_value=_empty_graph()
+        "wikify.wiki.builder._load_graph_metrics", return_value=_empty_graph()
     )
 
 
 def _patch_graph():
     """Patch _load_graph_metrics to return valid graph data."""
     return patch(
-        "scholarforge.wiki.builder._load_graph_metrics", return_value=_graph_with_data()
+        "wikify.wiki.builder._load_graph_metrics", return_value=_graph_with_data()
     )
 
 

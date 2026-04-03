@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scholarforge.ingest.markdown import (
+from wikify.ingest.markdown import (
     _extract_authors,
     _extract_title,
     _extract_year,
@@ -104,7 +104,7 @@ def test_parse_markdown_basic(tmp_path, monkeypatch):
     """parse_markdown returns a Paper with correct metadata and non-empty chunks."""
     # Monkeypatch the DB session to avoid real DB in tests
     monkeypatch.setattr(
-        "scholarforge.ingest.markdown.chunk_sections",
+        "wikify.ingest.markdown.chunk_sections",
         lambda text, tree, pid: [],  # return empty chunks for simplicity
     )
 
@@ -129,7 +129,7 @@ def test_parse_markdown_basic(tmp_path, monkeypatch):
 def test_parse_markdown_no_frontmatter(tmp_path, monkeypatch):
     """parse_markdown handles files without frontmatter."""
     monkeypatch.setattr(
-        "scholarforge.ingest.markdown.chunk_sections",
+        "wikify.ingest.markdown.chunk_sections",
         lambda text, tree, pid: [],
     )
 
@@ -147,7 +147,7 @@ def test_parse_markdown_no_frontmatter(tmp_path, monkeypatch):
 def test_parse_markdown_txt_file(tmp_path, monkeypatch):
     """parse_markdown works with .txt files."""
     monkeypatch.setattr(
-        "scholarforge.ingest.markdown.chunk_sections",
+        "wikify.ingest.markdown.chunk_sections",
         lambda text, tree, pid: [],
     )
 
@@ -161,7 +161,7 @@ def test_parse_markdown_txt_file(tmp_path, monkeypatch):
 
 def test_ingest_markdown_skips_existing(tmp_path, monkeypatch):
     """ingest_markdown returns 0 and skips if paper already in DB."""
-    from scholarforge.ingest.markdown import ingest_markdown
+    from wikify.ingest.markdown import ingest_markdown
 
     md_file = tmp_path / "existing.md"
     md_file.write_text("# Existing\n\nContent.", encoding="utf-8")
@@ -180,7 +180,7 @@ def test_ingest_markdown_skips_existing(tmp_path, monkeypatch):
         def get(self, model, key):
             return FakePaper()
 
-    monkeypatch.setattr("scholarforge.store.db.get_session", lambda: FakeSession())
+    monkeypatch.setattr("wikify.store.db.get_session", lambda: FakeSession())
 
     result = ingest_markdown(md_file)
     assert result == 0

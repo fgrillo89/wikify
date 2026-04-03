@@ -2,7 +2,7 @@
 
 import pytest
 
-from scholarforge.config import Settings
+from wikify.config import Settings
 
 
 @pytest.fixture

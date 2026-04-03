@@ -34,10 +34,10 @@ def main() -> None:
     start = time.time()
 
     # ── Step 0: Imports ──────────────────────────────────────────────────────
-    from scholarforge.agent.core import ScholarForgeAgent
-    from scholarforge.agent.defaults import get_default_hooks
-    from scholarforge.agent.reading_log import reset_reading_log
-    from scholarforge.agent.tools import (
+    from wikify.agent.core import ScholarForgeAgent
+    from wikify.agent.defaults import get_default_hooks
+    from wikify.agent.reading_log import reset_reading_log
+    from wikify.agent.tools import (
         deep_read,
         find_corpus_gaps,
         find_synthesis_opportunities,
@@ -49,9 +49,9 @@ def main() -> None:
         save_reading_log,
         search_papers,
     )
-    from scholarforge.agent.workflows import export_paper
-    from scholarforge.export.journal_profile import load_journal_profile
-    from scholarforge.generate.persona import build_persona
+    from wikify.agent.workflows import export_paper
+    from wikify.export.journal_profile import load_journal_profile
+    from wikify.generate.persona import build_persona
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -315,10 +315,10 @@ Start with the title, then write each section in order. Use [REF:DisplayName] ci
 
     # The writer agent only needs search_papers and read_paper_digest
     # in case it needs to look up more details
-    from scholarforge.agent.tools import (
+    from wikify.agent.tools import (
         read_paper_digest as rpd,
     )
-    from scholarforge.agent.tools import (
+    from wikify.agent.tools import (
         search_papers as sp,
     )
 

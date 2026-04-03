@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scholarforge.generate.verifier import (
+from wikify.generate.verifier import (
     PaperVerificationResult,
     _extract_key_terms,
     _extract_numbered_refs,
@@ -14,7 +14,7 @@ from scholarforge.generate.verifier import (
     verify_paper,
     verify_section_against_plan,
 )
-from scholarforge.store.models import PaperPlan, SectionPlan
+from wikify.store.models import PaperPlan, SectionPlan
 
 # ── Helper function tests ────────────────────────────────────────────────────
 

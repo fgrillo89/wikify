@@ -35,7 +35,7 @@ def _extract_concept_links_llm(paper_name: str, text: str) -> list[dict]:
     """
     import litellm
 
-    from scholarforge.config import settings
+    from wikify.config import settings
 
     prompt = (
         f"Extract concept relationships from this paper text.\n\n"
@@ -90,18 +90,18 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING)
 
     # Verify injection is disabled
-    from scholarforge.config import settings
+    from wikify.config import settings
 
     assert not settings.inject_concept_graph, (
         "inject_concept_graph should be False (env var not picked up)"
     )
 
     # ── Step 0: Imports ──────────────────────────────────────────────────────
-    from scholarforge.agent.concept_graph import get_concept_graph, reset_concept_graph
-    from scholarforge.agent.core import ScholarForgeAgent
-    from scholarforge.agent.defaults import get_default_hooks
-    from scholarforge.agent.reading_log import reset_reading_log
-    from scholarforge.agent.tools import (
+    from wikify.agent.concept_graph import get_concept_graph, reset_concept_graph
+    from wikify.agent.core import ScholarForgeAgent
+    from wikify.agent.defaults import get_default_hooks
+    from wikify.agent.reading_log import reset_reading_log
+    from wikify.agent.tools import (
         deep_read,
         find_citation_for,
         find_corpus_gaps,
@@ -115,9 +115,9 @@ def main() -> None:
         save_reading_log,
         search_papers,
     )
-    from scholarforge.agent.workflows import export_paper
-    from scholarforge.export.journal_profile import load_journal_profile
-    from scholarforge.generate.persona import build_persona
+    from wikify.agent.workflows import export_paper
+    from wikify.export.journal_profile import load_journal_profile
+    from wikify.generate.persona import build_persona
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

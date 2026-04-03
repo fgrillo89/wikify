@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import scholarforge.wiki.persona as persona_mod
-
+import wikify.wiki.persona as persona_mod
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scholarforge.ingest.service import ingest_path
+from wikify.ingest.service import ingest_path
 
 
 def test_ingest_path_file_uses_public_ingest_file(monkeypatch, tmp_path):
@@ -15,7 +15,7 @@ def test_ingest_path_file_uses_public_ingest_file(monkeypatch, tmp_path):
         seen["background_refresh"] = background_refresh
         return 1
 
-    monkeypatch.setattr("scholarforge.ingest.service.ingest_file", fake_ingest_file)
+    monkeypatch.setattr("wikify.ingest.service.ingest_file", fake_ingest_file)
 
     result = ingest_path(file_path)
 
@@ -38,8 +38,8 @@ def test_ingest_path_directory_runs_single_refresh_after_sequential_ingest(monke
     def fake_refresh(new_paper_ids=None):
         seen["refresh_calls"] += 1
 
-    monkeypatch.setattr("scholarforge.ingest.service.ingest_file", fake_ingest_file)
-    monkeypatch.setattr("scholarforge.ingest.service.refresh_corpus", fake_refresh)
+    monkeypatch.setattr("wikify.ingest.service.ingest_file", fake_ingest_file)
+    monkeypatch.setattr("wikify.ingest.service.refresh_corpus", fake_refresh)
 
     result = ingest_path(tmp_path, parallel=False)
 

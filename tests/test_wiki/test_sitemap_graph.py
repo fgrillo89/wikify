@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-import scholarforge.wiki.sitemap as sitemap_mod
-from scholarforge.wiki.sitemap import (
+from wikify.wiki.sitemap import (
     SitemapEntry,
     WikiSitemap,
     _build_graph_context_block,
@@ -20,7 +16,6 @@ from scholarforge.wiki.sitemap import (
     generate_multi_domain_sitemap,
     generate_sitemap,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -154,14 +149,14 @@ class TestExploreCorpusForSitemapGraphContext:
     """Verify that explore_corpus_for_sitemap injects graph context into system prompt."""
 
     # Patch targets: deferred imports live in their source modules; patch there.
-    _GRAPH_METRICS = "scholarforge.agent.tools.get_graph_metrics"
-    _FIND_GAPS = "scholarforge.agent.tools.find_corpus_gaps"
-    _FIND_SYNTH = "scholarforge.agent.tools.find_synthesis_opportunities"
-    _AGENT_CLS = "scholarforge.agent.core.ScholarForgeAgent"
-    _HOOKS = "scholarforge.agent.defaults.get_default_hooks"
-    _TOOLS = "scholarforge.agent.defaults.get_explorer_tools"
-    _CREATE_CTX = "scholarforge.agent.run_context.create_run_context"
-    _USE_CTX = "scholarforge.agent.run_context.use_run_context"
+    _GRAPH_METRICS = "wikify.agent.tools.get_graph_metrics"
+    _FIND_GAPS = "wikify.agent.tools.find_corpus_gaps"
+    _FIND_SYNTH = "wikify.agent.tools.find_synthesis_opportunities"
+    _AGENT_CLS = "wikify.agent.core.ScholarForgeAgent"
+    _HOOKS = "wikify.agent.defaults.get_default_hooks"
+    _TOOLS = "wikify.agent.defaults.get_explorer_tools"
+    _CREATE_CTX = "wikify.agent.run_context.create_run_context"
+    _USE_CTX = "wikify.agent.run_context.use_run_context"
 
     def _run_explore(self, graph_json, agent_result=None, gaps="gaps text", synth="synth text"):
         """Helper that patches all external calls and runs explore_corpus_for_sitemap."""
@@ -269,9 +264,9 @@ class TestExploreCorpusForSitemapGraphContext:
 
 class TestGenerateSitemapDomain:
     # Deferred imports in generate_sitemap:
-    _EXPLORE = "scholarforge.wiki.sitemap.explore_corpus_for_sitemap"
-    _COMPLETE = "scholarforge.llm.client.complete"
-    _SETTINGS = "scholarforge.config.settings"
+    _EXPLORE = "wikify.wiki.sitemap.explore_corpus_for_sitemap"
+    _COMPLETE = "wikify.llm.client.complete"
+    _SETTINGS = "wikify.config.settings"
 
     def _run_generate(self, domain="", tmp_path=None):
         if tmp_path is None:
@@ -421,10 +416,10 @@ class TestDomainClassification:
 
 class TestGenerateMultiDomainSitemap:
     # Deferred imports in generate_multi_domain_sitemap live in these modules:
-    _GET_SESSION = "scholarforge.store.db.get_session"
-    _FIND_SYNTH = "scholarforge.agent.tools.find_synthesis_opportunities"
+    _GET_SESSION = "wikify.store.db.get_session"
+    _FIND_SYNTH = "wikify.agent.tools.find_synthesis_opportunities"
     # generate_sitemap is in the same module -- patch the module-level name
-    _GEN_SITEMAP = "scholarforge.wiki.sitemap.generate_sitemap"
+    _GEN_SITEMAP = "wikify.wiki.sitemap.generate_sitemap"
 
     def _make_papers_and_topics(self):
         """Return 6 material_science papers and 6 machine_learning papers + topics."""

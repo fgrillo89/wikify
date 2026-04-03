@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from scholarforge.generate.writer import (
+from wikify.generate.writer import (
     _check_context_sufficiency,
     _compact_prior_sections,
     _extract_section_summary,
 )
-from scholarforge.retrieve.context import RetrievedContext
-from scholarforge.store.models import Paper, PaperPlan, SectionPlan
+from wikify.retrieve.context import RetrievedContext
+from wikify.store.models import Paper, PaperPlan, SectionPlan
 
 # ── Context compaction tests ─────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-"""Integration tests for the 'scholarforge wiki' CLI commands.
+"""Integration tests for the 'wikify wiki' CLI commands.
 
 Uses Typer's CliRunner and unittest.mock.patch. No real LLM or DB calls.
 All tests patch at the module boundary so no real DB, LLM, or filesystem
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from scholarforge.cli import app
+from wikify.cli import app
 
 runner = CliRunner()
 
@@ -26,7 +26,7 @@ runner = CliRunner()
 
 def _make_fake_sitemap() -> "WikiSitemap":  # noqa: F821
     """Build a minimal in-memory WikiSitemap (does not touch disk)."""
-    from scholarforge.wiki.sitemap import SitemapEntry, WikiSitemap
+    from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
 
     entries = [
         SitemapEntry(
@@ -69,28 +69,28 @@ def _noop_generate_wiki_index(wiki_dir: Path) -> str:
 
 
 class TestWikiInit:
-    """Tests for 'scholarforge wiki init'."""
+    """Tests for 'wikify wiki init'."""
 
     def test_init_calls_generate_sitemap_and_build(self, tmp_path: Path) -> None:
         fake_sitemap = _make_fake_sitemap()
 
         with (
             patch(
-                "scholarforge.wiki.sitemap.generate_sitemap",
+                "wikify.wiki.sitemap.generate_sitemap",
                 return_value=fake_sitemap,
             ) as mock_gen,
             patch(
-                "scholarforge.wiki.agent.build_wiki_from_sitemap",
+                "wikify.wiki.agent.build_wiki_from_sitemap",
                 return_value=[],
             ) as mock_build,
-            patch("scholarforge.wiki.linker.cross_link_articles", return_value=2),
-            patch("scholarforge.wiki.linker.ensure_parent_backlinks"),
+            patch("wikify.wiki.linker.cross_link_articles", return_value=2),
+            patch("wikify.wiki.linker.ensure_parent_backlinks"),
             patch(
-                "scholarforge.wiki.builder.generate_wiki_index",
+                "wikify.wiki.builder.generate_wiki_index",
                 side_effect=_noop_generate_wiki_index,
             ),
             # Redirect wiki_dir to tmp_path so index file writes succeed
-            patch("scholarforge.cli.Path", new=lambda p: tmp_path if p == "data/wiki" else Path(p)),
+            patch("wikify.cli.Path", new=lambda p: tmp_path if p == "data/wiki" else Path(p)),
         ):
             result = runner.invoke(app, ["wiki", "init", "--topic", "ALD"])
 
@@ -101,7 +101,7 @@ class TestWikiInit:
         assert "planned" in result.output.lower() or "themes" in result.output.lower()
 
     def test_init_prints_summary_counts(self, tmp_path: Path) -> None:
-        from scholarforge.wiki.sitemap import SitemapEntry, WikiSitemap
+        from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
 
         entries = [
             SitemapEntry(
@@ -131,18 +131,18 @@ class TestWikiInit:
 
         with (
             patch(
-                "scholarforge.wiki.sitemap.generate_sitemap",
+                "wikify.wiki.sitemap.generate_sitemap",
                 return_value=fake_sitemap,
             ),
-            patch("scholarforge.wiki.agent.build_wiki_from_sitemap", return_value=[]),
-            patch("scholarforge.wiki.linker.cross_link_articles", return_value=1),
-            patch("scholarforge.wiki.linker.ensure_parent_backlinks"),
+            patch("wikify.wiki.agent.build_wiki_from_sitemap", return_value=[]),
+            patch("wikify.wiki.linker.cross_link_articles", return_value=1),
+            patch("wikify.wiki.linker.ensure_parent_backlinks"),
             patch(
-                "scholarforge.wiki.builder.generate_wiki_index",
+                "wikify.wiki.builder.generate_wiki_index",
                 side_effect=_noop_generate_wiki_index,
             ),
             patch(
-                "scholarforge.cli.Path",
+                "wikify.cli.Path",
                 new=lambda p: tmp_path if p == "data/wiki" else Path(p),
             ),
         ):
@@ -159,7 +159,7 @@ class TestWikiInit:
 
 
 class TestWikiExpand:
-    """Tests for 'scholarforge wiki expand'."""
+    """Tests for 'wikify wiki expand'."""
 
     def test_expand_concept_writes_article(self) -> None:
         """Expand a concept via the no-sitemap fallback path."""
@@ -171,15 +171,15 @@ class TestWikiExpand:
         mock_session.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch("scholarforge.wiki.sitemap.WikiSitemap.load", return_value=None),
+            patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=None),
             patch(
-                "scholarforge.wiki.agent.build_wiki_article",
+                "wikify.wiki.agent.build_wiki_article",
                 return_value=(fake_content, fake_source_ids),
             ) as mock_bwa,
-            patch("scholarforge.wiki.builder.write_article") as mock_write,
-            patch("scholarforge.wiki.linker.cross_link_articles", return_value=0),
-            patch("scholarforge.wiki.builder.generate_wiki_index", return_value=""),
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.wiki.builder.write_article") as mock_write,
+            patch("wikify.wiki.linker.cross_link_articles", return_value=0),
+            patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
         ):
             result = runner.invoke(
@@ -192,12 +192,12 @@ class TestWikiExpand:
         mock_write.assert_called_once()
 
     def test_expand_no_sitemap_no_concept_exits_nonzero(self) -> None:
-        with patch("scholarforge.wiki.sitemap.WikiSitemap.load", return_value=None):
+        with patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=None):
             result = runner.invoke(app, ["wiki", "expand"])
         assert result.exit_code != 0
 
     def test_expand_all_from_sitemap(self, tmp_path: Path) -> None:
-        from scholarforge.wiki.sitemap import SitemapEntry, WikiSitemap
+        from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
 
         stub_entry = SitemapEntry(
             title="Stub Topic",
@@ -219,16 +219,16 @@ class TestWikiExpand:
         mock_session.exec.return_value.first.return_value = None
 
         with (
-            patch("scholarforge.wiki.sitemap.WikiSitemap.load", return_value=fake_sitemap),
+            patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=fake_sitemap),
             patch(
-                "scholarforge.wiki.agent.build_article_from_entry",
+                "wikify.wiki.agent.build_article_from_entry",
                 return_value=("body text", []),
             ),
-            patch("scholarforge.wiki.builder.write_article"),
-            patch("scholarforge.wiki.builder.article_path", return_value=stub_path),
-            patch("scholarforge.wiki.linker.cross_link_articles", return_value=0),
-            patch("scholarforge.wiki.builder.generate_wiki_index", return_value=""),
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.wiki.builder.write_article"),
+            patch("wikify.wiki.builder.article_path", return_value=stub_path),
+            patch("wikify.wiki.linker.cross_link_articles", return_value=0),
+            patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
         ):
             result = runner.invoke(app, ["wiki", "expand", "--all"])
@@ -242,7 +242,7 @@ class TestWikiExpand:
 
 
 class TestWikiSync:
-    """Tests for 'scholarforge wiki sync'."""
+    """Tests for 'wikify wiki sync'."""
 
     def test_sync_no_stale_articles(self) -> None:
         """When no articles have needs_update=True, prints 'Synced 0 articles'."""
@@ -252,9 +252,9 @@ class TestWikiSync:
         mock_session.exec.return_value.all.return_value = []
 
         with (
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
-            patch("scholarforge.wiki.builder.generate_wiki_index", return_value=""),
+            patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
         ):
             result = runner.invoke(app, ["wiki", "sync"])
 
@@ -271,7 +271,7 @@ class TestWikiSync:
             "---\ntitle: Test\n---\n## Established\n\nOriginal body.\n", encoding="utf-8"
         )
 
-        from scholarforge.store.models import WikiArticle
+        from wikify.store.models import WikiArticle
 
         stale_row = WikiArticle(
             id="test_article",
@@ -287,7 +287,7 @@ class TestWikiSync:
             domain="test_domain",
         )
 
-        from scholarforge.wiki.mapreduce import SourceExtraction
+        from wikify.wiki.mapreduce import SourceExtraction
 
         mock_ext = SourceExtraction(
             source_id="src1",
@@ -324,14 +324,14 @@ class TestWikiSync:
         session_mock.exec.side_effect = exec_by_call
 
         with (
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=session_mock),
-            patch("scholarforge.wiki.mapreduce.map_chunks_to_topic", return_value=[mock_ext]),
-            patch("scholarforge.wiki.maintenance.detect_contradiction", return_value=False),
-            patch("scholarforge.wiki.maintenance.additive_update", return_value="Updated body."),
-            patch("scholarforge.wiki.persona.get_or_create_persona", return_value="Persona text"),
-            patch("scholarforge.wiki.builder.write_article"),
-            patch("scholarforge.wiki.builder.generate_wiki_index", return_value=""),
+            patch("wikify.wiki.mapreduce.map_chunks_to_topic", return_value=[mock_ext]),
+            patch("wikify.wiki.maintenance.detect_contradiction", return_value=False),
+            patch("wikify.wiki.maintenance.additive_update", return_value="Updated body."),
+            patch("wikify.wiki.persona.get_or_create_persona", return_value="Persona text"),
+            patch("wikify.wiki.builder.write_article"),
+            patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
         ):
             result = runner.invoke(app, ["wiki", "sync"])
 
@@ -345,20 +345,20 @@ class TestWikiSync:
 
 
 class TestWikiHealth:
-    """Tests for 'scholarforge wiki health'."""
+    """Tests for 'wikify wiki health'."""
 
     def test_health_no_db_does_not_crash(self, tmp_path: Path) -> None:
         """Health command gracefully handles an empty or missing DB."""
         with (
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", side_effect=Exception("No DB")),
             patch(
-                "scholarforge.agent.tools.find_synthesis_opportunities",
+                "wikify.agent.tools.find_synthesis_opportunities",
                 return_value="",
             ),
             # Redirect wiki_dir so the _health.md write succeeds
             patch(
-                "scholarforge.cli.Path",
+                "wikify.cli.Path",
                 new=lambda p: tmp_path if p == "data/wiki" else Path(p),
             ),
         ):
@@ -371,7 +371,7 @@ class TestWikiHealth:
         """Health prints expected counts when DB is present."""
         now = datetime.now(timezone.utc)
 
-        from scholarforge.store.models import WikiArticle
+        from wikify.store.models import WikiArticle
 
         rows = [
             WikiArticle(
@@ -394,14 +394,14 @@ class TestWikiHealth:
         mock_session.exec.return_value.all.return_value = rows
 
         with (
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
             patch(
-                "scholarforge.agent.tools.find_synthesis_opportunities",
+                "wikify.agent.tools.find_synthesis_opportunities",
                 return_value="",
             ),
             patch(
-                "scholarforge.cli.Path",
+                "wikify.cli.Path",
                 new=lambda p: tmp_path if p == "data/wiki" else Path(p),
             ),
         ):
@@ -417,7 +417,7 @@ class TestWikiHealth:
 
 
 class TestWikiQuery:
-    """Tests for 'scholarforge wiki query'."""
+    """Tests for 'wikify wiki query'."""
 
     def test_query_prints_answer(self, tmp_path: Path) -> None:
         """Query returns an answer via the escalation protocol."""
@@ -428,11 +428,11 @@ class TestWikiQuery:
 
         with (
             patch(
-                "scholarforge.cli._answer_with_escalation",
+                "wikify.cli._answer_with_escalation",
                 return_value="ALD is atomic layer deposition, a technique for thin films.",
             ),
             patch(
-                "scholarforge.cli.Path",
+                "wikify.cli.Path",
                 new=lambda p: wiki_dir if p == "data/wiki" else Path(p),
             ),
         ):
@@ -447,7 +447,7 @@ class TestWikiQuery:
         empty_wiki.mkdir()
 
         with patch(
-            "scholarforge.cli.Path",
+            "wikify.cli.Path",
             new=lambda p: empty_wiki if p == "data/wiki" else Path(p),
         ):
             result = runner.invoke(app, ["wiki", "query", "what is ALD?"])
@@ -466,14 +466,14 @@ class TestWikiQuery:
 
         with (
             patch(
-                "scholarforge.cli._answer_with_escalation",
+                "wikify.cli._answer_with_escalation",
                 return_value="ALD is great for thin films.",
             ),
             patch(
-                "scholarforge.cli.Path",
+                "wikify.cli.Path",
                 new=lambda p: wiki_dir if p == "data/wiki" else Path(p),
             ),
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_sess),
         ):
             result = runner.invoke(app, ["wiki", "query", "what is ALD overview?", "--promote"])

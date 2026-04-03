@@ -7,9 +7,9 @@ General rules for how Claude should operate in this project.
 2. `docs/architecture.md` — module layout, writing pipeline, data flow
 
 **Runtime prompts** (loaded by code, NOT documentation):
-- `src/scholarforge/prompts/style_guide.md` — base writing style
-- `src/scholarforge/prompts/artifact_types/` — per-document-type rules
-- `src/scholarforge/prompts/fields/` — per-field writing guides
+- `src/wikify/prompts/style_guide.md` — base writing style
+- `src/wikify/prompts/artifact_types/` — per-document-type rules
+- `src/wikify/prompts/fields/` — per-field writing guides
 
 **Design docs**: `docs/design/` — architecture decisions, design plans (reference only)
 
@@ -61,7 +61,7 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **Data libraries**: Always use polars over pandas. User strongly prefers polars.
 - **Package installs**: Always use `uv add` (not `uv pip install`) to add dependencies. This keeps pyproject.toml in sync.
 - **Commit messages**: Never include absolute paths or personal PC paths in commit messages. Use relative paths or project-relative references only.
-- **Vault output location**: The Obsidian vault output goes under `data/vault/` (gitignored), NOT at project root. The vault Python *code* lives in `src/scholarforge/vault/` — don't confuse code with output.
+- **Vault output location**: The Obsidian vault output goes under `data/vault/` (gitignored), NOT at project root. The vault Python *code* lives in `src/wikify/vault/` — don't confuse code with output.
 - **No mock generation scripts**: Don't hardcode paper text in scripts. Use the MCP server + Claude Code agents to generate real papers from the knowledge base.
 - **DOCX templates**: When using a publisher template, clone paragraph exemplars from the template XML. Never override template fonts/spacing programmatically — let the template's native styles handle formatting.
 - **BibTeX is corpus-level**: `library.bib` is auto-generated on ingest/refresh at `data/library.bib`, not per-output.

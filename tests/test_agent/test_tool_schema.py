@@ -1,10 +1,10 @@
-"""Tests for scholarforge.agent.tool_schema."""
+"""Tests for wikify.agent.tool_schema."""
 
 from __future__ import annotations
 
 from typing import Optional
 
-from scholarforge.agent.tool_schema import fn_to_tool_schema, fns_to_tool_schemas
+from wikify.agent.tool_schema import fn_to_tool_schema, fns_to_tool_schemas
 
 # ---------------------------------------------------------------------------
 # Helper functions used as test fixtures

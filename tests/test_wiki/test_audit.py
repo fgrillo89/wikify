@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from scholarforge.cli import app
+from wikify.cli import app
 
 runner = CliRunner()
 
@@ -34,7 +34,7 @@ def _make_wiki_dir(tmp_path: Path) -> Path:
 
 
 def _make_structural_report(domain=""):
-    from scholarforge.wiki.maintenance import StructuralReport
+    from wikify.wiki.maintenance import StructuralReport
 
     return StructuralReport(
         domain=domain,
@@ -95,7 +95,7 @@ class TestWikiAudit:
         _make_wiki_dir(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        with patch("scholarforge.wiki.maintenance.structural_audit") as mock_audit:
+        with patch("wikify.wiki.maintenance.structural_audit") as mock_audit:
             mock_audit.return_value = _make_structural_report()
             result = runner.invoke(app, ["wiki", "audit", "--domain", "test"])
 
@@ -106,7 +106,7 @@ class TestWikiAudit:
         _make_wiki_dir(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        with patch("scholarforge.wiki.maintenance.structural_audit") as mock_audit:
+        with patch("wikify.wiki.maintenance.structural_audit") as mock_audit:
             mock_audit.return_value = _make_structural_report()
             result = runner.invoke(app, ["wiki", "audit"])
 
@@ -121,7 +121,7 @@ class TestWikiAudit:
         _make_wiki_dir(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        with patch("scholarforge.wiki.maintenance.structural_audit") as mock_audit:
+        with patch("wikify.wiki.maintenance.structural_audit") as mock_audit:
             mock_audit.return_value = _make_structural_report("mydom")
             result = runner.invoke(app, ["wiki", "audit", "--domain", "mydom"])
 
@@ -148,8 +148,8 @@ class TestWikiAudit:
         session_mock.exec.return_value = MagicMock(first=lambda: MagicMock())
 
         with (
-            patch("scholarforge.wiki.maintenance.structural_audit") as mock_audit,
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.wiki.maintenance.structural_audit") as mock_audit,
+            patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=session_mock),
         ):
             mock_audit.return_value = report
@@ -165,8 +165,8 @@ class TestWikiAudit:
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("scholarforge.wiki.maintenance.structural_audit") as mock_audit,
-            patch("scholarforge.store.db.get_engine") as mock_ge,
+            patch("wikify.wiki.maintenance.structural_audit") as mock_audit,
+            patch("wikify.store.db.get_engine") as mock_ge,
         ):
             mock_audit.return_value = _make_structural_report()
             result = runner.invoke(app, ["wiki", "audit"])
@@ -206,7 +206,7 @@ class TestWikiSyncRouting:
             source_ids=["src_a", "src_b"],
         )
 
-        from scholarforge.wiki.mapreduce import SourceExtraction
+        from wikify.wiki.mapreduce import SourceExtraction
 
         mock_extraction = SourceExtraction(
             source_id="src_b",
@@ -233,15 +233,15 @@ class TestWikiSyncRouting:
         session_mock = _make_session_ctx([stale_exec, coverage_exec, update_exec])
 
         with (
-            patch("scholarforge.wiki.mapreduce.map_chunks_to_topic") as mock_map,
-            patch("scholarforge.wiki.maintenance.detect_contradiction") as mock_dc,
-            patch("scholarforge.wiki.maintenance.additive_update", additive_mock),
-            patch("scholarforge.wiki.maintenance.revisionary_update", revisionary_mock),
-            patch("scholarforge.wiki.persona.get_or_create_persona") as mock_persona,
-            patch("scholarforge.wiki.builder.write_article"),
-            patch("scholarforge.wiki.builder.generate_wiki_index"),
+            patch("wikify.wiki.mapreduce.map_chunks_to_topic") as mock_map,
+            patch("wikify.wiki.maintenance.detect_contradiction") as mock_dc,
+            patch("wikify.wiki.maintenance.additive_update", additive_mock),
+            patch("wikify.wiki.maintenance.revisionary_update", revisionary_mock),
+            patch("wikify.wiki.persona.get_or_create_persona") as mock_persona,
+            patch("wikify.wiki.builder.write_article"),
+            patch("wikify.wiki.builder.generate_wiki_index"),
             patch("sqlmodel.Session", return_value=session_mock),
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
         ):
             mock_dc.return_value = contradict
             mock_map.return_value = [mock_extraction]
@@ -291,9 +291,9 @@ class TestWikiSyncRouting:
         session_mock = _make_session_ctx([stale_exec])
 
         with (
-            patch("scholarforge.wiki.builder.generate_wiki_index"),
+            patch("wikify.wiki.builder.generate_wiki_index"),
             patch("sqlmodel.Session", return_value=session_mock),
-            patch("scholarforge.store.db.get_engine"),
+            patch("wikify.store.db.get_engine"),
         ):
             result = runner.invoke(app, ["wiki", "sync"])
 
@@ -312,7 +312,7 @@ class TestWikiQueryEscalation:
         (wiki_dir / "_index.md").write_text("# KB\nSome domain info.\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
-        with patch("scholarforge.cli._answer_with_escalation") as mock_esc:
+        with patch("wikify.cli._answer_with_escalation") as mock_esc:
             mock_esc.return_value = "The answer from the wiki."
             result = runner.invoke(app, ["wiki", "query", "What is ALD?"])
 
@@ -327,8 +327,8 @@ class TestWikiQueryEscalation:
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("scholarforge.cli._answer_with_escalation") as mock_esc,
-            patch("scholarforge.wiki.builder.append_unanswered_question") as mock_append,
+            patch("wikify.cli._answer_with_escalation") as mock_esc,
+            patch("wikify.wiki.builder.append_unanswered_question") as mock_append,
         ):
             mock_esc.return_value = None
             result = runner.invoke(app, ["wiki", "query", "Unanswerable question"])

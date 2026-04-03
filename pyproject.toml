@@ -1,7 +1,7 @@
 [project]
-name = "scholarforge"
+name = "wikify"
 version = "0.1.0"
-description = "Research writing assistant: ingest papers, build knowledge graphs, generate publications"
+description = "Corpus-driven Wikipedia builder: ingest any knowledge source, extract concepts, build a self-improving personal wiki"
 readme = "README.md"
 authors = [
     { name = "Fabio Grillo", email = "fabio.grillo89@gmail.com" }
@@ -52,7 +52,7 @@ gdrive = ["google-api-python-client>=2.130", "google-auth-oauthlib>=1.2"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4"]
 
 [project.scripts]
-scholarforge = "scholarforge.cli:app"
+wikify = "wikify.cli:app"
 
 [build-system]
 requires = ["hatchling"]

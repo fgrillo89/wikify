@@ -62,10 +62,10 @@ These should be separated cleanly.
 
 ### Immediate Targets
 
-- `src/scholarforge/agent/scripted.py`
-- `src/scholarforge/agent/fast_generate.py`
-- `src/scholarforge/agent/defaults.py`
-- `src/scholarforge/cli.py`
+- `src/wikify/agent/scripted.py`
+- `src/wikify/agent/fast_generate.py`
+- `src/wikify/agent/defaults.py`
+- `src/wikify/cli.py`
 
 ## Phase 2: Introduce Run-Scoped State
 
@@ -100,10 +100,10 @@ Introduce a `RunContext` or `SessionContext` that owns:
 
 ### Immediate Targets
 
-- `src/scholarforge/agent/tools.py`
-- `src/scholarforge/agent/reading_log.py`
-- `src/scholarforge/agent/core.py`
-- `src/scholarforge/agent/workflows.py`
+- `src/wikify/agent/tools.py`
+- `src/wikify/agent/reading_log.py`
+- `src/wikify/agent/core.py`
+- `src/wikify/agent/workflows.py`
 
 ## Phase 3: Define One Canonical Research Pipeline
 
@@ -131,10 +131,10 @@ Promote hierarchical progressive disclosure from an experimental strategy to the
 
 ### Immediate Targets
 
-- `src/scholarforge/agent/workflows.py`
-- `src/scholarforge/retrieve/strategies/hierarchical.py`
-- `src/scholarforge/retrieve/strategies/query_driven.py`
-- `src/scholarforge/generate/writer.py`
+- `src/wikify/agent/workflows.py`
+- `src/wikify/retrieve/strategies/hierarchical.py`
+- `src/wikify/retrieve/strategies/query_driven.py`
+- `src/wikify/generate/writer.py`
 
 ## Phase 4: Fix Evaluation Truthfulness
 
@@ -162,8 +162,8 @@ Split evaluation into three explicit layers:
 
 ### Immediate Targets
 
-- `src/scholarforge/evaluate/quality.py`
-- `src/scholarforge/evaluate/pi_review.py`
+- `src/wikify/evaluate/quality.py`
+- `src/wikify/evaluate/pi_review.py`
 
 ## Phase 5: Rebuild Prompting And Planning Around Generalization
 
@@ -187,10 +187,10 @@ Treat these as orthogonal inputs:
 
 ### Immediate Targets
 
-- `src/scholarforge/generate/persona.py`
-- `src/scholarforge/generate/planner.py`
-- `src/scholarforge/generate/prompts.py`
-- `src/scholarforge/generate/field_guide.py`
+- `src/wikify/generate/persona.py`
+- `src/wikify/generate/planner.py`
+- `src/wikify/generate/prompts.py`
+- `src/wikify/generate/field_guide.py`
 
 ## Phase 6: Tighten Token Economics
 
@@ -221,9 +221,9 @@ The repo is already thinking carefully about token usage. The next step is to ma
 
 ### Immediate Targets
 
-- `src/scholarforge/agent/core.py`
-- `src/scholarforge/generate/writer.py`
-- `src/scholarforge/store/embeddings.py`
+- `src/wikify/agent/core.py`
+- `src/wikify/generate/writer.py`
+- `src/wikify/store/embeddings.py`
 
 ## Phase 7: Replace Stringly Error Handling With Structured Outcomes
 
@@ -253,10 +253,10 @@ Tool and workflow boundaries should return structured result types such as:
 
 ### Immediate Targets
 
-- `src/scholarforge/agent/tools.py`
-- `src/scholarforge/agent/workflows.py`
-- `src/scholarforge/ingest/registry.py`
-- `src/scholarforge/llm/client.py`
+- `src/wikify/agent/tools.py`
+- `src/wikify/agent/workflows.py`
+- `src/wikify/ingest/registry.py`
+- `src/wikify/llm/client.py`
 
 ## Phase 8: Expand Test Coverage To Match Real Risk
 

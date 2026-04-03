@@ -17,7 +17,7 @@ NetworkX DiGraph with three edge types:
 ## How it's used
 1. **LLM generation**: Graph metrics summary included in planner prompts. LLM starts with hubs, explores frontiers.
 2. **Deep read**: Top 3 hub papers get ALL chunks during retrieval (instead of first 3).
-3. **CLI**: `scholarforge graph` displays full ranking table.
+3. **CLI**: `wikify graph` displays full ranking table.
 4. **MCP**: `get_graph_metrics` tool exposes metrics to external LLMs.
 
 ## Design note

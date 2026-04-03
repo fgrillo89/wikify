@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from scholarforge.agent.concept_graph import get_concept_graph
-from scholarforge.agent.reading_log import configure_reading_log, get_reading_log, reset_reading_log
-from scholarforge.agent.run_context import create_run_context, use_run_context
-from scholarforge.agent.scripted import scripted_explore
-from scholarforge.agent.tools import get_paper_summaries, record_paper_summary
-from scholarforge.agent.workflows import explore_corpus
+from wikify.agent.concept_graph import get_concept_graph
+from wikify.agent.reading_log import configure_reading_log, get_reading_log, reset_reading_log
+from wikify.agent.run_context import create_run_context, use_run_context
+from wikify.agent.scripted import scripted_explore
+from wikify.agent.tools import get_paper_summaries, record_paper_summary
+from wikify.agent.workflows import explore_corpus
 
 
 def test_reset_reading_log_can_use_custom_backing_file(tmp_path):
@@ -60,25 +60,25 @@ def test_scripted_explore_resets_concept_graph(monkeypatch):
     calls: list[str] = []
 
     monkeypatch.setattr(
-        "scholarforge.agent.concept_graph.reset_concept_graph",
+        "wikify.agent.concept_graph.reset_concept_graph",
         lambda: calls.append("reset_concept_graph"),
     )
     monkeypatch.setattr(
-        "scholarforge.agent.reading_log.reset_reading_log",
+        "wikify.agent.reading_log.reset_reading_log",
         lambda *args, **kwargs: calls.append("reset_reading_log"),
     )
     monkeypatch.setattr(
-        "scholarforge.agent.tools.reset_paper_summaries",
+        "wikify.agent.tools.reset_paper_summaries",
         lambda: calls.append("reset_paper_summaries"),
     )
     monkeypatch.setattr(
-        "scholarforge.evaluate.frontier.frontier_exploration_order",
+        "wikify.evaluate.frontier.frontier_exploration_order",
         lambda max_papers=12: [],
     )
-    monkeypatch.setattr("scholarforge.agent.tools.find_corpus_gaps", lambda: "")
-    monkeypatch.setattr("scholarforge.agent.tools.find_synthesis_opportunities", lambda: "")
-    monkeypatch.setattr("scholarforge.agent.tools.deep_read", lambda *args, **kwargs: "")
-    monkeypatch.setattr("scholarforge.agent.tools.read_paper_digest", lambda *args, **kwargs: "")
+    monkeypatch.setattr("wikify.agent.tools.find_corpus_gaps", lambda: "")
+    monkeypatch.setattr("wikify.agent.tools.find_synthesis_opportunities", lambda: "")
+    monkeypatch.setattr("wikify.agent.tools.deep_read", lambda *args, **kwargs: "")
+    monkeypatch.setattr("wikify.agent.tools.read_paper_digest", lambda *args, **kwargs: "")
 
     class _ExecResult:
         def all(self):
@@ -94,7 +94,7 @@ def test_scripted_explore_resets_concept_graph(monkeypatch):
         def exec(self, _query):
             return _ExecResult()
 
-    monkeypatch.setattr("scholarforge.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
 
     result = scripted_explore(max_papers=1, n_deep=0)
 
@@ -106,26 +106,26 @@ def test_explore_corpus_resets_concept_graph(monkeypatch):
     calls: list[str] = []
 
     monkeypatch.setattr(
-        "scholarforge.agent.concept_graph.reset_concept_graph",
+        "wikify.agent.concept_graph.reset_concept_graph",
         lambda: calls.append("reset_concept_graph"),
     )
     monkeypatch.setattr(
-        "scholarforge.agent.reading_log.reset_reading_log",
+        "wikify.agent.reading_log.reset_reading_log",
         lambda *args, **kwargs: calls.append("reset_reading_log"),
     )
     monkeypatch.setattr(
-        "scholarforge.agent.tools.reset_paper_summaries",
+        "wikify.agent.tools.reset_paper_summaries",
         lambda: calls.append("reset_paper_summaries"),
     )
-    monkeypatch.setattr("scholarforge.agent.defaults.build_explorer_prompt", lambda prompt: prompt)
-    monkeypatch.setattr("scholarforge.agent.defaults.get_explorer_tools", lambda: [])
+    monkeypatch.setattr("wikify.agent.defaults.build_explorer_prompt", lambda prompt: prompt)
+    monkeypatch.setattr("wikify.agent.defaults.get_explorer_tools", lambda: [])
 
     class _FakeNotes:
         gap_analysis = ""
         proposed_outline: list[str] = []
 
     monkeypatch.setattr(
-        "scholarforge.agent.research_notes.ResearchNotes",
+        "wikify.agent.research_notes.ResearchNotes",
         SimpleNamespace(from_session=lambda topic, run_context=None: _FakeNotes()),
     )
 
@@ -136,7 +136,7 @@ def test_explore_corpus_resets_concept_graph(monkeypatch):
         def run(self, prompt, max_turns=25):
             return SimpleNamespace(content="")
 
-    monkeypatch.setattr("scholarforge.agent.workflows.ScholarForgeAgent", _FakeAgent)
+    monkeypatch.setattr("wikify.agent.workflows.ScholarForgeAgent", _FakeAgent)
 
     explore_corpus("test topic")
 

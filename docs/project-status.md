@@ -1,145 +1,175 @@
 # ScholarForge -- Project Status
 
-## Current State (2026-04-02)
+## What is ScholarForge?
 
-ScholarForge is a working end-to-end pipeline with a 206-paper ALD/memristor corpus.
-The exploration strategy has been optimized through 9 strategy variants benchmarked
-on 7 quality metrics. Reviews generate in 3-5 minutes with gap identification and
-cross-paper synthesis.
+ScholarForge is a local-first Python pipeline that ingests academic PDFs and other documents into
+a structured knowledge base, then produces literature reviews, research papers, and presentations
+from that knowledge. It runs two independent pipelines: a **writing pipeline** (`generate`,
+`evaluate`, `revise`) that produces academic documents on demand, and a **Wikipedia pipeline**
+that builds and maintains a curated, self-correcting wiki from the corpus over multiple epochs.
+The system is model-agnostic, routing all LLM calls through litellm.
 
-### What Works
+---
 
-**Ingestion (Phase 1 -- complete, no LLM):**
+## What is Fully Working
+
+### Ingestion (complete, no LLM)
+
 - PDF/DOCX/PPTX parsing (pymupdf4llm + fitz fallback, no OCR by default)
 - Metadata extraction, section-aware chunking (600-token), figure/table refs
 - Bibliography extraction + fuzzy citation matching (prefix + fuzzy scoring)
-- ChromaDB embeddings: per-paper summaries + per-chunk + per-section (ONNX quantized)
+- ChromaDB embeddings: per-paper summaries, per-chunk, per-section (ONNX quantized)
 - Paper vibe vectors: token-weighted chunk centroids (0.4s from stored embeddings)
 - Obsidian vault: paper notes, author notes, topic hubs, Dashboard
 - Incremental + parallel batch ingestion (60% of CPU cores by default)
 - Auto-generated `library.bib` on every ingest
-- Conclusion fallback: last section marked as conclusion if no heading matches
-- Corpus/output isolation: Paper.origin field, Project scoping, GeneratedOutput tracking
+- Public ingest boundary: `ingest/service.py` and `ingest/corpus_refresh.py`
+- Corpus/output isolation: `Paper.origin` field, `Project` scoping, `GeneratedOutput` tracking
 
-**Exploration & Quality (Phase 2 -- optimized):**
+### Exploration and Quality Metrics (complete)
+
 - Enhanced hybrid strategy: greedy seeds + frontier papers + bridge papers + serendipity
 - Frontier detection: density-ranked papers in sparse embedding regions
-- Bridge computation: vibe midpoints between seed-frontier pairs (replaces random walks)
-- Composite quality report now includes prose quality alongside corpus-grounded metrics
-- Automated evaluation now covers prose quality, frontier shift, bridge vectors,
-  semantic residual, gap detection, argumentative coherence, topic coverage,
-  factual specificity, semantic coverage, and centroid alignment
-- All metrics computable from stored embeddings in 4-5s per review
+- Bridge computation: vibe midpoints between seed-frontier pairs
+- 10-component automated composite quality report including prose quality
+- PI-style evaluation via `wikify evaluate`
 - Gap detection: embedding voids + regex gap-claim detection
-- Agent tools: find_corpus_gaps, find_synthesis_opportunities, get_frontier_exploration_order,
-  suggest_next_papers, find_jump_target, evaluate_coverage, get_paper_vibes
-- Reading log: per-tool reason tracking for reproducibility
-- Greedy submodular paper ordering: lazy heap, O(N log N), 500 papers in 3s
+- 25+ MCP/agent tools: `search_papers`, `deep_read`, `read_section`, `read_paper_digest`,
+  `find_corpus_gaps`, `find_synthesis_opportunities`, `get_frontier_exploration_order`,
+  `get_paper_vibes`, `suggest_next_papers`, `find_jump_target`, and others
+- Greedy submodular paper ordering: lazy heap, O(N log N)
+- Pre-compute cache: vibes, KMeans, gaps, links, section summaries (all <0.1s load time)
 
-**Generation (Phase 2 -- implemented):**
-- Default strategy: enhanced hybrid (greedy + frontier + bridge + serendipity + gaps)
-- Default prompt guidance is now hierarchical: digest first, section drill-down second,
-  `deep_read` as last resort
-- Snowball strategy as fallback (5 retrieval strategies available)
+### Generation (complete)
+
+- Five generation routes: skill (single-agent), hierarchical skill, scripted, two-agent,
+  fast one-shot -- all sharing the same `ResearchNotes` writer handoff
 - Artifact types: lit review, research article, grant proposal, technical report,
   master thesis, PhD thesis, undergrad research paper
-- Academic writing style guide with sentence complexity rules
-- Hard bans: zero em-dashes, no abstract citations, one concept per sentence
+- Academic writing style guide: zero em-dashes, no abstract citations, one concept per sentence
 - Chemical formula subscripting (HfO2 in markdown, native subscripts in DOCX)
-- Reference resolver: prefix matching + fuzzy scoring, warns on unresolved refs
-- Post-processing: em-dash safety net, duplicate References section stripping
+- Reference resolver: prefix matching + fuzzy scoring
+- Run-scoped state via `RunContext`: reading log, paper summaries, concept graph, usage telemetry
 
-**Export (Phase 3 -- complete):**
+### Export (complete)
+
 - DOCX with publisher templates (template cloning, SQLite registry)
-- PDF (default on) via DOCX->PDF or HTML fallback
+- PDF via DOCX-to-PDF or HTML fallback (explicit warning on fallback)
 - PPTX with professional template
 - Markdown with Unicode chemical subscripts
 
-**Hierarchical Retrieval (Phase 2b -- implemented, PageIndex-inspired):**
-- PDF TOC extraction via fitz.get_toc() for better section structure
-- Chunk-level semantic queries (query_chunks) on existing ChromaDB collection
-- Section summaries: extractive (default, free) or LLM (opt-in, ~$0.002/paper)
-- Section summary embeddings in dedicated ChromaDB collection
-- `read_section` tool: mid-granularity reading (~5KB per section)
-- Progressive disclosure: get_paper (200 chars) -> digest (1.5KB) -> read_section (5KB) -> deep_read (70KB)
-- `--strategy hierarchical`: 3-level cascade (paper -> section -> chunk)
-- `/generate-hierarchical` skill: digest all, drill selectively
+### MCP Server (complete)
 
-**MCP Server (Phase 4 -- implemented):**
-- 25+ tools: search_papers, get_paper, list_papers, deep_read, read_section,
-  get_sections, get_graph_metrics, get_corpus_summary, scan_all_abstracts,
-  read_paper_digest, get_paper_vibes, find_corpus_gaps, find_synthesis_opportunities,
-  get_frontier_exploration_order, suggest_next_papers, find_jump_target,
-  evaluate_coverage, get_coverage_gaps, get_reading_log_text, save_reading_log,
-  ingest_paper
-- `.mcp.json` configured for Claude Code integration
+- 25+ tools exposed; `.mcp.json` configured for Claude Code integration
+- `ingest_paper` tool follows `ok/error` envelope contract
 
-**Refactor progress (current wave):**
-- Run-scoped state via `RunContext`: reading log, paper summaries, and concept graph
-  no longer rely on process-global mutable session state
-- `deep_read` / digest lookup made more robust against display-name matching
-- JSON-oriented tools now expose clearer `ok/error` envelopes, including `ingest_paper`
-- The two-agent, scripted, and fast generation routes now share the same
-  writer handoff built from `ResearchNotes` plus a common citation/instruction layer
-- Fast generation now converts precomputed paper context into `ResearchNotes`
-  with evidence excerpts instead of using its own writer-only prompt format
-- Export logs an explicit warning when DOCX-to-PDF conversion fails and the
-  workflow falls back to HTML-to-PDF
-- Ingestion now has a public service boundary: CLI and agent tools call
-  `ingest/service.py` and `ingest/corpus_refresh.py` instead of reaching
-  into private helpers in `ingest/registry.py`
-- `ingest/registry.py` now behaves as a compatibility shim rather than the
-  primary orchestration surface
-- `RunContext` now records phase-level usage telemetry and run warnings so
-  token/time behavior is attributable across agent, scripted, and fast routes
+### Wiki Building-Block Modules (complete)
 
-**Testing: 303 unit tests, all passing.**
+All modules in `src/wikify/wiki/` are implemented and tested:
 
-### CLI Commands
+| Module | Purpose |
+|--------|---------|
+| `wiki/persona.py` | Domain persona generation and DB caching (`DomainPersona` table) |
+| `wiki/mapreduce.py` | Map (haiku per source) + reduce (sonnet to article body) + coverage recording |
+| `wiki/maintenance.py` | Three-tier updates: additive, revisionary, structural audit |
+| `wiki/builder.py` | Article file I/O, slugify, hierarchical index generation, unanswered-question log |
+| `wiki/linker.py` | Cross-reference pass: adds `[[wikilinks]]` and See Also sections |
+| `wiki/sitemap.py` | `SitemapEntry`/`WikiSitemap` data contracts + exploration agent (optional, secondary role) |
+| `wiki/agent.py` | `build_wiki_from_sitemap`, `build_article_from_entry`, `build_wiki_article` |
+
+Data models for wiki in SQLite (`store/models.py`):
+`WikiArticle`, `DomainPersona`, `SourceCoverage` -- all implemented.
+
+### CLI (writing pipeline, wiki building blocks)
 
 | Command | Status | Description |
 |---|---|---|
-| `scholarforge ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (--parallel, --workers) |
-| `scholarforge refresh` | Working | Recompute all batch signals + regenerate vault |
-| `scholarforge stats` | Working | Show paper/chunk/figure counts |
-| `scholarforge graph` | Working | Show PageRank, centrality, hub/bridge/frontier |
-| `scholarforge generate "prompt"` | Working | Generate paper (--strategy snowball, --journal) |
-| `scholarforge slides "topic"` | Working | Generate PPTX presentation |
-| `scholarforge chat` | Working | Interactive literature Q&A |
-| `scholarforge mcp` | Working | Launch MCP server for Claude Code |
-| `scholarforge templates list` | Working | Show available DOCX/LaTeX templates |
-| `scholarforge templates import` | Working | Import a .docx as reusable template |
-| `scholarforge templates download` | Working | Auto-download publisher templates |
+| `wikify ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (--parallel, --workers) |
+| `wikify refresh` | Working | Recompute all batch signals + regenerate vault |
+| `wikify stats` | Working | Show paper/chunk/figure counts |
+| `wikify graph` | Working | Show PageRank, centrality, hub/bridge/frontier |
+| `wikify generate "prompt"` | Working | Generate paper (--strategy, --journal) |
+| `wikify evaluate <file>` | Working | PI-style + automated quality review |
+| `wikify revise <file>` | Working | Targeted revision of weakest section |
+| `wikify slides "topic"` | Working | Generate PPTX presentation |
+| `wikify chat` | Working | Interactive literature Q&A |
+| `wikify mcp` | Working | Launch MCP server for Claude Code |
+| `wikify templates list` | Working | Show available DOCX/LaTeX templates |
+| `wikify templates import` | Working | Import a .docx as reusable template |
+| `wikify templates download` | Working | Auto-download publisher templates |
+| `wikify wiki init` | Working | Bootstrap wiki via sitemap pipeline |
+| `wikify wiki expand` | Working | Expand stub/draft article to full |
+| `wikify wiki sync` | Working | Update stale articles after new ingest |
+| `wikify wiki audit` | Working | Structural health report (split/merge/orphan/drift) |
+| `wikify wiki health` | Working | Orphan, staleness, and synthesis gap report |
 
-## Remaining Work
+**Testing: 303 unit tests, all passing.**
 
-### High Priority (from hierarchical benchmark findings)
-- [ ] **Corpus expansion**: ingest 15-20 papers in 2D material + ALD memristor space (MoS₂/WS₂/MoTe₂ + ALD). Phase 4 devil's advocate consistently finds this territory but corpus is too thin to fill it.
-- [ ] **Falsifiable prediction in skill**: add required step before writing -- "state one quantitative prediction: if X (ALD parameter), then Y (neuromorphic metric) changes by Z because (mechanism), falsifiable by the experiment in the research agenda." PI flagged this as the gap between 8.9 and 9.5.
-- [ ] **LLM-as-PI as standard eval step**: automate as `scholarforge evaluate --pi <review.md>` or integrate into `comprehensive_quality_report()`. Automated metrics miss #1 review by PI score -- PI eval must be first-class.
-- [ ] **Metric recalibration**: topic_coverage is overweighted; bridge_vectors underweighted. Add synthesis sentence density metric (sentences citing 2+ papers with a conclusion neither stated alone) -- this directly measures what the PI scores highest.
-- [ ] Citation-only PageRank: separate citation authority from embedding similarity
-- [ ] Seed selection: #1 PageRank + #2-3 greedy coverage (orthogonal views)
+---
 
-### Medium Priority
-- [ ] **Phase 4 domain-aware pre-seeding**: derive blind spots from corpus (missing topics in top papers) rather than generic list. Promise-delivery check: verify each announced territory is actually populated before finalising draft.
-- [ ] **Iterative section refinement**: generate full draft → LLM-as-PI → identify weakest section → targeted rewrite with search_papers → re-evaluate. Feasible with existing tools.
-- [ ] **Topic coverage vocabulary audit**: current 236-topic vocabulary contains noise (filler phrases, DOI fragments, duplicate concepts). Needs cleaning before metric weight changes.
-- [ ] LaTeX export with .cls files and BibTeX integration
-- [ ] Ollama support for fully offline generation
-- [ ] Talk-to-corpus mode: same tools, conversational output
-- [ ] Coverage metric optimization: ANN query instead of brute-force at 25k+ chunks
+## What is In Progress
 
-### Low Priority
-- [ ] Claims extraction (JIT)
-- [ ] Note model + FTS5 search
-- [ ] Attention pooling for paper vibes (learn which chunks matter)
-- [ ] GPU embedding support for 17x speedup
+### Wikipedia/Epoch Model (design complete, implementation not started)
 
-### Future Phase: Output Promotion
-- [ ] `/promote` command: flip Paper.origin from "generated" to "corpus"
-- [ ] Re-chunk, embed, integrate into citation graph
-- [ ] "Draft" intermediate state between generated and corpus
+The authoritative design is `docs/design/wiki-wikipedia-model.md`. The approach is
+**concept-first epochs**: the agent reads the corpus, discovers named concepts, writes
+Wikipedia-style articles, and iterates until convergence. This replaces the sitemap-first
+approach as the primary wiki-building pipeline (the sitemap remains available as an optional
+user-directed focus tool).
+
+The epoch model requires four new modules plus a CLI command and an ingest hook. None of
+these exist yet -- see "Not Started" below.
+
+---
+
+## What is Not Started
+
+### New Wiki Modules (epoch model)
+
+| Module | Purpose | Key classes/functions |
+|--------|---------|----------------------|
+| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline | `discover_concepts(paper_ids)`, `merge_concept_records()` |
+| `wiki/concept_graph.py` | Co-occurrence graph, importance scoring, relation classification | `build_concept_graph()`, `score_importance()`, `classify_relations()` |
+| `wiki/article.py` | Wikipedia-format article writer (concept-aware, uses `ConceptRecord` + graph neighbors) | `write_concept_article(concept_record, neighbors, domain)` |
+| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, convergence tracking, trigger hooks | `run_epoch()`, `run_until_convergence()`, `check_convergence()` |
+
+### CLI
+
+- `wikify wiki epoch` -- run one epoch (discovery + articles + cross-ref + index)
+- `wikify wiki epoch --n N` -- run N epochs
+- `wikify wiki epoch --until-convergence` -- run until convergence criteria met
+- `wikify wiki epoch --status` -- show epoch log
+- `wikify wiki epoch --on-ingest` -- auto-trigger epoch after ingest
+
+### Ingest Hook
+
+- Bump epoch counter when new files are ingested
+- Optionally auto-trigger a new epoch pass
+
+---
+
+## Known Issues and Tech Debt
+
+- **Sitemap-first vs epoch model**: `wiki init` still uses the sitemap pipeline (exploration
+  agent + structured JSON plan). The epoch model (`wiki epoch`) does not yet exist. Both
+  pipelines will coexist: sitemap for user-directed topic focus, epoch for autonomous discovery.
+- **Topic coverage vocabulary**: 268 terms contain noise (filler phrases, DOI fragments).
+  Needs cleaning before metric weight changes are meaningful.
+- **Metric recalibration**: `topic_coverage` is overweighted; `bridge_vectors` is underweighted.
+  A synthesis sentence density metric (sentences citing 2+ papers with a joint conclusion)
+  would better capture what PI reviewers score highest.
+- **Falsifiable prediction step**: generation skill does not yet require a quantitative
+  falsifiable prediction before writing. PI feedback identifies this as the gap between
+  an 8.9 and 9.5 score.
+- **Corpus gaps**: the current 206-paper ALD/memristor corpus is thin in the 2D material +
+  ALD memristor space (MoS2/WS2/MoTe2 + ALD). Phase 4 devil's advocate consistently finds
+  this territory but cannot fill it.
+- **Citation-only PageRank**: current PageRank mixes citation and embedding similarity.
+  A citation-only graph would give cleaner authority signals.
+- **LaTeX export**: not yet implemented.
+- **Ollama support**: offline generation via Ollama is planned but not implemented.
+
+---
 
 ## Benchmarks (206-Paper Corpus)
 
@@ -156,48 +186,25 @@ cross-paper synthesis.
 | Ingestion time | ~10 min (206 papers, 10 workers) |
 | Review generation | 3-5 min (enhanced hybrid strategy) |
 
-### Strategy Benchmark (7 quality metrics, 9 strategies tested)
+### Best Strategy Results (PageIndex Hierarchical Benchmark)
 
-| Strategy | Composite | Frontier | Bridge | Gaps | Chain | Time |
-|----------|-----------|----------|--------|------|-------|------|
-| random_walk | **0.489** | **0.910** | 9% | 0.008 | **0.515** | 16m |
-| **enhanced_hybrid** | **0.459** | 0.738 | **15%** | 0.007 | 0.418 | **4.4m** |
-| gap_aware | 0.447 | 0.767 | 8% | **0.012** | 0.460 | 4.5m |
-| hybrid | 0.445 | 0.587 | **17%** | 0.004 | 0.446 | 4.75m |
-| greedy_v2 | 0.420 | 0.605 | 5% | 0.000 | 0.542 | 3.4m |
-| snowball_v4 | 0.347 | 0.269 | 8% | 0.012 | 0.388 | 24m |
+| Strategy | Composite | Frontier | Arg Coherence | PI Score |
+|----------|-----------|----------|---------------|----------|
+| hier_hybrid_v3 | 0.621 | 1.000 | 0.393 | 8.9/10 |
+| hier_hybrid_v1 | 0.599 | 1.000 | 0.375 | 9.1/10 |
+| hier_gap_first | 0.611 | 1.000 | 0.482 | 8.8/10 |
 
-Key: enhanced hybrid achieves 94% of random walk quality in 28% of the time.
+Key insight: automated composite and PI scores diverge at the top. The composite cannot
+detect cross-community synthesis or conclusion-level insights that PI reviewers reward most.
 
-### PageIndex Hierarchical Benchmark (5 strategies, automated + PI scores)
-
-Hierarchical retrieval adds 3-level progressive disclosure: paper digest → section summary → full section.
-
-| Strategy | Composite | Frontier | Arg Coherence | Topic Cov | Citations | PI Score |
-|----------|-----------|----------|---------------|-----------|-----------|----------|
-| s5_gap_structured | **0.634** | 0.967 | 0.383 | 28.4% | 80 | 7.8/10 |
-| hier_gap_first | 0.611 | **1.000** | **0.482** | 17.8% | 10 | 8.8/10 |
-| **hier_hybrid_v3** | **0.621** | **1.000** | 0.393 | 16.9% | 47 | **8.9/10** |
-| hier_hybrid_v1 | 0.599 | **1.000** | 0.375 | 19.5% | 34 | 9.1/10 |
-| hierarchical_v1 | 0.596 | **1.000** | 0.392 | 17.8% | 28 | 6.5/10 |
-| s5_injected | 0.572 | 0.677 | 0.364 | **31.8%** | 40 | 7.0/10 |
-| hier_broad | 0.555 | 0.885 | 0.348 | 23.3% | 70 | 8.3/10 |
-
-Key findings:
-- **Best composite**: hier_hybrid_v3 (0.621, best hierarchical variant) with highest bridge ratio (21.9%) and frontier shift (0.624) in the entire benchmark
-- **Best PI score**: hier_hybrid_v1 (9.1/10) — four-role 2D ALD taxonomy; hier_hybrid_v3 (8.9/10) — strongest Nature Electronics submission candidate (scope + prose discipline)
-- **Metric vs PI diverge at the top**: composite ranks s5_gap_structured #1 (0.634), PI ranks hier_hybrid_v1 #1 (9.1); metric cannot detect cross-community synthesis or conclusion-level insights
-- **Gap-first + devil's advocate = best overall**: gaps first forces a thesis; devil's advocate (Phase 4) prevents premature termination before the review encounters scope-challenging results
-- **Qualitative stopping criteria** improved prose discipline and arg coherence (v2 chain=0.550, best ever) but narrowed corpus; devil's advocate phase restored scope without sacrificing discipline
-- **Key insight from v3 conclusion**: "Analog linearity is primarily an oxygen diffusion rate problem at the bilayer interface, not a switching oxide property" — PI: "a grant reviewer would underline this sentence"
+---
 
 ## Resume Instructions
 
-1. Read `CLAUDE.md` for working conventions
-2. Read this file for current status
-3. Read `docs/architecture.md` for module layout and strategy design
-4. Read `docs/design/research-loop-insights.md` for benchmark details
-5. Code: `src/scholarforge/`; vault output: `data/vault/`
-6. MCP: restart Claude Code to load `.mcp.json`, then use MCP tools
-7. Key modules: `evaluate/quality.py` (metrics), `evaluate/frontier.py` (exploration),
-   `evaluate/strategies.py` (greedy/max-distance/spectral), `agent/tools.py` (20+ tools)
+1. Read `CLAUDE.md` for working conventions.
+2. Read this file for current status.
+3. Read `docs/architecture.md` for module layout and data flow.
+4. Read `docs/design/wiki-wikipedia-model.md` for the epoch model design spec.
+5. Read `docs/design/wiki-implementation-plan.md` for what is implemented and what needs building.
+6. Code: `src/wikify/`; wiki output: `data/wiki/`; vault output: `data/vault/`.
+7. MCP: restart Claude Code to load `.mcp.json`, then use MCP tools.

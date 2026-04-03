@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from scholarforge.generate.artifact_types.registry import ARTIFACT_TYPES, get_artifact_type
-from scholarforge.generate.field_guide import detect_field, load_field_guide
+from wikify.generate.artifact_types.registry import ARTIFACT_TYPES, get_artifact_type
+from wikify.generate.field_guide import detect_field, load_field_guide
 
 # ── Auto-mock the database so no real DB is needed ──────────────────────────
 
@@ -14,7 +14,7 @@ from scholarforge.generate.field_guide import detect_field, load_field_guide
 def _no_db(monkeypatch):
     """Patch out DB call so all tests run without a populated database."""
     monkeypatch.setattr(
-        "scholarforge.generate.persona._get_top_topics",
+        "wikify.generate.persona._get_top_topics",
         lambda limit=5: [],
     )
 
@@ -56,21 +56,21 @@ FIELD_MARKERS: dict[str, str] = {
 
 
 def test_base_style_guide_contains_banned_words():
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(user_prompt="test")
     assert "Banned Words" in prompt, "Expected 'Banned Words' section in base style guide"
 
 
 def test_base_style_guide_contains_nominalizations():
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(user_prompt="test")
     assert "nominalizations" in prompt, "Expected 'nominalizations' in base style guide"
 
 
 def test_base_style_guide_contains_em_dashes():
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(user_prompt="test")
     assert "em-dashes" in prompt or "em-dash" in prompt, (
@@ -79,7 +79,7 @@ def test_base_style_guide_contains_em_dashes():
 
 
 def test_base_style_guide_contains_known_new_contract():
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(user_prompt="test")
     assert "Known-new contract" in prompt, "Expected 'Known-new contract' in base style guide"
@@ -90,7 +90,7 @@ def test_base_style_guide_contains_known_new_contract():
 
 @pytest.mark.parametrize("type_id,marker", list(ARTIFACT_TYPE_MARKERS.items()))
 def test_artifact_type_marker_in_prompt(type_id: str, marker: str):
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(artifact_type_id=type_id, user_prompt="test")
     assert marker in prompt, f"Artifact type '{type_id}' prompt missing expected marker '{marker}'"
@@ -112,7 +112,7 @@ def test_field_detection(expected_field: str, trigger: str):
 
 @pytest.mark.parametrize("field,trigger", list(FIELD_TRIGGERS.items()))
 def test_field_guide_injected_into_prompt(field: str, trigger: str):
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     marker = FIELD_MARKERS[field]
     prompt = build_persona(user_prompt=trigger)
@@ -130,7 +130,7 @@ def test_detect_field_generic_fallback():
 
 
 def test_build_persona_generic_still_has_style_guide():
-    from scholarforge.generate.persona import build_persona
+    from wikify.generate.persona import build_persona
 
     prompt = build_persona(user_prompt="random xyz")
     assert "Banned Words" in prompt, (
@@ -142,21 +142,21 @@ def test_build_persona_generic_still_has_style_guide():
 
 
 def test_generation_prompt_contains_deep_read():
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
     assert "deep_read" in prompt, "Expected 'deep_read' tool instruction in generation prompt"
 
 
 def test_generation_prompt_contains_citation_markers():
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
     assert "[REF:" in prompt, "Expected '[REF:' citation instruction in generation prompt"
 
 
 def test_generation_prompt_contains_list_papers():
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
     assert "get_frontier_exploration_order" in prompt, (
@@ -165,7 +165,7 @@ def test_generation_prompt_contains_list_papers():
 
 
 def test_generation_prompt_contains_digest_first_guidance():
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
     assert "read_paper_digest" in prompt, "Expected digest-first instruction in generation prompt"
@@ -173,7 +173,7 @@ def test_generation_prompt_contains_digest_first_guidance():
 
 
 def test_explorer_prompt_prefers_hierarchical_reads():
-    from scholarforge.agent.defaults import build_explorer_prompt
+    from wikify.agent.defaults import build_explorer_prompt
 
     prompt = build_explorer_prompt("ALD memristors")
     assert "read_paper_digest" in prompt
@@ -208,8 +208,8 @@ def test_field_guide_non_empty(field: str):
 
 
 def test_journal_profile_in_prompt():
-    from scholarforge.export.journal_profile import load_journal_profile
-    from scholarforge.generate.persona import build_persona
+    from wikify.export.journal_profile import load_journal_profile
+    from wikify.generate.persona import build_persona
 
     journal_profile = load_journal_profile("Advanced Functional Materials")
     prompt = build_persona(journal_profile=journal_profile)
@@ -219,7 +219,7 @@ def test_journal_profile_in_prompt():
 
 
 def test_journal_profile_name_via_build_generation_prompt():
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(journal="Advanced Functional Materials")
     assert "Advanced Functional Materials" in prompt, (
@@ -232,7 +232,7 @@ def test_journal_profile_name_via_build_generation_prompt():
 
 def test_combined_ald_lit_review_afm():
     """Real-world scenario: ALD lit review for Advanced Functional Materials."""
-    from scholarforge.agent.defaults import build_generation_prompt
+    from wikify.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(
         artifact_type_id="lit_review",
@@ -291,7 +291,7 @@ def test_generic_guide_loaded_and_nonempty():
 
 def test_specific_field_gets_only_its_guide():
     """When a specific field is detected, only that field's guide is used (no generic)."""
-    from scholarforge.generate.field_guide import get_field_instructions
+    from wikify.generate.field_guide import get_field_instructions
 
     instructions = get_field_instructions("ALD thin film memristor nanoparticle", [])
     assert "Field Guide: materials_science" in instructions
@@ -302,7 +302,7 @@ def test_specific_field_gets_only_its_guide():
 
 def test_generic_only_when_no_field_detected():
     """When no field matches, generic guide is the fallback."""
-    from scholarforge.generate.field_guide import get_field_instructions
+    from wikify.generate.field_guide import get_field_instructions
 
     instructions = get_field_instructions("random topic xyz", [])
     assert "Cross-Field Best Practices" in instructions
@@ -311,7 +311,7 @@ def test_generic_only_when_no_field_detected():
 
 def test_all_specific_fields_exclude_generic():
     """For every detectable field, only the specific guide is returned."""
-    from scholarforge.generate.field_guide import get_field_instructions
+    from wikify.generate.field_guide import get_field_instructions
 
     for trigger in FIELD_TRIGGERS.values():
         instructions = get_field_instructions(trigger, [])

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from scholarforge.wiki.maintenance import (
+from wikify.wiki.maintenance import (
     StructuralReport,
     _extract_established_section,
     _strip_frontmatter,
@@ -29,7 +29,7 @@ def _make_extraction(
     extraction="YES: Key finding here.",
     is_relevant=True,
 ):
-    from scholarforge.wiki.mapreduce import SourceExtraction
+    from wikify.wiki.mapreduce import SourceExtraction
 
     return SourceExtraction(
         source_id=source_id,
@@ -140,7 +140,7 @@ class TestDetectContradiction:
     def test_returns_false_for_short_extraction(self):
         """Short extractions (<=50 chars) never trigger contradiction."""
         # No encode call needed -- short extraction returns immediately
-        with patch("scholarforge.wiki.maintenance._store", _mock_store([])):
+        with patch("wikify.wiki.maintenance._store", _mock_store([])):
             result = detect_contradiction("some body", "short")
         assert result is False
 
@@ -150,7 +150,7 @@ class TestDetectContradiction:
         e2 = np.array([0.0, 1.0, 0.0])  # orthogonal -> cosine = 0.0
 
         mock_st = _mock_store([e1, e2])
-        with patch("scholarforge.wiki.maintenance._store", mock_st):
+        with patch("wikify.wiki.maintenance._store", mock_st):
             result = detect_contradiction(SAMPLE_BODY, "A" * 60)
 
         assert result is True
@@ -162,7 +162,7 @@ class TestDetectContradiction:
         e2 = np.array([0.99, 0.51, 0.31])  # very similar
 
         mock_st = _mock_store([e1, e2])
-        with patch("scholarforge.wiki.maintenance._store", mock_st):
+        with patch("wikify.wiki.maintenance._store", mock_st):
             result = detect_contradiction(SAMPLE_BODY, "B" * 60)
 
         assert result is False
@@ -171,7 +171,7 @@ class TestDetectContradiction:
         """If body is empty, established section is also empty -> skip."""
         # detect_contradiction returns False immediately when established is empty
         mock_st = _mock_store([])
-        with patch("scholarforge.wiki.maintenance._store", mock_st):
+        with patch("wikify.wiki.maintenance._store", mock_st):
             result = detect_contradiction("", "A" * 60)
 
         assert result is False
@@ -191,7 +191,7 @@ class TestAdditiveUpdate:
         ]
         persona = "You are a senior ALD researcher."
 
-        with patch("scholarforge.llm.client.complete") as mock_complete:
+        with patch("wikify.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Updated body content"
             result = additive_update(art_file, extractions, persona, model=None)
 
@@ -211,7 +211,7 @@ class TestAdditiveUpdate:
         irrelevant = _make_extraction(is_relevant=False)
         relevant = _make_extraction(extraction="YES: Good finding.", is_relevant=True)
 
-        with patch("scholarforge.llm.client.complete") as mock_complete:
+        with patch("wikify.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Updated"
             additive_update(art_file, [irrelevant, relevant], "persona", model=None)
 
@@ -237,7 +237,7 @@ class TestRevisionaryUpdate:
         ]
         persona = "You are a senior ALD researcher."
 
-        with patch("scholarforge.llm.client.complete") as mock_complete:
+        with patch("wikify.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Revised body with WARNING marker"
             result = revisionary_update(art_file, extractions, persona, model=None)
 
@@ -255,7 +255,7 @@ class TestRevisionaryUpdate:
 
         extractions = [_make_extraction(is_relevant=True)]
 
-        with patch("scholarforge.llm.client.complete") as mock_complete:
+        with patch("wikify.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Revised"
             revisionary_update(art_file, extractions, "persona", model=None)
 
@@ -301,8 +301,8 @@ class TestStructuralAudit:
         article = _make_article("slug_heavy", source_ids=["s1", "s2"])
 
         with (
-            patch("scholarforge.store.db.get_session") as mock_gs,
-            patch("scholarforge.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock
@@ -354,8 +354,8 @@ class TestStructuralAudit:
         article = _make_article("slug_empty", source_ids=["s1"])  # only 1 source
 
         with (
-            patch("scholarforge.store.db.get_session") as mock_gs,
-            patch("scholarforge.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock
@@ -410,8 +410,8 @@ class TestStructuralAudit:
         article.file_path = str(art_file)
 
         with (
-            patch("scholarforge.store.db.get_session") as mock_gs,
-            patch("scholarforge.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock

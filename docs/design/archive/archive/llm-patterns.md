@@ -109,7 +109,7 @@ def complete_structured(
     On validation failure, appends the error to the conversation and retries.
     Inspired by Instructor's automatic retry and DSPy's assertion backtracking.
     """
-    from scholarforge.llm.client import complete
+    from wikify.llm.client import complete
 
     # Inject schema instructions into the system message
     schema_instructions = schema_to_prompt_instructions(response_model)
