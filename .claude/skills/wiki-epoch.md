@@ -129,6 +129,17 @@ For each concept needing an article (article_status == "none"), build a brief:
 - concept name, type, definition, importance
 - neighbor concepts from the graph (top 10)
 - extracted parameters (top 5)
+- **evidence quotes** with paper display names (top 10)
+
+```python
+from wikify.wiki.builder import build_evidence_brief
+
+brief["evidence"] = build_evidence_brief(concept.id, max_evidence=10)
+# Returns: [{"paper_id": "...", "paper_display": "Yang 2011 - Dopant Control...",
+#            "quote": "exact text from source", "chunk_id": "..."}]
+```
+
+The writing agent uses these to write evidence-backed claims with inline `[REF:paper_display]` citations.
 
 ### Step 3b: Batch and write
 
@@ -136,24 +147,29 @@ Split concepts into batches of 10. Launch **balanced-tier** subagents in paralle
 
 Each agent writes a Wikipedia-style article (300-500 words) per concept:
 - Introduction (2-3 sentences, no heading)
-- ## What Is Known — established facts, [[wikilinks]] to neighbors
-- ## Where the Field Disagrees — contested points
+- ## What Is Known — established facts, [[wikilinks]] to neighbors, cite sources with `[REF:Author Year - Title]`
+- ## Where the Field Disagrees — contested points, cite both sides
 - ## Open Questions — unresolved
 - ## Parameters — markdown table (if parameters exist)
 
-Rules: one concept per sentence, no em-dashes, no meta-commentary.
+Rules: one concept per sentence, no em-dashes, no meta-commentary. Every factual claim must have a `[REF:...]` citation from the evidence provided.
 
-### Step 3c: Save articles to disk
+### Step 3c: Save articles and resolve sources
 
 ```python
-from wikify.wiki.builder import article_path, write_article, generate_parameter_table
+from wikify.wiki.builder import article_path, write_article, generate_parameter_table, resolve_all_article_sources
 from pathlib import Path
 
 wiki_dir = Path("data/wiki")
 # For each concept + article body:
 #   fpath = article_path(wiki_dir, "concepts", concept.id)
-#   write_article(fpath, concept.name, body, source_ids, [concept.concept_type], "full", "balanced")
+#   write_article(fpath, concept.name, body, [], [concept.concept_type], "full", "balanced")
 #   Update concept.article_status = "full" and concept.article_path in DB
+
+# After all articles are written, resolve [REF:] markers to paper IDs:
+resolve_all_article_sources(wiki_dir)
+# This scans all articles, finds [REF:Author Year - Title] markers,
+# resolves them to paper IDs, and updates frontmatter sources: field.
 ```
 
 ## Pass 4: Cross-Linking

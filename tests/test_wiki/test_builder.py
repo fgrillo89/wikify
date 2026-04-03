@@ -201,3 +201,45 @@ def test_generate_wiki_index_with_articles(tmp_path):
     result = generate_wiki_index(tmp_path)
     assert "Hafnium Oxide" in result
     assert "concepts" in result.lower()
+
+
+# ── resolve_article_sources ─────────────────────────────────────────────────
+
+
+def test_resolve_article_sources_updates_frontmatter(tmp_path):
+    """REF markers are resolved to paper IDs in frontmatter."""
+    from unittest.mock import MagicMock, patch
+
+    from wikify.wiki.builder import resolve_article_sources
+
+    # Write an article with a [REF:] marker
+    article = tmp_path / "test.md"
+    article.write_text(
+        "---\ntitle: Test\nsources:\n  []\n---\n\nALD is a technique [REF:Yang 2011].\n",
+        encoding="utf-8",
+    )
+
+    # Mock Paper with matching display name
+    mock_paper = MagicMock()
+    mock_paper.id = "abc123"
+    mock_paper.display_name.return_value = "Yang 2011 - Dopant Control"
+    mock_paper.parsed_authors = ["Yang"]
+    mock_paper.year = 2011
+
+    mock_session = MagicMock()
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    exec_result = MagicMock()
+    exec_result.all.return_value = [mock_paper]
+    mock_session.exec.return_value = exec_result
+
+    with patch("wikify.store.db.get_session", return_value=mock_session):
+        resolved = resolve_article_sources(article)
+
+    assert len(resolved) == 1
+    assert "abc123" in resolved
+
+    # Check frontmatter was updated
+    content = article.read_text(encoding="utf-8")
+    assert "abc123" in content
+    assert "[]" not in content

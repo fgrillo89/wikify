@@ -156,6 +156,166 @@ def find_stale_articles(
 
 
 # ---------------------------------------------------------------------------
+# Article provenance: evidence enrichment + source resolution
+# ---------------------------------------------------------------------------
+
+
+def build_evidence_brief(concept_id: str, max_evidence: int = 10) -> list[dict]:
+    """Build a list of evidence entries for an article writing brief.
+
+    Queries ConceptEvidence for the concept and returns enriched entries
+    with paper display names for the writing agent to cite.
+
+    Args:
+        concept_id: ConceptRecord.id (slug).
+        max_evidence: Maximum evidence entries to include.
+
+    Returns:
+        List of dicts with: paper_id, paper_display, quote, chunk_id
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import ConceptEvidence, Paper
+
+    with get_session() as session:
+        evidence_rows: list[ConceptEvidence] = list(
+            session.exec(
+                select(ConceptEvidence)
+                .where(ConceptEvidence.concept_id == concept_id)
+                .where(ConceptEvidence.verified == True)  # noqa: E712
+                .limit(max_evidence)
+            ).all()
+        )
+
+    if not evidence_rows:
+        return []
+
+    # Build paper display name lookup
+    paper_ids = list({e.paper_id for e in evidence_rows})
+    with get_session() as session:
+        paper_display: dict[str, str] = {}
+        for pid in paper_ids:
+            p = session.get(Paper, pid)
+            if p is not None:
+                paper_display[pid] = p.display_name()
+
+    return [
+        {
+            "paper_id": e.paper_id,
+            "paper_display": paper_display.get(e.paper_id, e.paper_id[:16]),
+            "quote": e.evidence_quote,
+            "chunk_id": e.chunk_id,
+        }
+        for e in evidence_rows
+    ]
+
+
+def resolve_article_sources(article_path_obj: Path) -> list[str]:
+    """Scan an article for [REF:display_name] markers and resolve to paper IDs.
+
+    Reads the article body, finds all [REF:...] markers, looks up each
+    display name against the Paper table, and returns the matching paper IDs.
+
+    Also updates the article's YAML frontmatter `sources:` field with
+    the resolved paper IDs.
+
+    Args:
+        article_path_obj: Path to the .md article file.
+
+    Returns:
+        List of resolved paper IDs.
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import Paper
+
+    if not article_path_obj.exists():
+        return []
+
+    text = article_path_obj.read_text(encoding="utf-8", errors="replace")
+
+    # Find all [REF:...] markers
+    ref_pattern = re.compile(r"\[REF:([^\]]+)\]")
+    ref_names = ref_pattern.findall(text)
+
+    if not ref_names:
+        return []
+
+    # Build display_name -> paper_id lookup
+    with get_session() as session:
+        all_papers: list[Paper] = list(session.exec(select(Paper)).all())
+
+    display_to_id: dict[str, str] = {}
+    for p in all_papers:
+        display_to_id[p.display_name()] = p.id
+        # Also index by partial matches (first author + year)
+        authors = p.parsed_authors
+        first_author = authors[0].split()[-1] if authors else ""
+        if first_author and p.year:
+            display_to_id[f"{first_author} {p.year}"] = p.id
+
+    # Resolve each REF marker
+    resolved_ids: list[str] = []
+    for ref_name in ref_names:
+        ref_clean = ref_name.strip()
+        # Try exact match first
+        pid = display_to_id.get(ref_clean)
+        if pid is None:
+            # Try fuzzy: check if any display name starts with the ref
+            for display, paper_id in display_to_id.items():
+                if display.startswith(ref_clean) or ref_clean.startswith(display.split(" - ")[0]):
+                    pid = paper_id
+                    break
+        if pid and pid not in resolved_ids:
+            resolved_ids.append(pid)
+
+    if not resolved_ids:
+        return []
+
+    # Update frontmatter sources
+    # Simple approach: replace the sources line in the frontmatter
+    sources_yaml = "\n".join(f"  - {sid}" for sid in resolved_ids)
+    text = re.sub(
+        r"sources:\n  \[\]",
+        f"sources:\n{sources_yaml}",
+        text,
+    )
+    article_path_obj.write_text(text, encoding="utf-8")
+
+    logger.info(
+        "resolve_article_sources: %s -> %d sources resolved",
+        article_path_obj.name,
+        len(resolved_ids),
+    )
+    return resolved_ids
+
+
+def resolve_all_article_sources(wiki_dir: Path) -> int:
+    """Resolve [REF:] markers to paper IDs for all wiki articles.
+
+    Args:
+        wiki_dir: Root wiki directory.
+
+    Returns:
+        Total number of source links resolved across all articles.
+    """
+    total = 0
+    for md_file in wiki_dir.rglob("*.md"):
+        if md_file.name.startswith("_"):
+            continue
+        resolved = resolve_article_sources(md_file)
+        total += len(resolved)
+
+    logger.info(
+        "resolve_all_article_sources: %d total source links resolved",
+        total,
+    )
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Parameter table generation
 # ---------------------------------------------------------------------------
 
