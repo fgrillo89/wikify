@@ -215,6 +215,204 @@ def generate_parameter_table(concept_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Index condensation (inspired by ByteRover Context Tree)
+# ---------------------------------------------------------------------------
+
+
+def generate_domain_condensation(
+    wiki_dir: Path,
+    domain_label: str,
+    concept_ids: list[str],
+) -> Path:
+    """Generate a condensed _index.md for a domain directory.
+
+    Creates a compact summary of all concepts in the domain, suitable for
+    injecting into LLM context without loading every article. Each concept
+    gets a one-line entry with its type, importance, status, and definition.
+
+    The condensation follows ByteRover's pattern of summary files at each
+    hierarchy level, adapted for our domain/concept structure.
+
+    Args:
+        wiki_dir: Root wiki directory (e.g. data/wiki/).
+        domain_label: Domain name (used for directory and heading).
+        concept_ids: List of ConceptRecord.id values in this domain.
+
+    Returns:
+        Path to the generated _index.md file.
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import ConceptRecord, ParameterExtraction
+
+    domain_slug = slugify(domain_label)
+    domain_dir = wiki_dir / "domains" / domain_slug
+    domain_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load concepts
+    with get_session() as session:
+        concepts: list[ConceptRecord] = []
+        for cid in concept_ids:
+            c = session.get(ConceptRecord, cid)
+            if c is not None:
+                concepts.append(c)
+
+    # Sort by importance descending
+    concepts.sort(key=lambda c: c.importance, reverse=True)
+
+    # Count parameters per concept
+    param_counts: dict[str, int] = {}
+    if concepts:
+        with get_session() as session:
+            for c in concepts:
+                count = len(
+                    list(
+                        session.exec(
+                            select(ParameterExtraction).where(
+                                ParameterExtraction.concept_id == c.id
+                            )
+                        ).all()
+                    )
+                )
+                if count > 0:
+                    param_counts[c.id] = count
+
+    # Build condensed index
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        f"# {domain_label}",
+        "",
+        f"_Condensed index -- {len(concepts)} concepts -- {now}_",
+        "",
+    ]
+
+    # Stats summary
+    status_counts = {"none": 0, "stub": 0, "draft": 0, "full": 0}
+    for c in concepts:
+        key = c.article_status if c.article_status in status_counts else "none"
+        status_counts[key] += 1
+
+    type_counts: dict[str, int] = {}
+    for c in concepts:
+        if c.concept_type:
+            type_counts[c.concept_type] = type_counts.get(c.concept_type, 0) + 1
+
+    lines.append("## Overview")
+    lines.append("")
+    lines.append("| Stat | Value |")
+    lines.append("|------|-------|")
+    lines.append(f"| Total concepts | {len(concepts)} |")
+    for status, count in status_counts.items():
+        if count > 0:
+            lines.append(f"| {status} articles | {count} |")
+    if param_counts:
+        lines.append(f"| Concepts with parameters | {len(param_counts)} |")
+    lines.append("")
+
+    if type_counts:
+        lines.append(
+            "**Concept types:** "
+            + ", ".join(
+                f"{t} ({n})"
+                for t, n in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)
+            )
+        )
+        lines.append("")
+
+    # Concept table (compact: one line per concept)
+    lines.append("## Concepts")
+    lines.append("")
+    lines.append("| Concept | Type | Importance | Status | Definition |")
+    lines.append("|---------|------|------------|--------|------------|")
+
+    for c in concepts:
+        imp = f"{c.importance:.2f}" if c.importance > 0 else "-"
+        defn = (c.definition or "")[:60]
+        if len(c.definition or "") > 60:
+            defn += "..."
+        ctype = c.concept_type or "-"
+        status = c.article_status or "none"
+        lines.append(f"| [[{c.name}]] | {ctype} | {imp} | {status} | {defn} |")
+
+    lines.append("")
+
+    # Top parameters (if any)
+    if param_counts:
+        lines.append("## Key Parameters")
+        lines.append("")
+        top_param_concepts = sorted(
+            param_counts.keys(), key=lambda k: param_counts[k], reverse=True
+        )[:10]
+
+        with get_session() as session:
+            for cid in top_param_concepts:
+                params = list(
+                    session.exec(
+                        select(ParameterExtraction)
+                        .where(ParameterExtraction.concept_id == cid)
+                        .limit(3)
+                    ).all()
+                )
+                concept = session.get(ConceptRecord, cid)
+                cname = concept.name if concept else cid
+                for p in params:
+                    val = f"{p.value} {p.unit}".strip()
+                    lines.append(f"- **{cname}**: {p.parameter_name} = {val}")
+        lines.append("")
+
+    content = "\n".join(lines)
+    index_path = domain_dir / "_index.md"
+    index_path.write_text(content, encoding="utf-8")
+
+    logger.info(
+        "generate_domain_condensation: wrote %s (%d concepts, %d chars)",
+        index_path,
+        len(concepts),
+        len(content),
+    )
+    return index_path
+
+
+def generate_all_domain_condensations(wiki_dir: Path) -> int:
+    """Generate condensed _index.md for all discovered domains.
+
+    Queries DomainCluster table for all domains and generates a
+    condensation file for each.
+
+    Args:
+        wiki_dir: Root wiki directory.
+
+    Returns:
+        Number of domain index files generated.
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import DomainCluster
+
+    with get_session() as session:
+        clusters: list[DomainCluster] = list(session.exec(select(DomainCluster)).all())
+
+    if not clusters:
+        logger.info("generate_all_domain_condensations: no domains found")
+        return 0
+
+    count = 0
+    for cluster in clusters:
+        concept_ids = cluster.parsed_core_concepts + cluster.parsed_bridge_concepts
+        if concept_ids:
+            generate_domain_condensation(wiki_dir, cluster.label, concept_ids)
+            count += 1
+
+    logger.info(
+        "generate_all_domain_condensations: generated %d domain indexes",
+        count,
+    )
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Graph metrics helper (used by index generation)
 # ---------------------------------------------------------------------------
 

@@ -37,7 +37,12 @@ from wikify.wiki.article import (
     upgrade_concept_article,
     write_concept_article,
 )
-from wikify.wiki.builder import article_path, generate_wiki_index, write_article
+from wikify.wiki.builder import (
+    article_path,
+    generate_all_domain_condensations,
+    generate_wiki_index,
+    write_article,
+)
 from wikify.wiki.concept_graph import (
     build_concept_graph,
     classify_node_roles,
@@ -806,6 +811,7 @@ def run_epoch(
     logger.info("--- Pass 5: Index Rebuild + Loss (epoch=%d) ---", epoch)
 
     generate_wiki_index(_WIKI_DIR)
+    generate_all_domain_condensations(_WIKI_DIR)
 
     # Template refinement: evolve the extraction template based on gap feedback
     _, template_delta = refine_template(_WIKI_DIR, epoch, model=HAIKU_MODEL)
