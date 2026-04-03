@@ -471,3 +471,23 @@ Correctness first, then cost optimization.
 
 Steps 2 and 3 can run in parallel.  Step 4 depends on both.
 Step 5 can start once step 4 is wired.
+
+---
+
+## Relationship to the Adaptive Knowledge Engine Plan
+
+The `docs/design/adaptive-knowledge-engine.md` plan introduces two features that interact
+directly with the domain membrane model:
+
+- **Phase 2 (UCB chunk scoring)** will replace the current progressive mining frontier used
+  to determine which corpus chunks are processed each epoch. The UCB scorer incorporates
+  graph signals (which papers are linked to high-importance concepts) and novelty signals
+  (embedding distance to the nearest known concept). The domain membrane's community
+  centroids feed naturally into the novelty score, making the two designs complementary.
+
+- **Phase 3 (contradiction-driven exploration)** expands the mining frontier around papers
+  involved in detected contradictions. Bridge concepts -- which the domain membrane model
+  identifies as spanning multiple communities -- are the most likely sites for contradictions
+  (two domains may hold incompatible views on the same concept). Phase 3's citation
+  neighborhood expansion will therefore disproportionately benefit cross-domain bridge
+  concept detection and resolution.

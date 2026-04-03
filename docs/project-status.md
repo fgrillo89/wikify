@@ -87,6 +87,20 @@ and tested:
 - **Ingest hook**: bump epoch counter when new files are ingested; optionally auto-trigger a
   new epoch pass.
 
+### Planned: Adaptive Knowledge Engine
+
+The next major evolution of the Wikipedia pipeline. See `docs/design/adaptive-knowledge-engine.md`
+for the full spec. Six phases, building on each other:
+
+| Phase | What it does |
+|-------|-------------|
+| 1. Yield-based feedback | Track extraction yield per chunk; make the haiku prompt adaptive per epoch |
+| 2. UCB chunk scoring | Replace flat tier system with a UCB1-style scorer using yield + graph signals |
+| 3. Contradiction-driven exploration | Boost mining priority for papers neighboring active contradictions |
+| 4. Hierarchical taxonomy | Add IS-A parent-child relationships to the concept model and graph |
+| 5. Schema evolution | Discover new concept types that emerge from the corpus over time |
+| 6. Conceptual Nexus Model | Unify graph, embeddings, and articles into a sparse tensor representation |
+
 ---
 
 ## B. Research Paper Writing Pipeline

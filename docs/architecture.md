@@ -228,6 +228,25 @@ Model-selection schedule within Pass 3:
 The sitemap pipeline (`wiki init`) remains available as an optional alternative for
 user-directed topic focus. It is NOT the primary epoch-driven pipeline.
 
+### Planned: Conceptual Nexus Model
+
+The Adaptive Knowledge Engine plan (`docs/design/adaptive-knowledge-engine.md`) introduces
+a **Conceptual Nexus Model** as Phase 6 of the Wikipedia pipeline's next evolution. It
+unifies the three existing knowledge layers into a single queryable representation:
+
+- **Concept graph** (`wiki/concept_graph.py`) -- NetworkX DiGraph of co-occurrence relations
+- **Embedding layer** (ChromaDB `chunks` + concept definitions) -- semantic similarity
+- **Article layer** (`data/wiki/`) -- human-readable Markdown articles per concept
+
+The nexus model formalizes these as a sparse tensor `T[concept_i, concept_j, relation_k] =
+evidence_strength`, where the `ConceptRelation` table IS the tensor's non-zero entries and
+ChromaDB holds the vector projections. No new data store is added -- it is a computation
+layer over existing tables that enables structured gap detection, analogy discovery, and
+cluster coherence scoring.
+
+Phases 1-5 of the Adaptive Knowledge Engine plan (yield feedback, UCB scoring, contradiction
+exploration, hierarchical taxonomy, schema evolution) are prerequisites before Phase 6 is built.
+
 ### How Pipeline B Feeds Pipeline A (planned)
 
 Once the wiki reaches convergence (L < threshold), Pipeline A retrieval will gain a

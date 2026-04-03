@@ -498,6 +498,25 @@ Steps 5-7 depend on 1-4 being complete. Step 8 depends on step 5.
 
 ---
 
+## Next: Adaptive Knowledge Engine
+
+The six phases planned for the next evolution of the Wikipedia pipeline. Full spec:
+`docs/design/adaptive-knowledge-engine.md`.
+
+| Phase | Description | Key deliverable |
+|-------|-------------|-----------------|
+| 1. Yield-based feedback | Track extraction yield per chunk; make the haiku Pass 1 prompt adaptive per epoch based on the corpus's actual concept-type distribution | `ChunkMiningLog` yield fields; `_mining_stats.json`; adaptive prompt context block |
+| 2. UCB chunk scoring | Replace the flat tier-based mining frontier with a UCB1-style scorer combining section yield, paper yield, graph signal, contradiction bonus, novelty, and exploration bonus | `score_chunk()` in `concepts.py`; budget-allocation loop in `epoch.py` |
+| 3. Contradiction-driven exploration | Boost mining priority for papers in the citation neighborhood of detected contradictions | `ContradictionRecord` model; expansion logic in `epoch.py` |
+| 4. Hierarchical taxonomy | Extend Pass 1 extraction to detect IS-A parent-child relationships; add `parent_concept_id` to `ConceptRecord`; add Sub-topics sections to parent articles | `ConceptRecord.parent_concept_id`; hierarchy-aware dedup; IS-A edges in concept graph |
+| 5. Schema evolution | Accumulate extraction gaps over epochs; cluster them; propose and auto-accept new concept types | `ExtractionGap` and `TypeProposal` models; `wikify wiki audit --schema` |
+| 6. Conceptual Nexus Model | Formalize concept graph + embeddings + articles as a sparse tensor; add gap detection, analogy detection, and cluster coherence queries | `wiki/nexus.py`; Concept Card JSON; tensor query API |
+
+Phases 1-3 are sequential. Phase 4 can start in parallel with Phase 3. Phase 5 depends on
+Phase 1. Phase 6 requires all previous phases to be stable.
+
+---
+
 ## What Does NOT Change
 
 - `wikify generate` / `evaluate` / `revise` -- writing pipeline is untouched

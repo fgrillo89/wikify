@@ -478,6 +478,30 @@ New modules needed:
 
 ---
 
+## Relationship to the Adaptive Knowledge Engine Plan
+
+The `docs/design/adaptive-knowledge-engine.md` plan extends the epoch model in three ways
+that are directly grounded in this document's design:
+
+- **Phase 1 (yield-based feedback)** makes the Pass 1 extraction prompt adaptive per epoch.
+  The static haiku prompt described in the Epoch Structure section becomes context-aware:
+  it appends the corpus's actual concept-type distribution and a list of known false positives,
+  so the prompt improves with each epoch rather than staying fixed.
+
+- **Phase 4 (hierarchical taxonomy)** adds IS-A parent-child relationships to the concept
+  model described in the Data Model section. `ConceptRecord` gains a `parent_concept_id`
+  field. The Relationships table in each article gains a Sub-topics section for parent
+  concepts. The concept co-occurrence graph described in the Graph and Similarity Leverage
+  section gains a new directed IS-A edge type that lets parent concepts accumulate importance
+  from their children via PageRank.
+
+- **Phase 6 (Conceptual Nexus Model)** formalizes the tensor representation described
+  informally in the Graph and Similarity Leverage section. The co-occurrence graph, embedding
+  pre-filter, and community detection are three projections of a single sparse tensor
+  `T[concept_i, concept_j, relation_k] = evidence_strength`. Phase 6 adds a query API over
+  this tensor for gap detection (missing relations between high-importance concepts), analogy
+  detection (similar relation patterns across concept pairs), and cluster coherence scoring.
+
 ## Implementation Order
 
 1. **`wiki/concepts.py`** -- `ConceptRecord`, `ConceptRelation`, `EpochLog` models + haiku extraction
