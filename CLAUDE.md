@@ -43,7 +43,10 @@ This means no API key dependency for the primary workflow. The scripted path
 ## Agent Usage
 
 - **Always prefer sub-agents** for parallelizable work — launch independent tasks simultaneously
-- **Model triaging**: Use haiku for simple tasks (file searches, formatting, simple edits). Use sonnet for moderate tasks (code generation, research). Reserve opus for complex reasoning only.
+- **Cost tier triaging** (model-agnostic):
+  - **fast**: Bulk extraction, classification, yes/no checks (haiku, Codex mini, Gemini Flash)
+  - **balanced**: Article writing, synthesis, code generation (sonnet, Codex, Gemini Pro)  
+  - **deep**: Complex reasoning, structural audits, conflict resolution (opus, o3)
 - Foreground agents only when results are needed before proceeding; background otherwise
 - **Batch processing**: For LLM-heavy passes (extraction, article writing), split work into N batches and spawn N haiku agents in parallel
 
