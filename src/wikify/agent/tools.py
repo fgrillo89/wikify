@@ -270,6 +270,29 @@ def search_papers(
         return f"Search error: {exc}"
 
 
+def search_wiki_domains(query: str, top_k: int = 10) -> str:
+    """Search the wiki with domain-aware routing.
+
+    Routes the query to the most relevant domain community, then expands
+    across domain boundaries via bridge concepts if needed. Falls back to
+    standard search_papers if no domains have been discovered.
+
+    Args:
+        query: Natural language search query.
+        top_k: Maximum results to return.
+
+    Returns:
+        JSON with domain-scoped search results including domain labels.
+    """
+    try:
+        from wikify.wiki.routing import domain_aware_search
+
+        results = domain_aware_search(query, top_k)
+        return _tool_json_success(results=results, count=len(results))
+    except Exception as exc:  # noqa: BLE001
+        return _tool_json_error(str(exc))
+
+
 def lookup_citation(
     pattern: str,
     max_results: int = 5,
@@ -1980,6 +2003,58 @@ def query_concept_graph(concept: str) -> str:
         lines.append(f"  Paper: [REF:{paper}]")
 
     return "\n".join(lines)
+
+
+def get_concept_domain_context(concept: str) -> str:
+    """Get domain membership and cross-domain context for a concept.
+
+    Returns which domain(s) a concept belongs to, whether it's a bridge
+    concept, and which concepts in other domains are connected to it.
+
+    Args:
+        concept: Concept name or slug to look up.
+
+    Returns:
+        JSON with primary_domain, all_domains, is_bridge, neighbors_in_other_domains.
+    """
+    try:
+        from wikify.wiki.builder import slugify
+        from wikify.wiki.routing import get_domain_context
+
+        context = get_domain_context(slugify(concept))
+        return _tool_json_success(**context)
+    except Exception as exc:  # noqa: BLE001
+        return _tool_json_error(str(exc))
+
+
+def list_domain_clusters() -> str:
+    """List all discovered domain clusters and their key metrics.
+
+    Returns the auto-discovered domains from the concept graph, including
+    labels, concept counts, and bridge concepts.
+    """
+    try:
+        from sqlmodel import select
+
+        from wikify.store.db import get_session
+        from wikify.store.models import DomainCluster
+
+        with get_session() as session:
+            clusters = list(session.exec(select(DomainCluster)).all())
+
+        cluster_dicts = [
+            {
+                "id": cl.id,
+                "label": cl.label,
+                "core_concept_count": len(cl.parsed_core_concepts),
+                "bridge_concept_count": len(cl.parsed_bridge_concepts),
+                "bridge_concepts": cl.parsed_bridge_concepts,
+            }
+            for cl in clusters
+        ]
+        return _tool_json_success(clusters=cluster_dicts, count=len(cluster_dicts))
+    except Exception as exc:  # noqa: BLE001
+        return _tool_json_error(str(exc))
 
 
 def find_citation_for(claim: str) -> str:

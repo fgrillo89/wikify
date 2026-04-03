@@ -61,6 +61,33 @@ def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
             console.print(f"[dim]  Marked {updated} wiki articles as needing update[/dim]")
 
 
+def _maybe_trigger_epoch(new_paper_ids: list[str]) -> None:
+    """Trigger a wiki epoch if the on-ingest flag is set in data/wiki/_epoch.json."""
+    import json
+
+    flag_path = Path("data/wiki/_epoch.json")
+    try:
+        if not flag_path.exists():
+            return
+        config = json.loads(flag_path.read_text(encoding="utf-8"))
+        if not config.get("on_ingest"):
+            return
+
+        try:
+            from wikify.wiki.epoch import run_epoch
+        except ImportError:
+            return
+
+        console.print(
+            f"[dim]  on_ingest flag set — triggering wiki epoch "
+            f"({len(new_paper_ids)} new paper(s))...[/dim]"
+        )
+        run_epoch(triggered_by="ingest")
+        console.print("[green]  Wiki epoch triggered by ingest completed[/green]")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]  Epoch trigger warning (ingest continues): {exc}[/yellow]")
+
+
 def get_vocab_cache_path() -> Path:
     """Return the cached corpus vocabulary path."""
     from wikify.config import settings
@@ -160,6 +187,8 @@ def run_incremental_refresh(paper_id: str) -> None:
     console.print(
         f"[dim]  Incremental: {len(topics)} topics, {len(similar_names)} similar papers[/dim]"
     )
+
+    _maybe_trigger_epoch([paper_id])
 
 
 def run_background_refresh() -> None:
@@ -381,6 +410,8 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
         precompute_all()
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]Precompute cache warning: {exc}[/yellow]")
+
+    _maybe_trigger_epoch(list(new_paper_ids) if new_paper_ids else [])
 
     console.print(
         f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"
