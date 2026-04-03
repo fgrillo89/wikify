@@ -227,6 +227,20 @@ class ConceptEvidence(SQLModel, table=True):
     verified: bool = False  # True if quote found in source text
 
 
+class ParameterExtraction(SQLModel, table=True):
+    """A quantitative parameter extracted from a publication."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    concept_id: str = Field(index=True)  # FK -> ConceptRecord.id
+    paper_id: str = Field(index=True)  # FK -> Paper.id
+    parameter_name: str = ""  # e.g. "growth rate"
+    value: str = ""  # e.g. "1.0"
+    unit: str = ""  # e.g. "A/cycle"
+    conditions: str = ""  # e.g. "substrate temperature 250C"
+    evidence: str = ""  # source quote
+    epoch_extracted: int = 0
+
+
 class ExtractionGap(SQLModel, table=True):
     """Knowledge that the extraction template could not classify."""
 

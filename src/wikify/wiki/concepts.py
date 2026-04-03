@@ -40,6 +40,7 @@ from wikify.store.models import (
     ConceptEvidence,
     ConceptRecord,
     ExtractionGap,
+    ParameterExtraction,
 )
 from wikify.wiki.builder import slugify
 from wikify.wiki.template import build_extraction_prompt, load_template
@@ -263,6 +264,66 @@ def store_gaps(
         len(gap_rows),
     )
     return len(gap_rows)
+
+
+def store_parameters(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    epoch: int,
+) -> int:
+    """Store quantitative parameters from rich extraction results.
+
+    Each parameter links a concept to a measured value with units and
+    experimental conditions. These feed into auto-generated parameter
+    tables in wiki articles.
+
+    Args:
+        rich_extractions: Dict mapping paper_id -> list of per-chunk rich
+            extraction dicts (from get_rich_extractions()).
+        epoch: Current epoch number.
+
+    Returns:
+        Number of ParameterExtraction rows stored.
+    """
+    param_rows: list[ParameterExtraction] = []
+
+    for paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            for param in chunk_result.get("parameters", []):
+                if not isinstance(param, dict):
+                    continue
+
+                concept_name = (param.get("concept_name") or "").strip()
+                param_name = (param.get("parameter_name") or "").strip()
+                value = (param.get("value") or "").strip()
+
+                if not param_name or not value:
+                    continue
+
+                param_rows.append(
+                    ParameterExtraction(
+                        concept_id=slugify(concept_name) if concept_name else "",
+                        paper_id=paper_id,
+                        parameter_name=param_name,
+                        value=value,
+                        unit=(param.get("unit") or "").strip(),
+                        conditions=(param.get("conditions") or "").strip(),
+                        evidence=(param.get("evidence") or "").strip(),
+                        epoch_extracted=epoch,
+                    )
+                )
+
+    if param_rows:
+        with get_session() as session:
+            for row in param_rows:
+                session.add(row)
+            session.commit()
+
+    logger.info(
+        "store_parameters: epoch %d -> %d parameter rows stored",
+        epoch,
+        len(param_rows),
+    )
+    return len(param_rows)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────

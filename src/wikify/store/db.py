@@ -25,6 +25,7 @@ from wikify.store.models import (  # noqa: F401 — ensure tables created
     GeneratedOutput,
     JournalTemplate,
     PaperTopic,
+    ParameterExtraction,
     Project,
     ProjectPaper,
     SourceCoverage,

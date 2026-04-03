@@ -156,6 +156,65 @@ def find_stale_articles(
 
 
 # ---------------------------------------------------------------------------
+# Parameter table generation
+# ---------------------------------------------------------------------------
+
+
+def generate_parameter_table(concept_id: str) -> str:
+    """Generate a markdown parameter table for a concept.
+
+    Queries ParameterExtraction rows for the given concept and builds
+    a formatted markdown table. Returns empty string if no parameters.
+
+    Args:
+        concept_id: ConceptRecord.id (slug) to look up parameters for.
+
+    Returns:
+        Markdown string with ## Parameters heading and table, or "".
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import Paper, ParameterExtraction
+
+    with get_session() as session:
+        params: list[ParameterExtraction] = list(
+            session.exec(
+                select(ParameterExtraction).where(ParameterExtraction.concept_id == concept_id)
+            ).all()
+        )
+
+    if not params:
+        return ""
+
+    # Build paper display name lookup for source column
+    paper_ids = list({p.paper_id for p in params})
+    with get_session() as session:
+        papers = {
+            p.id: p.display_name()
+            for pid in paper_ids
+            if (p := session.get(Paper, pid)) is not None
+        }
+
+    lines = [
+        "## Parameters",
+        "",
+        "| Parameter | Value | Unit | Conditions | Source |",
+        "|-----------|-------|------|------------|--------|",
+    ]
+
+    for p in params:
+        source = papers.get(p.paper_id, p.paper_id[:16])
+        # Truncate long source names
+        if len(source) > 30:
+            source = source[:27] + "..."
+        lines.append(f"| {p.parameter_name} | {p.value} | {p.unit} | {p.conditions} | {source} |")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Graph metrics helper (used by index generation)
 # ---------------------------------------------------------------------------
 

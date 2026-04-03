@@ -882,3 +882,81 @@ def test_extract_from_publication_no_paper():
 
     assert result["concepts"] == []
     assert result["parameters"] == []
+
+
+# ── store_parameters ────────────────────────────────────────────────────────
+
+
+def test_store_parameters_creates_rows():
+    """store_parameters creates ParameterExtraction rows."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "text",
+                "concepts": [],
+                "parameters": [
+                    {
+                        "concept_name": "ALD",
+                        "parameter_name": "growth rate",
+                        "value": "1.0",
+                        "unit": "A/cycle",
+                        "conditions": "250C substrate",
+                        "evidence": "growth rate of 1.0",
+                    }
+                ],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_parameters(rich, epoch=1)
+
+    assert count == 1
+    row = mock_session.add.call_args[0][0]
+    assert row.concept_id == "ald"
+    assert row.parameter_name == "growth rate"
+    assert row.value == "1.0"
+    assert row.unit == "A/cycle"
+
+
+def test_store_parameters_skips_empty():
+    """Parameters without name or value are skipped."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "text",
+                "concepts": [],
+                "parameters": [
+                    {
+                        "concept_name": "ALD",
+                        "parameter_name": "",
+                        "value": "1.0",
+                        "unit": "",
+                    },
+                    {
+                        "concept_name": "ALD",
+                        "parameter_name": "rate",
+                        "value": "",
+                        "unit": "",
+                    },
+                ],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_parameters(rich, epoch=1)
+
+    assert count == 0

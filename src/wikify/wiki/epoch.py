@@ -55,6 +55,7 @@ from wikify.wiki.concepts import (
     list_concepts,
     store_evidence,
     store_gaps,
+    store_parameters,
 )
 from wikify.wiki.domains import discover_domains
 from wikify.wiki.linker import cross_link_articles
@@ -557,6 +558,7 @@ def run_epoch(
     if rich:
         store_evidence(rich, epoch)
         store_gaps(rich, epoch)
+        store_parameters(rich, epoch)
 
     logger.info(
         "Pass 1 complete in %.1fs: %d concepts discovered",
