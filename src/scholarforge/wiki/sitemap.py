@@ -45,6 +45,7 @@ class SitemapEntry:
     depth: ArticleDepth  # stub | draft | full
     source_types: list[str]  # e.g. ["paper", "web_article", "markdown"]
     notes: str = ""  # LLM's reasoning about scope/gaps for this article
+    domain: str = ""  # domain this entry belongs to (e.g. "material_science")
 
 
 @dataclass
@@ -98,6 +99,7 @@ class WikiSitemap:
                     "depth": e.depth,
                     "source_types": e.source_types,
                     "notes": e.notes,
+                    "domain": e.domain,
                 }
                 for e in self.entries
             ],
@@ -124,6 +126,7 @@ class WikiSitemap:
                 depth=e.get("depth", "draft"),
                 source_types=e.get("source_types", []),
                 notes=e.get("notes", ""),
+                domain=e.get("domain", ""),
             )
             for e in data.get("entries", [])
         ]
@@ -183,6 +186,64 @@ _SKIP_DOC_TYPES = {"image", "repo_readme"}
 _ACADEMIC_DOC_TYPES = {"paper", "report", "proposal", "thesis"}
 
 
+def _build_graph_context_block(graph_json: str) -> str:
+    """Parse get_graph_metrics() JSON and return a graph context block for the prompt.
+
+    Returns an empty string if the data is missing or malformed.
+    """
+    try:
+        data = json.loads(graph_json)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        logger.warning("Could not parse graph metrics JSON; skipping graph context")
+        return ""
+
+    if data.get("error"):
+        logger.warning("Graph metrics returned error: %s", data["error"])
+        return ""
+
+    def display_names(entries: list[dict], max_n: int = 10) -> list[str]:
+        return [e.get("display_name", e.get("id", "unknown")) for e in entries[:max_n]]
+
+    hub_names = display_names(data.get("hub_papers", []))
+    bridge_names = display_names(data.get("bridge_papers", []))
+    frontier_names = display_names(data.get("frontier_papers", []))
+
+    if not hub_names and not bridge_names and not frontier_names:
+        return ""
+
+    lines = [
+        "Graph structure of this corpus:",
+        "",
+        "HUB papers (highest PageRank -- define field consensus):",
+    ]
+    for name in hub_names:
+        lines.append(f"  {name}")
+
+    lines += [
+        "",
+        "BRIDGE papers (connect different topic clusters -- cross-community insights):",
+    ]
+    for name in bridge_names:
+        lines.append(f"  {name}")
+
+    lines += [
+        "",
+        "FRONTIER papers (sparse embedding regions -- leading edge):",
+    ]
+    for name in frontier_names:
+        lines.append(f"  {name}")
+
+    lines += [
+        "",
+        "When planning the wiki structure:",
+        "- HUB papers belong as key_source_ids in THEME articles",
+        "- BRIDGE papers belong in SYNTHESIS articles or concept articles where two sub-fields meet",  # noqa: E501
+        "- FRONTIER papers inform Open Questions sections and stub/draft articles at the edges",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def explore_corpus_for_sitemap(
     topic_hint: str,
     model: str | None,
@@ -193,6 +254,9 @@ def explore_corpus_for_sitemap(
 
     Reads broadly with source-type-aware depth (digest for academic, deep_read
     for short sources, skip for images/readmes). Runs for at most 20 turns.
+
+    Also injects graph-awareness (hub/bridge/frontier) into the system prompt and
+    provides corpus gap/synthesis context in the first user message.
 
     Args:
         topic_hint: Optional topic focus (e.g. "ALD materials"). Empty string = whole corpus.
@@ -206,6 +270,40 @@ def explore_corpus_for_sitemap(
     from scholarforge.agent.core import ScholarForgeAgent
     from scholarforge.agent.defaults import get_default_hooks, get_explorer_tools
     from scholarforge.agent.run_context import create_run_context, use_run_context
+    from scholarforge.agent.tools import (
+        find_corpus_gaps,
+        find_synthesis_opportunities,
+        get_graph_metrics,
+    )
+
+    # ------------------------------------------------------------------
+    # Attempt graph enrichment of the system prompt
+    # ------------------------------------------------------------------
+    graph_context_block = ""
+    try:
+        graph_json = get_graph_metrics()
+        graph_context_block = _build_graph_context_block(graph_json)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_graph_metrics() failed during sitemap exploration: %s", exc)
+
+    system_prompt = _EXPLORATION_SYSTEM_PROMPT
+    if graph_context_block:
+        system_prompt = graph_context_block + "\n" + system_prompt
+
+    # ------------------------------------------------------------------
+    # Attempt gap/synthesis context for the first user message
+    # ------------------------------------------------------------------
+    gap_context = ""
+    synthesis_context = ""
+    try:
+        gap_context = find_corpus_gaps()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("find_corpus_gaps() failed: %s", exc)
+
+    try:
+        synthesis_context = find_synthesis_opportunities()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("find_synthesis_opportunities() failed: %s", exc)
 
     context = run_context or create_run_context(
         topic=topic_hint or "corpus exploration for wiki sitemap",
@@ -220,16 +318,26 @@ def explore_corpus_for_sitemap(
         model=model,
         tools=get_explorer_tools(),
         hooks=hooks,
-        system_prompt=_EXPLORATION_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         run_context=context,
     )
 
     hint_clause = f" Focus on: {topic_hint}." if topic_hint else ""
+
+    extra_context_parts: list[str] = []
+    if gap_context:
+        extra_context_parts.append(f"## Corpus Gaps\n\n{gap_context}")
+    if synthesis_context:
+        extra_context_parts.append(f"## Synthesis Opportunities\n\n{synthesis_context}")
+
+    extra_context = ("\n\n" + "\n\n".join(extra_context_parts)) if extra_context_parts else ""
+
     prompt = (
         "Explore the corpus broadly and shallowly to discover its thematic"
         f" structure.{hint_clause}\n"
         f"Read at most {max_papers} sources. Use the workflow described in your system prompt.\n"
         "End with a structured summary of themes, concept candidates, and source assignments."
+        f"{extra_context}"
     )
 
     with use_run_context(context):
@@ -300,6 +408,7 @@ def generate_sitemap(
     wiki_dir: Path,
     max_explore_papers: int,
     run_context: "RunContext | None",
+    domain: str = "",
 ) -> WikiSitemap:
     """Orchestrate two-phase sitemap generation.
 
@@ -314,6 +423,8 @@ def generate_sitemap(
         wiki_dir: Root wiki directory (e.g. Path("data/wiki")).
         max_explore_papers: Max sources to read during Phase 1 exploration.
         run_context: Existing RunContext to reuse, or None to create fresh.
+        domain: Optional domain label (e.g. "material_science"). When set, included
+            in the sitemap JSON prompt and stored on each SitemapEntry.
 
     Returns:
         WikiSitemap populated from the LLM's JSON response.
@@ -327,9 +438,10 @@ def generate_sitemap(
     # Phase 1: Explore
     # ------------------------------------------------------------------
     logger.info(
-        "Sitemap Phase 1: exploring corpus (max_papers=%d, model=%s)",
+        "Sitemap Phase 1: exploring corpus (max_papers=%d, model=%s, domain=%s)",
         max_explore_papers,
         effective_model,
+        domain or "<all>",
     )
     exploration_text, explored_ids = explore_corpus_for_sitemap(
         topic_hint=topic_hint,
@@ -348,9 +460,11 @@ def generate_sitemap(
     # ------------------------------------------------------------------
     logger.info("Sitemap Phase 2: generating structured JSON plan")
 
+    domain_clause = f"\nDomain: {domain}\n" if domain else ""
     user_msg = (
         "Below is a structured exploration summary of the corpus. "
         "Use it to produce a wiki sitemap as specified.\n\n"
+        f"{domain_clause}"
         "## Corpus Exploration Summary\n\n"
         f"{exploration_text}\n\n"
         "---\n\n"
@@ -428,6 +542,7 @@ def generate_sitemap(
                 depth=depth,
                 source_types=e.get("source_types", []),
                 notes=e.get("notes", ""),
+                domain=domain,
             )
         )
 
@@ -445,3 +560,219 @@ def generate_sitemap(
         len(sitemap.concepts()),
     )
     return sitemap
+
+
+# ---------------------------------------------------------------------------
+# Multi-domain sitemap generation
+# ---------------------------------------------------------------------------
+
+_DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "material_science": [
+        "material_science",
+        "materials",
+        "ald",
+        "deposition",
+        "semiconductor",
+        "oxide",
+        "thin_film",
+    ],
+    "machine_learning": [
+        "machine_learning",
+        "ml",
+        "deep_learning",
+        "neural",
+        "ai",
+        "nlp",
+        "computer_vision",
+    ],
+    "chemistry": ["chemistry", "chemical", "synthesis", "reaction", "catalyst"],
+    "biology": ["biology", "biomedical", "genomics", "protein", "cell"],
+    "physics": ["physics", "quantum", "photonics", "optics"],
+}
+
+
+def _classify_paper_domain(paper) -> str:  # type: ignore[no-untyped-def]
+    """Classify a Paper into a domain string.
+
+    Strategy (in order):
+    1. Check source_path segments for known domain keywords.
+    2. Use the paper's most frequent PaperTopic topic prefix.
+    3. Fall back to "general".
+    """
+    source_path = (paper.source_path or "").lower().replace("\\", "/")
+    path_segments = set(source_path.replace("/", " ").replace("_", " ").split())
+
+    for domain, keywords in _DOMAIN_KEYWORDS.items():
+        for kw in keywords:
+            kw_parts = kw.replace("_", " ").split()
+            if all(part in path_segments for part in kw_parts):
+                return domain
+            # Also check as substring in full path
+            if kw in source_path:
+                return domain
+
+    return ""  # caller will use topic-based fallback
+
+
+def _topics_to_domain(topics: list[str]) -> str:
+    """Map a list of topic strings to a domain, or 'general'."""
+    if not topics:
+        return "general"
+
+    topic_text = " ".join(topics).lower()
+    for domain, keywords in _DOMAIN_KEYWORDS.items():
+        for kw in keywords:
+            if kw.replace("_", " ") in topic_text or kw in topic_text:
+                return domain
+
+    # Use the first topic as a domain name (normalised)
+    first = topics[0].lower().strip()
+    first = first.replace(" ", "_").replace("-", "_")
+    return first or "general"
+
+
+def generate_multi_domain_sitemap(
+    wiki_dir: Path,
+    model: str | None = None,
+    max_explore_papers: int = 30,
+) -> dict[str, WikiSitemap]:
+    """Generate per-domain sitemaps for a multi-domain corpus.
+
+    Steps:
+    1. Load all Paper rows and classify into domains.
+    2. For each domain with >=5 papers: call generate_sitemap(domain=...).
+    3. Detect cross-domain synthesis via find_synthesis_opportunities().
+    4. Add synthesis SitemapEntry objects to all relevant domain sitemaps.
+    5. Return {domain: WikiSitemap} dict.
+
+    Args:
+        wiki_dir: Root wiki directory.
+        model: LLM model string (uses settings default if None).
+        max_explore_papers: Max papers to read during each domain's exploration.
+
+    Returns:
+        Mapping from domain name to its WikiSitemap.
+    """
+    from sqlmodel import select
+
+    from scholarforge.agent.tools import find_synthesis_opportunities
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import Paper, PaperTopic
+
+    # ------------------------------------------------------------------
+    # Step 1: Load papers + topics, classify domains
+    # ------------------------------------------------------------------
+    with get_session() as session:
+        papers = session.exec(select(Paper)).all()
+        topics_rows = session.exec(select(PaperTopic)).all()
+
+    # Build paper_id -> list[topic] mapping
+    paper_topics: dict[str, list[str]] = {}
+    for row in topics_rows:
+        paper_topics.setdefault(row.paper_id, []).append(row.topic)
+
+    domain_papers: dict[str, list] = {}
+    for paper in papers:
+        # Try path-based classification first
+        domain = _classify_paper_domain(paper)
+        if not domain:
+            # Fall back to topic-based classification
+            domain = _topics_to_domain(paper_topics.get(paper.id, []))
+        domain_papers.setdefault(domain, []).append(paper)
+
+    logger.info(
+        "Multi-domain classification: %s",
+        {d: len(ps) for d, ps in domain_papers.items()},
+    )
+
+    # ------------------------------------------------------------------
+    # Step 2: Generate per-domain sitemaps for domains with >=5 papers
+    # ------------------------------------------------------------------
+    domain_sitemaps: dict[str, WikiSitemap] = {}
+    for domain, domain_paper_list in domain_papers.items():
+        if len(domain_paper_list) < 5:
+            logger.info(
+                "Skipping domain '%s' -- only %d papers (need >=5)",
+                domain,
+                len(domain_paper_list),
+            )
+            continue
+
+        logger.info(
+            "Generating sitemap for domain '%s' (%d papers)",
+            domain,
+            len(domain_paper_list),
+        )
+        sitemap = generate_sitemap(
+            topic_hint="",
+            model=model,
+            wiki_dir=wiki_dir / "domains" / domain,
+            max_explore_papers=max_explore_papers,
+            run_context=None,
+            domain=domain,
+        )
+        domain_sitemaps[domain] = sitemap
+
+    # ------------------------------------------------------------------
+    # Step 3: Detect cross-domain synthesis opportunities
+    # ------------------------------------------------------------------
+    if len(domain_sitemaps) < 2:
+        return domain_sitemaps
+
+    try:
+        synthesis_text = find_synthesis_opportunities()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("find_synthesis_opportunities() failed for multi-domain: %s", exc)
+        synthesis_text = ""
+
+    # Build a set of paper display names appearing in synthesis text
+    # (approximate: any source_id from one domain appearing in synthesis text
+    # when sources from another domain also appear)
+    domain_list = list(domain_sitemaps.keys())
+
+    for i, domain_a in enumerate(domain_list):
+        for domain_b in domain_list[i + 1 :]:
+            # Collect source ids from both domains
+            a_sources: set[str] = set()
+            b_sources: set[str] = set()
+            for entry in domain_sitemaps[domain_a].entries:
+                a_sources.update(entry.key_source_ids)
+            for entry in domain_sitemaps[domain_b].entries:
+                b_sources.update(entry.key_source_ids)
+
+            # Check if sources from both domains appear in synthesis output
+            a_hits = [s for s in a_sources if s and s in synthesis_text]
+            b_hits = [s for s in b_sources if s and s in synthesis_text]
+
+            if not a_hits or not b_hits:
+                continue
+
+            # Create a cross-domain synthesis entry
+            synth_slug = f"synthesis_{domain_a}_{domain_b}"
+            a_label = domain_a.replace("_", " ").title()
+            b_label = domain_b.replace("_", " ").title()
+            synth_title = f"{a_label} x {b_label} Synthesis"
+            synth_entry = SitemapEntry(
+                title=synth_title,
+                slug=synth_slug,
+                category="synthesis",
+                scope=f"Cross-domain synthesis connecting {domain_a} and {domain_b}.",
+                parent_slug=None,
+                key_source_ids=a_hits[:5] + b_hits[:5],
+                related_slugs=[],
+                depth="draft",
+                source_types=["paper"],
+                notes=f"Auto-detected cross-domain synthesis between {domain_a} and {domain_b}.",
+                domain="",
+            )
+
+            # Add to all relevant domain sitemaps
+            for domain in (domain_a, domain_b):
+                domain_sitemaps[domain].entries.append(synth_entry)
+            logger.info(
+                "Created cross-domain synthesis entry: %s <-> %s",
+                domain_a,
+                domain_b,
+            )
+
+    return domain_sitemaps
