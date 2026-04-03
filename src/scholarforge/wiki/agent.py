@@ -55,6 +55,8 @@ def build_wiki_article(
     status: str = "draft",
     model: str | None = None,
     top_k: int = 8,
+    domain: str = "",
+    persona: str = "",
 ) -> tuple[str, list[str]]:
     """Use the LLM to write a wiki article on `title`.
 
@@ -76,6 +78,13 @@ def build_wiki_article(
     """
     from scholarforge.agent.tools import read_paper_digest, search_papers
     from scholarforge.llm.client import complete
+
+    # If a domain is provided and no persona given, look up/create the persona
+    resolved_persona = persona
+    if domain and not resolved_persona:
+        from scholarforge.wiki.persona import get_or_create_persona
+
+        resolved_persona = get_or_create_persona(domain, model=model)
 
     # Step 1: search for relevant papers
     search_result = search_papers(topic_query, top_k=top_k, reason=f"wiki article: {title}")
@@ -275,10 +284,13 @@ def build_article_from_entry(
     wiki_dir: Path,
     model: str | None = None,
 ) -> tuple[str, list[str]]:
-    """Write one wiki article from a SitemapEntry.
+    """Write one wiki article from a SitemapEntry using map-reduce + persona.
 
-    Fetches evidence using source-type-aware reading strategy, then calls
-    the LLM to author the article body with inline [REF:...] citations.
+    Steps:
+    1. Get or create the domain persona for entry.domain (or "general").
+    2. Run map_chunks_to_topic() to extract relevant evidence from the corpus.
+    3. Run reduce_to_article() to synthesise the article body.
+    4. Record SourceCoverage rows for all relevant extractions.
 
     Args:
         entry: The planned article to write.
@@ -288,54 +300,43 @@ def build_article_from_entry(
     Returns:
         (article_markdown_body, list_of_actual_source_ids_used)
     """
-    from scholarforge.llm.client import complete
-    from scholarforge.wiki.sitemap import WikiSitemap
+    from scholarforge.wiki.mapreduce import map_chunks_to_topic, record_coverage, reduce_to_article
+    from scholarforge.wiki.persona import get_or_create_persona
 
-    # Build system prompt -- inject parent theme context when available
-    system_prompt = _ARTICLE_SYSTEM_PROMPT
+    domain = getattr(entry, "domain", None) or "general"
+    persona = get_or_create_persona(domain, model=model)
+
+    # Build topic query incorporating parent context when available
+    topic_query = f"{entry.scope} {entry.title}"
     if entry.parent_slug:
-        # Try to resolve parent title from the sitemap on disk
-        sitemap = WikiSitemap.load(wiki_dir)
-        parent_title = entry.parent_slug
-        if sitemap:
-            slug_map = sitemap.by_slug()
-            parent_entry = slug_map.get(entry.parent_slug)
-            if parent_entry:
-                parent_title = parent_entry.title
+        topic_query = f"{entry.parent_slug} {topic_query}"
 
-        system_prompt = (
-            _ARTICLE_SYSTEM_PROMPT + f"\n\nThis article is part of the '{parent_title}' theme. "
-            f"Stay within the scope: {entry.scope}."
-        )
-
-    # Fetch evidence
-    evidence, actual_source_ids = _fetch_evidence_for_entry(entry, model=model)
-
-    length_hint = {
-        "stub": "200-300 words",
-        "draft": "400-600 words",
-        "full": "600-1200 words",
-    }.get(entry.depth, "400-800 words")
-
-    user_msg = (
-        f"Write a wiki article titled '{entry.title}'.\n"
-        f"Scope: {entry.scope}\n"
-        f"Target length: {length_hint}.\n\n"
-        f"Evidence from the corpus:\n\n{evidence}"
+    extractions = map_chunks_to_topic(
+        topic_query=topic_query,
+        scope=entry.scope,
+        domain=domain,
+        key_source_ids=entry.key_source_ids,
     )
 
-    content = complete(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg},
-        ],
+    article_body = reduce_to_article(
+        topic=entry.title,
+        scope=entry.scope,
+        domain=domain,
+        extractions=extractions,
+        persona=persona,
+        status=entry.depth,
         model=model,
-        temperature=0.3,
-        max_tokens=2000,
-        use_cache=False,
     )
 
-    return content, actual_source_ids
+    # Record coverage for all relevant extractions
+    record_coverage(
+        article_slug=entry.slug,
+        domain=domain,
+        extractions=extractions,
+    )
+
+    actual_source_ids = [e.source_id for e in extractions if e.is_relevant]
+    return article_body, actual_source_ids
 
 
 def build_wiki_from_sitemap(
@@ -426,6 +427,8 @@ def build_wiki_from_sitemap(
         with Session(engine) as session:
             existing = session.exec(select(WikiArticle).where(WikiArticle.id == entry.slug)).first()
 
+            entry_domain = getattr(entry, "domain", None) or ""
+
             if existing is None:
                 row = WikiArticle(
                     id=entry.slug,
@@ -434,6 +437,7 @@ def build_wiki_from_sitemap(
                     file_path=str(out_path.relative_to(wiki_dir.parent)),
                     source_ids=json.dumps(actual_source_ids),
                     topic_keys=json.dumps([entry.slug]),
+                    domain=entry_domain,
                     created_at=now,
                     updated_at=now,
                     model=model or "",
@@ -444,6 +448,7 @@ def build_wiki_from_sitemap(
                 existing.status = entry.depth
                 existing.source_ids = json.dumps(actual_source_ids)
                 existing.topic_keys = json.dumps([entry.slug])
+                existing.domain = entry_domain
                 existing.updated_at = now
                 existing.model = model or ""
                 existing.needs_update = False
