@@ -13,12 +13,14 @@ from sqlmodel import Session, SQLModel, create_engine
 from scholarforge.config import settings
 from scholarforge.store.models import (  # noqa: F401 — ensure tables created
     Citation,
+    DomainPersona,
     FigureRef,
     GeneratedOutput,
     JournalTemplate,
     PaperTopic,
     Project,
     ProjectPaper,
+    SourceCoverage,
     WikiArticle,
 )
 
@@ -77,6 +79,15 @@ def _run_migrations(engine) -> None:
                 sqlalchemy.text(
                     "ALTER TABLE paper ADD COLUMN section_summaries VARCHAR DEFAULT '{}'"
                 )
+            )
+            conn.commit()
+
+        # Migration 3: WikiArticle.domain column (added 2026-04-03)
+        try:
+            conn.execute(sqlalchemy.text("SELECT domain FROM wikiarticle LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text("ALTER TABLE wikiarticle ADD COLUMN domain VARCHAR DEFAULT ''")
             )
             conn.commit()
 

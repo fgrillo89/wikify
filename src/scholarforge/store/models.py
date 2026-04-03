@@ -149,10 +149,32 @@ class WikiArticle(SQLModel, table=True):
     file_path: str  # relative to data/wiki/, e.g. "concepts/HfO2.md"
     source_ids: str = Field(default="[]")  # JSON list of Paper.id values
     topic_keys: str = Field(default="[]")  # JSON list of topic vocab keys
+    domain: str = ""  # e.g. "material_science", "machine_learning"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     model: str = ""
     needs_update: bool = False
+
+
+class DomainPersona(SQLModel, table=True):
+    """Expert persona generated from a domain's corpus sample, applied to all wiki writing."""
+
+    domain: str = Field(primary_key=True)  # e.g. "material_science"
+    persona_text: str  # 150-200 word expert persona
+    source_sample: str = Field(default="[]")  # JSON list of source titles used
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    model: str = ""
+
+
+class SourceCoverage(SQLModel, table=True):
+    """Records which wiki article each source contributed to, and what was extracted."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_id: str = Field(index=True)      # Paper.id
+    article_slug: str = Field(index=True)   # WikiArticle.id
+    domain: str = ""
+    extraction: str = ""  # haiku-extracted sentence(s) that were used
+    covered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class JournalTemplate(SQLModel, table=True):
