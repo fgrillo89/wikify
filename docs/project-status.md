@@ -80,7 +80,32 @@ All modules in `src/wikify/wiki/` are implemented and tested:
 Data models for wiki in SQLite (`store/models.py`):
 `WikiArticle`, `DomainPersona`, `SourceCoverage` -- all implemented.
 
-### CLI (writing pipeline, wiki building blocks)
+### Wiki Epoch Pipeline (complete)
+
+The concept-first epoch pipeline is fully implemented. All modules are in `src/wikify/wiki/`
+and tested:
+
+| Module | Purpose |
+|--------|---------|
+| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline (`discover_concepts`, `merge_concept_records`) |
+| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification (`build_concept_graph`, `score_importance`, `classify_relations`) |
+| `wiki/article.py` | Wikipedia-format article writer using `ConceptRecord` + graph neighbors (`write_concept_article`) |
+| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks (`run_epoch`, `run_until_convergence`, `check_convergence`, `compute_loss`) |
+| `wiki/dashboard.py` | FastAPI dashboard API: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard (`/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient`) |
+
+### ML-Style Convergence Tracking (complete)
+
+- Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and
+  `EpochLog.loss_delta`. Formula: `L = 0.3*stub_ratio + 0.2*orphan_concept_rate + 0.3*contradiction_density - 0.2*cross_ref_density`. Coefficients tunable in project config.
+- Information gradient per concept: `new_evidence_tokens / existing_article_tokens`. Used to
+  prioritise Pass 3 ordering and skip near-zero-gradient concepts that have stabilised.
+- Momentum tracking: concepts with high gradient for 3+ consecutive epochs flagged
+  `momentum: active` in YAML frontmatter; near-zero-gradient concepts for 3+ epochs skipped
+  in Pass 3 unless new sources arrive.
+- Model-selection schedule: haiku used for Pass 3 drafting while L >= 0.3; sonnet used once
+  L < 0.3 (learning rate decay analog). Transition epoch recorded in `EpochLog`.
+
+### CLI (writing pipeline, wiki building blocks, epoch pipeline)
 
 | Command | Status | Description |
 |---|---|---|
@@ -102,71 +127,35 @@ Data models for wiki in SQLite (`store/models.py`):
 | `wikify wiki sync` | Working | Update stale articles after new ingest |
 | `wikify wiki audit` | Working | Structural health report (split/merge/orphan/drift) |
 | `wikify wiki health` | Working | Orphan, staleness, and synthesis gap report |
+| `wikify wiki epoch` | Working | Run one epoch (discovery + articles + cross-ref + index) |
+| `wikify wiki epoch --n N` | Working | Run N epochs |
+| `wikify wiki epoch --until-convergence` | Working | Run until convergence criteria met |
+| `wikify wiki epoch --status` | Working | Show epoch log |
+| `wikify wiki epoch --on-ingest` | Working | Auto-trigger epoch after ingest |
 
-**Testing: 303 unit tests, all passing.**
-
----
-
-## What is In Progress
-
-### Wikipedia/Epoch Model (design complete, implementation not started)
-
-The authoritative design is `docs/design/wiki-wikipedia-model.md`. The approach is
-**concept-first epochs**: the agent reads the corpus, discovers named concepts, writes
-Wikipedia-style articles, and iterates until convergence. This replaces the sitemap-first
-approach as the primary wiki-building pipeline (the sitemap remains available as an optional
-user-directed focus tool).
-
-The epoch model requires four new modules plus a CLI command and an ingest hook. None of
-these exist yet -- see "Not Started" below.
+**Testing: 592 unit tests, all passing.**
 
 ---
 
 ## What is Not Started
-
-### New Wiki Modules (epoch model)
-
-| Module | Purpose | Key classes/functions |
-|--------|---------|----------------------|
-| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline | `discover_concepts(paper_ids)`, `merge_concept_records()` |
-| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification | `build_concept_graph()`, `score_importance()`, `classify_relations()` |
-| `wiki/article.py` | Wikipedia-format article writer (concept-aware, uses `ConceptRecord` + graph neighbors) | `write_concept_article(concept_record, neighbors, domain)` |
-| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks | `run_epoch()`, `run_until_convergence()`, `check_convergence()`, `compute_loss()` |
-| `wiki/dashboard.py` | FastAPI dashboard: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard | `app: FastAPI`, `/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient` |
-
-### CLI
-
-- `wikify wiki epoch` -- run one epoch (discovery + articles + cross-ref + index)
-- `wikify wiki epoch --n N` -- run N epochs
-- `wikify wiki epoch --until-convergence` -- run until convergence criteria met
-- `wikify wiki epoch --status` -- show epoch log
-- `wikify wiki epoch --on-ingest` -- auto-trigger epoch after ingest
-- `wikify wiki dashboard` -- launch local convergence/coverage/graph dashboard
 
 ### Ingest Hook
 
 - Bump epoch counter when new files are ingested
 - Optionally auto-trigger a new epoch pass
 
-### Dashboard and Visualization
+### Dashboard and Visualization (Obsidian layer)
 
-- `wiki/dashboard.py` -- FastAPI application serving convergence curve (Plotly), force-directed concept graph (D3.js), coverage heatmap (sources x domains from SourceCoverage), epoch log table, gradient leaderboard (top 20 concepts by information gradient), and domain health charts. Reads EpochLog, ConceptRecord, and SourceCoverage from SQLite only; no LLM calls.
-- Obsidian-layer: auto-generated `_dashboard.md` per domain with live Dataview queries (stubs by domain, top concepts by importance, momentum-active concepts, recent-epoch updates). Written by Pass 5 each epoch.
-
-### ML-Style Convergence Tracking
-
-- Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and `EpochLog.loss_delta`. Formula: `L = 0.3*stub_ratio + 0.2*orphan_concept_rate + 0.3*contradiction_density - 0.2*cross_ref_density`. Coefficients tunable in project config.
-- Information gradient per concept: `new_evidence_tokens / existing_article_tokens`. Used to prioritise Pass 3 ordering and skip near-zero-gradient concepts that have stabilised.
-- Momentum tracking: concepts with high gradient for 3+ consecutive epochs flagged `momentum: active` in YAML frontmatter (active research fronts); near-zero-gradient concepts for 3+ epochs skipped in Pass 3 unless new sources arrive.
-- Model-selection schedule: haiku used for Pass 3 drafting while L >= 0.3; sonnet used once L < 0.3 (learning rate decay analog). Transition epoch recorded in EpochLog.
+- `wikify wiki dashboard` CLI command -- launch local FastAPI convergence/coverage/graph dashboard (the `wiki/dashboard.py` API is implemented; the launch command is not yet wired)
+- Obsidian-layer: auto-generated `_dashboard.md` per domain with live Dataview queries (stubs by domain, top concepts by importance, momentum-active concepts, recent-epoch updates). Written by Pass 5 each epoch. Not yet implemented.
 
 ---
 
 ## Known Issues and Tech Debt
 
 - **Sitemap-first vs epoch model**: `wiki init` still uses the sitemap pipeline (exploration
-  agent + structured JSON plan). The epoch model (`wiki epoch`) does not yet exist. Both
-  pipelines will coexist: sitemap for user-directed topic focus, epoch for autonomous discovery.
+  agent + structured JSON plan). Both pipelines coexist: sitemap for user-directed topic focus,
+  `wiki epoch` for autonomous concept-first discovery.
 - **Topic coverage vocabulary**: 268 terms contain noise (filler phrases, DOI fragments).
   Needs cleaning before metric weight changes are meaningful.
 - **Metric recalibration**: `topic_coverage` is overweighted; `bridge_vectors` is underweighted.
@@ -196,7 +185,7 @@ these exist yet -- see "Not Started" below.
 | Figure/table refs | 2,730 |
 | Citation cross-refs | 936 |
 | Topics | 1,232 (268 vocabulary terms) |
-| Tests | 303 |
+| Tests | 592 |
 | Ingestion time | ~10 min (206 papers, 10 workers) |
 | Review generation | 3-5 min (enhanced hybrid strategy) |
 
