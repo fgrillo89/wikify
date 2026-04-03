@@ -392,8 +392,10 @@ def _deduplicate_concepts(concepts: list[ConceptRecord]) -> list[ConceptRecord]:
     if len(concepts) < 2:
         return concepts
 
-    # Build text representations for embedding
-    texts = [f"{c.name}: {c.definition or ''}" for c in concepts]
+    # Build structured text representations for embedding (Phase 6)
+    from wikify.wiki.vectors import build_structured_texts  # noqa: PLC0415
+
+    texts = build_structured_texts(concepts)
 
     # Encode all concepts at once
     try:
