@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAP_SIMILARITY_THRESHOLD = 0.35  # cosine distance threshold (ChromaDB uses cosine distance)
-MAP_MAX_SOURCES = 60  # max sources to map per article
+MAP_MAX_SOURCES = 60  # max sources fetched from search (embedding pre-rank pool)
+MAP_HAIKU_BUDGET = 15  # max haiku map calls per concept (after pre-ranking)
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 # Zone labels by domain register
@@ -194,8 +195,9 @@ def map_chunks_to_topic(
 
     Steps:
     1. Graph enrichment: get hub/bridge/frontier paper roles.
-    2. Pre-filter: search_papers() for top MAP_MAX_SOURCES candidates.
-       Always include hub and bridge papers (regardless of similarity).
+    2. Pre-filter: search_papers() returns top MAP_MAX_SOURCES candidates ranked
+       by embedding similarity.  Truncate to MAP_HAIKU_BUDGET before haiku calls,
+       always keeping forced (hub/bridge/key) papers first.
     3. Haiku map: for each candidate, call haiku to extract relevant claims.
     4. Return list of SourceExtraction objects.
 
@@ -236,7 +238,8 @@ def map_chunks_to_topic(
     if key_source_ids:
         forced_ids.update(key_source_ids)
 
-    # Merge: candidates first, then any missing forced ones
+    # Merge: candidates first (already ranked by embedding similarity),
+    # then any missing forced ones appended at the end.
     candidate_set: list[str] = list(candidate_ids)
     seen_candidates = set(candidate_ids)
     for pid in forced_ids:
@@ -244,8 +247,21 @@ def map_chunks_to_topic(
             candidate_set.append(pid)
             seen_candidates.add(pid)
 
-    # Limit to MAP_MAX_SOURCES total
-    candidate_set = candidate_set[:MAP_MAX_SOURCES]
+    # Hierarchical budget: forced (hub/bridge/key) always included; fill the
+    # remaining slots from the similarity-ranked candidates up to MAP_HAIKU_BUDGET.
+    forced_in_set = [pid for pid in candidate_set if pid in forced_ids]
+    ranked_in_set = [pid for pid in candidate_set if pid not in forced_ids]
+    remaining_slots = max(0, MAP_HAIKU_BUDGET - len(forced_in_set))
+    candidate_set = forced_in_set + ranked_in_set[:remaining_slots]
+
+    logger.info(
+        "map_chunks_to_topic(%r): pre-rank pool=%d forced=%d ranked=%d -> budget=%d candidates",
+        topic_query,
+        len(candidate_ids) + len(forced_ids - set(candidate_ids)),
+        len(forced_in_set),
+        min(len(ranked_in_set), remaining_slots),
+        len(candidate_set),
+    )
 
     # Load paper metadata for all candidates
     with get_session() as session:

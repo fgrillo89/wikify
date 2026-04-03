@@ -244,6 +244,24 @@ class EpochLog(SQLModel, table=True):
     loss_delta: float = 0.0  # |L(epoch_n) - L(epoch_n-1)|
 
 
+class ChunkMiningLog(SQLModel, table=True):
+    """Tracks which chunks have been mined for concepts and in which epoch.
+
+    Progressive mining ensures every chunk is eventually processed:
+    - Tier 0 (abstract, introduction, conclusion): mined in early epochs
+    - Tier 1 (methods, results): mined in mid epochs
+    - Tier 2 (body, discussion, other): mined in later epochs
+    - Exploration: random 5% of unmined chunks mined each epoch regardless of tier
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    chunk_id: str = Field(index=True)  # FK -> Chunk.id
+    paper_id: str = Field(index=True)  # FK -> Paper.id
+    epoch_mined: int = 0  # which epoch this chunk was processed in
+    tier: int = 0  # 0=high priority, 1=medium, 2=low
+    source: str = ""  # "scheduled" | "exploration" | "deepening"
+
+
 class DomainCluster(SQLModel, table=True):
     """A discovered domain community from the concept co-occurrence graph."""
 

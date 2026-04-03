@@ -366,6 +366,111 @@ def check_convergence(recent_logs: list[EpochLog]) -> bool:
     return True
 
 
+# ── Concept deduplication ──────────────────────────────────────────────────────
+
+
+def _deduplicate_concepts(concepts: list[ConceptRecord]) -> list[ConceptRecord]:
+    """Remove near-duplicate concepts before article writing.
+
+    Groups concepts by embedding similarity of their names + definitions.
+    For each group of near-duplicates (similarity > 0.85), keeps only the
+    concept with the highest importance score.  The others get their
+    article_status set to "merged:<kept_concept_id>" and are excluded from
+    the returned list.
+
+    Returns:
+        Deduplicated list (kept concepts only).
+    """
+    import numpy as np
+
+    if len(concepts) < 2:
+        return concepts
+
+    # Build text representations for embedding
+    texts = [f"{c.name}: {c.definition or ''}" for c in concepts]
+
+    # Encode all concepts at once
+    try:
+        from wikify.store.embeddings import _store  # noqa: PLC0415
+
+        embeddings = _store.model.encode(texts)  # shape (N, D)
+    except Exception:
+        logger.exception("_deduplicate_concepts: could not encode concepts, skipping dedup")
+        return concepts
+
+    n = len(concepts)
+    # Normalise rows so dot product == cosine similarity
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    normed = embeddings / norms
+
+    # Union-Find for grouping
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(x: int, y: int) -> None:
+        parent[_find(x)] = _find(y)
+
+    # Pairwise similarity — O(N^2) but N is typically < 500 concepts
+    sim_matrix = normed @ normed.T  # (N, N)
+    threshold = 0.85
+    for i in range(n):
+        for j in range(i + 1, n):
+            if sim_matrix[i, j] > threshold:
+                _union(i, j)
+
+    # Build groups
+    from collections import defaultdict
+
+    groups: dict[int, list[int]] = defaultdict(list)
+    for idx in range(n):
+        groups[_find(idx)].append(idx)
+
+    merged_groups = [g for g in groups.values() if len(g) > 1]
+
+    if not merged_groups:
+        logger.info("_deduplicate_concepts: no near-duplicate groups found (%d concepts)", n)
+        return concepts
+
+    kept_set: set[int] = set(range(n))  # indices to keep
+    db_updates: list[tuple[str, str]] = []  # (merged_id, kept_id)
+
+    for group in merged_groups:
+        # Keep the concept with the highest importance
+        best_idx = max(group, key=lambda i: concepts[i].importance)
+        kept_id = concepts[best_idx].id
+        for idx in group:
+            if idx != best_idx:
+                kept_set.discard(idx)
+                db_updates.append((concepts[idx].id, kept_id))
+
+    # Persist merged status to DB
+    if db_updates:
+        with get_session() as session:
+            for merged_id, kept_id in db_updates:
+                db_concept = session.get(ConceptRecord, merged_id)
+                if db_concept is not None:
+                    db_concept.article_status = f"merged:{kept_id}"
+                    session.add(db_concept)
+            session.commit()
+
+    result = [concepts[i] for i in sorted(kept_set)]
+
+    logger.info(
+        "dedup: %d concepts -> %d after merging %d group(s) (%d concepts merged)",
+        n,
+        len(result),
+        len(merged_groups),
+        n - len(result),
+    )
+    return result
+
+
 # ── Main epoch orchestrator ────────────────────────────────────────────────────
 
 
@@ -499,6 +604,9 @@ def run_epoch(
     all_concepts = list_concepts(domain=domain, min_importance=0.0)
     all_concepts.sort(key=lambda c: c.importance, reverse=True)
 
+    # Deduplicate near-synonym concepts before article writing
+    all_concepts = _deduplicate_concepts(all_concepts)
+
     articles_written = 0
     stubs_upgraded = 0
     contradictions_flagged = 0
@@ -517,9 +625,7 @@ def run_epoch(
 
                 # Use domain-scoped label if available, fall back to epoch domain
                 concept_domain = _concept_domain.get(concept.id, domain)
-                body = write_concept_article(
-                    concept, neighbors, concept_domain, article_model
-                )
+                body = write_concept_article(concept, neighbors, concept_domain, article_model)
 
                 extractions: list[SourceExtraction] = map_chunks_to_topic(
                     topic_query=concept.name,
