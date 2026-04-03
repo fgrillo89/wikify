@@ -196,3 +196,75 @@ def test_refine_template_rejects_low_hit_proposal(tmp_path):
 
     assert "## rare_section" not in new_template
     assert delta == 0.0
+
+
+def test_refine_template_overfitting_guard_rejects(tmp_path):
+    """Overfitting guard rejects corpus-specific proposals."""
+    mod.save_template(tmp_path, mod.get_default_template(), epoch=0)
+
+    mock_gaps = []
+    for i in range(6):
+        g = MagicMock()
+        g.description = f"Gap {i}"
+        g.suggested_type = "specific_type"
+        g.paper_id = "p1"
+        g.chunk_id = f"c{i}"
+        g.epoch = 2
+        mock_gaps.append(g)
+
+    mock_chunks = []
+    for i in range(5):
+        c = MagicMock()
+        c.content = f"Chunk {i} with specific data"
+        mock_chunks.append(c)
+
+    session = _mock_session([mock_gaps, mock_chunks])
+
+    # LLM: 1 proposal + 5 YES hits + 1 NO from overfitting guard
+    complete_responses = [
+        "## corpus_specific\nArray: {field}\n- Very specific",
+        "YES",
+        "YES",
+        "YES",
+        "YES",
+        "YES",
+        "NO",  # overfitting guard says NO
+    ]
+
+    with (
+        patch("wikify.store.db.get_session", return_value=session),
+        patch("wikify.llm.client.complete", side_effect=complete_responses),
+    ):
+        new_template, delta = mod.refine_template(tmp_path, epoch=3)
+
+    assert "## corpus_specific" not in new_template
+    assert delta == 0.0
+
+
+# ── _prune_zero_yield_sections ──────────────────────────────────────────────
+
+
+def test_prune_preserves_default_sections():
+    """Default sections are never pruned."""
+    template = mod.get_default_template()
+    pruned, count = mod._prune_zero_yield_sections(template, current_epoch=5)
+    assert count == 0
+    assert "## concepts" in pruned
+    assert "## parameters" in pruned
+
+
+def test_prune_removes_custom_sections():
+    """Custom sections added after defaults get pruned after lookback."""
+    template = mod.get_default_template() + "\n## custom_section\nSome content\n"
+    pruned, count = mod._prune_zero_yield_sections(template, current_epoch=5)
+    assert count == 1
+    assert "## custom_section" not in pruned
+    assert "## concepts" in pruned
+
+
+def test_prune_skips_early_epochs():
+    """No pruning in early epochs (epoch <= lookback)."""
+    template = mod.get_default_template() + "\n## custom_section\nSome content\n"
+    pruned, count = mod._prune_zero_yield_sections(template, current_epoch=2)
+    assert count == 0
+    assert "## custom_section" in pruned

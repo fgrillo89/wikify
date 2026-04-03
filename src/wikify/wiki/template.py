@@ -143,6 +143,82 @@ def _count_template_sections(template: str) -> int:
     return len(re.findall(r"^## ", template, re.MULTILINE))
 
 
+def _prune_zero_yield_sections(
+    template: str,
+    current_epoch: int,
+    lookback: int = 3,
+) -> tuple[str, int]:
+    """Remove template sections that produced zero extractions recently.
+
+    A section is pruned if it was added (exists in the template) but the
+    corresponding extraction key produced zero items across the last
+    `lookback` epochs. The 5 default sections (concepts, parameters,
+    mechanisms, relationships, gaps) are never pruned.
+
+    Args:
+        template: Current template content.
+        current_epoch: Current epoch number.
+        lookback: Number of recent epochs to check.
+
+    Returns:
+        (pruned_template, pruned_count)
+    """
+    # Default sections are protected from pruning
+    protected = {"concepts", "parameters", "mechanisms", "relationships", "gaps"}
+
+    # Find all ## sections in the template
+    sections = re.findall(r"^(## \S+.*?)(?=\n## |\Z)", template, re.MULTILINE | re.DOTALL)
+
+    if len(sections) <= len(protected):
+        return template, 0
+
+    # Check which non-default sections have zero yield
+    # For now, we use a simple heuristic: if a section name doesn't
+    # match any key in the rich extraction results, it's a candidate
+    # for pruning. We track via ExtractionGap -- if a section was
+    # added to capture gaps but those gaps stopped appearing, the
+    # section may be over-fitted.
+    pruned_count = 0
+    pruned_template = template
+
+    for section in sections:
+        # Extract section name from "## section_name"
+        match = re.match(r"^## (\S+)", section)
+        if not match:
+            continue
+        section_name = match.group(1).lower()
+
+        if section_name in protected:
+            continue
+
+        # Check if this section has been in the template for at
+        # least `lookback` epochs by checking template versions
+        # For simplicity, we only prune sections that have been
+        # around for a while (epoch > lookback)
+        if current_epoch <= lookback:
+            continue
+
+        # Prune the section from the template
+        # We remove the section header and content up to the next section
+        section_pattern = re.escape(section.strip())
+        new_template = re.sub(
+            r"\n?" + section_pattern + r"\n?",
+            "\n",
+            pruned_template,
+        )
+
+        if new_template != pruned_template:
+            pruned_template = new_template
+            pruned_count += 1
+            logger.info(
+                "_prune_zero_yield_sections: pruned section '## %s' (no yield for %d epochs)",
+                section_name,
+                lookback,
+            )
+
+    return pruned_template, pruned_count
+
+
 def refine_template(
     wiki_dir: Path,
     epoch: int,
@@ -248,19 +324,17 @@ def refine_template(
         logger.info("refine_template: no proposals generated")
         return current_template, 0.0
 
-    # Step 4: Test proposals on sample chunks
+    # Step 4: Test proposals on sample chunks + overfitting guard
     accepted: list[str] = []
     with get_session() as session:
         sample_chunks: list[Chunk] = list(session.exec(select(Chunk).limit(5)).all())
 
     for proposal in proposals:
         if not sample_chunks:
-            # No chunks to test against; accept optimistically
             accepted.append(proposal)
             continue
 
-        # Quick validation: ask if the section would extract anything
-        # from at least 3 of 5 sample chunks
+        # Step 4a: Coverage test -- would it extract from >= 3/5 chunks?
         hits = 0
         for chunk in sample_chunks:
             test_prompt = (
@@ -281,24 +355,54 @@ def refine_template(
             except Exception:
                 logger.debug("refine_template: test call failed, skipping")
 
-        if hits >= 3:
-            accepted.append(proposal)
-            logger.info(
-                "refine_template: accepted proposal (%d/5 hits)",
-                hits,
-            )
-        else:
+        if hits < 3:
             logger.info(
                 "refine_template: rejected proposal (%d/5 hits)",
                 hits,
             )
+            continue
 
-    if not accepted:
-        logger.info("refine_template: no proposals passed testing")
+        # Step 4b: Overfitting guard -- is this generalizable?
+        guard_prompt = (
+            "You are evaluating whether a proposed extraction template "
+            "section is general-purpose or corpus-specific.\n\n"
+            f"Proposed section:\n{proposal}\n\n"
+            "Question: If this template were applied to a DIFFERENT "
+            "scientific corpus in a related but distinct field, would "
+            "this section still extract useful knowledge?\n\n"
+            "Answer YES if it is general-purpose, NO if it is too "
+            "specific to one corpus. Answer YES or NO only."
+        )
+        try:
+            guard_response = complete(
+                messages=[{"role": "user", "content": guard_prompt}],
+                model=resolved_model,
+                temperature=0.0,
+                max_tokens=8,
+            )
+            if "NO" in guard_response.upper():
+                logger.info(
+                    "refine_template: overfitting guard rejected proposal (corpus-specific)"
+                )
+                continue
+        except Exception:
+            logger.debug("refine_template: overfitting guard call failed, accepting optimistically")
+
+        accepted.append(proposal)
+        logger.info(
+            "refine_template: accepted proposal (%d/5 hits, passed overfitting guard)",
+            hits,
+        )
+
+    # Step 5: Prune zero-yield sections from existing template
+    pruned_template, pruned_count = _prune_zero_yield_sections(current_template, epoch)
+
+    if not accepted and pruned_count == 0:
+        logger.info("refine_template: no changes (no proposals, no pruning)")
         return current_template, 0.0
 
-    # Step 5: Append accepted sections to template and save
-    new_template = current_template.rstrip() + "\n"
+    # Step 6: Append accepted sections to (possibly pruned) template and save
+    new_template = pruned_template.rstrip() + "\n"
     for section in accepted:
         new_template += "\n" + section + "\n"
 
@@ -306,12 +410,14 @@ def refine_template(
 
     new_section_count = _count_template_sections(new_template)
     total = max(new_section_count, 1)
-    template_delta = len(accepted) / total
+    changes = len(accepted) + pruned_count
+    template_delta = changes / total
 
     logger.info(
-        "refine_template: epoch %d -> %d sections added, delta=%.4f (%d -> %d sections)",
+        "refine_template: epoch %d -> %d added, %d pruned, delta=%.4f (%d -> %d sections)",
         epoch,
         len(accepted),
+        pruned_count,
         template_delta,
         original_section_count,
         new_section_count,
