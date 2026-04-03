@@ -38,16 +38,52 @@ Data models for wiki in SQLite (`store/models.py`):
 
 ### Wiki Epoch Pipeline (complete)
 
-The concept-first epoch pipeline is fully implemented. All modules are in `src/wikify/wiki/`
-and tested:
+The concept-first epoch pipeline is fully implemented with a **dual execution model**:
+
+**Skill-based (primary):** The `/wiki-epoch` skill (`.claude/skills/wiki-epoch.md`) orchestrates
+the pipeline via Claude Code. The LLM spawns haiku subagents for batch extraction and article
+writing, and calls Python tools for graph computation, DB operations, and file I/O. No API key
+needed -- the LLM IS the model.
+
+**Scripted (secondary):** `wiki/epoch.py` provides `run_epoch()` for automated/scheduled runs
+via litellm (requires `ANTHROPIC_API_KEY`). Same 5-pass pipeline, same DB models.
+
+All modules in `src/wikify/wiki/` and tested:
 
 | Module | Purpose |
 |--------|---------|
-| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline (`discover_concepts`, `merge_concept_records`) |
-| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification (`build_concept_graph`, `score_importance`, `classify_relations`) |
-| `wiki/article.py` | Wikipedia-format article writer using `ConceptRecord` + graph neighbors (`write_concept_article`) |
-| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks (`run_epoch`, `run_until_convergence`, `check_convergence`, `compute_loss`) |
-| `wiki/dashboard.py` | FastAPI dashboard API: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard (`/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient`) |
+| `wiki/concepts.py` | `ConceptRecord`, `ConceptEvidence`, `ExtractionGap`, `ParameterExtraction` models + rich extraction pipeline with template system |
+| `wiki/template.py` | Extraction template management: load/save/version, prompt building, self-consistent refinement with overfitting guard and pruning |
+| `wiki/vectors.py` | Structured concept vectors for dedup: encodes type + relations + params into embedding strings |
+| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification |
+| `wiki/article.py` | Wikipedia-format article writer using `ConceptRecord` + graph neighbors |
+| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5, loss computation, convergence tracking (scripted mode) |
+| `wiki/dashboard.py` | FastAPI dashboard API: convergence curve, concept graph, coverage heatmap, epoch log, gap clusters |
+
+### Discovery Engine Alignment (complete)
+
+Seven phases implemented aligning with the Discovery Engine framework (arxiv 2505.17500):
+
+| Phase | What it does |
+|-------|-------------|
+| 0. Extraction Template | Evolving template replaces hardcoded prompt; concepts + params + mechanisms + relationships + gaps |
+| 1. Source Evidence | `ConceptEvidence` with fuzzy quote verification against source text |
+| 2. Meta-Probes | `ExtractionGap` captures what the template can't classify; `/api/gaps` dashboard |
+| 3. Template Refinement | Gap-driven template evolution with overfitting guard and zero-yield pruning |
+| 4. Two-Pass Extraction | Publication-level overview then targeted chunk deepening |
+| 5. Parameter Extraction | `ParameterExtraction` model; auto-generated parameter tables in articles |
+| 6. Structured Vectors | Type + relation + param enriched embedding strings for better dedup |
+
+### Tiered Retrieval (complete)
+
+Inspired by ByteRover's architecture, retrieval uses 4 tiers:
+
+| Tier | Mechanism | Latency |
+|------|-----------|---------|
+| 0 | Exact query cache (hash match) | ~0ms |
+| 1 | Jaccard fuzzy cache (>= 0.6 overlap) | ~1ms |
+| 2 | BM25 lexical search (if confident) | ~100ms |
+| 3 | ChromaDB embedding search | ~500ms |
 
 ### ML-Style Convergence Tracking (complete)
 

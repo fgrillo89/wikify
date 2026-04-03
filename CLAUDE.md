@@ -20,13 +20,32 @@ a concept-first, self-correcting personal Wikipedia. It also contains a writing 
 
 **Two pipelines — do not confuse them:**
 - **Writing pipeline**: `wikify generate` → `wikify evaluate` → `wikify revise` (fully working)
-- **Wikipedia pipeline**: `wikify wiki epoch` — concept discovery → graph → articles → cross-ref (in design; building-block modules exist, epoch orchestrator not yet implemented)
+- **Wikipedia pipeline**: `/wiki-epoch` skill → concept discovery → graph → articles → cross-ref (fully working)
+
+**Skills** (`.claude/skills/`):
+- `wiki-epoch.md` — orchestrate one epoch of the wiki-building pipeline
+- `generate.md` — write a paper from the corpus
+- `ingest.md` — ingest PDFs into the knowledge base
+
+## Architecture: Skills + Tools
+
+**The LLM is the orchestrator.** Pipelines are skills, not Python scripts calling litellm.
+
+- **Skills** describe what to do (markdown in `.claude/skills/`)
+- **Tools** are Python functions for DB, graph, file I/O, embeddings (no LLM needed)
+- **Agents** (haiku subagents) handle LLM-heavy batch work (extraction, article writing)
+- **Python code** handles: DB operations, graph computation, file I/O, embedding search
+- **The LLM** handles: extraction, synthesis, article writing, quality judgment, orchestration
+
+This means no API key dependency for the primary workflow. The scripted path
+(`epoch.py` via litellm) exists for automated/scheduled runs but is secondary.
 
 ## Agent Usage
 
 - **Always prefer sub-agents** for parallelizable work — launch independent tasks simultaneously
 - **Model triaging**: Use haiku for simple tasks (file searches, formatting, simple edits). Use sonnet for moderate tasks (code generation, research). Reserve opus for complex reasoning only.
 - Foreground agents only when results are needed before proceeding; background otherwise
+- **Batch processing**: For LLM-heavy passes (extraction, article writing), split work into N batches and spawn N haiku agents in parallel
 
 ## Python Tooling
 
@@ -83,3 +102,5 @@ same mistake is never repeated. Format: `- **Topic**: What went wrong → what t
 - **Epoch model for convergence**: Wiki building is iterative. Each epoch runs 5 passes: discovery → graph → article writing → cross-reference → index rebuild. Convergence is tracked via a scalar loss L and per-concept information gradient. See `wiki-wikipedia-model.md` for formulas.
 - **Model selection in epochs**: Use haiku for Pass 1 (extraction) always. Use haiku for Pass 3 (article writing) while L >= 0.3; switch to sonnet once L < 0.3. Reserve opus only for structural audit or complex synthesis.
 - **Package name**: The Python package is `wikify` (renamed from `scholarforge`). CLI command is `wikify`. GitHub repo is `github.com/fgrillo89/wikify`. Project root directory is still `C:\dev\scholarforge`.
+- **Skill-first architecture**: Pipelines are skills orchestrated by the LLM, not Python scripts calling litellm. The LLM spins up haiku agents for batch work and uses Python tools for DB/graph/file ops. The scripted path (litellm) is secondary, for automated/scheduled runs only. Never ask for API keys -- use subagents.
+- **Extraction template evolves**: The extraction template (`data/wiki/_template.md`) is versioned per epoch. It grows via gap-driven refinement and shrinks via zero-yield pruning. An overfitting guard rejects corpus-specific sections.
