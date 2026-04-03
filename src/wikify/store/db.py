@@ -12,6 +12,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from wikify.config import settings
 from wikify.store.models import (  # noqa: F401 — ensure tables created
+    Campaign,
     ChunkMiningLog,
     Citation,
     ConceptEvidence,

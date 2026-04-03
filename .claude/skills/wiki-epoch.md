@@ -141,16 +141,28 @@ brief["evidence"] = build_evidence_brief(concept.id, max_evidence=10)
 
 The writing agent uses these to write evidence-backed claims with inline `[REF:paper_display]` citations.
 
-### Step 3b: Batch and write
+### Step 3b: Build type-specific prompts
+
+Each concept gets a **type-adapted template** from `src/wikify/prompts/article_templates.py`:
+
+```python
+from wikify.prompts.article_templates import get_article_template, WRITING_RULES
+
+prompt = get_article_template(
+    concept_type=concept.concept_type,  # material, technique, phenomenon, etc.
+    name=concept.name,
+    parameters=brief["parameters"],
+    evidence=brief["evidence"],
+) + WRITING_RULES
+```
+
+This gives each concept type a different article structure (e.g. materials get Properties/Synthesis/Applications, techniques get Mechanism/Process Parameters/Variants). Templates are domain-agnostic.
+
+### Step 3c: Batch and write
 
 Split concepts into batches of 10. Launch **balanced-tier** subagents in parallel.
 
-Each agent writes a Wikipedia-style article (300-500 words) per concept:
-- Introduction (2-3 sentences, no heading)
-- ## What Is Known — established facts, [[wikilinks]] to neighbors, cite sources with `[REF:Author Year - Title]`
-- ## Where the Field Disagrees — contested points, cite both sides
-- ## Open Questions — unresolved
-- ## Parameters — markdown table (if parameters exist)
+Each agent receives the type-specific prompt + writing rules for its batch. The structure adapts to the concept type automatically.
 
 Rules: one concept per sentence, no em-dashes, no meta-commentary. Every factual claim must have a `[REF:...]` citation from the evidence provided.
 

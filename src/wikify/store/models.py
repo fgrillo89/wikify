@@ -170,8 +170,8 @@ class SourceCoverage(SQLModel, table=True):
     """Records which wiki article each source contributed to, and what was extracted."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    source_id: str = Field(index=True)      # Paper.id
-    article_slug: str = Field(index=True)   # WikiArticle.id
+    source_id: str = Field(index=True)  # Paper.id
+    article_slug: str = Field(index=True)  # WikiArticle.id
     domain: str = ""
     extraction: str = ""  # haiku-extracted sentence(s) that were used
     covered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -239,6 +239,60 @@ class ParameterExtraction(SQLModel, table=True):
     conditions: str = ""  # e.g. "substrate temperature 250C"
     evidence: str = ""  # source quote
     epoch_extracted: int = 0
+
+
+class Campaign(SQLModel, table=True):
+    """A directed research campaign with a thesis and multi-epoch investigation."""
+
+    id: str = Field(primary_key=True)  # slug, e.g. "ald-oxide-memristor-switching"
+    name: str  # human-readable, e.g. "ALD Oxide Composition for Memristor Switching"
+    thesis: str = ""  # the hypothesis or research question
+    status: str = "created"  # created | investigating | synthesizing | concluded
+    confidence: float = 0.0  # 0-1, how confident we are in answering the question
+    epochs_run: int = 0
+    findings: str = "[]"  # JSON list of key findings so far
+    open_gaps: str = "[]"  # JSON list of what's still missing
+    extraction_probes: str = "[]"  # JSON list of directed extraction questions
+    concept_ids: str = "[]"  # JSON list of ConceptRecord.id relevant to this campaign
+    paper_ids: str = "[]"  # JSON list of Paper.id used in this campaign
+    synthesis_path: str = ""  # path to the synthesis article
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def parsed_findings(self) -> list[str]:
+        try:
+            return json.loads(self.findings)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_gaps(self) -> list[str]:
+        try:
+            return json.loads(self.open_gaps)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_probes(self) -> list[str]:
+        try:
+            return json.loads(self.extraction_probes)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_concept_ids(self) -> list[str]:
+        try:
+            return json.loads(self.concept_ids)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_paper_ids(self) -> list[str]:
+        try:
+            return json.loads(self.paper_ids)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 class ExtractionGap(SQLModel, table=True):
