@@ -7,9 +7,12 @@ from scholarforge.wiki.builder import (
     slugify,
     write_article,
 )
+from scholarforge.wiki.linker import cross_link_articles, ensure_parent_backlinks
 
 __all__ = [
     "article_path",
+    "cross_link_articles",
+    "ensure_parent_backlinks",
     "find_stale_articles",
     "read_article_frontmatter",
     "slugify",

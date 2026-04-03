@@ -180,7 +180,7 @@ def test_find_stale_articles_handles_naive_datetime():
 
 def test_generate_wiki_index_empty_dir(tmp_path):
     result = generate_wiki_index(tmp_path)
-    assert "# Wiki Index" in result
+    assert "# Knowledge Base Index" in result
 
 
 def test_generate_wiki_index_with_articles(tmp_path):

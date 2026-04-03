@@ -146,42 +146,106 @@ def find_stale_articles(
 def generate_wiki_index(wiki_dir: Path) -> str:
     """Scan wiki directory and generate _index.md content.
 
-    Walks all .md files under wiki_dir (excluding _*.md files) and builds
-    a compact index grouped by subdirectory.
+    Groups articles by their frontmatter ``category`` field (theme, concept,
+    synthesis, query).  Falls back to the subdirectory name when the field is
+    absent.  Produces a structured Markdown index and writes it to
+    ``wiki_dir/_index.md``.
 
-    Returns the index markdown as a string.
+    Returns the generated index as a string.
     """
-    from datetime import date
+    now = datetime.now(timezone.utc)
+    now_str = now.strftime("%Y-%m-%d %H:%M UTC")
+
+    # Collect all non-index articles and their metadata.
+    category_order = ["theme", "concept", "synthesis", "query"]
+    buckets: dict[str, list[dict]] = {cat: [] for cat in category_order}
+    all_source_ids: set[str] = set()
+
+    for md_file in sorted(wiki_dir.rglob("*.md")):
+        if md_file.name.startswith("_"):
+            continue
+        meta = read_article_frontmatter(md_file)
+        title = str(meta.get("title") or md_file.stem)
+        scope = str(meta.get("scope", ""))
+        updated_raw = meta.get("updated") or meta.get("updated_at") or ""
+        parent_raw = meta.get("parent") or meta.get("parent_slug") or ""
+        sources_raw = meta.get("sources", [])
+        if isinstance(sources_raw, list):
+            for sid in sources_raw:
+                all_source_ids.add(str(sid))
+        elif isinstance(sources_raw, str) and sources_raw.strip("[]"):
+            for sid in sources_raw.strip("[]").split(","):
+                sid = sid.strip().strip("'\"")
+                if sid:
+                    all_source_ids.add(sid)
+
+        # Determine category.
+        category = str(meta.get("category", "")).lower()
+        if category not in category_order:
+            # Fall back to subdirectory name mapping.
+            subdir_name = md_file.parent.name.lower()
+            _dir_map = {
+                "themes": "theme",
+                "concepts": "concept",
+                "syntheses": "synthesis",
+                "queries": "query",
+                "gaps": "synthesis",
+            }
+            category = _dir_map.get(subdir_name, "concept")
+
+        entry = {
+            "title": title,
+            "slug": md_file.stem,
+            "scope": scope,
+            "updated": str(updated_raw),
+            "parent": str(parent_raw),
+        }
+        buckets.setdefault(category, []).append(entry)
+
+    article_count = sum(len(v) for v in buckets.values())
 
     lines: list[str] = [
-        "# Wiki Index",
+        "# Knowledge Base Index",
         "",
-        f"_Generated: {date.today().isoformat()}_",
-        "",
+        f"_Last updated: {now_str}_",
+        f"_Articles: {article_count} | Sources indexed: {len(all_source_ids)}_",
     ]
 
-    for subdir in sorted(wiki_dir.iterdir()):
-        if not subdir.is_dir():
-            continue
-        articles = sorted(subdir.glob("*.md"))
-        if not articles:
-            continue
-        lines.append(f"## {subdir.name.title()}")
-        lines.append("")
-        for article in articles:
-            meta = read_article_frontmatter(article)
-            title = meta.get("title") or article.stem
-            status = meta.get("status", "")
-            topics_raw = meta.get("topics", "")
-            topic_str = ""
-            if isinstance(topics_raw, list):
-                topic_str = ", ".join(topics_raw[:3])
-            elif isinstance(topics_raw, str) and topics_raw:
-                # Strip brackets
-                topic_str = topics_raw.strip("[]")
-            status_badge = f" `{status}`" if status else ""
-            topic_badge = f" — {topic_str}" if topic_str else ""
-            lines.append(f"- [[{article.stem}]] {title}{status_badge}{topic_badge}")
-        lines.append("")
+    section_labels = {
+        "theme": "Themes",
+        "concept": "Concepts",
+        "synthesis": "Syntheses",
+        "query": "Queries",
+    }
 
-    return "\n".join(lines)
+    for cat in category_order:
+        entries = buckets.get(cat, [])
+        if not entries:
+            continue
+        lines.append("")
+        lines.append(f"## {section_labels[cat]}")
+        lines.append("")
+        for e in entries:
+            scope_part = f" — {e['scope']}" if e["scope"] else ""
+            parent_part = f" _(parent: [[{e['parent']}]])_" if e["parent"] else ""
+            lines.append(f"- [[{e['title']}]]{scope_part}{parent_part}")
+
+    # Recent updates: top 5 by updated field (string sort; ISO dates compare lexically).
+    all_entries = [e for cat_entries in buckets.values() for e in cat_entries]
+    recent = sorted(
+        (e for e in all_entries if e["updated"]),
+        key=lambda e: e["updated"],
+        reverse=True,
+    )[:5]
+
+    if recent:
+        lines.append("")
+        lines.append("## Recent Updates")
+        lines.append("")
+        for e in recent:
+            lines.append(f"- {e['title']} — {e['updated']}")
+
+    content = "\n".join(lines) + "\n"
+    index_path = wiki_dir / "_index.md"
+    index_path.write_text(content, encoding="utf-8")
+    return content
