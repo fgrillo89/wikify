@@ -76,7 +76,7 @@ Seven phases implemented aligning with the Discovery Engine framework (arxiv 250
 
 ### Tiered Retrieval (complete)
 
-Inspired by ByteRover's architecture, retrieval uses 4 tiers:
+Retrieval uses 4 tiers for speed:
 
 | Tier | Mechanism | Latency |
 |------|-----------|---------|

@@ -215,7 +215,7 @@ def generate_parameter_table(concept_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Index condensation (inspired by ByteRover Context Tree)
+# Index condensation
 # ---------------------------------------------------------------------------
 
 
@@ -230,7 +230,7 @@ def generate_domain_condensation(
     injecting into LLM context without loading every article. Each concept
     gets a one-line entry with its type, importance, status, and definition.
 
-    The condensation follows ByteRover's pattern of summary files at each
+    The condensation follows the pattern of summary files at each
     hierarchy level, adapted for our domain/concept structure.
 
     Args:

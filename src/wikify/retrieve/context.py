@@ -1,6 +1,6 @@
 """Retrieve and assemble context from the knowledge base for LLM generation.
 
-Tiered retrieval (inspired by ByteRover):
+Tiered retrieval:
     Tier 0: Exact query cache (hash match)           -- ~0ms
     Tier 1: Jaccard fuzzy cache (>= 0.6 overlap)     -- ~1ms
     Tier 2: BM25 lexical search (if confident)        -- ~100ms
