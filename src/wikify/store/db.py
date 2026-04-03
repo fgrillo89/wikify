@@ -15,6 +15,7 @@ from wikify.store.models import (  # noqa: F401 — ensure tables created
     Citation,
     ConceptRecord,
     ConceptRelation,
+    DomainCluster,
     DomainPersona,
     EpochLog,
     FigureRef,
@@ -24,6 +25,7 @@ from wikify.store.models import (  # noqa: F401 — ensure tables created
     Project,
     ProjectPaper,
     SourceCoverage,
+    TopologySnapshot,
     WikiArticle,
 )
 
@@ -91,6 +93,17 @@ def _run_migrations(engine) -> None:
         except Exception:  # noqa: BLE001
             conn.execute(
                 sqlalchemy.text("ALTER TABLE wikiarticle ADD COLUMN domain VARCHAR DEFAULT ''")
+            )
+            conn.commit()
+
+        # Migration 4: ConceptRecord.domains column (added 2026-04-03)
+        try:
+            conn.execute(sqlalchemy.text("SELECT domains FROM conceptrecord LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE conceptrecord ADD COLUMN domains VARCHAR DEFAULT '[]'"
+                )
             )
             conn.commit()
 

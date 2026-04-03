@@ -20,6 +20,7 @@ import statistics
 from collections import defaultdict
 
 import networkx as nx
+import numpy as np
 from sqlmodel import select
 
 from wikify.store.db import get_session
@@ -427,3 +428,166 @@ def save_relations(relations: list[ConceptRelation], epoch: int) -> int:
         len(relations),
     )
     return len(relations)
+
+
+# ---------------------------------------------------------------------------
+# Topology metrics
+# ---------------------------------------------------------------------------
+
+
+def compute_modularity(graph: nx.DiGraph, communities: dict[str, int]) -> float:
+    """Compute the modularity score of a community partition.
+
+    Converts the flat concept_id -> community_index mapping into the list-of-sets
+    format expected by NetworkX, then delegates to
+    :func:`networkx.community.modularity` on the undirected projection.
+
+    Args:
+        graph:       DiGraph returned by :func:`build_concept_graph`.
+        communities: Mapping of concept_id -> community_index from
+                     :func:`detect_communities`.
+
+    Returns:
+        Modularity score in roughly [0, 1].  Returns 0.0 for empty graphs or
+        when no edges exist.
+    """
+    if graph.number_of_nodes() == 0 or graph.number_of_edges() == 0:
+        return 0.0
+
+    # Build list[set[str]] indexed by community index
+    index_to_members: dict[int, set[str]] = defaultdict(set)
+    for node, idx in communities.items():
+        index_to_members[idx].add(node)
+    community_sets: list[set[str]] = list(index_to_members.values())
+
+    if not community_sets:
+        return 0.0
+
+    score: float = nx.community.modularity(graph.to_undirected(), community_sets)
+    logger.debug("compute_modularity: %.4f from %d communities", score, len(community_sets))
+    return score
+
+
+def compute_inter_community_edge_ratio(
+    graph: nx.DiGraph,
+    communities: dict[str, int],
+) -> float:
+    """Return the fraction of edges that cross community boundaries.
+
+    An edge (u, v) is inter-community when u and v belong to different
+    community indices.
+
+    Args:
+        graph:       DiGraph returned by :func:`build_concept_graph`.
+        communities: Mapping of concept_id -> community_index from
+                     :func:`detect_communities`.
+
+    Returns:
+        Ratio in [0, 1].  Returns 0.0 when there are no edges.
+    """
+    total_edges = graph.number_of_edges()
+    if total_edges == 0:
+        return 0.0
+
+    inter = sum(1 for src, tgt in graph.edges() if communities.get(src) != communities.get(tgt))
+    ratio = inter / total_edges
+    logger.debug(
+        "compute_inter_community_edge_ratio: %d/%d inter-community edges (%.4f)",
+        inter,
+        total_edges,
+        ratio,
+    )
+    return ratio
+
+
+def compute_bridge_density(roles: dict[str, str]) -> float:
+    """Return the proportion of nodes classified as "bridge".
+
+    Args:
+        roles: Mapping of concept_id -> role string from
+               :func:`classify_node_roles`.
+
+    Returns:
+        Bridge density in [0, 1].  Returns 0.0 for empty role maps.
+    """
+    if not roles:
+        return 0.0
+
+    bridge_count = sum(1 for role in roles.values() if role == "bridge")
+    density = bridge_count / len(roles)
+    logger.debug(
+        "compute_bridge_density: %d/%d bridge nodes (%.4f)",
+        bridge_count,
+        len(roles),
+        density,
+    )
+    return density
+
+
+def compute_community_gini(communities: dict[str, int]) -> float:
+    """Compute the Gini coefficient of community sizes.
+
+    A Gini of 0 means all communities are equally sized; a Gini near 1 means
+    nearly all concepts belong to a single community.
+
+    Formula (1-indexed sort):
+        G = (2 * sum(i * x_i)) / (n * sum(x_i)) - (n + 1) / n
+
+    Args:
+        communities: Mapping of concept_id -> community_index from
+                     :func:`detect_communities`.
+
+    Returns:
+        Gini coefficient in [0, 1].  Returns 0.0 when there are 0 or 1
+        distinct communities.
+    """
+    if not communities:
+        return 0.0
+
+    size_counter: dict[int, int] = defaultdict(int)
+    for idx in communities.values():
+        size_counter[idx] += 1
+
+    n_communities = len(size_counter)
+    if n_communities <= 1:
+        return 0.0
+
+    sizes = sorted(size_counter.values())  # ascending
+    n = len(sizes)
+    total = sum(sizes)
+    if total == 0:
+        return 0.0
+
+    weighted_sum = sum((i + 1) * x for i, x in enumerate(sizes))
+    gini = (2 * weighted_sum) / (n * total) - (n + 1) / n
+    # Clamp to [0, 1] to guard against floating-point drift
+    gini = max(0.0, min(1.0, gini))
+    logger.debug("compute_community_gini: %.4f from %d communities", gini, n_communities)
+    return gini
+
+
+def compute_spectral_gap(graph: nx.DiGraph) -> float:
+    """Compute the spectral gap (algebraic connectivity / Fiedler value).
+
+    The spectral gap is the difference between the second-smallest and
+    smallest eigenvalues of the graph Laplacian.  A larger gap indicates a
+    better-connected, more robust graph structure.
+
+    Args:
+        graph: DiGraph returned by :func:`build_concept_graph`.
+
+    Returns:
+        Spectral gap >= 0.  Returns 0.0 for graphs with fewer than 2 nodes,
+        disconnected graphs, or any numeric error.
+    """
+    if graph.number_of_nodes() < 2:
+        return 0.0
+
+    try:
+        eigenvalues = np.sort(nx.laplacian_spectrum(graph.to_undirected()))
+        gap = float(eigenvalues[1] - eigenvalues[0])
+        logger.debug("compute_spectral_gap: %.6f", gap)
+        return max(0.0, gap)
+    except Exception:
+        logger.debug("compute_spectral_gap: failed to compute eigenvalues, returning 0.0")
+        return 0.0

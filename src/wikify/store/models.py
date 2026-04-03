@@ -185,7 +185,8 @@ class ConceptRecord(SQLModel, table=True):
     aliases: str = Field(default="[]")  # JSON list, e.g. '["ALD", "atomic layer dep."]'
     definition: str = ""  # one-line definition from discovery
     concept_type: str = ""  # technique | material | phenomenon | method | theory | dataset
-    domain: str = ""  # inferred from source distribution
+    domain: str = ""  # deprecated: use domains; kept for backward compat
+    domains: str = Field(default="[]")  # JSON list of DomainCluster.id values
     importance: float = 0.0  # 0-1, computed from concept graph (updated in Pass 2)
     epoch_discovered: int = 0
     epoch_last_updated: int = 0
@@ -201,6 +202,17 @@ class ConceptRecord(SQLModel, table=True):
             return json.loads(self.aliases)
         except (json.JSONDecodeError, TypeError):
             return []
+
+    @property
+    def parsed_domains(self) -> list[str]:
+        """Parse domains JSON safely."""
+        if not self.domains:
+            return [self.domain] if self.domain else []
+        try:
+            result = json.loads(self.domains)
+            return result if result else ([self.domain] if self.domain else [])
+        except (json.JSONDecodeError, TypeError):
+            return [self.domain] if self.domain else []
 
 
 class ConceptRelation(SQLModel, table=True):
@@ -230,6 +242,59 @@ class EpochLog(SQLModel, table=True):
     converged: bool = False
     loss_score: float = 0.0  # L computed after Pass 5
     loss_delta: float = 0.0  # |L(epoch_n) - L(epoch_n-1)|
+
+
+class DomainCluster(SQLModel, table=True):
+    """A discovered domain community from the concept co-occurrence graph."""
+
+    id: str = Field(primary_key=True)  # e.g. "cluster_0" or slug of label
+    label: str  # LLM-generated, e.g. "ALD Process Engineering"
+    scope: str = ""  # one-sentence scope statement
+    epoch_created: int = 0
+    epoch_last_updated: int = 0
+    concept_count: int = 0
+    core_concept_ids: str = Field(default="[]")  # JSON list of ConceptRecord.id
+    bridge_concept_ids: str = Field(default="[]")  # JSON list
+    centroid_embedding: str = Field(default="[]")  # JSON list[float]
+    modularity_contribution: float = 0.0
+    persona_text: str = ""  # community-specific persona
+    merged_from: str = Field(default="[]")  # JSON list of previous cluster ids
+
+    @property
+    def parsed_core_concepts(self) -> list[str]:
+        try:
+            return json.loads(self.core_concept_ids)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_bridge_concepts(self) -> list[str]:
+        try:
+            return json.loads(self.bridge_concept_ids)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_centroid(self) -> list[float]:
+        try:
+            return json.loads(self.centroid_embedding)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+
+class TopologySnapshot(SQLModel, table=True):
+    """Corpus topology metrics captured once per epoch after domain discovery."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    epoch: int = Field(index=True)
+    modularity_q: float = 0.0
+    inter_community_edge_ratio: float = 0.0
+    bridge_density: float = 0.0
+    community_gini: float = 0.0
+    spectral_gap: float = 0.0
+    community_count: int = 0
+    total_concepts: int = 0
+    total_edges: int = 0
 
 
 class JournalTemplate(SQLModel, table=True):

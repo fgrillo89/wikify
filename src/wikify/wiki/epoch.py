@@ -52,6 +52,7 @@ from wikify.wiki.concepts import (
     discover_concepts,
     list_concepts,
 )
+from wikify.wiki.domains import discover_domains
 from wikify.wiki.linker import cross_link_articles
 from wikify.wiki.mapreduce import SourceExtraction, map_chunks_to_topic
 
@@ -465,6 +466,31 @@ def run_epoch(
         n_relations,
     )
 
+    # ── Pass 2b: Domain Discovery ────────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 2b: Domain Discovery (epoch=%d) ---", epoch)
+
+    domain_clusters = discover_domains(graph, epoch, model=HAIKU_MODEL)
+
+    # Build a concept -> primary domain label lookup for Pass 3 scoping
+    _concept_domain: dict[str, str] = {}
+    _concept_is_bridge: set[str] = set()
+    for cluster in domain_clusters:
+        for cid in cluster.parsed_core_concepts:
+            _concept_domain[cid] = cluster.label
+        for cid in cluster.parsed_bridge_concepts:
+            _concept_is_bridge.add(cid)
+            _concept_domain.setdefault(cid, cluster.label)
+
+    # Map cluster id -> cluster for persona lookup
+    _cluster_by_id: dict[str, object] = {c.id: c for c in domain_clusters}
+
+    logger.info(
+        "Pass 2b complete in %.1fs: %d domains discovered",
+        time.monotonic() - t0,
+        len(domain_clusters),
+    )
+
     # ── Pass 3: Article Writing ────────────────────────────────────────────────
     t0 = time.monotonic()
     logger.info("--- Pass 3: Article Writing (epoch=%d, model=%s) ---", epoch, article_model)
@@ -489,12 +515,16 @@ def run_epoch(
                         if session.get(ConceptRecord, nid) is not None
                     ]
 
-                body = write_concept_article(concept, neighbors, domain, article_model)
+                # Use domain-scoped label if available, fall back to epoch domain
+                concept_domain = _concept_domain.get(concept.id, domain)
+                body = write_concept_article(
+                    concept, neighbors, concept_domain, article_model
+                )
 
                 extractions: list[SourceExtraction] = map_chunks_to_topic(
                     topic_query=concept.name,
                     scope=concept.definition or concept.name,
-                    domain=domain,
+                    domain=concept_domain,
                     model=HAIKU_MODEL,
                 )
 
@@ -548,12 +578,25 @@ def run_epoch(
                 continue
 
             try:
+                concept_domain = _concept_domain.get(concept.id, domain)
                 new_extractions: list[SourceExtraction] = map_chunks_to_topic(
                     topic_query=concept.name,
                     scope=concept.definition or concept.name,
-                    domain=domain,
+                    domain=concept_domain,
                     model=HAIKU_MODEL,
                 )
+
+                # Bridge concepts: also pull evidence from adjacent domains
+                if concept.id in _concept_is_bridge:
+                    for d_label in concept.parsed_domains:
+                        if d_label != concept_domain:
+                            cross_ext = map_chunks_to_topic(
+                                topic_query=concept.name,
+                                scope=concept.definition or concept.name,
+                                domain=d_label,
+                                model=HAIKU_MODEL,
+                            )
+                            new_extractions.extend(cross_ext)
 
                 relevant_extractions = [e for e in new_extractions if e.is_relevant]
                 if not relevant_extractions:
@@ -566,7 +609,7 @@ def run_epoch(
                     continue
 
                 updated_body = upgrade_concept_article(
-                    concept, article_file, relevant_extractions, domain, article_model
+                    concept, article_file, relevant_extractions, concept_domain, article_model
                 )
 
                 # Determine new status
