@@ -262,12 +262,14 @@ class TestWikiSync:
         assert "Synced 0 articles" in result.output
 
     def test_sync_one_stale_article(self, tmp_path: Path) -> None:
-        """Syncs a single stale article: updates file and clears needs_update."""
+        """Syncs a single stale article via the new map-reduce + maintenance pipeline."""
         now = datetime.now(timezone.utc)
 
         article_file = tmp_path / "concepts" / "test_article.md"
         article_file.parent.mkdir(parents=True)
-        article_file.write_text("---\ntitle: Test\n---\n\nOriginal body.\n", encoding="utf-8")
+        article_file.write_text(
+            "---\ntitle: Test\n---\n## Established\n\nOriginal body.\n", encoding="utf-8"
+        )
 
         from scholarforge.store.models import WikiArticle
 
@@ -282,39 +284,52 @@ class TestWikiSync:
             updated_at=now,
             model="test",
             needs_update=True,
+            domain="test_domain",
         )
 
-        # First Session call: return stale articles list
-        mock_stale_session = MagicMock()
-        mock_stale_session.__enter__ = MagicMock(return_value=mock_stale_session)
-        mock_stale_session.__exit__ = MagicMock(return_value=False)
-        mock_stale_session.exec.return_value.all.return_value = [stale_row]
+        from scholarforge.wiki.mapreduce import SourceExtraction
 
-        # Second Session call: update the row
-        mock_update_session = MagicMock()
-        mock_update_session.__enter__ = MagicMock(return_value=mock_update_session)
-        mock_update_session.__exit__ = MagicMock(return_value=False)
-        mock_update_session.exec.return_value.first.return_value = stale_row
+        mock_ext = SourceExtraction(
+            source_id="src1",
+            display_name="Smith 2024 - Test",
+            doc_type="paper",
+            graph_role="standard",
+            pagerank_score=0.0,
+            extraction="YES: New finding.",
+            is_relevant=True,
+        )
 
-        session_calls = iter([mock_stale_session, mock_update_session])
+        # Session mock that cycles through calls
+        stale_exec = MagicMock()
+        stale_exec.all.return_value = [stale_row]
+        coverage_exec = MagicMock()
+        coverage_exec.all.return_value = []  # no existing coverage
+        update_exec = MagicMock()
+        update_exec.first.return_value = stale_row
 
-        def _session_factory(_engine):
-            try:
-                return next(session_calls)
-            except StopIteration:
-                return mock_update_session
+        session_mock = MagicMock()
+        session_mock.__enter__ = lambda s: session_mock
+        session_mock.__exit__ = MagicMock(return_value=False)
+
+        call_index = [0]
+        exec_results = [stale_exec, coverage_exec, update_exec]
+
+        def exec_by_call(stmt):
+            idx = call_index[0]
+            call_index[0] += 1
+            if idx < len(exec_results):
+                return exec_results[idx]
+            return MagicMock(all=lambda: [], first=lambda: None)
+
+        session_mock.exec.side_effect = exec_by_call
 
         with (
             patch("scholarforge.store.db.get_engine"),
-            patch("sqlmodel.Session", side_effect=_session_factory),
-            patch(
-                "scholarforge.agent.tools.read_paper_digest",
-                return_value="digest text",
-            ),
-            patch(
-                "scholarforge.wiki.agent.update_wiki_article",
-                return_value="Updated body.",
-            ),
+            patch("sqlmodel.Session", return_value=session_mock),
+            patch("scholarforge.wiki.mapreduce.map_chunks_to_topic", return_value=[mock_ext]),
+            patch("scholarforge.wiki.maintenance.detect_contradiction", return_value=False),
+            patch("scholarforge.wiki.maintenance.additive_update", return_value="Updated body."),
+            patch("scholarforge.wiki.persona.get_or_create_persona", return_value="Persona text"),
             patch("scholarforge.wiki.builder.write_article"),
             patch("scholarforge.wiki.builder.generate_wiki_index", return_value=""),
         ):
@@ -405,29 +420,16 @@ class TestWikiQuery:
     """Tests for 'scholarforge wiki query'."""
 
     def test_query_prints_answer(self, tmp_path: Path) -> None:
-        """Query returns an LLM-generated answer from wiki articles."""
+        """Query returns an answer via the escalation protocol."""
         wiki_dir = tmp_path / "wiki"
         wiki_dir.mkdir()
         index_file = wiki_dir / "_index.md"
         index_file.write_text("# Knowledge Base Index\n\n## Concepts\n\n- [[ALD Fundamentals]]\n")
 
-        concepts_dir = wiki_dir / "concepts"
-        concepts_dir.mkdir()
-        (concepts_dir / "ald_fundamentals.md").write_text(
-            "---\ntitle: ALD Fundamentals\n---\n\nALD is a thin-film deposition technique.\n"
-        )
-
-        llm_responses = iter(
-            [
-                "ald_fundamentals",  # relevance call
-                "ALD is atomic layer deposition, a technique for thin films.",  # answer
-            ]
-        )
-
         with (
             patch(
-                "scholarforge.llm.client.complete",
-                side_effect=lambda **kw: next(llm_responses),
+                "scholarforge.cli._answer_with_escalation",
+                return_value="ALD is atomic layer deposition, a technique for thin films.",
             ),
             patch(
                 "scholarforge.cli.Path",
@@ -458,21 +460,14 @@ class TestWikiQuery:
         wiki_dir.mkdir()
         (wiki_dir / "_index.md").write_text("# Knowledge Base Index\n")
 
-        llm_responses = iter(
-            [
-                "ald_overview",  # relevance slug
-                "ALD is great for thin films.",  # answer
-            ]
-        )
-
         mock_sess = MagicMock()
         mock_sess.__enter__ = MagicMock(return_value=mock_sess)
         mock_sess.__exit__ = MagicMock(return_value=False)
 
         with (
             patch(
-                "scholarforge.llm.client.complete",
-                side_effect=lambda **kw: next(llm_responses),
+                "scholarforge.cli._answer_with_escalation",
+                return_value="ALD is great for thin films.",
             ),
             patch(
                 "scholarforge.cli.Path",

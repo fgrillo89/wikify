@@ -1,9 +1,12 @@
 """ScholarForge CLI entry point."""
 
+import logging
 from pathlib import Path
 
 import typer
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="scholarforge",
@@ -862,17 +865,30 @@ def wiki_expand(
 def wiki_sync(
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
 ):
-    """Update stale wiki articles (needs_update=True) with new corpus evidence."""
+    """Update stale wiki articles (needs_update=True) with new corpus evidence.
+
+    For each stale article:
+    1. Map new (uncovered) sources to the article topic.
+    2. Run detect_contradiction on each relevant extraction.
+    3. Route to additive_update or revisionary_update accordingly.
+    4. Write the updated body back to file (preserving frontmatter).
+    """
     import json
     from datetime import datetime, timezone
 
     from sqlmodel import Session, select
 
-    from scholarforge.agent.tools import read_paper_digest
     from scholarforge.store.db import get_engine
-    from scholarforge.store.models import WikiArticle
-    from scholarforge.wiki.agent import update_wiki_article
+    from scholarforge.store.models import SourceCoverage, WikiArticle
     from scholarforge.wiki.builder import generate_wiki_index, write_article
+    from scholarforge.wiki.maintenance import (
+        _strip_frontmatter,
+        additive_update,
+        detect_contradiction,
+        revisionary_update,
+    )
+    from scholarforge.wiki.mapreduce import map_chunks_to_topic
+    from scholarforge.wiki.persona import get_or_create_persona
 
     wiki_dir = Path("data/wiki")
     engine = get_engine()
@@ -886,6 +902,8 @@ def wiki_sync(
 
     console.print(f"[bold]Syncing {len(stale)} stale article(s)...[/bold]")
     synced = 0
+    additive_count = 0
+    revisionary_count = 0
 
     for article in stale:
         console.print(f"  Syncing: {article.title}")
@@ -896,35 +914,84 @@ def wiki_sync(
             console.print(f"[yellow]  File missing, skipping: {art_path}[/yellow]")
             continue
 
-        # Read current content (strip frontmatter)
-        text = art_path.read_text(encoding="utf-8", errors="replace")
-        parts = text.split("---\n", 2)
-        body = parts[2].strip() if len(parts) >= 3 else text
+        # Identify source IDs already covered for this article
+        source_ids: list[str] = json.loads(article.source_ids or "[]")
+        with Session(engine) as session:
+            covered_rows = list(
+                session.exec(
+                    select(SourceCoverage.source_id).where(
+                        SourceCoverage.article_slug == article.id
+                    )
+                ).all()
+            )
+        covered_ids: set[str] = set(covered_rows)
+        new_source_ids = [pid for pid in source_ids if pid not in covered_ids]
 
-        # Fetch digests for known source IDs
-        source_ids = json.loads(article.source_ids or "[]")
-        digests: list[str] = []
-        for pid in source_ids[:5]:
-            digest = read_paper_digest(pid[:16], reason=f"wiki sync: {article.title}")
-            if digest:
-                digests.append(digest)
+        if not new_source_ids:
+            # Nothing new — just clear the flag
+            with Session(engine) as session:
+                row = session.exec(select(WikiArticle).where(WikiArticle.id == article.id)).first()
+                if row is not None:
+                    row.needs_update = False
+                    row.updated_at = datetime.now(timezone.utc)
+                    session.add(row)
+                    session.commit()
+            console.print(f"  [dim]No new sources for {article.title}, cleared flag.[/dim]")
+            continue
 
+        # Map new sources to the article's topic
         try:
-            revised_body = update_wiki_article(body, digests, model=model)
+            extractions = map_chunks_to_topic(
+                topic_query=article.title,
+                scope="",
+                domain=article.domain,
+                model=model,
+                key_source_ids=new_source_ids,
+            )
         except Exception as exc:
-            console.print(f"[red]  LLM update failed ({exc}), skipping[/red]")
+            console.print(f"[red]  map_chunks_to_topic failed ({exc}), skipping[/red]")
             raise
 
-        write_article(
-            path=art_path,
-            title=article.title,
-            content=revised_body,
-            sources=source_ids,
-            topics=json.loads(article.topic_keys or "[]"),
-            status=article.status,
-            model=model or article.model,
-        )
+        relevant = [e for e in extractions if e.is_relevant]
+        if not relevant:
+            console.print(f"  [dim]No relevant extractions for {article.title}.[/dim]")
+        else:
+            # Read body for contradiction detection
+            text = art_path.read_text(encoding="utf-8", errors="replace")
+            body = _strip_frontmatter(text)
 
+            # Get domain persona
+            try:
+                persona = get_or_create_persona(article.domain, model=model)
+            except Exception as exc:
+                logger.warning("Could not fetch persona for %r: %s", article.domain, exc)
+                persona = ""
+
+            # Check any extraction for contradiction
+            has_contradiction = any(detect_contradiction(body, e.extraction) for e in relevant)
+
+            try:
+                if has_contradiction:
+                    updated_body = revisionary_update(art_path, relevant, persona, model)
+                    revisionary_count += 1
+                else:
+                    updated_body = additive_update(art_path, relevant, persona, model)
+                    additive_count += 1
+            except Exception as exc:
+                console.print(f"[red]  LLM update failed ({exc}), skipping[/red]")
+                raise
+
+            write_article(
+                path=art_path,
+                title=article.title,
+                content=updated_body,
+                sources=source_ids,
+                topics=json.loads(article.topic_keys or "[]"),
+                status=article.status,
+                model=model or article.model,
+            )
+
+        # Mark article as synced
         with Session(engine) as session:
             row = session.exec(select(WikiArticle).where(WikiArticle.id == article.id)).first()
             if row is not None:
@@ -936,7 +1003,165 @@ def wiki_sync(
         synced += 1
 
     generate_wiki_index(wiki_dir)
-    console.print(f"[green]Synced {synced} articles[/green]")
+    console.print(
+        f"[green]Synced {synced} articles "
+        f"({revisionary_count} revisionary, {additive_count} additive)[/green]"
+    )
+
+
+@wiki_app.command("audit")
+def wiki_audit(
+    domain: str = typer.Option("", "--domain", "-d", help="Filter by domain"),
+    fix: bool = typer.Option(False, "--fix", help="Queue split/merge candidates for sync"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+):
+    """Report structural issues in the wiki (split/merge/orphan/contradiction/drift).
+
+    Writes a full audit report to data/wiki/_audit.md.
+    Use --fix to automatically queue split/merge candidates for sync.
+    """
+    from datetime import datetime, timezone
+
+    from sqlmodel import Session, select
+
+    from scholarforge.store.db import get_engine
+    from scholarforge.store.models import WikiArticle
+    from scholarforge.wiki.maintenance import structural_audit
+
+    wiki_dir = Path("data/wiki")
+    report = structural_audit(wiki_dir, domain=domain, model=model)
+
+    # ── Print summary ─────────────────────────────────────────────────────────
+    console.print("\n[bold]Wiki Structural Audit[/bold]")
+    if domain:
+        console.print(f"[dim]Domain: {domain}[/dim]\n")
+
+    console.print(f"  Split candidates (>15 coverage rows): {len(report.split_candidates)}")
+    for slug in report.split_candidates:
+        console.print(f"    - {slug}")
+
+    console.print(f"  Merge candidates (>80% source overlap): {len(report.merge_candidates)}")
+    for a, b in report.merge_candidates:
+        console.print(f"    - {a} <-> {b}")
+
+    n_dep = len(report.deprecation_candidates)
+    console.print(f"  Deprecation candidates (0 coverage, <3 sources): {n_dep}")
+    for slug in report.deprecation_candidates:
+        console.print(f"    - {slug}")
+
+    console.print(f"  Orphan sources (no coverage anywhere): {len(report.orphan_sources)}")
+    if report.orphan_sources:
+        console.print("    [dim](showing first 10)[/dim]")
+        for src in report.orphan_sources[:10]:
+            console.print(f"    - {src}")
+
+    console.print(f"  Contradiction flags (WARNING in body): {len(report.contradiction_flags)}")
+    for slug in report.contradiction_flags:
+        console.print(f"    - {slug}")
+
+    console.print(f"  Graph drift (hub/bridge not in any article): {len(report.graph_drift)}")
+    for name in report.graph_drift[:10]:
+        console.print(f"    - {name}")
+
+    # ── Write audit file ──────────────────────────────────────────────────────
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = wiki_dir / "_audit.md"
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    lines: list[str] = [
+        "# Wiki Structural Audit",
+        "",
+        f"_Generated: {now_str}_",
+        f"_Domain filter: {domain or '(all)'}_",
+        "",
+        "## Split Candidates",
+        "_Articles with >15 SourceCoverage rows (may need splitting into sub-articles)_",
+        "",
+    ]
+    if report.split_candidates:
+        for slug in report.split_candidates:
+            lines.append(f"- {slug}")
+    else:
+        lines.append("_None_")
+    lines += [
+        "",
+        "## Merge Candidates",
+        "_Article pairs with >80% overlapping source_ids (may cover duplicate territory)_",
+        "",
+    ]
+    if report.merge_candidates:
+        for a, b in report.merge_candidates:
+            lines.append(f"- {a} <-> {b}")
+    else:
+        lines.append("_None_")
+    lines += [
+        "",
+        "## Deprecation Candidates",
+        "_Articles with zero SourceCoverage rows and fewer than 3 source_ids_",
+        "",
+    ]
+    if report.deprecation_candidates:
+        for slug in report.deprecation_candidates:
+            lines.append(f"- {slug}")
+    else:
+        lines.append("_None_")
+    lines += [
+        "",
+        "## Orphan Sources",
+        "_Papers in the corpus that are not referenced in any wiki article_",
+        "",
+    ]
+    if report.orphan_sources:
+        for src in report.orphan_sources:
+            lines.append(f"- {src}")
+    else:
+        lines.append("_None_")
+    lines += [
+        "",
+        "## Contradiction Flags",
+        "_Articles containing WARNING markers (unresolved contradictions)_",
+        "",
+    ]
+    if report.contradiction_flags:
+        for slug in report.contradiction_flags:
+            lines.append(f"- {slug}")
+    else:
+        lines.append("_None_")
+    lines += [
+        "",
+        "## Graph Drift",
+        "_Hub/bridge papers identified by graph analysis not yet referenced in any article_",
+        "",
+    ]
+    if report.graph_drift:
+        for name in report.graph_drift:
+            lines.append(f"- {name}")
+    else:
+        lines.append("_None_")
+
+    audit_path.write_text("\n".join(lines), encoding="utf-8")
+
+    # ── Apply --fix ───────────────────────────────────────────────────────────
+    if fix:
+        fix_slugs: set[str] = set(report.split_candidates)
+        for a, b in report.merge_candidates:
+            fix_slugs.add(a)
+            fix_slugs.add(b)
+
+        if fix_slugs:
+            engine = get_engine()
+            with Session(engine) as session:
+                for slug in fix_slugs:
+                    row = session.exec(select(WikiArticle).where(WikiArticle.id == slug)).first()
+                    if row is not None:
+                        row.needs_update = True
+                        session.add(row)
+                session.commit()
+            console.print(
+                f"[green]Queued {len(fix_slugs)} article(s) for sync (needs_update=True)[/green]"
+            )
+
+    console.print(f"[green]Audit complete. Report saved to {audit_path}[/green]")
 
 
 @wiki_app.command("health")
@@ -1031,43 +1256,100 @@ def wiki_health():
     console.print(f"[dim]Saved: {health_path}[/dim]")
 
 
-@wiki_app.command("query")
-def wiki_query(
-    question: str = typer.Argument(..., help="Question to answer from the wiki"),
-    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
-    promote: bool = typer.Option(False, "--promote", help="Save the answer as a new wiki article"),
-):
-    """Answer a question by querying the wiki index and relevant articles.
+def _answer_with_escalation(
+    question: str,
+    wiki_dir: Path,
+    domain: str,
+    model: str | None,
+) -> str | None:
+    """Run the 5-level escalation protocol to answer a wiki question.
 
-    1. Reads the compact _index.md to identify 2-3 relevant articles.
-    2. Reads those article files in full.
-    3. Calls the LLM to produce an answer grounded in article content.
-    4. Optionally promotes the answer to data/wiki/queries/<slug>.md.
+    Level 0: Read _index.md -- can this be answered from domain/theme info?
+    Level 1: Read relevant domain _index.md + theme index(es).
+    Level 2: Read the specific article file(s) identified.
+    Level 3: Read source digests cited in article Source Pointers.
+    Level 4: Read source sections named in Source Pointers.
+    If still unanswered after Level 4: record gap and return None.
+
+    Returns:
+        The answer string if answered at any level; None if unanswered.
     """
-    import json
-    from datetime import datetime, timezone
+    import re
 
+    from scholarforge.agent.tools import read_paper_digest, read_section
     from scholarforge.llm.client import complete
-    from scholarforge.wiki.builder import slugify, write_article
 
-    wiki_dir = Path("data/wiki")
+    decision_prompt_template = (
+        "Question: {question}\n\n"
+        "Content at hand:\n{content}\n\n"
+        "Can you answer this question fully and accurately from what you have read?\n"
+        "Respond with either:\n"
+        "ANSWER: [your complete answer]\n"
+        "or\n"
+        "ESCALATE: [exactly what information is missing and what source/section would contain it]"
+    )
+
+    def _llm_decide(content: str) -> tuple[bool, str]:
+        """Call LLM with escalation decision prompt. Returns (answered, text)."""
+        resp = complete(
+            messages=[
+                {
+                    "role": "user",
+                    "content": decision_prompt_template.format(question=question, content=content),
+                }
+            ],
+            model=model,
+            temperature=0.1,
+            max_tokens=1500,
+            use_cache=False,
+        )
+        resp = resp.strip()
+        if resp.startswith("ANSWER:"):
+            return True, resp[len("ANSWER:") :].strip()
+        return False, resp[len("ESCALATE:") :].strip() if resp.startswith("ESCALATE:") else resp
+
+    # ── Level 0: global index ─────────────────────────────────────────────────
     index_path = wiki_dir / "_index.md"
+    if index_path.exists():
+        level0_content = index_path.read_text(encoding="utf-8")
+        answered, text = _llm_decide(level0_content)
+        if answered:
+            return text
+        logger.debug("escalation level 0 -> escalate: %s", text[:120])
 
-    if not index_path.exists():
-        console.print("[red]No wiki index found. Run 'scholarforge wiki init' first.[/red]")
-        raise typer.Exit(1)
+    # ── Level 1: domain index ─────────────────────────────────────────────────
+    domain_index_paths: list[Path] = []
+    if domain:
+        di = wiki_dir / "domains" / domain / "_index.md"
+        if di.exists():
+            domain_index_paths.append(di)
+    else:
+        # Try to find any matching domain _index
+        for di in wiki_dir.glob("domains/*/_index.md"):
+            domain_index_paths.append(di)
 
-    index_text = index_path.read_text(encoding="utf-8")
+    level1_texts = [p.read_text(encoding="utf-8") for p in domain_index_paths[:2]]
+    # Also add theme indexes
+    for theme_idx in list(wiki_dir.glob("domains/**/_index_*.md"))[:3]:
+        level1_texts.append(theme_idx.read_text(encoding="utf-8"))
 
-    # Step 1: identify relevant articles
-    relevance_answer = complete(
+    if level1_texts:
+        answered, text = _llm_decide("\n\n---\n\n".join(level1_texts))
+        if answered:
+            return text
+        logger.debug("escalation level 1 -> escalate: %s", text[:120])
+
+    # ── Level 2: find and read specific articles ───────────────────────────────
+    # Use LLM to identify which article(s) to read from the index
+    index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+    nav_resp = complete(
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a wiki navigator. Given a wiki index and a question, "
-                    "identify the 2-3 most relevant article filenames (slugs). "
-                    "Return only the filenames, one per line, no extension, no explanation."
+                    "You are a wiki navigator. Identify the 2-3 most relevant article "
+                    "filenames (slugs) from the wiki index. "
+                    "Return only the slugs, one per line, no extension, no explanation."
                 ),
             },
             {
@@ -1084,56 +1366,169 @@ def wiki_query(
         max_tokens=200,
         use_cache=False,
     )
+    candidate_slugs = [
+        line.strip().strip("-").strip()
+        for line in nav_resp.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
-    # Parse slugs from the response
-    candidate_slugs = [line.strip().strip("-").strip() for line in relevance_answer.splitlines()]
-    candidate_slugs = [s for s in candidate_slugs if s and not s.startswith("#")]
-
-    # Find and read article files
     article_texts: list[str] = []
+    article_files: list[Path] = []
     for slug in candidate_slugs[:3]:
         for md_file in wiki_dir.rglob(f"{slug}.md"):
             if not md_file.name.startswith("_"):
                 article_texts.append(md_file.read_text(encoding="utf-8"))
+                article_files.append(md_file)
                 break
 
     if not article_texts:
-        # Fallback: read all articles up to 3
         for md_file in sorted(wiki_dir.rglob("*.md"))[:3]:
             if not md_file.name.startswith("_"):
                 article_texts.append(md_file.read_text(encoding="utf-8"))
+                article_files.append(md_file)
 
-    article_block = "\n\n---\n\n".join(article_texts)
+    if article_texts:
+        answered, text = _llm_decide("\n\n---\n\n".join(article_texts))
+        if answered:
+            return text
+        logger.debug("escalation level 2 -> escalate: %s", text[:120])
 
-    # Step 2: answer the question
-    answer = complete(
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a knowledgeable assistant answering questions from wiki articles. "
-                    "Base your answer strictly on the provided article content. "
-                    "Cite articles by title when relevant. Be concise and precise."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Wiki articles:\n\n{article_block}\n\n"
-                    f"Question: {question}\n\n"
-                    "Answer based on the articles above."
-                ),
-            },
-        ],
-        model=model,
-        temperature=0.2,
-        max_tokens=1000,
-        use_cache=False,
-    )
+    # ── Level 3: read source digests from Source Pointers ────────────────────
+    digest_texts: list[str] = []
+    source_pointer_pattern = re.compile(r"\[REF:([^\]]+)\]")
+    for art_text in article_texts:
+        # Find Source Pointers section
+        sp_match = re.search(
+            r"##\s+Source Pointers\s*\n(.*?)(?=\n##\s|\Z)", art_text, re.DOTALL | re.IGNORECASE
+        )
+        if sp_match:
+            sp_section = sp_match.group(1)
+            display_names = source_pointer_pattern.findall(sp_section)
+            for name in display_names[:5]:
+                digest = read_paper_digest(
+                    name[:16], reason=f"wiki query escalation L3: {question[:60]}"
+                )
+                if digest:
+                    digest_texts.append(f"[Source: {name}]\n{digest}")
+
+    if digest_texts:
+        answered, text = _llm_decide("\n\n---\n\n".join(digest_texts))
+        if answered:
+            return text
+        logger.debug("escalation level 3 -> escalate: %s", text[:120])
+
+    # ── Level 4: read source sections ────────────────────────────────────────
+    section_texts: list[str] = []
+    # Parse "source - section" style from escalation text at level 3
+    for art_text in article_texts:
+        sp_match = re.search(
+            r"##\s+Source Pointers\s*\n(.*?)(?=\n##\s|\Z)", art_text, re.DOTALL | re.IGNORECASE
+        )
+        if sp_match:
+            sp_section = sp_match.group(1)
+            # Look for lines like: "Smith 2021 - Results: [description]"
+            for line in sp_section.splitlines():
+                line = line.strip()
+                if " - " in line:
+                    parts = line.split(" - ", 1)
+                    source_pat = parts[0].strip().strip("*-[] ")
+                    section_hint = parts[1].split(":")[0].strip() if ":" in parts[1] else "results"
+                    sec = read_section(
+                        source_pat[:16],
+                        section_hint,
+                        reason=f"wiki query escalation L4: {question[:60]}",
+                    )
+                    if sec:
+                        section_texts.append(f"[Source: {source_pat} / {section_hint}]\n{sec}")
+            if section_texts:
+                break  # enough content for one LLM call
+
+    if section_texts:
+        answered, text = _llm_decide("\n\n---\n\n".join(section_texts))
+        if answered:
+            return text
+        logger.debug("escalation level 4 -> unanswered")
+
+    # Unanswered after all levels
+    return None
+
+
+@wiki_app.command("query")
+def wiki_query(
+    question: str = typer.Argument(..., help="Question to answer from the wiki"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    domain: str = typer.Option("", "--domain", "-d", help="Limit search to a domain"),
+    deep: bool = typer.Option(False, "--deep", help="Build ephemeral mini-wiki before escalation"),
+    promote: bool = typer.Option(False, "--promote", help="Save the answer as a new wiki article"),
+):
+    """Answer a question via 5-level escalation through the wiki.
+
+    Level 0 -> global index, Level 1 -> domain/theme indexes,
+    Level 2 -> specific article(s), Level 3 -> source digests,
+    Level 4 -> source sections. If still unanswered, records the gap.
+
+    Use --deep to build an ephemeral mini-wiki targeted at the question first.
+    Use --promote to save the answer as a new wiki article.
+    """
+    import json
+    import tempfile
+    from datetime import datetime, timezone
+
+    from scholarforge.wiki.builder import append_unanswered_question, slugify, write_article
+
+    wiki_dir = Path("data/wiki")
+    index_path = wiki_dir / "_index.md"
+
+    if not index_path.exists():
+        console.print("[red]No wiki index found. Run 'scholarforge wiki init' first.[/red]")
+        raise typer.Exit(1)
+
+    # ── --deep mode: build ephemeral mini-wiki ────────────────────────────────
+    query_wiki_dir = wiki_dir
+    temp_dir_obj: object = None
+
+    if deep:
+        console.print("[dim]--deep: building ephemeral mini-wiki for this query...[/dim]")
+        try:
+            from scholarforge.wiki.agent import build_wiki_from_sitemap
+            from scholarforge.wiki.sitemap import generate_sitemap
+
+            temp_dir_obj = tempfile.mkdtemp()
+            temp_wiki_dir = Path(str(temp_dir_obj))
+            sitemap = generate_sitemap(
+                wiki_dir=temp_wiki_dir,
+                topic_hint=question,
+                max_explore_papers=15,
+                model=model,
+            )
+            build_wiki_from_sitemap(sitemap, wiki_dir=temp_wiki_dir, model=model)
+            query_wiki_dir = temp_wiki_dir
+            console.print(f"[dim]Ephemeral wiki built in {temp_wiki_dir}[/dim]")
+
+            if promote:
+                import shutil
+
+                queries_dir = wiki_dir / "queries"
+                queries_dir.mkdir(parents=True, exist_ok=True)
+                for md_file in temp_wiki_dir.rglob("*.md"):
+                    dest = queries_dir / md_file.name
+                    shutil.copy2(md_file, dest)
+                console.print(f"[dim]Promoted {temp_wiki_dir} contents to {queries_dir}[/dim]")
+        except Exception as exc:
+            console.print(f"[yellow]--deep build failed ({exc}), using existing wiki.[/yellow]")
+
+    # ── Run escalation ────────────────────────────────────────────────────────
+    answer = _answer_with_escalation(question, query_wiki_dir, domain, model)
+
+    if answer is None:
+        append_unanswered_question(wiki_dir, question, domain)
+        console.print("[yellow]Gap recorded in wiki. Run 'wiki expand' to address.[/yellow]")
+        return
 
     console.print(answer)
 
-    if promote:
+    # ── --promote (non-deep path) ─────────────────────────────────────────────
+    if promote and not deep:
         from sqlmodel import Session
 
         from scholarforge.store.db import get_engine
