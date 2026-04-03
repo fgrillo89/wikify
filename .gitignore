@@ -31,3 +31,6 @@ desktop.ini
 # Cache
 .cache/
 .claude/worktrees/
+
+# Benchmark results (generated)
+benchmarks/results/
