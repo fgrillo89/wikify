@@ -14,6 +14,7 @@ from wikify.config import settings
 from wikify.store.models import (  # noqa: F401 — ensure tables created
     ChunkMiningLog,
     Citation,
+    ConceptEvidence,
     ConceptRecord,
     ConceptRelation,
     DomainCluster,

@@ -648,3 +648,130 @@ def test_list_concepts_no_filter_returns_all():
         result = mod.list_concepts()
 
     assert len(result) == 2
+
+
+# ── _fuzzy_match_quote ───────────────────────────────────────────────────────
+
+
+def test_fuzzy_match_quote_exact():
+    """Exact substring match returns True."""
+    assert mod._fuzzy_match_quote("ALD is a technique", "ALD is a technique used")
+
+
+def test_fuzzy_match_quote_case_insensitive():
+    """Case difference still matches."""
+    assert mod._fuzzy_match_quote("ALD Is A Technique", "ald is a technique used")
+
+
+def test_fuzzy_match_quote_whitespace():
+    """Extra whitespace in source still matches."""
+    assert mod._fuzzy_match_quote("ALD is great", "ALD  is   great today")
+
+
+def test_fuzzy_match_quote_punctuation():
+    """Punctuation differences still match."""
+    assert mod._fuzzy_match_quote("ALD, is great.", "ALD is great today")
+
+
+def test_fuzzy_match_quote_no_match():
+    """Non-matching quote returns False."""
+    assert not mod._fuzzy_match_quote("CVD is better", "ALD is a technique")
+
+
+def test_fuzzy_match_quote_empty():
+    """Empty quote or source returns False."""
+    assert not mod._fuzzy_match_quote("", "some text")
+    assert not mod._fuzzy_match_quote("quote", "")
+
+
+# ── store_evidence ───────────────────────────────────────────────────────────
+
+
+def test_store_evidence_creates_rows():
+    """store_evidence creates ConceptEvidence rows for concepts with evidence."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "ALD is a technique for thin film deposition",
+                "concepts": [
+                    {
+                        "name": "ALD",
+                        "type": "technique",
+                        "evidence": "ALD is a technique",
+                    }
+                ],
+                "parameters": [],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_evidence(rich, epoch=1)
+
+    assert count == 1
+    mock_session.add.assert_called_once()
+    row = mock_session.add.call_args[0][0]
+    assert row.concept_id == "ald"
+    assert row.verified is True
+
+
+def test_store_evidence_marks_unverified():
+    """Evidence not found in chunk is marked verified=False."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "Some completely different text",
+                "concepts": [
+                    {
+                        "name": "ALD",
+                        "type": "technique",
+                        "evidence": "ALD is a technique for deposition",
+                    }
+                ],
+                "parameters": [],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_evidence(rich, epoch=1)
+
+    assert count == 1
+    row = mock_session.add.call_args[0][0]
+    assert row.verified is False
+
+
+def test_store_evidence_skips_empty():
+    """Concepts without evidence quotes are skipped."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "text",
+                "concepts": [{"name": "ALD", "type": "technique", "evidence": ""}],
+                "parameters": [],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_evidence(rich, epoch=1)
+
+    assert count == 0

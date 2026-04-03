@@ -34,7 +34,7 @@ from sqlmodel import select
 from wikify.llm.client import complete_json
 from wikify.store.db import get_session
 from wikify.store.embeddings import _store
-from wikify.store.models import Chunk, ChunkMiningLog, ConceptRecord
+from wikify.store.models import Chunk, ChunkMiningLog, ConceptEvidence, ConceptRecord
 from wikify.wiki.builder import slugify
 from wikify.wiki.template import build_extraction_prompt, load_template
 
@@ -90,6 +90,117 @@ def get_rich_extractions() -> dict[str, list[dict[str, Any]]]:
 def clear_rich_extractions() -> None:
     """Clear the stored rich extraction results."""
     _last_rich_extractions.clear()
+
+
+def _fuzzy_match_quote(quote: str, source_text: str) -> bool:
+    """Check if an evidence quote is present in the source text.
+
+    Uses fuzzy matching: normalizes whitespace and punctuation, then
+    checks if the normalized quote is a substring of the normalized source.
+    Allows minor differences in whitespace, case, and punctuation.
+
+    Args:
+        quote: The evidence quote to look for.
+        source_text: The source text to search in.
+
+    Returns:
+        True if the quote is found (fuzzy match).
+    """
+    import re as _re
+
+    if not quote or not source_text:
+        return False
+
+    def _normalize(text: str) -> str:
+        text = text.lower()
+        text = _re.sub(r"[^\w\s]", "", text)
+        text = _re.sub(r"\s+", " ", text).strip()
+        return text
+
+    norm_quote = _normalize(quote)
+    norm_source = _normalize(source_text)
+
+    if not norm_quote:
+        return False
+
+    return norm_quote in norm_source
+
+
+def store_evidence(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    epoch: int,
+) -> int:
+    """Store evidence quotes from rich extractions and verify against source.
+
+    For each concept in each chunk's extraction, creates a ConceptEvidence
+    row with the evidence quote and verifies it against the source text.
+
+    Args:
+        rich_extractions: Dict mapping paper_id -> list of per-chunk rich
+            extraction dicts (from get_rich_extractions()).
+        epoch: Current epoch number.
+
+    Returns:
+        Number of ConceptEvidence rows stored.
+    """
+    evidence_rows: list[ConceptEvidence] = []
+    verified_count = 0
+    unverified_count = 0
+
+    for paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            chunk_id = chunk_result.get("_chunk_id", "")
+            chunk_content = chunk_result.get("_chunk_content", "")
+
+            for concept in chunk_result.get("concepts", []):
+                if not isinstance(concept, dict):
+                    continue
+                name = (concept.get("name") or "").strip()
+                if not name:
+                    continue
+
+                evidence = (concept.get("evidence") or "").strip()
+                if not evidence:
+                    continue
+
+                verified = _fuzzy_match_quote(evidence, chunk_content)
+                if verified:
+                    verified_count += 1
+                else:
+                    unverified_count += 1
+                    logger.debug(
+                        "store_evidence: unverified quote for %r in "
+                        "chunk %s (potential hallucination)",
+                        name,
+                        chunk_id[:16],
+                    )
+
+                evidence_rows.append(
+                    ConceptEvidence(
+                        concept_id=slugify(name),
+                        paper_id=paper_id,
+                        chunk_id=chunk_id,
+                        evidence_quote=evidence,
+                        epoch_extracted=epoch,
+                        verified=verified,
+                    )
+                )
+
+    if evidence_rows:
+        with get_session() as session:
+            for row in evidence_rows:
+                session.add(row)
+            session.commit()
+
+    logger.info(
+        "store_evidence: epoch %d -> %d evidence rows "
+        "(%d verified, %d unverified)",
+        epoch,
+        len(evidence_rows),
+        verified_count,
+        unverified_count,
+    )
+    return len(evidence_rows)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────

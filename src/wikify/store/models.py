@@ -215,6 +215,18 @@ class ConceptRecord(SQLModel, table=True):
             return [self.domain] if self.domain else []
 
 
+class ConceptEvidence(SQLModel, table=True):
+    """Source evidence linking a concept extraction to its source text."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    concept_id: str = Field(index=True)  # FK -> ConceptRecord.id
+    paper_id: str = Field(index=True)  # FK -> Paper.id
+    chunk_id: str = ""  # FK -> Chunk.id
+    evidence_quote: str = ""  # exact text from source
+    epoch_extracted: int = 0
+    verified: bool = False  # True if quote found in source text
+
+
 class ConceptRelation(SQLModel, table=True):
     """A directed relationship between two concepts in the concept graph."""
 
