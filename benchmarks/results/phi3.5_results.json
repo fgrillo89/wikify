@@ -1,0 +1,610 @@
+[
+  {
+    "chunk_id": "06b0c44d-9691-419c-a46c-5f608e3046c2",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "memristor",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "complementary metal-oxidesemiconductor (cmos)",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "oxide memristors",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "atomic layer deposition (ald)",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "physical vapor deposition (pvd)",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "neuromorphic computing",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "crossbar architectures",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 42.516
+  },
+  {
+    "chunk_id": "a135cc55-6ce9-4782-bc82-d15377fbb90b",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "memristor",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "memtransistor",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "neuromorphic computing",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "laser patterning",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "atomic layer deposition",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "molybdenum ditelluride",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "analogue switching",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "homosynaptic plasticity",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "heterosynaptic plasticity",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 9,
+    "json_valid": true,
+    "latency_s": 43.734
+  },
+  {
+    "chunk_id": "1b36bcf7-7e9b-4c1d-bc1d-1305a60f17f4",
+    "section_type": "body",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 65.687
+  },
+  {
+    "chunk_id": "7d53fd05-f49b-43e3-b309-89b558cb4a71",
+    "section_type": "body",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 118.063
+  },
+  {
+    "chunk_id": "03031e0a-e95a-4882-89e7-85cc0fc4c7c3",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "bader charge",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "cu",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "cu+",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "cu2+",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "gete",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "al2o3",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "barrier effect",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "cf",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "point discharge",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 9,
+    "json_valid": true,
+    "latency_s": 31.156
+  },
+  {
+    "chunk_id": "4a7c84b8-24ae-4314-ac56-2d0b1a0ba8ae",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "perovskite",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "perovskite oxide",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "ndnio3",
+        "type": "material",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 23.344
+  },
+  {
+    "chunk_id": "37b38ae4-3a60-4898-914e-de9c48e2873c",
+    "section_type": "methods",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 91.797
+  },
+  {
+    "chunk_id": "f0376a62-c418-467f-bb22-b1005d5ce81e",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "mechanical exfoliation",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "chemical exfoliation",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "intercalation",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "chemical vapor deposition",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 17.984
+  },
+  {
+    "chunk_id": "42f4f598-97d6-4bce-8da8-96a153eb05c2",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "rf magnetron sputtering",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "technol magnetron sputtering system jcp500",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "gallium oxide disk",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "quartz, silicon, ito",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "ar pressure",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "sputtering power",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "wox layer",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "w electrodes",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "grazing incidence x-ray diffraction (gixrd)",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "x-ray photoelectron spectroscsopy (xps)",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "bandgap",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "sem",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "eds",
+        "type": "technique",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 13,
+    "json_valid": true,
+    "latency_s": 60.969
+  },
+  {
+    "chunk_id": "ce37e564-54b2-4297-93ac-d7a90ba10c56",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "in situ solvothermal process",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 1,
+    "json_valid": true,
+    "latency_s": 6.141
+  },
+  {
+    "chunk_id": "2d6fe3a2-6726-4b24-aa01-554524fc0df6",
+    "section_type": "results",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 50.265
+  },
+  {
+    "chunk_id": "84fc394b-cbec-4c1b-b713-beba4dfc0d45",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "tiox",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "pt",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "au",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "cr",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "tiox",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "memristor",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "i\u2013v characteristics",
+        "type": "dataset",
+        "aliases": []
+      },
+      {
+        "name": "switching",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "write-once read many times (worm)",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "oxygen vacans",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "conductive filament",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "positive voltage",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "negative voltage",
+        "type": "",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 13,
+    "json_valid": true,
+    "latency_s": 64.031
+  },
+  {
+    "chunk_id": "b4a09090-cac2-4b7d-9005-17cd14a65567",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "memristor",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "high-speed memristor",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "low-speed memristor",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "combined unit",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "dynamic hidden layer",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "signal-to-noise ratio (snr)",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "accuracy",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 39.375
+  },
+  {
+    "chunk_id": "9ceab599-0d84-4bbb-b913-4b86dfd66bb8",
+    "section_type": "results",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 96.188
+  },
+  {
+    "chunk_id": "99a939f4-2875-4517-8d15-0e7fe3f73d08",
+    "section_type": "introduction",
+    "concepts": [
+      {
+        "name": "oxide-based optically controlled synaptic devices",
+        "type": "technique",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 1,
+    "json_valid": true,
+    "latency_s": 6.375
+  },
+  {
+    "chunk_id": "bb07c6ff-ed0e-4d87-aaf9-a944ddece012",
+    "section_type": "introduction",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": false,
+    "latency_s": 98.266
+  },
+  {
+    "chunk_id": "71fe42e3-2650-44b7-8a85-dd811da4437b",
+    "section_type": "introduction",
+    "concepts": [],
+    "raw_concept_count": 0,
+    "json_valid": true,
+    "latency_s": 15.89
+  },
+  {
+    "chunk_id": "61640312-0ba1-462b-9e6f-9f6610cc7f2f",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "artificial neural network",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "internet of everything",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "molybdenum disulfide",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "field effect transistor",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "high-\u03ba dielectric",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "threshold switching memristor",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "leaky integration-and-firing neuron",
+        "type": "",
+        "aliases": []
+      },
+      {
+        "name": "single layer perceptron",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "nociceptor",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 10,
+    "json_valid": true,
+    "latency_s": 47.844
+  },
+  {
+    "chunk_id": "350eebc2-e360-450e-981b-53b75374ff80",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "electronic synapse",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "memristive switching",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "atomic layer deposition",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "al2o3/graphene quantum dots",
+        "type": "material",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 19.0
+  },
+  {
+    "chunk_id": "3d5b6e0f-73e6-4513-81a4-ac854fc03716",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "memristor",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "hfox",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "tin",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "filament",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "reset behavior",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "compliance current",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "analog weight tuning",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 31.5
+  }
+]

@@ -1,0 +1,814 @@
+[
+  {
+    "chunk_id": "06b0c44d-9691-419c-a46c-5f608e3046c2",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "memristor",
+        "type": "material",
+        "aliases": [
+          "memristive device"
+        ]
+      },
+      {
+        "name": "cmos compatible oxide memristors",
+        "type": "material",
+        "aliases": [
+          "oxide memristors"
+        ]
+      },
+      {
+        "name": "atomic layer deposition",
+        "type": "technique",
+        "aliases": [
+          "ald"
+        ]
+      },
+      {
+        "name": "physical vapor deposition",
+        "type": "technique",
+        "aliases": [
+          "pvd"
+        ]
+      },
+      {
+        "name": "back-end-of-line",
+        "type": "technique",
+        "aliases": [
+          "beol"
+        ]
+      },
+      {
+        "name": "oxygen vacancy engineering",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "self-rectifying memristor",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "a135cc55-6ce9-4782-bc82-d15377fbb90b",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "memtransistor",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "molybdenum ditelluride",
+        "type": "material",
+        "aliases": [
+          "mote2"
+        ]
+      },
+      {
+        "name": "laser treatment",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "perovskite",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "ferroelectric material",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "two-dimensional material",
+        "type": "material",
+        "aliases": [
+          "2d material"
+        ]
+      },
+      {
+        "name": "memory window",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "1b36bcf7-7e9b-4c1d-bc1d-1305a60f17f4",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "1m1t1r neuron",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 1,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "7d53fd05-f49b-43e3-b309-89b558cb4a71",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "ferroelectric tunnel junction",
+        "type": "material",
+        "aliases": [
+          "fetj"
+        ]
+      },
+      {
+        "name": "bismuth samarium oxide",
+        "type": "material",
+        "aliases": [
+          "bso"
+        ]
+      },
+      {
+        "name": "niobium-doped strontium titanate",
+        "type": "material",
+        "aliases": [
+          "nb:sto"
+        ]
+      },
+      {
+        "name": "tunnelling electroresistance",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "hafnium-zirconium oxide",
+        "type": "material",
+        "aliases": [
+          "hf0.5zr0.5o2"
+        ]
+      },
+      {
+        "name": "polarization retention",
+        "type": "phenomenon",
+        "aliases": [
+          "pr"
+        ]
+      },
+      {
+        "name": "coercive field",
+        "type": "phenomenon",
+        "aliases": [
+          "ec"
+        ]
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "03031e0a-e95a-4882-89e7-85cc0fc4c7c3",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "bader charge",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "germanium telluride",
+        "type": "material",
+        "aliases": [
+          "gete"
+        ]
+      },
+      {
+        "name": "aluminum oxide",
+        "type": "material",
+        "aliases": [
+          "al2o3"
+        ]
+      },
+      {
+        "name": "copper filament",
+        "type": "phenomenon",
+        "aliases": [
+          "cf"
+        ]
+      },
+      {
+        "name": "virtual anode",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 5,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "4a7c84b8-24ae-4314-ac56-2d0b1a0ba8ae",
+    "section_type": "body",
+    "concepts": [
+      {
+        "name": "hfo2-based memristive devices",
+        "type": "material",
+        "aliases": [
+          "hafnium oxide memristors"
+        ]
+      },
+      {
+        "name": "oxygen vacancy filament",
+        "type": "phenomenon",
+        "aliases": [
+          "vo filament",
+          "conductive filament"
+        ]
+      },
+      {
+        "name": "resistive switching",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "set process",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "reset process",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "compliance current",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "bipolar resistive switching",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "37b38ae4-3a60-4898-914e-de9c48e2873c",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "atomic layer deposition",
+        "type": "method",
+        "aliases": [
+          "ald"
+        ]
+      },
+      {
+        "name": "tetrakis(dimethylamido)hafnium",
+        "type": "material",
+        "aliases": [
+          "tdmah"
+        ]
+      },
+      {
+        "name": "spectroscopic ellipsometry",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "sputtering",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "f0376a62-c418-467f-bb22-b1005d5ce81e",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "dc i-v sweep",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "pulse measurements",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 2,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "42f4f598-97d6-4bce-8da8-96a153eb05c2",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "density functional theory",
+        "type": "theory",
+        "aliases": [
+          "dft"
+        ]
+      },
+      {
+        "name": "projector augmented wave",
+        "type": "method",
+        "aliases": [
+          "paw"
+        ]
+      },
+      {
+        "name": "generalized gradient approximation",
+        "type": "theory",
+        "aliases": [
+          "gga"
+        ]
+      },
+      {
+        "name": "perdew-burke-ernzerhof",
+        "type": "theory",
+        "aliases": [
+          "pbe"
+        ]
+      },
+      {
+        "name": "dft+u method",
+        "type": "method",
+        "aliases": []
+      },
+      {
+        "name": "monkhorst-pack k-point mesh",
+        "type": "method",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 6,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "ce37e564-54b2-4297-93ac-d7a90ba10c56",
+    "section_type": "methods",
+    "concepts": [
+      {
+        "name": "crossbar array",
+        "type": "material",
+        "aliases": [
+          "memristor matrix"
+        ]
+      },
+      {
+        "name": "pulse-based weight update",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "batch normalization",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "dropout",
+        "type": "technique",
+        "aliases": []
+      },
+      {
+        "name": "mnist",
+        "type": "dataset",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 5,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "2d6fe3a2-6726-4b24-aa01-554524fc0df6",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "bipolar resistive switching",
+        "type": "phenomenon",
+        "aliases": [
+          "bipolar rs"
+        ]
+      },
+      {
+        "name": "forming voltage",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "set operation",
+        "type": "method",
+        "aliases": [
+          "set"
+        ]
+      },
+      {
+        "name": "reset operation",
+        "type": "method",
+        "aliases": [
+          "reset"
+        ]
+      },
+      {
+        "name": "on/off ratio",
+        "type": "phenomenon",
+        "aliases": [
+          "resistance ratio"
+        ]
+      },
+      {
+        "name": "endurance",
+        "type": "phenomenon",
+        "aliases": [
+          "cycling endurance"
+        ]
+      }
+    ],
+    "raw_concept_count": 6,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "84fc394b-cbec-4c1b-b713-beba4dfc0d45",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "long-term potentiation",
+        "type": "phenomenon",
+        "aliases": [
+          "ltp"
+        ]
+      },
+      {
+        "name": "long-term depression",
+        "type": "phenomenon",
+        "aliases": [
+          "ltd"
+        ]
+      },
+      {
+        "name": "conductance states",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "paired-pulse facilitation",
+        "type": "phenomenon",
+        "aliases": [
+          "ppf"
+        ]
+      },
+      {
+        "name": "spike-timing-dependent plasticity",
+        "type": "phenomenon",
+        "aliases": [
+          "stdp"
+        ]
+      }
+    ],
+    "raw_concept_count": 5,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "b4a09090-cac2-4b7d-9005-17cd14a65567",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "conductive filament",
+        "type": "phenomenon",
+        "aliases": [
+          "filament"
+        ]
+      },
+      {
+        "name": "in-situ transmission electron microscopy",
+        "type": "technique",
+        "aliases": [
+          "in-situ tem"
+        ]
+      },
+      {
+        "name": "oxygen vacancies",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "joule heating-assisted ion migration",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "stem-eels mapping",
+        "type": "technique",
+        "aliases": [
+          "eels"
+        ]
+      }
+    ],
+    "raw_concept_count": 5,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "9ceab599-0d84-4bbb-b913-4b86dfd66bb8",
+    "section_type": "results",
+    "concepts": [
+      {
+        "name": "atomic layer deposition",
+        "type": "technique",
+        "aliases": [
+          "ald"
+        ]
+      },
+      {
+        "name": "bilayer structure",
+        "type": "material",
+        "aliases": [
+          "bilayer"
+        ]
+      },
+      {
+        "name": "oxygen reservoir",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "cycle-to-cycle variation",
+        "type": "phenomenon",
+        "aliases": [
+          "c2c variation"
+        ]
+      },
+      {
+        "name": "device-to-device variation",
+        "type": "phenomenon",
+        "aliases": [
+          "d2d variation"
+        ]
+      },
+      {
+        "name": "analog in-memory computing",
+        "type": "technique",
+        "aliases": [
+          "analog computing"
+        ]
+      }
+    ],
+    "raw_concept_count": 6,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "99a939f4-2875-4517-8d15-0e7fe3f73d08",
+    "section_type": "introduction",
+    "concepts": [
+      {
+        "name": "resistive random-access memory",
+        "type": "technique",
+        "aliases": [
+          "rram"
+        ]
+      },
+      {
+        "name": "neuromorphic computing",
+        "type": "technique",
+        "aliases": [
+          "brain-inspired computing"
+        ]
+      },
+      {
+        "name": "hafnium oxide",
+        "type": "material",
+        "aliases": [
+          "hfo2"
+        ]
+      },
+      {
+        "name": "cmos compatibility",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "bb07c6ff-ed0e-4d87-aaf9-a944ddece012",
+    "section_type": "introduction",
+    "concepts": [
+      {
+        "name": "neuromorphic computing",
+        "type": "technique",
+        "aliases": [
+          "neuromorphic systems"
+        ]
+      },
+      {
+        "name": "memristive devices",
+        "type": "material",
+        "aliases": [
+          "memristors"
+        ]
+      },
+      {
+        "name": "oxide-based memristors",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "atomic layer deposition",
+        "type": "method",
+        "aliases": [
+          "ald"
+        ]
+      },
+      {
+        "name": "spike-timing-dependent plasticity",
+        "type": "phenomenon",
+        "aliases": [
+          "stdp"
+        ]
+      },
+      {
+        "name": "crossbar array architecture",
+        "type": "technique",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 6,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "71fe42e3-2650-44b7-8a85-dd811da4437b",
+    "section_type": "introduction",
+    "concepts": [
+      {
+        "name": "ferroelectric tunnel junctions",
+        "type": "material",
+        "aliases": [
+          "fetjs"
+        ]
+      },
+      {
+        "name": "rram devices",
+        "type": "material",
+        "aliases": [
+          "resistive random-access memory"
+        ]
+      },
+      {
+        "name": "ferroelectric hfo2",
+        "type": "material",
+        "aliases": [
+          "doped hfo2"
+        ]
+      },
+      {
+        "name": "hfzro2",
+        "type": "material",
+        "aliases": [
+          "hzo"
+        ]
+      },
+      {
+        "name": "bismuth-based oxides",
+        "type": "material",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 5,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "61640312-0ba1-462b-9e6f-9f6610cc7f2f",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "tin/hfo2/pt resistive switching devices",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "bipolar switching",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "oxygen vacancies",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "hfo2-based rram",
+        "type": "material",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "350eebc2-e360-450e-981b-53b75374ff80",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "hfzro2",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "aluminum scandium nitride",
+        "type": "material",
+        "aliases": [
+          "alscn"
+        ]
+      },
+      {
+        "name": "remnant polarization",
+        "type": "phenomenon",
+        "aliases": []
+      },
+      {
+        "name": "coercive field",
+        "type": "phenomenon",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 4,
+    "json_valid": true,
+    "latency_s": 0.3
+  },
+  {
+    "chunk_id": "3d5b6e0f-73e6-4513-81a4-ac854fc03716",
+    "section_type": "abstract",
+    "concepts": [
+      {
+        "name": "transition metal dichalcogenides",
+        "type": "material",
+        "aliases": [
+          "tmds"
+        ]
+      },
+      {
+        "name": "mote2-based memristors",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "al2o3 coating",
+        "type": "material",
+        "aliases": []
+      },
+      {
+        "name": "long-term potentiation",
+        "type": "phenomenon",
+        "aliases": [
+          "ltp"
+        ]
+      },
+      {
+        "name": "long-term depression",
+        "type": "phenomenon",
+        "aliases": [
+          "ltd"
+        ]
+      },
+      {
+        "name": "paired-pulse facilitation",
+        "type": "phenomenon",
+        "aliases": [
+          "ppf"
+        ]
+      },
+      {
+        "name": "mnist dataset",
+        "type": "dataset",
+        "aliases": []
+      }
+    ],
+    "raw_concept_count": 7,
+    "json_valid": true,
+    "latency_s": 0.3
+  }
+]
