@@ -1579,7 +1579,6 @@ def wiki_epoch(
     domain: str = typer.Option("", "--domain", help="Restrict to one domain"),
     on_ingest: bool = typer.Option(False, "--on-ingest", help="Configure auto-trigger on ingest"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
-    max_papers: int = typer.Option(0, "--max-papers", help="Limit to N papers (0=all)"),
 ):
     """Run one or more wiki-building epochs.
 
@@ -1609,9 +1608,7 @@ def wiki_epoch(
 
     if until_convergence:
         max_epochs = n if n > 1 else 10
-        summary = run_until_convergence(
-            domain=domain, max_epochs=max_epochs, model=model, max_papers=max_papers
-        )
+        summary = run_until_convergence(domain=domain, max_epochs=max_epochs, model=model)
         epochs_run = summary.get("epochs_run", "?")
         console.print(f"\n[bold green]Converged after {epochs_run} epoch(s)[/bold green]")
         console.print(f"  Final loss : {summary.get('loss', 'n/a')}")
@@ -1621,7 +1618,7 @@ def wiki_epoch(
 
     for i in range(n):
         console.print(f"\n[bold]Epoch {i + 1}/{n}[/bold]")
-        result = run_epoch(triggered_by="user", domain=domain, model=model, max_papers=max_papers)
+        result = run_epoch(triggered_by="user", domain=domain, model=model)
         console.print(f"  Concepts discovered : {result.get('concepts_discovered', 0)}")
         console.print(f"  Articles written    : {result.get('articles_written', 0)}")
         console.print(f"  Stubs upgraded      : {result.get('stubs_upgraded', 0)}")

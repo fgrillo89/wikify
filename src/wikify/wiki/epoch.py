@@ -491,7 +491,6 @@ def run_epoch(
     triggered_by: str = "user",
     domain: str = "",
     model: Optional[str] = None,
-    max_papers: int = 0,
 ) -> EpochLog:
     """Run one complete epoch of the Wikipedia pipeline (5 passes).
 
@@ -501,7 +500,6 @@ def run_epoch(
                       Pass "" to process all domains.
         model:        Override the article-writing model.  When None, model
                       selection follows the loss-based rule (haiku vs sonnet).
-        max_papers:   If > 0, limit to this many papers (for testing).
 
     Returns:
         Completed EpochLog row (persisted to DB).
@@ -557,8 +555,6 @@ def run_epoch(
     clear_staged_extractions(epoch)
     clear_rich_extractions()
     paper_ids = _get_all_paper_ids()
-    if max_papers > 0:
-        paper_ids = paper_ids[:max_papers]
     logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
 
     new_concepts = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
@@ -879,7 +875,6 @@ def run_until_convergence(
     domain: str = "",
     max_epochs: int = 10,
     model: Optional[str] = None,
-    max_papers: int = 0,
 ) -> list[EpochLog]:
     """Run epochs until convergence or max_epochs is reached.
 
@@ -887,7 +882,6 @@ def run_until_convergence(
         domain:     Domain filter passed to each run_epoch() call.
         max_epochs: Hard ceiling on the number of epochs to run.
         model:      Optional model override passed to run_epoch().
-        max_papers: If > 0, limit to this many papers per epoch.
 
     Returns:
         List of all EpochLog rows produced.
@@ -896,7 +890,7 @@ def run_until_convergence(
 
     for i in range(max_epochs):
         logger.info("run_until_convergence: starting epoch %d of %d max", i + 1, max_epochs)
-        log = run_epoch(triggered_by="schedule", domain=domain, model=model, max_papers=max_papers)
+        log = run_epoch(triggered_by="schedule", domain=domain, model=model)
         logs.append(log)
 
         if log.converged:
