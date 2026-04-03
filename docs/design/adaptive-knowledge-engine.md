@@ -441,6 +441,30 @@ being stable.
 
 ---
 
+## Companion Document: Discovery Engine Alignment
+
+`docs/design/discovery-engine-alignment.md` extends this plan with a deeper
+alignment to the Discovery Engine framework (arxiv 2505.17500). It addresses
+7 additional gaps not covered here:
+
+- **Structured extraction template** (replaces our hardcoded prompt with an
+  evolving Markdown document)
+- **Source evidence linkage** (provenance chain from concept to source sentence)
+- **Meta-probes** (LLM self-reflection on extraction capacity, integrated into
+  template)
+- **Self-consistent template refinement loop** (the template schema converges
+  toward the corpus structure)
+- **Two-pass extraction** (publication-level overview + targeted chunk deepening)
+- **Quantitative parameter extraction** (structured values with units)
+- **Structured concept vectors** (VSA-inspired embeddings that preserve structure)
+
+The AKE phases 1.3 (adaptive prompt) and 5 (schema evolution) are superseded by
+the more comprehensive template refinement approach in that document. AKE phases
+2 (UCB scoring), 3 (contradiction exploration), and 4 (hierarchy) remain as
+specified here.
+
+---
+
 ## References
 
 - [The Discovery Engine (2025)](https://arxiv.org/html/2505.17500v1) -- self-consistent
