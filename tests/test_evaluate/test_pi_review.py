@@ -25,9 +25,10 @@ _SAMPLE_REPORT = """\
 
 **Overall: 7.6/10**
 
-**Verdict:** This review is close to publishable. The primary weakness is abstract length. Tighten the abstract to one concept per sentence.
+**Verdict:** This review is close to publishable. The primary weakness is abstract length.
+Tighten the abstract to one concept per sentence.
 
-**Strongest sentence:** "Analog linearity is primarily an oxygen diffusion problem at the bilayer interface."
+**Strongest sentence:** "Analog linearity is primarily an oxygen diffusion problem."
 
 **Weakest section:** Introduction -- too broad, does not end with a clear gap statement.
 """
