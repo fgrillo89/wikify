@@ -1,5 +1,7 @@
 """ScholarForge CLI entry point."""
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 
@@ -34,7 +36,6 @@ def ingest(
 ):
     """Ingest PDF(s) into the knowledge base."""
     import time
-    from pathlib import Path
 
     from scholarforge.ingest.service import ingest_path
 
@@ -124,7 +125,6 @@ def generate(
 ):
     """Generate a review paper from the literature corpus."""
     import time
-    from pathlib import Path
 
     from scholarforge.export.journal_profile import load_journal_profile
     from scholarforge.generate.planner import plan_paper
@@ -338,7 +338,6 @@ def slides(
 ):
     """Generate a PowerPoint presentation from the literature corpus."""
     import time
-    from pathlib import Path
 
     from scholarforge.export.pptx_export import export_slides
     from scholarforge.generate.planner import plan_slides
@@ -381,7 +380,6 @@ def evaluate(
     ),
 ):
     """Evaluate a generated review with automated metrics and/or LLM-as-PI scoring."""
-    from pathlib import Path
 
     path = Path(review_path)
     if not path.exists():
@@ -445,7 +443,6 @@ def revise(
       4. Rewrite the section with fresh evidence.
       5. Save the revised review.
     """
-    from pathlib import Path
 
     from scholarforge.agent.revision import revise_weakest_section
     from scholarforge.evaluate.pi_review import evaluate_pi, parse_pi_review
@@ -591,7 +588,6 @@ def templates_import(
         scholarforge templates import wiley_template.docx --name "wiley_afm"
         scholarforge templates import my_old_paper.docx --name "my_style"
     """
-    from pathlib import Path
 
     from scholarforge.export.templates.registry import import_template
 
@@ -606,7 +602,6 @@ def templates_styles(
 
     Useful for setting up the style_map in a journal profile.
     """
-    from pathlib import Path
 
     from rich.table import Table
 
@@ -642,182 +637,225 @@ app.add_typer(wiki_app)
 
 @wiki_app.command("init")
 def wiki_init(
-    top_n: int = typer.Option(20, "--top-n", help="Number of concepts to bootstrap"),
+    topic: str = typer.Option("", "--topic", help="Optional topic hint to focus exploration"),
+    max_papers: int = typer.Option(
+        20, "--max-papers", help="Max sources to read during corpus exploration"
+    ),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    resume: bool = typer.Option(False, "--resume", help="Skip articles whose files already exist"),
 ):
-    """Bootstrap wiki stubs from top-N concepts in the corpus."""
-    import json
+    """Bootstrap the wiki from the corpus using the two-phase sitemap pipeline.
 
-    from scholarforge.agent.tools import find_synthesis_opportunities, get_corpus_summary
-    from scholarforge.config import settings
-    from scholarforge.store.db import get_session
-    from scholarforge.store.models import WikiArticle
-    from scholarforge.wiki.agent import build_wiki_article
-    from scholarforge.wiki.builder import article_path, generate_wiki_index, slugify, write_article
+    Phase 1 explores the corpus broadly to discover thematic structure.
+    Phase 2 generates a structured article plan (sitemap).
+    Phase 3 writes all articles in dependency order (themes then concepts).
+    """
 
-    wiki_dir = settings.data_dir / "wiki"
+    from scholarforge.wiki.agent import build_wiki_from_sitemap
+    from scholarforge.wiki.builder import generate_wiki_index
+    from scholarforge.wiki.linker import cross_link_articles, ensure_parent_backlinks
+    from scholarforge.wiki.sitemap import generate_sitemap
+
+    wiki_dir = Path("data/wiki")
     wiki_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print("[bold]Bootstrapping wiki...[/bold]")
-    summary = get_corpus_summary()
-    opportunities = find_synthesis_opportunities()
-    console.print(f"[dim]Corpus summary: {len(summary)} chars[/dim]")
+    # Phase 1 + 2: explore corpus and generate structured sitemap
+    console.print("[bold]Phase 1: Exploring corpus...[/bold]")
+    sitemap = generate_sitemap(
+        topic_hint=topic,
+        model=model,
+        wiki_dir=wiki_dir,
+        max_explore_papers=max_papers,
+        run_context=None,
+    )
+    theme_count = len(sitemap.themes())
+    concept_count = len(sitemap.concepts())
+    total = len(sitemap.entries)
+    console.print(f"  Planned {total} articles: {theme_count} themes, {concept_count} concepts")
 
-    # Extract concept titles from synthesis opportunities (one per line starting with a number or -)
-    import re
+    # Phase 3: write articles
+    console.print(f"[bold]Phase 2: Writing {theme_count} theme articles...[/bold]")
+    build_wiki_from_sitemap(sitemap, wiki_dir, model=model, resume=resume)
 
-    concept_lines: list[str] = []
-    for line in opportunities.splitlines():
-        line = line.strip()
-        if re.match(r"^(\d+\.|\-|\*)\s+", line):
-            concept = re.sub(r"^(\d+\.|\-|\*)\s+", "", line).strip()
-            if concept:
-                concept_lines.append(concept)
+    # Cross-link
+    linked = cross_link_articles(wiki_dir, sitemap)
+    console.print(f"  Cross-linked {linked} articles")
 
-    concepts = concept_lines[:top_n]
-    if not concepts:
-        console.print("[yellow]No synthesis opportunities found. Check corpus size.[/yellow]")
-        raise typer.Exit(1)
+    # Parent backlinks
+    ensure_parent_backlinks(wiki_dir, sitemap)
 
-    console.print(f"[bold]Creating {len(concepts)} stubs...[/bold]")
-    created = 0
-
-    with get_session() as session:
-        for concept in concepts:
-            slug = slugify(concept)
-            path = article_path(wiki_dir, "concepts", slug)
-            rel_path = str(path.relative_to(settings.data_dir))
-
-            existing = session.get(WikiArticle, slug)
-            if existing:
-                console.print(f"[dim]Already exists: {slug}[/dim]")
-                continue
-
-            console.print(f"  Stub: {concept}")
-            try:
-                content, source_ids = build_wiki_article(
-                    concept, concept, status="stub", model=model, top_k=5
-                )
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]  Failed ({exc})[/red]")
-                continue
-
-            write_article(
-                path=path,
-                title=concept,
-                content=content,
-                sources=source_ids,
-                topics=[concept],
-                status="stub",
-                model=model or "",
-            )
-
-            row = WikiArticle(
-                id=slug,
-                title=concept,
-                status="stub",
-                file_path=rel_path,
-                source_ids=json.dumps(source_ids),
-                topic_keys=json.dumps([concept]),
-                model=model or "",
-            )
-            session.add(row)
-            created += 1
-
-        session.commit()
-
-    # Write index
+    # Index
+    generate_wiki_index(wiki_dir)
     index_path = wiki_dir / "_index.md"
-    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
+    console.print(f"[green]Wiki index written to {index_path}[/green]")
 
-    console.print(f"[green]Created {created} stubs. Index: {index_path}[/green]")
+    console.print(
+        f"[green]Wiki built: {theme_count} themes, {concept_count} concepts,"
+        f" {total} articles[/green]"
+    )
 
 
 @wiki_app.command("expand")
 def wiki_expand(
-    concept: str = typer.Argument(
-        "", help="Concept slug or title to expand (empty = expand all stubs)"
-    ),
+    concept: str = typer.Argument("", help="Concept slug or title to expand"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    all_stubs: bool = typer.Option(False, "--all", help="Expand all stubs/drafts"),
 ):
-    """Expand stub article(s) to full articles."""
+    """Expand a stub/draft wiki article into a full article.
+
+    If CONCEPT is given, expands that specific article.
+    If --all is given, expands every stub and draft in the sitemap.
+    Falls back to build_wiki_article when no sitemap exists.
+    """
     import json
+    from datetime import datetime, timezone
 
-    from sqlmodel import select
+    from sqlmodel import Session, select
 
-    from scholarforge.config import settings
-    from scholarforge.store.db import get_session
+    from scholarforge.store.db import get_engine
     from scholarforge.store.models import WikiArticle
-    from scholarforge.wiki.agent import build_wiki_article
-    from scholarforge.wiki.builder import generate_wiki_index, write_article
+    from scholarforge.wiki.builder import (
+        article_path,
+        generate_wiki_index,
+        slugify,
+        write_article,
+    )
+    from scholarforge.wiki.linker import cross_link_articles
+    from scholarforge.wiki.sitemap import WikiSitemap
 
-    wiki_dir = settings.data_dir / "wiki"
+    wiki_dir = Path("data/wiki")
+    sitemap = WikiSitemap.load(wiki_dir)
+    engine = get_engine()
 
-    with get_session() as session:
-        if concept:
-            # Find by slug or title match
-            from scholarforge.wiki.builder import slugify
+    def _expand_entry(entry: "WikiSitemap.entries.__class__") -> None:  # type: ignore[name-defined]
+        from scholarforge.wiki.agent import build_article_from_entry
 
+        content, source_ids = build_article_from_entry(entry, wiki_dir, model=model)
+
+        category_dir = {
+            "theme": "concepts",
+            "concept": "concepts",
+            "synthesis": "syntheses",
+            "query": "queries",
+        }.get(entry.category, "concepts")
+        out_path = article_path(wiki_dir, category_dir, entry.slug)
+
+        write_article(
+            path=out_path,
+            title=entry.title,
+            content=content,
+            sources=source_ids,
+            topics=[entry.slug] + entry.related_slugs,
+            status="full",
+            model=model or "",
+        )
+
+        now = datetime.now(timezone.utc)
+        with Session(engine) as session:
+            row = session.exec(select(WikiArticle).where(WikiArticle.id == entry.slug)).first()
+            if row is None:
+                row = WikiArticle(
+                    id=entry.slug,
+                    title=entry.title,
+                    status="full",
+                    file_path=str(out_path.relative_to(wiki_dir.parent)),
+                    source_ids=json.dumps(source_ids),
+                    topic_keys=json.dumps([entry.slug]),
+                    created_at=now,
+                    updated_at=now,
+                    model=model or "",
+                    needs_update=False,
+                )
+            else:
+                row.status = "full"
+                row.source_ids = json.dumps(source_ids)
+                row.updated_at = now
+                row.model = model or row.model
+                row.needs_update = False
+            session.add(row)
+            session.commit()
+
+        console.print(f"  Expanded: {entry.title}")
+
+    if sitemap is not None:
+        if all_stubs:
+            targets = [e for e in sitemap.entries if e.depth in ("stub", "draft")]
+        elif concept:
             slug = slugify(concept)
-            article = session.get(WikiArticle, slug)
-            if not article:
+            by_slug = sitemap.by_slug()
+            entry = by_slug.get(slug)
+            if entry is None:
                 # Try title match
-                all_articles = session.exec(select(WikiArticle)).all()
-                matches = [a for a in all_articles if concept.lower() in a.title.lower()]
+                matches = [e for e in sitemap.entries if concept.lower() in e.title.lower()]
                 if not matches:
-                    console.print(f"[red]No wiki article found for: {concept}[/red]")
+                    console.print(f"[red]No sitemap entry found for: {concept}[/red]")
                     raise typer.Exit(1)
-                article = matches[0]
-            targets = [article]
+                entry = matches[0]
+            targets = [entry]
         else:
-            targets = list(
-                session.exec(select(WikiArticle).where(WikiArticle.status == "stub")).all()
-            )
+            console.print("[yellow]Provide a CONCEPT or --all to expand stubs.[/yellow]")
+            raise typer.Exit(1)
 
         if not targets:
             console.print("[yellow]No stubs to expand.[/yellow]")
             return
 
         console.print(f"[bold]Expanding {len(targets)} article(s)...[/bold]")
-
-        for article in targets:
-            console.print(f"  Expanding: {article.title}")
+        for entry in targets:
             try:
-                content, source_ids = build_wiki_article(
-                    article.title, article.title, status="full", model=model, top_k=8
-                )
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]  Failed ({exc})[/red]")
-                continue
+                _expand_entry(entry)
+            except Exception as exc:
+                console.print(f"[red]  Failed ({entry.title}): {exc}[/red]")
 
-            path = settings.data_dir / article.file_path
-            existing_sources = json.loads(article.source_ids or "[]")
-            all_sources = list(dict.fromkeys(existing_sources + source_ids))
+        # After expanding: cross-link and regenerate index
+        cross_link_articles(wiki_dir, sitemap)
+        generate_wiki_index(wiki_dir)
 
-            write_article(
-                path=path,
-                title=article.title,
-                content=content,
-                sources=all_sources,
-                topics=json.loads(article.topic_keys or "[]"),
+    else:
+        # No sitemap: fall back to build_wiki_article for the given concept string
+        if not concept:
+            console.print("[red]No sitemap found and no concept given.[/red]")
+            raise typer.Exit(1)
+
+        from scholarforge.wiki.agent import build_wiki_article
+
+        console.print(f"[bold]Expanding (no-sitemap fallback): {concept}[/bold]")
+        content, source_ids = build_wiki_article(concept, concept, status="full", model=model)
+
+        slug = slugify(concept)
+        out_path = article_path(wiki_dir, "concepts", slug)
+        write_article(
+            path=out_path,
+            title=concept,
+            content=content,
+            sources=source_ids,
+            topics=[slug],
+            status="full",
+            model=model or "",
+        )
+
+        now = datetime.now(timezone.utc)
+        with Session(engine) as session:
+            row = WikiArticle(
+                id=slug,
+                title=concept,
                 status="full",
+                file_path=str(out_path.relative_to(wiki_dir.parent)),
+                source_ids=json.dumps(source_ids),
+                topic_keys=json.dumps([slug]),
+                created_at=now,
+                updated_at=now,
                 model=model or "",
+                needs_update=False,
             )
+            session.merge(row)
+            session.commit()
 
-            from datetime import datetime, timezone
+        cross_link_articles(wiki_dir, None)
+        generate_wiki_index(wiki_dir)
+        console.print(f"[green]Expanded: {concept} -> {out_path}[/green]")
 
-            article.status = "full"
-            article.source_ids = json.dumps(all_sources)
-            article.model = model or article.model
-            article.updated_at = datetime.now(timezone.utc)
-            session.add(article)
-
-        session.commit()
-
-    # Regenerate index
-    index_path = wiki_dir / "_index.md"
-    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
-    console.print(f"[green]Expansion complete. Index updated: {index_path}[/green]")
+    console.print("[green]Expand complete.[/green]")
 
 
 @wiki_app.command("sync")
@@ -828,96 +866,100 @@ def wiki_sync(
     import json
     from datetime import datetime, timezone
 
-    from sqlmodel import select
+    from sqlmodel import Session, select
 
     from scholarforge.agent.tools import read_paper_digest
-    from scholarforge.config import settings
-    from scholarforge.store.db import get_session
+    from scholarforge.store.db import get_engine
     from scholarforge.store.models import WikiArticle
     from scholarforge.wiki.agent import update_wiki_article
     from scholarforge.wiki.builder import generate_wiki_index, write_article
 
-    wiki_dir = settings.data_dir / "wiki"
+    wiki_dir = Path("data/wiki")
+    engine = get_engine()
 
-    with get_session() as session:
+    with Session(engine) as session:
         stale = list(session.exec(select(WikiArticle).where(WikiArticle.needs_update)).all())
 
-        if not stale:
-            console.print("[green]All wiki articles are up to date.[/green]")
-            return
+    if not stale:
+        console.print("[green]Synced 0 articles[/green]")
+        return
 
-        console.print(f"[bold]Syncing {len(stale)} stale article(s)...[/bold]")
+    console.print(f"[bold]Syncing {len(stale)} stale article(s)...[/bold]")
+    synced = 0
 
-        for article in stale:
-            console.print(f"  Syncing: {article.title}")
-            path = settings.data_dir / article.file_path
-            if not path.exists():
-                console.print(f"[yellow]  File missing, skipping: {path}[/yellow]")
-                continue
+    for article in stale:
+        console.print(f"  Syncing: {article.title}")
+        art_path = Path(article.file_path)
+        if not art_path.is_absolute():
+            art_path = Path("data") / article.file_path
+        if not art_path.exists():
+            console.print(f"[yellow]  File missing, skipping: {art_path}[/yellow]")
+            continue
 
-            # Read current content (strip frontmatter)
-            text = path.read_text(encoding="utf-8", errors="replace")
-            # Find end of frontmatter block
-            parts = text.split("---\n", 2)
-            body = parts[2].strip() if len(parts) >= 3 else text
+        # Read current content (strip frontmatter)
+        text = art_path.read_text(encoding="utf-8", errors="replace")
+        parts = text.split("---\n", 2)
+        body = parts[2].strip() if len(parts) >= 3 else text
 
-            # Fetch digests for known source IDs
-            source_ids = json.loads(article.source_ids or "[]")
-            digests: list[str] = []
-            for pid in source_ids[:5]:
-                try:
-                    digest = read_paper_digest(pid[:16], reason=f"wiki sync: {article.title}")
-                    if digest:
-                        digests.append(digest)
-                except Exception:  # noqa: BLE001
-                    pass
+        # Fetch digests for known source IDs
+        source_ids = json.loads(article.source_ids or "[]")
+        digests: list[str] = []
+        for pid in source_ids[:5]:
+            digest = read_paper_digest(pid[:16], reason=f"wiki sync: {article.title}")
+            if digest:
+                digests.append(digest)
 
-            try:
-                revised_body = update_wiki_article(body, digests, model=model)
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]  LLM update failed ({exc}), skipping[/red]")
-                continue
+        try:
+            revised_body = update_wiki_article(body, digests, model=model)
+        except Exception as exc:
+            console.print(f"[red]  LLM update failed ({exc}), skipping[/red]")
+            raise
 
-            write_article(
-                path=path,
-                title=article.title,
-                content=revised_body,
-                sources=source_ids,
-                topics=json.loads(article.topic_keys or "[]"),
-                status=article.status,
-                model=model or article.model,
-            )
+        write_article(
+            path=art_path,
+            title=article.title,
+            content=revised_body,
+            sources=source_ids,
+            topics=json.loads(article.topic_keys or "[]"),
+            status=article.status,
+            model=model or article.model,
+        )
 
-            article.needs_update = False
-            article.updated_at = datetime.now(timezone.utc)
-            session.add(article)
+        with Session(engine) as session:
+            row = session.exec(select(WikiArticle).where(WikiArticle.id == article.id)).first()
+            if row is not None:
+                row.needs_update = False
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
+                session.commit()
 
-        session.commit()
+        synced += 1
 
-    index_path = wiki_dir / "_index.md"
-    index_path.write_text(generate_wiki_index(wiki_dir), encoding="utf-8")
-    console.print(f"[green]Sync complete. Index updated: {index_path}[/green]")
+    generate_wiki_index(wiki_dir)
+    console.print(f"[green]Synced {synced} articles[/green]")
 
 
 @wiki_app.command("health")
 def wiki_health():
-    """Report orphans, stale articles, and synthesis gaps."""
+    """Report orphans, stale articles, and synthesis gaps in the wiki."""
     from datetime import datetime, timezone
 
-    from sqlmodel import select
+    from sqlmodel import Session, select
 
-    from scholarforge.agent.tools import find_synthesis_opportunities
-    from scholarforge.config import settings
-    from scholarforge.store.db import get_session
+    from scholarforge.store.db import get_engine
     from scholarforge.store.models import WikiArticle
     from scholarforge.wiki.builder import find_stale_articles, slugify
 
-    wiki_dir = settings.data_dir / "wiki"
+    wiki_dir = Path("data/wiki")
 
-    with get_session() as session:
-        all_articles = session.exec(select(WikiArticle)).all()
+    engine = get_engine()
+    try:
+        with Session(engine) as session:
+            all_articles = list(session.exec(select(WikiArticle)).all())
+    except Exception:
+        all_articles = []
 
-    # Stale count
+    # Stale flag count
     needs_update = [a for a in all_articles if a.needs_update]
 
     # Find stale by age (older than 30 days)
@@ -926,14 +968,17 @@ def wiki_health():
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     age_stale = find_stale_articles(list(all_articles), cutoff)
 
-    # Orphaned: file path doesn't exist on disk
-    orphans = [a for a in all_articles if not (settings.data_dir / a.file_path).exists()]
+    # Orphaned: topic_keys is empty list
+    orphans = [a for a in all_articles if a.topic_keys in ("[]", "", None)]
 
     # Missing: synthesis opportunities not yet in wiki
+    missing: list[str] = []
     try:
-        opportunities = find_synthesis_opportunities()
         import re
 
+        from scholarforge.agent.tools import find_synthesis_opportunities
+
+        opportunities = find_synthesis_opportunities()
         opp_concepts: list[str] = []
         for line in opportunities.splitlines():
             line = line.strip()
@@ -943,7 +988,7 @@ def wiki_health():
                     opp_concepts.append(concept)
         existing_slugs = {a.id for a in all_articles}
         missing = [c for c in opp_concepts if slugify(c) not in existing_slugs]
-    except Exception:  # noqa: BLE001
+    except Exception:
         missing = []
 
     # Build health report
@@ -953,7 +998,7 @@ def wiki_health():
         f"- Total articles: {len(all_articles)}",
         f"- Needs update (flag): {len(needs_update)}",
         f"- Age-stale (>30 days): {len(age_stale)}",
-        f"- Orphaned (file missing): {len(orphans)}",
+        f"- Orphaned (empty topic_keys): {len(orphans)}",
         f"- Missing synthesis opportunities: {len(missing)}",
         "",
     ]
@@ -984,6 +1029,149 @@ def wiki_health():
 
     console.print(report)
     console.print(f"[dim]Saved: {health_path}[/dim]")
+
+
+@wiki_app.command("query")
+def wiki_query(
+    question: str = typer.Argument(..., help="Question to answer from the wiki"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    promote: bool = typer.Option(False, "--promote", help="Save the answer as a new wiki article"),
+):
+    """Answer a question by querying the wiki index and relevant articles.
+
+    1. Reads the compact _index.md to identify 2-3 relevant articles.
+    2. Reads those article files in full.
+    3. Calls the LLM to produce an answer grounded in article content.
+    4. Optionally promotes the answer to data/wiki/queries/<slug>.md.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from scholarforge.llm.client import complete
+    from scholarforge.wiki.builder import slugify, write_article
+
+    wiki_dir = Path("data/wiki")
+    index_path = wiki_dir / "_index.md"
+
+    if not index_path.exists():
+        console.print("[red]No wiki index found. Run 'scholarforge wiki init' first.[/red]")
+        raise typer.Exit(1)
+
+    index_text = index_path.read_text(encoding="utf-8")
+
+    # Step 1: identify relevant articles
+    relevance_answer = complete(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a wiki navigator. Given a wiki index and a question, "
+                    "identify the 2-3 most relevant article filenames (slugs). "
+                    "Return only the filenames, one per line, no extension, no explanation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Wiki index:\n\n{index_text}\n\n"
+                    f"Question: {question}\n\n"
+                    "Return the 2-3 most relevant article slugs, one per line."
+                ),
+            },
+        ],
+        model=model,
+        temperature=0.1,
+        max_tokens=200,
+        use_cache=False,
+    )
+
+    # Parse slugs from the response
+    candidate_slugs = [line.strip().strip("-").strip() for line in relevance_answer.splitlines()]
+    candidate_slugs = [s for s in candidate_slugs if s and not s.startswith("#")]
+
+    # Find and read article files
+    article_texts: list[str] = []
+    for slug in candidate_slugs[:3]:
+        for md_file in wiki_dir.rglob(f"{slug}.md"):
+            if not md_file.name.startswith("_"):
+                article_texts.append(md_file.read_text(encoding="utf-8"))
+                break
+
+    if not article_texts:
+        # Fallback: read all articles up to 3
+        for md_file in sorted(wiki_dir.rglob("*.md"))[:3]:
+            if not md_file.name.startswith("_"):
+                article_texts.append(md_file.read_text(encoding="utf-8"))
+
+    article_block = "\n\n---\n\n".join(article_texts)
+
+    # Step 2: answer the question
+    answer = complete(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a knowledgeable assistant answering questions from wiki articles. "
+                    "Base your answer strictly on the provided article content. "
+                    "Cite articles by title when relevant. Be concise and precise."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Wiki articles:\n\n{article_block}\n\n"
+                    f"Question: {question}\n\n"
+                    "Answer based on the articles above."
+                ),
+            },
+        ],
+        model=model,
+        temperature=0.2,
+        max_tokens=1000,
+        use_cache=False,
+    )
+
+    console.print(answer)
+
+    if promote:
+        from sqlmodel import Session
+
+        from scholarforge.store.db import get_engine
+        from scholarforge.store.models import WikiArticle
+
+        slug = slugify(question[:60])
+        queries_dir = wiki_dir / "queries"
+        out_path = queries_dir / f"{slug}.md"
+
+        write_article(
+            path=out_path,
+            title=question,
+            content=answer,
+            sources=[],
+            topics=[slug],
+            status="full",
+            model=model or "",
+        )
+
+        now = datetime.now(timezone.utc)
+        engine = get_engine()
+        with Session(engine) as session:
+            row = WikiArticle(
+                id=f"query_{slug}",
+                title=question,
+                status="full",
+                file_path=str(out_path.relative_to(wiki_dir.parent)),
+                source_ids=json.dumps([]),
+                topic_keys=json.dumps([slug]),
+                created_at=now,
+                updated_at=now,
+                model=model or "",
+                needs_update=False,
+            )
+            session.merge(row)
+            session.commit()
+
+        console.print(f"[green]Answer promoted to: {out_path}[/green]")
 
 
 if __name__ == "__main__":

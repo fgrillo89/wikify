@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -52,7 +52,7 @@ class WikiSitemap:
     """Full structured plan for the wiki, produced in one LLM call after exploration."""
 
     entries: list[SitemapEntry]
-    generated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    generated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     corpus_summary: str = ""  # snapshot of corpus shape at generation time
     model: str = ""
 
