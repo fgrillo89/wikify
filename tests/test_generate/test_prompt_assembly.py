@@ -168,9 +168,7 @@ def test_generation_prompt_contains_digest_first_guidance():
     from scholarforge.agent.defaults import build_generation_prompt
 
     prompt = build_generation_prompt(field_hint="ALD memristors")
-    assert "read_paper_digest" in prompt, (
-        "Expected digest-first instruction in generation prompt"
-    )
+    assert "read_paper_digest" in prompt, "Expected digest-first instruction in generation prompt"
     assert "read_section" in prompt, "Expected section drill-down instruction in prompt"
 
 

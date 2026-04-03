@@ -1821,6 +1821,7 @@ def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
 
 # ── Session context: read-once-summarize pattern ─────────────────────────────
 
+
 def reset_paper_summaries() -> None:
     """Clear the session paper summary store. Call at the start of each run."""
     from scholarforge.agent.run_context import get_current_run_context

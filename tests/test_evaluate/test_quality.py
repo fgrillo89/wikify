@@ -82,9 +82,7 @@ def test_comprehensive_quality_report_populates_prose_quality(
     factual = _high_factual_specificity()
 
     monkeypatch.setattr(quality_module, "compute_prose_quality", lambda review_text: prose)
-    monkeypatch.setattr(
-        quality_module, "compute_factual_specificity", lambda review_text: factual
-    )
+    monkeypatch.setattr(quality_module, "compute_factual_specificity", lambda review_text: factual)
     monkeypatch.setattr(quality_module, "compute_topic_coverage", lambda review_text: None)
     monkeypatch.setattr(quality_module, "_build_embedding_context", lambda review_text: None)
 

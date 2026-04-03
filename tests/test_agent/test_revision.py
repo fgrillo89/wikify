@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from scholarforge.agent.revision import _find_section_bounds, revise_weakest_section
 from scholarforge.evaluate.pi_review import PIReviewResult
-
 
 _SAMPLE_REVIEW = """\
 ## Abstract
