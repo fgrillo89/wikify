@@ -359,6 +359,101 @@ After `ingest/corpus_refresh.py` completes a refresh:
 
 ---
 
+## Implementation Patterns (from related work)
+
+### Pattern 1 -- Boolean Gating Agent (before Pass 3 article writes)
+
+Before spending a sonnet call rewriting or upgrading an article in Pass 3, insert a cheap
+haiku gate in `wiki/epoch.py`:
+
+```python
+def should_update_article(existing_article: str, new_extractions: list[SourceExtraction], model: str = HAIKU_MODEL) -> bool:
+    """Return True only if new evidence meaningfully extends the existing article."""
+    ...
+```
+
+Gate prompt: "Does this new evidence add facts, corrections, or context not already present
+in this article? Return YES or NO only."
+
+If NO: skip the article entirely for this epoch; do not call `upgrade_concept_article()`.
+If YES: proceed to the Pass 3 article rewrite.
+
+This gate is more semantically precise than the gradient threshold alone. The gradient
+measures token volume, not semantic novelty -- two checks must both pass before a sonnet
+call is issued:
+
+1. Gradient threshold as fast pre-filter: skip if `new_evidence_tokens / existing_article_tokens < 0.05`.
+2. Boolean gate as secondary semantic check: skip if haiku returns NO.
+
+The haiku gate costs approximately $0.0003 per call versus $0.015 for a sonnet rewrite. The
+gate pays for itself if it prevents even 1 in 50 sonnet calls. Place `should_update_article`
+in `wiki/epoch.py` as a module-level helper; call it inside the Pass 3 loop immediately after
+the gradient pre-filter passes.
+
+### Pattern 2 -- Staging/Production ChromaDB Split for Pass 1 Output
+
+Pass 1 (concept discovery) currently writes haiku extractions directly to `ConceptRecord`. A
+mid-epoch failure in Pass 1 itself partially populates the concept table with no clean rollback
+path. To make Pass 1 atomic, add a `concept_extractions` ChromaDB staging collection that is
+per-epoch and ephemeral:
+
+- Pass 1 writes all haiku extractions to `concept_extractions` first.
+- After all sources in the epoch are processed, merge into `ConceptRecord` with deduplication.
+- `concept_extractions` is cleared at the start of each new epoch.
+
+This means either all extractions for an epoch are committed to `ConceptRecord`, or none are.
+It also allows replaying Pass 2 and Pass 3 without re-running haiku if only the
+article-writing step failed -- the staging collection retains the raw extractions until the
+next epoch clears it.
+
+Add the following three functions to `wiki/concepts.py`:
+
+- `stage_extractions(epoch: int, extractions: list[dict]) -> None` -- writes raw haiku output
+  to the staging ChromaDB collection, keyed by `(epoch, source_id)`.
+- `commit_staged_extractions(epoch: int) -> int` -- reads all staging entries for the given
+  epoch, merges into `ConceptRecord` via the existing deduplication logic, and returns the
+  count of records committed.
+- `clear_staged_extractions(epoch: int) -> None` -- deletes all staging collection entries
+  for the given epoch; called at the start of `run_epoch()` before Pass 1 begins.
+
+### Pattern 3 -- Cross-Chunk Context Threading in Pass 1
+
+Pass 1 currently calls haiku independently for each corpus chunk. Concepts that build across
+section boundaries -- a variable introduced in an Introduction and referenced by name in
+Methods -- are invisible to haiku when it processes the later chunk in isolation. This
+produces duplicate extractions (same concept under slightly different aliases) and broken
+alias resolution.
+
+In `wiki/concepts.py:extract_concepts_from_source()`, thread the concept name list forward
+across chunks of the same source:
+
+```python
+def extract_concepts_from_source(
+    source_id: str,
+    chunks: list[Chunk],
+    epoch: int,
+    model: str = HAIKU_MODEL,
+) -> list[ConceptRecord]:
+    prior_concepts: list[str] = []  # names extracted from previous chunks
+    results = []
+    for chunk in chunks:
+        extracted = _extract_from_chunk(chunk, prior_context=prior_concepts, model=model)
+        prior_concepts = [c.name for c in extracted]  # carry forward
+        results.extend(extracted)
+    return results
+```
+
+The haiku prompt for `_extract_from_chunk` includes: "Previously extracted concepts from
+earlier sections of this source: {prior_concepts}. Do not re-extract these unless this
+section adds new information about them."
+
+This reduces alias duplication within a single source and gives haiku enough context to
+resolve cross-section references without requiring a larger context window or a second
+consolidation pass. The `prior_concepts` list is reset to `[]` at the start of each new
+source -- it does not carry across sources.
+
+---
+
 ## Implementation Order
 
 The modules have hard dependencies in this order:
