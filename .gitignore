@@ -30,3 +30,4 @@ desktop.ini
 
 # Cache
 .cache/
+.claude/worktrees/
