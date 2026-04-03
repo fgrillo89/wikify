@@ -10,6 +10,57 @@ from rich.console import Console
 console = Console()
 
 
+def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
+    """Set needs_update=True on WikiArticle rows whose topics overlap with new papers.
+
+    Steps:
+    1. Gets the topic keys for the new papers from PaperTopic.
+    2. Queries WikiArticle rows where topic_keys JSON overlaps.
+    3. Sets needs_update=True on matches and commits.
+    """
+    import json
+
+    from sqlmodel import select
+
+    from scholarforge.store.db import get_session
+    from scholarforge.store.models import PaperTopic, WikiArticle
+
+    if not new_paper_ids:
+        return
+
+    with get_session() as session:
+        # Collect topics for new papers
+        new_topics: set[str] = set()
+        for paper_id in new_paper_ids:
+            paper_topics = session.exec(
+                select(PaperTopic).where(PaperTopic.paper_id == paper_id)
+            ).all()
+            for pt in paper_topics:
+                new_topics.add(pt.topic)
+
+        if not new_topics:
+            return
+
+        # Find wiki articles whose topic_keys overlap
+        all_articles = session.exec(select(WikiArticle)).all()
+        updated = 0
+        for article in all_articles:
+            if article.needs_update:
+                continue
+            try:
+                article_topics: list[str] = json.loads(article.topic_keys or "[]")
+            except (json.JSONDecodeError, ValueError):
+                article_topics = []
+            if set(article_topics) & new_topics:
+                article.needs_update = True
+                session.add(article)
+                updated += 1
+
+        if updated:
+            session.commit()
+            console.print(f"[dim]  Marked {updated} wiki articles as needing update[/dim]")
+
+
 def get_vocab_cache_path() -> Path:
     """Return the cached corpus vocabulary path."""
     from scholarforge.config import settings
@@ -320,6 +371,9 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     from scholarforge.zotero.bibtex_library import rebuild_bibtex_library
 
     rebuild_bibtex_library(papers, settings.data_dir)
+
+    if new_paper_ids:
+        _mark_stale_wiki_articles(list(new_paper_ids))
 
     try:
         from scholarforge.store.precompute import precompute_all
