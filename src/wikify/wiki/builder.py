@@ -274,14 +274,38 @@ def resolve_article_sources(article_path_obj: Path) -> list[str]:
     if not resolved_ids:
         return []
 
+    # Build paper_id -> display info for readable sources
+    id_to_display: dict[str, str] = {}
+    for p in all_papers:
+        authors = p.parsed_authors
+        first_author = authors[0].split()[-1] if authors else "Unknown"
+        year = p.year or "?"
+        title_short = (p.title or "Untitled")[:80]
+        id_to_display[p.id] = f"{first_author} {year} - {title_short}"
+
     # Update frontmatter sources
-    # Simple approach: replace the sources line in the frontmatter
     sources_yaml = "\n".join(f"  - {sid}" for sid in resolved_ids)
     text = re.sub(
         r"sources:\n  \[\]",
         f"sources:\n{sources_yaml}",
         text,
     )
+
+    # Append or replace ## Sources section (human-readable + machine hash)
+    sources_section = "\n## Sources\n\n"
+    for pid in resolved_ids:
+        display = id_to_display.get(pid, pid[:16])
+        sources_section += f"- {display} `{pid[:12]}`\n"
+
+    # Remove existing ## Sources section if present
+    text = re.sub(
+        r"\n## Sources\n.*",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    text = text.rstrip() + "\n" + sources_section
+
     article_path_obj.write_text(text, encoding="utf-8")
 
     logger.info(
