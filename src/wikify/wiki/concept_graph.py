@@ -1,0 +1,429 @@
+"""Concept co-occurrence graph, importance scoring, and role classification.
+
+Implements Pass 2 of the Wikipedia/epoch pipeline:
+
+    build_concept_graph  -- Load ConceptRecords + SourceCoverage from DB,
+                            build a weighted directed graph of co-occurrences.
+    score_importance     -- PageRank + degree centrality + source diversity,
+                            normalised to [0, 1].
+    classify_node_roles  -- Assign "core" | "bridge" | "peripheral" to each node.
+    detect_communities   -- Louvain community detection for auto-domain discovery.
+    extract_relations    -- Derive ConceptRelation rows from graph edges.
+    update_concept_importance -- Persist importance scores back to ConceptRecord.
+    save_relations       -- Atomic replace of ConceptRelation rows for an epoch.
+"""
+
+from __future__ import annotations
+
+import logging
+import statistics
+from collections import defaultdict
+
+import networkx as nx
+from sqlmodel import select
+
+from wikify.store.db import get_session
+from wikify.store.models import ConceptRecord, ConceptRelation, SourceCoverage
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — graph construction
+# ---------------------------------------------------------------------------
+
+
+def build_concept_graph(domain: str, epoch: int) -> nx.DiGraph:
+    """Build a co-occurrence graph for all ConceptRecords in a domain.
+
+    Nodes are concept slugs (ConceptRecord.id).  An edge (A, B) exists when
+    concepts A and B were both extracted from the same source document (as
+    recorded in SourceCoverage) or appear together in chunks of the same paper.
+    Edge weight is the number of shared sources.
+
+    Node attributes stored:
+        name          -- ConceptRecord.name
+        concept_type  -- ConceptRecord.concept_type
+        domain        -- ConceptRecord.domain
+        article_status -- ConceptRecord.article_status
+
+    Args:
+        domain: Domain filter (e.g. "material_science").  Pass "" to include
+                all domains.
+        epoch:  Current epoch number (stored on ConceptRelation rows later).
+
+    Returns:
+        Directed graph.  Edges are bidirectional (A->B and B->A) with the same
+        weight so PageRank treats the relationship symmetrically; the caller may
+        choose direction later when creating ConceptRelation rows.
+    """
+    graph = nx.DiGraph()
+
+    # ── Load concepts ────────────────────────────────────────────────────────
+    with get_session() as session:
+        query = select(ConceptRecord)
+        if domain:
+            query = query.where(ConceptRecord.domain == domain)
+        concepts: list[ConceptRecord] = list(session.exec(query).all())
+
+    if not concepts:
+        logger.info("build_concept_graph: no concepts for domain=%r epoch=%d", domain, epoch)
+        return graph
+
+    for c in concepts:
+        graph.add_node(
+            c.id,
+            name=c.name,
+            concept_type=c.concept_type,
+            domain=c.domain,
+            article_status=c.article_status,
+        )
+
+    concept_ids = {c.id for c in concepts}
+
+    # ── Build co-occurrence counts via SourceCoverage ────────────────────────
+    # source_id -> set of concept slugs extracted from that source
+    source_to_concepts: dict[str, set[str]] = defaultdict(set)
+
+    with get_session() as session:
+        if domain:
+            rows = list(
+                session.exec(select(SourceCoverage).where(SourceCoverage.domain == domain)).all()
+            )
+        else:
+            rows = list(session.exec(select(SourceCoverage)).all())
+
+    for row in rows:
+        if row.article_slug in concept_ids:
+            source_to_concepts[row.source_id].add(row.article_slug)
+
+    # co-occurrence weight: number of shared sources
+    cooccurrence: dict[tuple[str, str], int] = defaultdict(int)
+    for concepts_in_source in source_to_concepts.values():
+        concepts_list = sorted(concepts_in_source)
+        for i, a in enumerate(concepts_list):
+            for b in concepts_list[i + 1 :]:
+                cooccurrence[(a, b)] += 1
+
+    # Add edges in both directions with equal weight
+    for (a, b), weight in cooccurrence.items():
+        if a in concept_ids and b in concept_ids:
+            graph.add_edge(a, b, weight=float(weight))
+            graph.add_edge(b, a, weight=float(weight))
+
+    logger.info(
+        "build_concept_graph: domain=%r epoch=%d nodes=%d edges=%d",
+        domain,
+        epoch,
+        graph.number_of_nodes(),
+        graph.number_of_edges(),
+    )
+    return graph
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — importance scoring
+# ---------------------------------------------------------------------------
+
+
+def score_importance(graph: nx.DiGraph) -> dict[str, float]:
+    """Compute a blended importance score for each node in [0, 1].
+
+    Formula:
+        raw = 0.5 * pagerank + 0.3 * degree_centrality + 0.2 * source_diversity
+
+    where source_diversity is the number of unique source_ids that mention this
+    concept (from SourceCoverage), normalised by the maximum across all concepts.
+
+    Final scores are normalised to [0, 1] by dividing by the maximum raw score.
+
+    Args:
+        graph: DiGraph returned by :func:`build_concept_graph`.
+
+    Returns:
+        Mapping of concept_id -> importance score.  Empty dict if the graph
+        has no nodes.
+    """
+    if graph.number_of_nodes() == 0:
+        return {}
+
+    node_ids = list(graph.nodes())
+
+    # ── PageRank ─────────────────────────────────────────────────────────────
+    if graph.number_of_edges() > 0:
+        pagerank: dict[str, float] = nx.pagerank(graph, weight="weight")
+    else:
+        # Uniform if no edges
+        uniform = 1.0 / len(node_ids)
+        pagerank = {n: uniform for n in node_ids}
+
+    # ── Degree centrality (undirected view) ──────────────────────────────────
+    degree_cent: dict[str, float] = nx.degree_centrality(graph.to_undirected())
+
+    # ── Source diversity: unique source_ids per concept ──────────────────────
+    source_counts: dict[str, int] = defaultdict(int)
+    with get_session() as session:
+        for cid in node_ids:
+            n_sources = len(
+                list(
+                    session.exec(
+                        select(SourceCoverage).where(SourceCoverage.article_slug == cid)
+                    ).all()
+                )
+            )
+            source_counts[cid] = n_sources
+
+    max_sources = max(source_counts.values(), default=1) or 1
+    source_diversity: dict[str, float] = {cid: source_counts[cid] / max_sources for cid in node_ids}
+
+    # ── Blend ────────────────────────────────────────────────────────────────
+    raw: dict[str, float] = {}
+    for cid in node_ids:
+        raw[cid] = (
+            0.5 * pagerank.get(cid, 0.0)
+            + 0.3 * degree_cent.get(cid, 0.0)
+            + 0.2 * source_diversity.get(cid, 0.0)
+        )
+
+    max_raw = max(raw.values(), default=1.0) or 1.0
+    scores: dict[str, float] = {cid: raw[cid] / max_raw for cid in node_ids}
+    return scores
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — role classification
+# ---------------------------------------------------------------------------
+
+
+def classify_node_roles(
+    graph: nx.DiGraph,
+    scores: dict[str, float],
+) -> dict[str, str]:
+    """Classify each node as "core", "bridge", or "peripheral".
+
+    Rules (applied in priority order):
+        core       -- importance > 0.5 AND degree > median degree
+        bridge     -- betweenness centrality > 75th percentile
+        peripheral -- everything else
+
+    Args:
+        graph:  DiGraph returned by :func:`build_concept_graph`.
+        scores: Importance scores from :func:`score_importance`.
+
+    Returns:
+        Mapping of concept_id -> role string.  Empty dict if graph is empty.
+    """
+    if graph.number_of_nodes() == 0:
+        return {}
+
+    undirected = graph.to_undirected()
+    node_ids = list(graph.nodes())
+
+    degrees = [undirected.degree(n) for n in node_ids]
+    median_degree = statistics.median(degrees) if degrees else 0.0
+
+    if graph.number_of_edges() > 0:
+        betweenness: dict[str, float] = nx.betweenness_centrality(undirected, weight="weight")
+    else:
+        betweenness = {n: 0.0 for n in node_ids}
+
+    bc_values = sorted(betweenness.values())
+    p75_index = int(len(bc_values) * 0.75)
+    p75_threshold = bc_values[p75_index] if bc_values else 0.0
+
+    roles: dict[str, str] = {}
+    for cid in node_ids:
+        node_degree = undirected.degree(cid)
+        node_importance = scores.get(cid, 0.0)
+        node_bc = betweenness.get(cid, 0.0)
+
+        if node_importance > 0.5 and node_degree > median_degree:
+            roles[cid] = "core"
+        elif node_bc > p75_threshold:
+            roles[cid] = "bridge"
+        else:
+            roles[cid] = "peripheral"
+
+    return roles
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — community detection
+# ---------------------------------------------------------------------------
+
+
+def detect_communities(graph: nx.DiGraph) -> dict[str, int]:
+    """Detect communities via Louvain algorithm.
+
+    Uses :func:`networkx.community.louvain_communities` on the undirected
+    projection of the graph.  Each community is assigned an integer index
+    (0-based in descending size order).
+
+    Args:
+        graph: DiGraph returned by :func:`build_concept_graph`.
+
+    Returns:
+        Mapping of concept_id -> community_index.  Empty dict if graph is empty.
+    """
+    if graph.number_of_nodes() == 0:
+        return {}
+
+    undirected = graph.to_undirected()
+
+    # louvain_communities requires at least one edge to be meaningful
+    if undirected.number_of_edges() == 0:
+        # All isolated nodes go into community 0
+        return {n: 0 for n in graph.nodes()}
+
+    community_sets: list[set] = list(
+        nx.community.louvain_communities(undirected, weight="weight", seed=42)
+    )
+
+    # Sort communities largest-first so index 0 is the most populous
+    community_sets.sort(key=len, reverse=True)
+
+    membership: dict[str, int] = {}
+    for idx, members in enumerate(community_sets):
+        for node in members:
+            membership[node] = idx
+
+    logger.info(
+        "detect_communities: %d communities from %d nodes",
+        len(community_sets),
+        graph.number_of_nodes(),
+    )
+    return membership
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — relation extraction
+# ---------------------------------------------------------------------------
+
+# Maps (source_type, target_type) pairs to a relation_type string.
+# Both keys are concept_type values from ConceptRecord.
+_RELATION_MAP: dict[tuple[str, str], str] = {
+    ("method", "material"): "USED-IN",
+    ("technique", "material"): "USED-IN",
+    ("method", "dataset"): "USED-IN",
+    ("technique", "dataset"): "USED-IN",
+    ("theory", "phenomenon"): "ENABLES",
+    ("theory", "method"): "ENABLES",
+    ("theory", "technique"): "ENABLES",
+}
+
+
+def _infer_relation_type(src_type: str, tgt_type: str) -> str:
+    """Infer a relation type from a pair of concept_type strings.
+
+    Checks the directed pair first, then the reversed pair, then falls back
+    to "RELATED-TO".
+    """
+    direct = _RELATION_MAP.get((src_type, tgt_type))
+    if direct:
+        return direct
+    return "RELATED-TO"
+
+
+def extract_relations(graph: nx.DiGraph, epoch: int) -> list[ConceptRelation]:
+    """Derive ConceptRelation rows from graph edges.
+
+    Each directed edge (u, v) with weight w becomes one ConceptRelation.
+    The relation_type is inferred from the concept_type attributes of the
+    source and target nodes.
+
+    Args:
+        graph: DiGraph returned by :func:`build_concept_graph`.
+        epoch: Current epoch number stored on each relation.
+
+    Returns:
+        List of (unsaved) ConceptRelation instances.
+    """
+    relations: list[ConceptRelation] = []
+    for src, tgt, edge_data in graph.edges(data=True):
+        src_type: str = graph.nodes[src].get("concept_type", "")
+        tgt_type: str = graph.nodes[tgt].get("concept_type", "")
+
+        # Same type -> RELATED-TO (covers identical-type pairs)
+        if src_type and tgt_type and src_type == tgt_type:
+            rel_type = "RELATED-TO"
+        else:
+            rel_type = _infer_relation_type(src_type, tgt_type)
+
+        relations.append(
+            ConceptRelation(
+                source_concept=src,
+                target_concept=tgt,
+                relation_type=rel_type,
+                weight=float(edge_data.get("weight", 1.0)),
+                epoch=epoch,
+            )
+        )
+    return relations
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — DB persistence helpers
+# ---------------------------------------------------------------------------
+
+
+def update_concept_importance(scores: dict[str, float]) -> None:
+    """Write importance scores back to ConceptRecord rows in the DB.
+
+    Only updates concepts whose id appears in *scores*.  Commits in a single
+    transaction.
+
+    Args:
+        scores: Mapping of concept_id -> importance score (0-1).
+    """
+    if not scores:
+        return
+
+    with get_session() as session:
+        for cid, value in scores.items():
+            results = list(session.exec(select(ConceptRecord).where(ConceptRecord.id == cid)).all())
+            if results:
+                record = results[0]
+                record.importance = value
+                session.add(record)
+        session.commit()
+
+    logger.info("update_concept_importance: updated %d concepts", len(scores))
+
+
+def save_relations(relations: list[ConceptRelation], epoch: int) -> int:
+    """Atomically replace ConceptRelation rows for a given epoch.
+
+    Deletes all existing rows for *epoch*, then bulk-inserts *relations*.
+
+    Args:
+        relations: List of ConceptRelation instances to persist.
+        epoch:     Epoch number (used for the delete filter).
+
+    Returns:
+        Number of rows inserted.
+    """
+    if not relations:
+        logger.info("save_relations: no relations to save for epoch=%d", epoch)
+        return 0
+
+    with get_session() as session:
+        # Delete existing rows for this epoch
+        existing = list(
+            session.exec(select(ConceptRelation).where(ConceptRelation.epoch == epoch)).all()
+        )
+        for row in existing:
+            session.delete(row)
+        session.flush()
+
+        # Bulk insert
+        for rel in relations:
+            session.add(rel)
+        session.commit()
+
+    logger.info(
+        "save_relations: epoch=%d deleted=%d inserted=%d",
+        epoch,
+        len(existing),
+        len(relations),
+    )
+    return len(relations)

@@ -1569,5 +1569,87 @@ def wiki_query(
         console.print(f"[green]Answer promoted to: {out_path}[/green]")
 
 
+@wiki_app.command("epoch")
+def wiki_epoch(
+    n: int = typer.Option(1, "--n", help="Number of epochs to run"),
+    until_convergence: bool = typer.Option(
+        False, "--until-convergence", help="Run until convergence"
+    ),
+    status: bool = typer.Option(False, "--status", help="Show current epoch status"),
+    domain: str = typer.Option("", "--domain", help="Restrict to one domain"),
+    on_ingest: bool = typer.Option(
+        False, "--on-ingest", help="Configure auto-trigger on ingest"
+    ),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
+):
+    """Run one or more wiki-building epochs.
+
+    Passes: discovery -> graph -> articles -> cross-ref -> index.
+    """
+    import json
+
+    from wikify.wiki.epoch import get_epoch_status, run_epoch, run_until_convergence
+
+    wiki_dir = Path("data/wiki")
+
+    if status:
+        s = get_epoch_status()
+        console.print("\n[bold]Epoch Status[/bold]")
+        console.print(f"  Epochs completed : {s.get('epochs_completed', 0)}")
+        console.print(f"  Loss (L)         : {s.get('loss', 'n/a')}")
+        console.print(f"  Converged        : {s.get('converged', False)}")
+        console.print(f"  Last run         : {s.get('last_run', 'never')}")
+        return
+
+    if on_ingest:
+        flag_path = wiki_dir / "_epoch.json"
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        flag_path.write_text(json.dumps({"on_ingest": True}))
+        console.print(f"[green]Auto-trigger on ingest enabled.[/green] Flag: {flag_path}")
+        return
+
+    if until_convergence:
+        max_epochs = n if n > 1 else 10
+        summary = run_until_convergence(domain=domain, max_epochs=max_epochs, model=model)
+        epochs_run = summary.get("epochs_run", "?")
+        console.print(f"\n[bold green]Converged after {epochs_run} epoch(s)[/bold green]")
+        console.print(f"  Final loss : {summary.get('loss', 'n/a')}")
+        console.print(f"  Concepts   : {summary.get('total_concepts', 'n/a')}")
+        console.print(f"  Articles   : {summary.get('total_articles', 'n/a')}")
+        return
+
+    for i in range(n):
+        console.print(f"\n[bold]Epoch {i + 1}/{n}[/bold]")
+        result = run_epoch(triggered_by="user", domain=domain, model=model)
+        console.print(f"  Concepts discovered : {result.get('concepts_discovered', 0)}")
+        console.print(f"  Articles written    : {result.get('articles_written', 0)}")
+        console.print(f"  Stubs upgraded      : {result.get('stubs_upgraded', 0)}")
+        loss = result.get("loss")
+        loss_delta = result.get("loss_delta")
+        loss_str = f"{loss:.4f}" if loss is not None else "n/a"
+        delta_str = f"{loss_delta:+.4f}" if loss_delta is not None else "n/a"
+        console.print(f"  Loss (L)            : {loss_str}  (delta: {delta_str})")
+        converged = result.get("converged", False)
+        converged_label = "[green]yes[/green]" if converged else "no"
+        console.print(f"  Converged           : {converged_label}")
+        if converged:
+            console.print("[green]Wiki has converged — no further epochs needed.[/green]")
+            break
+
+
+@wiki_app.command("dashboard")
+def wiki_dashboard(
+    port: int = typer.Option(8765, "--port", help="Port to serve on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+):
+    """Serve the live wiki dashboard (requires uvicorn + wikify.wiki.dashboard)."""
+    import uvicorn
+
+    from wikify.wiki.dashboard import app as dashboard_app
+
+    console.print(f"[bold]Serving wiki dashboard at[/bold] http://{host}:{port}")
+    uvicorn.run(dashboard_app, host=host, port=port)
+
+
 if __name__ == "__main__":
     app()

@@ -177,6 +177,61 @@ class SourceCoverage(SQLModel, table=True):
     covered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ConceptRecord(SQLModel, table=True):
+    """A named concept discovered from the corpus by the epoch pipeline."""
+
+    id: str = Field(primary_key=True)  # slugified name, e.g. "atomic_layer_deposition"
+    name: str  # canonical display name, e.g. "Atomic Layer Deposition"
+    aliases: str = Field(default="[]")  # JSON list, e.g. '["ALD", "atomic layer dep."]'
+    definition: str = ""  # one-line definition from discovery
+    concept_type: str = ""  # technique | material | phenomenon | method | theory | dataset
+    domain: str = ""  # inferred from source distribution
+    importance: float = 0.0  # 0-1, computed from concept graph (updated in Pass 2)
+    epoch_discovered: int = 0
+    epoch_last_updated: int = 0
+    article_status: str = "none"  # none | stub | draft | full
+    article_path: str = ""  # relative path to .md file, or ""
+
+    @property
+    def parsed_aliases(self) -> list[str]:
+        """Parse aliases JSON safely."""
+        if not self.aliases:
+            return []
+        try:
+            return json.loads(self.aliases)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+
+class ConceptRelation(SQLModel, table=True):
+    """A directed relationship between two concepts in the concept graph."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_concept: str = Field(index=True)  # FK -> ConceptRecord.id
+    target_concept: str = Field(index=True)  # FK -> ConceptRecord.id
+    relation_type: str = ""  # IS-A | PART-OF | USED-IN | ENABLES | CONTRASTS-WITH
+    weight: float = 0.0  # co-occurrence strength
+    epoch: int = 0
+
+
+class EpochLog(SQLModel, table=True):
+    """Log entry for one completed epoch of the Wikipedia pipeline."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    epoch: int = Field(index=True)
+    triggered_by: str = ""  # "user" | "ingest" | "schedule"
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: Optional[datetime] = None
+    concepts_discovered: int = 0
+    stubs_upgraded: int = 0
+    articles_written: int = 0
+    contradictions_flagged: int = 0
+    cross_refs_added: int = 0
+    converged: bool = False
+    loss_score: float = 0.0  # L computed after Pass 5
+    loss_delta: float = 0.0  # |L(epoch_n) - L(epoch_n-1)|
+
+
 class JournalTemplate(SQLModel, table=True):
     """A tracked journal/publisher DOCX or LaTeX template."""
 

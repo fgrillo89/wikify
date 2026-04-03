@@ -1,0 +1,777 @@
+"""Epoch orchestrator for the Wikipedia/epoch pipeline.
+
+Runs one complete epoch of the wiki-building loop (5 passes in order) and tracks
+convergence via a scalar loss function L.
+
+Pipeline:
+    run_epoch()
+        Pass 1 -- concept discovery  (discover_concepts)
+        Pass 2 -- graph building      (build_concept_graph, score_importance, ...)
+        Pass 3 -- article writing     (write_concept_article / upgrade_concept_article)
+        Pass 4 -- cross-linking       (cross_link_articles)
+        Pass 5 -- index rebuild       (generate_wiki_index, compute_loss)
+    -> EpochLog (persisted)
+
+Convergence:
+    check_convergence() -- all 4 criteria must hold
+    run_until_convergence() -- loop until convergence or max_epochs reached
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from sqlmodel import select
+
+from wikify.config import settings
+from wikify.llm.client import complete
+from wikify.store.db import get_session
+from wikify.store.models import ConceptRecord, EpochLog, Paper, SourceCoverage
+from wikify.wiki.article import (
+    should_write_full,
+    upgrade_concept_article,
+    write_concept_article,
+)
+from wikify.wiki.builder import article_path, generate_wiki_index, write_article
+from wikify.wiki.concept_graph import (
+    build_concept_graph,
+    classify_node_roles,
+    extract_relations,
+    save_relations,
+    score_importance,
+    update_concept_importance,
+)
+from wikify.wiki.concepts import (
+    HAIKU_MODEL,
+    clear_staged_extractions,
+    discover_concepts,
+    list_concepts,
+)
+from wikify.wiki.linker import cross_link_articles
+from wikify.wiki.mapreduce import SourceExtraction, map_chunks_to_topic
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+_WIKI_DIR = Path("data/wiki")
+
+# Loss function weights (alpha + beta + gamma - delta need not sum to 1;
+# the formula is a signed linear combination).
+_ALPHA = 0.3  # stub_ratio weight
+_BETA = 0.2  # orphan_concept_rate weight
+_GAMMA = 0.3  # contradiction_density weight
+_DELTA = 0.2  # cross_ref_density weight (negative contribution to loss)
+
+# Convergence thresholds
+_CONVERGENCE_NEW_CONCEPT_RATE = 0.02  # < 2% new concepts relative to total
+_CONVERGENCE_STUB_RATIO = 0.10  # < 10% stubs
+_CONVERGENCE_LOSS_DELTA = 0.01  # epsilon
+
+
+# ── Private helpers ────────────────────────────────────────────────────────────
+
+
+def _get_next_epoch_number() -> int:
+    """Return the next epoch number to use (max existing + 1, or 1)."""
+    with get_session() as session:
+        all_logs: list[EpochLog] = list(session.exec(select(EpochLog)).all())
+
+    if not all_logs:
+        return 1
+    return max(log.epoch for log in all_logs) + 1
+
+
+def _get_all_paper_ids() -> list[str]:
+    """Return ids of all corpus papers (origin == 'corpus')."""
+    with get_session() as session:
+        papers: list[Paper] = list(
+            session.exec(select(Paper).where(Paper.origin == "corpus")).all()
+        )
+    return [p.id for p in papers]
+
+
+# ── Boolean gating agent ───────────────────────────────────────────────────────
+
+
+def should_update_article(
+    existing_article: str,
+    new_extractions: list[SourceExtraction],
+    model: str = HAIKU_MODEL,
+) -> bool:
+    """Two-gate check before spending a model rewrite on an existing article.
+
+    Gate 1 (gradient pre-filter):
+        Skip if new_evidence_tokens / existing_article_tokens < 0.05.
+
+    Gate 2 (haiku semantic check):
+        Ask haiku whether the new evidence adds facts not present in the article.
+        Return True only when the response contains "YES".
+
+    Args:
+        existing_article: Current article body text.
+        new_extractions:  Fresh SourceExtraction objects to evaluate.
+        model:            Model for the semantic gate (default haiku).
+
+    Returns:
+        True if the article should be rewritten with the new evidence.
+    """
+    if not new_extractions:
+        return False
+
+    new_evidence_text = "\n".join(
+        e.extraction for e in new_extractions if e.is_relevant and e.extraction != "NO"
+    ).strip()
+
+    if not new_evidence_text:
+        return False
+
+    # Gate 1: rough token approximation (chars / 4)
+    existing_tokens = max(len(existing_article) / 4, 1)
+    new_tokens = len(new_evidence_text) / 4
+
+    if new_tokens / existing_tokens < 0.05:
+        logger.debug(
+            "should_update_article: Gate 1 blocked (gradient %.3f < 0.05)",
+            new_tokens / existing_tokens,
+        )
+        return False
+
+    # Gate 2: haiku semantic check
+    prompt = (
+        "You are reviewing whether new evidence warrants rewriting an existing article.\n\n"
+        "--- EXISTING ARTICLE ---\n"
+        f"{existing_article[:3000]}\n"
+        "--- END EXISTING ARTICLE ---\n\n"
+        "--- NEW EVIDENCE ---\n"
+        f"{new_evidence_text[:2000]}\n"
+        "--- END NEW EVIDENCE ---\n\n"
+        "Does this new evidence add facts, corrections, or context not already present in "
+        "this article? Return YES or NO only."
+    )
+
+    try:
+        response = complete(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0.0,
+            max_tokens=8,
+            use_cache=False,
+        )
+    except Exception:
+        logger.exception("should_update_article: haiku gate call failed, defaulting to False")
+        return False
+
+    result = "YES" in response.upper()
+    logger.debug("should_update_article: Gate 2 response=%r -> %s", response.strip(), result)
+    return result
+
+
+# ── Loss computation ───────────────────────────────────────────────────────────
+
+
+def _count_warning_markers(wiki_dir: Path) -> tuple[int, int]:
+    """Scan all article files and count WARNING markers and total articles.
+
+    Returns:
+        (warning_count, total_article_count)
+    """
+    total_articles = 0
+    warning_count = 0
+    warning_pattern = re.compile(r"\bWARNING\b", re.IGNORECASE)
+
+    for md_file in wiki_dir.rglob("*.md"):
+        if md_file.name.startswith("_"):
+            continue
+        total_articles += 1
+        try:
+            text = md_file.read_text(encoding="utf-8", errors="replace")
+            warning_count += len(warning_pattern.findall(text))
+        except OSError as exc:
+            logger.warning("_count_warning_markers: could not read %s: %s", md_file, exc)
+
+    return warning_count, total_articles
+
+
+def _count_wikilinks(wiki_dir: Path, total_articles: int) -> float:
+    """Count total [[wikilinks]] across all articles.
+
+    Returns:
+        Average wikilinks per article, or 0.0 if no articles.
+    """
+    if total_articles == 0:
+        return 0.0
+
+    wikilink_pattern = re.compile(r"\[\[[^\]]+\]\]")
+    total_links = 0
+
+    for md_file in wiki_dir.rglob("*.md"):
+        if md_file.name.startswith("_"):
+            continue
+        try:
+            text = md_file.read_text(encoding="utf-8", errors="replace")
+            total_links += len(wikilink_pattern.findall(text))
+        except OSError as exc:
+            logger.warning("_count_wikilinks: could not read %s: %s", md_file, exc)
+
+    return total_links / total_articles
+
+
+def compute_loss(epoch: int) -> tuple[float, float]:
+    """Compute the epoch loss L and delta from the previous epoch.
+
+    Formula:
+        L = alpha * stub_ratio
+          + beta  * orphan_concept_rate
+          + gamma * contradiction_density
+          - delta * cross_ref_density
+
+    Clamped to [0, 1].
+
+    Args:
+        epoch: The epoch number just completed.
+
+    Returns:
+        (loss_score, loss_delta) tuple.
+    """
+    with get_session() as session:
+        all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
+        all_coverage: list[SourceCoverage] = list(session.exec(select(SourceCoverage)).all())
+
+    total_concepts = len(all_concepts)
+
+    if total_concepts == 0:
+        logger.warning("compute_loss: no concepts found, returning 0.0")
+        return 0.0, 0.0
+
+    # stub_ratio
+    stub_count = sum(1 for c in all_concepts if c.article_status in ("none", "stub"))
+    stub_ratio = stub_count / total_concepts
+
+    # orphan_concept_rate — concepts with no SourceCoverage rows
+    covered_slugs: set[str] = {cov.article_slug for cov in all_coverage}
+    orphan_count = sum(1 for c in all_concepts if c.id not in covered_slugs)
+    orphan_concept_rate = orphan_count / total_concepts
+
+    # contradiction_density — WARNING markers per article
+    warning_count, total_articles = _count_warning_markers(_WIKI_DIR)
+    contradiction_density = warning_count / total_articles if total_articles > 0 else 0.0
+
+    # cross_ref_density — [[wikilinks]] per article
+    cross_ref_density = _count_wikilinks(_WIKI_DIR, total_articles)
+
+    # Clamp cross_ref_density to [0, 1] for the formula (density can exceed 1)
+    cross_ref_density_clamped = min(cross_ref_density / max(cross_ref_density, 1.0), 1.0)
+
+    loss = (
+        _ALPHA * stub_ratio
+        + _BETA * orphan_concept_rate
+        + _GAMMA * contradiction_density
+        - _DELTA * cross_ref_density_clamped
+    )
+    loss = max(0.0, min(1.0, loss))
+
+    # Get previous epoch's loss for delta
+    prev_loss = 0.0
+    with get_session() as session:
+        prev_logs: list[EpochLog] = list(
+            session.exec(select(EpochLog).where(EpochLog.epoch < epoch)).all()
+        )
+    if prev_logs:
+        prev_log = max(prev_logs, key=lambda lg: lg.epoch)
+        prev_loss = prev_log.loss_score
+
+    loss_delta = abs(loss - prev_loss)
+
+    logger.info(
+        "compute_loss(epoch=%d): stub=%.3f orphan=%.3f contradiction=%.3f "
+        "cross_ref=%.3f -> L=%.4f delta=%.4f",
+        epoch,
+        stub_ratio,
+        orphan_concept_rate,
+        contradiction_density,
+        cross_ref_density,
+        loss,
+        loss_delta,
+    )
+    return loss, loss_delta
+
+
+# ── Convergence ────────────────────────────────────────────────────────────────
+
+
+def check_convergence(recent_logs: list[EpochLog]) -> bool:
+    """Return True when all four convergence criteria are met.
+
+    Criteria:
+    1. New concepts / epoch  < 2% of total concept count.
+    2. Stub ratio            < 10%.
+    3. No new contradictions in the last epoch (contradictions_flagged == 0).
+    4. loss_delta            < 0.01 (epsilon).
+
+    Args:
+        recent_logs: EpochLog rows from recent epochs (at least the last one).
+
+    Returns:
+        True if converged.
+    """
+    if not recent_logs:
+        return False
+
+    last_log = max(recent_logs, key=lambda lg: lg.epoch)
+
+    with get_session() as session:
+        total_concepts: int = len(list(session.exec(select(ConceptRecord)).all()))
+
+    if total_concepts == 0:
+        return False
+
+    # Criterion 1: new concept rate
+    new_concept_rate = last_log.concepts_discovered / total_concepts
+    if new_concept_rate >= _CONVERGENCE_NEW_CONCEPT_RATE:
+        logger.debug(
+            "check_convergence: criterion 1 failed (new_concept_rate=%.4f)", new_concept_rate
+        )
+        return False
+
+    # Criterion 2: stub ratio
+    with get_session() as session:
+        all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
+    stub_count = sum(1 for c in all_concepts if c.article_status in ("none", "stub"))
+    stub_ratio = stub_count / total_concepts
+    if stub_ratio >= _CONVERGENCE_STUB_RATIO:
+        logger.debug("check_convergence: criterion 2 failed (stub_ratio=%.4f)", stub_ratio)
+        return False
+
+    # Criterion 3: no new contradictions
+    if last_log.contradictions_flagged != 0:
+        logger.debug(
+            "check_convergence: criterion 3 failed (contradictions=%d)",
+            last_log.contradictions_flagged,
+        )
+        return False
+
+    # Criterion 4: loss delta
+    if last_log.loss_delta >= _CONVERGENCE_LOSS_DELTA:
+        logger.debug("check_convergence: criterion 4 failed (loss_delta=%.4f)", last_log.loss_delta)
+        return False
+
+    logger.info("check_convergence: all 4 criteria met -> converged")
+    return True
+
+
+# ── Main epoch orchestrator ────────────────────────────────────────────────────
+
+
+def run_epoch(
+    triggered_by: str = "user",
+    domain: str = "",
+    model: Optional[str] = None,
+) -> EpochLog:
+    """Run one complete epoch of the Wikipedia pipeline (5 passes).
+
+    Args:
+        triggered_by: "user" | "ingest" | "schedule"
+        domain:       Domain filter for graph building and article writing.
+                      Pass "" to process all domains.
+        model:        Override the article-writing model.  When None, model
+                      selection follows the loss-based rule (haiku vs sonnet).
+
+    Returns:
+        Completed EpochLog row (persisted to DB).
+    """
+    epoch = _get_next_epoch_number()
+    started_at = datetime.now(timezone.utc)
+
+    log = EpochLog(
+        epoch=epoch,
+        triggered_by=triggered_by,
+        started_at=started_at,
+    )
+
+    logger.info(
+        "=== Epoch %d started (triggered_by=%r, domain=%r) ===",
+        epoch,
+        triggered_by,
+        domain,
+    )
+
+    # ── Determine article model based on previous epoch's loss ────────────────
+    if model is not None:
+        article_model: str = model
+    else:
+        # Check previous epoch loss
+        prev_loss = 0.0
+        with get_session() as session:
+            prev_logs: list[EpochLog] = list(
+                session.exec(select(EpochLog).where(EpochLog.epoch < epoch)).all()
+            )
+        if prev_logs:
+            prev_log = max(prev_logs, key=lambda lg: lg.epoch)
+            prev_loss = prev_log.loss_score
+
+        if prev_loss >= 0.3:
+            article_model = HAIKU_MODEL
+            logger.info(
+                "run_epoch: prev_loss=%.3f >= 0.3 -> using haiku for article writing",
+                prev_loss,
+            )
+        else:
+            article_model = settings.llm_model
+            logger.info(
+                "run_epoch: prev_loss=%.3f < 0.3 -> using %s for article writing",
+                prev_loss,
+                settings.llm_model,
+            )
+
+    # ── Pass 1: Concept Discovery ─────────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 1: Concept Discovery (epoch=%d) ---", epoch)
+
+    clear_staged_extractions(epoch)
+    paper_ids = _get_all_paper_ids()
+    logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
+
+    new_concepts = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
+    log.concepts_discovered = len(new_concepts)
+
+    logger.info(
+        "Pass 1 complete in %.1fs: %d concepts discovered",
+        time.monotonic() - t0,
+        log.concepts_discovered,
+    )
+
+    # ── Pass 2: Graph Building ─────────────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 2: Graph Building (epoch=%d) ---", epoch)
+
+    graph = build_concept_graph(domain, epoch)
+    scores = score_importance(graph)
+    update_concept_importance(scores)
+    classify_node_roles(graph, scores)  # side-effect: node role attributes stored in graph
+    relations = extract_relations(graph, epoch)
+    n_relations = save_relations(relations, epoch)
+
+    logger.info(
+        "Pass 2 complete in %.1fs: graph nodes=%d edges=%d relations_saved=%d",
+        time.monotonic() - t0,
+        graph.number_of_nodes(),
+        graph.number_of_edges(),
+        n_relations,
+    )
+
+    # ── Pass 3: Article Writing ────────────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 3: Article Writing (epoch=%d, model=%s) ---", epoch, article_model)
+
+    # Reload concepts from DB after importance update, sorted descending
+    all_concepts = list_concepts(domain=domain, min_importance=0.0)
+    all_concepts.sort(key=lambda c: c.importance, reverse=True)
+
+    articles_written = 0
+    stubs_upgraded = 0
+    contradictions_flagged = 0
+
+    for concept in all_concepts:
+        if concept.article_status == "none":
+            # ── Write new article ──────────────────────────────────────────────
+            try:
+                neighbor_ids = list(graph.neighbors(concept.id)) if concept.id in graph else []
+                with get_session() as session:
+                    neighbors: list[ConceptRecord] = [
+                        session.get(ConceptRecord, nid)
+                        for nid in neighbor_ids
+                        if session.get(ConceptRecord, nid) is not None
+                    ]
+
+                body = write_concept_article(concept, neighbors, domain, article_model)
+
+                extractions: list[SourceExtraction] = map_chunks_to_topic(
+                    topic_query=concept.name,
+                    scope=concept.definition or concept.name,
+                    domain=domain,
+                    model=HAIKU_MODEL,
+                )
+
+                status = "full" if should_write_full(concept, extractions) else "stub"
+
+                source_ids: list[str] = list({e.source_id for e in extractions if e.is_relevant})
+
+                fpath = article_path(_WIKI_DIR, "concepts", concept.id)
+                write_article(
+                    fpath,
+                    concept.name,
+                    body,
+                    source_ids,
+                    [concept.concept_type] if concept.concept_type else [],
+                    status,
+                    article_model,
+                )
+
+                with get_session() as session:
+                    db_concept = session.get(ConceptRecord, concept.id)
+                    if db_concept is not None:
+                        db_concept.article_status = status
+                        db_concept.article_path = str(fpath)
+                        db_concept.epoch_last_updated = epoch
+                        session.add(db_concept)
+                        session.commit()
+
+                articles_written += 1
+                logger.debug("Pass 3: wrote new article for %r (status=%s)", concept.name, status)
+
+            except Exception:
+                logger.exception("Pass 3: failed to write article for %r", concept.name)
+
+        elif concept.article_status in ("stub", "draft"):
+            # ── Consider upgrading existing article ────────────────────────────
+            if not concept.article_path:
+                logger.debug(
+                    "Pass 3: concept %r has status=%s but no article_path, skipping",
+                    concept.name,
+                    concept.article_status,
+                )
+                continue
+
+            article_file = Path(concept.article_path)
+            if not article_file.exists():
+                logger.warning(
+                    "Pass 3: article file missing for %r at %s, skipping",
+                    concept.name,
+                    article_file,
+                )
+                continue
+
+            try:
+                new_extractions: list[SourceExtraction] = map_chunks_to_topic(
+                    topic_query=concept.name,
+                    scope=concept.definition or concept.name,
+                    domain=domain,
+                    model=HAIKU_MODEL,
+                )
+
+                relevant_extractions = [e for e in new_extractions if e.is_relevant]
+                if not relevant_extractions:
+                    continue
+
+                existing_text = article_file.read_text(encoding="utf-8", errors="replace")
+
+                if not should_update_article(existing_text, relevant_extractions):
+                    logger.debug("Pass 3: boolean gate blocked upgrade for %r", concept.name)
+                    continue
+
+                updated_body = upgrade_concept_article(
+                    concept, article_file, relevant_extractions, domain, article_model
+                )
+
+                # Determine new status
+                new_status = (
+                    "full"
+                    if should_write_full(concept, new_extractions)
+                    else concept.article_status
+                )
+
+                source_ids = list({e.source_id for e in new_extractions if e.is_relevant})
+                write_article(
+                    article_file,
+                    concept.name,
+                    updated_body,
+                    source_ids,
+                    [concept.concept_type] if concept.concept_type else [],
+                    new_status,
+                    article_model,
+                )
+
+                with get_session() as session:
+                    db_concept = session.get(ConceptRecord, concept.id)
+                    if db_concept is not None:
+                        db_concept.article_status = new_status
+                        db_concept.epoch_last_updated = epoch
+                        session.add(db_concept)
+                        session.commit()
+
+                stubs_upgraded += 1
+                if new_status != concept.article_status:
+                    logger.debug(
+                        "Pass 3: upgraded %r: %s -> %s",
+                        concept.name,
+                        concept.article_status,
+                        new_status,
+                    )
+
+                # Count contradiction markers in the updated body
+                warning_hits = len(re.findall(r"\bWARNING\b", updated_body, re.IGNORECASE))
+                contradictions_flagged += warning_hits
+
+            except Exception:
+                logger.exception("Pass 3: failed to upgrade article for %r", concept.name)
+
+    log.articles_written = articles_written
+    log.stubs_upgraded = stubs_upgraded
+    log.contradictions_flagged = contradictions_flagged
+
+    logger.info(
+        "Pass 3 complete in %.1fs: articles_written=%d stubs_upgraded=%d contradictions=%d",
+        time.monotonic() - t0,
+        articles_written,
+        stubs_upgraded,
+        contradictions_flagged,
+    )
+
+    # ── Pass 4: Cross-linking ──────────────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 4: Cross-linking (epoch=%d) ---", epoch)
+
+    cross_refs = cross_link_articles(_WIKI_DIR, sitemap=None)
+    log.cross_refs_added = cross_refs
+
+    logger.info(
+        "Pass 4 complete in %.1fs: cross_refs_added=%d",
+        time.monotonic() - t0,
+        cross_refs,
+    )
+
+    # ── Pass 5: Index Rebuild + Loss ──────────────────────────────────────────
+    t0 = time.monotonic()
+    logger.info("--- Pass 5: Index Rebuild + Loss (epoch=%d) ---", epoch)
+
+    generate_wiki_index(_WIKI_DIR)
+
+    loss_score, loss_delta = compute_loss(epoch)
+    log.loss_score = loss_score
+    log.loss_delta = loss_delta
+
+    # Gather recent logs for convergence check (include the current one)
+    with get_session() as session:
+        existing_logs: list[EpochLog] = list(session.exec(select(EpochLog)).all())
+
+    # Create a temporary complete log for convergence check
+    temp_log = EpochLog(
+        epoch=epoch,
+        triggered_by=triggered_by,
+        started_at=started_at,
+        concepts_discovered=log.concepts_discovered,
+        stubs_upgraded=log.stubs_upgraded,
+        articles_written=log.articles_written,
+        contradictions_flagged=log.contradictions_flagged,
+        cross_refs_added=log.cross_refs_added,
+        loss_score=loss_score,
+        loss_delta=loss_delta,
+    )
+    recent_logs = existing_logs + [temp_log]
+    log.converged = check_convergence(recent_logs)
+
+    log.completed_at = datetime.now(timezone.utc)
+
+    # Persist EpochLog
+    with get_session() as session:
+        session.add(log)
+        session.commit()
+        session.refresh(log)
+
+    logger.info(
+        "Pass 5 complete in %.1fs: loss=%.4f delta=%.4f converged=%s",
+        time.monotonic() - t0,
+        loss_score,
+        loss_delta,
+        log.converged,
+    )
+    logger.info(
+        "=== Epoch %d complete: %d articles, %d upgrades, L=%.4f, converged=%s ===",
+        epoch,
+        articles_written,
+        stubs_upgraded,
+        loss_score,
+        log.converged,
+    )
+
+    return log
+
+
+# ── Loop until convergence ─────────────────────────────────────────────────────
+
+
+def run_until_convergence(
+    domain: str = "",
+    max_epochs: int = 10,
+    model: Optional[str] = None,
+) -> list[EpochLog]:
+    """Run epochs until convergence or max_epochs is reached.
+
+    Args:
+        domain:     Domain filter passed to each run_epoch() call.
+        max_epochs: Hard ceiling on the number of epochs to run.
+        model:      Optional model override passed to run_epoch().
+
+    Returns:
+        List of all EpochLog rows produced.
+    """
+    logs: list[EpochLog] = []
+
+    for i in range(max_epochs):
+        logger.info("run_until_convergence: starting epoch %d of %d max", i + 1, max_epochs)
+        log = run_epoch(triggered_by="schedule", domain=domain, model=model)
+        logs.append(log)
+
+        if log.converged:
+            logger.info("run_until_convergence: converged after %d epoch(s)", len(logs))
+            break
+    else:
+        logger.warning(
+            "run_until_convergence: reached max_epochs=%d without convergence", max_epochs
+        )
+
+    return logs
+
+
+# ── Status query ───────────────────────────────────────────────────────────────
+
+
+def get_epoch_status() -> dict:
+    """Return a summary of the current wiki epoch state.
+
+    Reads from the latest EpochLog and current DB concept counts.
+
+    Returns:
+        Dict with keys:
+            current_epoch, latest_loss, loss_delta, converged,
+            total_concepts, stub_count, draft_count, full_count, none_count
+    """
+    with get_session() as session:
+        all_logs: list[EpochLog] = list(session.exec(select(EpochLog)).all())
+        all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
+
+    current_epoch = 0
+    latest_loss = 0.0
+    loss_delta = 0.0
+    converged = False
+
+    if all_logs:
+        latest_log = max(all_logs, key=lambda lg: lg.epoch)
+        current_epoch = latest_log.epoch
+        latest_loss = latest_log.loss_score
+        loss_delta = latest_log.loss_delta
+        converged = latest_log.converged
+
+    total_concepts = len(all_concepts)
+    status_counts: dict[str, int] = {"none": 0, "stub": 0, "draft": 0, "full": 0}
+    for c in all_concepts:
+        key = c.article_status if c.article_status in status_counts else "none"
+        status_counts[key] += 1
+
+    return {
+        "current_epoch": current_epoch,
+        "latest_loss": latest_loss,
+        "loss_delta": loss_delta,
+        "converged": converged,
+        "total_concepts": total_concepts,
+        "stub_count": status_counts["stub"],
+        "draft_count": status_counts["draft"],
+        "full_count": status_counts["full"],
+        "none_count": status_counts["none"],
+    }
