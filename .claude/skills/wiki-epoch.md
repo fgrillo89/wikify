@@ -172,6 +172,48 @@ resolve_all_article_sources(wiki_dir)
 # resolves them to paper IDs, and updates frontmatter sources: field.
 ```
 
+## Pass 3d: Article Consolidation (orchestrator judgment)
+
+Before cross-linking, review the concept list for merge candidates. This is a **deep-tier** task (you, the orchestrator) because it requires judgment about semantic equivalence.
+
+**When to merge:** Two concepts should be merged when:
+- They are synonyms or near-synonyms (e.g. "Pt" and "Platinum", "RRAM" and "Resistive RAM")
+- One is a subset of the other (e.g. "Switching" is too generic, merge into "Resistive Switching")
+- They cover the same topic from different angles and would be better as one article
+
+**How to merge:**
+1. Query concepts with articles: pick the higher-importance concept as the primary
+2. Read both articles, combine the best content into the primary article
+3. Delete the secondary article file
+4. Update the secondary concept's `article_status` to `merged:<primary_id>` in DB
+5. Add any unique aliases from the secondary to the primary
+
+```python
+from wikify.store.db import get_session
+from wikify.store.models import ConceptRecord
+import json
+
+# For each merge pair (primary_id, secondary_id):
+with get_session() as s:
+    secondary = s.get(ConceptRecord, secondary_id)
+    primary = s.get(ConceptRecord, primary_id)
+    if secondary and primary:
+        # Merge aliases
+        p_aliases = set(json.loads(primary.aliases or '[]'))
+        s_aliases = set(json.loads(secondary.aliases or '[]'))
+        p_aliases.add(secondary.name)
+        p_aliases |= s_aliases
+        primary.aliases = json.dumps(sorted(p_aliases))
+        secondary.article_status = f"merged:{primary_id}"
+        s.add(primary)
+        s.add(secondary)
+        s.commit()
+# Delete secondary article file
+# Rewrite primary article with merged content (balanced-tier agent)
+```
+
+**Guideline:** Be conservative. Only merge when clearly redundant. When in doubt, keep separate and add a See Also link instead.
+
 ## Pass 4: Cross-Linking
 
 No LLM needed:
