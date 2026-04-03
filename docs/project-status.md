@@ -1,17 +1,95 @@
-# ScholarForge -- Project Status
+# Wikify -- Project Status
 
-## What is ScholarForge?
+## What is Wikify?
 
-ScholarForge is a local-first Python pipeline that ingests academic PDFs and other documents into
-a structured knowledge base, then produces literature reviews, research papers, and presentations
-from that knowledge. It runs two independent pipelines: a **writing pipeline** (`generate`,
-`evaluate`, `revise`) that produces academic documents on demand, and a **Wikipedia pipeline**
-that builds and maintains a curated, self-correcting wiki from the corpus over multiple epochs.
+Wikify is a local-first Python pipeline with two distinct capabilities:
+
+**A. Wikipedia Pipeline (primary focus):** Turns any corpus of PDFs, notes, and documents into
+a concept-first, self-correcting personal Wikipedia. Concepts are discovered automatically from
+the corpus (not from a pre-planned sitemap), built into a graph, and written into Markdown
+articles that improve over multiple epochs until convergence.
+
+**B. Research Paper Writing (secondary, enhanced by wiki later):** Generates literature reviews,
+research papers, and presentations from the same corpus via a generate -> evaluate -> revise
+pipeline. This pipeline will gain a richer knowledge layer once the wiki reaches maturity.
+
 The system is model-agnostic, routing all LLM calls through litellm.
 
 ---
 
-## What is Fully Working
+## A. Wikipedia Pipeline
+
+### Wiki Building-Block Modules (complete)
+
+All modules in `src/wikify/wiki/` are implemented and tested:
+
+| Module | Purpose |
+|--------|---------|
+| `wiki/persona.py` | Domain persona generation and DB caching (`DomainPersona` table) |
+| `wiki/mapreduce.py` | Map (haiku per source) + reduce (sonnet to article body) + coverage recording |
+| `wiki/maintenance.py` | Three-tier updates: additive, revisionary, structural audit |
+| `wiki/builder.py` | Article file I/O, slugify, hierarchical index generation, unanswered-question log |
+| `wiki/linker.py` | Cross-reference pass: adds `[[wikilinks]]` and See Also sections |
+| `wiki/sitemap.py` | `SitemapEntry`/`WikiSitemap` data contracts + exploration agent (optional, secondary role) |
+| `wiki/agent.py` | `build_wiki_from_sitemap`, `build_article_from_entry`, `build_wiki_article` |
+
+Data models for wiki in SQLite (`store/models.py`):
+`WikiArticle`, `DomainPersona`, `SourceCoverage` -- all implemented.
+
+### Wiki Epoch Pipeline (complete)
+
+The concept-first epoch pipeline is fully implemented. All modules are in `src/wikify/wiki/`
+and tested:
+
+| Module | Purpose |
+|--------|---------|
+| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline (`discover_concepts`, `merge_concept_records`) |
+| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification (`build_concept_graph`, `score_importance`, `classify_relations`) |
+| `wiki/article.py` | Wikipedia-format article writer using `ConceptRecord` + graph neighbors (`write_concept_article`) |
+| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks (`run_epoch`, `run_until_convergence`, `check_convergence`, `compute_loss`) |
+| `wiki/dashboard.py` | FastAPI dashboard API: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard (`/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient`) |
+
+### ML-Style Convergence Tracking (complete)
+
+- Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and
+  `EpochLog.loss_delta`. Formula: `L = 0.3*stub_ratio + 0.2*orphan_concept_rate + 0.3*contradiction_density - 0.2*cross_ref_density`. Coefficients tunable in project config.
+- Information gradient per concept: `new_evidence_tokens / existing_article_tokens`. Used to
+  prioritise Pass 3 ordering and skip near-zero-gradient concepts that have stabilised.
+- Momentum tracking: concepts with high gradient for 3+ consecutive epochs flagged
+  `momentum: active` in YAML frontmatter; near-zero-gradient concepts for 3+ epochs skipped
+  in Pass 3 unless new sources arrive.
+- Model-selection schedule: haiku used for Pass 3 drafting while L >= 0.3; sonnet used once
+  L < 0.3 (learning rate decay analog). Transition epoch recorded in `EpochLog`.
+
+### Wiki CLI Commands
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `wikify wiki init` | Working | Bootstrap wiki via sitemap pipeline |
+| `wikify wiki expand` | Working | Expand stub/draft article to full |
+| `wikify wiki sync` | Working | Update stale articles after new ingest |
+| `wikify wiki audit` | Working | Structural health report (split/merge/orphan/drift) |
+| `wikify wiki health` | Working | Orphan, staleness, and synthesis gap report |
+| `wikify wiki epoch` | Working | Run one epoch (discovery + articles + cross-ref + index) |
+| `wikify wiki epoch --n N` | Working | Run N epochs |
+| `wikify wiki epoch --until-convergence` | Working | Run until convergence criteria met |
+| `wikify wiki epoch --status` | Working | Show epoch log |
+| `wikify wiki epoch --on-ingest` | Working | Auto-trigger epoch after ingest |
+
+### What is Not Started (Wikipedia Pipeline)
+
+- **Dashboard launch command**: `wikify wiki dashboard` CLI command to start the local FastAPI
+  convergence/coverage/graph dashboard. The `wiki/dashboard.py` API is implemented; the CLI
+  wiring is not yet done.
+- **Obsidian dashboard layer**: auto-generated `_dashboard.md` per domain with live Dataview
+  queries (stubs by domain, top concepts by importance, momentum-active concepts,
+  recent-epoch updates). Written by Pass 5 each epoch. Not yet implemented.
+- **Ingest hook**: bump epoch counter when new files are ingested; optionally auto-trigger a
+  new epoch pass.
+
+---
+
+## B. Research Paper Writing Pipeline
 
 ### Ingestion (complete, no LLM)
 
@@ -58,57 +136,10 @@ The system is model-agnostic, routing all LLM calls through litellm.
 - PPTX with professional template
 - Markdown with Unicode chemical subscripts
 
-### MCP Server (complete)
-
-- 25+ tools exposed; `.mcp.json` configured for Claude Code integration
-- `ingest_paper` tool follows `ok/error` envelope contract
-
-### Wiki Building-Block Modules (complete)
-
-All modules in `src/wikify/wiki/` are implemented and tested:
-
-| Module | Purpose |
-|--------|---------|
-| `wiki/persona.py` | Domain persona generation and DB caching (`DomainPersona` table) |
-| `wiki/mapreduce.py` | Map (haiku per source) + reduce (sonnet to article body) + coverage recording |
-| `wiki/maintenance.py` | Three-tier updates: additive, revisionary, structural audit |
-| `wiki/builder.py` | Article file I/O, slugify, hierarchical index generation, unanswered-question log |
-| `wiki/linker.py` | Cross-reference pass: adds `[[wikilinks]]` and See Also sections |
-| `wiki/sitemap.py` | `SitemapEntry`/`WikiSitemap` data contracts + exploration agent (optional, secondary role) |
-| `wiki/agent.py` | `build_wiki_from_sitemap`, `build_article_from_entry`, `build_wiki_article` |
-
-Data models for wiki in SQLite (`store/models.py`):
-`WikiArticle`, `DomainPersona`, `SourceCoverage` -- all implemented.
-
-### Wiki Epoch Pipeline (complete)
-
-The concept-first epoch pipeline is fully implemented. All modules are in `src/wikify/wiki/`
-and tested:
-
-| Module | Purpose |
-|--------|---------|
-| `wiki/concepts.py` | `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models + haiku discovery pipeline (`discover_concepts`, `merge_concept_records`) |
-| `wiki/concept_graph.py` | Co-occurrence graph, PageRank importance scoring, Louvain community detection, relation classification (`build_concept_graph`, `score_importance`, `classify_relations`) |
-| `wiki/article.py` | Wikipedia-format article writer using `ConceptRecord` + graph neighbors (`write_concept_article`) |
-| `wiki/epoch.py` | Epoch orchestrator: Passes 1-5 in order, loss computation, convergence tracking, trigger hooks (`run_epoch`, `run_until_convergence`, `check_convergence`, `compute_loss`) |
-| `wiki/dashboard.py` | FastAPI dashboard API: convergence curve, concept graph, coverage heatmap, epoch log, gradient leaderboard (`/api/epochs`, `/api/concepts`, `/api/coverage`, `/api/gradient`) |
-
-### ML-Style Convergence Tracking (complete)
-
-- Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and
-  `EpochLog.loss_delta`. Formula: `L = 0.3*stub_ratio + 0.2*orphan_concept_rate + 0.3*contradiction_density - 0.2*cross_ref_density`. Coefficients tunable in project config.
-- Information gradient per concept: `new_evidence_tokens / existing_article_tokens`. Used to
-  prioritise Pass 3 ordering and skip near-zero-gradient concepts that have stabilised.
-- Momentum tracking: concepts with high gradient for 3+ consecutive epochs flagged
-  `momentum: active` in YAML frontmatter; near-zero-gradient concepts for 3+ epochs skipped
-  in Pass 3 unless new sources arrive.
-- Model-selection schedule: haiku used for Pass 3 drafting while L >= 0.3; sonnet used once
-  L < 0.3 (learning rate decay analog). Transition epoch recorded in `EpochLog`.
-
-### CLI (writing pipeline, wiki building blocks, epoch pipeline)
+### Writing Pipeline CLI Commands
 
 | Command | Status | Description |
-|---|---|---|
+|---------|--------|-------------|
 | `wikify ingest <path>` | Working | Ingest PDFs/DOCX/PPTX (--parallel, --workers) |
 | `wikify refresh` | Working | Recompute all batch signals + regenerate vault |
 | `wikify stats` | Working | Show paper/chunk/figure counts |
@@ -122,32 +153,21 @@ and tested:
 | `wikify templates list` | Working | Show available DOCX/LaTeX templates |
 | `wikify templates import` | Working | Import a .docx as reusable template |
 | `wikify templates download` | Working | Auto-download publisher templates |
-| `wikify wiki init` | Working | Bootstrap wiki via sitemap pipeline |
-| `wikify wiki expand` | Working | Expand stub/draft article to full |
-| `wikify wiki sync` | Working | Update stale articles after new ingest |
-| `wikify wiki audit` | Working | Structural health report (split/merge/orphan/drift) |
-| `wikify wiki health` | Working | Orphan, staleness, and synthesis gap report |
-| `wikify wiki epoch` | Working | Run one epoch (discovery + articles + cross-ref + index) |
-| `wikify wiki epoch --n N` | Working | Run N epochs |
-| `wikify wiki epoch --until-convergence` | Working | Run until convergence criteria met |
-| `wikify wiki epoch --status` | Working | Show epoch log |
-| `wikify wiki epoch --on-ingest` | Working | Auto-trigger epoch after ingest |
 
-**Testing: 592 unit tests, all passing.**
+### MCP Server (complete)
 
----
+- 25+ tools exposed; `.mcp.json` configured for Claude Code integration
+- `ingest_paper` tool follows `ok/error` envelope contract
 
-## What is Not Started
+### What is Not Started (Writing Pipeline)
 
-### Ingest Hook
-
-- Bump epoch counter when new files are ingested
-- Optionally auto-trigger a new epoch pass
-
-### Dashboard and Visualization (Obsidian layer)
-
-- `wikify wiki dashboard` CLI command -- launch local FastAPI convergence/coverage/graph dashboard (the `wiki/dashboard.py` API is implemented; the launch command is not yet wired)
-- Obsidian-layer: auto-generated `_dashboard.md` per domain with live Dataview queries (stubs by domain, top concepts by importance, momentum-active concepts, recent-epoch updates). Written by Pass 5 each epoch. Not yet implemented.
+- **Falsifiable prediction step**: generation skill does not yet require a quantitative
+  falsifiable prediction before writing. PI feedback identifies this as the gap between
+  an 8.9 and 9.5 score.
+- **LaTeX export**: not yet implemented.
+- **Ollama support**: offline generation via Ollama is planned but not implemented.
+- **Wiki-enhanced retrieval**: once the wiki reaches convergence, the writing pipeline will
+  use concept articles as a structured knowledge layer to improve paper generation.
 
 ---
 
@@ -161,23 +181,18 @@ and tested:
 - **Metric recalibration**: `topic_coverage` is overweighted; `bridge_vectors` is underweighted.
   A synthesis sentence density metric (sentences citing 2+ papers with a joint conclusion)
   would better capture what PI reviewers score highest.
-- **Falsifiable prediction step**: generation skill does not yet require a quantitative
-  falsifiable prediction before writing. PI feedback identifies this as the gap between
-  an 8.9 and 9.5 score.
 - **Corpus gaps**: the current 206-paper ALD/memristor corpus is thin in the 2D material +
   ALD memristor space (MoS2/WS2/MoTe2 + ALD). Phase 4 devil's advocate consistently finds
   this territory but cannot fill it.
 - **Citation-only PageRank**: current PageRank mixes citation and embedding similarity.
   A citation-only graph would give cleaner authority signals.
-- **LaTeX export**: not yet implemented.
-- **Ollama support**: offline generation via Ollama is planned but not implemented.
 
 ---
 
 ## Benchmarks (206-Paper Corpus)
 
 | Metric | Value |
-|---|---|
+|--------|-------|
 | Papers | 206 (ALD/memristor/neuromorphic, 1971-2026) |
 | Chunks | 6,531 |
 | Chunk embeddings | 6,531 (ChromaDB, ONNX quint8_avx2) |
@@ -185,7 +200,7 @@ and tested:
 | Figure/table refs | 2,730 |
 | Citation cross-refs | 936 |
 | Topics | 1,232 (268 vocabulary terms) |
-| Tests | 592 |
+| Tests | 647 |
 | Ingestion time | ~10 min (206 papers, 10 workers) |
 | Review generation | 3-5 min (enhanced hybrid strategy) |
 

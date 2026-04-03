@@ -1,4 +1,4 @@
-# ScholarForge Coding Standards & Architecture Patterns
+# Wikify Coding Standards & Architecture Patterns
 
 Short reference for consistency across the codebase.
 
@@ -6,7 +6,7 @@ Short reference for consistency across the codebase.
 
 1. **Dependency injection over globals.** Pass instances as arguments. Module-level singletons (e.g., `_store = EmbeddingStore()`) are acceptable if assigned once and never mutated via `global`.
 2. **Tools are plain functions.** Each tool in `agent/tools.py` is a standalone function with type-hinted args and a Google-style docstring. Schema is auto-generated via introspection in `tool_schema.py`.
-3. **Agent loop is generic.** `ScholarForgeAgent` in `core.py` doesn't know about papers — it dispatches tool calls to whatever functions are passed in.
+3. **Agent loop is generic.** `WikifyAgent` in `core.py` doesn't know about papers — it dispatches tool calls to whatever functions are passed in.
 4. **Pydantic for contracts.** LLM output schemas use Pydantic BaseModel. DB models use SQLModel. The two don't mix.
 5. **Evaluate module is pure computation.** Quality metrics take text + embeddings as input, return dataclasses. No LLM calls, no DB writes.
 6. **Model-agnostic.** All LLM interactions go through litellm. No provider-specific annotations (no `cache_control`, no OpenAI function_call format). Everything works with Claude, GPT-4, DeepSeek, Ollama.
@@ -32,7 +32,7 @@ vault/          -- Obsidian vault generation
 - **Tools**: verb_noun (`deep_read`, `find_corpus_gaps`, `record_paper_summary`)
 - **Metrics**: compute_noun (`compute_coverage`, `compute_bridge_vectors`)
 - **Models**: PascalCase nouns (`Paper`, `SourceSummary`, `ResearchNotes`)
-- **Config**: snake_case with `SCHOLARFORGE_` env prefix
+- **Config**: snake_case with `WIKIFY_` env prefix
 - **CLI commands**: lowercase verbs (`ingest`, `generate`, `refresh`)
 
 ## Token Efficiency Patterns
@@ -52,7 +52,7 @@ vault/          -- Obsidian vault generation
 
 ## Testing
 
-- `uv run pytest` for all tests (274+)
+- `uv run pytest` for all tests (647)
 - `uv run ruff check --fix .` for linting
 - `uv run ruff format .` for formatting
 - No mocks for generation tests — use subagent patterns with the corpus

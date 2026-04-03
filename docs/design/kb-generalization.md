@@ -1,9 +1,9 @@
-# ScholarForge Knowledge Base Generalization
+# Wikify Knowledge Base Generalization
 
 ## Vision
 
-ScholarForge evolves from an academic-paper pipeline into a general-purpose personal knowledge
-base system. The user collects raw sources of any kind, ScholarForge enriches them with
+Wikify evolves from an academic-paper pipeline into a general-purpose personal knowledge
+base system. The user collects raw sources of any kind, Wikify enriches them with
 semantic structure, and an LLM builds and maintains a curated wiki on top of that structure.
 All three layers are separate, composable, and independently queryable.
 

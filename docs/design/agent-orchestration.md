@@ -1,6 +1,6 @@
 # Agent Orchestration
 
-How ScholarForge explores a corpus and generates output, with token efficiency.
+How Wikify explores a corpus and generates output, with token efficiency.
 
 ## Single-Agent Mode (Default)
 
@@ -8,7 +8,7 @@ How ScholarForge explores a corpus and generates output, with token efficiency.
 User prompt: "Write a review on ALD memristors"
               |
               v
-    ScholarForgeAgent (all tools, 30 turns max)
+    WikifyAgent (all tools, 30 turns max)
               |
     Turn 1:   get_frontier_exploration_order() -> reading order
     Turn 2:   read_paper_digest(seed_1) -> 1.5KB digest
