@@ -11,7 +11,12 @@ from wikify.store.models import ConceptRecord
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
 
 
-def _make_chunk(chunk_id="chunk1", paper_id="paper1", content="Some text about ALD techniques and HfO2 thin film deposition methods used in research.", chunk_index=0):
+def _make_chunk(
+    chunk_id="chunk1",
+    paper_id="paper1",
+    content="Some text about ALD techniques and HfO2 thin film deposition.",
+    chunk_index=0,
+):
     c = MagicMock()
     c.id = chunk_id
     c.paper_id = paper_id
@@ -66,17 +71,26 @@ def _make_session(existing_records=None):
 def test_extract_from_chunk_basic():
     """Returns one ConceptRecord with correct fields when LLM succeeds."""
     chunk = _make_chunk()
-    llm_response = [
-        {
-            "name": "Atomic Layer Deposition",
-            "type": "technique",
-            "aliases": ["ALD"],
-            "definition": "A thin film deposition method",
-        }
-    ]
+    llm_response = {
+        "concepts": [
+            {
+                "name": "Atomic Layer Deposition",
+                "type": "technique",
+                "aliases": ["ALD"],
+                "definition": "A thin film deposition method",
+                "evidence": "ALD techniques used in research",
+            }
+        ],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
 
     with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert len(records) == 1
     rec = records[0]
@@ -90,17 +104,25 @@ def test_extract_from_chunk_basic():
 def test_extract_from_chunk_filters_invalid_type():
     """An invalid concept_type is replaced with empty string; record is still created."""
     chunk = _make_chunk()
-    llm_response = [
-        {
-            "name": "Some Term",
-            "type": "invalid_type",
-            "aliases": [],
-            "definition": "A generic term.",
-        }
-    ]
+    llm_response = {
+        "concepts": [
+            {
+                "name": "Some Term",
+                "type": "invalid_type",
+                "aliases": [],
+                "definition": "A generic term.",
+            }
+        ],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
 
     with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert len(records) == 1
     assert records[0].concept_type == ""
@@ -108,11 +130,20 @@ def test_extract_from_chunk_filters_invalid_type():
 
 
 def test_extract_from_chunk_handles_empty_response():
-    """Returns empty list when the LLM returns an empty array."""
+    """Returns empty list when the LLM returns an empty dict."""
     chunk = _make_chunk()
+    llm_response = {
+        "concepts": [],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
 
-    with patch("wikify.wiki.concepts.complete_json", return_value=[]):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert records == []
 
@@ -122,66 +153,182 @@ def test_extract_from_chunk_handles_llm_failure():
     chunk = _make_chunk()
 
     with patch("wikify.wiki.concepts.complete_json", side_effect=RuntimeError("LLM down")):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert records == []
 
 
-def test_extract_from_chunk_handles_non_list_response():
-    """Returns empty list when the LLM returns something other than a list."""
+def test_extract_from_chunk_handles_non_dict_response():
+    """Returns empty list when the LLM returns something other than a dict or list."""
     chunk = _make_chunk()
 
-    with patch("wikify.wiki.concepts.complete_json", return_value={"error": "oops"}):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+    with patch("wikify.wiki.concepts.complete_json", return_value="not json"):
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert records == []
+
+
+def test_extract_from_chunk_handles_legacy_list_response():
+    """Handles legacy list response format (backward compat)."""
+    chunk = _make_chunk()
+    llm_response = [
+        {
+            "name": "Atomic Layer Deposition",
+            "type": "technique",
+            "aliases": ["ALD"],
+            "definition": "A thin film deposition method",
+        }
+    ]
+
+    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
+
+    assert len(records) == 1
+    assert records[0].name == "Atomic Layer Deposition"
 
 
 def test_extract_from_chunk_skips_items_missing_name():
     """Items without a 'name' key are silently skipped."""
     chunk = _make_chunk()
-    llm_response = [
-        {"type": "technique", "aliases": [], "definition": "No name here."},
-        {"name": "Valid Concept", "type": "method", "aliases": [], "definition": "Has a name."},
-    ]
+    llm_response = {
+        "concepts": [
+            {"type": "technique", "aliases": [], "definition": "No name here."},
+            {"name": "Valid Concept", "type": "method", "aliases": [], "definition": "Has a name."},
+        ],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
 
     with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(chunk, prior_context=[], model="test-model")
+        records = mod._extract_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
 
     assert len(records) == 1
     assert records[0].name == "Valid Concept"
 
 
+def test_extract_rich_from_chunk_returns_all_sections():
+    """Rich extraction returns all sections from a well-formed LLM response."""
+    chunk = _make_chunk()
+    llm_response = {
+        "concepts": [
+            {
+                "name": "ALD",
+                "type": "technique",
+                "aliases": [],
+                "definition": "A method",
+                "evidence": "quote",
+            }
+        ],
+        "parameters": [
+            {
+                "concept_name": "ALD",
+                "parameter_name": "rate",
+                "value": "1.0",
+                "unit": "A/cycle",
+                "conditions": "250C",
+                "evidence": "quote",
+            }
+        ],
+        "mechanisms": [
+            {
+                "description": "Self-limiting",
+                "causes": "precursor saturation",
+                "effects": "monolayer growth",
+                "evidence": "quote",
+            }
+        ],
+        "relationships": [
+            {
+                "source_concept": "ALD",
+                "target_concept": "RRAM",
+                "relation_type": "USED-IN",
+                "evidence": "quote",
+            }
+        ],
+        "gaps": [
+            {"description": "device reliability data", "suggested_type": "reliability_metric"}
+        ],
+    }
+
+    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
+        result = mod._extract_rich_from_chunk(
+            chunk, prior_context=[], model="test-model", template="test"
+        )
+
+    assert len(result["concepts"]) == 1
+    assert len(result["parameters"]) == 1
+    assert len(result["mechanisms"]) == 1
+    assert len(result["relationships"]) == 1
+    assert len(result["gaps"]) == 1
+
+
 # ── extract_concepts_from_source ─────────────────────────────────────────────
+
+
+def _make_rich_result(concepts=None):
+    """Build a rich extraction result dict for testing."""
+    return {
+        "concepts": concepts or [],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
 
 
 def test_extract_concepts_from_source_threads_context():
     """prior_context passed to each chunk should be the names from the previous chunk."""
     chunks = [
-        _make_chunk(chunk_id=f"c{i}", chunk_index=i, content=f"Chunk {i} discusses atomic layer deposition of HfO2 thin films for memristor applications")
+        _make_chunk(
+            chunk_id=f"c{i}",
+            chunk_index=i,
+            content=f"Chunk {i} discusses ALD of HfO2 thin films for memristor apps",
+        )
         for i in range(3)
     ]
 
-    # Each call returns one record with a unique name
+    # Each call returns a rich result with one concept
     side_effects = [
-        [_make_concept_record(cid="ald", name="ALD")],
-        [_make_concept_record(cid="tma", name="TMA", aliases=[])],
-        [_make_concept_record(cid="h2o", name="H2O", aliases=[])],
+        _make_rich_result(
+            [{"name": "ALD", "type": "technique", "aliases": [], "definition": "A method"}]
+        ),
+        _make_rich_result(
+            [{"name": "TMA", "type": "material", "aliases": [], "definition": "A precursor"}]
+        ),
+        _make_rich_result(
+            [{"name": "H2O", "type": "material", "aliases": [], "definition": "An oxidant"}]
+        ),
     ]
 
-    with patch.object(mod, "_extract_from_chunk", side_effect=side_effects) as mock_extract:
+    with patch.object(mod, "_extract_rich_from_chunk", side_effect=side_effects) as mock_extract:
         records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=chunks, epoch=1, model="test-model"
+            source_id="paper1", chunks=chunks, epoch=1, model="test-model", template="test"
         )
 
     assert mock_extract.call_count == 3
 
     # First chunk: no prior context
-    assert mock_extract.call_args_list[0] == call(chunks[0], prior_context=[], model="test-model")
+    assert mock_extract.call_args_list[0] == call(
+        chunks[0], prior_context=[], model="test-model", template="test"
+    )
     # Second chunk: prior = names from first chunk's output
-    assert mock_extract.call_args_list[1] == call(chunks[1], prior_context=["ALD"], model="test-model")
+    assert mock_extract.call_args_list[1] == call(
+        chunks[1], prior_context=["ALD"], model="test-model", template="test"
+    )
     # Third chunk: prior = names from second chunk's output
-    assert mock_extract.call_args_list[2] == call(chunks[2], prior_context=["TMA"], model="test-model")
+    assert mock_extract.call_args_list[2] == call(
+        chunks[2], prior_context=["TMA"], model="test-model", template="test"
+    )
 
     assert len(records) == 3
 
@@ -190,12 +337,14 @@ def test_extract_concepts_from_source_stamps_epoch():
     """All returned records have epoch_discovered and epoch_last_updated set."""
     chunks = [_make_chunk()]
     side_effects = [
-        [_make_concept_record(epoch_discovered=0, epoch_last_updated=0)],
+        _make_rich_result(
+            [{"name": "ALD", "type": "technique", "aliases": [], "definition": "A method"}]
+        ),
     ]
 
-    with patch.object(mod, "_extract_from_chunk", side_effect=side_effects):
+    with patch.object(mod, "_extract_rich_from_chunk", side_effect=side_effects):
         records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=chunks, epoch=5, model="test-model"
+            source_id="paper1", chunks=chunks, epoch=5, model="test-model", template="test"
         )
 
     assert all(r.epoch_discovered == 5 for r in records)
@@ -204,9 +353,9 @@ def test_extract_concepts_from_source_stamps_epoch():
 
 def test_extract_concepts_from_source_empty_chunks():
     """Returns empty list when no chunks are provided."""
-    with patch.object(mod, "_extract_from_chunk") as mock_extract:
+    with patch.object(mod, "_extract_rich_from_chunk") as mock_extract:
         records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=[], epoch=1, model="test-model"
+            source_id="paper1", chunks=[], epoch=1, model="test-model", template="test"
         )
 
     assert records == []
@@ -285,7 +434,9 @@ def test_merge_concept_records_dedup_by_alias():
 def test_merge_concept_records_backfills_definition():
     """An existing record with no definition gets the incoming definition."""
     existing = _make_concept_record(cid="ald", name="ALD", aliases=[], definition="")
-    incoming = _make_concept_record(cid="ald", name="ALD", aliases=[], definition="A deposition technique.")
+    incoming = _make_concept_record(
+        cid="ald", name="ALD", aliases=[], definition="A deposition technique."
+    )
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):

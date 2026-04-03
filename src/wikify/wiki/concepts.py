@@ -25,6 +25,7 @@ import logging
 import os
 import random
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -35,11 +36,13 @@ from wikify.store.db import get_session
 from wikify.store.embeddings import _store
 from wikify.store.models import Chunk, ChunkMiningLog, ConceptRecord
 from wikify.wiki.builder import slugify
+from wikify.wiki.template import build_extraction_prompt, load_template
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
+_WIKI_DIR = Path("data/wiki")
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _STAGING_COLLECTION = "concept_staging"
 _VALID_CONCEPT_TYPES = frozenset(
@@ -64,8 +67,29 @@ _DEFAULT_TIER = 2  # anything not in the map
 # 5% of unmined lower-tier chunks explored randomly each epoch
 _EXPLORATION_RATE = 0.05
 
+# Module-level storage for rich extraction results from the last extraction run.
+# Maps paper_id -> list of per-chunk rich dicts. Populated by
+# extract_concepts_from_source(), consumed by evidence/gap/parameter processors.
+_last_rich_extractions: dict[str, list[dict[str, Any]]] = {}
+
 # Minimum cosine similarity to any known concept definition to keep a chunk
 _CONCEPT_SIM_THRESHOLD = 0.15
+
+
+def get_rich_extractions() -> dict[str, list[dict[str, Any]]]:
+    """Return the rich extraction results from the last extraction run.
+
+    Returns:
+        Dict mapping paper_id -> list of per-chunk rich extraction dicts.
+        Each dict has keys: concepts, parameters, mechanisms, relationships,
+        gaps, _chunk_id, _paper_id, _chunk_content.
+    """
+    return _last_rich_extractions
+
+
+def clear_rich_extractions() -> None:
+    """Clear the stored rich extraction results."""
+    _last_rich_extractions.clear()
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -95,61 +119,89 @@ def _chunk_tier(chunk: Chunk) -> int:
 # ── Core extraction ────────────────────────────────────────────────────────────
 
 
-def _extract_from_chunk(
+def _extract_rich_from_chunk(
     chunk: Chunk,
     prior_context: list[str],
     model: str,
-) -> list[ConceptRecord]:
-    """Call haiku to extract named concepts from a single chunk.
+    template: str | None = None,
+) -> dict[str, Any]:
+    """Call haiku to extract structured knowledge from a single chunk.
+
+    Uses the extraction template to produce a rich result containing concepts,
+    parameters, mechanisms, relationships, and gaps.
 
     Args:
         chunk: The Chunk object whose content will be analysed.
         prior_context: Concept names already seen in earlier chunks of the same
             source.  Passed to the prompt so haiku avoids redundant re-extractions.
         model: litellm model string (normally HAIKU_MODEL).
+        template: Extraction template content. If None, loads from disk.
+
+    Returns:
+        Dict with keys: concepts, parameters, mechanisms, relationships, gaps.
+        Each value is a list of dicts. Returns empty lists on failure.
+    """
+    empty_result: dict[str, Any] = {
+        "concepts": [],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
+
+    if template is None:
+        template = load_template(_WIKI_DIR)
+
+    messages = build_extraction_prompt(template, chunk.content, prior_context)
+
+    try:
+        raw = complete_json(
+            messages=messages,
+            model=model,
+            temperature=0.1,
+            max_tokens=2048,
+        )
+    except Exception:
+        logger.exception("_extract_rich_from_chunk: LLM call failed for chunk %s", chunk.id)
+        return empty_result
+
+    # Handle both dict and list responses
+    if isinstance(raw, list):
+        # Legacy format: list of concept dicts
+        return {**empty_result, "concepts": raw}
+
+    if not isinstance(raw, dict):
+        logger.warning(
+            "_extract_rich_from_chunk: expected dict, got %s for chunk %s",
+            type(raw).__name__,
+            chunk.id,
+        )
+        return empty_result
+
+    # Normalize: ensure all expected keys exist as lists
+    for key in empty_result:
+        val = raw.get(key, [])
+        if not isinstance(val, list):
+            val = []
+        empty_result[key] = val
+
+    return empty_result
+
+
+def _parse_concepts_from_rich(rich_result: dict[str, Any]) -> list[ConceptRecord]:
+    """Extract ConceptRecord objects from a rich extraction result.
+
+    Provides backward compatibility: the rest of the pipeline expects
+    a list of ConceptRecord objects from extraction.
+
+    Args:
+        rich_result: Dict from _extract_rich_from_chunk().
 
     Returns:
         List of ConceptRecord objects (not yet persisted to DB).
     """
-    prior_str = ", ".join(prior_context) if prior_context else "none"
-
-    user_msg = (
-        "Extract named concepts from the following text excerpt.\n\n"
-        f"Previously extracted concepts from earlier sections of this source: {prior_str}. "
-        "Do not re-extract these unless this section adds new information about them.\n\n"
-        "Return a JSON array — and ONLY the JSON array, no prose — where each element has:\n"
-        '  "name":       canonical display name (e.g. "Atomic Layer Deposition")\n'
-        '  "type":       one of: technique | material | phenomenon | method | theory | dataset\n'
-        '  "aliases":    list of abbreviations / alternate names (may be empty list)\n'
-        '  "definition": one-sentence definition (max 25 words)\n\n'
-        "Include only concepts that are clearly named and domain-specific. "
-        "Skip generic terms like 'experiment', 'data', 'result'.\n\n"
-        "--- TEXT ---\n"
-        f"{chunk.content}\n"
-        "--- END TEXT ---"
-    )
-
-    try:
-        raw = complete_json(
-            messages=[{"role": "user", "content": user_msg}],
-            model=model,
-            temperature=0.1,
-            max_tokens=1024,
-        )
-    except Exception:
-        logger.exception("_extract_from_chunk: LLM call failed for chunk %s", chunk.id)
-        return []
-
-    if not isinstance(raw, list):
-        logger.warning(
-            "_extract_from_chunk: expected list, got %s for chunk %s",
-            type(raw).__name__,
-            chunk.id,
-        )
-        return []
-
     records: list[ConceptRecord] = []
-    for item in raw:
+    for item in rich_result.get("concepts", []):
         if not isinstance(item, dict):
             continue
 
@@ -181,11 +233,36 @@ def _extract_from_chunk(
     return records
 
 
+def _extract_from_chunk(
+    chunk: Chunk,
+    prior_context: list[str],
+    model: str,
+    template: str | None = None,
+) -> list[ConceptRecord]:
+    """Call haiku to extract named concepts from a single chunk.
+
+    Backward-compatible wrapper around _extract_rich_from_chunk().
+
+    Args:
+        chunk: The Chunk object whose content will be analysed.
+        prior_context: Concept names already seen in earlier chunks of the same
+            source.  Passed to the prompt so haiku avoids redundant re-extractions.
+        model: litellm model string (normally HAIKU_MODEL).
+        template: Extraction template content. If None, loads from disk.
+
+    Returns:
+        List of ConceptRecord objects (not yet persisted to DB).
+    """
+    rich = _extract_rich_from_chunk(chunk, prior_context, model, template=template)
+    return _parse_concepts_from_rich(rich)
+
+
 def extract_concepts_from_source(
     source_id: str,
     chunks: list[Chunk],
     epoch: int,
     model: str = HAIKU_MODEL,
+    template: str | None = None,
 ) -> list[ConceptRecord]:
     """Extract concepts from a (possibly pre-filtered) list of chunks for one source.
 
@@ -197,12 +274,17 @@ def extract_concepts_from_source(
     the profiler or tests), this function applies only the baseline _SKIP_SECTIONS
     and minimum-length guards.
 
+    Also stores rich extraction results (parameters, mechanisms, relationships,
+    gaps) in the module-level _last_rich_extractions dict for downstream
+    consumers (evidence linkage, gap reporting, parameter extraction).
+
     Args:
         source_id: Paper.id for the source being processed.
         chunks:    Ordered list of Chunk objects to process (may be a subset of
                    all chunks for the paper when called via the epoch pipeline).
         epoch:     Current epoch number (stored on each returned record).
         model:     litellm model string.
+        template:  Extraction template content. If None, loads from disk.
 
     Returns:
         All ConceptRecord objects extracted across every supplied chunk.
@@ -223,14 +305,31 @@ def extract_concepts_from_source(
         len(chunks),
     )
 
+    # Load template once for all chunks in this source
+    if template is None:
+        template = load_template(_WIKI_DIR)
+
     prior_concepts: list[str] = []
     all_records: list[ConceptRecord] = []
+    all_rich: list[dict[str, Any]] = []
 
     for chunk in relevant_chunks:
-        chunk_records = _extract_from_chunk(chunk, prior_context=prior_concepts, model=model)
+        rich = _extract_rich_from_chunk(
+            chunk, prior_context=prior_concepts, model=model, template=template
+        )
+        # Tag each rich result with chunk metadata for downstream consumers
+        rich["_chunk_id"] = chunk.id
+        rich["_paper_id"] = chunk.paper_id
+        rich["_chunk_content"] = chunk.content
+        all_rich.append(rich)
+
+        chunk_records = _parse_concepts_from_rich(rich)
         all_records.extend(chunk_records)
         # Thread names forward so the next chunk prompt knows what was already seen
         prior_concepts = [r.name for r in chunk_records]
+
+    # Store rich results for downstream consumers
+    _last_rich_extractions[source_id] = all_rich
 
     # Stamp epoch fields (discovery will be refined at merge time)
     for record in all_records:
