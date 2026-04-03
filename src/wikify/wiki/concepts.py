@@ -45,7 +45,10 @@ _VALID_CONCEPT_TYPES = frozenset(
 
 def _get_staging_collection() -> Any:
     """Return (creating if absent) the ChromaDB staging collection."""
-    return _store.client.get_or_create_collection(_STAGING_COLLECTION)
+    # Access the underlying chromadb client via the collection property
+    # which triggers lazy init of _client
+    _ = _store.collection  # ensure client is initialized
+    return _store._client.get_or_create_collection(_STAGING_COLLECTION)
 
 
 def _build_staging_id(epoch: int, concept_id: str, source_id: str, chunk_index: int) -> str:

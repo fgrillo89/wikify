@@ -1,0 +1,30 @@
+{
+  "papers": 50,
+  "chunks": 1189,
+  "estimated_concepts": 200,
+  "estimated_communities": 7,
+  "pass1": {
+    "calls": 1189,
+    "cost": 1.28412,
+    "time_s": 356.7
+  },
+  "pass2": {
+    "calls": 0,
+    "cost": 0,
+    "time_s": 2.02
+  },
+  "pass2b": {
+    "calls": 14,
+    "cost": 0.02016
+  },
+  "pass3": {
+    "map_calls": 1000,
+    "reduce_calls": 200,
+    "haiku_cost": 0.72,
+    "sonnet_cost": 3.3,
+    "time_s": 700.0
+  },
+  "total_cost": 5.32428,
+  "total_time_min": 17.657,
+  "bottleneck": "Pass 3 (sonnet article reduce)"
+}
