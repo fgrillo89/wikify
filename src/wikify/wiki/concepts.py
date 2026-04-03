@@ -34,7 +34,13 @@ from sqlmodel import select
 from wikify.llm.client import complete_json
 from wikify.store.db import get_session
 from wikify.store.embeddings import _store
-from wikify.store.models import Chunk, ChunkMiningLog, ConceptEvidence, ConceptRecord
+from wikify.store.models import (
+    Chunk,
+    ChunkMiningLog,
+    ConceptEvidence,
+    ConceptRecord,
+    ExtractionGap,
+)
 from wikify.wiki.builder import slugify
 from wikify.wiki.template import build_extraction_prompt, load_template
 
@@ -193,14 +199,70 @@ def store_evidence(
             session.commit()
 
     logger.info(
-        "store_evidence: epoch %d -> %d evidence rows "
-        "(%d verified, %d unverified)",
+        "store_evidence: epoch %d -> %d evidence rows (%d verified, %d unverified)",
         epoch,
         len(evidence_rows),
         verified_count,
         unverified_count,
     )
     return len(evidence_rows)
+
+
+def store_gaps(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    epoch: int,
+) -> int:
+    """Store extraction gaps from rich extraction results.
+
+    Each gap represents knowledge that the extraction template could not
+    classify. These accumulate across epochs and drive template refinement
+    in Phase 3.
+
+    Args:
+        rich_extractions: Dict mapping paper_id -> list of per-chunk rich
+            extraction dicts (from get_rich_extractions()).
+        epoch: Current epoch number.
+
+    Returns:
+        Number of ExtractionGap rows stored.
+    """
+    gap_rows: list[ExtractionGap] = []
+
+    for paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            chunk_id = chunk_result.get("_chunk_id", "")
+
+            for gap in chunk_result.get("gaps", []):
+                if not isinstance(gap, dict):
+                    continue
+                description = (gap.get("description") or "").strip()
+                if not description:
+                    continue
+
+                suggested_type = (gap.get("suggested_type") or "").strip()
+
+                gap_rows.append(
+                    ExtractionGap(
+                        description=description,
+                        suggested_type=suggested_type,
+                        paper_id=paper_id,
+                        chunk_id=chunk_id,
+                        epoch=epoch,
+                    )
+                )
+
+    if gap_rows:
+        with get_session() as session:
+            for row in gap_rows:
+                session.add(row)
+            session.commit()
+
+    logger.info(
+        "store_gaps: epoch %d -> %d gap rows stored",
+        epoch,
+        len(gap_rows),
+    )
+    return len(gap_rows)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────

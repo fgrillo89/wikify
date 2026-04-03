@@ -775,3 +775,66 @@ def test_store_evidence_skips_empty():
         count = mod.store_evidence(rich, epoch=1)
 
     assert count == 0
+
+
+# ── store_gaps ───────────────────────────────────────────────────────────────
+
+
+def test_store_gaps_creates_rows():
+    """store_gaps creates ExtractionGap rows for gaps with descriptions."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "text",
+                "concepts": [],
+                "parameters": [],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [
+                    {
+                        "description": "device reliability data",
+                        "suggested_type": "reliability_metric",
+                    },
+                    {
+                        "description": "process window info",
+                        "suggested_type": "process_param",
+                    },
+                ],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_gaps(rich, epoch=1)
+
+    assert count == 2
+    assert mock_session.add.call_count == 2
+
+
+def test_store_gaps_skips_empty_description():
+    """Gaps without a description are skipped."""
+    rich = {
+        "paper1": [
+            {
+                "_chunk_id": "c1",
+                "_paper_id": "paper1",
+                "_chunk_content": "text",
+                "concepts": [],
+                "parameters": [],
+                "mechanisms": [],
+                "relationships": [],
+                "gaps": [
+                    {"description": "", "suggested_type": "something"},
+                ],
+            }
+        ]
+    }
+
+    mock_session = _make_session()
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        count = mod.store_gaps(rich, epoch=1)
+
+    assert count == 0

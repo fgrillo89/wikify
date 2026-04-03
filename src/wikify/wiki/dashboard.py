@@ -14,7 +14,12 @@ from fastapi.responses import HTMLResponse
 from sqlmodel import func, select
 
 from wikify.store.db import get_session
-from wikify.store.models import ConceptRecord, EpochLog, SourceCoverage
+from wikify.store.models import (
+    ConceptRecord,
+    EpochLog,
+    ExtractionGap,
+    SourceCoverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,43 @@ def api_gradient() -> list[dict]:
                 }
             )
         return result
+
+
+@app.get("/api/gaps")
+def api_gaps() -> list[dict]:
+    """Return extraction gaps clustered by suggested_type.
+
+    Groups gaps by suggested_type, counts occurrences, and returns
+    clusters sorted by frequency descending.
+    """
+    with get_session() as session:
+        rows = session.exec(select(ExtractionGap)).all()
+
+    if not rows:
+        return []
+
+    # Cluster by suggested_type
+    clusters: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        key = row.suggested_type or "unclassified"
+        clusters[key].append(
+            {
+                "description": row.description,
+                "paper_id": row.paper_id,
+                "chunk_id": row.chunk_id,
+                "epoch": row.epoch,
+            }
+        )
+
+    result = [
+        {
+            "suggested_type": stype,
+            "count": len(gaps),
+            "gaps": gaps[:10],  # limit per cluster for UI
+        }
+        for stype, gaps in sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)
+    ]
+    return result
 
 
 # ---------------------------------------------------------------------------

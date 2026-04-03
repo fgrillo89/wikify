@@ -227,6 +227,17 @@ class ConceptEvidence(SQLModel, table=True):
     verified: bool = False  # True if quote found in source text
 
 
+class ExtractionGap(SQLModel, table=True):
+    """Knowledge that the extraction template could not classify."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    description: str = ""  # what the LLM couldn't classify
+    suggested_type: str = ""  # proposed new type
+    paper_id: str = ""
+    chunk_id: str = ""
+    epoch: int = 0
+
+
 class ConceptRelation(SQLModel, table=True):
     """A directed relationship between two concepts in the concept graph."""
 

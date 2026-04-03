@@ -20,6 +20,7 @@ from wikify.store.models import (  # noqa: F401 — ensure tables created
     DomainCluster,
     DomainPersona,
     EpochLog,
+    ExtractionGap,
     FigureRef,
     GeneratedOutput,
     JournalTemplate,
