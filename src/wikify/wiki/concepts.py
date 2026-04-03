@@ -430,6 +430,165 @@ def _extract_from_chunk(
     return _parse_concepts_from_rich(rich)
 
 
+def extract_from_publication(
+    paper_id: str,
+    template: str,
+    epoch: int,
+    model: str = HAIKU_MODEL,
+) -> dict[str, Any]:
+    """Pass 1a: Extract from abstract + section summaries against full template.
+
+    Gives a broad view of what the publication covers without reading every
+    chunk. Returns the rich extraction dict (concepts, parameters, mechanisms,
+    relationships, gaps).
+
+    Args:
+        paper_id: Paper.id for the publication.
+        template: Extraction template content.
+        epoch: Current epoch number.
+        model: litellm model string.
+
+    Returns:
+        Rich extraction dict, or empty result if paper not found.
+    """
+    from wikify.store.models import Paper
+
+    empty_result: dict[str, Any] = {
+        "concepts": [],
+        "parameters": [],
+        "mechanisms": [],
+        "relationships": [],
+        "gaps": [],
+    }
+
+    with get_session() as session:
+        paper = session.get(Paper, paper_id)
+        if paper is None:
+            logger.warning(
+                "extract_from_publication: paper %s not found",
+                paper_id[:16],
+            )
+            return empty_result
+
+    # Build a combined text from abstract + section summaries
+    parts: list[str] = []
+
+    # Get abstract chunk if available
+    with get_session() as session:
+        abstract_chunks: list[Chunk] = list(
+            session.exec(
+                select(Chunk)
+                .where(Chunk.paper_id == paper_id)
+                .where(Chunk.section_type == "abstract")
+                .order_by(Chunk.chunk_index)  # type: ignore[arg-type]
+            ).all()
+        )
+
+    if abstract_chunks:
+        parts.append("ABSTRACT:\n" + " ".join(c.content for c in abstract_chunks))
+
+    # Add section summaries if available
+    try:
+        summaries = json.loads(paper.section_summaries or "{}")
+        if summaries:
+            parts.append("\nSECTION SUMMARIES:")
+            for section, summary in summaries.items():
+                parts.append(f"  {section}: {summary}")
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # If we have nothing, fall back to intro + conclusion chunks
+    if not parts:
+        with get_session() as session:
+            fallback_chunks: list[Chunk] = list(
+                session.exec(
+                    select(Chunk)
+                    .where(Chunk.paper_id == paper_id)
+                    .where(Chunk.section_type.in_(["introduction", "conclusion"]))  # type: ignore[union-attr]
+                    .order_by(Chunk.chunk_index)  # type: ignore[arg-type]
+                ).all()
+            )
+        if fallback_chunks:
+            parts.append(" ".join(c.content for c in fallback_chunks[:4]))
+
+    if not parts:
+        logger.debug(
+            "extract_from_publication(%s): no text to extract from",
+            paper_id[:16],
+        )
+        return empty_result
+
+    combined_text = "\n".join(parts)
+
+    # Create a mock chunk-like object for the extraction function
+    pub_chunk = Chunk(
+        id=f"pub_{paper_id[:16]}",
+        paper_id=paper_id,
+        content=combined_text[:3000],  # cap at ~3000 chars
+        section_type="abstract",
+        chunk_index=0,
+    )
+
+    rich = _extract_rich_from_chunk(pub_chunk, prior_context=[], model=model, template=template)
+    rich["_chunk_id"] = pub_chunk.id
+    rich["_paper_id"] = paper_id
+    rich["_chunk_content"] = pub_chunk.content
+
+    logger.info(
+        "extract_from_publication(%s): %d concepts, %d params, %d gaps",
+        paper_id[:16],
+        len(rich.get("concepts", [])),
+        len(rich.get("parameters", [])),
+        len(rich.get("gaps", [])),
+    )
+    return rich
+
+
+def _identify_deepening_chunks(
+    paper_id: str,
+    pub_concepts: list[str],
+    all_chunks: list[Chunk],
+) -> list[Chunk]:
+    """Identify which chunks need deeper extraction based on pub-level concepts.
+
+    Returns chunks from sections that are likely to contain details about
+    the publication-level concepts (methods, results, discussion) that
+    weren't already covered by abstract/summary.
+
+    Args:
+        paper_id: Paper.id for the publication.
+        pub_concepts: Concept names from publication-level extraction.
+        all_chunks: All chunks for this paper.
+
+    Returns:
+        Filtered list of chunks worth deepening into.
+    """
+    if not pub_concepts:
+        # No pub-level concepts found -- fall back to all chunks
+        return all_chunks
+
+    # Focus on detail-rich sections that complement the abstract overview
+    deepening_types = {"methods", "results", "discussion", "body"}
+    candidates = [
+        c
+        for c in all_chunks
+        if c.section_type in deepening_types
+        and c.section_type not in _SKIP_SECTIONS
+        and len(c.content) > 50
+    ]
+
+    if not candidates:
+        return all_chunks
+
+    logger.debug(
+        "_identify_deepening_chunks(%s): %d/%d chunks for deepening",
+        paper_id[:16],
+        len(candidates),
+        len(all_chunks),
+    )
+    return candidates
+
+
 def extract_concepts_from_source(
     source_id: str,
     chunks: list[Chunk],
@@ -1104,9 +1263,12 @@ def discover_concepts(
         len(paper_frontier),
     )
 
-    # ── Step 4: parallel per-paper processing ─────────────────────────────────
+    # ── Step 4: parallel per-paper processing (two-pass) ───────────────────────
+    # Load template once for all papers
+    _template = load_template(_WIKI_DIR)
+
     def _process_paper(paper_id: str, chunk_reasons: list[tuple[Chunk, str]]) -> None:
-        """Process one paper's frontier chunks: extract, stage, record."""
+        """Process one paper: pub-level extraction then targeted chunk deepening."""
         chunks_only = [c for c, _ in chunk_reasons]
 
         logger.info(
@@ -1115,13 +1277,45 @@ def discover_concepts(
             len(chunks_only),
         )
 
-        extractions = extract_concepts_from_source(
-            source_id=paper_id,
-            chunks=chunks_only,
+        # Pass 1a: Publication-level extraction (abstract + summaries)
+        pub_rich = extract_from_publication(
+            paper_id=paper_id,
+            template=_template,
             epoch=epoch,
             model=resolved_model,
         )
-        stage_extractions(epoch=epoch, source_id=paper_id, extractions=extractions)
+        pub_concepts = _parse_concepts_from_rich(pub_rich)
+        pub_concept_names = [c.name for c in pub_concepts]
+
+        # Store pub-level rich results
+        if pub_concepts:
+            if paper_id not in _last_rich_extractions:
+                _last_rich_extractions[paper_id] = []
+            _last_rich_extractions[paper_id].append(pub_rich)
+
+        # Pass 1b: Targeted chunk deepening
+        deepening_chunks = _identify_deepening_chunks(paper_id, pub_concept_names, chunks_only)
+
+        if deepening_chunks:
+            extractions = extract_concepts_from_source(
+                source_id=paper_id,
+                chunks=deepening_chunks,
+                epoch=epoch,
+                model=resolved_model,
+                template=_template,
+            )
+        else:
+            extractions = []
+
+        # Merge pub-level concepts with chunk-level
+        all_extractions = pub_concepts + extractions
+
+        # Stamp epoch on pub-level concepts
+        for rec in pub_concepts:
+            rec.epoch_discovered = epoch
+            rec.epoch_last_updated = epoch
+
+        stage_extractions(epoch=epoch, source_id=paper_id, extractions=all_extractions)
 
         # Record each chunk as mined
         for chunk, reason in chunk_reasons:

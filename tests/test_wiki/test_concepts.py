@@ -838,3 +838,47 @@ def test_store_gaps_skips_empty_description():
         count = mod.store_gaps(rich, epoch=1)
 
     assert count == 0
+
+
+# ── _identify_deepening_chunks ──────────────────────────────────────────────
+
+
+def test_identify_deepening_chunks_filters_by_section():
+    """Returns only detail-rich sections for deepening."""
+    chunks = [
+        _make_chunk(chunk_id="c0", content="x" * 60),
+        _make_chunk(chunk_id="c1", content="x" * 60),
+        _make_chunk(chunk_id="c2", content="x" * 60),
+    ]
+    chunks[0].section_type = "abstract"
+    chunks[1].section_type = "methods"
+    chunks[2].section_type = "results"
+
+    result = mod._identify_deepening_chunks("paper1", ["ALD"], chunks)
+
+    section_types = [c.section_type for c in result]
+    assert "methods" in section_types
+    assert "results" in section_types
+    assert "abstract" not in section_types
+
+
+def test_identify_deepening_chunks_no_concepts_returns_all():
+    """Falls back to all chunks when no pub concepts exist."""
+    chunks = [_make_chunk()]
+    result = mod._identify_deepening_chunks("paper1", [], chunks)
+    assert result == chunks
+
+
+# ── extract_from_publication ────────────────────────────────────────────────
+
+
+def test_extract_from_publication_no_paper():
+    """Returns empty result when paper not found."""
+    mock_session = _make_session()
+    mock_session.get.return_value = None
+
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        result = mod.extract_from_publication("nonexistent", template="test", epoch=1)
+
+    assert result["concepts"] == []
+    assert result["parameters"] == []
