@@ -18,6 +18,33 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_nvidia_path_added = False
+
+
+def _add_nvidia_to_path() -> None:
+    """Add pip-installed NVIDIA CUDA runtime bin dirs to PATH (Windows).
+
+    Packages like nvidia-cublas-cu12, nvidia-cufft-cu12, etc. install
+    DLLs under .venv/Lib/site-packages/nvidia/*/bin/.  ONNX Runtime
+    GenAI needs these on PATH to load the CUDA execution provider.
+    """
+    global _nvidia_path_added  # noqa: PLW0603
+    if _nvidia_path_added:
+        return
+
+    import glob
+    import os
+    import sys
+
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+    nvidia_bins = glob.glob(str(site_packages / "nvidia" / "*" / "bin"))
+    if nvidia_bins:
+        extra = ";".join(str(Path(b).resolve()) for b in nvidia_bins)
+        os.environ["PATH"] = extra + ";" + os.environ.get("PATH", "")
+        logger.debug("Added %d NVIDIA bin dirs to PATH", len(nvidia_bins))
+
+    _nvidia_path_added = True
+
 
 class OnnxProvider:
     """Local LLM inference via ONNX Runtime GenAI with CUDA support."""
@@ -40,12 +67,16 @@ class OnnxProvider:
                 "Install with: uv pip install onnxruntime-genai-cuda"
             ) from exc
 
+        # Ensure NVIDIA CUDA runtime DLLs are on PATH (pip-installed)
+        _add_nvidia_to_path()
+
         logger.info("Loading ONNX model from %s", self._model_path)
         start = time.monotonic()
         self._model = og.Model(self._model_path)
         self._tokenizer = og.Tokenizer(self._model)
         elapsed = time.monotonic() - start
-        logger.info("ONNX model loaded in %.1fs", elapsed)
+        device = getattr(self._model, "device_type", "unknown")
+        logger.info("ONNX model loaded in %.1fs (device: %s)", elapsed, device)
 
     def complete(
         self,
@@ -81,15 +112,14 @@ class OnnxProvider:
             top_p=0.9,
             do_sample=temperature > 0.01,
         )
-        params.input_ids = input_tokens
 
-        # Generate
+        # Generate token-by-token
         start = time.monotonic()
         generator = og.Generator(self._model, params)
+        generator.append_tokens(input_tokens)
 
         output_tokens = []
         while not generator.is_done():
-            generator.compute_logits()
             generator.generate_next_token()
             token = generator.get_next_tokens()[0]
             output_tokens.append(token)
