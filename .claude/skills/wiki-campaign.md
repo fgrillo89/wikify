@@ -129,27 +129,29 @@ You are writing this article as part of a research campaign investigating:
 Emphasize aspects of {concept.name} that are relevant to this question.
 ```
 
-### Pass 3c: Create Synthetic Concepts
+### Pass 3c: Reshape the Wiki (orchestrator judgment)
 
-This is the campaign-unique step. **Synthetic concepts don't exist in any single paper** but emerge from cross-cutting analysis. The orchestrator (you, deep tier) identifies them:
+This is the campaign-unique step. The orchestrator (you, **deep** tier) reviews the campaign-relevant concepts and decides what the wiki needs. **You have full freedom to:**
 
-Examples:
-- "ALD-HfO2 Process Window" -- synthesizes growth rate, temperature, and switching data
-- "Oxide Composition-Switching Correlation" -- connects material properties to device behavior
-- "Neuromorphic Scaling Bottlenecks" -- aggregates limits from different device types
+- **Do nothing** -- if the existing articles + refinements are sufficient
+- **Merge concepts** -- if two concepts are really the same thing seen through different lenses, combine them (same merge logic as Pass 3d in wiki-epoch)
+- **Create a synthetic concept** -- if a cross-cutting insight emerges that no single paper covers
+- **Split a concept** -- if an article is trying to cover too much and would be better as two
+- **Reclassify** -- if a concept's type is wrong (e.g. labeled "material" but really a "technique")
 
-For each synthetic concept:
-1. Create a `ConceptRecord` with `concept_type="synthesis"` (a new type)
-2. Write the article using a **balanced-tier** agent with all relevant evidence
-3. Link it to its constituent concepts via `ConceptRelation` (SYNTHESIZES)
-4. Add to `campaign.concept_ids`
+**Synthetic concepts** (create only when genuinely needed):
+- They don't exist in any single paper but emerge from cross-cutting analysis
+- Examples: "ALD-HfO2 Process Window", "Oxide Composition-Switching Correlation"
+- Create with `concept_type="synthesis"`, link via `ConceptRelation` (SYNTHESIZES)
+- Use the synthesis article template
 
-Synthetic articles have a different structure:
-- ## Thesis -- what this synthesis addresses
-- ## Contributing Evidence -- which concepts/papers feed into this
-- ## Analysis -- the cross-cutting insight
-- ## Implications -- what this means for the field
-- ## Sources
+**Merges** (when two concepts overlap in the campaign context):
+- Keep the more important/comprehensive one as primary
+- Move unique content from secondary into primary
+- Mark secondary as `merged:{primary_id}`
+- Add secondary's name as an alias on the primary
+
+**The guiding principle:** After this step, the wiki should make it easier to answer the campaign thesis. Every action should serve that goal. If the wiki is already good enough, do nothing.
 
 ### Pass 4-5: Cross-link + Update Campaign + Grow Wiki
 
