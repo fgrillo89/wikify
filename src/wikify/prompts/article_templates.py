@@ -105,6 +105,26 @@ matters.
 {parameters_instruction}
 {evidence_instruction}
 """,
+    "synthesis": """\
+Write a synthesis article about "{name}".
+
+This is a **cross-cutting concept** that does not exist in any single \
+source but emerges from combining evidence across multiple papers.
+
+Structure:
+1. **Lead** (2-3 sentences): What this synthesis addresses, why it \
+matters.
+2. **## Contributing Evidence**: Which concepts and papers feed into \
+this synthesis. Cite each with [REF:paper_display].
+3. **## Analysis**: The cross-cutting insight that emerges. Connect \
+the dots between sources.
+4. **## Implications**: What this means for the field. Practical \
+consequences.
+5. **## Remaining Gaps**: What evidence is still missing to \
+strengthen or challenge this synthesis.
+{parameters_instruction}
+{evidence_instruction}
+""",
 }
 
 # Fallback for unknown or empty concept types

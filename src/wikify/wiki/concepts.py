@@ -53,7 +53,7 @@ _WIKI_DIR = Path("data/wiki")
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _STAGING_COLLECTION = "concept_staging"
 _VALID_CONCEPT_TYPES = frozenset(
-    {"technique", "material", "phenomenon", "method", "theory", "dataset"}
+    {"technique", "material", "phenomenon", "method", "theory", "dataset", "synthesis"}
 )
 
 # Sections that rarely contain extractable domain concepts — skip to save LLM calls
