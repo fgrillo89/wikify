@@ -11,6 +11,41 @@ from typing import Optional
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _extract_surname(author: str) -> str:
+    """Extract surname from an author string.
+
+    Handles: "J. J. Yang" -> "Yang", "M. De Silva" -> "De Silva",
+    "Kim" -> "Kim", "Yang, J. J." -> "Yang", "Alice Kim" -> "Kim"
+    """
+    if not author:
+        return "Unknown"
+    # If "Last, First" format, take the part before the comma
+    if "," in author:
+        return author.split(",")[0].strip()
+    parts = author.strip().split()
+    if len(parts) == 1:
+        return parts[0]
+    # Check if name starts with initials (J. J. Yang pattern)
+    # An initial: single letter + optional dot, max 2 chars stripped
+    leading_initials = 0
+    for part in parts:
+        if len(part.rstrip(".")) <= 2 and part[0].isupper():
+            leading_initials += 1
+        else:
+            break
+    if leading_initials > 0:
+        # "J. J. Yang" -> "Yang", "M. De Silva" -> "De Silva"
+        surname = " ".join(parts[leading_initials:])
+        return surname if surname else parts[-1]
+    # "Alice Kim" -> "Kim", "Alice De Silva" -> "De Silva"
+    # Heuristic: last name is everything after the first word
+    # unless first word looks like a particle (de, van, von, etc.)
+    return parts[-1]
+
+
 # ── SQLite models (via SQLModel) ──────────────────────────────────────────────
 
 
@@ -68,7 +103,7 @@ class Paper(SQLModel, table=True):
     def display_name(self) -> str:
         """Create display name like 'Kim 2021 - 4K-memristor...' for wikilinks."""
         authors = self.parsed_authors
-        first_author = authors[0].split()[-1] if authors else "Unknown"
+        first_author = _extract_surname(authors[0]) if authors else "Unknown"
         year = self.year or "YYYY"
         title = self.title or "Untitled"
         raw = f"{first_author} {year} - {title}"
