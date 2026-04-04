@@ -46,6 +46,60 @@ def article_path(wiki_dir: Path, category: str, slug: str) -> Path:
     return wiki_dir / category / f"{slug}.md"
 
 
+def file_back_answer(
+    wiki_dir: Path,
+    question: str,
+    answer: str,
+    sources: list[str] | None = None,
+    confidence: float = 0.0,
+) -> Path:
+    """File a Q&A answer back into the wiki as a query article.
+
+    Answers from chat, MCP queries, or campaign synthesis are saved
+    as wiki articles so they become part of the searchable knowledge base.
+    Stored in wiki_dir/queries/.
+
+    Args:
+        wiki_dir: Root wiki directory.
+        question: The original question.
+        answer: The generated answer (markdown).
+        sources: Paper IDs that contributed to the answer.
+        confidence: How confident the answer is (0-1).
+
+    Returns:
+        Path to the saved query article.
+    """
+    query_slug = slugify(question)[:60]
+    query_dir = wiki_dir / "queries"
+    query_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc).date().isoformat()
+
+    sources_yaml = "\n".join(f"  - {s}" for s in sources) if sources else "  []"
+    confidence_str = f"{confidence:.2f}" if confidence > 0 else "unknown"
+
+    frontmatter = f"""\
+---
+title: "{question[:100]}"
+type: query
+wiki_id: {query_slug}
+status: answered
+confidence: {confidence_str}
+created: {now}
+sources:
+{sources_yaml}
+---
+
+"""
+
+    full_content = frontmatter + f"# {question}\n\n{answer}"
+    fpath = query_dir / f"{query_slug}.md"
+    fpath.write_text(full_content, encoding="utf-8")
+
+    logger.info("file_back_answer: saved %s (%d chars)", fpath.name, len(answer))
+    return fpath
+
+
 def write_article(
     path: Path,
     title: str,

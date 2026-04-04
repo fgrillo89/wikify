@@ -243,3 +243,44 @@ def test_resolve_article_sources_updates_frontmatter(tmp_path):
     content = article.read_text(encoding="utf-8")
     assert "abc123" in content
     assert "[]" not in content
+
+
+# ── file_back_answer ────────────────────────────────────────────────────────
+
+
+def test_file_back_answer_creates_query_article(tmp_path):
+    """Files a Q&A answer as a wiki article in queries/."""
+    from wikify.wiki.builder import file_back_answer
+
+    fpath = file_back_answer(
+        wiki_dir=tmp_path,
+        question="How does ALD affect memristor switching?",
+        answer="ALD controls oxide composition via pulse parameters.",
+        sources=["abc123", "def456"],
+        confidence=0.8,
+    )
+
+    assert fpath.exists()
+    assert fpath.parent.name == "queries"
+
+    content = fpath.read_text(encoding="utf-8")
+    assert "How does ALD affect memristor switching?" in content
+    assert "ALD controls oxide composition" in content
+    assert "abc123" in content
+    assert "0.80" in content
+    assert "type: query" in content
+
+
+def test_file_back_answer_no_sources(tmp_path):
+    """Works without sources."""
+    from wikify.wiki.builder import file_back_answer
+
+    fpath = file_back_answer(
+        wiki_dir=tmp_path,
+        question="What is ALD?",
+        answer="A deposition technique.",
+    )
+
+    assert fpath.exists()
+    content = fpath.read_text(encoding="utf-8")
+    assert "[]" in content  # empty sources

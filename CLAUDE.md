@@ -20,12 +20,20 @@ a concept-first, self-correcting personal Wikipedia. It also contains a writing 
 
 **Two pipelines — do not confuse them:**
 - **Writing pipeline**: `wikify generate` → `wikify evaluate` → `wikify revise` (fully working)
-- **Wikipedia pipeline**: `/wiki-epoch` skill → concept discovery → graph → articles → cross-ref (fully working)
+- **Wikipedia pipeline**: `/wiki-epoch` → `/wiki-campaign` → `/wiki-ask` → `/wiki-maintain` (fully working)
 
-**Skills** (`.claude/skills/`):
-- `wiki-epoch.md` — orchestrate one epoch of the wiki-building pipeline
-- `generate.md` — write a paper from the corpus
-- `ingest.md` — ingest PDFs into the knowledge base
+**Skills** (`.claude/skills/`) — four wiki modes + two writing modes:
+
+| Skill | Mode | When to use |
+|-------|------|-------------|
+| `/wiki-epoch` | Build | After ingest, grow the wiki encyclopedically |
+| `/wiki-campaign` | Investigate | Thesis-driven research, opinionated epochs |
+| `/wiki-ask` | Query | Answer questions, file answers back into wiki |
+| `/wiki-maintain` | Maintain | Lint + auto-fix + self-enhance (find & fill gaps) |
+| `/generate` | Write | Generate a paper from the corpus |
+| `/ingest` | Ingest | Ingest PDFs into the knowledge base |
+
+**The wiki cycle:** ingest → epoch → ask → maintain → (repeat). Each mode enriches the wiki. Campaigns are user-initiated research threads that layer on top.
 
 ## Architecture: Skills + Tools
 
