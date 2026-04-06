@@ -28,6 +28,9 @@ _MIN_WIDTH = 100
 _MIN_HEIGHT = 100
 _MIN_BYTES = 2000
 
+# Pages with more images than this are treated as scanned (OCR fragments)
+_SCAN_THRESHOLD = 15
+
 # Caption patterns (case-insensitive)
 _FIGURE_CAPTION_RE = re.compile(
     r"(?i)(fig(?:ure)?\.?\s*\d+[a-z]?)\s*[.:\s\u2014\-]+(.*)", re.DOTALL
@@ -110,6 +113,19 @@ def _extract_images_from_page(
     figures: list[Figure] = []
     image_list = page.get_images(full=True)
 
+    # Scan detection: if too many images on one page, it's likely scanned
+    if len(image_list) > _SCAN_THRESHOLD:
+        logger.debug(
+            "Skipping page %d: %d images suggests scanned content",
+            page_num,
+            len(image_list),
+        )
+        return _extract_scanned_page_figures(
+            doc, page, page_num, paper_id, seen_hashes, page_captions, md_captions
+        )
+
+    # Collect all valid images first so we can resolve caption conflicts
+    extracted: list[tuple[int, str, bytes, int, int, str, list[float] | None]] = []
     for img_index, img_info in enumerate(image_list):
         xref = img_info[0]
         try:
@@ -137,16 +153,63 @@ def _extract_images_from_page(
         image_path = _store_media(image_bytes, img_hash, ext)
         _write_meta_sidecar(image_path, paper_id, page_num, width, height, ext)
 
-        # Try to find the image's bounding box on the page
         bbox = _find_image_bbox(page, xref)
+        extracted.append((img_index, img_hash, image_bytes, width, height, ext, bbox))
 
-        # Match caption
+    # Match captions with consumption: each caption used at most once.
+    # When multiple images compete for the same caption, the largest wins.
+    # We do two passes: first find best caption per image, then resolve conflicts.
+    pending_matches: list[
+        tuple[int, str, int, int, str, list[float] | None, _CaptionMatch | None]
+    ] = []
+    # Work on copies so consumption is local to this page's image extraction
+    avail_page = list(page_captions)
+
+    for img_index, img_hash, _img_bytes, width, height, ext, bbox in extracted:
         caption_match = _match_caption(
-            page_num, bbox, page_captions, md_captions, exclude_type="table"
+            page_num, bbox, avail_page, md_captions, exclude_type="table"
         )
+        pending_matches.append((img_index, img_hash, width, height, ext, bbox, caption_match))
+
+    # Resolve duplicate caption assignments: group by caption label,
+    # keep only the largest image (by pixel area), others get no caption.
+    label_winners: dict[str, int] = {}  # label -> index in pending_matches with max area
+    for idx, (img_index, _h, w, h, _e, _b, cap) in enumerate(pending_matches):
+        if cap is None:
+            continue
+        lbl = cap.label
+        area = w * h
+        if lbl not in label_winners:
+            label_winners[lbl] = idx
+        else:
+            prev_idx = label_winners[lbl]
+            prev_w = pending_matches[prev_idx][2]
+            prev_h = pending_matches[prev_idx][3]
+            if area > prev_w * prev_h:
+                label_winners[lbl] = idx
+
+    # Build figures, consuming captions for winners only
+    consumed_labels: set[str] = set()
+    for idx, (img_index, img_hash, width, height, ext, bbox, caption_match) in enumerate(
+        pending_matches
+    ):
+        # Only the winner for each label gets the caption
+        if caption_match is not None:
+            lbl = caption_match.label
+            if lbl in consumed_labels or label_winners.get(lbl) != idx:
+                caption_match = None
+            else:
+                consumed_labels.add(lbl)
+                # Remove consumed caption from page and md lists
+                if caption_match in avail_page:
+                    avail_page.remove(caption_match)
+                _consume_md_caption(md_captions, lbl)
+
         caption = caption_match.text if caption_match else None
         label = caption_match.label if caption_match else None
         media_type = caption_match.media_type if caption_match else "figure"
+
+        img_path = settings.figures_dir / img_hash[:2] / img_hash[2:4] / f"{img_hash}.{ext}"
 
         figures.append(
             Figure(
@@ -154,7 +217,7 @@ def _extract_images_from_page(
                 paper_id=paper_id,
                 caption=caption,
                 figure_number=label or f"p{page_num + 1}_img{img_index}",
-                image_path=str(image_path),
+                image_path=str(img_path),
                 width_px=width,
                 height_px=height,
                 format=ext,
@@ -164,6 +227,9 @@ def _extract_images_from_page(
                 bbox=json.dumps(bbox) if bbox else None,
             )
         )
+
+    # Propagate page_captions consumption back to caller's list
+    page_captions[:] = avail_page
 
     return figures
 
@@ -215,12 +281,17 @@ def _extract_tables_from_page(
         bbox_rect = table.bbox if hasattr(table, "bbox") else None
         bbox = list(bbox_rect) if bbox_rect else None
 
-        # Match caption
+        # Match caption and consume it
         caption_match = _match_caption(
             page_num, bbox, page_captions, md_captions, prefer_type="table"
         )
         caption = caption_match.text if caption_match else None
         label = caption_match.label if caption_match else None
+
+        if caption_match is not None:
+            if caption_match in page_captions:
+                page_captions.remove(caption_match)
+            _consume_md_caption(md_captions, caption_match.label)
 
         figures.append(
             Figure(
@@ -238,6 +309,83 @@ def _extract_tables_from_page(
         )
 
     return figures
+
+
+# ── Scanned page handling ─────────────────────────────────────────────────────
+
+
+def _extract_scanned_page_figures(
+    doc: fitz.Document,
+    page: fitz.Page,
+    page_num: int,
+    paper_id: str,
+    seen_hashes: set[str],
+    page_captions: list[_CaptionMatch],
+    md_captions: list[_CaptionMatch],
+) -> list[Figure]:
+    """Handle a scanned page by rendering the full page as an image.
+
+    Only produces figures if there are unmatched captions on the page.
+    Each caption gets a copy of the full-page render.
+    """
+    # Filter to figure-type captions (not table) on this page
+    figure_captions = [c for c in page_captions if c.media_type != "table"]
+    if not figure_captions:
+        return []
+
+    # Render the full page as PNG
+    try:
+        pixmap = page.get_pixmap(dpi=150)
+        page_bytes = pixmap.tobytes("png")
+    except Exception:
+        logger.debug("Failed to render scanned page %d as pixmap", page_num)
+        return []
+
+    figures: list[Figure] = []
+    for cap in figure_captions:
+        img_hash = hashlib.sha256(
+            (paper_id + str(page_num) + cap.label).encode("utf-8") + page_bytes
+        ).hexdigest()
+
+        if img_hash in seen_hashes:
+            continue
+        seen_hashes.add(img_hash)
+
+        image_path = _store_media(page_bytes, img_hash, "png")
+        width = pixmap.width
+        height = pixmap.height
+        _write_meta_sidecar(image_path, paper_id, page_num, width, height, "png")
+
+        figures.append(
+            Figure(
+                id=img_hash,
+                paper_id=paper_id,
+                caption=cap.text,
+                figure_number=cap.label,
+                image_path=str(image_path),
+                width_px=width,
+                height_px=height,
+                format="png",
+                media_type=cap.media_type,
+                label=cap.label,
+                page_number=page_num,
+            )
+        )
+
+        # Consume the caption from both page and md lists
+        if cap in page_captions:
+            page_captions.remove(cap)
+        _consume_md_caption(md_captions, cap.label)
+
+    return figures
+
+
+def _consume_md_caption(md_captions: list[_CaptionMatch], label: str) -> None:
+    """Remove the first markdown caption matching *label* (consumed after use)."""
+    for i, mc in enumerate(md_captions):
+        if mc.label == label:
+            md_captions.pop(i)
+            return
 
 
 # ── Caption extraction and matching ────────────────────────────────────────────

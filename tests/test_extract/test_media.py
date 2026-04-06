@@ -7,8 +7,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wikify.extract.media import (
+    _SCAN_THRESHOLD,
     _CaptionMatch,
+    _consume_md_caption,
     _extract_captions_from_markdown,
+    _extract_images_from_page,
     _match_caption,
     _store_media,
     _table_data_to_markdown,
@@ -353,3 +356,199 @@ class TestExtractMedia:
             meta = json.loads(meta_path.read_text())
             assert meta["paper_id"] == "paper123"
             assert meta["page_number"] == 0
+
+
+# ── Scanned page detection ───────────────────────────────────────────────────
+
+
+class TestScannedPageDetection:
+    """Issue 1: pages with >15 images are treated as scanned."""
+
+    def test_many_images_triggers_scan_path(self, tmp_path):
+        """A page with >SCAN_THRESHOLD images should skip fragment extraction."""
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+
+            doc = MagicMock()
+            page = MagicMock()
+
+            # Simulate 20 tiny image fragments (scanned page)
+            page.get_images.return_value = [(i,) + (0,) * 7 for i in range(20)]
+            assert len(page.get_images()) > _SCAN_THRESHOLD
+
+            # No captions -> should return empty list, not extract fragments
+            page.get_text.return_value = []
+
+            page_captions: list[_CaptionMatch] = []
+            md_captions: list[_CaptionMatch] = []
+
+            results = _extract_images_from_page(
+                doc, page, 0, "paper1", set(), page_captions, md_captions
+            )
+            # No captions means scanned page produces no figures
+            assert results == []
+            # extract_image should NOT have been called (fragments skipped)
+            doc.extract_image.assert_not_called()
+
+    def test_scanned_page_with_caption_renders_full_page(self, tmp_path):
+        """Scanned page with captions renders page as pixmap."""
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+
+            doc = MagicMock()
+            page = MagicMock()
+
+            page.get_images.return_value = [(i,) + (0,) * 7 for i in range(20)]
+
+            # Mock pixmap rendering
+            mock_pixmap = MagicMock()
+            mock_pixmap.tobytes.return_value = b"\x89PNG" + b"\x00" * 5000
+            mock_pixmap.width = 1200
+            mock_pixmap.height = 1600
+            page.get_pixmap.return_value = mock_pixmap
+
+            page_captions = [
+                _CaptionMatch("Fig. 3", "SEM cross-section", "figure", y_position=400.0),
+            ]
+            md_captions: list[_CaptionMatch] = []
+
+            results = _extract_images_from_page(
+                doc, page, 0, "paper1", set(), page_captions, md_captions
+            )
+            assert len(results) == 1
+            assert results[0].label == "Fig. 3"
+            assert results[0].width_px == 1200
+            assert results[0].height_px == 1600
+            # Caption should have been consumed
+            assert len(page_captions) == 0
+
+    def test_normal_page_not_affected(self, tmp_path):
+        """Pages with <=SCAN_THRESHOLD images use normal extraction."""
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+
+            doc = MagicMock()
+            page = MagicMock()
+
+            # 3 images -- normal page
+            page.get_images.return_value = [(i,) + (0,) * 7 for i in range(3)]
+            page.get_image_info.return_value = []
+
+            doc.extract_image.return_value = {
+                "image": b"\x89PNG" + b"\x00" * 3000,
+                "width": 400,
+                "height": 300,
+                "ext": "png",
+            }
+
+            _extract_images_from_page(doc, page, 0, "paper1", set(), [], [])
+            # Should have called extract_image for each fragment
+            assert doc.extract_image.call_count == 3
+
+
+# ── Caption consumption ──────────────────────────────────────────────────────
+
+
+class TestCaptionConsumption:
+    """Issue 2 & 3: captions should not be reused across images or pages."""
+
+    def test_same_caption_not_assigned_twice(self, tmp_path):
+        """Multiple images matching same caption: only largest gets it."""
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+
+            doc = MagicMock()
+            page = MagicMock()
+
+            # Two images on the page
+            page.get_images.return_value = [(10,) + (0,) * 7, (11,) + (0,) * 7]
+            page.get_image_info.return_value = []
+
+            # First image: small (200x150), second image: large (800x600)
+            def extract_image_side_effect(xref):
+                if xref == 10:
+                    return {
+                        "image": b"\x89PNG_small" + b"\x00" * 3000,
+                        "width": 200,
+                        "height": 150,
+                        "ext": "png",
+                    }
+                return {
+                    "image": b"\x89PNG_large" + b"\x00" * 3000,
+                    "width": 800,
+                    "height": 600,
+                    "ext": "png",
+                }
+
+            doc.extract_image.side_effect = extract_image_side_effect
+
+            page_captions = [
+                _CaptionMatch("Fig. 7", "Composite panel", "figure", y_position=500.0),
+            ]
+            md_captions: list[_CaptionMatch] = []
+
+            results = _extract_images_from_page(
+                doc, page, 0, "paper1", set(), page_captions, md_captions
+            )
+            assert len(results) == 2
+            labeled = [r for r in results if r.label == "Fig. 7"]
+            unlabeled = [r for r in results if r.label is None]
+            # Only one should get the caption (the larger one)
+            assert len(labeled) == 1
+            assert labeled[0].width_px == 800
+            assert len(unlabeled) == 1
+
+    def test_md_caption_consumed_across_pages(self, tmp_path):
+        """md_captions should be depleted after first use (Issue 3)."""
+        with (
+            patch("wikify.extract.media.fitz") as mock_fitz,
+            patch("wikify.extract.media.settings") as mock_settings,
+        ):
+            mock_settings.figures_dir = tmp_path / "figures"
+
+            # Build doc with 2 pages, each with 1 image (different bytes)
+            doc = MagicMock()
+            doc.__len__ = MagicMock(return_value=2)
+
+            pages = []
+            for p in range(2):
+                pg = MagicMock()
+                pg.get_images.return_value = [(100 + p,) + (0,) * 7]
+                pg.get_image_info.return_value = []
+                pg.get_text.return_value = []  # No page-level captions
+                pg.find_tables.return_value = []
+                pages.append(pg)
+
+            doc.__getitem__ = MagicMock(side_effect=lambda i: pages[i])
+
+            # Different image bytes per page so hashes differ
+            def extract_image_side_effect(xref):
+                return {
+                    "image": b"\x89PNG" + bytes([xref]) * 3000,
+                    "width": 400,
+                    "height": 300,
+                    "ext": "png",
+                }
+
+            doc.extract_image.side_effect = extract_image_side_effect
+            mock_fitz.open.return_value = doc
+
+            # Only one Fig. 1 caption in markdown
+            md_text = "**Fig. 1.** The cross-section image."
+            results = extract_media("/fake.pdf", "paper1", md_text)
+
+            # Only one figure should get the "Fig. 1" label
+            labeled = [r for r in results if r.label and "Fig. 1" in r.label]
+            assert len(labeled) == 1
+
+    def test_consume_md_caption_removes_entry(self):
+        """_consume_md_caption removes first matching label."""
+        captions = [
+            _CaptionMatch("Fig. 1", "First", "figure"),
+            _CaptionMatch("Fig. 2", "Second", "figure"),
+            _CaptionMatch("Fig. 1", "Duplicate", "figure"),
+        ]
+        _consume_md_caption(captions, "Fig. 1")
+        assert len(captions) == 2
+        assert captions[0].label == "Fig. 2"
+        assert captions[1].label == "Fig. 1"  # Second instance survives
