@@ -71,18 +71,21 @@ with get_session() as s:
 Split chunks into N batches (10 recommended). Save each batch to a temp JSON file.
 Launch N **fast-tier** subagents in parallel, each processing one batch.
 
-Each agent extracts per chunk:
+Each agent extracts per chunk (following `data/wiki/_template.md`):
 - **concepts**: name, type (technique|material|phenomenon|method|theory|dataset), aliases, definition (max 25 words), evidence (exact quote, max 50 words)
+- **people**: name, aliases, role, affiliations, contributions, mentioned_context. Identify researchers, authors, practitioners — not just the author list.
 - **parameters**: concept_name, parameter_name, value, unit, conditions
+- **equations**: latex, type (mathematical|chemical|inline), describes, variables, related_concepts
 - **gaps**: description, suggested_type (knowledge the template can't classify)
 
-Output format: `{"results": [{"chunk_id": "...", "paper_id": "...", "concepts": [...], "parameters": [...], "gaps": [...]}]}`
+Output format: `{"results": [{"chunk_id": "...", "paper_id": "...", "concepts": [...], "people": [...], "parameters": [...], "equations": [...], "gaps": [...]}]}`
 
 ### Step 1c: Merge results into DB
 
 ```python
 from wikify.wiki.concepts import merge_concept_records, apply_redirect_map
 from wikify.wiki.concepts import store_evidence, store_gaps, store_parameters
+from wikify.wiki.people import deduplicate_people, create_person_records, match_person_to_authors
 from wikify.wiki.builder import slugify
 
 # Parse all result files into model objects
@@ -90,14 +93,39 @@ from wikify.wiki.builder import slugify
 new_count, redirect_map = merge_concept_records(concept_list, epoch)
 
 # Apply redirect map BEFORE storing evidence/params/gaps
-# This prevents orphaned rows pointing to slugs that were merged
 apply_redirect_map(rich_extractions, redirect_map)
 
-# Now store with correct canonical IDs
+# Store evidence, parameters, gaps
 store_evidence(rich_extractions, epoch)
 store_gaps(rich_extractions, epoch)
 store_parameters(rich_extractions, epoch)
+
+# Merge people: deduplicate, cross-reference with paper authors, store as ConceptRecord
+existing_people = [c for c in all_concepts if c.concept_type == "person"]
+new_people = deduplicate_people(extracted_people, existing_people)
+person_records = create_person_records(new_people, epoch)
+# For each person, match_person_to_authors() to link them to papers they authored
+
+# Store equations: link to chunks and concepts
+# Equations extracted by regex are already in DB from ingest (extract/equations.py).
+# LLM-extracted equations from this pass enrich with concept_links and context.
 ```
+
+### Step 1e: Enrich figures with vision (optional)
+
+If the corpus has extracted figures, send them to a **fast-tier** agent for visual understanding:
+
+```python
+from wikify.wiki.figure_enrichment import enrich_paper_figures
+
+# For each paper with unenriched figures:
+for paper_id in paper_ids:
+    enrich_paper_figures(paper_id, model="fast")
+# This skips already-described figures, small images, and caption-sufficient figures.
+# Costs ~$0.01 per paper with 10 figures.
+```
+
+Visual concepts extracted from figures are merged into the concept pipeline alongside text-based concepts.
 
 ### Step 1d: Build co-occurrence relations
 
@@ -156,14 +184,17 @@ Each concept gets a **type-adapted template** from `src/wikify/prompts/article_t
 from wikify.prompts.article_templates import get_article_template, WRITING_RULES
 
 prompt = get_article_template(
-    concept_type=concept.concept_type,  # material, technique, phenomenon, etc.
+    concept_type=concept.concept_type,  # material, technique, phenomenon, person, etc.
     name=concept.name,
     parameters=brief["parameters"],
     evidence=brief["evidence"],
+    equations=brief.get("equations"),  # LaTeX equations linked to this concept
 ) + WRITING_RULES
 ```
 
-This gives each concept type a different article structure (e.g. materials get Properties/Synthesis/Applications, techniques get Mechanism/Process Parameters/Variants). Templates are domain-agnostic.
+This gives each concept type a different article structure (e.g. materials get Properties/Synthesis/Applications, techniques get Mechanism/Process Parameters/Variants, **people** get Contributions/In This Corpus/Collaborators/Key Concepts). Templates are domain-agnostic.
+
+**Figures in articles:** If a concept has associated figures (from `get_paper_figures`), the writing agent can use `get_figure_details(figure_id)` to inspect critical diagrams. Use sparingly — most information is in the text. Include figure references as `![caption](figures/path)` when they materially help the reader.
 
 ### Step 3c: Batch and write
 
@@ -242,16 +273,20 @@ from wikify.wiki.linker import cross_link_articles
 cross_refs = cross_link_articles(Path("data/wiki"), sitemap=None)
 ```
 
-## Pass 5: Index + Loss + Refinement
+## Pass 5: Index + Loss + HTML + Refinement
 
 ```python
 from wikify.wiki.builder import generate_wiki_index, generate_all_domain_condensations
 from wikify.wiki.epoch import compute_loss
+from wikify.wiki.html import build_site
 
 wiki_dir = Path("data/wiki")
 generate_wiki_index(wiki_dir)
 generate_all_domain_condensations(wiki_dir)
 loss, delta = compute_loss(epoch=N)
+
+# Build Wikipedia-style HTML site
+build_site(wiki_dir)
 ```
 
 Template refinement: if gaps exist, spawn one **fast-tier** agent to propose template additions. The orchestrator (you, **deep** tier) decides whether to accept using the overfitting guard.

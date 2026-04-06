@@ -132,6 +132,20 @@ For each identified gap:
 - **On demand**: user runs `/wiki-maintain` manually
 - **Triggered by queries**: low-confidence answers from `/wiki-ask` feed into the next maintain cycle
 
+## Phase 4: Rebuild HTML
+
+After all fixes and enhancements, rebuild the Wikipedia-style HTML site:
+
+```python
+from pathlib import Path
+from wikify.wiki.html import build_site
+
+site_path = build_site(Path("data/wiki"))
+```
+
+This regenerates the static HTML site at `data/wiki/_site/` with updated articles,
+cross-references, indexes, and search index. Users can browse it with `wikify wiki html --serve`.
+
 ## Output
 
 After maintenance, report:
@@ -144,4 +158,5 @@ Maintenance complete:
   Enhanced:  Generated 15 questions, 4 gaps found
   Filled:    2 gaps (wrote new articles)
   Flagged:   2 gaps need new papers (outside corpus)
+  HTML:      Rebuilt (N pages)
 ```
