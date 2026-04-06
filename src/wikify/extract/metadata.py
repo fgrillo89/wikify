@@ -124,21 +124,57 @@ def _parse_authors(raw: str) -> list[str]:
     raw = raw.replace(";", ",").replace(" and ", ",")
     parts = [a.strip() for a in raw.split(",") if a.strip()]
 
-    # Reassemble "LastName, Initials" pairs: if a part looks like initials
-    # (all uppercase, short, possibly with dots), merge it with the previous part
-    authors: list[str] = []
+    # Reassemble "LastName, FirstName/Initials" pairs: if a part looks like
+    # initials (e.g. "J. J.", "A.") or a single first name (e.g. "John"),
+    # merge it with the previous part to form "FirstName LastName".
+    assembled: list[str] = []
     i = 0
     while i < len(parts):
         part = parts[i]
-        # Check if next part looks like initials (e.g., "J. J." or "A.")
-        if i + 1 < len(parts) and re.match(r"^[A-Z][.\s]*[A-Z]?\.?$", parts[i + 1]):
-            authors.append(f"{parts[i + 1]} {part}")  # "J. J. Yang"
-            i += 2
-        else:
-            authors.append(part)
-            i += 1
+        if i + 1 < len(parts):
+            next_part = parts[i + 1].strip()
+            # Initials: "J. J." or "A."
+            is_initials = bool(re.match(r"^[A-Z][.\s]*(?:[A-Z]\.?\s*)*$", next_part))
+            # Single first name: one capitalized word, 2-15 chars (e.g. "John", "Jane")
+            is_first_name = bool(
+                re.match(r"^[A-Z][a-z]{1,14}$", next_part)
+                and len(part.split()) == 1
+                and part[0:1].isupper()
+            )
+            if is_initials or is_first_name:
+                assembled.append(f"{next_part} {part}")  # "John Smith" or "J. J. Yang"
+                i += 2
+                continue
+        assembled.append(part)
+        i += 1
 
-    return authors
+    # Filter out invalid author names
+    return [a for a in assembled if _is_valid_author(a)]
+
+
+def _is_valid_author(name: str) -> bool:
+    """Check if a string looks like a valid person name."""
+    name = name.strip()
+    if not name or len(name) < 2:
+        return False
+    words = name.split()
+    # Single-word names: reject unless CJK
+    if len(words) == 1:
+        if not any("\u4e00" <= c <= "\u9fff" or "\uac00" <= c <= "\ud7af" for c in name):
+            return False
+    # Too many words: probably a sentence
+    if len(words) > 5:
+        return False
+    # Must start with uppercase letter
+    if not words[0][0:1].isupper():
+        return False
+    # Reject if contains brackets, pipes, or trailing digits (PDF artifacts)
+    if re.search(r"[(\[|]|\d+\s*$", name):
+        return False
+    # Reject if all words are noise
+    if all(w.lower() in _AUTHOR_NOISE for w in words):
+        return False
+    return True
 
 
 def _extract_authors_from_markdown(md_text: str) -> list[str]:
@@ -267,6 +303,14 @@ def _parse_author_line(line: str) -> list[str]:
             continue
         # Skip if too many words (probably a sentence, not a name)
         if len(words) > 5:
+            continue
+        # Reject single-word names unless CJK (Chinese/Japanese/Korean names can be one word)
+        if len(words) == 1:
+            # Allow if contains CJK characters
+            if not any("\u4e00" <= c <= "\u9fff" or "\uac00" <= c <= "\ud7af" for c in part):
+                continue
+        # Reject names containing brackets, pipes, or digit suffixes (PDF artifacts)
+        if re.search(r"[(\[|]|\d+\s*$", part):
             continue
         names.append(part)
 

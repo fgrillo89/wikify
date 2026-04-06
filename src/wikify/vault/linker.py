@@ -187,8 +187,24 @@ def _is_valid_keyword(kw: str) -> bool:
     - Single-word stop terms rejected
     - Inner-phrase sentence markers rejected
     - Date-like patterns rejected
+    - HTML/PDF artifacts rejected
     """
     if len(kw) < 3 or len(kw) > 50:
+        return False
+    # Reject HTML tags and PDF line-break artifacts
+    if re.search(r"<\s*br\s*/?\s*>|<br>", kw, re.IGNORECASE):
+        return False
+    # Reject hyphenated line-break artifacts (e.g. "Further-\nMore" -> "Further-More")
+    if re.search(r"\w-\s*[A-Z]", kw) and len(kw.split()) <= 2:
+        return False
+    # Reject pipe characters (PDF table artifacts)
+    if "|" in kw:
+        return False
+    # Reject "all rights reserved" and similar copyright noise
+    if re.search(r"(?i)rights?\s+reserved|copyright|permission", kw):
+        return False
+    # Reject keywords ending with "article", "letter", "paper" (journal noise)
+    if re.search(r"(?i)\b(?:article|letter|paper)\s*$", kw):
         return False
     words = kw.split()
     if not words or len(words) > 5:
@@ -219,6 +235,22 @@ def _is_valid_keyword(kw: str) -> bool:
     return True
 
 
+def _sanitize_keyword(kw: str) -> str:
+    """Clean PDF artifacts from a keyword before validation.
+
+    Fixes <br> tags, hyphenated line breaks, and trailing noise.
+    """
+    # Remove HTML <br> tags and rejoin
+    kw = re.sub(r"<\s*br\s*/?\s*>", " ", kw, flags=re.IGNORECASE)
+    # Fix hyphenated line breaks: "Further-\n  More" or "Further- More" -> "Furthermore"
+    kw = re.sub(r"(\w)-\s+([a-z])", lambda m: m.group(1) + m.group(2), kw)
+    # Collapse whitespace
+    kw = re.sub(r"\s+", " ", kw).strip()
+    # Strip trailing pipe or period
+    kw = kw.rstrip("|. ")
+    return kw
+
+
 def _extract_declared_keywords(text: str) -> list[str]:
     """Extract keywords from a 'Keywords:' or 'Index Terms:' section."""
     pattern = re.compile(
@@ -241,7 +273,7 @@ def _extract_declared_keywords(text: str) -> list[str]:
     for part in parts:
         kw = part.strip().rstrip(".")
         kw = re.sub(r"^\d+[.)]\s*", "", kw)
-        kw = kw.strip()
+        kw = _sanitize_keyword(kw)
         if _is_valid_keyword(kw):
             keywords.append(kw.lower())
     return keywords
