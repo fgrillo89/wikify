@@ -165,16 +165,21 @@ For each concept needing an article (article_status == "none"), build a brief:
 - neighbor concepts from the graph (top 10)
 - extracted parameters (top 5)
 - **evidence quotes** with paper display names (top 10)
+- **figures and tables** relevant to this concept (top 5)
 
 ```python
-from wikify.wiki.builder import build_evidence_brief
+from wikify.wiki.builder import build_evidence_brief, build_figure_brief
 
 brief["evidence"] = build_evidence_brief(concept.id, max_evidence=10)
 # Returns: [{"paper_id": "...", "paper_display": "Yang 2011 - Dopant Control...",
 #            "quote": "exact text from source", "chunk_id": "..."}]
+
+brief["figures"] = build_figure_brief(concept.id, max_figures=5)
+# Returns: [{"figure_id": "...", "paper_display": "...", "caption": "...",
+#            "media_type": "figure|table", "label": "Fig. 1", "llm_description": "..."}]
 ```
 
-The writing agent uses these to write evidence-backed claims with inline `[REF:paper_display]` citations.
+The writing agent uses evidence for `[REF:paper_display]` citations. Figures and tables should be referenced in articles when they materially help the reader — include the caption and label inline (e.g. "as shown in Fig. 1 of [REF:paper_display]"). For tables with structured data, summarize key values in the article text.
 
 ### Step 3b: Build type-specific prompts
 

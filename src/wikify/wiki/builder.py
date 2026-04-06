@@ -282,6 +282,77 @@ def build_evidence_brief(concept_id: str, max_evidence: int = 10) -> list[dict]:
     ]
 
 
+def build_figure_brief(concept_id: str, max_figures: int = 5) -> list[dict]:
+    """Build a list of figure/table entries relevant to a concept.
+
+    Queries Figure table for papers associated with the concept's evidence,
+    returning captions and metadata for the writing agent.
+
+    Args:
+        concept_id: ConceptRecord.id (slug).
+        max_figures: Maximum figure entries to include.
+
+    Returns:
+        List of dicts with: figure_id, paper_display, caption, media_type,
+        label, llm_description, has_image
+    """
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import ConceptEvidence, Figure, Paper
+
+    # Get paper IDs from concept evidence
+    with get_session() as session:
+        evidence_rows = list(
+            session.exec(
+                select(ConceptEvidence.paper_id)
+                .where(ConceptEvidence.concept_id == concept_id)
+                .distinct()
+            ).all()
+        )
+
+    if not evidence_rows:
+        return []
+
+    paper_ids = list({pid for pid in evidence_rows if pid})
+
+    with get_session() as session:
+        figures: list[Figure] = []
+        for pid in paper_ids:
+            figs = list(session.exec(select(Figure).where(Figure.paper_id == pid)).all())
+            figures.extend(figs)
+
+        # Build paper display name lookup
+        paper_display: dict[str, str] = {}
+        for pid in paper_ids:
+            p = session.get(Paper, pid)
+            if p is not None:
+                paper_display[pid] = p.display_name()
+
+    # Sort by relevance: figures with captions and LLM descriptions first
+    figures.sort(
+        key=lambda f: (
+            bool(f.llm_description),
+            bool(f.caption),
+            f.media_type == "table",
+        ),
+        reverse=True,
+    )
+
+    return [
+        {
+            "figure_id": f.id,
+            "paper_display": paper_display.get(f.paper_id or "", ""),
+            "caption": f.caption or "",
+            "media_type": f.media_type if hasattr(f, "media_type") else "figure",
+            "label": (f.label if hasattr(f, "label") else f.figure_number) or "",
+            "llm_description": (f.llm_description if hasattr(f, "llm_description") else "") or "",
+            "has_image": bool(f.image_path),
+        }
+        for f in figures[:max_figures]
+    ]
+
+
 def resolve_article_sources(article_path_obj: Path) -> list[str]:
     """Scan an article for [REF:display_name] markers and resolve to paper IDs.
 
