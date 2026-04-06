@@ -124,6 +124,17 @@ def _run_migrations(engine) -> None:
             )
             conn.commit()
 
+        # Migration 6: Figure.llm_description column (added 2026-04-06)
+        try:
+            conn.execute(sqlalchemy.text("SELECT llm_description FROM figure LIMIT 1"))
+        except Exception:  # noqa: BLE001
+            conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE figure ADD COLUMN llm_description VARCHAR DEFAULT NULL"
+                )
+            )
+            conn.commit()
+
 
 # ── Module-level instance ─────────────────────────────────────────────────────
 

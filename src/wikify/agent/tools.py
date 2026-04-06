@@ -2398,3 +2398,72 @@ def run_wiki_gc() -> str:
         orphans_removed=result["orphans_removed"],
         staging_cleaned=result["staging_cleaned"],
     )
+
+
+# ── Figure tools ──────────────────────────────────────────────────────────────
+
+
+def get_figure_details(figure_id: str) -> str:
+    """Get figure details including image for LLM viewing.
+
+    Returns metadata, caption, LLM description, and base64 image
+    so the writing agent can inspect figures during article writing.
+
+    Args:
+        figure_id: The Figure.id (content hash) to look up.
+
+    Returns:
+        JSON string with keys: caption, llm_description, paper_title,
+        media_type, image_base64 (or error).
+    """
+    try:
+        from wikify.llm.vision import view_figure
+
+        result = view_figure(figure_id)
+        if "error" in result:
+            return _tool_json_error(result["error"])
+        return _tool_json_success(**result)
+    except Exception as exc:  # noqa: BLE001
+        return _tool_json_error(str(exc))
+
+
+def get_paper_figures(paper_id: str) -> str:
+    """List all figures and tables for a paper with metadata.
+
+    Args:
+        paper_id: The Paper.id to look up figures for.
+
+    Returns:
+        JSON string with keys:
+            - figures: list of figure metadata dicts
+            - total: number of figures found
+    """
+    try:
+        from sqlmodel import select
+
+        from wikify.store.db import get_session
+        from wikify.store.models import Figure
+
+        with get_session() as session:
+            figures = session.exec(select(Figure).where(Figure.paper_id == paper_id)).all()
+
+        figure_list = []
+        for fig in figures:
+            figure_list.append(
+                {
+                    "id": fig.id,
+                    "paper_id": fig.paper_id,
+                    "caption": fig.caption or "",
+                    "figure_number": fig.figure_number or "",
+                    "section_path": fig.section_path or "",
+                    "width_px": fig.width_px,
+                    "height_px": fig.height_px,
+                    "format": fig.format,
+                    "llm_description": fig.llm_description or "",
+                    "has_extracted_data": bool(fig.extracted_data),
+                }
+            )
+
+        return _tool_json_success(figures=figure_list, total=len(figure_list))
+    except Exception as exc:  # noqa: BLE001
+        return _tool_json_error(str(exc), figures=[], total=0)
