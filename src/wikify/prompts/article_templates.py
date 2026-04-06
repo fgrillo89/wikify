@@ -132,6 +132,26 @@ strengthen or challenge this synthesis.
 {equations_instruction}
 {evidence_instruction}
 """,
+    "person": """\
+Write a wiki article about the person "{name}".
+
+Structure:
+1. **Lead** (2-3 sentences): Full name, primary role/title, affiliation(s), \
+why they are significant in this field.
+2. **## Contributions**: Key research contributions mentioned in this corpus. \
+Cite with [REF:paper_display].
+3. **## In This Corpus**: Which papers they authored or are cited in. \
+Table format: | Paper | Role (author/cited/mentioned) | Year |
+4. **## Collaborators**: Other people they frequently co-author with or are \
+cited alongside. Link with [[wikilinks]].
+5. **## Key Concepts**: Concepts this person is most associated with. \
+Link with [[wikilinks]].
+6. **## Open Questions**: What aspects of their work remain unresolved \
+or contentious in this corpus.
+{parameters_instruction}
+{equations_instruction}
+{evidence_instruction}
+""",
 }
 
 # Fallback for unknown or empty concept types

@@ -19,6 +19,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def people_dir(wiki_dir: Path, domain: str) -> Path:
+    """Get the people subdirectory for a domain.
+
+    Creates the directory if it does not exist.
+
+    Args:
+        wiki_dir: Root wiki directory (e.g. data/wiki/).
+        domain: Domain name (e.g. "material_science").
+
+    Returns:
+        Path to wiki_dir/domains/{domain}/people/
+    """
+    d = wiki_dir / "domains" / domain / "people"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def slugify(title: str) -> str:
     """Convert a title to a filesystem-safe slug.
 
@@ -903,6 +920,18 @@ def generate_domain_index(
         "|-------|----------|-------|-------|",
     ]
     lines.extend(theme_rows)
+
+    # People section: list person articles in this domain
+    people_path = wiki_dir / "domains" / domain / "people"
+    if people_path.is_dir():
+        person_files = sorted(people_path.glob("*.md"))
+        if person_files:
+            lines += ["", "## People", "| Name | Status |", "|------|--------|"]
+            for pf in person_files:
+                meta = read_article_frontmatter(pf)
+                p_title = str(meta.get("title") or pf.stem.replace("_", " ").title())
+                p_status = str(meta.get("status", "stub"))
+                lines.append(f"| [[{p_title}]] | {p_status} |")
 
     # Domain graph summary
     lines += ["", "## Domain Graph Summary", ""]
