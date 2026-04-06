@@ -81,15 +81,22 @@ Output format: `{"results": [{"chunk_id": "...", "paper_id": "...", "concepts": 
 ### Step 1c: Merge results into DB
 
 ```python
-from wikify.wiki.concepts import merge_concept_records
-from wikify.store.models import ConceptRecord, ConceptEvidence, ParameterExtraction, ExtractionGap
+from wikify.wiki.concepts import merge_concept_records, apply_redirect_map
+from wikify.wiki.concepts import store_evidence, store_gaps, store_parameters
 from wikify.wiki.builder import slugify
 
 # Parse all result files into model objects
-# merge_concept_records(concept_list, epoch) -- handles dedup by slug + alias
-# Store ConceptEvidence rows (with verified=True if evidence found in chunk)
-# Store ParameterExtraction rows
-# Store ExtractionGap rows
+# IMPORTANT: merge returns a redirect map (input_slug -> canonical_slug)
+new_count, redirect_map = merge_concept_records(concept_list, epoch)
+
+# Apply redirect map BEFORE storing evidence/params/gaps
+# This prevents orphaned rows pointing to slugs that were merged
+apply_redirect_map(rich_extractions, redirect_map)
+
+# Now store with correct canonical IDs
+store_evidence(rich_extractions, epoch)
+store_gaps(rich_extractions, epoch)
+store_parameters(rich_extractions, epoch)
 ```
 
 ### Step 1d: Build co-occurrence relations

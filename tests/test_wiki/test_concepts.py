@@ -374,7 +374,7 @@ def test_merge_concept_records_new_concepts():
     mock_session = _make_session(existing_records=[])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        count = mod.merge_concept_records(new_records, epoch=1)
+        count, _redirect = mod.merge_concept_records(new_records, epoch=1)
 
     assert count == 2
     assert mock_session.add.call_count == 2
@@ -388,7 +388,7 @@ def test_merge_concept_records_dedup_by_slug():
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        count = mod.merge_concept_records([incoming], epoch=2)
+        count, _redirect = mod.merge_concept_records([incoming], epoch=2)
 
     assert count == 0
     # The existing record should have been updated and re-added
@@ -404,7 +404,7 @@ def test_merge_concept_records_dedup_updates_epoch():
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        mod.merge_concept_records([incoming], epoch=7)
+        _count, _redirect = mod.merge_concept_records([incoming], epoch=7)
 
     assert existing.epoch_last_updated == 7
 
@@ -425,10 +425,42 @@ def test_merge_concept_records_dedup_by_alias():
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        count = mod.merge_concept_records([incoming], epoch=2)
+        count, _redirect = mod.merge_concept_records([incoming], epoch=2)
 
     assert count == 0
     assert existing.epoch_last_updated == 2
+
+
+def test_merge_concept_records_returns_redirect_map():
+    """Redirect map shows input slug -> canonical slug when merged."""
+    existing = _make_concept_record(
+        cid="atomic_layer_deposition",
+        name="Atomic Layer Deposition",
+        aliases=["ALD"],
+    )
+    incoming = _make_concept_record(
+        cid="ald_process",
+        name="ALD Process",
+        aliases=["ALD"],
+    )
+    mock_session = _make_session(existing_records=[existing])
+
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        _count, redirect = mod.merge_concept_records([incoming], epoch=2)
+
+    # ald_process was merged into atomic_layer_deposition
+    assert redirect["ald_process"] == "atomic_layer_deposition"
+
+
+def test_merge_concept_records_identity_for_new():
+    """New concepts get identity mapping in redirect map."""
+    mock_session = _make_session(existing_records=[])
+    incoming = _make_concept_record(cid="cvd", name="CVD", aliases=[])
+
+    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+        _count, redirect = mod.merge_concept_records([incoming], epoch=1)
+
+    assert redirect["cvd"] == "cvd"
 
 
 def test_merge_concept_records_backfills_definition():
@@ -440,7 +472,7 @@ def test_merge_concept_records_backfills_definition():
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        mod.merge_concept_records([incoming], epoch=1)
+        _count, _redirect = mod.merge_concept_records([incoming], epoch=1)
 
     assert existing.definition == "A deposition technique."
 
@@ -452,7 +484,7 @@ def test_merge_concept_records_merges_aliases():
     mock_session = _make_session(existing_records=[existing])
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        mod.merge_concept_records([incoming], epoch=1)
+        _count, _redirect = mod.merge_concept_records([incoming], epoch=1)
 
     merged = existing.parsed_aliases
     assert "ALD" in merged
@@ -464,7 +496,7 @@ def test_merge_concept_records_empty_input():
     mock_session = _make_session()
 
     with patch("wikify.wiki.concepts.get_session", return_value=mock_session) as mock_gs:
-        count = mod.merge_concept_records([], epoch=1)
+        count, _redirect = mod.merge_concept_records([], epoch=1)
 
     assert count == 0
     mock_gs.assert_not_called()

@@ -83,6 +83,47 @@ _last_rich_extractions: dict[str, list[dict[str, Any]]] = {}
 _CONCEPT_SIM_THRESHOLD = 0.15
 
 
+def apply_redirect_map(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    redirect_map: dict[str, str],
+) -> None:
+    """Apply a concept ID redirect map to rich extraction results in-place.
+
+    After merge_concept_records, some concept slugs have been redirected
+    (e.g. "ald" -> "atomic_layer_deposition"). This function fixes all
+    concept references in the rich extraction data so that downstream
+    consumers (store_evidence, store_gaps, store_parameters) use the
+    canonical DB slug, preventing orphaned rows.
+
+    Args:
+        rich_extractions: Dict from get_rich_extractions().
+        redirect_map: Dict from merge_concept_records().
+    """
+    for _paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            # Fix concept names
+            for concept in chunk_result.get("concepts", []):
+                if not isinstance(concept, dict):
+                    continue
+                name = (concept.get("name") or "").strip()
+                if name:
+                    slug = slugify(name)
+                    if slug in redirect_map:
+                        # Don't change the display name, just ensure
+                        # downstream code uses the right slug
+                        concept["_canonical_id"] = redirect_map[slug]
+
+            # Fix parameter concept_names
+            for param in chunk_result.get("parameters", []):
+                if not isinstance(param, dict):
+                    continue
+                cname = (param.get("concept_name") or "").strip()
+                if cname:
+                    slug = slugify(cname)
+                    if slug in redirect_map:
+                        param["_canonical_id"] = redirect_map[slug]
+
+
 def get_rich_extractions() -> dict[str, list[dict[str, Any]]]:
     """Return the rich extraction results from the last extraction run.
 
@@ -182,9 +223,12 @@ def store_evidence(
                         chunk_id[:16],
                     )
 
+                # Use canonical ID if redirect map was applied
+                canonical_id = concept.get("_canonical_id", slugify(name))
+
                 evidence_rows.append(
                     ConceptEvidence(
-                        concept_id=slugify(name),
+                        concept_id=canonical_id,
                         paper_id=paper_id,
                         chunk_id=chunk_id,
                         evidence_quote=evidence,
@@ -299,9 +343,15 @@ def store_parameters(
                 if not param_name or not value:
                     continue
 
+                # Use canonical ID if redirect map was applied
+                canonical_id = param.get(
+                    "_canonical_id",
+                    slugify(concept_name) if concept_name else "",
+                )
+
                 param_rows.append(
                     ParameterExtraction(
-                        concept_id=slugify(concept_name) if concept_name else "",
+                        concept_id=canonical_id,
                         paper_id=paper_id,
                         parameter_name=param_name,
                         value=value,
@@ -1099,7 +1149,7 @@ def commit_staged_extractions(epoch: int) -> int:
         )
 
     new_records = [r for r in new_records if r.id]
-    count = merge_concept_records(new_records, epoch)
+    count, _redirect = merge_concept_records(new_records, epoch)
 
     logger.info(
         "commit_staged_extractions: epoch %d -> %d new concepts committed",
@@ -1138,7 +1188,9 @@ def clear_staged_extractions(epoch: int) -> None:
 # ── DB merge ──────────────────────────────────────────────────────────────────
 
 
-def merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int:
+def merge_concept_records(
+    new_records: list[ConceptRecord], epoch: int
+) -> tuple[int, dict[str, str]]:
     """Merge a batch of newly extracted ConceptRecords into the database.
 
     Deduplication logic:
@@ -1153,10 +1205,17 @@ def merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int:
         epoch:       Current epoch number.
 
     Returns:
-        Number of truly new concepts inserted.
+        Tuple of (new_count, redirect_map) where:
+        - new_count: number of truly new concepts inserted
+        - redirect_map: dict mapping input slug -> canonical DB slug.
+          If "ald" was merged into "atomic_layer_deposition", the map
+          contains {"ald": "atomic_layer_deposition"}. Use this to fix
+          evidence/params/relations that reference the input slug.
     """
+    redirect_map: dict[str, str] = {}
+
     if not new_records:
-        return 0
+        return 0, redirect_map
 
     new_count = 0
 
@@ -1190,6 +1249,10 @@ def merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int:
                     existing = alias_index.get(new_rec.name.lower())
 
             if existing is not None:
+                # Record the redirect: input slug -> canonical slug
+                if new_rec.id != existing.id:
+                    redirect_map[new_rec.id] = existing.id
+
                 # Update last-seen epoch and merge any new aliases
                 existing.epoch_last_updated = epoch
 
@@ -1213,7 +1276,8 @@ def merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int:
                 for alias in merged:
                     alias_index[alias.lower()] = existing
             else:
-                # Truly new concept
+                # Truly new concept -- identity mapping
+                redirect_map[new_rec.id] = new_rec.id
                 new_rec.epoch_discovered = epoch
                 new_rec.epoch_last_updated = epoch
                 session.add(new_rec)
@@ -1229,12 +1293,13 @@ def merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int:
         session.commit()
 
     logger.info(
-        "merge_concept_records: %d input records -> %d new concepts (epoch %d)",
+        "merge_concept_records: %d input -> %d new, %d redirected (epoch %d)",
         len(new_records),
         new_count,
+        sum(1 for k, v in redirect_map.items() if k != v),
         epoch,
     )
-    return new_count
+    return new_count, redirect_map
 
 
 # ── Orchestration ─────────────────────────────────────────────────────────────

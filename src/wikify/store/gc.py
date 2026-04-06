@@ -76,6 +76,105 @@ def integrity_check() -> dict:
     return report
 
 
+def merge_concepts_atomic(
+    primary_id: str,
+    secondary_id: str,
+) -> int:
+    """Atomically merge secondary concept into primary, redirecting all refs.
+
+    In a single transaction:
+    1. Merge aliases from secondary into primary
+    2. Redirect all evidence, params, relations to primary
+    3. Mark secondary as merged
+    4. Delete secondary's article file if it exists
+
+    This prevents garbage production by doing everything atomically.
+
+    Args:
+        primary_id: ConceptRecord.id to keep.
+        secondary_id: ConceptRecord.id to merge away.
+
+    Returns:
+        Number of rows redirected.
+    """
+    import json
+    from pathlib import Path
+
+    count = 0
+
+    with get_session() as s:
+        primary = s.get(ConceptRecord, primary_id)
+        secondary = s.get(ConceptRecord, secondary_id)
+
+        if not primary or not secondary:
+            logger.warning(
+                "merge_concepts_atomic: concept not found (primary=%s, secondary=%s)",
+                primary_id,
+                secondary_id,
+            )
+            return 0
+
+        # 1. Merge aliases
+        p_aliases = set(json.loads(primary.aliases or "[]"))
+        s_aliases = set(json.loads(secondary.aliases or "[]"))
+        p_aliases.add(secondary.name)
+        p_aliases |= s_aliases
+        primary.aliases = json.dumps(sorted(p_aliases))
+        s.add(primary)
+
+        # 2. Redirect evidence
+        for row in s.exec(
+            select(ConceptEvidence).where(ConceptEvidence.concept_id == secondary_id)
+        ).all():
+            row.concept_id = primary_id
+            s.add(row)
+            count += 1
+
+        # Redirect parameters
+        for row in s.exec(
+            select(ParameterExtraction).where(ParameterExtraction.concept_id == secondary_id)
+        ).all():
+            row.concept_id = primary_id
+            s.add(row)
+            count += 1
+
+        # Redirect relations
+        for row in s.exec(
+            select(ConceptRelation).where(ConceptRelation.source_concept == secondary_id)
+        ).all():
+            row.source_concept = primary_id
+            s.add(row)
+            count += 1
+
+        for row in s.exec(
+            select(ConceptRelation).where(ConceptRelation.target_concept == secondary_id)
+        ).all():
+            row.target_concept = primary_id
+            s.add(row)
+            count += 1
+
+        # 3. Mark secondary as merged
+        secondary.article_status = f"merged:{primary_id}"
+        s.add(secondary)
+
+        s.commit()
+
+    # 4. Delete secondary article file
+    wiki_dir = Path("data/wiki")
+    secondary_file = wiki_dir / "concepts" / f"{secondary_id}.md"
+    if secondary_file.exists():
+        secondary_file.unlink()
+        logger.info("merge_concepts_atomic: deleted %s", secondary_file.name)
+
+    logger.info(
+        "merge_concepts_atomic: %s -> %s (%d rows redirected)",
+        secondary_id,
+        primary_id,
+        count,
+    )
+    return count
+
+
 def redirect_merged() -> int:
     """Redirect evidence/params/relations from merged concepts to their primaries.
 
