@@ -33,6 +33,143 @@ CHEM_EQUATION_RE = re.compile(
 # Equation label patterns: (1), (2a), Eq. 1, Equation 1
 EQUATION_LABEL_RE = re.compile(r"(?:\((\d+[a-z]?)\)|(?:Eq(?:uation)?\.?\s*(\d+[a-z]?)))")
 
+# ── Unicode math (no LaTeX delimiters) ────────────────────────────────────
+# Catches plain-text equations from pymupdf4llm output like:
+#   v(t) = M(q)i(t),  I = V/R,  R_ON/R_OFF > 10^6,  sigma = nqu
+
+# A "math token" is a variable-like piece: short identifier, digit, operator, Greek, etc.
+# We allow spaces between math tokens but NOT before lowercase words 4+ chars long.
+_MATH_TOKEN = (
+    r"[A-Za-z\u0394\u03b1-\u03c9\u0391-\u03a9]"
+    r"[A-Za-z0-9_()\u0394\u03b1-\u03c9\u0391-\u03a9"
+    r"\u2080-\u2089\u00b2\u00b3\u207f]*"
+)
+_MATH_RHS_TOKEN = (
+    r"[A-Za-z0-9_()\u0394\u03b1-\u03c9\u0391-\u03a9"
+    r"\u2080-\u2089\u00b2\u00b3\u207f^]+"
+)
+_MATH_OP = r"[+\-*/\u00b7\u22c5]"
+
+UNICODE_EQUATION_RE = re.compile(
+    r"(?:^|(?<=\s))"  # start of line or after space
+    r"("
+    + _MATH_TOKEN
+    + r"\s*[=<>\u2264\u2265\u2248\u221d\u00b1]+\s*"  # operator
+    + _MATH_RHS_TOKEN  # first RHS token (required)
+    + r"(?:\s*"
+    + _MATH_OP
+    + r"\s*"
+    + _MATH_RHS_TOKEN
+    + r")*"  # additional operator+token pairs
+    + r")"
+    r"(?=\s|$|[,;:!?.])",  # end boundary
+    re.MULTILINE,
+)
+
+# Words that look like equations but are just prose — used to filter false positives
+_PROSE_STOPWORDS = frozenset(
+    {
+        "is",
+        "are",
+        "was",
+        "were",
+        "the",
+        "and",
+        "that",
+        "this",
+        "which",
+        "with",
+        "from",
+        "for",
+        "not",
+        "but",
+        "its",
+        "has",
+        "have",
+        "had",
+        "been",
+        "will",
+        "can",
+        "may",
+        "also",
+        "than",
+        "then",
+        "such",
+        "each",
+        "into",
+        "over",
+        "both",
+        "only",
+        "very",
+        "when",
+        "where",
+        "while",
+        "about",
+        "after",
+        "before",
+        "other",
+        "between",
+        "through",
+        "during",
+        "without",
+        "however",
+        "because",
+        "although",
+        "therefore",
+        "important",
+    }
+)
+
+# ── Picture-omitted placeholder ───────────────────────────────────────────
+# pymupdf4llm emits this when it cannot render an image/equation
+
+PICTURE_OMITTED_RE = re.compile(
+    r"\*?\*?=+>.*?(?:picture|image).*?(?:omitted|removed).*?<+=+\*?\*?",
+    re.IGNORECASE,
+)
+
+# Context phrases that suggest a nearby picture-omitted is an equation
+_EQUATION_CONTEXT_RE = re.compile(
+    r"(?:where|equation|given\s+by|defined\s+as|expressed\s+as|formula|"
+    r"can\s+be\s+written|is\s+described\s+by|according\s+to|"
+    r"Eq\.|Equation|relation)",
+    re.IGNORECASE,
+)
+
+# ── Named equation patterns ──────────────────────────────────────────────
+# "Fick's second law", "the Arrhenius equation", "Ohm's law"
+
+NAMED_EQUATION_RE = re.compile(
+    r"(?:the\s+)?"
+    r"([A-Z][a-z]{2,}(?:['\u2019]s)?)"  # Name: 3+ letters (excludes "We", "He", etc.)
+    r"\s+"
+    r"(?:(?:first|second|third|fourth|zeroth)\s+)?"
+    r"(law|equation|relation|formula|rule|principle|theorem)",
+    # Note: "model" excluded — too many false positives ("We model", "This model")
+)
+
+# Common words that look like proper names but aren't equation names
+_NAMED_EQUATION_EXCLUDE = frozenset(
+    {
+        "the",
+        "this",
+        "that",
+        "each",
+        "our",
+        "their",
+        "its",
+        "any",
+        "new",
+        "general",
+        "simple",
+        "basic",
+        "above",
+        "following",
+        "resulting",
+        "governing",
+    }
+)
+
 # Variable extraction: single Latin letters and common Greek letters in LaTeX
 _GREEK_NAMES = (
     "alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|"
@@ -190,6 +327,181 @@ def _find_chunk_for_position(
     return "", ""
 
 
+def _is_plausible_equation(text: str) -> bool:
+    """Return True if *text* looks like a real equation, not prose.
+
+    Heuristics:
+    - Must contain an operator (=, <, >, etc.)
+    - Right-hand side must not be only common English words
+    - At least one side should have a "mathy" token (single letter, digit,
+      parenthesized expression, Greek letter, subscript, etc.)
+    """
+    # Must have an operator
+    if not re.search(r"[=<>\u2264\u2265\u2248\u221d\u00b1]", text):
+        return False
+
+    # Split on operator to get LHS / RHS
+    parts = re.split(r"\s*[=<>\u2264\u2265\u2248\u221d\u00b1]+\s*", text, maxsplit=1)
+    if len(parts) < 2:
+        return False
+
+    lhs, rhs = parts[0].strip(), parts[1].strip()
+
+    # Both sides must be non-empty
+    if not lhs or not rhs:
+        return False
+
+    # Reject if either side is dominated by long English words (4+ chars)
+    # Real equations use short variables (1-3 chars), not prose words
+    rhs_words = re.findall(r"[A-Za-z]+", rhs.lower())
+    if rhs_words and all(w in _PROSE_STOPWORDS for w in rhs_words):
+        return False
+    # If RHS has 3+ words that are all 4+ chars, it's almost certainly prose
+    rhs_long_words = [w for w in rhs_words if len(w) >= 4]
+    if len(rhs_long_words) >= 3:
+        return False
+
+    lhs_words = re.findall(r"[A-Za-z]+", lhs.lower())
+    if lhs_words and all(w in _PROSE_STOPWORDS for w in lhs_words):
+        return False
+    lhs_long_words = [w for w in lhs_words if len(w) >= 4]
+    if len(lhs_long_words) >= 3:
+        return False
+
+    # At least one side should have a short token (1-3 chars) — variable-like
+    has_var = any(len(w) <= 3 for w in re.findall(r"[A-Za-z]+", lhs + rhs))
+    # Or contains digits, Greek, parenthesized sub-expr, subscripts
+    has_math_char = bool(
+        re.search(r"[\d()\u0394\u03b1-\u03c9\u0391-\u03a9\u2080-\u2089\u00b2\u00b3^_/]", text)
+    )
+
+    return has_var or has_math_char
+
+
+def _extract_unicode_equations(
+    md_text: str,
+    paper_id: str,
+    chunks: list[Chunk],
+    seen_ids: set[str],
+) -> list[Equation]:
+    """Extract plain-text (Unicode) equations that lack LaTeX delimiters."""
+    equations: list[Equation] = []
+    for m in UNICODE_EQUATION_RE.finditer(md_text):
+        text = m.group(1).strip().rstrip(".")
+        if not text or len(text) < 3:
+            continue
+        if not _is_plausible_equation(text):
+            continue
+
+        eq_id = _equation_id(text)
+        if eq_id in seen_ids:
+            continue
+        seen_ids.add(eq_id)
+
+        chunk_id, section_path = _find_chunk_for_position(md_text, text, m.start(), chunks)
+
+        equations.append(
+            Equation(
+                id=eq_id,
+                paper_id=paper_id,
+                chunk_id=chunk_id,
+                latex=text,
+                equation_type="inline",
+                context=_extract_context(md_text, m.start(), m.end()),
+                label=_find_label_near(md_text, m.start(), m.end()),
+                variables=json.dumps([]),
+                section_path=section_path,
+            )
+        )
+    return equations
+
+
+def _extract_image_equations(
+    md_text: str,
+    paper_id: str,
+    chunks: list[Chunk],
+    seen_ids: set[str],
+) -> list[Equation]:
+    """Detect picture-omitted placeholders that likely represent equations."""
+    equations: list[Equation] = []
+    for m in PICTURE_OMITTED_RE.finditer(md_text):
+        # Look at surrounding ~300 chars for equation-context clues
+        region_start = max(0, m.start() - 300)
+        region_end = min(len(md_text), m.end() + 300)
+        region = md_text[region_start:region_end]
+
+        if not _EQUATION_CONTEXT_RE.search(region):
+            continue
+
+        placeholder = m.group(0).strip()
+        eq_id = _equation_id(f"image@{m.start()}")
+        if eq_id in seen_ids:
+            continue
+        seen_ids.add(eq_id)
+
+        chunk_id, section_path = _find_chunk_for_position(md_text, placeholder, m.start(), chunks)
+        label = _find_label_near(md_text, m.start(), m.end())
+
+        equations.append(
+            Equation(
+                id=eq_id,
+                paper_id=paper_id,
+                chunk_id=chunk_id,
+                latex="[image equation]",
+                equation_type="image",
+                context=_extract_context(md_text, m.start(), m.end()),
+                label=label,
+                variables=json.dumps([]),
+                section_path=section_path,
+            )
+        )
+    return equations
+
+
+def _extract_named_equations(
+    md_text: str,
+    paper_id: str,
+    chunks: list[Chunk],
+    seen_ids: set[str],
+) -> list[Equation]:
+    """Detect equations referenced by name (e.g. "Fick's second law")."""
+    equations: list[Equation] = []
+    seen_names: set[str] = set()
+    for m in NAMED_EQUATION_RE.finditer(md_text):
+        # Skip if the "name" is a common English word, not a proper noun
+        name_part = m.group(1).rstrip("'s\u2019").lower()
+        if name_part in _NAMED_EQUATION_EXCLUDE:
+            continue
+
+        full = m.group(0).strip()
+        name_key = full.lower()
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
+
+        eq_id = _equation_id(f"named:{name_key}")
+        if eq_id in seen_ids:
+            continue
+        seen_ids.add(eq_id)
+
+        chunk_id, section_path = _find_chunk_for_position(md_text, full, m.start(), chunks)
+
+        equations.append(
+            Equation(
+                id=eq_id,
+                paper_id=paper_id,
+                chunk_id=chunk_id,
+                latex=full,
+                equation_type="named",
+                context=_extract_context(md_text, m.start(), m.end()),
+                label=None,
+                variables=json.dumps([]),
+                section_path=section_path,
+            )
+        )
+    return equations
+
+
 def extract_equations(md_text: str, paper_id: str, chunks: list[Chunk]) -> list[Equation]:
     """Extract mathematical and chemical equations from markdown text.
 
@@ -198,10 +510,13 @@ def extract_equations(md_text: str, paper_id: str, chunks: list[Chunk]) -> list[
     - Inline math: $...$ (single dollar, excludes currency patterns)
     - Chemical equations: A + B -> C patterns
     - Numbered equations: (1), Eq. 1, Equation 1
+    - Unicode math: plain-text equations without LaTeX delimiters (pymupdf4llm output)
+    - Image equations: picture-omitted placeholders near equation context
+    - Named equations: references like "Fick's second law", "Ohm's law"
 
     For each equation:
-    - Extract the LaTeX content
-    - Classify as mathematical | chemical | inline
+    - Extract the LaTeX content (or placeholder for image equations)
+    - Classify as mathematical | chemical | inline | image | named
     - Extract surrounding context (1 sentence before, 1 after)
     - Extract equation label if present
     - Identify variable names
@@ -296,5 +611,14 @@ def extract_equations(md_text: str, paper_id: str, chunks: list[Chunk]) -> list[
                 section_path=section_path,
             )
         )
+
+    # 4. Unicode math (plain-text equations without LaTeX delimiters)
+    equations.extend(_extract_unicode_equations(md_text, paper_id, chunks, seen_ids))
+
+    # 5. Image equations (picture-omitted placeholders)
+    equations.extend(_extract_image_equations(md_text, paper_id, chunks, seen_ids))
+
+    # 6. Named equations (e.g. "Fick's second law")
+    equations.extend(_extract_named_equations(md_text, paper_id, chunks, seen_ids))
 
     return equations

@@ -158,7 +158,7 @@ class Equation(SQLModel, table=True):
     paper_id: str = Field(foreign_key="paper.id")
     chunk_id: str = Field(default="", foreign_key="chunk.id")
     latex: str = ""  # raw LaTeX string
-    equation_type: str = "mathematical"  # mathematical | chemical | inline
+    equation_type: str = "mathematical"  # mathematical | chemical | inline | image | named
     context: str = ""  # surrounding 1-2 sentences
     label: Optional[str] = None  # "Eq. 1", "(1)", etc.
     variables: str = "[]"  # JSON list of variable names

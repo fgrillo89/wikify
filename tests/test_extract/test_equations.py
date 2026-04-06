@@ -8,7 +8,11 @@ from wikify.extract.equations import (
     CHEM_EQUATION_RE,
     DISPLAY_MATH_PATTERNS,
     INLINE_MATH_RE,
+    NAMED_EQUATION_RE,
+    PICTURE_OMITTED_RE,
+    UNICODE_EQUATION_RE,
     _extract_variables,
+    _is_plausible_equation,
     extract_equations,
 )
 from wikify.store.models import Chunk
@@ -32,9 +36,12 @@ class TestDisplayMathDetection:
         text = "Newton's second law: $$F = ma$$ is fundamental."
         chunks = [_make_chunk("c1", text)]
         eqs = extract_equations(text, "paper1", chunks)
-        assert len(eqs) == 1
-        assert eqs[0].latex == "F = ma"
-        assert eqs[0].equation_type == "mathematical"
+        math_eqs = [e for e in eqs if e.equation_type == "mathematical"]
+        assert len(math_eqs) == 1
+        assert math_eqs[0].latex == "F = ma"
+        # Also detects "Newton's second law" as a named equation
+        named = [e for e in eqs if e.equation_type == "named"]
+        assert len(named) == 1
 
     def test_bracket_notation(self):
         text = r"The energy is given by \[E = mc^2\] in special relativity."
@@ -229,3 +236,142 @@ class TestRegexPatterns:
     def test_chem_equation_re(self):
         m = CHEM_EQUATION_RE.search("H2O + CO2 -> H2CO3")
         assert m is not None
+
+    def test_unicode_equation_re(self):
+        m = UNICODE_EQUATION_RE.search("The current I = V/R in the circuit")
+        assert m is not None
+
+    def test_picture_omitted_re(self):
+        m = PICTURE_OMITTED_RE.search("**==> picture intentionally omitted <==**")
+        assert m is not None
+
+    def test_named_equation_re(self):
+        m = NAMED_EQUATION_RE.search("We use Fick's second law to model diffusion.")
+        assert m is not None
+        assert m.group(1) == "Fick's"
+        assert m.group(2) == "law"
+
+
+class TestUnicodeEquationDetection:
+    def test_simple_ohms_law(self):
+        text = "The current is given by I = V/R in steady state."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        inline = [e for e in eqs if e.equation_type == "inline"]
+        assert len(inline) >= 1
+        assert any("I = V/R" in eq.latex for eq in inline)
+
+    def test_function_notation(self):
+        text = "The memristor model defines v(t) = M(q)i(t) for the device."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        inline = [e for e in eqs if e.equation_type == "inline"]
+        assert len(inline) >= 1
+
+    def test_greek_equation(self):
+        text = "Conductivity is \u03c3 = nq\u03bc in the material."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        inline = [e for e in eqs if e.equation_type == "inline"]
+        assert len(inline) >= 1
+
+    def test_no_false_positive_prose(self):
+        """Regular English sentences with '=' should not be detected."""
+        text = "This is important for the process."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        assert len(eqs) == 0
+
+    def test_no_false_positive_assignment(self):
+        """Prose-like 'X = the thing' should be rejected."""
+        text = "The result = very important for this study."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        # Should not pick up prose
+        inline = [e for e in eqs if e.equation_type == "inline"]
+        assert len(inline) == 0
+
+
+class TestImageEquationDetection:
+    def test_picture_omitted_with_equation_context(self):
+        text = (
+            "The resistance is given by the equation:\n"
+            "**==> picture intentionally omitted <==**\n"
+            "where R is the resistance."
+        )
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        image_eqs = [e for e in eqs if e.equation_type == "image"]
+        assert len(image_eqs) == 1
+        assert image_eqs[0].latex == "[image equation]"
+
+    def test_picture_omitted_without_equation_context(self):
+        """A picture placeholder not near equation context should be ignored."""
+        text = (
+            "Figure 3 shows the surface morphology.\n"
+            "**==> picture intentionally omitted <==**\n"
+            "The grains are clearly visible."
+        )
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        image_eqs = [e for e in eqs if e.equation_type == "image"]
+        assert len(image_eqs) == 0
+
+
+class TestNamedEquationDetection:
+    def test_ficks_second_law(self):
+        text = "We model diffusion using Fick's second law for concentration gradients."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        named = [e for e in eqs if e.equation_type == "named"]
+        assert len(named) == 1
+        assert "Fick" in named[0].latex
+        assert "law" in named[0].latex
+
+    def test_ohms_law(self):
+        text = "According to Ohm's law, the voltage drop is proportional."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        named = [e for e in eqs if e.equation_type == "named"]
+        assert len(named) == 1
+
+    def test_arrhenius_equation(self):
+        text = "The rate follows the Arrhenius equation at elevated temperatures."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        named = [e for e in eqs if e.equation_type == "named"]
+        assert len(named) == 1
+        assert "Arrhenius" in named[0].latex
+
+    def test_named_deduplication(self):
+        """Same named equation mentioned twice should appear only once."""
+        text = "Fick's law governs diffusion. We again apply Fick's law in the next section."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        named = [e for e in eqs if e.equation_type == "named"]
+        assert len(named) == 1
+
+
+class TestCrossMethodDeduplication:
+    def test_latex_and_unicode_same_equation(self):
+        """If an equation appears in both $...$ and plain text, extract only once."""
+        text = "We have $I = V/R$ and also I = V/R in the text."
+        chunks = [_make_chunk("c1", text)]
+        eqs = extract_equations(text, "paper1", chunks)
+        # The latex version should be found; the unicode duplicate should be skipped
+        ivr = [e for e in eqs if "I = V/R" in e.latex]
+        assert len(ivr) == 1
+
+
+class TestPlausibleEquation:
+    def test_valid_equation(self):
+        assert _is_plausible_equation("I = V/R") is True
+
+    def test_prose_rejected(self):
+        assert _is_plausible_equation("This = important") is False
+
+    def test_no_operator(self):
+        assert _is_plausible_equation("just some text") is False
+
+    def test_greek_equation(self):
+        assert _is_plausible_equation("\u03c3 = nq\u03bc") is True
