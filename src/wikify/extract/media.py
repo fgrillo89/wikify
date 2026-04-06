@@ -74,6 +74,9 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
         # Pre-extract all captions from markdown text, keyed by page estimate
         md_captions = _extract_captions_from_markdown(md_text)
 
+        # Pre-compute which pages have table captions (to skip expensive find_tables)
+        table_caption_pages = _pages_with_table_captions(doc, md_captions)
+
         for page_num in range(len(doc)):
             if len(figures) >= _MAX_MEDIA_PER_PAPER:
                 break
@@ -89,11 +92,14 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
             )
             figures.extend(image_figures)
 
-            # 2. Extract tables
-            table_figures = _extract_tables_from_page(
-                page, page_num, paper_id, seen_hashes, page_captions, md_captions
-            )
-            figures.extend(table_figures)
+            # 2. Extract tables (only on pages likely to have tables)
+            if page_num in table_caption_pages or any(
+                c.media_type == "table" for c in page_captions
+            ):
+                table_figures = _extract_tables_from_page(
+                    page, page_num, paper_id, seen_hashes, page_captions, md_captions
+                )
+                figures.extend(table_figures)
     finally:
         doc.close()
 
@@ -471,6 +477,28 @@ def _extract_captions_from_markdown(md_text: str) -> list[_CaptionMatch]:
                 break
 
     return captions
+
+
+def _pages_with_table_captions(doc: fitz.Document, md_captions: list[_CaptionMatch]) -> set[int]:
+    """Identify pages likely to contain tables by scanning for table captions.
+
+    Checks both page text blocks and markdown captions. Returns a set of
+    page numbers where find_tables() is worth calling. This avoids the
+    ~0.3s/page cost of find_tables() on pages without tables.
+    """
+    pages: set[int] = set()
+    # Check each page's text blocks for table captions
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        blocks = page.get_text("blocks")
+        for block in blocks:
+            if len(block) < 5:
+                continue
+            text = block[4]
+            if isinstance(text, str) and _TABLE_CAPTION_RE.match(text.strip()):
+                pages.add(page_num)
+                break
+    return pages
 
 
 def _match_caption(

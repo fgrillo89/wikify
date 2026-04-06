@@ -207,7 +207,13 @@ class TestExtractMedia:
                 page.get_images.return_value = []
 
             # Text blocks (for caption matching)
-            page.get_text.return_value = []
+            # Include a table caption block when table_data is provided
+            if table_data:
+                page.get_text.return_value = [
+                    (0, 0, 500, 20, "Table 1. Process parameters", 0, 0)
+                ]
+            else:
+                page.get_text.return_value = []
             page.get_image_info.return_value = []
 
             # Tables
@@ -265,7 +271,7 @@ class TestExtractMedia:
             doc = self._make_mock_doc(num_pages=1, table_data=table_data)
             mock_fitz.open.return_value = doc
 
-            results = extract_media("/fake.pdf", "paper123", "")
+            results = extract_media("/fake.pdf", "paper123", "Table 1. Process parameters")
             tables = [r for r in results if r.media_type == "table"]
             assert len(tables) == 1
             tbl = tables[0]
