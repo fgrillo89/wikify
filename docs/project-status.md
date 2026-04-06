@@ -85,6 +85,65 @@ Retrieval uses 4 tiers for speed:
 | 2 | BM25 lexical search (if confident) | ~100ms |
 | 3 | ChromaDB embedding search | ~500ms |
 
+### Research Campaigns (complete)
+
+Thesis-driven multi-epoch investigations (`/wiki-campaign` skill):
+- `Campaign` SQLite model with thesis, confidence, findings, gaps, extraction probes
+- Directed extraction: chunks scored by relevance to thesis
+- Reads existing wiki first, then extracts only what's missing
+- Refines existing articles with campaign-specific evidence
+- Creates synthetic concepts (cross-cutting insights) only when needed
+- Orchestrator has full freedom: merge, split, reclassify, or do nothing
+
+### Adaptive Article Templates (complete)
+
+Type-specific article structures in `src/wikify/prompts/article_templates.py`:
+- 7 templates: material, technique, phenomenon, method, theory, dataset, synthesis
+- Domain-agnostic (works for any field, not just materials science)
+- Auto-injects parameter tables and evidence citations
+- Generic fallback for unknown concept types
+
+### Wiki Operational Model (complete)
+
+Four skills, four modes (`.claude/skills/`):
+
+| Skill | Mode | What it does |
+|-------|------|-------------|
+| `/wiki-epoch` | Build | Undirected extraction + articles + convergence |
+| `/wiki-campaign` | Investigate | Thesis-driven research, opinionated epochs |
+| `/wiki-ask` | Query | Answer questions, file answers back into wiki |
+| `/wiki-maintain` | Maintain | GC + lint + auto-fix + self-enhance |
+
+The cycle: ingest -> epoch -> ask -> maintain -> repeat. Each mode enriches the wiki.
+Answers from `/wiki-ask` are filed back as `data/wiki/queries/` articles.
+
+### Database Integrity (complete)
+
+Garbage collection module (`store/gc.py`):
+- `integrity_check()`: read-only health report (orphans, dangling refs, merged refs)
+- `redirect_merged()`: fix references to merged concepts -> primaries
+- `remove_orphans()`: delete rows pointing to nonexistent concepts/papers
+- `clean_chromadb_staging()`: remove stale ChromaDB staging entries
+- `gc_run()`: full GC pass, runs automatically in `/wiki-maintain`
+
+### MCP Tools (13 total)
+
+| Tool | Purpose |
+|------|---------|
+| `search_papers` | Semantic search across corpus |
+| `search_wiki` | Search wiki concepts by name/definition |
+| `get_paper` | Paper metadata + abstract |
+| `deep_read` | Full paper text |
+| `get_sections` | Cross-paper section retrieval |
+| `get_corpus_summary` | Corpus overview with metrics |
+| `get_graph_metrics` | PageRank, centrality, hub/bridge/frontier |
+| `list_papers` | Browse all papers |
+| `list_topics` | Browse extracted topics |
+| `ingest_paper` | Add new documents |
+| `check_wiki_health` | DB + wiki integrity report |
+| `run_wiki_gc` | Trigger garbage collection |
+| `search_wiki` | Search wiki concept articles |
+
 ### ML-Style Convergence Tracking (complete)
 
 - Loss function `L` computed after each epoch's Pass 5 and stored in `EpochLog.loss_score` and
@@ -120,22 +179,22 @@ Retrieval uses 4 tiers for speed:
 - **Obsidian dashboard layer**: auto-generated `_dashboard.md` per domain with live Dataview
   queries (stubs by domain, top concepts by importance, momentum-active concepts,
   recent-epoch updates). Written by Pass 5 each epoch. Not yet implemented.
-- **Ingest hook**: bump epoch counter when new files are ingested; optionally auto-trigger a
-  new epoch pass.
+- **Scheduled maintenance**: Automated `/wiki-maintain` runs (hooks or cron) to keep the wiki
+  clean between manual sessions.
 
-### Planned: Adaptive Knowledge Engine
+### Planned: Adaptive Knowledge Engine (partially implemented)
 
-The next major evolution of the Wikipedia pipeline. See `docs/design/adaptive-knowledge-engine.md`
-for the full spec. Six phases, building on each other:
+Six phases from `docs/design/adaptive-knowledge-engine.md`. Phases 1, 5 are superseded
+by the Discovery Engine alignment work. Remaining:
 
-| Phase | What it does |
-|-------|-------------|
-| 1. Yield-based feedback | Track extraction yield per chunk; make the haiku prompt adaptive per epoch |
-| 2. UCB chunk scoring | Replace flat tier system with a UCB1-style scorer using yield + graph signals |
-| 3. Contradiction-driven exploration | Boost mining priority for papers neighboring active contradictions |
-| 4. Hierarchical taxonomy | Add IS-A parent-child relationships to the concept model and graph |
-| 5. Schema evolution | Discover new concept types that emerge from the corpus over time |
-| 6. Conceptual Nexus Model | Unify graph, embeddings, and articles into a sparse tensor representation |
+| Phase | What it does | Status |
+|-------|-------------|--------|
+| 1. Yield-based feedback | Adaptive prompt per epoch | Superseded by template refinement |
+| 2. UCB chunk scoring | UCB1-style scorer using yield + graph signals | Not started |
+| 3. Contradiction-driven exploration | Boost mining priority near contradictions | Not started |
+| 4. Hierarchical taxonomy | IS-A parent-child relationships | Not started |
+| 5. Schema evolution | New concept types from corpus | Superseded by gap-driven template refinement |
+| 6. Conceptual Nexus Model | Sparse tensor representation | Partially addressed by structured vectors |
 
 ---
 
