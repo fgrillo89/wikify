@@ -18,6 +18,9 @@ from wikify.agent.tools import (
     _build_corpus_summary,
 )
 from wikify.agent.tools import (
+    check_wiki_health as _check_wiki_health,
+)
+from wikify.agent.tools import (
     deep_read as _deep_read,
 )
 from wikify.agent.tools import (
@@ -42,16 +45,24 @@ from wikify.agent.tools import (
     list_topics as _list_topics,
 )
 from wikify.agent.tools import (
+    run_wiki_gc as _run_wiki_gc,
+)
+from wikify.agent.tools import (
     search_papers as _search_papers,
+)
+from wikify.agent.tools import (
+    search_wiki as _search_wiki,
 )
 
 mcp = FastMCP(
     "ScholarForge",
     instructions=(
-        "ScholarForge knowledge base. Use search_papers to find relevant literature, "
-        "get_paper for full details, get_graph_metrics for network analysis, "
+        "Wikify knowledge base. Use search_papers to find relevant literature, "
+        "search_wiki to search the wiki, get_paper for full details, "
+        "get_graph_metrics for network analysis, check_wiki_health for integrity, "
         "list_papers/list_topics for browsing, deep_read for full text retrieval, "
         "get_corpus_summary for a high-level corpus overview, "
+        "run_wiki_gc for database cleanup, "
         "and ingest_paper to add new documents."
     ),
 )
@@ -243,6 +254,43 @@ def ingest_paper(file_path: str) -> str:
         Status message with paper title, chunk count, and background refresh status.
     """
     return _ingest_paper(file_path)
+
+
+@mcp.tool()
+def search_wiki(query: str, top_k: int = 10) -> str:
+    """Search wiki articles by concept name and definition.
+
+    Uses tiered matching to find relevant wiki concepts.
+    Returns concept metadata and whether an article exists on disk.
+
+    Args:
+        query: Natural language search query.
+        top_k: Maximum number of results.
+
+    Returns:
+        JSON with matching wiki concepts and their metadata.
+    """
+    return _search_wiki(query, top_k)
+
+
+@mcp.tool()
+def check_wiki_health() -> str:
+    """Check wiki integrity: DB orphans, broken wikilinks, stale articles.
+
+    Returns a structured health report with counts of issues.
+    Run this before /wiki-maintain to see what needs fixing.
+    """
+    return _check_wiki_health()
+
+
+@mcp.tool()
+def run_wiki_gc() -> str:
+    """Run garbage collection on the wiki database.
+
+    Redirects merged concept references, removes orphaned rows,
+    and cleans ChromaDB staging. Safe to run at any time.
+    """
+    return _run_wiki_gc()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

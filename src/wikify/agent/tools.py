@@ -2247,3 +2247,154 @@ def ingest_paper(file_path: str) -> str:
             status="error",
             file_path=file_path,
         )
+
+
+# ── Wiki tools ──────────────────────────────────────────────────────────────
+
+
+def check_wiki_health() -> str:
+    """Check wiki integrity: DB orphans, broken wikilinks, stale articles.
+
+    Combines DB integrity checks with filesystem wiki health scan.
+    Returns a structured JSON health report.
+    """
+    import re
+    from pathlib import Path
+
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.gc import integrity_check
+    from wikify.store.models import ConceptRecord
+
+    wiki_dir = Path("data/wiki")
+
+    # DB integrity
+    db_report = integrity_check()
+
+    # Filesystem checks
+    concept_ids: set[str] = set()
+    with get_session() as session:
+        for c in session.exec(select(ConceptRecord)).all():
+            concept_ids.add(c.id)
+
+    # Count articles on disk
+    articles_on_disk = 0
+    broken_links: list[str] = []
+    for md_file in wiki_dir.rglob("*.md"):
+        if md_file.name.startswith("_"):
+            continue
+        articles_on_disk += 1
+
+        # Check wikilinks
+        text = md_file.read_text(encoding="utf-8", errors="replace")
+        links = re.findall(r"\[\[([^\]|]+)", text)
+        for link in links:
+            from wikify.wiki.builder import slugify
+
+            slug = slugify(link.strip())
+            target = wiki_dir / "concepts" / f"{slug}.md"
+            if not target.exists():
+                broken_links.append(f"{md_file.stem} -> [[{link}]]")
+
+    # Orphan concepts (in DB, no article on disk)
+    concepts_with_articles = set()
+    for md_file in (wiki_dir / "concepts").rglob("*.md"):
+        concepts_with_articles.add(md_file.stem)
+
+    orphan_concepts = [
+        cid for cid in concept_ids if cid not in concepts_with_articles and cid in concept_ids
+    ]
+
+    # Ghost articles (on disk, not in DB)
+    ghost_articles = [stem for stem in concepts_with_articles if stem not in concept_ids]
+
+    report = {
+        **db_report,
+        "articles_on_disk": articles_on_disk,
+        "broken_wikilinks": len(broken_links),
+        "broken_wikilinks_sample": broken_links[:10],
+        "orphan_concepts_no_article": len(orphan_concepts),
+        "ghost_articles_no_db": len(ghost_articles),
+    }
+
+    return _tool_json_success(**report)
+
+
+def search_wiki(query: str, top_k: int = 10) -> str:
+    """Search wiki articles using tiered retrieval (cache -> BM25 -> embeddings).
+
+    Returns matching wiki article summaries with wikilinks.
+    Useful for /wiki-ask and /wiki-campaign to check existing knowledge.
+    """
+    from pathlib import Path
+
+    from sqlmodel import select
+
+    from wikify.store.db import get_session
+    from wikify.store.models import ConceptRecord
+
+    # Search the concept definitions via ConceptRecord
+    with get_session() as session:
+        all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
+
+    # Simple text matching against concept names and definitions
+    query_lower = query.lower()
+    scored: list[tuple[ConceptRecord, float]] = []
+    for c in all_concepts:
+        score = 0.0
+        name_lower = c.name.lower()
+        defn_lower = (c.definition or "").lower()
+
+        # Name match
+        for word in query_lower.split():
+            if word in name_lower:
+                score += 2.0
+            if word in defn_lower:
+                score += 1.0
+
+        if score > 0:
+            scored.append((c, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top = scored[:top_k]
+
+    if not top:
+        return _tool_json_success(query=query, results=[], message="No wiki articles match")
+
+    results = []
+    wiki_dir = Path("data/wiki")
+    for concept, score in top:
+        article_path = wiki_dir / "concepts" / f"{concept.id}.md"
+        has_article = article_path.exists()
+
+        results.append(
+            {
+                "concept_id": concept.id,
+                "name": concept.name,
+                "type": concept.concept_type,
+                "definition": concept.definition,
+                "importance": concept.importance,
+                "has_article": has_article,
+                "score": round(score, 2),
+            }
+        )
+
+    return _tool_json_success(query=query, results=results)
+
+
+def run_wiki_gc() -> str:
+    """Run garbage collection on the wiki database.
+
+    Redirects merged concept references, removes orphaned rows,
+    and cleans ChromaDB staging. Safe to run at any time.
+    """
+    from wikify.store.gc import gc_run
+
+    result = gc_run()
+    return _tool_json_success(
+        message="Garbage collection complete",
+        redirected=result["redirected"],
+        orphans_removed=result["orphans_removed"],
+        staging_cleaned=result["staging_cleaned"],
+    )

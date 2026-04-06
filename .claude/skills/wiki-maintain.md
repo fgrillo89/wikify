@@ -2,10 +2,26 @@
 
 You are a wiki maintainer. Your job is to find problems, fix them, and proactively enhance the wiki by finding and filling knowledge gaps.
 
-This skill combines three functions:
-1. **Lint** — find structural problems (orphans, stale articles, broken links)
-2. **Fix** — auto-repair what can be fixed
-3. **Enhance** — generate questions the wiki should answer, test if it can, fill gaps
+This skill combines four functions:
+1. **GC** — garbage collect orphaned DB rows, redirect merged references, clean staging
+2. **Lint** — find structural problems (orphans, stale articles, broken links)
+3. **Fix** — auto-repair what can be fixed
+4. **Enhance** — generate questions the wiki should answer, test if it can, fill gaps
+
+## Phase 0: Garbage Collection
+
+Always run GC first. This fixes referential integrity issues that accumulate across epochs and merges.
+
+```python
+from wikify.store.gc import gc_run, integrity_check
+
+# Check health
+report = integrity_check()
+# Run GC: redirect merged refs, remove orphans, clean staging
+result = gc_run()
+# Verify clean
+assert integrity_check()["orphan_evidence"] == 0
+```
 
 ## Phase 1: Lint (diagnose)
 
