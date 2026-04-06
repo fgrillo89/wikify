@@ -15,6 +15,7 @@ from wikify.extract.chunker import chunk_sections
 from wikify.extract.citations import extract_citations
 from wikify.extract.figure_refs import extract_figure_refs
 from wikify.extract.figures import extract_figures
+from wikify.extract.media import extract_media
 from wikify.extract.metadata import extract_metadata
 from wikify.store.models import Chunk, Citation, Figure, FigureRef, Paper
 
@@ -135,8 +136,15 @@ def parse_pdf(path: Path) -> ParsedPaper:
     # Chunk
     chunks = chunk_sections(md_text, section_tree, paper.id)
 
-    # Figures
-    figures = extract_figures(str(path), paper.id)
+    # Figures — prefer unified media extraction, fall back to legacy
+    try:
+        figures = extract_media(str(path), paper.id, md_text)
+    except Exception as exc:
+        console.print(
+            f"[yellow]  Media extraction failed ({exc}), "
+            f"falling back to legacy figure extraction[/yellow]"
+        )
+        figures = extract_figures(str(path), paper.id)
 
     # Citations from bibliography section
     citations = extract_citations(md_text, paper.id)

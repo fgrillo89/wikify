@@ -142,6 +142,13 @@ class Figure(SQLModel, table=True):
     tags: str = "[]"  # JSON list
     extracted_data: Optional[str] = None  # JSON, if chart data extracted
     reuse_count: int = 0
+    # Media pipeline fields (added for unified extraction)
+    media_type: str = "figure"  # figure | table | scheme | chart
+    label: Optional[str] = None  # "Fig. 1", "Table 2"
+    page_number: Optional[int] = None
+    bbox: Optional[str] = None  # JSON [x0, y0, x1, y1]
+    markdown_table: Optional[str] = None  # markdown representation for tables
+    llm_description: Optional[str] = None  # Haiku-generated description (Phase 4)
 
 
 class Citation(SQLModel, table=True):
