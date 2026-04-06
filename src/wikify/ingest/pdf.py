@@ -13,11 +13,12 @@ from rich.console import Console
 
 from wikify.extract.chunker import chunk_sections
 from wikify.extract.citations import extract_citations
+from wikify.extract.equations import extract_equations
 from wikify.extract.figure_refs import extract_figure_refs
 from wikify.extract.figures import extract_figures
 from wikify.extract.media import extract_media
 from wikify.extract.metadata import extract_metadata
-from wikify.store.models import Chunk, Citation, Figure, FigureRef, Paper
+from wikify.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
 
 console = Console()
 
@@ -31,6 +32,7 @@ class ParsedPaper:
     figures: list[Figure] = field(default_factory=list)
     citations: list[Citation] = field(default_factory=list)
     figure_refs: list[FigureRef] = field(default_factory=list)
+    equations: list[Equation] = field(default_factory=list)
     md_text: str = ""
     skipped: bool = False
 
@@ -152,12 +154,16 @@ def parse_pdf(path: Path) -> ParsedPaper:
     # Caption-first figure references
     fig_refs = extract_figure_refs(md_text, paper.id)
 
+    # Equations
+    equations = extract_equations(md_text, paper.id, chunks)
+
     return ParsedPaper(
         paper=paper,
         chunks=chunks,
         figures=figures,
         citations=citations,
         figure_refs=fig_refs,
+        equations=equations,
         md_text=md_text,
     )
 
@@ -179,6 +185,8 @@ def persist_parsed(parsed: ParsedPaper) -> None:
             session.merge(citation)
         for fig_ref in parsed.figure_refs:
             session.merge(fig_ref)
+        for equation in parsed.equations:
+            session.merge(equation)
         session.commit()
 
     write_paper_note(

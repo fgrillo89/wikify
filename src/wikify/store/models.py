@@ -151,6 +151,37 @@ class Figure(SQLModel, table=True):
     llm_description: Optional[str] = None  # Haiku-generated description (Phase 4)
 
 
+class Equation(SQLModel, table=True):
+    """A mathematical or chemical equation extracted from a source."""
+
+    id: str = Field(primary_key=True)  # hash of normalized LaTeX
+    paper_id: str = Field(foreign_key="paper.id")
+    chunk_id: str = Field(default="", foreign_key="chunk.id")
+    latex: str = ""  # raw LaTeX string
+    equation_type: str = "mathematical"  # mathematical | chemical | inline
+    context: str = ""  # surrounding 1-2 sentences
+    label: Optional[str] = None  # "Eq. 1", "(1)", etc.
+    variables: str = "[]"  # JSON list of variable names
+    section_path: str = ""
+    concept_links: str = "[]"  # JSON list of concept IDs this equation relates to
+
+    @property
+    def parsed_variables(self) -> list[str]:
+        """Parse variables JSON safely."""
+        try:
+            return json.loads(self.variables)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def parsed_concept_links(self) -> list[str]:
+        """Parse concept_links JSON safely."""
+        try:
+            return json.loads(self.concept_links)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+
 class Citation(SQLModel, table=True):
     """A citation reference within a paper."""
 

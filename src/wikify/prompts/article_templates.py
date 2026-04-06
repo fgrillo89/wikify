@@ -31,6 +31,7 @@ with [[wikilinks]].
 materials for the same applications.
 6. **## Open Questions**: What remains unresolved.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "technique": """\
@@ -46,6 +47,7 @@ Use a table if parameters are known.
 6. **## Variants**: Related or competing techniques.
 7. **## Open Questions**: What remains unresolved.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "phenomenon": """\
@@ -62,6 +64,7 @@ Note where models disagree.
 5. **## Influencing Factors**: What controls or modifies the phenomenon.
 6. **## Open Questions**: What remains unexplained.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "method": """\
@@ -76,6 +79,7 @@ Structure:
 Compare trade-offs.
 6. **## Open Questions**: Limitations or gaps.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "theory": """\
@@ -90,6 +94,7 @@ Structure:
 6. **## Competing Theories**: Alternative explanations.
 7. **## Open Questions**: What remains unresolved.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "dataset": """\
@@ -103,6 +108,7 @@ matters.
 4. **## Limitations**: Known biases, missing categories, scale issues.
 5. **## Alternatives**: Competing datasets or benchmarks.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
     "synthesis": """\
@@ -123,6 +129,7 @@ consequences.
 5. **## Remaining Gaps**: What evidence is still missing to \
 strengthen or challenge this synthesis.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """,
 }
@@ -138,6 +145,7 @@ Structure:
 3. **## Where the Field Disagrees**: Contested points or open debates.
 4. **## Open Questions**: What remains unresolved.
 {parameters_instruction}
+{equations_instruction}
 {evidence_instruction}
 """
 
@@ -151,6 +159,17 @@ Include a **## Parameters** table:
 """
 
 _PARAMETERS_EMPTY = ""
+
+_EQUATIONS_WITH_DATA = """\
+Include a **## Key Equations** section:
+{equation_blocks}
+For each equation, provide:
+- The equation in LaTeX block format ($$...$$)
+- A one-line plain-English explanation
+- Variable definitions
+"""
+
+_EQUATIONS_EMPTY = ""
 
 _EVIDENCE_WITH_DATA = """\
 Use these evidence quotes as sources. Cite with [REF:paper_display]:
@@ -168,6 +187,7 @@ def get_article_template(
     name: str,
     parameters: list[dict] | None = None,
     evidence: list[dict] | None = None,
+    equations: list[dict] | None = None,
 ) -> str:
     """Get the appropriate article template for a concept type.
 
@@ -177,6 +197,7 @@ def get_article_template(
         name: Concept display name.
         parameters: List of param dicts with name, value, unit, conditions.
         evidence: List of evidence dicts with paper_display, quote.
+        equations: List of equation dicts with latex, context, variables.
 
     Returns:
         Formatted template string ready for the writing agent.
@@ -194,6 +215,15 @@ def get_article_template(
     else:
         params_instruction = _PARAMETERS_EMPTY
 
+    # Build equations instruction
+    if equations:
+        blocks = "\n".join(
+            f"- $${eq.get('latex', '')}$$: {eq.get('context', '')}" for eq in equations
+        )
+        equations_instruction = _EQUATIONS_WITH_DATA.format(equation_blocks=blocks)
+    else:
+        equations_instruction = _EQUATIONS_EMPTY
+
     # Build evidence instruction
     if evidence:
         lines = "\n".join(
@@ -206,6 +236,7 @@ def get_article_template(
     return template.format(
         name=name,
         parameters_instruction=params_instruction,
+        equations_instruction=equations_instruction,
         evidence_instruction=evidence_instruction,
     )
 
