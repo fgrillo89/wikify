@@ -74,9 +74,6 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
         # Pre-extract all captions from markdown text, keyed by page estimate
         md_captions = _extract_captions_from_markdown(md_text)
 
-        # Pre-compute which pages have table captions (to skip expensive find_tables)
-        table_caption_pages = _pages_with_table_captions(doc, md_captions)
-
         for page_num in range(len(doc)):
             if len(figures) >= _MAX_MEDIA_PER_PAPER:
                 break
@@ -86,20 +83,12 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
             # Extract page-level captions from text blocks
             page_captions = _extract_captions_from_page(page)
 
-            # 1. Extract images
+            # Extract images (tables are already in the markdown via pymupdf4llm,
+            # which produces higher-quality table output than find_tables())
             image_figures = _extract_images_from_page(
                 doc, page, page_num, paper_id, seen_hashes, page_captions, md_captions
             )
             figures.extend(image_figures)
-
-            # 2. Extract tables (only on pages likely to have tables)
-            if page_num in table_caption_pages or any(
-                c.media_type == "table" for c in page_captions
-            ):
-                table_figures = _extract_tables_from_page(
-                    page, page_num, paper_id, seen_hashes, page_captions, md_captions
-                )
-                figures.extend(table_figures)
     finally:
         doc.close()
 
@@ -236,83 +225,6 @@ def _extract_images_from_page(
 
     # Propagate page_captions consumption back to caller's list
     page_captions[:] = avail_page
-
-    return figures
-
-
-def _extract_tables_from_page(
-    page: fitz.Page,
-    page_num: int,
-    paper_id: str,
-    seen_hashes: set[str],
-    page_captions: list[_CaptionMatch],
-    md_captions: list[_CaptionMatch],
-) -> list[Figure]:
-    """Extract structured tables from a single page."""
-    figures: list[Figure] = []
-
-    try:
-        tables = page.find_tables(strategy="lines_strict")
-    except Exception:
-        logger.debug("Table extraction failed on page %d", page_num)
-        return figures
-
-    for tbl_index, table in enumerate(tables):
-        try:
-            # Extract table data as list of lists
-            data = table.extract()
-        except Exception:
-            logger.debug(
-                "Failed to extract table data on page %d, table %d",
-                page_num,
-                tbl_index,
-            )
-            continue
-
-        if not data or len(data) < 2:
-            continue  # Skip trivially small tables
-
-        # Build markdown representation
-        md_table = _table_data_to_markdown(data)
-        if not md_table:
-            continue
-
-        # Content-address the table by its markdown content
-        table_hash = hashlib.sha256((paper_id + md_table).encode("utf-8")).hexdigest()
-
-        if table_hash in seen_hashes:
-            continue
-        seen_hashes.add(table_hash)
-
-        bbox_rect = table.bbox if hasattr(table, "bbox") else None
-        bbox = list(bbox_rect) if bbox_rect else None
-
-        # Match caption and consume it
-        caption_match = _match_caption(
-            page_num, bbox, page_captions, md_captions, prefer_type="table"
-        )
-        caption = caption_match.text if caption_match else None
-        label = caption_match.label if caption_match else None
-
-        if caption_match is not None:
-            if caption_match in page_captions:
-                page_captions.remove(caption_match)
-            _consume_md_caption(md_captions, caption_match.label)
-
-        figures.append(
-            Figure(
-                id=table_hash,
-                paper_id=paper_id,
-                caption=caption,
-                figure_number=label or f"p{page_num + 1}_tbl{tbl_index}",
-                media_type="table",
-                label=label,
-                page_number=page_num,
-                bbox=json.dumps(bbox) if bbox else None,
-                markdown_table=md_table,
-                extracted_data=json.dumps(data),
-            )
-        )
 
     return figures
 
@@ -479,28 +391,6 @@ def _extract_captions_from_markdown(md_text: str) -> list[_CaptionMatch]:
     return captions
 
 
-def _pages_with_table_captions(doc: fitz.Document, md_captions: list[_CaptionMatch]) -> set[int]:
-    """Identify pages likely to contain tables by scanning for table captions.
-
-    Checks both page text blocks and markdown captions. Returns a set of
-    page numbers where find_tables() is worth calling. This avoids the
-    ~0.3s/page cost of find_tables() on pages without tables.
-    """
-    pages: set[int] = set()
-    # Check each page's text blocks for table captions
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        blocks = page.get_text("blocks")
-        for block in blocks:
-            if len(block) < 5:
-                continue
-            text = block[4]
-            if isinstance(text, str) and _TABLE_CAPTION_RE.match(text.strip()):
-                pages.add(page_num)
-                break
-    return pages
-
-
 def _match_caption(
     page_num: int,
     bbox: list[float] | None,
@@ -604,31 +494,3 @@ def _find_image_bbox(page: fitz.Page, xref: int) -> list[float] | None:
     except Exception:
         pass
     return None
-
-
-def _table_data_to_markdown(data: list[list]) -> str:
-    """Convert a list-of-lists table to a markdown table string.
-
-    Args:
-        data: List of rows, each row is a list of cell strings.
-
-    Returns:
-        Markdown table string, or empty string if data is invalid.
-    """
-    if not data or not data[0]:
-        return ""
-
-    ncols = max(len(row) for row in data)
-    rows: list[str] = []
-
-    for i, row in enumerate(data):
-        # Pad short rows
-        cells = [(c or "").replace("|", "\\|").replace("\n", " ") for c in row]
-        cells.extend([""] * (ncols - len(cells)))
-        rows.append("| " + " | ".join(cells) + " |")
-
-        # Add separator after header row
-        if i == 0:
-            rows.append("| " + " | ".join(["---"] * ncols) + " |")
-
-    return "\n".join(rows)

@@ -147,8 +147,7 @@ class Figure(SQLModel, table=True):
     label: Optional[str] = None  # "Fig. 1", "Table 2"
     page_number: Optional[int] = None
     bbox: Optional[str] = None  # JSON [x0, y0, x1, y1]
-    markdown_table: Optional[str] = None  # markdown representation for tables
-    llm_description: Optional[str] = None  # Haiku-generated description (Phase 4)
+    llm_description: Optional[str] = None  # Vision-model description of the figure
 
 
 class Equation(SQLModel, table=True):

@@ -14,7 +14,6 @@ from wikify.extract.media import (
     _extract_images_from_page,
     _match_caption,
     _store_media,
-    _table_data_to_markdown,
     extract_media,
 )
 from wikify.store.models import Figure
@@ -117,38 +116,6 @@ class TestMatchCaption:
 # ── Table data to markdown ─────────────────────────────────────────────────────
 
 
-class TestTableDataToMarkdown:
-    def test_basic_table(self):
-        data = [["A", "B", "C"], ["1", "2", "3"], ["4", "5", "6"]]
-        md = _table_data_to_markdown(data)
-        lines = md.strip().split("\n")
-        assert len(lines) == 4  # header + separator + 2 data rows
-        assert "| A | B | C |" in lines[0]
-        assert "| --- | --- | --- |" in lines[1]
-        assert "| 1 | 2 | 3 |" in lines[2]
-
-    def test_empty_data(self):
-        assert _table_data_to_markdown([]) == ""
-        assert _table_data_to_markdown([[]]) == ""
-
-    def test_ragged_rows(self):
-        data = [["A", "B"], ["1"]]
-        md = _table_data_to_markdown(data)
-        assert md  # Should not crash
-        # Second row should be padded
-        assert "| 1 |" in md
-
-    def test_pipe_escaping(self):
-        data = [["col"], ["val|ue"]]
-        md = _table_data_to_markdown(data)
-        assert "val\\|ue" in md
-
-    def test_none_cells(self):
-        data = [["A", "B"], [None, "x"]]
-        md = _table_data_to_markdown(data)
-        assert md  # Should not crash
-
-
 # ── Content-addressed storage ──────────────────────────────────────────────────
 
 
@@ -185,9 +152,8 @@ class TestExtractMedia:
         num_pages: int = 1,
         images_per_page: list[list[tuple]] | None = None,
         image_bytes: bytes | None = None,
-        table_data: list[list] | None = None,
     ) -> MagicMock:
-        """Build a mock fitz.Document with configurable images and tables."""
+        """Build a mock fitz.Document with configurable images."""
         doc = MagicMock()
         doc.__len__ = MagicMock(return_value=num_pages)
         doc.__enter__ = MagicMock(return_value=doc)
@@ -207,23 +173,8 @@ class TestExtractMedia:
                 page.get_images.return_value = []
 
             # Text blocks (for caption matching)
-            # Include a table caption block when table_data is provided
-            if table_data:
-                page.get_text.return_value = [
-                    (0, 0, 500, 20, "Table 1. Process parameters", 0, 0)
-                ]
-            else:
-                page.get_text.return_value = []
+            page.get_text.return_value = []
             page.get_image_info.return_value = []
-
-            # Tables
-            if table_data:
-                mock_table = MagicMock()
-                mock_table.extract.return_value = table_data
-                mock_table.bbox = (0, 0, 500, 300)
-                page.find_tables.return_value = [mock_table]
-            else:
-                page.find_tables.return_value = []
 
             pages.append(page)
 
@@ -260,26 +211,6 @@ class TestExtractMedia:
             assert fig.paper_id == "paper123"
             assert fig.width_px == 400
             assert fig.height_px == 300
-
-    def test_extracts_tables(self, tmp_path):
-        with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
-        ):
-            mock_settings.figures_dir = tmp_path / "figures"
-            table_data = [["Param", "Value"], ["Temp", "250C"], ["Pressure", "1 Torr"]]
-            doc = self._make_mock_doc(num_pages=1, table_data=table_data)
-            mock_fitz.open.return_value = doc
-
-            results = extract_media("/fake.pdf", "paper123", "Table 1. Process parameters")
-            tables = [r for r in results if r.media_type == "table"]
-            assert len(tables) == 1
-            tbl = tables[0]
-            assert tbl.markdown_table is not None
-            assert "Param" in tbl.markdown_table
-            assert tbl.extracted_data is not None
-            parsed = json.loads(tbl.extracted_data)
-            assert len(parsed) == 3
 
     def test_caption_matching_from_md(self, tmp_path):
         with (
