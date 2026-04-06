@@ -140,222 +140,48 @@ Key functions:
 
 ---
 
-## What Needs to Be Implemented (Epoch Model)
+## Implemented Modules (Epoch Model)
 
-### 1. `wiki/concepts.py` -- ConceptRecord, haiku discovery pipeline
+All modules listed below are fully implemented and tested. This section is retained as
+a reference for the architecture and function signatures. For current project status,
+see `docs/project-status.md`.
 
-**Purpose:** Define the three new SQLite models needed by the epoch model, and implement the
-haiku-based concept discovery pass (epoch Pass 1).
+### 1. `wiki/concepts.py` -- ConceptRecord, haiku discovery pipeline (done)
 
-**SQLite models to add to `store/models.py`:**
+Defines `ConceptRecord`, `ConceptRelation`, `EpochLog` SQLite models and the haiku-based
+concept discovery pass (epoch Pass 1). Includes rich extraction with template system,
+`ConceptEvidence` with fuzzy quote verification, `ExtractionGap` meta-probes, and
+`ParameterExtraction` for auto-generated parameter tables.
 
-```python
-class ConceptRecord(SQLModel, table=True):
-    id: str              # slugified name, PK (e.g. "atomic_layer_deposition")
-    name: str            # canonical display name (e.g. "Atomic Layer Deposition")
-    aliases: str         # JSON list, e.g. '["ALD", "atomic layer dep."]'
-    concept_type: str    # technique | material | phenomenon | method | theory | dataset
-    domain: str          # inferred from source distribution
-    importance: float    # 0-1, computed from concept graph (updated in Pass 2)
-    epoch_discovered: int
-    epoch_last_updated: int
-    article_status: str  # none | stub | draft | full
-    article_path: str    # relative path to .md file, or ""
+### 2. `wiki/concept_graph.py` -- co-occurrence graph, importance scoring (done)
 
-class ConceptRelation(SQLModel, table=True):
-    id: int | None       # PK autoincrement
-    source_concept: str  # FK -> ConceptRecord.id
-    target_concept: str  # FK -> ConceptRecord.id
-    relation_type: str   # IS-A | PART-OF | USED-IN | ENABLES | CONTRASTS-WITH
-    weight: float        # co-occurrence strength
-    epoch: int
+Builds concept co-occurrence graph, computes PageRank importance, Louvain communities,
+and relation classification. Updates `ConceptRelation` and `ConceptRecord.importance`.
 
-class EpochLog(SQLModel, table=True):
-    id: int | None       # PK autoincrement
-    epoch: int
-    triggered_by: str    # "user" | "ingest" | "schedule"
-    started_at: datetime
-    completed_at: datetime | None
-    concepts_discovered: int
-    stubs_upgraded: int
-    articles_written: int
-    contradictions_flagged: int
-    cross_refs_added: int
-    converged: bool
-    loss_score: float = 0.0   # L computed after Pass 5
-    loss_delta: float = 0.0   # |L(epoch_n) - L(epoch_n-1)|
-```
+### 3. `wiki/article.py` -- Wikipedia-format article writer (done)
 
-**Key functions in `wiki/concepts.py`:**
+Writes/updates Wikipedia-format articles per concept using the concept's record, graph
+neighbors, and domain persona. Routes to additive or revisionary update based on
+contradiction detection.
 
-- `discover_concepts(paper_ids: list[str], epoch: int, model: str | None) -> list[ConceptRecord]`
-  - For each paper: feed digest to haiku with prompt asking for named concepts
-  - JSON response: `[{name, type, aliases, one_line_definition}]`
-  - Returns deduplicated `ConceptRecord` list
-- `merge_concept_records(new_records: list[ConceptRecord], epoch: int) -> int`
-  - Merges new records into DB (deduplicating by name + aliases)
-  - Returns count of new concepts added (not already in DB)
-- `get_concept_by_name(name: str) -> ConceptRecord | None`
-- `list_concepts(domain: str, min_importance: float) -> list[ConceptRecord]`
+### 4. `wiki/epoch.py` -- epoch orchestrator (done)
 
-**Inputs:** list of `Paper.id` values (all corpus papers not yet fully mined)
-**Outputs:** updated `ConceptRecord` table; returns list of new/updated records
+Runs all five passes, computes loss score, tracks convergence. Dual execution model:
+skill-based (primary, via `/wiki-epoch`) and scripted (secondary, via litellm).
 
-### 2. `wiki/concept_graph.py` -- co-occurrence graph, importance scoring
+### 5. `wiki/dashboard.py` -- convergence and coverage dashboard (done)
 
-**Purpose:** Build the concept co-occurrence graph from the `ConceptRecord` table and
-`SourceCoverage` data. Assign importance scores. Classify node roles (core/peripheral/bridge).
-Update `ConceptRelation` table. Used by epoch Pass 2.
+FastAPI dashboard with convergence curve, concept graph, coverage heatmap, epoch log,
+and gap cluster endpoints.
 
-**Key functions:**
+### 6. CLI -- `wikify wiki epoch` (done)
 
-- `build_concept_graph(domain: str, epoch: int) -> nx.DiGraph`
-  - Edge weight = how often two concepts appear in the same source/chunk
-  - Node degree = corpus frequency x source diversity
-  - Returns a NetworkX graph
-- `score_importance(graph: nx.DiGraph) -> dict[str, float]`
-  - Returns `{concept_id: importance}` (0-1 normalized)
-  - Based on: graph degree, source diversity, cross-domain edges
-- `classify_node_roles(graph: nx.DiGraph, scores: dict) -> dict[str, str]`
-  - Returns `{concept_id: "core" | "peripheral" | "bridge"}`
-  - Core: high degree, many sources
-  - Peripheral: low degree, few sources
-  - Bridge: connects disparate concept clusters
-- `extract_relations(graph: nx.DiGraph, epoch: int) -> list[ConceptRelation]`
-  - Produces `ConceptRelation` rows from graph edges (IS-A, ENABLES, CONTRASTS-WITH, etc.)
-- `update_concept_importance(scores: dict[str, float])` -- writes scores back to `ConceptRecord`
+All epoch CLI commands implemented: `--n`, `--until-convergence`, `--status`,
+`--domain`, `--on-ingest`.
 
-**Inputs:** `ConceptRecord` table, corpus chunk data
-**Outputs:** `ConceptRelation` table updated, `ConceptRecord.importance` updated
+### 7. Ingest hook (done)
 
-### 3. `wiki/article.py` -- Wikipedia-format article writer
-
-**Purpose:** Write or update a Wikipedia-format article for one concept, using the concept's
-record, its graph neighbors, and the domain persona. This is the concept-aware alternative to
-`build_article_from_entry`. Used by epoch Pass 3.
-
-The article format is defined in `docs/design/wiki-wikipedia-model.md` (Definition,
-Mechanism, Key Facts, In This Corpus, Relationships table, Open Questions).
-
-**Key functions:**
-
-- `write_concept_article(concept: ConceptRecord, neighbors: list[ConceptRecord], domain: str, model: str | None) -> str`
-  - Calls `get_or_create_persona(domain)` for consistent voice
-  - Calls `map_chunks_to_topic(concept.name, scope=concept.one_line_definition, domain=domain)`
-  - Builds Relationships table from `neighbors` and `ConceptRelation` rows
-  - Calls `reduce_to_article()` with the Wikipedia-format structure instead of
-    the three-zone structure used by the sitemap pipeline
-  - Returns article body markdown (no frontmatter)
-- `upgrade_concept_article(concept: ConceptRecord, article_path: Path, new_extractions: list, domain: str, model: str | None) -> str`
-  - For existing stubs/drafts: detects contradictions via `detect_contradiction()`,
-    routes to `additive_update()` or `revisionary_update()` accordingly
-  - Upgrades `article_status` (stub -> draft -> full) if new evidence is sufficient
-- `should_write_full(concept: ConceptRecord, extractions: list[SourceExtraction]) -> bool`
-  - Heuristic: >=3 relevant extractions AND concept.importance > 0.3 -> full article
-  - Otherwise: stub
-
-**Inputs:** `ConceptRecord`, list of neighbor `ConceptRecord` objects
-**Outputs:** article body markdown string; `ConceptRecord.article_status` and `article_path` updated
-
-### 4. `wiki/epoch.py` -- epoch orchestrator
-
-**Purpose:** Run one complete epoch (Passes 1-5 in order), track convergence, expose trigger
-hooks. The primary entry point for the Wikipedia pipeline.
-
-**Key functions:**
-
-- `run_epoch(triggered_by: str, domain: str, model: str | None) -> EpochLog`
-  - Runs all five passes in order:
-    1. `discover_concepts()` -- haiku, parallel per paper
-    2. `build_concept_graph()` + `score_importance()` + `update_concept_importance()` -- local
-    3. For each concept ranked by importance: `write_concept_article()` or `upgrade_concept_article()`
-    4. `cross_link_articles()` -- local, scans all articles for concept name mentions
-    5. `generate_library_catalog()` + domain/theme indexes -- local
-  - Computes loss score after Pass 5 (see Convergence Algorithm below)
-  - Writes `EpochLog` row on completion
-  - Returns the completed `EpochLog`
-- `run_until_convergence(domain: str, max_epochs: int, model: str | None) -> list[EpochLog]`
-  - Calls `run_epoch()` repeatedly until `check_convergence()` returns True
-  - Returns list of all `EpochLog` rows
-- `check_convergence(recent_logs: list[EpochLog]) -> bool`
-  - Convergence criteria (all must hold):
-    1. New concepts/epoch < 2% of total concept count
-    2. Stub ratio < 10%
-    3. No new contradictions flagged in last epoch
-    4. `loss_delta` < epsilon (default 0.01)
-- `compute_loss(epoch: int) -> tuple[float, float]`
-  - Reads current wiki state from SQLite; returns `(loss_score, loss_delta)`
-  - See Convergence Algorithm below for the formula
-- `get_epoch_status() -> dict` -- returns current epoch number + convergence metrics
-
-**Inputs:** corpus (via `ConceptRecord` table + corpus embeddings)
-**Outputs:** updated wiki articles in `data/wiki/`, `EpochLog` row in SQLite
-
-#### Convergence Algorithm
-
-After Pass 5 completes each epoch, `compute_loss()` evaluates the following formula
-using current counts read from SQLite:
-
-```
-L = alpha * stub_ratio
-  + beta  * orphan_concept_rate
-  + gamma * contradiction_density
-  - delta * cross_ref_density
-```
-
-where `stub_ratio = stubs / total_concepts`, `orphan_concept_rate = concepts_with_no_refs /
-total_concepts`, `contradiction_density = flagged_claims / total_claims`, and
-`cross_ref_density = total_cross_refs / total_articles`. Default weights: alpha=0.3,
-beta=0.2, gamma=0.3, delta=0.2 (stored in project config, not hardcoded).
-
-`loss_delta` is `|L(epoch_n) - L(epoch_n-1)|`. Both values are written to the `EpochLog`
-row before it is committed. The convergence check fails if `loss_delta >= epsilon`
-even when the three threshold criteria above are met.
-
-The model selected for Pass 3 is also determined here: if the previous epoch's
-`loss_score >= 0.3`, haiku is used for article drafting; if `loss_score < 0.3`,
-sonnet is used. This transition is logged and visible in `wikify wiki epoch --status`.
-
-### 5. `wiki/dashboard.py` -- convergence and coverage dashboard
-
-**Purpose:** FastAPI application serving a local web dashboard for quantitative monitoring
-of epoch convergence, concept graph state, and corpus coverage. All data is read from
-SQLite -- no LLM calls are made. Launched via `wikify wiki dashboard`.
-
-**Key components:**
-
-- `app: FastAPI` -- module-level FastAPI instance
-- `GET /api/epochs` -- returns all `EpochLog` rows as JSON (loss_score, loss_delta, counts, duration)
-- `GET /api/concepts` -- returns all `ConceptRecord` rows (name, status, importance, domain)
-- `GET /api/coverage` -- returns `SourceCoverage` aggregated as sources x domains matrix
-- `GET /api/gradient` -- returns top-N concepts by information gradient (new_evidence_tokens / existing_article_tokens)
-- `GET /` -- serves the single-page HTML/JS application
-
-The frontend uses Plotly (via CDN) for the convergence curve and domain health charts,
-and D3.js (via CDN) for the force-directed concept graph. No build step is required.
-
-**Inputs:** SQLite database (EpochLog, ConceptRecord, SourceCoverage tables)
-**Outputs:** local HTTP server; no files written
-
-### 6. CLI -- `wikify wiki epoch` and `wikify wiki dashboard`
-
-Add to `src/wikify/cli.py`:
-
-```
-wikify wiki epoch                        # run one epoch
-wikify wiki epoch --n 5                  # run N epochs
-wikify wiki epoch --until-convergence    # run until converged
-wikify wiki epoch --status               # show epoch log
-wikify wiki epoch --domain DOMAIN        # restrict to one domain
-wikify wiki epoch --on-ingest            # auto-trigger on next ingest
-wikify wiki dashboard                    # launch local convergence/coverage dashboard
-```
-
-### 7. Ingest hook
-
-After `ingest/corpus_refresh.py` completes a refresh:
-- Increment epoch counter (or mark epoch as stale) in `_epoch.json`
-- If `--on-ingest` was previously configured, trigger `run_epoch()` automatically
+`ingest/corpus_refresh.py` bumps epoch counter; optional auto-trigger via `--on-ingest`.
 
 ---
 
@@ -454,47 +280,18 @@ source -- it does not carry across sources.
 
 ---
 
-## Implementation Order
+## Rich Media, People & HTML Layout (complete)
 
-The modules have hard dependencies in this order:
+Five additional features layered on top of the epoch model. All implemented and tested.
+Design spec: `docs/design/wiki-rich-media-people-layout.md`.
 
-```
-1. ConceptRecord / ConceptRelation / EpochLog models
-   (add to store/models.py + register in store/db.py)
-   Note: EpochLog must include loss_score and loss_delta fields
-        |
-        v
-2. wiki/concepts.py
-   (needs ConceptRecord model; uses haiku via llm/client.py)
-        |
-        v
-3. wiki/concept_graph.py
-   (needs ConceptRecord, ConceptRelation models; uses NetworkX)
-        |
-        v
-4. wiki/article.py
-   (needs ConceptRecord; reuses persona.py, mapreduce.py, maintenance.py)
-        |
-        v
-5. wiki/epoch.py
-   (orchestrates all four above + builder.py + linker.py;
-    implements compute_loss() after Pass 5)
-        |
-        v
-6. CLI: wikify wiki epoch
-   (calls epoch.py; adds --n, --until-convergence, --status, --on-ingest flags)
-        |
-        v
-7. Ingest hook
-   (corpus_refresh.py bumps epoch counter; optional auto-trigger)
-        |
-        v
-8. wiki/dashboard.py
-   (depends on EpochLog + SourceCoverage being populated by at least one epoch)
-```
-
-Steps 1-4 can be worked in parallel by independent agents once the models are added.
-Steps 5-7 depend on 1-4 being complete. Step 8 depends on step 5.
+| Feature | Module | Description |
+|---------|--------|-------------|
+| Image/table extraction | `extract/media.py` | Unified pipeline; `Figure` gains `media_type`, `label`, `page_number`, `bbox`, `markdown_table`, `llm_description` |
+| Equation extraction | `extract/equations.py` | LaTeX/chemical/inline detection; new `Equation` SQLite model |
+| People identification | `wiki/people.py` | Name dedup, author cross-ref; `ConceptRecord` with `type=person` |
+| Haiku vision | `llm/vision.py`, `wiki/figure_enrichment.py` | Structured figure descriptions; MCP tools `get_figure_details`, `get_paper_figures` |
+| Wikipedia HTML layout | `wiki/html.py`, `wiki/templates/` | Static site, Wikipedia Vector skin, KaTeX, client-side search; CLI: `wikify wiki html [--serve]` |
 
 ---
 
@@ -530,9 +327,9 @@ Phase 1. Phase 6 requires all previous phases to be stable.
 
 ---
 
-## Test Coverage Required
+## Test Coverage (implemented)
 
-Each new module needs tests. No real LLM or DB calls in tests -- mock `complete()`,
+All modules have tests. No real LLM or DB calls in tests -- mock `complete()`,
 `get_graph_metrics()`, `map_chunks_to_topic()`, `reduce_to_article()`.
 
 Shared fixtures (add to `tests/test_wiki/conftest.py`):

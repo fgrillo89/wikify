@@ -126,7 +126,22 @@ Garbage collection module (`store/gc.py`):
 - `clean_chromadb_staging()`: remove stale ChromaDB staging entries
 - `gc_run()`: full GC pass, runs automatically in `/wiki-maintain`
 
-### MCP Tools (13 total)
+### Rich Media, People & HTML Layout (complete)
+
+Five features that bring the wiki closer to a real Wikipedia experience:
+
+| Feature | Module | What it does |
+|---------|--------|-------------|
+| Image/table extraction | `extract/media.py` | Unified pipeline via pymupdf4llm; `Figure` model gains `media_type`, `label`, `page_number`, `bbox`, `markdown_table`, `llm_description` |
+| Equation extraction | `extract/equations.py` | Detects LaTeX, chemical, and inline equations; new `Equation` SQLite model linked to concepts |
+| People identification | `wiki/people.py` | Discovers researchers from text, deduplicates by name, cross-references with `Paper.authors`; stored as `ConceptRecord` with `type=person` |
+| Haiku vision | `llm/vision.py`, `wiki/figure_enrichment.py` | Sends figures to Haiku for structured description; enriches figures at scale |
+| Wikipedia HTML layout | `wiki/html.py`, `wiki/templates/` | Static HTML site with Wikipedia Vector skin, Jinja2 templates, KaTeX equations, client-side search |
+
+New MCP tools: `get_figure_details`, `get_paper_figures`.
+New CLI command: `wikify wiki html [--serve]`.
+
+### MCP Tools (15 total)
 
 | Tool | Purpose |
 |------|---------|
@@ -143,6 +158,8 @@ Garbage collection module (`store/gc.py`):
 | `check_wiki_health` | DB + wiki integrity report |
 | `run_wiki_gc` | Trigger garbage collection |
 | `search_wiki` | Search wiki concept articles |
+| `get_figure_details` | Figure metadata + Haiku description |
+| `get_paper_figures` | List all figures/tables for a paper |
 
 ### ML-Style Convergence Tracking (complete)
 
@@ -170,6 +187,8 @@ Garbage collection module (`store/gc.py`):
 | `wikify wiki epoch --until-convergence` | Working | Run until convergence criteria met |
 | `wikify wiki epoch --status` | Working | Show epoch log |
 | `wikify wiki epoch --on-ingest` | Working | Auto-trigger epoch after ingest |
+| `wikify wiki html` | Working | Build static HTML site to `data/wiki/_site/` |
+| `wikify wiki html --serve` | Working | Build and serve on localhost |
 
 ### What is Not Started (Wikipedia Pipeline)
 
@@ -181,6 +200,7 @@ Garbage collection module (`store/gc.py`):
   recent-epoch updates). Written by Pass 5 each epoch. Not yet implemented.
 - **Scheduled maintenance**: Automated `/wiki-maintain` runs (hooks or cron) to keep the wiki
   clean between manual sessions.
+- **HTML watch mode**: `wikify wiki html --serve --watch` for live rebuild on file changes.
 
 ### Planned: Adaptive Knowledge Engine (partially implemented)
 
@@ -265,7 +285,7 @@ by the Discovery Engine alignment work. Remaining:
 
 ### MCP Server (complete)
 
-- 25+ tools exposed; `.mcp.json` configured for Claude Code integration
+- 15 MCP tools + 25+ agent tools exposed; `.mcp.json` configured for Claude Code integration
 - `ingest_paper` tool follows `ok/error` envelope contract
 
 ### What is Not Started (Writing Pipeline)
@@ -309,7 +329,8 @@ by the Discovery Engine alignment work. Remaining:
 | Figure/table refs | 2,730 |
 | Citation cross-refs | 936 |
 | Topics | 1,232 (268 vocabulary terms) |
-| Tests | 647 |
+| Equations extracted | (computed at ingest) |
+| Tests | 647+ |
 | Ingestion time | ~10 min (206 papers, 10 workers) |
 | Review generation | 3-5 min (enhanced hybrid strategy) |
 

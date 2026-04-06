@@ -1,5 +1,8 @@
 # Wiki Enrichment: People, Layout, Equations, Images & Tables
 
+> **Status: All five features are implemented and tested.** This document is retained as
+> the design reference. For current project status, see `docs/project-status.md`.
+
 ## Overview
 
 Five features that bring Wikify closer to a real Wikipedia experience:
@@ -593,62 +596,31 @@ Update `.claude/skills/wiki-epoch.md`:
 
 ## Implementation Order
 
-### Phase 1: Image & Table Parsing (Foundation)
+### Phase 1: Image & Table Parsing (Implemented)
 
-**Must come first** — all other features depend on having reliable media extraction.
+`src/wikify/extract/media.py` -- unified extraction pipeline. `Figure` model updated with
+`media_type`, `label`, `page_number`, `bbox`, `markdown_table`, `llm_description`.
 
-1. Write `src/wikify/extract/media.py` — unified extraction pipeline
-2. Update `Figure` model with new fields (`media_type`, `label`, `page_number`, `bbox`,
-   `markdown_table`, `llm_description`)
-3. Run DB migration (auto-migration via SQLModel)
-4. Update `ingest/pdf.py` to use new extraction pipeline
-5. **Validation experiment**: test on 4-5 papers, iterate until accurate
-6. Update `persist_parsed()` to save new fields
+### Phase 2: Equation Extraction (Implemented)
 
-### Phase 2: Equation Extraction
+`src/wikify/extract/equations.py` -- regex + LaTeX detection. `Equation` model in
+`store/models.py`. Integrated into ingest pipeline and article templates.
 
-Can proceed in parallel with Phase 1.
+### Phase 3: People Identification (Implemented)
 
-1. Write `src/wikify/extract/equations.py` — regex + LaTeX detection
-2. Add `Equation` model to `store/models.py`
-3. Integrate into `parse_pdf()` pipeline
-4. Update extraction template to include equations
-5. Update article templates with `## Key Equations` section
+`src/wikify/wiki/people.py` -- person discovery, name dedup, author cross-reference.
+`person` template in `article_templates.py`. People articles under `people/` subdirectory.
 
-### Phase 3: People Identification
+### Phase 4: Haiku Vision (Implemented)
 
-Depends on Phase 1 (people may appear in figure captions).
+`src/wikify/llm/vision.py` -- sends figures to Haiku for structured description.
+`src/wikify/wiki/figure_enrichment.py` -- batch enrichment at scale.
+MCP tools: `get_figure_details`, `get_paper_figures`.
 
-1. Add `person` template to `article_templates.py`
-2. Update extraction template (`_template.md`) with `people` section
-3. Add person deduplication logic (name normalization + fuzzy match)
-4. Cross-reference discovered people with `Paper.parsed_authors`
-5. Update `builder.py` to write people articles under `people/` subdirectory
-6. Update domain/library indexes to include people section
+### Phase 5: Wikipedia HTML Layout (Implemented)
 
-### Phase 4: Haiku Vision
-
-Depends on Phase 1 (needs extracted images).
-
-1. Add vision helper to `src/wikify/llm/client.py` — `complete_with_image()`
-2. Write figure extraction prompts
-3. Integrate into Pass 1: after text extraction, run figure extraction
-4. Add `view_figure` tool for writing agents
-5. Test Haiku vision on extracted figures from the validation papers
-6. Update skills with vision instructions
-
-### Phase 5: Wikipedia HTML Layout
-
-Can proceed in parallel with Phases 2-4 (only needs markdown articles to exist).
-
-1. Write `src/wikify/wiki/html.py` — static site generator
-2. Create Jinja2 templates: article, index, category, sidebar
-3. Write `wiki.css` — Wikipedia Vector skin approximation
-4. Implement wikilink resolution, TOC generation, infobox rendering
-5. Add equation rendering via KaTeX
-6. Add image rendering (figure thumbnails with captions)
-7. Wire CLI: `wikify wiki html [--serve] [--watch]`
-8. Update skills to regenerate HTML after epoch/maintain
+`src/wikify/wiki/html.py` -- static site generator with Jinja2 templates, Wikipedia
+Vector skin, KaTeX equations, client-side search. CLI: `wikify wiki html [--serve]`.
 
 ### Dependencies
 
