@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="wiki-article">
+  <h1>Welcome to {{ wiki_name }}</h1>
+
+  <div class="main-page-banner">
+    <p>A personal knowledge wiki with <strong>{{ total_articles }}</strong> articles
+    built from your research corpus.</p>
+  </div>
+
+  {% if featured %}
+  <div class="main-page-section">
+    <h2>Featured Articles</h2>
+    <ul>
+      {% for a in featured %}
+      <li>
+        <a href="{{ root }}{{ a.rel_path.replace('.md', '.html') }}">{{ a.title }}</a>
+        {% if a.importance %}<span class="importance-badge">{{ "%.0f"|format(a.importance * 100) }}%</span>{% endif %}
+        {% if a.status %}<span class="status-badge status-{{ a.status }}">{{ a.status }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if recent %}
+  <div class="main-page-section">
+    <h2>Recent Changes</h2>
+    <ul>
+      {% for a in recent %}
+      <li>
+        <a href="{{ root }}{{ a.rel_path.replace('.md', '.html') }}">{{ a.title }}</a>
+        <span class="date-badge">{{ a.frontmatter.get('updated', a.frontmatter.get('created', '')) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</article>
+{% endblock %}

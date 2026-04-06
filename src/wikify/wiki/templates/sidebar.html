@@ -1,0 +1,30 @@
+<div class="sidebar-section">
+  <h3>Navigation</h3>
+  <ul>
+    <li><a href="{{ root }}index.html">Main page</a></li>
+    <li><a href="{{ root }}recent.html">Recent changes</a></li>
+    <li><a href="{{ root }}categories.html">Categories</a></li>
+    <li><a href="{{ root }}people.html">People</a></li>
+    <li><a href="{{ root }}random.html">Random article</a></li>
+  </ul>
+</div>
+{% if domains %}
+<div class="sidebar-section">
+  <h3>Domains</h3>
+  <ul>
+    {% for domain in domains %}
+    <li><a href="{{ root }}domains/{{ domain.slug }}/index.html">{{ domain.label }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+<div class="sidebar-section">
+  <h3>Statistics</h3>
+  <ul>
+    <li>{{ stats.total_articles }} articles</li>
+    <li>{{ stats.total_sources }} sources</li>
+    {% if stats.current_epoch > 0 %}
+    <li>Epoch {{ stats.current_epoch }}</li>
+    {% endif %}
+  </ul>
+</div>

@@ -1649,5 +1649,31 @@ def wiki_dashboard(
     uvicorn.run(dashboard_app, host=host, port=port)
 
 
+@wiki_app.command("html")
+def wiki_html(
+    serve: bool = typer.Option(False, "--serve", help="Serve after building"),
+    port: int = typer.Option(8080, "--port", help="Port for local server"),
+    wiki_dir: str = typer.Option("data/wiki", "--wiki-dir", help="Wiki source directory"),
+    output_dir: str = typer.Option(
+        "", "--output", "-o", help="Output directory (default: wiki_dir/_site)"
+    ),
+):
+    """Build Wikipedia-style HTML site from wiki."""
+    from wikify.wiki.html import build_site, serve_site
+
+    src = Path(wiki_dir)
+    if not src.exists():
+        console.print(f"[red]Wiki directory not found:[/red] {wiki_dir}")
+        raise typer.Exit(1)
+
+    out = Path(output_dir) if output_dir else None
+    console.print(f"[bold]Building HTML site from[/bold] {src}")
+    site_path = build_site(src, out)
+    console.print(f"[green]Site built at {site_path}[/green]")
+
+    if serve:
+        serve_site(site_path, port=port)
+
+
 if __name__ == "__main__":
     app()

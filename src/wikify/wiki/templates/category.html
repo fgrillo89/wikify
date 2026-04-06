@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="wiki-article">
+  <h1>{{ category_name }}</h1>
+  <p>Articles in this category: {{ articles|length }}</p>
+  <ul class="article-list">
+    {% for a in articles %}
+    <li>
+      <a href="{{ root }}{{ a.rel_path.replace('.md', '.html') }}">{{ a.title }}</a>
+      {% if a.status %}<span class="status-badge status-{{ a.status }}">{{ a.status }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</article>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="wiki-article">
+  <h1>Recent Changes</h1>
+  <table class="wiki-table">
+    <thead>
+      <tr>
+        <th>Article</th>
+        <th>Status</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in articles %}
+      <tr>
+        <td><a href="{{ root }}{{ a.rel_path.replace('.md', '.html') }}">{{ a.title }}</a></td>
+        <td><span class="status-badge status-{{ a.status }}">{{ a.status }}</span></td>
+        <td>{{ a.frontmatter.get('updated', a.frontmatter.get('created', '')) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}
