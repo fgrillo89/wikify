@@ -21,8 +21,8 @@ from typing import Any
 
 from sqlmodel import select
 
-from wikify.core.retrieve.context import retrieve_for_query
 from wikify.core.graph.metrics import compute_metrics
+from wikify.core.retrieve.context import retrieve_for_query
 from wikify.core.store.db import get_session
 from wikify.core.store.models import Chunk, Paper
 

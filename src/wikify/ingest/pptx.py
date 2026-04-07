@@ -9,11 +9,11 @@ from pathlib import Path
 from pptx import Presentation
 from rich.console import Console
 
+from wikify.core.store.models import Paper
 from wikify.ingest.extract.chunker import chunk_sections
 from wikify.ingest.extract.figure_refs import extract_figure_refs
 from wikify.ingest.extract.metadata import _extract_summary, _parse_filename
 from wikify.ingest.pdf import ParsedPaper, _parse_section_tree, persist_parsed
-from wikify.core.store.models import Paper
 
 console = Console()
 

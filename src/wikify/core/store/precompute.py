@@ -206,8 +206,8 @@ def _compute_boilerplate_ids() -> set[str]:
     Uses ChromaDB k-NN: if a chunk's 10 nearest neighbors span 5+
     distinct papers with similarity > 0.9, it's boilerplate.
     """
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.embeddings import _store, get_chunk_embeddings
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     if not chunks:
@@ -266,11 +266,11 @@ def _compute_divergent_gaps(
     """
     from sqlmodel import select
 
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import get_chunk_embeddings
     from wikify.core.store.models import Paper
     from wikify.ingest.vault.coupler import compute_coupling
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -371,10 +371,10 @@ def _compute_concept_links_v2(
 
     from sqlmodel import select
 
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import get_chunk_embeddings
     from wikify.core.store.models import Paper
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -639,8 +639,8 @@ def precompute_all() -> None:
         logger.info("Cached %d vibe vectors", len(vibes))
 
     # 2. KMeans on chunk embeddings
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.embeddings import get_chunk_embeddings
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     all_ids = [c.id for c in chunks]
@@ -737,8 +737,8 @@ def precompute_all() -> None:
 
     # 9. Section summaries (extractive by default, free and instant)
     try:
-        from wikify.ingest.extract.section_summarizer import summarize_sections_batch
         from wikify.core.store.embeddings import embed_section_summaries
+        from wikify.ingest.extract.section_summarizer import summarize_sections_batch
 
         n_summarized = summarize_sections_batch(mode="extractive", force=False)
         if n_summarized > 0:

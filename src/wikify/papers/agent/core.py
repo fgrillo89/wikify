@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
-    from wikify.papers.agent.run_context import RunContext
     from wikify.core.llm.hooks import LLMHook
+    from wikify.papers.agent.run_context import RunContext
 
 
 # ── Tool schema builder ───────────────────────────────────────────────────────
@@ -407,13 +407,13 @@ class ScholarForgeAgent:
         """Execute the agent loop until LLM stops calling tools or max_turns."""
         import litellm
 
+        from wikify.core.config import settings
+        from wikify.core.llm.hooks import LLMEvent
         from wikify.papers.agent.run_context import (
             create_run_context,
             restore_run_context,
             set_current_run_context,
         )
-        from wikify.core.config import settings
-        from wikify.core.llm.hooks import LLMEvent
 
         model = self.model or settings.llm_model
         run_context = self.run_context or create_run_context(topic=prompt)

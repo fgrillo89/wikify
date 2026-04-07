@@ -129,10 +129,10 @@ def generate(
     """Generate a review paper from the literature corpus."""
     import time
 
+    from wikify.core.retrieve.strategies import StrategyConfig, get_strategy
     from wikify.papers.export.journal_profile import load_journal_profile
     from wikify.papers.generate.planner import plan_paper
     from wikify.papers.generate.writer import write_paper
-    from wikify.core.retrieve.strategies import StrategyConfig, get_strategy
 
     start = time.time()
     journal_profile = load_journal_profile(journal)
@@ -342,9 +342,9 @@ def slides(
     """Generate a PowerPoint presentation from the literature corpus."""
     import time
 
+    from wikify.core.retrieve.context import retrieve_all_papers
     from wikify.papers.export.pptx_export import export_slides
     from wikify.papers.generate.planner import plan_slides
-    from wikify.core.retrieve.context import retrieve_all_papers
 
     start = time.time()
 
@@ -1059,8 +1059,8 @@ def _answer_with_escalation(
     """
     import re
 
-    from wikify.papers.agent.tools import read_paper_digest, read_section
     from wikify.core.llm.client import complete
+    from wikify.papers.agent.tools import read_paper_digest, read_section
 
     decision_prompt_template = (
         "Question: {question}\n\n"

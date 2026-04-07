@@ -180,9 +180,9 @@ def scripted_summarize(
     """
     import litellm
 
+    from wikify.core.config import settings
     from wikify.papers.agent.research_notes import ResearchNotes, SourceSummary
     from wikify.papers.agent.tools import record_paper_summary
-    from wikify.core.config import settings
 
     model = model or settings.llm_model
     start = time.time()
@@ -309,8 +309,8 @@ def scripted_write(
     """
     import litellm
 
-    from wikify.papers.agent.defaults import build_writer_prompt
     from wikify.core.config import settings
+    from wikify.papers.agent.defaults import build_writer_prompt
 
     model = model or settings.llm_model
     start = time.time()

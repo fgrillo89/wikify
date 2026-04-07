@@ -17,23 +17,59 @@ from mcp.server.fastmcp import FastMCP
 
 from wikify.papers.agent.tools import (
     _build_corpus_summary,
+)
+from wikify.papers.agent.tools import (
     check_wiki_health as _check_wiki_health,
+)
+from wikify.papers.agent.tools import (
     compare_wiki_runs as _compare_wiki_runs,
+)
+from wikify.papers.agent.tools import (
     deep_read as _deep_read,
+)
+from wikify.papers.agent.tools import (
     export_wiki_metrics as _export_wiki_metrics,
+)
+from wikify.papers.agent.tools import (
     get_corpus_summary as _get_corpus_summary,
+)
+from wikify.papers.agent.tools import (
     get_graph_metrics as _get_graph_metrics,
+)
+from wikify.papers.agent.tools import (
     get_paper as _get_paper,
+)
+from wikify.papers.agent.tools import (
     get_sections as _get_sections,
+)
+from wikify.papers.agent.tools import (
     ingest_paper as _ingest_paper,
+)
+from wikify.papers.agent.tools import (
     list_papers as _list_papers,
+)
+from wikify.papers.agent.tools import (
     list_topics as _list_topics,
+)
+from wikify.papers.agent.tools import (
     query_wiki_runtime as _query_wiki_runtime,
+)
+from wikify.papers.agent.tools import (
     reconcile_wiki_state as _reconcile_wiki_state,
+)
+from wikify.papers.agent.tools import (
     run_wiki_campaign as _run_wiki_campaign,
+)
+from wikify.papers.agent.tools import (
     run_wiki_gc as _run_wiki_gc,
+)
+from wikify.papers.agent.tools import (
     run_wiki_maintain as _run_wiki_maintain,
+)
+from wikify.papers.agent.tools import (
     search_papers as _search_papers,
+)
+from wikify.papers.agent.tools import (
     search_wiki as _search_wiki,
 )
 

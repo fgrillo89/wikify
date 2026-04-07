@@ -50,9 +50,9 @@ def summarize_sections_extractive(paper_id: str, force: bool = False) -> dict[st
     """
     from sqlmodel import select
 
-    from wikify.ingest.extract.section_classifier import classify_section_path
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Chunk, Paper
+    from wikify.ingest.extract.section_classifier import classify_section_path
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)
@@ -120,9 +120,9 @@ def summarize_sections_llm(
 
     from wikify.core.config import settings
     from wikify.core.llm.client import complete_json
-    from wikify.ingest.extract.section_classifier import classify_section_path
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Chunk, Paper
+    from wikify.ingest.extract.section_classifier import classify_section_path
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)

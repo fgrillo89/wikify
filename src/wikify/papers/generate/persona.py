@@ -11,8 +11,8 @@ from wikify.core.store.db import get_session
 from wikify.core.store.models import PaperTopic
 
 if TYPE_CHECKING:
-    from wikify.papers.export.journal_profile import JournalProfile
     from wikify.core.retrieve.context import RetrievedContext
+    from wikify.papers.export.journal_profile import JournalProfile
 
 
 def _find_style_guide() -> Path | None:

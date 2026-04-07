@@ -9,8 +9,8 @@ from pathlib import Path
 
 from rich.console import Console
 
-from wikify.ingest.extract.chunker import chunk_sections
 from wikify.core.store.models import DocType, Paper
+from wikify.ingest.extract.chunker import chunk_sections
 
 console = Console()
 

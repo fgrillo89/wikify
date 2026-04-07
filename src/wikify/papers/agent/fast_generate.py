@@ -159,8 +159,8 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
     # Fall back to original computation
     import numpy as np
 
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -285,8 +285,8 @@ def fast_generate(
     """
     import litellm
 
-    from wikify.papers.agent.workflows import export_paper
     from wikify.core.config import settings
+    from wikify.papers.agent.workflows import export_paper
 
     model = model or settings.llm_model
     topic = normalize_topic(topic)

@@ -376,9 +376,9 @@ def _resolve_references(markdown: str, profile) -> str:
     """Resolve [REF:...] markers to numbered citations and append bibliography."""
     from sqlmodel import select
 
-    from wikify.papers.generate.references import ReferenceResolver
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Paper
+    from wikify.papers.generate.references import ReferenceResolver
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()

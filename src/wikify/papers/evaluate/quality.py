@@ -56,8 +56,8 @@ class EmbeddingContext:
 
 def _build_embedding_context(review_text: str, chunk_size: int = 150) -> Optional[EmbeddingContext]:
     """Build the shared EmbeddingContext.  Returns None if corpus is unavailable."""
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.core.store.embeddings import _store, get_chunk_embeddings
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     if not chunks:

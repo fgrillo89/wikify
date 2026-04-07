@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlmodel import select
 
+from wikify.core.llm.client import complete
 from wikify.core.store.db import get_session
 from wikify.core.store.models import (
     Campaign,
@@ -28,18 +29,11 @@ from wikify.core.store.models import (
     WikiPage,
     WikiSnapshotMetric,
 )
-from wikify.core.llm.client import complete
 from wikify.wiki.builder import (
     append_unanswered_question,
     read_article_frontmatter,
     slugify,
     write_article,
-)
-from wikify.wiki.presentation.layout import (
-    ensure_layout,
-    iter_visible_page_files,
-    metrics_dir,
-    visible_page_path,
 )
 from wikify.wiki.observability import (
     begin_run,
@@ -49,6 +43,12 @@ from wikify.wiki.observability import (
     record_tool_call,
     snapshot_wiki_metrics,
     stage_timer,
+)
+from wikify.wiki.presentation.layout import (
+    ensure_layout,
+    iter_visible_page_files,
+    metrics_dir,
+    visible_page_path,
 )
 
 _WIKI_DIR = Path("data/wiki")

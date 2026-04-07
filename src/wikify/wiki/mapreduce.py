@@ -11,7 +11,6 @@ Coverage recording: write SourceCoverage rows after each successful reduce.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 

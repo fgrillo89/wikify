@@ -9,18 +9,18 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.progress import Progress
 
-from wikify.papers.generate.persona import build_persona
-from wikify.papers.generate.references import ReferenceResolver
-from wikify.papers.generate.verifier import verify_paper, verify_section_against_plan
 from wikify.core.llm.client import LLMOutputError, complete, validate_and_retry_text
 from wikify.core.llm.schemas import SectionOutput
 from wikify.core.retrieve.context import RetrievedContext
 from wikify.core.store.models import PaperPlan, SectionPlan
+from wikify.papers.generate.persona import build_persona
+from wikify.papers.generate.references import ReferenceResolver
+from wikify.papers.generate.verifier import verify_paper, verify_section_against_plan
 
 if TYPE_CHECKING:
-    from wikify.papers.export.journal_profile import JournalProfile
     from wikify.core.retrieve.context import SectionContext
     from wikify.core.store.models import Paper
+    from wikify.papers.export.journal_profile import JournalProfile
 
 console = Console()
 

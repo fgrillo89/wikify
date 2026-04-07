@@ -11,6 +11,7 @@ import fitz
 import pymupdf4llm
 from rich.console import Console
 
+from wikify.core.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
 from wikify.ingest.extract.chunker import chunk_sections
 from wikify.ingest.extract.citations import extract_citations
 from wikify.ingest.extract.equations import extract_equations
@@ -18,7 +19,6 @@ from wikify.ingest.extract.figure_refs import extract_figure_refs
 from wikify.ingest.extract.figures import extract_figures
 from wikify.ingest.extract.media import extract_media
 from wikify.ingest.extract.metadata import extract_metadata
-from wikify.core.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
 
 console = Console()
 

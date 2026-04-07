@@ -241,9 +241,9 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
+    from wikify.core.store.models import PaperTopic
     from wikify.ingest.extract.cite_match import build_citation_graph
     from wikify.ingest.extract.figure_refs import extract_figure_refs
-    from wikify.core.store.models import PaperTopic
 
     citations_by_paper: dict[str, list[str]] = {}
     with get_session() as session:

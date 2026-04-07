@@ -125,9 +125,9 @@ def _build_corpus_summary() -> str:
 
     from sqlmodel import select
 
-    from wikify.ingest.corpus_refresh import load_corpus_vocabulary
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Paper
+    from wikify.ingest.corpus_refresh import load_corpus_vocabulary
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
@@ -1127,8 +1127,8 @@ def suggest_next_papers(
     try:
         import numpy as np
 
-        from wikify.papers.evaluate.coverage import compute_paper_vibes
         from wikify.core.graph.metrics import build_corpus_graph
+        from wikify.papers.evaluate.coverage import compute_paper_vibes
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1242,9 +1242,9 @@ def get_coverage_gaps(
 
         from sqlmodel import select
 
-        from wikify.papers.evaluate.coverage import compute_coverage
         from wikify.core.store.db import get_session
         from wikify.core.store.models import Paper
+        from wikify.papers.evaluate.coverage import compute_coverage
 
         result = compute_coverage(review_text, threshold=threshold)
         delta = result.coverage_ratio - previous_coverage
@@ -1338,8 +1338,8 @@ def find_jump_target(
     try:
         import numpy as np
 
-        from wikify.papers.evaluate.coverage import compute_coverage, compute_paper_vibes
         from wikify.core.graph.metrics import build_corpus_graph
+        from wikify.papers.evaluate.coverage import compute_coverage, compute_paper_vibes
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1521,10 +1521,10 @@ def find_corpus_gaps() -> str:
         from sklearn.cluster import KMeans
         from sqlmodel import select
 
-        from wikify.papers.evaluate.coverage import load_corpus_chunks
         from wikify.core.store.db import get_session
         from wikify.core.store.embeddings import _store, get_chunk_embeddings
         from wikify.core.store.models import Paper, PaperTopic
+        from wikify.papers.evaluate.coverage import load_corpus_chunks
 
         chunks = load_corpus_chunks()
         if not chunks:
@@ -2165,9 +2165,9 @@ def ingest_paper(file_path: str) -> str:
 
         from sqlmodel import select
 
-        from wikify.ingest.service import ingest_file
         from wikify.core.store.db import get_session
         from wikify.core.store.models import Chunk, Paper
+        from wikify.ingest.service import ingest_file
 
         path = Path(file_path)
         if not path.exists():

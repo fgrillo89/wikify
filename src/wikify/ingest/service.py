@@ -101,9 +101,9 @@ def ingest_file(path: Path, background_refresh: bool = True) -> int:
 
 def _ingest_parallel(files: list[Path], max_workers: int) -> int:
     """Parse PDFs in parallel, then persist sequentially."""
-    from wikify.ingest.pdf import ParsedPaper, persist_parsed
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Paper
+    from wikify.ingest.pdf import ParsedPaper, persist_parsed
 
     pdf_files = [file for file in files if file.suffix.lower() == ".pdf"]
     other_files = [file for file in files if file.suffix.lower() != ".pdf"]

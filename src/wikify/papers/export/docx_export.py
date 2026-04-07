@@ -13,9 +13,9 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from rich.console import Console
 
+from wikify.core.store.models import Paper
 from wikify.papers.export.chemistry import split_formula_runs
 from wikify.papers.export.journal_profile import JournalProfile
-from wikify.core.store.models import Paper
 
 console = Console()
 
