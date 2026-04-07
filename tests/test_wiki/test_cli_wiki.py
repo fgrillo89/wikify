@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from wikify.cli import app
-from wikify.store.models import EpochLog
+from wikify.core.store.models import EpochLog
 
 runner = CliRunner()
 
@@ -180,7 +180,7 @@ class TestWikiExpand:
             patch("wikify.wiki.builder.write_article") as mock_write,
             patch("wikify.wiki.linker.cross_link_articles", return_value=0),
             patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
         ):
             result = runner.invoke(
@@ -229,7 +229,7 @@ class TestWikiExpand:
             patch("wikify.wiki.builder.article_path", return_value=stub_path),
             patch("wikify.wiki.linker.cross_link_articles", return_value=0),
             patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
         ):
             result = runner.invoke(app, ["wiki", "expand", "--all"])
@@ -253,7 +253,7 @@ class TestWikiSync:
         mock_session.exec.return_value.all.return_value = []
 
         with (
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
             patch("wikify.wiki.builder.generate_wiki_index", return_value=""),
         ):
@@ -272,7 +272,7 @@ class TestWikiSync:
             "---\ntitle: Test\n---\n## Established\n\nOriginal body.\n", encoding="utf-8"
         )
 
-        from wikify.store.models import WikiArticle
+        from wikify.core.store.models import WikiArticle
 
         stale_row = WikiArticle(
             id="test_article",
@@ -325,7 +325,7 @@ class TestWikiSync:
         session_mock.exec.side_effect = exec_by_call
 
         with (
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=session_mock),
             patch("wikify.wiki.mapreduce.map_chunks_to_topic", return_value=[mock_ext]),
             patch("wikify.wiki.maintenance.detect_contradiction", return_value=False),
@@ -351,7 +351,7 @@ class TestWikiHealth:
     def test_health_no_db_does_not_crash(self, tmp_path: Path) -> None:
         """Health command gracefully handles an empty or missing DB."""
         with (
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", side_effect=Exception("No DB")),
             patch(
                 "wikify.papers.agent.tools.find_synthesis_opportunities",
@@ -372,7 +372,7 @@ class TestWikiHealth:
         """Health prints expected counts when DB is present."""
         now = datetime.now(timezone.utc)
 
-        from wikify.store.models import WikiArticle
+        from wikify.core.store.models import WikiArticle
 
         rows = [
             WikiArticle(
@@ -395,7 +395,7 @@ class TestWikiHealth:
         mock_session.exec.return_value.all.return_value = rows
 
         with (
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
             patch(
                 "wikify.papers.agent.tools.find_synthesis_opportunities",

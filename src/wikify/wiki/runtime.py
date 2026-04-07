@@ -12,8 +12,8 @@ from typing import Any
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     Campaign,
     ConceptRecord,
     DomainMembership,
@@ -28,7 +28,7 @@ from wikify.store.models import (
     WikiPage,
     WikiSnapshotMetric,
 )
-from wikify.llm.client import complete
+from wikify.core.llm.client import complete
 from wikify.wiki.builder import (
     append_unanswered_question,
     read_article_frontmatter,

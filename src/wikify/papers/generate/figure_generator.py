@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch  # noqa: E402
 
-from wikify.store.models import FigurePlan  # noqa: E402
+from wikify.core.store.models import FigurePlan  # noqa: E402
 
 # ── constants ──────────────────────────────────────────────────────────────────
 

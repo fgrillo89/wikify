@@ -6,7 +6,7 @@ import json
 from unittest.mock import MagicMock, call, patch
 
 import wikify.wiki.concepts as mod
-from wikify.store.models import ConceptRecord
+from wikify.core.store.models import ConceptRecord
 
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
 

@@ -265,8 +265,8 @@ class TestExploreCorpusForSitemapGraphContext:
 class TestGenerateSitemapDomain:
     # Deferred imports in generate_sitemap:
     _EXPLORE = "wikify.wiki.legacy.sitemap.explore_corpus_for_sitemap"
-    _COMPLETE = "wikify.llm.client.complete"
-    _SETTINGS = "wikify.config.settings"
+    _COMPLETE = "wikify.core.llm.client.complete"
+    _SETTINGS = "wikify.core.config.settings"
 
     def _run_generate(self, domain="", tmp_path=None):
         if tmp_path is None:
@@ -416,7 +416,7 @@ class TestDomainClassification:
 
 class TestGenerateMultiDomainSitemap:
     # Deferred imports in generate_multi_domain_sitemap live in these modules:
-    _GET_SESSION = "wikify.store.db.get_session"
+    _GET_SESSION = "wikify.core.store.db.get_session"
     _FIND_SYNTH = "wikify.papers.agent.tools.find_synthesis_opportunities"
     # generate_sitemap is in the same module -- patch the module-level name
     _GEN_SITEMAP = "wikify.wiki.legacy.sitemap.generate_sitemap"

@@ -14,10 +14,10 @@ from dataclasses import dataclass, field
 
 from sqlmodel import select
 
-from wikify.graph.metrics import GraphMetrics
-from wikify.store.db import get_session
-from wikify.store.embeddings import _get_collection, _get_model
-from wikify.store.models import Chunk, Paper
+from wikify.core.graph.metrics import GraphMetrics
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import _get_collection, _get_model
+from wikify.core.store.models import Chunk, Paper
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ def retrieve_for_query(
     """
     from wikify.core.retrieve.bm25 import bm25_is_confident, bm25_search
     from wikify.core.retrieve.cache import get_query_cache
-    from wikify.store.embeddings import query_chunks
+    from wikify.core.store.embeddings import query_chunks
 
     cache = get_query_cache()
 
@@ -263,7 +263,7 @@ def retrieve_all_papers(
     Top N hub papers (by PageRank) get ALL chunks (deep read).
     Remaining papers get first ~3 chunks (shallow read).
     """
-    from wikify.graph.metrics import compute_metrics
+    from wikify.core.graph.metrics import compute_metrics
 
     metrics = compute_metrics() if include_metrics else None
 

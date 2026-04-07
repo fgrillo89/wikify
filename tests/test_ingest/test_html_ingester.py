@@ -167,7 +167,7 @@ def test_ingest_html_skips_existing(tmp_path, monkeypatch):
         def get(self, model, key):
             return FakePaper()
 
-    monkeypatch.setattr("wikify.store.db.get_session", lambda: FakeSession())
+    monkeypatch.setattr("wikify.core.store.db.get_session", lambda: FakeSession())
 
     result = ingest_html(html_file)
     assert result == 0

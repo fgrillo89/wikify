@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 
-from wikify.store.models import Chunk, Equation
+from wikify.core.store.models import Chunk, Equation
 
 # ── Display math patterns ──────────────────────────────────────────────────
 

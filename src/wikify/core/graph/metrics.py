@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 import networkx as nx
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import Paper
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Paper
 
 
 @dataclass
@@ -75,7 +75,7 @@ def build_citation_only_graph() -> nx.DiGraph:
     PageRank as an orthogonal signal to embedding-based metrics.
     """
     from wikify.extract.cite_match import build_citation_graph
-    from wikify.store.models import Citation
+    from wikify.core.store.models import Citation
 
     graph = nx.DiGraph()
 
@@ -108,7 +108,7 @@ def build_corpus_graph() -> nx.DiGraph:
     2. k-NN similarity (undirected, lower weight)
     3. Bibliographic coupling (undirected)
     """
-    from wikify.store.embeddings import get_all_similar
+    from wikify.core.store.embeddings import get_all_similar
     from wikify.vault.coupler import compute_coupling
 
     graph = nx.DiGraph()
@@ -123,7 +123,7 @@ def build_corpus_graph() -> nx.DiGraph:
 
     # 1. Citation edges (directed)
     from wikify.extract.cite_match import build_citation_graph
-    from wikify.store.models import Citation
+    from wikify.core.store.models import Citation
 
     citations_by_paper: dict[str, list[str]] = {}
     with get_session() as session:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wikify.llm.client import complete_json, complete_structured, schema_to_prompt
-from wikify.llm.schemas import PaperPlanOutput
+from wikify.core.llm.client import complete_json, complete_structured, schema_to_prompt
+from wikify.core.llm.schemas import PaperPlanOutput
 from wikify.core.retrieve.context import RetrievedContext
-from wikify.store.models import PaperPlan, SectionPlan
+from wikify.core.store.models import PaperPlan, SectionPlan
 
 if TYPE_CHECKING:
     from wikify.papers.export.journal_profile import JournalProfile

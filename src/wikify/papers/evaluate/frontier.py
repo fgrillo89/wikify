@@ -31,9 +31,9 @@ def compute_paper_density() -> list[tuple[str, float, str]]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import get_paper_vibe_vectors
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.models import Paper
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -100,7 +100,7 @@ def frontier_exploration_order(
     # Phase 1: Seeds = #1 citation PageRank + #2-3 greedy coverage
     import heapq
 
-    from wikify.graph.metrics import compute_metrics
+    from wikify.core.graph.metrics import compute_metrics
 
     metrics = compute_metrics()
 
@@ -153,7 +153,7 @@ def frontier_exploration_order(
             heapq.heappush(heap, (-fresh, iteration, pid))
 
     # Get vibe vectors for all remaining phases
-    from wikify.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     seed_ids = [pid for pid, _, _ in selected]
@@ -266,8 +266,8 @@ def format_frontier_order_for_agent(order: list[tuple[str, str, str]]) -> str:
     """Format the frontier exploration order as text for the agent."""
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}

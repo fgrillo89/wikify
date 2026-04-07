@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wikify.config import settings
+from wikify.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ def _compute_boilerplate_ids() -> set[str]:
     distinct papers with similarity > 0.9, it's boilerplate.
     """
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import _store, get_chunk_embeddings
+    from wikify.core.store.embeddings import _store, get_chunk_embeddings
 
     chunks = load_corpus_chunks()
     if not chunks:
@@ -267,9 +267,9 @@ def _compute_divergent_gaps(
     from sqlmodel import select
 
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import get_chunk_embeddings
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import get_chunk_embeddings
+    from wikify.core.store.models import Paper
     from wikify.vault.coupler import compute_coupling
 
     with get_session() as session:
@@ -372,9 +372,9 @@ def _compute_concept_links_v2(
     from sqlmodel import select
 
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import get_chunk_embeddings
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import get_chunk_embeddings
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -631,7 +631,7 @@ def precompute_all() -> None:
     clear_cache()
 
     # 1. Vibe vectors
-    from wikify.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if vibes:
@@ -640,7 +640,7 @@ def precompute_all() -> None:
 
     # 2. KMeans on chunk embeddings
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import get_chunk_embeddings
+    from wikify.core.store.embeddings import get_chunk_embeddings
 
     chunks = load_corpus_chunks()
     all_ids = [c.id for c in chunks]
@@ -658,7 +658,7 @@ def precompute_all() -> None:
         logger.info("Cached KMeans: %d clusters, %d chunks", n_clusters, len(labels))
 
     # 3. Graph metrics
-    from wikify.graph.metrics import compute_metrics
+    from wikify.core.graph.metrics import compute_metrics
 
     metrics = compute_metrics()
     cache_graph_metrics(
@@ -677,9 +677,9 @@ def precompute_all() -> None:
     # 4. Topic embeddings
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import _store
-    from wikify.store.models import PaperTopic
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import _store
+    from wikify.core.store.models import PaperTopic
 
     with get_session() as session:
         all_topics = session.exec(select(PaperTopic)).all()
@@ -707,7 +707,7 @@ def precompute_all() -> None:
         logger.info("Cached %d topic embeddings", len(sig_topics))
 
     # 5. Science vibes (results/discussion/conclusion only)
-    from wikify.store.embeddings import get_science_vibe_vectors
+    from wikify.core.store.embeddings import get_science_vibe_vectors
 
     science_vibes = get_science_vibe_vectors()
     if science_vibes:
@@ -738,14 +738,14 @@ def precompute_all() -> None:
     # 9. Section summaries (extractive by default, free and instant)
     try:
         from wikify.extract.section_summarizer import summarize_sections_batch
-        from wikify.store.embeddings import embed_section_summaries
+        from wikify.core.store.embeddings import embed_section_summaries
 
         n_summarized = summarize_sections_batch(mode="extractive", force=False)
         if n_summarized > 0:
             logger.info("Generated section summaries for %d papers", n_summarized)
 
         # Embed all section summaries
-        from wikify.store.models import Paper as PaperModel
+        from wikify.core.store.models import Paper as PaperModel
 
         with get_session() as session:
             all_papers = session.exec(select(PaperModel)).all()

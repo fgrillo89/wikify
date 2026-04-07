@@ -6,9 +6,9 @@ import json
 
 from wikify.papers.agent.scripted import scripted_explore
 from wikify.papers.agent.tools import deep_read, read_paper_digest
-from wikify.store import db as db_module
-from wikify.store.db import DatabaseManager
-from wikify.store.models import Chunk, Paper
+from wikify.core.store import db as db_module
+from wikify.core.store.db import DatabaseManager
+from wikify.core.store.models import Chunk, Paper
 
 
 def _seed_paper_corpus(monkeypatch, tmp_path) -> dict[str, str]:

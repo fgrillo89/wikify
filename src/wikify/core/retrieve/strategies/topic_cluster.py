@@ -15,8 +15,8 @@ from sqlmodel import select
 from wikify.core.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
-    from wikify.graph.metrics import GraphMetrics
-    from wikify.store.models import PaperPlan
+    from wikify.core.graph.metrics import GraphMetrics
+    from wikify.core.store.models import PaperPlan
 
 
 class TopicClusteredStrategy(RetrievalStrategy):
@@ -31,10 +31,10 @@ class TopicClusteredStrategy(RetrievalStrategy):
         graph_metrics: GraphMetrics | None = None,
         plan: PaperPlan | None = None,  # noqa: ARG002
     ):
-        from wikify.graph.metrics import compute_metrics
+        from wikify.core.graph.metrics import compute_metrics
         from wikify.core.retrieve.context import RetrievedContext
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper, PaperTopic
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper, PaperTopic
 
         metrics = graph_metrics or compute_metrics()
         pagerank = metrics.pagerank if metrics else {}

@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 from wikify.papers.agent.tools import ingest_paper
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 
 def test_ingest_paper_returns_structured_missing_file_error(tmp_path):
@@ -52,7 +52,7 @@ def test_ingest_paper_returns_structured_already_ingested(monkeypatch, tmp_path)
         def get(self, model, key):
             return paper
 
-    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.core.store.db.get_session", lambda: _Session())
 
     data = json.loads(ingest_paper(str(file_path)))
 
@@ -93,7 +93,7 @@ def test_ingest_paper_returns_structured_success(monkeypatch, tmp_path):
         def exec(self, query):
             return _ExecResult()
 
-    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.core.store.db.get_session", lambda: _Session())
 
     data = json.loads(ingest_paper(str(file_path)))
 

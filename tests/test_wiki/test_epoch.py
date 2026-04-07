@@ -10,7 +10,7 @@ import networkx as nx
 import pytest
 
 import wikify.wiki.epoch as mod
-from wikify.store.models import ConceptRecord, EpochLog
+from wikify.core.store.models import ConceptRecord, EpochLog
 from wikify.wiki.mapreduce import SourceExtraction
 
 # ── Helpers / fixtures ────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ def test_get_next_epoch_number_increments():
 
 def test_get_all_paper_ids():
     """Returns only paper ids with origin == 'corpus', not 'generated'."""
-    from wikify.store.models import Paper
+    from wikify.core.store.models import Paper
 
     p1 = Paper(id="aaa", title="Paper A", origin="corpus")
     p2 = Paper(id="bbb", title="Paper B", origin="corpus")
@@ -236,7 +236,7 @@ def test_compute_loss_basic(tmp_path: Path):
         _make_concept(cid=f"c{i}", name=f"C{i}", article_status="stub") for i in range(3)
     ] + [_make_concept(cid=f"c{i + 3}", name=f"C{i + 3}", article_status="full") for i in range(7)]
     # 8 concepts covered (2 orphans)
-    from wikify.store.models import SourceCoverage
+    from wikify.core.store.models import SourceCoverage
 
     coverage = [SourceCoverage(source_id="p1", article_slug=f"c{i}") for i in range(8)]
 

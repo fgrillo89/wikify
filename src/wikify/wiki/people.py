@@ -11,7 +11,7 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
-from wikify.store.models import ConceptRecord, Paper
+from wikify.core.store.models import ConceptRecord, Paper
 from wikify.wiki.builder import slugify
 
 # Titles / honorifics to strip from names

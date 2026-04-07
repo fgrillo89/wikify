@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pyzotero import zotero
 
-from wikify.config import settings
-from wikify.store.models import Paper
+from wikify.core.config import settings
+from wikify.core.store.models import Paper
 
 
 class ZoteroClient:

@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-from wikify.config import settings
-from wikify.llm.client import complete, resolve_model_name
+from wikify.core.config import settings
+from wikify.core.llm.client import complete, resolve_model_name
 
 
 def test_resolve_model_name_maps_tier_aliases():
@@ -33,7 +33,7 @@ def test_complete_resolves_alias_before_litellm_call():
         settings.llm_model = "balanced-model"
         settings.llm_fast_model = "fast-model"
 
-        with patch("wikify.llm.client.litellm.completion") as mock_completion:
+        with patch("wikify.core.llm.client.litellm.completion") as mock_completion:
             mock_completion.return_value.choices = [
                 type("Choice", (), {"message": type("Message", (), {"content": "ok"})()})()
             ]

@@ -79,8 +79,8 @@ def precompute_context(
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers_db = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -143,7 +143,7 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
     """Load cached concept links or compute from chunk embedding similarity."""
     # Try cached links first (section-filtered, boilerplate-free)
     try:
-        from wikify.store.precompute import load_concept_links
+        from wikify.core.store.precompute import load_concept_links
 
         links = load_concept_links()
         if links:
@@ -160,7 +160,7 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
     import numpy as np
 
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -286,7 +286,7 @@ def fast_generate(
     import litellm
 
     from wikify.papers.agent.workflows import export_paper
-    from wikify.config import settings
+    from wikify.core.config import settings
 
     model = model or settings.llm_model
     topic = normalize_topic(topic)

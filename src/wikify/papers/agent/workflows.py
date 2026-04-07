@@ -377,8 +377,8 @@ def _resolve_references(markdown: str, profile) -> str:
     from sqlmodel import select
 
     from wikify.papers.generate.references import ReferenceResolver
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()

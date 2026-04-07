@@ -9,7 +9,7 @@ import networkx as nx
 import pytest
 
 import wikify.wiki.graph.domains as mod
-from wikify.store.models import ConceptRecord, DomainCluster, TopologySnapshot
+from wikify.core.store.models import ConceptRecord, DomainCluster, TopologySnapshot
 
 
 # ---------------------------------------------------------------------------

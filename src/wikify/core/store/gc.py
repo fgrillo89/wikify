@@ -17,8 +17,8 @@ import logging
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     ConceptEvidence,
     ConceptRecord,
     ConceptRelation,
@@ -310,7 +310,7 @@ def clean_chromadb_staging() -> int:
     Returns:
         Number of entries removed.
     """
-    from wikify.store.embeddings import _store
+    from wikify.core.store.embeddings import _store
 
     try:
         _ = _store.collection  # ensure client initialized

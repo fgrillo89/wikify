@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from sqlmodel import select
 
-from wikify.store.db import DatabaseManager
-from wikify.store.models import Campaign, MaintenanceFinding, WikiPage
+from wikify.core.store.db import DatabaseManager
+from wikify.core.store.models import Campaign, MaintenanceFinding, WikiPage
 from wikify.wiki.builder import article_path, slugify, write_article
 from wikify.wiki.runtime import (
     compare_runs,

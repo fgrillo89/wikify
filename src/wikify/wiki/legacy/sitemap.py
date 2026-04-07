@@ -429,8 +429,8 @@ def generate_sitemap(
     Returns:
         WikiSitemap populated from the LLM's JSON response.
     """
-    from wikify.config import settings
-    from wikify.llm.client import complete
+    from wikify.core.config import settings
+    from wikify.core.llm.client import complete
 
     effective_model = model or settings.llm_model
 
@@ -656,8 +656,8 @@ def generate_multi_domain_sitemap(
     from sqlmodel import select
 
     from wikify.papers.agent.tools import find_synthesis_opportunities
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper, PaperTopic
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper, PaperTopic
 
     # ------------------------------------------------------------------
     # Step 1: Load papers + topics, classify domains

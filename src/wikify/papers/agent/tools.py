@@ -126,8 +126,8 @@ def _build_corpus_summary() -> str:
     from sqlmodel import select
 
     from wikify.ingest.corpus_refresh import load_corpus_vocabulary
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
@@ -158,7 +158,7 @@ def _build_corpus_summary() -> str:
 
     # Graph metrics (hub / bridge / frontier) — wrapped defensively
     try:
-        from wikify.graph.metrics import compute_metrics
+        from wikify.core.graph.metrics import compute_metrics
 
         metrics = compute_metrics()
         id_to_paper = {p.id: p for p in papers}
@@ -313,8 +313,8 @@ def lookup_citation(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -373,8 +373,8 @@ def get_paper(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -435,9 +435,9 @@ def get_graph_metrics() -> str:
     try:
         from sqlmodel import select
 
-        from wikify.graph.metrics import compute_metrics
-        from wikify.store.db import get_session
-        from wikify.store.models import Paper
+        from wikify.core.graph.metrics import compute_metrics
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Paper
 
         with get_session() as session:
             papers = session.exec(select(Paper)).all()
@@ -514,15 +514,15 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
 
         # Order by citation PageRank (most influential first)
         try:
-            from wikify.graph.metrics import compute_metrics
+            from wikify.core.graph.metrics import compute_metrics
 
             metrics = compute_metrics()
             all_papers.sort(key=lambda p: metrics.pagerank.get(p.id, 0), reverse=True)
@@ -572,8 +572,8 @@ def list_papers(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -603,8 +603,8 @@ def list_topics() -> str:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             papers = session.exec(select(Paper)).all()
@@ -658,8 +658,8 @@ def read_paper_digest(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper, PaperTopic
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper, PaperTopic
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -780,8 +780,8 @@ def deep_read(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -863,8 +863,8 @@ def read_section(
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -940,8 +940,8 @@ def get_sections(
 
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         valid_types = {
             "abstract",
@@ -1072,8 +1072,8 @@ def _resolve_to_paper_ids(patterns: list[str]) -> list[str]:
     """Resolve display name patterns to paper IDs (internal helper)."""
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     with get_session() as session:
         all_papers = session.exec(select(Paper)).all()
@@ -1128,7 +1128,7 @@ def suggest_next_papers(
         import numpy as np
 
         from wikify.papers.evaluate.coverage import compute_paper_vibes
-        from wikify.graph.metrics import build_corpus_graph
+        from wikify.core.graph.metrics import build_corpus_graph
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1243,8 +1243,8 @@ def get_coverage_gaps(
         from sqlmodel import select
 
         from wikify.papers.evaluate.coverage import compute_coverage
-        from wikify.store.db import get_session
-        from wikify.store.models import Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Paper
 
         result = compute_coverage(review_text, threshold=threshold)
         delta = result.coverage_ratio - previous_coverage
@@ -1339,7 +1339,7 @@ def find_jump_target(
         import numpy as np
 
         from wikify.papers.evaluate.coverage import compute_coverage, compute_paper_vibes
-        from wikify.graph.metrics import build_corpus_graph
+        from wikify.core.graph.metrics import build_corpus_graph
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1494,7 +1494,7 @@ def find_corpus_gaps() -> str:
     """
     # Try cached divergent gaps first (computed at ingest time)
     try:
-        from wikify.store.precompute import load_divergent_gaps
+        from wikify.core.store.precompute import load_divergent_gaps
 
         gaps = load_divergent_gaps()
         if gaps:
@@ -1522,9 +1522,9 @@ def find_corpus_gaps() -> str:
         from sqlmodel import select
 
         from wikify.papers.evaluate.coverage import load_corpus_chunks
-        from wikify.store.db import get_session
-        from wikify.store.embeddings import _store, get_chunk_embeddings
-        from wikify.store.models import Paper, PaperTopic
+        from wikify.core.store.db import get_session
+        from wikify.core.store.embeddings import _store, get_chunk_embeddings
+        from wikify.core.store.models import Paper, PaperTopic
 
         chunks = load_corpus_chunks()
         if not chunks:
@@ -1539,7 +1539,7 @@ def find_corpus_gaps() -> str:
         corpus_embs = corpus_embs / corpus_norms
 
         # Try cached KMeans first (computed at ingest time)
-        from wikify.store.precompute import load_kmeans
+        from wikify.core.store.precompute import load_kmeans
 
         cached = load_kmeans()
         if cached is not None:
@@ -1694,7 +1694,7 @@ def find_synthesis_opportunities() -> str:
     """
     # Try cached concept links first (section-filtered, boilerplate-free)
     try:
-        from wikify.store.precompute import load_concept_links
+        from wikify.core.store.precompute import load_concept_links
 
         links = load_concept_links()
         if links:
@@ -1718,9 +1718,9 @@ def find_synthesis_opportunities() -> str:
         import numpy as np
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.embeddings import get_paper_vibe_vectors
-        from wikify.store.models import Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.embeddings import get_paper_vibe_vectors
+        from wikify.core.store.models import Paper
 
         vibes = get_paper_vibe_vectors()
         if not vibes:
@@ -2036,8 +2036,8 @@ def list_domain_clusters() -> str:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import DomainCluster
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import DomainCluster
 
         with get_session() as session:
             clusters = list(session.exec(select(DomainCluster)).all())
@@ -2166,8 +2166,8 @@ def ingest_paper(file_path: str) -> str:
         from sqlmodel import select
 
         from wikify.ingest.service import ingest_file
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         path = Path(file_path)
         if not path.exists():
@@ -2263,9 +2263,9 @@ def check_wiki_health() -> str:
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.gc import integrity_check
-    from wikify.store.models import ConceptRecord
+    from wikify.core.store.db import get_session
+    from wikify.core.store.gc import integrity_check
+    from wikify.core.store.models import ConceptRecord
     from wikify.wiki.presentation.layout import iter_visible_page_files
 
     wiki_dir = Path("data/wiki")
@@ -2329,8 +2329,8 @@ def search_wiki(query: str, top_k: int = 10) -> str:
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import ConceptRecord
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import ConceptRecord
     from wikify.wiki.presentation.layout import iter_visible_page_files
 
     # Search the concept definitions via ConceptRecord
@@ -2388,7 +2388,7 @@ def run_wiki_gc() -> str:
     Redirects merged concept references, removes orphaned rows,
     and cleans ChromaDB staging. Safe to run at any time.
     """
-    from wikify.store.gc import gc_run
+    from wikify.core.store.gc import gc_run
 
     result = gc_run()
     return _tool_json_success(
@@ -2505,7 +2505,7 @@ def get_figure_details(figure_id: str) -> str:
         media_type, image_base64 (or error).
     """
     try:
-        from wikify.llm.vision import view_figure
+        from wikify.core.llm.vision import view_figure
 
         result = view_figure(figure_id)
         if "error" in result:
@@ -2529,8 +2529,8 @@ def get_paper_figures(paper_id: str) -> str:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import Figure
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Figure
 
         with get_session() as session:
             figures = session.exec(select(Figure).where(Figure.paper_id == paper_id)).all()

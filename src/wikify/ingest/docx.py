@@ -23,7 +23,7 @@ from wikify.extract.metadata import (
     _parse_filename,
 )
 from wikify.ingest.pdf import ParsedPaper, _parse_section_tree, persist_parsed
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 console = Console()
 
@@ -250,7 +250,7 @@ def ingest_docx(path: Path, return_id: bool = False) -> int | str | None:
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    from wikify.store.db import get_session
+    from wikify.core.store.db import get_session
 
     with get_session() as session:
         existing = session.get(Paper, file_hash)

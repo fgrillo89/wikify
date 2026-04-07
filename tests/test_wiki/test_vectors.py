@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from wikify.store.models import ConceptRecord
+from wikify.core.store.models import ConceptRecord
 from wikify.wiki import vectors as mod
 
 

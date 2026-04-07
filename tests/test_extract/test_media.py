@@ -16,7 +16,7 @@ from wikify.extract.media import (
     _store_media,
     extract_media,
 )
-from wikify.store.models import Figure
+from wikify.core.store.models import Figure
 
 # ── Caption extraction from markdown ────────────────────────────────────────────
 

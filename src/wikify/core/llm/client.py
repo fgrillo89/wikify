@@ -12,10 +12,10 @@ import litellm
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
-from wikify.config import settings
+from wikify.core.config import settings
 
 if TYPE_CHECKING:
-    from wikify.llm.hooks import LLMEvent, LLMHook
+    from wikify.core.llm.hooks import LLMEvent, LLMHook
 
 console = Console()
 
@@ -293,7 +293,7 @@ def complete_structured(
     On validation failure, appends the error to the conversation and retries.
     Raises ``LLMOutputError`` after *max_retries* failed attempts.
     """
-    from wikify.llm.hooks import LLMEvent
+    from wikify.core.llm.hooks import LLMEvent
 
     resolved_model = resolve_model_name(model)
     active_hooks: list[LLMHook] = hooks or []
@@ -376,7 +376,7 @@ def validate_and_retry_text(
     Returns ``(raw_text, validated_model)`` on success.
     Raises ``LLMOutputError`` after *max_retries* failed attempts.
     """
-    from wikify.llm.hooks import LLMEvent
+    from wikify.core.llm.hooks import LLMEvent
 
     resolved_model = resolve_model_name(model)
     active_hooks: list[LLMHook] = hooks or []

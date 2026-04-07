@@ -23,8 +23,8 @@ import networkx as nx
 import numpy as np
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     ConceptEvidence,
     ConceptOccurrence,
     ConceptRecord,

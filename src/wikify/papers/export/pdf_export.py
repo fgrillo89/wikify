@@ -11,7 +11,7 @@ from jinja2 import Environment, FileSystemLoader
 from xhtml2pdf import pisa
 
 from wikify.papers.export.journal_profile import JournalProfile
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 

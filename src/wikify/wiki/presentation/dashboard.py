@@ -13,8 +13,8 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from sqlmodel import func, select
 
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     ConceptRecord,
     EpochLog,
     ExtractionGap,

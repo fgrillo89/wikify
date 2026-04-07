@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from wikify.papers.agent.run_context import RunContext
-    from wikify.llm.hooks import LLMHook
+    from wikify.core.llm.hooks import LLMHook
 
 
 # ── Tool schema builder ───────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ def _inject_session_context(
         # Include concept graph if enabled and has edges
         graph_text = ""
         try:
-            from wikify.config import settings as _cfg
+            from wikify.core.config import settings as _cfg
 
             if _cfg.inject_concept_graph and active_context.concept_graph.edges:
                 graph_text = "\n\n" + active_context.concept_graph.to_compact_text()
@@ -412,8 +412,8 @@ class ScholarForgeAgent:
             restore_run_context,
             set_current_run_context,
         )
-        from wikify.config import settings
-        from wikify.llm.hooks import LLMEvent
+        from wikify.core.config import settings
+        from wikify.core.llm.hooks import LLMEvent
 
         model = self.model or settings.llm_model
         run_context = self.run_context or create_run_context(topic=prompt)
@@ -606,7 +606,7 @@ class ScholarForgeAgent:
         max_retries: int = 2,
     ) -> BaseModel:
         """Run agent loop, then validate final output against Pydantic model."""
-        from wikify.llm.client import LLMOutputError, _extract_json, schema_to_prompt
+        from wikify.core.llm.client import LLMOutputError, _extract_json, schema_to_prompt
 
         schema_inst = schema_to_prompt(response_model)
         full_prompt = f"{prompt}\n\n{schema_inst}"

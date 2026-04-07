@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 from wikify.vault.templates import topic_note
 from wikify.vault.writer import _sanitize_filename, vault_dir
 

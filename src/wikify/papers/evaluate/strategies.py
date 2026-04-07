@@ -24,7 +24,7 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
         and paper_embs maps paper_id -> (K, 384) normalized chunk embeddings.
     """
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import get_chunk_embeddings
+    from wikify.core.store.embeddings import get_chunk_embeddings
 
     chunks = load_corpus_chunks()
 
@@ -170,7 +170,7 @@ def max_distance_order(
 
     Provides a 2-approximation guarantee for coverage.
     """
-    from wikify.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -221,7 +221,7 @@ def spectral_cluster_order(
 
     Ensures cross-topic coverage before depth in any single topic.
     """
-    from wikify.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -280,7 +280,7 @@ def hub_bfs_order(
     """Classic BFS from top-PageRank hub (baseline snowball)."""
     from collections import deque
 
-    from wikify.graph.metrics import build_corpus_graph, compute_metrics
+    from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
 
     metrics = compute_metrics()
     if not metrics.hub_papers:
@@ -319,7 +319,7 @@ def compute_cumulative_coverage(
     Returns a list of dicts with coverage metrics at each step.
     """
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import get_chunk_embeddings
+    from wikify.core.store.embeddings import get_chunk_embeddings
 
     chunks = load_corpus_chunks()
 

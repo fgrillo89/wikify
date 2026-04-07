@@ -6,7 +6,7 @@ import bibtexparser
 from bibtexparser.bibdatabase import BibDatabase
 from bibtexparser.bwriter import BibTexWriter
 
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 
 def paper_to_bibtex(paper: Paper) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import wikify.wiki.article as mod
-from wikify.store.models import ConceptRecord, ConceptRelation
+from wikify.core.store.models import ConceptRecord, ConceptRelation
 from wikify.wiki.mapreduce import SourceExtraction
 
 # ── Helpers / fixtures ────────────────────────────────────────────────────────

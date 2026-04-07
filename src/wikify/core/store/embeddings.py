@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import chromadb
 
-from wikify.config import settings
-from wikify.store.models import Paper
+from wikify.core.config import settings
+from wikify.core.store.models import Paper
 
 if TYPE_CHECKING:
     from chromadb.api.models.Collection import Collection
@@ -246,7 +246,7 @@ def get_paper_vibe_vectors() -> dict[str, list[float]]:
 
     # Try cached vibes first (computed at ingest time)
     try:
-        from wikify.store.precompute import load_vibe_vectors
+        from wikify.core.store.precompute import load_vibe_vectors
 
         cached = load_vibe_vectors()
         if cached:
@@ -309,7 +309,7 @@ def get_science_vibe_vectors() -> dict[str, list[float]]:
 
     # Try cache first
     try:
-        from wikify.store.precompute import load_science_vibes
+        from wikify.core.store.precompute import load_science_vibes
 
         cached = load_science_vibes()
         if cached:

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wikify.llm.vision import (
+from wikify.core.llm.vision import (
     _load_image_as_base64,
     _parse_json_response,
     describe_figure,
@@ -67,7 +67,7 @@ class TestLoadImageAsBase64:
 
 
 class TestDescribeFigure:
-    @patch("wikify.llm.vision.complete")
+    @patch("wikify.core.llm.vision.complete")
     def test_builds_correct_message_format(self, mock_complete: MagicMock, tmp_path: Path) -> None:
         """Verify that describe_figure builds multimodal messages correctly."""
         img = tmp_path / "fig.png"
@@ -106,7 +106,7 @@ class TestDescribeFigure:
         assert result["description"] == "XRD pattern showing crystalline HfO2"
         assert "HfO2" in result["concepts"]
 
-    @patch("wikify.llm.vision.complete")
+    @patch("wikify.core.llm.vision.complete")
     def test_parses_json_response(self, mock_complete: MagicMock, tmp_path: Path) -> None:
         img = tmp_path / "fig.png"
         img.write_bytes(b"\x89PNG" + b"\x00" * 20)
@@ -119,7 +119,7 @@ class TestDescribeFigure:
         result = describe_figure(image_path=img)
         assert result["description"] == "A graph"
 
-    @patch("wikify.llm.vision.complete")
+    @patch("wikify.core.llm.vision.complete")
     def test_handles_malformed_response(self, mock_complete: MagicMock, tmp_path: Path) -> None:
         img = tmp_path / "fig.png"
         img.write_bytes(b"\x89PNG" + b"\x00" * 20)
@@ -136,7 +136,7 @@ class TestDescribeFigure:
 
 
 class TestExtractTableFromImage:
-    @patch("wikify.llm.vision.complete")
+    @patch("wikify.core.llm.vision.complete")
     def test_builds_correct_prompt(self, mock_complete: MagicMock, tmp_path: Path) -> None:
         img = tmp_path / "table.png"
         img.write_bytes(b"\x89PNG" + b"\x00" * 20)
@@ -163,7 +163,7 @@ class TestExtractTableFromImage:
 
         assert result["headers"] == ["Material", "Thickness"]
 
-    @patch("wikify.llm.vision.complete")
+    @patch("wikify.core.llm.vision.complete")
     def test_parses_response(self, mock_complete: MagicMock, tmp_path: Path) -> None:
         img = tmp_path / "table.png"
         img.write_bytes(b"\x89PNG" + b"\x00" * 20)
@@ -184,10 +184,10 @@ class TestExtractTableFromImage:
 
 
 class TestViewFigure:
-    @patch("wikify.store.db.get_session")
+    @patch("wikify.core.store.db.get_session")
     def test_returns_correct_structure(self, mock_get_session: MagicMock, tmp_path: Path) -> None:
         """view_figure loads from DB and returns the expected dict keys."""
-        from wikify.store.models import Figure, Paper
+        from wikify.core.store.models import Figure, Paper
 
         # Create a test image
         img = tmp_path / "ab" / "cd" / "abcdef123456.png"
@@ -232,7 +232,7 @@ class TestViewFigure:
         assert result["image_base64"] != ""
         assert "image/" in result["media_type"]
 
-    @patch("wikify.store.db.get_session")
+    @patch("wikify.core.store.db.get_session")
     def test_missing_figure_returns_error(self, mock_get_session: MagicMock) -> None:
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -261,7 +261,7 @@ class TestEnrichPaperFigures:
         mock_resolve: MagicMock,
         mock_describe: MagicMock,
     ) -> None:
-        from wikify.store.models import Figure
+        from wikify.core.store.models import Figure
         from wikify.wiki.figure_enrichment import enrich_paper_figures
 
         fig = Figure(
@@ -306,7 +306,7 @@ class TestEnrichPaperFigures:
         mock_resolve: MagicMock,
         mock_describe: MagicMock,
     ) -> None:
-        from wikify.store.models import Figure
+        from wikify.core.store.models import Figure
         from wikify.wiki.figure_enrichment import enrich_paper_figures
 
         fig = Figure(
@@ -348,7 +348,7 @@ class TestEnrichPaperFigures:
         mock_resolve: MagicMock,
         mock_describe: MagicMock,
     ) -> None:
-        from wikify.store.models import Figure
+        from wikify.core.store.models import Figure
         from wikify.wiki.figure_enrichment import enrich_paper_figures
 
         long_caption = " ".join(["word"] * 55)  # 55 words > threshold of 50
@@ -393,7 +393,7 @@ class TestEnrichPaperFigures:
         mock_describe: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from wikify.store.models import Figure, Paper
+        from wikify.core.store.models import Figure, Paper
         from wikify.wiki.figure_enrichment import enrich_paper_figures
 
         img = tmp_path / "fig.png"

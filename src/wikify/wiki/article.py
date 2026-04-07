@@ -19,10 +19,10 @@ from pathlib import Path
 
 from sqlmodel import or_, select
 
-from wikify.config import settings
-from wikify.llm.client import complete
-from wikify.store.db import get_session
-from wikify.store.models import ConceptRecord, ConceptRelation
+from wikify.core.config import settings
+from wikify.core.llm.client import complete
+from wikify.core.store.db import get_session
+from wikify.core.store.models import ConceptRecord, ConceptRelation
 from wikify.wiki.maintenance import additive_update, detect_contradiction, revisionary_update
 from wikify.wiki.mapreduce import (
     FAST_MODEL,

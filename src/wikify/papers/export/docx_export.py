@@ -15,7 +15,7 @@ from rich.console import Console
 
 from wikify.papers.export.chemistry import split_formula_runs
 from wikify.papers.export.journal_profile import JournalProfile
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 console = Console()
 

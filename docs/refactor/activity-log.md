@@ -3,6 +3,33 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice Phase 2.A (move config / llm / store / graph into core/)
+
+Completes the `core/` boundary. The shared infrastructure layer is now
+in one place:
+
+- `src/wikify/config.py` → `src/wikify/core/config.py`
+- `src/wikify/llm/`      → `src/wikify/core/llm/`
+- `src/wikify/store/`    → `src/wikify/core/store/`
+- `src/wikify/graph/`    → `src/wikify/core/graph/`
+
+Bulk-rebound 117 import sites in the same slice
+(`wikify.{config,llm,store,graph}` → `wikify.core.*`) using a regex
+with negative lookbehind on `wikify.wiki.` to avoid touching the
+unrelated `wikify.wiki.graph` subpackage.
+
+`src/wikify/core/` now contains:
+- `config.py`
+- `corpus_tools.py`
+- `graph/` (corpus-level metrics: pagerank, centrality, peripheral)
+- `llm/`   (vendor-neutral client + tier resolver)
+- `store/` (SQLModel + ChromaDB + embeddings + cache)
+- `retrieve/` (corpus retrieval / BM25 / strategies)
+
+**852 tests pass.** No shims, no compat layer.
+
+---
+
 ## 2026-04-07 — Slice Phase 1.A.2 / Phase 2.A (core/, corpus_tools, boundary clean)
 
 Closes the boundary violation surfaced by Phase 1.A: no non-legacy wiki

@@ -97,7 +97,7 @@ def evaluate_pi(
     Returns:
         Formatted markdown report with per-criterion scores and verdict.
     """
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     # Truncate to avoid context overflow
     body = review_text[: _WORD_LIMIT * 5]  # ~5 chars/word estimate

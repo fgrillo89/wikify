@@ -94,7 +94,7 @@ def test_scripted_explore_resets_concept_graph(monkeypatch):
         def exec(self, _query):
             return _ExecResult()
 
-    monkeypatch.setattr("wikify.store.db.get_session", lambda: _Session())
+    monkeypatch.setattr("wikify.core.store.db.get_session", lambda: _Session())
 
     result = scripted_explore(max_papers=1, n_deep=0)
 

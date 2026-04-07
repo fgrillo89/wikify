@@ -83,7 +83,7 @@ def test_revise_weakest_section_replaces_section() -> None:
             return_value="evidence text",
         ),
         patch(
-            "wikify.llm.client.complete",
+            "wikify.core.llm.client.complete",
             return_value=revised_section,
         ),
     ):

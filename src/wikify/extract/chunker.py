@@ -7,9 +7,9 @@ import uuid
 
 import tiktoken
 
-from wikify.config import settings
+from wikify.core.config import settings
 from wikify.extract.section_classifier import classify_section_path
-from wikify.store.models import Chunk
+from wikify.core.store.models import Chunk
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
@@ -123,8 +123,8 @@ def migrate_section_types() -> dict[str, int]:
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk
 
     with get_session() as session:
         all_chunks: list[Chunk] = list(session.exec(select(Chunk)).all())

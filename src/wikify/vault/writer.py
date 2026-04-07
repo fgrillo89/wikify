@@ -6,8 +6,8 @@ import json
 import re
 from pathlib import Path
 
-from wikify.config import settings
-from wikify.store.models import Paper
+from wikify.core.config import settings
+from wikify.core.store.models import Paper
 from wikify.vault.templates import author_note, paper_note
 
 

@@ -11,8 +11,8 @@ from collections import defaultdict
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import Citation
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Citation
 
 
 def _fingerprint(raw_text: str) -> str:

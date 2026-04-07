@@ -57,7 +57,7 @@ class EmbeddingContext:
 def _build_embedding_context(review_text: str, chunk_size: int = 150) -> Optional[EmbeddingContext]:
     """Build the shared EmbeddingContext.  Returns None if corpus is unavailable."""
     from wikify.papers.evaluate.coverage import load_corpus_chunks
-    from wikify.store.embeddings import _store, get_chunk_embeddings
+    from wikify.core.store.embeddings import _store, get_chunk_embeddings
 
     chunks = load_corpus_chunks()
     if not chunks:
@@ -453,7 +453,7 @@ def compute_bridge_vectors(
     This avoids the cluster-centroid problem where no chunk can be
     geometrically close to two distant centroids.
     """
-    from wikify.store.embeddings import get_paper_vibe_vectors
+    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -638,8 +638,8 @@ def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import PaperTopic
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import PaperTopic
 
         with get_session() as session:
             all_topics = session.exec(select(PaperTopic)).all()

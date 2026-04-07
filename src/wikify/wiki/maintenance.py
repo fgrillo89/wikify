@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wikify.store.embeddings import _store
+from wikify.core.store.embeddings import _store
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def additive_update(
     Returns:
         Updated article body markdown (no frontmatter).
     """
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
     from wikify.wiki.mapreduce import _build_evidence_block
 
     text = article_path.read_text(encoding="utf-8", errors="replace")
@@ -190,7 +190,7 @@ def revisionary_update(
     Returns:
         Updated article body markdown (no frontmatter).
     """
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
     from wikify.wiki.mapreduce import _build_evidence_block
 
     text = article_path.read_text(encoding="utf-8", errors="replace")
@@ -263,8 +263,8 @@ def structural_audit(
     from sqlmodel import func, select
 
     from wikify.core.corpus_tools import compute_graph_metrics
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper, SourceCoverage, WikiArticle
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper, SourceCoverage, WikiArticle
 
     report = StructuralReport(domain=domain)
 

@@ -19,8 +19,8 @@ from typing import Any
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import Chunk, ConceptRecord
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Chunk, ConceptRecord
 from wikify.wiki.builder import slugify
 from wikify.wiki.concepts.merge import (
     apply_redirect_map,

@@ -15,7 +15,7 @@ from wikify.extract.equations import (
     _is_plausible_equation,
     extract_equations,
 )
-from wikify.store.models import Chunk
+from wikify.core.store.models import Chunk
 
 
 def _make_chunk(

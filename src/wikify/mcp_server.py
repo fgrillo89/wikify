@@ -356,7 +356,7 @@ def _prewarm() -> None:
 
     def _load():
         try:
-            from wikify.store.embeddings import _get_collection
+            from wikify.core.store.embeddings import _get_collection
 
             col = _get_collection()
             logger.info("ChromaDB pre-warmed: %d embeddings", col.count())
@@ -364,7 +364,7 @@ def _prewarm() -> None:
             logger.warning("ChromaDB pre-warm failed", exc_info=True)
 
         try:
-            from wikify.store.embeddings import _get_model
+            from wikify.core.store.embeddings import _get_model
 
             _get_model()
             logger.info("SentenceTransformer pre-warmed")
@@ -377,7 +377,7 @@ def _prewarm() -> None:
 def run_server(library: str = "default") -> None:
     """Configure library scope and start the MCP stdio server."""
     if library != "default":
-        from wikify.config import settings
+        from wikify.core.config import settings
 
         settings.library = library
 

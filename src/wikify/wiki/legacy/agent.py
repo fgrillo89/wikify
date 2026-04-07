@@ -77,7 +77,7 @@ def build_wiki_article(
         (article_markdown_content, list_of_source_paper_ids)
     """
     from wikify.papers.agent.tools import read_paper_digest, search_papers
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     # If a domain is provided and no persona given, look up/create the persona
     resolved_persona = persona
@@ -155,7 +155,7 @@ def update_wiki_article(
     Returns:
         Revised article body (without frontmatter).
     """
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     new_evidence = "\n\n---\n\n".join(new_source_digests) if new_source_digests else ""
 
@@ -364,8 +364,8 @@ def build_wiki_from_sitemap(
 
     from sqlmodel import Session, select
 
-    from wikify.store.db import get_engine
-    from wikify.store.models import WikiArticle
+    from wikify.core.store.db import get_engine
+    from wikify.core.store.models import WikiArticle
     from wikify.wiki.builder import article_path, write_article
 
     ordered = sitemap.ordered_for_writing()

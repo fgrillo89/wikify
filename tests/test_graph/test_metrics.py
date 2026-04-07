@@ -1,10 +1,10 @@
-"""Tests for wikify.graph.metrics."""
+"""Tests for wikify.core.graph.metrics."""
 
 from __future__ import annotations
 
 import networkx as nx
 
-from wikify.graph.metrics import GraphMetrics, compute_metrics
+from wikify.core.graph.metrics import GraphMetrics, compute_metrics
 
 # ── GraphMetrics dataclass ────────────────────────────────────────────────────
 

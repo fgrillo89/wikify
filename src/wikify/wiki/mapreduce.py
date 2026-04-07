@@ -15,15 +15,15 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from wikify.config import settings
+from wikify.core.config import settings
 from wikify.core.corpus_tools import (
     compute_graph_metrics,
     read_paper_digest_text,
     search_corpus,
 )
-from wikify.llm.client import complete
-from wikify.store.db import get_session
-from wikify.store.models import Paper, SourceCoverage
+from wikify.core.llm.client import complete
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Paper, SourceCoverage
 
 logger = logging.getLogger(__name__)
 

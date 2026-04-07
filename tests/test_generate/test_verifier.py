@@ -14,7 +14,7 @@ from wikify.papers.generate.verifier import (
     verify_paper,
     verify_section_against_plan,
 )
-from wikify.store.models import PaperPlan, SectionPlan
+from wikify.core.store.models import PaperPlan, SectionPlan
 
 # ── Helper function tests ────────────────────────────────────────────────────
 

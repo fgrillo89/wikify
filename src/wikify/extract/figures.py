@@ -8,8 +8,8 @@ from pathlib import Path
 
 import fitz
 
-from wikify.config import settings
-from wikify.store.models import Figure
+from wikify.core.config import settings
+from wikify.core.store.models import Figure
 
 
 def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:

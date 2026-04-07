@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from wikify.store.models import Chunk
+    from wikify.core.store.models import Chunk
 
 
 def get_corpus_paper_ids() -> set[str]:
@@ -35,8 +35,8 @@ def get_corpus_paper_ids() -> set[str]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper, PaperOrigin
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper, PaperOrigin
 
     with get_session() as session:
         papers = session.exec(select(Paper).where(Paper.origin == PaperOrigin.CORPUS)).all()
@@ -51,8 +51,8 @@ def load_corpus_chunks() -> list[Chunk]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk
 
     corpus_pids = get_corpus_paper_ids()
     with get_session() as session:
@@ -123,9 +123,9 @@ def compute_coverage(
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import _store, get_chunk_embeddings
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import _store, get_chunk_embeddings
+    from wikify.core.store.models import Paper
 
     # 1. Get corpus chunks only (excludes generated output)
     chunks = load_corpus_chunks()
@@ -284,9 +284,9 @@ def compute_paper_vibes() -> list[PaperVibe]:
 
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
+    from wikify.core.store.models import Paper
 
     # Load only corpus chunks (excludes generated output)
     chunks = load_corpus_chunks()
@@ -334,7 +334,7 @@ def compute_paper_vibes() -> list[PaperVibe]:
 
     # If no chunk embeddings stored, encode from scratch
     if not stored_embs:
-        from wikify.store.embeddings import _store
+        from wikify.core.store.embeddings import _store
 
         model = _store.model
         all_texts = [c.content for c in chunks]

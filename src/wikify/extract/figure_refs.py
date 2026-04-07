@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from wikify.store.models import FigureRef
+from wikify.core.store.models import FigureRef
 
 # Matches figure captions: Fig., Fig, Figure, FIG followed by number + optional letter.
 # Also matches inline patterns like "**Fig. 1.** caption text" (bold key followed by caption).

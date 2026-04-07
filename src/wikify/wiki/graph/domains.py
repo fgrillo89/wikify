@@ -27,11 +27,11 @@ import networkx as nx
 import numpy as np
 from sqlmodel import select
 
-from wikify.config import settings
-from wikify.llm.client import complete_json
-from wikify.store.db import get_session
-from wikify.store.embeddings import _store
-from wikify.store.models import ConceptRecord, DomainCluster, TopologySnapshot
+from wikify.core.config import settings
+from wikify.core.llm.client import complete_json
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import _store
+from wikify.core.store.models import ConceptRecord, DomainCluster, TopologySnapshot
 from wikify.wiki.builder import slugify
 from wikify.wiki.graph.build import classify_node_roles, detect_communities
 from wikify.wiki.persona import get_or_create_persona
@@ -852,7 +852,7 @@ def expand_via_bridges(
 
 def _get_frequent_source_titles(limit: int = 20) -> list[str]:
     """Return titles of the most frequently occurring papers in SourceCoverage."""
-    from wikify.store.models import Paper, SourceCoverage
+    from wikify.core.store.models import Paper, SourceCoverage
 
     with get_session() as session:
         # Count source_ids in SourceCoverage

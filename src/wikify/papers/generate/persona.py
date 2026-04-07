@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import PaperTopic
+from wikify.core.store.db import get_session
+from wikify.core.store.models import PaperTopic
 
 if TYPE_CHECKING:
     from wikify.papers.export.journal_profile import JournalProfile

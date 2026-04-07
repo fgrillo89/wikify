@@ -118,7 +118,7 @@ def revise_weakest_section(
         Full review text with the weakest section replaced by the revised version.
         Returns the original text unchanged if the weakest section cannot be found.
     """
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     weakest = pi_result.weakest_section.strip()
     if not weakest:

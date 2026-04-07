@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from wikify.llm.hooks import LLMHook
+    from wikify.core.llm.hooks import LLMHook
 
 
 def get_default_tools() -> list[Callable]:
@@ -73,7 +73,7 @@ def get_default_tools() -> list[Callable]:
 
 def get_default_hooks(token_budget: int = 200_000) -> list[LLMHook]:
     """Return standard hooks: cost tracker + token budget + call logger."""
-    from wikify.llm.hooks import CallLogger, CostTracker, TokenBudget
+    from wikify.core.llm.hooks import CallLogger, CostTracker, TokenBudget
 
     return [CostTracker(), TokenBudget(token_budget), CallLogger()]
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from wikify.config import Settings
+from wikify.core.config import Settings
 
 
 @pytest.fixture

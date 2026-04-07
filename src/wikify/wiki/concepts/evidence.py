@@ -12,8 +12,8 @@ import logging
 import re
 from typing import Any
 
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     ConceptEvidence,
     ConceptOccurrence,
     ExtractionGap,

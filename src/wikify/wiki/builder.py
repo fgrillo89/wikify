@@ -287,8 +287,8 @@ def build_evidence_brief(concept_id: str, max_evidence: int = 10) -> list[dict]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import ConceptEvidence, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import ConceptEvidence, Paper
 
     with get_session() as session:
         evidence_rows: list[ConceptEvidence] = list(
@@ -339,8 +339,8 @@ def build_figure_brief(concept_id: str, max_figures: int = 5) -> list[dict]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import ConceptEvidence, Figure, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import ConceptEvidence, Figure, Paper
 
     # Get paper IDs from concept evidence
     with get_session() as session:
@@ -411,8 +411,8 @@ def resolve_article_sources(article_path_obj: Path) -> list[str]:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     if not article_path_obj.exists():
         return []
@@ -541,8 +541,8 @@ def generate_parameter_table(concept_id: str) -> str:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper, ParameterExtraction
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper, ParameterExtraction
 
     with get_session() as session:
         params: list[ParameterExtraction] = list(
@@ -610,8 +610,8 @@ def generate_domain_condensation(
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import ConceptRecord, ParameterExtraction
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import ConceptRecord, ParameterExtraction
 
     domain_slug = slugify(domain_label)
     domain_dir = wiki_dir / "domains" / domain_slug
@@ -755,8 +755,8 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import DomainCluster
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import DomainCluster
 
     with get_session() as session:
         clusters: list[DomainCluster] = list(session.exec(select(DomainCluster)).all())
@@ -787,8 +787,8 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
 def _load_graph_metrics() -> dict:
     """Return graph metrics in the dict shape index generation expects."""
     from wikify.core.corpus_tools import compute_graph_metrics
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     metrics = compute_graph_metrics()
     if metrics.error:

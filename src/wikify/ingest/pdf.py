@@ -18,7 +18,7 @@ from wikify.extract.figure_refs import extract_figure_refs
 from wikify.extract.figures import extract_figures
 from wikify.extract.media import extract_media
 from wikify.extract.metadata import extract_metadata
-from wikify.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
+from wikify.core.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
 
 console = Console()
 
@@ -170,7 +170,7 @@ def parse_pdf(path: Path) -> ParsedPaper:
 
 def persist_parsed(parsed: ParsedPaper) -> None:
     """Persist a parsed paper to SQLite and vault."""
-    from wikify.store.db import get_session
+    from wikify.core.store.db import get_session
     from wikify.vault.writer import ensure_vault_dirs, write_paper_note
 
     ensure_vault_dirs()
@@ -206,7 +206,7 @@ def ingest_pdf(path: Path, return_id: bool = False) -> int | str | None:
     file_bytes = path.read_bytes()
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    from wikify.store.db import get_session
+    from wikify.core.store.db import get_session
 
     with get_session() as session:
         existing = session.get(Paper, file_hash)

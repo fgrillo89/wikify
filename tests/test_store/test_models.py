@@ -1,10 +1,10 @@
-"""Tests for wikify.store.models — Paper.parsed_authors and display_name."""
+"""Tests for wikify.core.store.models — Paper.parsed_authors and display_name."""
 
 from __future__ import annotations
 
 import json
 
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 
 def _make_paper(**kwargs) -> Paper:

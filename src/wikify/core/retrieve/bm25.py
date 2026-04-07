@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.models import Chunk
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Chunk
 
 logger = logging.getLogger(__name__)
 

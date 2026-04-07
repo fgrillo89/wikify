@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from wikify.store.db import DatabaseManager
-from wikify.store.models import GraphEdge
+from wikify.core.store.db import DatabaseManager
+from wikify.core.store.models import GraphEdge
 from wikify.wiki.builder import article_path, write_article
 from wikify.wiki.observability import begin_run, finish_run, snapshot_wiki_metrics
 

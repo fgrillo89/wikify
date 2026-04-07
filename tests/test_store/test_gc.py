@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from wikify.store.models import (
+from wikify.core.store.models import (
     ConceptEvidence,
     ConceptRecord,
     ConceptRelation,
@@ -43,7 +43,7 @@ def _mock_session(concepts=None, evidence=None, params=None, relations=None, pap
 
 def test_integrity_check_clean():
     """Clean DB reports zero orphans."""
-    from wikify.store.gc import integrity_check
+    from wikify.core.store.gc import integrity_check
 
     c1 = ConceptRecord(id="ald", name="ALD")
     p1 = MagicMock()
@@ -64,7 +64,7 @@ def test_integrity_check_clean():
     ]
     session.exec.side_effect = results
 
-    with patch("wikify.store.gc.get_session", return_value=session):
+    with patch("wikify.core.store.gc.get_session", return_value=session):
         report = integrity_check()
 
     assert report["orphan_evidence"] == 0
@@ -74,7 +74,7 @@ def test_integrity_check_clean():
 
 def test_integrity_check_detects_orphans():
     """Detects evidence pointing to nonexistent concept."""
-    from wikify.store.gc import integrity_check
+    from wikify.core.store.gc import integrity_check
 
     c1 = ConceptRecord(id="ald", name="ALD")
     e_orphan = ConceptEvidence(concept_id="nonexistent", paper_id="p1")
@@ -94,7 +94,7 @@ def test_integrity_check_detects_orphans():
     ]
     session.exec.side_effect = results
 
-    with patch("wikify.store.gc.get_session", return_value=session):
+    with patch("wikify.core.store.gc.get_session", return_value=session):
         report = integrity_check()
 
     assert report["orphan_evidence"] == 1
@@ -102,7 +102,7 @@ def test_integrity_check_detects_orphans():
 
 def test_redirect_merged():
     """Redirects evidence from merged concept to primary."""
-    from wikify.store.gc import redirect_merged
+    from wikify.core.store.gc import redirect_merged
 
     primary = ConceptRecord(id="ald", name="ALD", article_status="full")
     merged = ConceptRecord(
@@ -131,7 +131,7 @@ def test_redirect_merged():
         empty,  # relations target
     ]
 
-    with patch("wikify.store.gc.get_session", return_value=session):
+    with patch("wikify.core.store.gc.get_session", return_value=session):
         count = redirect_merged()
 
     assert count >= 1

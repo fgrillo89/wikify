@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 if TYPE_CHECKING:
-    from wikify.store.models import JournalTemplate
+    from wikify.core.store.models import JournalTemplate
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -89,8 +89,8 @@ def import_template(
 
     Copies the file into the templates directory and creates a SQLite record.
     """
-    from wikify.store.db import get_session
-    from wikify.store.models import JournalTemplate
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import JournalTemplate
 
     source_path = Path(source_path).resolve()
     if not source_path.exists():
@@ -160,8 +160,8 @@ def get_template_path(name: str) -> Path | None:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import JournalTemplate
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import JournalTemplate
 
         with get_session() as session:
             # By ID
@@ -199,8 +199,8 @@ def list_templates() -> list[dict[str, str]]:
     try:
         from sqlmodel import select
 
-        from wikify.store.db import get_session
-        from wikify.store.models import JournalTemplate
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import JournalTemplate
 
         with get_session() as session:
             for t in session.exec(select(JournalTemplate)).all():

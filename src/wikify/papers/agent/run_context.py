@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from wikify.config import settings
+from wikify.core.config import settings
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

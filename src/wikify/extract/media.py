@@ -15,8 +15,8 @@ from pathlib import Path
 
 import fitz
 
-from wikify.config import settings
-from wikify.store.models import Figure
+from wikify.core.config import settings
+from wikify.core.store.models import Figure
 
 logger = logging.getLogger(__name__)
 

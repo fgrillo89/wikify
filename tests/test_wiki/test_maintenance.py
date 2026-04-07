@@ -191,7 +191,7 @@ class TestAdditiveUpdate:
         ]
         persona = "You are a senior ALD researcher."
 
-        with patch("wikify.llm.client.complete") as mock_complete:
+        with patch("wikify.core.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Updated body content"
             result = additive_update(art_file, extractions, persona, model=None)
 
@@ -211,7 +211,7 @@ class TestAdditiveUpdate:
         irrelevant = _make_extraction(is_relevant=False)
         relevant = _make_extraction(extraction="YES: Good finding.", is_relevant=True)
 
-        with patch("wikify.llm.client.complete") as mock_complete:
+        with patch("wikify.core.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Updated"
             additive_update(art_file, [irrelevant, relevant], "persona", model=None)
 
@@ -237,7 +237,7 @@ class TestRevisionaryUpdate:
         ]
         persona = "You are a senior ALD researcher."
 
-        with patch("wikify.llm.client.complete") as mock_complete:
+        with patch("wikify.core.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Revised body with WARNING marker"
             result = revisionary_update(art_file, extractions, persona, model=None)
 
@@ -255,7 +255,7 @@ class TestRevisionaryUpdate:
 
         extractions = [_make_extraction(is_relevant=True)]
 
-        with patch("wikify.llm.client.complete") as mock_complete:
+        with patch("wikify.core.llm.client.complete") as mock_complete:
             mock_complete.return_value = "Revised"
             revisionary_update(art_file, extractions, "persona", model=None)
 
@@ -301,7 +301,7 @@ class TestStructuralAudit:
         article = _make_article("slug_heavy", source_ids=["s1", "s2"])
 
         with (
-            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.core.store.db.get_session") as mock_gs,
             patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
@@ -354,7 +354,7 @@ class TestStructuralAudit:
         article = _make_article("slug_empty", source_ids=["s1"])  # only 1 source
 
         with (
-            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.core.store.db.get_session") as mock_gs,
             patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
@@ -410,7 +410,7 @@ class TestStructuralAudit:
         article.file_path = str(art_file)
 
         with (
-            patch("wikify.store.db.get_session") as mock_gs,
+            patch("wikify.core.store.db.get_session") as mock_gs,
             patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()

@@ -11,8 +11,8 @@ import json
 import logging
 from pathlib import Path
 
-from wikify.config import settings
-from wikify.llm.client import complete
+from wikify.core.config import settings
+from wikify.core.llm.client import complete
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ def view_figure(figure_id: str) -> dict:
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Figure, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Figure, Paper
 
     with get_session() as session:
         figure = session.exec(select(Figure).where(Figure.id == figure_id)).first()

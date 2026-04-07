@@ -106,7 +106,7 @@ def test_refine_template_no_gaps(tmp_path):
 
     session = _mock_session([[]])  # gaps query returns empty
 
-    with patch("wikify.store.db.get_session", return_value=session):
+    with patch("wikify.core.store.db.get_session", return_value=session):
         _, delta = mod.refine_template(tmp_path, epoch=3)
 
     assert delta == 0.0
@@ -147,8 +147,8 @@ def test_refine_template_accepts_proposal(tmp_path):
     ]
 
     with (
-        patch("wikify.store.db.get_session", return_value=session),
-        patch("wikify.llm.client.complete", side_effect=complete_responses),
+        patch("wikify.core.store.db.get_session", return_value=session),
+        patch("wikify.core.llm.client.complete", side_effect=complete_responses),
     ):
         new_template, delta = mod.refine_template(tmp_path, epoch=3)
 
@@ -189,8 +189,8 @@ def test_refine_template_rejects_low_hit_proposal(tmp_path):
     ]
 
     with (
-        patch("wikify.store.db.get_session", return_value=session),
-        patch("wikify.llm.client.complete", side_effect=complete_responses),
+        patch("wikify.core.store.db.get_session", return_value=session),
+        patch("wikify.core.llm.client.complete", side_effect=complete_responses),
     ):
         new_template, delta = mod.refine_template(tmp_path, epoch=3)
 
@@ -232,8 +232,8 @@ def test_refine_template_overfitting_guard_rejects(tmp_path):
     ]
 
     with (
-        patch("wikify.store.db.get_session", return_value=session),
-        patch("wikify.llm.client.complete", side_effect=complete_responses),
+        patch("wikify.core.store.db.get_session", return_value=session),
+        patch("wikify.core.llm.client.complete", side_effect=complete_responses),
     ):
         new_template, delta = mod.refine_template(tmp_path, epoch=3)
 

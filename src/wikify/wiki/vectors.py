@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
+from wikify.core.store.db import get_session
 
 if TYPE_CHECKING:
-    from wikify.store.models import ConceptRecord
+    from wikify.core.store.models import ConceptRecord
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def build_structured_text(concept: ConceptRecord) -> str:
         Structured string suitable for embedding, e.g.:
         "Atomic Layer Deposition | type:technique | enables:RRAM,HfO2"
     """
-    from wikify.store.models import ConceptRelation, ParameterExtraction
+    from wikify.core.store.models import ConceptRelation, ParameterExtraction
 
     parts = [concept.name]
 

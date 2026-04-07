@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from wikify.store.models import Paper
+from wikify.core.store.models import Paper
 
 
 def _normalize(text: str) -> str:

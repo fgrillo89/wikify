@@ -11,7 +11,7 @@ from collections import Counter
 
 from pydantic import BaseModel
 
-from wikify.store.models import PaperPlan, SectionPlan
+from wikify.core.store.models import PaperPlan, SectionPlan
 
 # Common English stopwords to exclude from key-term extraction.
 _STOPWORDS: frozenset[str] = frozenset(

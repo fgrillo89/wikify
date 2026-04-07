@@ -17,7 +17,7 @@ import re
 import shutil
 from pathlib import Path
 
-from wikify.config import settings
+from wikify.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -250,9 +250,9 @@ def refine_template(
 
     from sqlmodel import select
 
-    from wikify.llm.client import complete
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk, ExtractionGap
+    from wikify.core.llm.client import complete
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk, ExtractionGap
 
     resolved_model = model or FAST_MODEL
 

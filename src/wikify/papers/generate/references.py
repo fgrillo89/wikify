@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from wikify.store.models import Paper
+    from wikify.core.store.models import Paper
 
 logger = logging.getLogger(__name__)
 

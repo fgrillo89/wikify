@@ -13,9 +13,9 @@ from typing import Any
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.embeddings import _store
-from wikify.store.models import ConceptRecord
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import _store
+from wikify.core.store.models import ConceptRecord
 from wikify.wiki.builder import slugify
 
 logger = logging.getLogger(__name__)

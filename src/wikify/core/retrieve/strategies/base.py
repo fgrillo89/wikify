@@ -6,12 +6,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from wikify.config import settings
+from wikify.core.config import settings
 
 if TYPE_CHECKING:
-    from wikify.graph.metrics import GraphMetrics
+    from wikify.core.graph.metrics import GraphMetrics
     from wikify.core.retrieve.context import RetrievedContext
-    from wikify.store.models import PaperPlan
+    from wikify.core.store.models import PaperPlan
 
 
 @dataclass

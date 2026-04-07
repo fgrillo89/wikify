@@ -149,7 +149,7 @@ class TestWikiAudit:
 
         with (
             patch("wikify.wiki.maintenance.structural_audit") as mock_audit,
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=session_mock),
         ):
             mock_audit.return_value = report
@@ -166,7 +166,7 @@ class TestWikiAudit:
 
         with (
             patch("wikify.wiki.maintenance.structural_audit") as mock_audit,
-            patch("wikify.store.db.get_engine") as mock_ge,
+            patch("wikify.core.store.db.get_engine") as mock_ge,
         ):
             mock_audit.return_value = _make_structural_report()
             result = runner.invoke(app, ["wiki", "audit"])
@@ -241,7 +241,7 @@ class TestWikiSyncRouting:
             patch("wikify.wiki.builder.write_article"),
             patch("wikify.wiki.builder.generate_wiki_index"),
             patch("sqlmodel.Session", return_value=session_mock),
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
         ):
             mock_dc.return_value = contradict
             mock_map.return_value = [mock_extraction]
@@ -293,7 +293,7 @@ class TestWikiSyncRouting:
         with (
             patch("wikify.wiki.builder.generate_wiki_index"),
             patch("sqlmodel.Session", return_value=session_mock),
-            patch("wikify.store.db.get_engine"),
+            patch("wikify.core.store.db.get_engine"),
         ):
             result = runner.invoke(app, ["wiki", "sync"])
 

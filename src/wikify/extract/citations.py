@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from wikify.store.models import Citation
+from wikify.core.store.models import Citation
 
 # Heading pattern for references/bibliography sections
 _REFS_HEADING_RE = re.compile(

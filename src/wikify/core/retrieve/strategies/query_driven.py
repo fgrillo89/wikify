@@ -17,8 +17,8 @@ from sqlmodel import select
 from wikify.core.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
-    from wikify.graph.metrics import GraphMetrics
-    from wikify.store.models import PaperPlan
+    from wikify.core.graph.metrics import GraphMetrics
+    from wikify.core.store.models import PaperPlan
 
 
 class QueryDrivenStrategy(RetrievalStrategy):
@@ -33,11 +33,11 @@ class QueryDrivenStrategy(RetrievalStrategy):
         graph_metrics: GraphMetrics | None = None,
         plan: PaperPlan | None = None,
     ):
-        from wikify.graph.metrics import compute_metrics
+        from wikify.core.graph.metrics import compute_metrics
         from wikify.core.retrieve.context import RetrievedContext, SectionContext
-        from wikify.store.db import get_session
-        from wikify.store.embeddings import _get_collection, _get_model, query_chunks
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.embeddings import _get_collection, _get_model, query_chunks
+        from wikify.core.store.models import Chunk, Paper
 
         metrics = graph_metrics or compute_metrics()
 

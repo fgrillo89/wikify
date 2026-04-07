@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from wikify.store.models import ConceptRecord, Paper
+from wikify.core.store.models import ConceptRecord, Paper
 from wikify.wiki.people import (
     create_person_records,
     deduplicate_people,

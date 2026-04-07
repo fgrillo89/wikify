@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 import logging
 
-from wikify.llm.client import complete
-from wikify.store.db import get_session
-from wikify.store.models import DomainPersona, Paper, PaperTopic
+from wikify.core.llm.client import complete
+from wikify.core.store.db import get_session
+from wikify.core.store.models import DomainPersona, Paper, PaperTopic
 
 logger = logging.getLogger(__name__)
 

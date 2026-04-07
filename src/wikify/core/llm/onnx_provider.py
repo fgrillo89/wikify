@@ -148,7 +148,7 @@ class OnnxProvider:
         """Generate a completion and parse as JSON.
 
         Strips markdown fences and recovers JSON boundaries,
-        matching the behavior of wikify.llm.client.complete_json.
+        matching the behavior of wikify.core.llm.client.complete_json.
         """
         text = self.complete(messages, max_tokens, temperature)
         text = text.strip()

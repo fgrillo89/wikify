@@ -28,10 +28,10 @@ from typing import Optional
 
 from sqlmodel import select
 
-from wikify.config import settings
-from wikify.llm.client import complete
-from wikify.store.db import get_session
-from wikify.store.models import (
+from wikify.core.config import settings
+from wikify.core.llm.client import complete
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
     ConceptOccurrence,
     ConceptRecord,
     DomainMembership,
@@ -447,7 +447,7 @@ def _deduplicate_concepts(concepts: list[ConceptRecord]) -> list[ConceptRecord]:
 
     # Encode all concepts at once
     try:
-        from wikify.store.embeddings import _store  # noqa: PLC0415
+        from wikify.core.store.embeddings import _store  # noqa: PLC0415
 
         embeddings = _store.model.encode(texts)  # shape (N, D)
     except Exception:

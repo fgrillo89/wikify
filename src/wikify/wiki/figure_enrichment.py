@@ -12,9 +12,9 @@ import logging
 
 from sqlmodel import select
 
-from wikify.llm.vision import _resolve_figure_path, describe_figure, extract_table_from_image
-from wikify.store.db import get_session
-from wikify.store.models import Figure, Paper
+from wikify.core.llm.vision import _resolve_figure_path, describe_figure, extract_table_from_image
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Figure, Paper
 
 logger = logging.getLogger(__name__)
 

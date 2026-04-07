@@ -18,9 +18,9 @@ import logging
 
 from sqlmodel import select
 
-from wikify.store.db import get_session
-from wikify.store.embeddings import _store
-from wikify.store.models import ConceptRecord, DomainCluster, SourceCoverage
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import _store
+from wikify.core.store.models import ConceptRecord, DomainCluster, SourceCoverage
 from wikify.wiki.graph.domains import expand_via_bridges, get_domain_for_query
 
 logger = logging.getLogger(__name__)

@@ -21,9 +21,9 @@ from wikify.core.retrieve.strategies.base import RetrievalStrategy
 if TYPE_CHECKING:
     import networkx as nx
 
-    from wikify.graph.metrics import GraphMetrics
+    from wikify.core.graph.metrics import GraphMetrics
     from wikify.core.retrieve.strategies.base import StrategyConfig
-    from wikify.store.models import Chunk, Paper, PaperPlan
+    from wikify.core.store.models import Chunk, Paper, PaperPlan
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +87,10 @@ class HubAndSpokeStrategy(RetrievalStrategy):
         graph_metrics: GraphMetrics | None = None,
         plan: PaperPlan | None = None,  # noqa: ARG002
     ):
-        from wikify.graph.metrics import build_corpus_graph, compute_metrics
+        from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
         from wikify.core.retrieve.context import RetrievedContext, SectionContext
-        from wikify.store.db import get_session
-        from wikify.store.models import Chunk, Paper
+        from wikify.core.store.db import get_session
+        from wikify.core.store.models import Chunk, Paper
 
         metrics = graph_metrics or compute_metrics()
         if not metrics or not metrics.hub_papers:
@@ -194,8 +194,8 @@ def _agent_traverse_hub(
     config: StrategyConfig,
 ) -> HubTraversalResult:
     """Single subagent: deep-read hub, traverse neighbors, synthesize."""
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk
 
     hub_paper = all_papers[hub_id]
 
@@ -241,7 +241,7 @@ def _agent_traverse_hub(
         )
 
     # Call LLM for synthesis
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     prompt = _SYNTHESIS_PROMPT.format(
         hub_title=hub_paper.title,

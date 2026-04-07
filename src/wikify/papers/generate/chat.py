@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.markdown import Markdown
 
-from wikify.llm.client import complete
+from wikify.core.llm.client import complete
 from wikify.core.retrieve.context import retrieve_for_query
 
 console = Console()

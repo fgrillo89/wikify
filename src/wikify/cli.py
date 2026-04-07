@@ -23,7 +23,7 @@ def main(
 ):
     """ScholarForge CLI — research writing assistant."""
     if library != "default":
-        from wikify.config import settings
+        from wikify.core.config import settings
 
         settings.library = library
         console.print(f"[dim]Library: {library}[/dim]")
@@ -67,8 +67,8 @@ def stats():
     """Show knowledge base statistics."""
     from sqlmodel import func, select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk, Figure, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk, Figure, Paper
 
     with get_session() as session:
         papers = session.exec(select(func.count(Paper.id))).one()
@@ -84,9 +84,9 @@ def graph():
 
     from sqlmodel import select
 
-    from wikify.graph.metrics import compute_metrics
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.graph.metrics import compute_metrics
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     metrics = compute_metrics()
 
@@ -715,8 +715,8 @@ def wiki_expand(
 
     from sqlmodel import Session, select
 
-    from wikify.store.db import get_engine
-    from wikify.store.models import WikiArticle
+    from wikify.core.store.db import get_engine
+    from wikify.core.store.models import WikiArticle
     from wikify.wiki.builder import (
         article_path,
         generate_wiki_index,
@@ -878,8 +878,8 @@ def wiki_sync(
 
     from sqlmodel import Session, select
 
-    from wikify.store.db import get_engine
-    from wikify.store.models import SourceCoverage, WikiArticle
+    from wikify.core.store.db import get_engine
+    from wikify.core.store.models import SourceCoverage, WikiArticle
     from wikify.wiki.builder import generate_wiki_index, write_article
     from wikify.wiki.maintenance import (
         _strip_frontmatter,
@@ -1024,8 +1024,8 @@ def wiki_audit(
 
     from sqlmodel import Session, select
 
-    from wikify.store.db import get_engine
-    from wikify.store.models import WikiArticle
+    from wikify.core.store.db import get_engine
+    from wikify.core.store.models import WikiArticle
     from wikify.wiki.maintenance import structural_audit
 
     wiki_dir = Path("data/wiki")
@@ -1171,8 +1171,8 @@ def wiki_health():
 
     from sqlmodel import Session, select
 
-    from wikify.store.db import get_engine
-    from wikify.store.models import WikiArticle
+    from wikify.core.store.db import get_engine
+    from wikify.core.store.models import WikiArticle
     from wikify.wiki.builder import find_stale_articles, slugify
 
     wiki_dir = Path("data/wiki")
@@ -1277,7 +1277,7 @@ def _answer_with_escalation(
     import re
 
     from wikify.papers.agent.tools import read_paper_digest, read_section
-    from wikify.llm.client import complete
+    from wikify.core.llm.client import complete
 
     decision_prompt_template = (
         "Question: {question}\n\n"
@@ -1764,7 +1764,7 @@ def wiki_migrate_figures(
     import shutil
     import sqlite3
 
-    from wikify.config import settings
+    from wikify.core.config import settings
     from wikify.extract.media import _make_figure_filename, _make_paper_slug
 
     db_path = settings.db_path

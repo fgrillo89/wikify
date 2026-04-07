@@ -51,8 +51,8 @@ def summarize_sections_extractive(paper_id: str, force: bool = False) -> dict[st
     from sqlmodel import select
 
     from wikify.extract.section_classifier import classify_section_path
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk, Paper
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)
@@ -118,11 +118,11 @@ def summarize_sections_llm(
     """
     from sqlmodel import select
 
-    from wikify.config import settings
-    from wikify.llm.client import complete_json
+    from wikify.core.config import settings
+    from wikify.core.llm.client import complete_json
     from wikify.extract.section_classifier import classify_section_path
-    from wikify.store.db import get_session
-    from wikify.store.models import Chunk, Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Chunk, Paper
 
     with get_session() as session:
         paper = session.get(Paper, paper_id)
@@ -252,8 +252,8 @@ def summarize_sections_batch(
     """
     from sqlmodel import select
 
-    from wikify.store.db import get_session
-    from wikify.store.models import Paper
+    from wikify.core.store.db import get_session
+    from wikify.core.store.models import Paper
 
     fn = summarize_sections_llm if mode == "llm" else summarize_sections_extractive
 
@@ -279,10 +279,10 @@ def summarize_sections_batch(
 
 def _persist_summaries(paper_id: str, summaries: dict[str, str]) -> None:
     """Save section summaries to the Paper record."""
-    from wikify.store.db import get_session
+    from wikify.core.store.db import get_session
 
     with get_session() as session:
-        from wikify.store.models import Paper
+        from wikify.core.store.models import Paper
 
         paper = session.get(Paper, paper_id)
         if paper:
