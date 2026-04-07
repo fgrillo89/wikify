@@ -93,6 +93,30 @@ def test_recipe_rejects_missing_recipe_id():
         parse_recipe({"steps": [{"name": "p", "kind": "profile_documents"}]})
 
 
+def test_recipe_step_name_defaults_to_kind():
+    recipe = parse_recipe(
+        {
+            "recipe_id": "x",
+            "steps": [
+                {"kind": "profile_documents"},
+                {"kind": "identify_concepts"},
+            ],
+        }
+    )
+    assert [s.name for s in recipe.steps] == ["profile_documents", "identify_concepts"]
+
+
+def test_recipe_rejects_unknown_frontier_priority():
+    with pytest.raises(RecipeError, match="frontier.priority"):
+        parse_recipe(
+            {
+                "recipe_id": "x",
+                "frontier": {"priority": "mystery"},
+                "steps": [{"kind": "profile_documents"}],
+            }
+        )
+
+
 def test_recipe_rejects_dangling_inputs_from():
     with pytest.raises(RecipeError, match="unknown step"):
         parse_recipe(
@@ -101,6 +125,54 @@ def test_recipe_rejects_dangling_inputs_from():
                 "steps": [
                     {"name": "p", "kind": "profile_documents"},
                     {"name": "c", "kind": "consolidate", "inputs_from": ["ghost"]},
+                ],
+            }
+        )
+
+
+def test_recipe_rejects_missing_prompt_file():
+    with pytest.raises(RecipeError, match="steps\\[p\\]: prompt file"):
+        parse_recipe(
+            {
+                "recipe_id": "x",
+                "steps": [
+                    {
+                        "name": "p",
+                        "kind": "profile_documents",
+                        "prompt": "src/wikify/wiki/prompts/does_not_exist.md",
+                    }
+                ],
+            }
+        )
+
+
+def test_recipe_rejects_missing_schema_file():
+    with pytest.raises(RecipeError, match="steps\\[c\\]: schema file"):
+        parse_recipe(
+            {
+                "recipe_id": "x",
+                "steps": [
+                    {
+                        "name": "c",
+                        "kind": "identify_concepts",
+                        "schema": "src/wikify/wiki/schemas/does_not_exist.json",
+                    }
+                ],
+            }
+        )
+
+
+def test_recipe_rejects_missing_style_guide_file():
+    with pytest.raises(RecipeError, match="steps\\[w\\]: style_guide file"):
+        parse_recipe(
+            {
+                "recipe_id": "x",
+                "steps": [
+                    {
+                        "name": "w",
+                        "kind": "write_articles",
+                        "style_guide": "src/wikify/wiki/prompts/missing_style.md",
+                    }
                 ],
             }
         )

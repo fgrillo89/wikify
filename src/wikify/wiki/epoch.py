@@ -62,6 +62,7 @@ from wikify.wiki.concepts import (
     store_parameters,
     store_relation_evidence,
 )
+from wikify.wiki.discovery.extractors import AgentExtractor
 from wikify.wiki.graph.build import (
     build_concept_graph,
     extract_relations,
@@ -289,7 +290,9 @@ def compute_loss(epoch: int) -> tuple[float, float]:
     """
     with get_session() as session:
         all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
-        all_occurrences: list[ConceptOccurrence] = list(session.exec(select(ConceptOccurrence)).all())
+        all_occurrences: list[ConceptOccurrence] = list(
+            session.exec(select(ConceptOccurrence)).all()
+        )
         all_coverage: list[SourceCoverage] = list(session.exec(select(SourceCoverage)).all())
 
     total_concepts = len(all_concepts)
@@ -533,6 +536,9 @@ def run_epoch(
     triggered_by: str = "user",
     domain: str = "",
     model: Optional[str] = None,
+    *,
+    extractor: AgentExtractor | None = None,
+    allow_echo_extractor: bool = False,
 ) -> EpochLog:
     """Run one complete epoch of the Wikipedia pipeline (5 passes).
 
@@ -542,6 +548,10 @@ def run_epoch(
                       Pass "" to process all domains.
         model:        Override the article-writing model.  When None, model
                       selection follows the loss-based rule (fast vs balanced).
+        extractor:    Agent-native extractor used by concept discovery.
+        allow_echo_extractor:
+                      Test/dry-run escape hatch to allow EchoExtractor
+                      fallback when no extractor is provided.
 
     Returns:
         Completed EpochLog row (persisted to DB).
@@ -563,25 +573,26 @@ def run_epoch(
     )
     rebuild_index_stub(_WIKI_DIR)
 
-    # Compile the active recipe so observability can record the
-    # workflow id, recipe config hash, and any deferred conceptual steps
-    # the orchestrating agent is expected to handle. The recipe is
-    # currently informational — the existing pass1/2/3 hot-path still
-    # runs — but it gives a single source of truth for "which recipe is
-    # this run". A follow-up slice will replace the hot-path with a
-    # DagExecutor.run(compiled_spec) call.
+    # Compile the active recipe once at run start. Pass 1 executes this
+    # compiled DAG per document; downstream passes (graph/article/index)
+    # remain on the current hot path.
+    from wikify.wiki.discovery.executor import DagExecutor
     from wikify.wiki.discovery.recipe import load_recipe_yaml
     from wikify.wiki.discovery.recipe_compiler import compile_recipe
+    from wikify.wiki.discovery.registry import default_registry
 
-    _RECIPE_PATH = Path(__file__).parent / "recipes" / "default_publication.yaml"
+    recipe_path = Path(__file__).parent / "recipes" / "default_publication.yaml"
+    compiled_spec = None
+    dag_executor = None
     try:
-        _recipe = load_recipe_yaml(_RECIPE_PATH)
-        _compiled = compile_recipe(_recipe)
+        _recipe = load_recipe_yaml(recipe_path)
+        compiled_spec = compile_recipe(_recipe)
+        dag_executor = DagExecutor(default_registry())
         recipe_id = _recipe.recipe_id
         recipe_hash = _recipe.config_hash
-        workflow_id = _compiled.workflow_id
+        workflow_id = compiled_spec.workflow_id
         deferred_step_names = ",".join(
-            d.get("step_name", "") for d in _compiled.params.get("deferred_steps", [])
+            d.get("step_name", "") for d in compiled_spec.params.get("deferred_steps", [])
         )
     except Exception as exc:
         logger.warning("epoch: failed to compile recipe: %s", exc)
@@ -589,6 +600,8 @@ def run_epoch(
         recipe_hash = ""
         workflow_id = "recipe::default_publication"
         deferred_step_names = ""
+        compiled_spec = None
+        dag_executor = None
 
     run_id = begin_run(
         workflow_type="epoch",
@@ -652,11 +665,16 @@ def run_epoch(
     paper_ids = _get_all_paper_ids()
     logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
 
-    # Agent-native: the orchestrating agent supplies an extractor through
-    # the runtime in production. Without one, EchoExtractor surfaces a
-    # clean "no agent wired in" run that produces zero new concepts.
-    discovery = discover_concepts(paper_ids, epoch)
+    discovery = discover_concepts(
+        paper_ids,
+        epoch,
+        extractor=extractor,
+        allow_echo_extractor=allow_echo_extractor,
+        workflow_spec=compiled_spec,
+        dag_executor=dag_executor,
+    )
     log.concepts_discovered = len(discovery.concepts)
+    discovery_stats: dict[str, object] = dict(getattr(discovery, "telemetry", {}) or {})
 
     # Store evidence and gaps from rich extraction results
     rich = discovery.rich_extractions
@@ -668,11 +686,31 @@ def run_epoch(
         store_relation_evidence(rich, epoch)
 
     logger.info(
-        "Pass 1 complete in %.1fs: %d concepts discovered",
+        "Pass 1 complete in %.1fs: %d concepts discovered (units processed=%s, deferred=%s)",
         time.monotonic() - t0,
         log.concepts_discovered,
+        discovery_stats.get("units_processed", 0),
+        discovery_stats.get("units_deferred", 0),
     )
-    pass1_stage.finish(paper_count=len(paper_ids), concepts_discovered=log.concepts_discovered)
+    pass1_counts: dict[str, object] = {
+        "paper_count": len(paper_ids),
+        "concepts_discovered": log.concepts_discovered,
+        "mode": discovery_stats.get("mode", "extractor"),
+        "documents_processed": discovery_stats.get("documents_processed", 0),
+        "documents_skipped": discovery_stats.get("documents_skipped", 0),
+        "documents_with_deferred": discovery_stats.get("documents_with_deferred", 0),
+        "units_planned": discovery_stats.get("units_planned", 0),
+        "units_processed": discovery_stats.get("units_processed", 0),
+        "units_deferred": discovery_stats.get("units_deferred", 0),
+        "units_failed": discovery_stats.get("units_failed", 0),
+    }
+    node_timing_s = discovery_stats.get("node_timing_s")
+    if isinstance(node_timing_s, dict) and node_timing_s:
+        pass1_counts["node_timing_s"] = node_timing_s
+    node_runs = discovery_stats.get("node_runs")
+    if isinstance(node_runs, dict) and node_runs:
+        pass1_counts["node_runs"] = node_runs
+    pass1_stage.finish(**pass1_counts)
 
     # ── Pass 2: Graph Building ─────────────────────────────────────────────────
     pass2_stage = stage_timer(run_id, "graph_building")
@@ -1022,7 +1060,9 @@ def run_epoch(
     log.loss_score = loss_score
     log.loss_delta = loss_delta
     with get_session() as session:
-        occurrence_rows: list[ConceptOccurrence] = list(session.exec(select(ConceptOccurrence)).all())
+        occurrence_rows: list[ConceptOccurrence] = list(
+            session.exec(select(ConceptOccurrence)).all()
+        )
         coverage_rows: list[SourceCoverage] = list(session.exec(select(SourceCoverage)).all())
     covered_slugs = (
         {row.concept_id for row in occurrence_rows}
@@ -1034,7 +1074,8 @@ def run_epoch(
     cross_ref_density = _count_wikilinks(_WIKI_DIR, max(visible_page_count, 1))
     loss_components = {
         "stub_ratio": (
-            sum(1 for c in all_concepts if c.article_status in ("none", "stub")) / max(len(all_concepts), 1),
+            sum(1 for c in all_concepts if c.article_status in ("none", "stub"))
+            / max(len(all_concepts), 1),
             _ALPHA,
         ),
         "orphan_concept_rate": (
@@ -1095,6 +1136,18 @@ def run_epoch(
             "workflow_type": "epoch",
             "total_visible_pages": visible_page_count,
             "metric_count": len(metrics),
+            "discovery_mode": discovery_stats.get("mode", "extractor"),
+            "discovery_documents_processed": discovery_stats.get("documents_processed", 0),
+            "discovery_documents_skipped": discovery_stats.get("documents_skipped", 0),
+            "discovery_documents_with_deferred": discovery_stats.get(
+                "documents_with_deferred", 0
+            ),
+            "discovery_units_planned": discovery_stats.get("units_planned", 0),
+            "discovery_units_processed": discovery_stats.get("units_processed", 0),
+            "discovery_units_deferred": discovery_stats.get("units_deferred", 0),
+            "discovery_units_failed": discovery_stats.get("units_failed", 0),
+            "discovery_node_timing_s": discovery_stats.get("node_timing_s", {}),
+            "discovery_node_runs": discovery_stats.get("node_runs", {}),
         }
     )
     finish_run(
@@ -1131,6 +1184,9 @@ def run_until_convergence(
     domain: str = "",
     max_epochs: int = 10,
     model: Optional[str] = None,
+    *,
+    extractor: AgentExtractor | None = None,
+    allow_echo_extractor: bool = False,
 ) -> list[EpochLog]:
     """Run epochs until convergence or max_epochs is reached.
 
@@ -1138,6 +1194,9 @@ def run_until_convergence(
         domain:     Domain filter passed to each run_epoch() call.
         max_epochs: Hard ceiling on the number of epochs to run.
         model:      Optional model override passed to run_epoch().
+        extractor:  Agent-native extractor passed to each run_epoch() call.
+        allow_echo_extractor:
+                    Test/dry-run escape hatch passed to each run_epoch().
 
     Returns:
         List of all EpochLog rows produced.
@@ -1146,7 +1205,13 @@ def run_until_convergence(
 
     for i in range(max_epochs):
         logger.info("run_until_convergence: starting epoch %d of %d max", i + 1, max_epochs)
-        log = run_epoch(triggered_by="schedule", domain=domain, model=model)
+        log = run_epoch(
+            triggered_by="schedule",
+            domain=domain,
+            model=model,
+            extractor=extractor,
+            allow_echo_extractor=allow_echo_extractor,
+        )
         logs.append(log)
 
         if log.converged:

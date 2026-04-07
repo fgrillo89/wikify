@@ -15,6 +15,13 @@ app = typer.Typer(
 console = Console()
 
 
+def _ingest_epoch_trigger(_new_paper_ids: list[str]) -> None:
+    """Adapter-level ingest hook that can trigger wiki epoch runs."""
+    from wikify.wiki.epoch import run_epoch
+
+    run_epoch(triggered_by="ingest")
+
+
 @app.callback()
 def main(
     library: str = typer.Option(
@@ -48,7 +55,12 @@ def ingest(
         raise typer.Exit(1)
 
     start = time.time()
-    count = ingest_path(p, parallel=parallel, max_workers=workers)
+    count = ingest_path(
+        p,
+        parallel=parallel,
+        max_workers=workers,
+        epoch_trigger_hook=_ingest_epoch_trigger,
+    )
     elapsed = time.time() - start
     rate = f" ({elapsed / count:.1f}s/paper)" if count > 0 else ""
     console.print(f"[green]Ingested {count} document(s) in {elapsed:.1f}s{rate}[/green]")
@@ -59,7 +71,7 @@ def refresh():
     """Full refresh: recompute all topics, embeddings, similarity, coupling, and vault notes."""
     from wikify.ingest.corpus_refresh import refresh_corpus
 
-    refresh_corpus()
+    refresh_corpus(epoch_trigger_hook=_ingest_epoch_trigger)
 
 
 @app.command()

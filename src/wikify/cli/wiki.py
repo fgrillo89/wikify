@@ -9,7 +9,6 @@ import logging
 from pathlib import Path
 
 import typer
-from rich.console import Console
 
 from wikify.cli._helpers import console
 
@@ -471,6 +470,11 @@ def wiki_campaign(
         "--promote/--no-promote",
         help="Promote the final campaign answer back into the visible wiki",
     ),
+    allow_echo_extractor: bool = typer.Option(
+        False,
+        "--allow-echo-extractor",
+        help="Allow EchoExtractor fallback when no extractor is wired (tests/dry-run).",
+    ),
 ):
     """Run a thesis-driven campaign over the shared wiki runtime."""
     from wikify.wiki.runtime import run_campaign
@@ -483,6 +487,7 @@ def wiki_campaign(
         epochs=epochs,
         model=model,
         promote=promote,
+        allow_echo_extractor=allow_echo_extractor,
     )
     console.print("\n[bold]Wiki Campaign[/bold]")
     console.print(f"  Campaign id       : {result.get('campaign_id', '')}")
@@ -569,6 +574,11 @@ def wiki_epoch(
     domain: str = typer.Option("", "--domain", help="Restrict to one domain"),
     on_ingest: bool = typer.Option(False, "--on-ingest", help="Configure auto-trigger on ingest"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
+    allow_echo_extractor: bool = typer.Option(
+        False,
+        "--allow-echo-extractor",
+        help="Allow EchoExtractor fallback when no extractor is wired (tests/dry-run).",
+    ),
 ):
     """Run one or more wiki-building epochs.
 
@@ -598,7 +608,12 @@ def wiki_epoch(
 
     if until_convergence:
         max_epochs = n if n > 1 else 10
-        logs = run_until_convergence(domain=domain, max_epochs=max_epochs, model=model)
+        logs = run_until_convergence(
+            domain=domain,
+            max_epochs=max_epochs,
+            model=model,
+            allow_echo_extractor=allow_echo_extractor,
+        )
         epochs_run = len(logs)
         final_log = logs[-1] if logs else None
         console.print(f"\n[bold green]Converged after {epochs_run} epoch(s)[/bold green]")
@@ -612,7 +627,12 @@ def wiki_epoch(
 
     for i in range(n):
         console.print(f"\n[bold]Epoch {i + 1}/{n}[/bold]")
-        result = run_epoch(triggered_by="user", domain=domain, model=model)
+        result = run_epoch(
+            triggered_by="user",
+            domain=domain,
+            model=model,
+            allow_echo_extractor=allow_echo_extractor,
+        )
         console.print(f"  Concepts discovered : {result.concepts_discovered}")
         console.print(f"  Articles written    : {result.articles_written}")
         console.print(f"  Stubs upgraded      : {result.stubs_upgraded}")

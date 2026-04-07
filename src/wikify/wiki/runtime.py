@@ -35,6 +35,7 @@ from wikify.wiki.builder import (
     slugify,
     write_article,
 )
+from wikify.wiki.discovery.extractors import AgentExtractor
 from wikify.wiki.observability import (
     begin_run,
     finish_run,
@@ -758,6 +759,8 @@ def run_campaign(
     epochs: int = 1,
     model: str | None = None,
     promote: bool = True,
+    extractor: AgentExtractor | None = None,
+    allow_echo_extractor: bool = False,
 ) -> dict[str, Any]:
     """Run a focused thesis-driven campaign over the shared wiki substrate."""
     from wikify.wiki.epoch import run_epoch
@@ -776,7 +779,15 @@ def run_campaign(
 
     epoch_logs = []
     for _ in range(max(epochs, 1)):
-        epoch_logs.append(run_epoch(triggered_by="campaign", domain=domain, model=model))
+        epoch_logs.append(
+            run_epoch(
+                triggered_by="campaign",
+                domain=domain,
+                model=model,
+                extractor=extractor,
+                allow_echo_extractor=allow_echo_extractor,
+            )
+        )
 
     query_result = query_wiki(
         thesis,

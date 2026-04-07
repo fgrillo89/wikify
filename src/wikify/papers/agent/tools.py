@@ -12,9 +12,9 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import numpy as np
 import networkx as nx
-from sqlmodel import func, select
+import numpy as np
+from sqlmodel import select
 
 from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
 from wikify.core.llm.vision import view_figure
@@ -51,7 +51,6 @@ from wikify.papers.evaluate.coverage import (
     vibe_map_for_llm,
 )
 from wikify.papers.evaluate.frontier import (
-    compute_paper_density,
     format_frontier_order_for_agent,
     frontier_exploration_order,
 )
@@ -2145,7 +2144,16 @@ def ingest_paper(file_path: str) -> str:
         # Compute the paper ID (SHA256) before ingestion so we can look it up after
         file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
-        result = ingest_file(path, background_refresh=True)
+        def _epoch_trigger(_new_paper_ids: list[str]) -> None:
+            from wikify.wiki.epoch import run_epoch
+
+            run_epoch(triggered_by="ingest")
+
+        result = ingest_file(
+            path,
+            background_refresh=True,
+            epoch_trigger_hook=_epoch_trigger,
+        )
 
         if result == 0:
             # May have been skipped (already ingested) or failed

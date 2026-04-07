@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from wikify.ingest.corpus_refresh import (
+    EpochTriggerHook,
     refresh_corpus,
     run_background_refresh,
     run_incremental_refresh,
@@ -27,12 +28,18 @@ def default_workers() -> int:
     return max(2, int(os.cpu_count() * 0.6))
 
 
-def ingest_path(path: Path, parallel: bool = False, max_workers: int = 0) -> int:
+def ingest_path(
+    path: Path,
+    parallel: bool = False,
+    max_workers: int = 0,
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> int:
     """Ingest a file or directory. Returns count of documents ingested."""
     if max_workers <= 0:
         max_workers = default_workers()
     if path.is_file():
-        return ingest_file(path)
+        return ingest_file(path, epoch_trigger_hook=epoch_trigger_hook)
     if path.is_dir():
         files: list[Path] = []
         for ext in SUPPORTED_EXTENSIONS:
@@ -41,18 +48,31 @@ def ingest_path(path: Path, parallel: bool = False, max_workers: int = 0) -> int
             return 0
 
         if parallel and len(files) > 1:
-            return _ingest_parallel(files, max_workers)
+            return _ingest_parallel(
+                files,
+                max_workers,
+                epoch_trigger_hook=epoch_trigger_hook,
+            )
 
         count = 0
         for file in files:
-            count += ingest_file(file, background_refresh=False)
+            count += ingest_file(
+                file,
+                background_refresh=False,
+                epoch_trigger_hook=epoch_trigger_hook,
+            )
         if count > 0:
-            refresh_corpus()
+            refresh_corpus(epoch_trigger_hook=epoch_trigger_hook)
         return count
     return 0
 
 
-def ingest_file(path: Path, background_refresh: bool = True) -> int:
+def ingest_file(
+    path: Path,
+    background_refresh: bool = True,
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> int:
     """Ingest a single file based on extension.
 
     Dispatches by suffix:
@@ -93,13 +113,18 @@ def ingest_file(path: Path, background_refresh: bool = True) -> int:
         return 0
 
     if background_refresh:
-        run_incremental_refresh(paper_id)
-        run_background_refresh()
+        run_incremental_refresh(paper_id, epoch_trigger_hook=epoch_trigger_hook)
+        run_background_refresh(epoch_trigger_hook=epoch_trigger_hook)
 
     return 1
 
 
-def _ingest_parallel(files: list[Path], max_workers: int) -> int:
+def _ingest_parallel(
+    files: list[Path],
+    max_workers: int,
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> int:
     """Parse PDFs in parallel, then persist sequentially."""
     from wikify.core.store.db import get_session
     from wikify.core.store.models import Paper
@@ -149,10 +174,10 @@ def _ingest_parallel(files: list[Path], max_workers: int) -> int:
         )
 
     new_ids = {parsed.paper.id for parsed in parsed_results}
-    refresh_corpus(new_paper_ids=new_ids)
+    refresh_corpus(new_paper_ids=new_ids, epoch_trigger_hook=epoch_trigger_hook)
 
     for file in other_files:
-        count += ingest_file(file)
+        count += ingest_file(file, epoch_trigger_hook=epoch_trigger_hook)
 
     return count
 

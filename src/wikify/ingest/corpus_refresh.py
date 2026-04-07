@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from wikify.core.store.models import (
 
 console = Console()
 logger = logging.getLogger(__name__)
+EpochTriggerHook = Callable[[list[str]], None]
 
 
 def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
@@ -41,8 +43,6 @@ def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
     2. Queries WikiArticle rows where topic_keys JSON overlaps.
     3. Sets needs_update=True on matches and commits.
     """
-
-
 
     if not new_paper_ids:
         return
@@ -80,8 +80,12 @@ def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
             console.print(f"[dim]  Marked {updated} wiki articles as needing update[/dim]")
 
 
-def _maybe_trigger_epoch(new_paper_ids: list[str]) -> None:
-    """Trigger a wiki epoch if the on-ingest flag is set in data/wiki/_epoch.json."""
+def _maybe_trigger_epoch(
+    new_paper_ids: list[str],
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> None:
+    """Trigger an optional epoch hook if on-ingest is enabled in data/wiki/_epoch.json."""
 
     flag_path = Path("data/wiki/_epoch.json")
     try:
@@ -91,16 +95,18 @@ def _maybe_trigger_epoch(new_paper_ids: list[str]) -> None:
         if not config.get("on_ingest"):
             return
 
-        try:
-            from wikify.wiki.epoch import run_epoch
-        except ImportError:
+        if epoch_trigger_hook is None:
+            logger.info("on_ingest enabled but no epoch trigger hook configured; skipping")
+            console.print(
+                "[dim]  on_ingest flag set but no epoch trigger hook configured; skipping[/dim]"
+            )
             return
 
         console.print(
-            f"[dim]  on_ingest flag set — triggering wiki epoch "
+            f"[dim]  on_ingest flag set - triggering wiki epoch "
             f"({len(new_paper_ids)} new paper(s))...[/dim]"
         )
-        run_epoch(triggered_by="ingest")
+        epoch_trigger_hook(new_paper_ids)
         console.print("[green]  Wiki epoch triggered by ingest completed[/green]")
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]  Epoch trigger warning (ingest continues): {exc}[/yellow]")
@@ -128,7 +134,11 @@ def save_corpus_vocabulary(vocabulary: list[str]) -> None:
     cache.write_text(json.dumps(vocabulary, ensure_ascii=False), encoding="utf-8")
 
 
-def run_incremental_refresh(paper_id: str) -> None:
+def run_incremental_refresh(
+    paper_id: str,
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> None:
     """Fast post-ingestion refresh for a single paper."""
 
     from wikify.ingest.vault.linker import _extract_declared_keywords, _to_display
@@ -155,7 +165,6 @@ def run_incremental_refresh(paper_id: str) -> None:
             vocab = load_corpus_vocabulary()
             matched = _match_corpus_vocabulary(search_text, vocab)
             topics = [_to_display(kw) for kw in matched]
-
 
         with get_session() as topic_session:
             existing_topics = topic_session.exec(
@@ -197,15 +206,15 @@ def run_incremental_refresh(paper_id: str) -> None:
         f"[dim]  Incremental: {len(topics)} topics, {len(similar_names)} similar papers[/dim]"
     )
 
-    _maybe_trigger_epoch([paper_id])
+    _maybe_trigger_epoch([paper_id], epoch_trigger_hook=epoch_trigger_hook)
 
 
-def run_background_refresh() -> None:
+def run_background_refresh(*, epoch_trigger_hook: EpochTriggerHook | None = None) -> None:
     """Spawn a background thread to refresh cross-paper signals."""
 
     def _refresh() -> None:
         try:
-            refresh_corpus()
+            refresh_corpus(epoch_trigger_hook=epoch_trigger_hook)
         except RuntimeError as exc:
             if "interpreter shutdown" in str(exc) or "cannot schedule" in str(exc):
                 return
@@ -218,9 +227,12 @@ def run_background_refresh() -> None:
     console.print("[dim]  Background corpus refresh started...[/dim]")
 
 
-def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
+def refresh_corpus(
+    new_paper_ids: set[str] | None = None,
+    *,
+    epoch_trigger_hook: EpochTriggerHook | None = None,
+) -> None:
     """Run all batch post-ingestion refresh steps."""
-
 
     from wikify.ingest.vault.coupler import compute_coupling
     from wikify.ingest.vault.linker import compute_all_links, write_topic_notes
@@ -410,7 +422,10 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]Precompute cache warning: {exc}[/yellow]")
 
-    _maybe_trigger_epoch(list(new_paper_ids) if new_paper_ids else [])
+    _maybe_trigger_epoch(
+        list(new_paper_ids) if new_paper_ids else [],
+        epoch_trigger_hook=epoch_trigger_hook,
+    )
 
     console.print(
         f"[green]Batch complete: {len(papers)} paper notes regenerated with all signals[/green]"

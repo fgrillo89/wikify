@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import networkx as nx
 import pytest
@@ -436,7 +436,14 @@ def test_run_epoch_orchestrates_all_passes():
     # All pass functions were called
     mock_clear.assert_called_once()
     mock_ids.assert_called_once()
-    mock_discover.assert_called_once()
+    mock_discover.assert_called_once_with(
+        ["paper1"],
+        1,
+        extractor=None,
+        allow_echo_extractor=False,
+        workflow_spec=ANY,
+        dag_executor=ANY,
+    )
     mock_graph.assert_called_once()
     mock_score.assert_called_once()
     mock_update_importance.assert_called_once()
@@ -486,6 +493,29 @@ def test_run_until_convergence_respects_max():
 
     assert mock_run.call_count == 3
     assert len(logs) == 3
+
+
+def test_run_until_convergence_forwards_extractor_controls():
+    """Forwards extractor controls into each run_epoch call."""
+    not_converged_log = _make_epoch_log(converged=False)
+    extractor = MagicMock()
+
+    with patch("wikify.wiki.epoch.run_epoch", return_value=not_converged_log) as mock_run:
+        mod.run_until_convergence(
+            domain="materials",
+            max_epochs=1,
+            model="test-model",
+            extractor=extractor,
+            allow_echo_extractor=True,
+        )
+
+    mock_run.assert_called_once_with(
+        triggered_by="schedule",
+        domain="materials",
+        model="test-model",
+        extractor=extractor,
+        allow_echo_extractor=True,
+    )
 
 
 # ── get_epoch_status ──────────────────────────────────────────────────────────

@@ -49,7 +49,7 @@ class StageTimer:
     started_at: datetime = field(default_factory=_utcnow)
     _t0: float = field(default_factory=time.monotonic)
 
-    def finish(self, **counts: int | float | bool) -> StageTelemetry:
+    def finish(self, **counts: object) -> StageTelemetry:
         completed_at = _utcnow()
         duration_s = time.monotonic() - self._t0
         row = StageTelemetry(

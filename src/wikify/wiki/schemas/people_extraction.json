@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "People Extraction Result",
+  "description": "Structured people extraction output for one unit.",
+  "type": "object",
+  "required": ["people"],
+  "additionalProperties": false,
+  "properties": {
+    "people": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "affiliation": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

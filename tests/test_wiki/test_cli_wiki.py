@@ -329,12 +329,32 @@ class TestWikiRuntimeCommands:
                 "promoted_path": "data/wiki/articles/ald-thesis.md",
                 "answer": "The campaign answer.",
             },
-        ):
-            result = runner.invoke(app, ["wiki", "campaign", "ALD thesis", "--epochs", "2"])
+        ) as mock_run_campaign:
+            result = runner.invoke(
+                app,
+                [
+                    "wiki",
+                    "campaign",
+                    "ALD thesis",
+                    "--epochs",
+                    "2",
+                    "--allow-echo-extractor",
+                ],
+            )
 
         assert result.exit_code == 0, result.output
         assert "ald-thesis" in result.output
         assert "The campaign answer." in result.output
+        mock_run_campaign.assert_called_once_with(
+            "ALD thesis",
+            wiki_dir=Path("data/wiki"),
+            name="",
+            domain="",
+            epochs=2,
+            model=None,
+            promote=True,
+            allow_echo_extractor=True,
+        )
 
     def test_maintain_command_prints_summary(self) -> None:
         with patch(
@@ -398,12 +418,18 @@ class TestWikiEpoch:
             converged=False,
         )
 
-        with patch("wikify.wiki.epoch.run_epoch", return_value=log):
-            result = runner.invoke(app, ["wiki", "epoch"])
+        with patch("wikify.wiki.epoch.run_epoch", return_value=log) as mock_run_epoch:
+            result = runner.invoke(app, ["wiki", "epoch", "--allow-echo-extractor"])
 
         assert result.exit_code == 0, result.output
         assert "Concepts discovered : 3" in result.output
         assert "Articles written    : 2" in result.output
+        mock_run_epoch.assert_called_once_with(
+            triggered_by="user",
+            domain="",
+            model=None,
+            allow_echo_extractor=True,
+        )
 
     def test_epoch_until_convergence_reads_epochlog_list(self) -> None:
         logs = [

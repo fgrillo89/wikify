@@ -23,6 +23,7 @@ class DiscoveryResult:
     concepts: list[ConceptRecord] = field(default_factory=list)
     rich_extractions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     redirect_map: dict[str, str] = field(default_factory=dict)
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 def get_concept_by_name(name: str) -> ConceptRecord | None:

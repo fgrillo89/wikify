@@ -12,7 +12,8 @@
 # To change the prompt or schema for a step, edit the `prompt` /
 # `schema` paths. Both are repo-relative.
 #
-# See docs/design/workflow-config-redesign.md for the full design.
+# See docs/design/workflow-config-redesign.md for the full design and
+# docs/design/wiki-recipe-reference.md for a field-by-field code map.
 
 recipe_id: default_publication
 description: >
@@ -25,59 +26,52 @@ frontier:
   strategy: eventual_coverage
   budget_per_epoch: 64
   exploration_rate: 0.05
+  # Priority label consumed by planning/scheduling policy.
+  # Current accepted labels are validated in discovery/recipe.py:
+  # section_tier | recency | weight | hub_spoke
   priority: section_tier
   filters:
     skip_sections: [references, acknowledgments, appendix]
     min_chunk_chars: 50
 
 steps:
-  - name: profile_documents
-    kind: profile_documents
+  # `name` is optional; when omitted it defaults to `kind`.
+  # Add `name` only when you need two steps with the same `kind`.
+  - kind: profile_documents
     model: fast
     prompt: src/wikify/wiki/prompts/profile_document.md
 
-  - name: identify_concepts
-    kind: identify_concepts
+  - kind: identify_concepts
     model: fast
     prompt: src/wikify/wiki/prompts/concept_extraction.md
     schema: src/wikify/wiki/schemas/concept_extraction.json
-    # NOTE: this is the first prompt that has actually been extracted
-    # to a standalone file. The others (people, figure, cross_link,
-    # article_writer, maintenance, consolidate) still live in Python
-    # and will be migrated in a follow-up slice.
     units: [chunk, synopsis]
     multimodal: false
 
-  - name: identify_people
-    kind: identify_people
+  - kind: identify_people
     model: fast
     prompt: src/wikify/wiki/prompts/people_extraction.md
     schema: src/wikify/wiki/schemas/people_extraction.json
     units: [chunk]
 
-  - name: identify_figures_tables
-    kind: identify_figures_tables
+  - kind: identify_figures_tables
     model: vision
     prompt: src/wikify/wiki/prompts/figure_extraction.md
     schema: src/wikify/wiki/schemas/figure_extraction.json
     units: [figure, table]
 
-  - name: consolidate
-    kind: consolidate
+  - kind: consolidate
     model: balanced
     prompt: src/wikify/wiki/prompts/consolidate_notes.md
     inputs_from: [identify_concepts, identify_people, identify_figures_tables]
 
-  - name: persist_canonical
-    kind: persist_canonical
+  - kind: persist_canonical
 
-  - name: cross_link
-    kind: cross_link
+  - kind: cross_link
     model: fast
     prompt: src/wikify/wiki/prompts/cross_link.md
 
-  - name: write_articles
-    kind: write_articles
+  - kind: write_articles
     model: balanced
     prompt: src/wikify/wiki/prompts/article_writer.md
     style_guide: src/wikify/papers/prompts/style_guide.md
@@ -87,8 +81,7 @@ steps:
         model: deep
         prompt: src/wikify/wiki/prompts/article_revision.md
 
-  - name: maintain
-    kind: maintain
+  - kind: maintain
     model: fast
     prompt: src/wikify/wiki/prompts/maintenance.md
     params:

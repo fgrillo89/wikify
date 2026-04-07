@@ -167,15 +167,30 @@ def test_run_campaign_persists_campaign_summary(tmp_path: Path):
     )
 
     runtime_patch, telemetry_patch = _patch_runtime_sessions(session_factory)
+    extractor = object()
     with (
         runtime_patch,
         telemetry_patch,
         patch("wikify.wiki.runtime.complete", return_value="Campaign answer."),
-        patch("wikify.wiki.epoch.run_epoch", return_value=object()),
+        patch("wikify.wiki.epoch.run_epoch", return_value=object()) as mock_run_epoch,
     ):
-        result = run_campaign("ALD for oxide films", wiki_dir=wiki_dir, epochs=2)
+        result = run_campaign(
+            "ALD for oxide films",
+            wiki_dir=wiki_dir,
+            epochs=2,
+            extractor=extractor,
+            allow_echo_extractor=True,
+        )
 
     assert result["answered"] is True
+    assert mock_run_epoch.call_count == 2
+    mock_run_epoch.assert_called_with(
+        triggered_by="campaign",
+        domain="",
+        model=None,
+        extractor=extractor,
+        allow_echo_extractor=True,
+    )
     with session_factory() as session:
         campaign = session.get(Campaign, slugify("ALD for oxide films"))
         assert campaign is not None

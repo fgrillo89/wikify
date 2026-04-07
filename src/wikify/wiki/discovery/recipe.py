@@ -22,6 +22,8 @@ from typing import Any
 
 import yaml
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
 # Vendor-neutral model tier names. Resolved against ``llm.client.resolve_model_name``
 # at runtime; the actual model id lives in ``config.Settings``.
 KNOWN_MODEL_TIERS = frozenset(
@@ -36,6 +38,20 @@ KNOWN_MODEL_TIERS = frozenset(
         "reasoning",
         "audit",
         "vision",
+    }
+)
+
+# Frontier priority labels used by recipe configs.
+#
+# Note: priorities are consumed by workflow/node implementations.
+# The parser validates labels so recipes stay self-documenting and
+# consistent even when a specific priority mode is not yet fully wired.
+KNOWN_FRONTIER_PRIORITIES = frozenset(
+    {
+        "section_tier",
+        "recency",
+        "weight",
+        "hub_spoke",
     }
 )
 
@@ -84,6 +100,8 @@ class StepConfig:
     nodes by hand.
     """
 
+    # Human-readable step id used for DAG node ids, telemetry labels, and
+    # `inputs_from` references. Defaults to `kind` when omitted in YAML.
     name: str
     kind: str  # one of KNOWN_STEP_KINDS
     model: str = "fast"  # tier name resolved by llm.client.resolve_model_name
@@ -123,20 +141,55 @@ def _parse_frontier(data: dict[str, Any] | None) -> FrontierConfig:
         return FrontierConfig()
     if not isinstance(data, dict):
         raise RecipeError("frontier: must be a mapping")
+    priority = str(data.get("priority", "section_tier"))
+    if priority not in KNOWN_FRONTIER_PRIORITIES:
+        raise RecipeError(
+            f"frontier.priority: unknown value '{priority}'. "
+            f"Known values: {sorted(KNOWN_FRONTIER_PRIORITIES)}"
+        )
     return FrontierConfig(
         strategy=str(data.get("strategy", "eventual_coverage")),
         budget_per_epoch=int(data.get("budget_per_epoch", 64)),
         exploration_rate=float(data.get("exploration_rate", 0.05)),
-        priority=str(data.get("priority", "section_tier")),
+        priority=priority,
         filters=dict(data.get("filters") or {}),
     )
+
+
+def _validate_asset_path(
+    raw: Any,
+    *,
+    field_name: str,
+    step_name: str,
+) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise RecipeError(f"steps[{step_name}]: {field_name} must be a string path")
+    value = raw.strip()
+    if not value:
+        raise RecipeError(f"steps[{step_name}]: {field_name} must not be empty")
+
+    candidate = Path(value)
+    resolved = candidate if candidate.is_absolute() else _PROJECT_ROOT / candidate
+    if not resolved.exists():
+        raise RecipeError(
+            f"steps[{step_name}]: {field_name} file '{value}' does not exist "
+            f"(resolved to '{resolved}')"
+        )
+    if not resolved.is_file():
+        raise RecipeError(
+            f"steps[{step_name}]: {field_name} path '{value}' is not a file "
+            f"(resolved to '{resolved}')"
+        )
+    return value
 
 
 def _parse_step(raw: Any, idx: int) -> StepConfig:
     if not isinstance(raw, dict):
         raise RecipeError(f"steps[{idx}]: must be a mapping")
-    name = str(_require(raw, "name", f"steps[{idx}]"))
-    kind = str(_require(raw, "kind", f"steps[{name}]"))
+    kind = str(_require(raw, "kind", f"steps[{idx}]"))
+    name = str(raw.get("name", kind)).strip() or kind
     if kind not in KNOWN_STEP_KINDS:
         raise RecipeError(
             f"steps[{name}]: unknown kind '{kind}'. "
@@ -145,13 +198,19 @@ def _parse_step(raw: Any, idx: int) -> StepConfig:
     model = str(raw.get("model", "fast"))
     if model not in KNOWN_MODEL_TIERS and not model.strip():
         raise RecipeError(f"steps[{name}]: model must be a tier name or model id")
+
+    prompt = _validate_asset_path(raw.get("prompt"), field_name="prompt", step_name=name)
+    schema = _validate_asset_path(raw.get("schema"), field_name="schema", step_name=name)
+    style_guide = _validate_asset_path(
+        raw.get("style_guide"), field_name="style_guide", step_name=name
+    )
     return StepConfig(
         name=name,
         kind=kind,
         model=model,
-        prompt=raw.get("prompt"),
-        schema=raw.get("schema"),
-        style_guide=raw.get("style_guide"),
+        prompt=prompt,
+        schema=schema,
+        style_guide=style_guide,
         units=tuple(raw.get("units") or ()),
         multimodal=bool(raw.get("multimodal", False)),
         inputs_from=tuple(raw.get("inputs_from") or ()),
@@ -211,6 +270,7 @@ def load_recipe_yaml(path: str | Path) -> Recipe:
 
 __all__ = [
     "FrontierConfig",
+    "KNOWN_FRONTIER_PRIORITIES",
     "KNOWN_MODEL_TIERS",
     "KNOWN_STEP_KINDS",
     "Recipe",
