@@ -33,7 +33,8 @@ from wikify.core.store.db import get_session
 from wikify.core.store.embeddings import _store
 from wikify.core.store.models import ConceptRecord, DomainCluster, TopologySnapshot
 from wikify.wiki.builder import slugify
-from wikify.wiki.graph.build import classify_node_roles, detect_communities
+from wikify.wiki.graph.importance import classify_node_roles, score_importance
+from wikify.wiki.graph.topology import detect_communities
 from wikify.wiki.persona import get_or_create_persona
 
 logger = logging.getLogger(__name__)
@@ -278,7 +279,6 @@ def compute_topology_metrics(
 
     # ── Bridge density ──────────────────────────────────────────────────────────
     if roles is None:
-        from wikify.wiki.graph.build import score_importance
 
         scores = score_importance(graph)
         roles = classify_node_roles(graph, scores)
@@ -505,7 +505,6 @@ def discover_domains(
         return []
 
     # ── Pass 2: roles + topology metrics ────────────────────────────────────────
-    from wikify.wiki.graph.build import score_importance
 
     scores = score_importance(graph)
     roles = classify_node_roles(graph, scores)

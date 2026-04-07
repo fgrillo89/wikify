@@ -319,7 +319,7 @@ class TestComputeTopologyMetrics:
 
         # score_importance is imported inside the function body from concept_graph;
         # classify_node_roles is imported at module level in domains.py.
-        with patch("wikify.wiki.graph.build.score_importance") as mock_si, \
+        with patch("wikify.wiki.graph.domains.score_importance") as mock_si, \
              patch("wikify.wiki.graph.domains.classify_node_roles") as mock_cr:
             mock_si.return_value = {n: 0.5 for n in graph.nodes()}
             mock_cr.return_value = {n: "peripheral" for n in graph.nodes()}
@@ -593,7 +593,7 @@ class TestDiscoverDomainsLowModularity:
         session.get.return_value = None  # no ConceptRecord rows
 
         with patch("wikify.wiki.graph.domains.detect_communities", return_value=communities), \
-             patch("wikify.wiki.graph.build.score_importance", return_value={n: 0.5 for n in nodes}), \
+             patch("wikify.wiki.graph.domains.score_importance", return_value={n: 0.5 for n in nodes}), \
              patch("wikify.wiki.graph.domains.classify_node_roles", return_value=roles), \
              patch("wikify.wiki.graph.domains.compute_topology_metrics",
                    return_value=low_q_snapshot), \

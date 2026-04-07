@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import networkx as nx
 
-import wikify.wiki.graph.build as mod
+import wikify.wiki.graph as mod
 from wikify.core.store.models import ConceptOccurrence, ConceptRecord, ConceptRelation, SourceCoverage
 
 

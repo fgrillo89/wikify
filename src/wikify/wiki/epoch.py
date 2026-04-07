@@ -67,12 +67,11 @@ from wikify.wiki.observability import (
 )
 from wikify.wiki.graph.build import (
     build_concept_graph,
-    classify_node_roles,
     extract_relations,
     save_relations,
-    score_importance,
     update_concept_importance,
 )
+from wikify.wiki.graph.importance import classify_node_roles, score_importance
 from wikify.wiki.concepts import (
     clear_staged_extractions,
     discover_concepts,
