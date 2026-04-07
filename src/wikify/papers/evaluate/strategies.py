@@ -24,7 +24,7 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
         and paper_embs maps paper_id -> (K, 384) normalized chunk embeddings.
     """
     from wikify.core.store.embeddings import get_chunk_embeddings
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
 
@@ -319,7 +319,7 @@ def compute_cumulative_coverage(
     Returns a list of dicts with coverage metrics at each step.
     """
     from wikify.core.store.embeddings import get_chunk_embeddings
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
 

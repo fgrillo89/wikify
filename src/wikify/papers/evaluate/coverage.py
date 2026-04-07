@@ -22,42 +22,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+# Re-exported for backwards compatibility with code that used to import
+# these from ``wikify.papers.evaluate.coverage``. New code should import
+# from ``wikify.core.store.corpus`` directly.
+from wikify.core.store.corpus import get_corpus_paper_ids, load_corpus_chunks
+
 if TYPE_CHECKING:
     from wikify.core.store.models import Chunk
-
-
-def get_corpus_paper_ids() -> set[str]:
-    """Return paper IDs that belong to the ingested corpus (not generated output).
-
-    Uses the Paper.origin field: "corpus" for ingested papers, "generated" for
-    writing pipeline output. This prevents generated content from contaminating
-    corpus metrics like coverage, vibe vectors, and strategy ordering.
-    """
-    from sqlmodel import select
-
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper, PaperOrigin
-
-    with get_session() as session:
-        papers = session.exec(select(Paper).where(Paper.origin == PaperOrigin.CORPUS)).all()
-    return {p.id for p in papers}
-
-
-def load_corpus_chunks() -> list[Chunk]:
-    """Load only chunks belonging to ingested corpus papers.
-
-    Filters out any chunks from generated output or other non-corpus sources,
-    using the Paper.origin field as the authoritative source of truth.
-    """
-    from sqlmodel import select
-
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Chunk
-
-    corpus_pids = get_corpus_paper_ids()
-    with get_session() as session:
-        chunks = session.exec(select(Chunk).order_by(Chunk.paper_id, Chunk.chunk_index)).all()
-    return [c for c in chunks if c.paper_id in corpus_pids]
 
 
 @dataclass

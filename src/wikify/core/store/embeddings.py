@@ -254,7 +254,7 @@ def get_paper_vibe_vectors() -> dict[str, list[float]]:
     except Exception:  # noqa: BLE001
         pass
 
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
 
@@ -317,7 +317,7 @@ def get_science_vibe_vectors() -> dict[str, list[float]]:
     except Exception:  # noqa: BLE001
         pass
 
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     if not chunks:

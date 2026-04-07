@@ -3,6 +3,47 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: code-quality sweep + close core->papers boundary
+
+### Boundary violation fixed
+
+`core/store/precompute.py` and `core/store/embeddings.py` were
+importing `load_corpus_chunks` from `wikify.papers.evaluate.coverage`
+— a `core → papers` boundary violation. Fixed by:
+
+- Extracting `get_corpus_paper_ids` and `load_corpus_chunks` into a
+  new `src/wikify/core/store/corpus.py` (where they always belonged
+  — they are corpus-level paper/chunk accessors filtered by
+  `Paper.origin == CORPUS`).
+- Rebinding 6 import sites (`core/store/embeddings`,
+  `core/store/precompute`, `papers/agent/fast_generate`,
+  `papers/agent/tools`, `papers/evaluate/quality`,
+  `papers/evaluate/strategies`).
+- `papers/evaluate/coverage.py` now re-exports the symbols from
+  `core/store/corpus` for back-compat with code that still imports
+  them from there.
+
+After this slice: `grep -rn "from wikify.papers" src/wikify/core` →
+**no matches**. The architecture's `core must not depend on papers`
+rule now holds strictly.
+
+### Code-quality cleanup (continued)
+
+- `wiki/builder.py`: 12 function-level imports of `sqlmodel.select`,
+  `get_session`, and store models hoisted to module top. Test
+  `test_resolve_article_sources_updates_frontmatter` rebound to
+  `wikify.wiki.builder.get_session` (patch-where-it's-used).
+- `ingest/corpus_refresh.py`: 11 function-level imports of
+  `sqlmodel`, `wikify.core.config.settings`, store models, embeddings,
+  and stdlib (`json`, `logging`, `defaultdict`,
+  `concurrent.futures`) hoisted to module top. The remaining lazy
+  imports (vault subpackage, ingest.extract, zotero, wiki.epoch) are
+  preserved because they break legitimate ingest-internal cycles.
+
+**Verification:** 818 tests pass; ruff clean on the touched files.
+
+---
+
 ## 2026-04-07 — Slice: paper-writing code out of core/, code-quality cleanup begins
 
 The user pointed out that paper-writing code was still under

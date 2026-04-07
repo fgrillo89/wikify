@@ -18,6 +18,15 @@ from pathlib import Path
 
 from sqlmodel import select
 
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
+    ConceptEvidence,
+    ConceptRecord,
+    DomainCluster,
+    Figure,
+    Paper,
+    ParameterExtraction,
+)
 from wikify.wiki.presentation.layout import (
     LEGACY_VISIBLE_DIRS,
     article_path_for_category,
@@ -285,10 +294,7 @@ def build_evidence_brief(concept_id: str, max_evidence: int = 10) -> list[dict]:
     Returns:
         List of dicts with: paper_id, paper_display, quote, chunk_id
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import ConceptEvidence, Paper
 
     with get_session() as session:
         evidence_rows: list[ConceptEvidence] = list(
@@ -337,10 +343,7 @@ def build_figure_brief(concept_id: str, max_figures: int = 5) -> list[dict]:
         List of dicts with: figure_id, paper_display, caption, media_type,
         label, llm_description, has_image
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import ConceptEvidence, Figure, Paper
 
     # Get paper IDs from concept evidence
     with get_session() as session:
@@ -409,10 +412,7 @@ def resolve_article_sources(article_path_obj: Path) -> list[str]:
     Returns:
         List of resolved paper IDs.
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
 
     if not article_path_obj.exists():
         return []
@@ -539,10 +539,7 @@ def generate_parameter_table(concept_id: str) -> str:
     Returns:
         Markdown string with ## Parameters heading and table, or "".
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper, ParameterExtraction
 
     with get_session() as session:
         params: list[ParameterExtraction] = list(
@@ -608,10 +605,7 @@ def generate_domain_condensation(
     Returns:
         Path to the generated _index.md file.
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import ConceptRecord, ParameterExtraction
 
     domain_slug = slugify(domain_label)
     domain_dir = wiki_dir / "domains" / domain_slug
@@ -753,10 +747,7 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
     Returns:
         Number of domain index files generated.
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import DomainCluster
 
     with get_session() as session:
         clusters: list[DomainCluster] = list(session.exec(select(DomainCluster)).all())
@@ -787,8 +778,6 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
 def _load_graph_metrics() -> dict:
     """Return graph metrics in the dict shape index generation expects."""
     from wikify.core.corpus_tools import compute_graph_metrics
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
 
     metrics = compute_graph_metrics()
     if metrics.error:

@@ -1524,7 +1524,7 @@ def find_corpus_gaps() -> str:
         from wikify.core.store.db import get_session
         from wikify.core.store.embeddings import _store, get_chunk_embeddings
         from wikify.core.store.models import Paper, PaperTopic
-        from wikify.papers.evaluate.coverage import load_corpus_chunks
+        from wikify.core.store.corpus import load_corpus_chunks
 
         chunks = load_corpus_chunks()
         if not chunks:

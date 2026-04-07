@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from rich.console import Console
+from sqlmodel import func, select
+
+from wikify.core.config import settings
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import (
+    embed_chunks,
+    embed_summaries,
+    get_all_similar,
+    query_similar,
+)
+from wikify.core.store.models import (
+    Chunk,
+    Citation,
+    FigureRef,
+    Paper,
+    PaperTopic,
+    WikiArticle,
+)
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
@@ -18,12 +41,8 @@ def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
     2. Queries WikiArticle rows where topic_keys JSON overlaps.
     3. Sets needs_update=True on matches and commits.
     """
-    import json
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import PaperTopic, WikiArticle
 
     if not new_paper_ids:
         return
@@ -63,7 +82,6 @@ def _mark_stale_wiki_articles(new_paper_ids: list[str]) -> None:
 
 def _maybe_trigger_epoch(new_paper_ids: list[str]) -> None:
     """Trigger a wiki epoch if the on-ingest flag is set in data/wiki/_epoch.json."""
-    import json
 
     flag_path = Path("data/wiki/_epoch.json")
     try:
@@ -90,14 +108,12 @@ def _maybe_trigger_epoch(new_paper_ids: list[str]) -> None:
 
 def get_vocab_cache_path() -> Path:
     """Return the cached corpus vocabulary path."""
-    from wikify.core.config import settings
 
     return settings.data_dir / "corpus_vocabulary.json"
 
 
 def load_corpus_vocabulary() -> list[str]:
     """Load cached corpus vocabulary. Returns empty list if no cache exists."""
-    import json
 
     cache = get_vocab_cache_path()
     if cache.exists():
@@ -107,7 +123,6 @@ def load_corpus_vocabulary() -> list[str]:
 
 def save_corpus_vocabulary(vocabulary: list[str]) -> None:
     """Persist the cached corpus vocabulary."""
-    import json
 
     cache = get_vocab_cache_path()
     cache.write_text(json.dumps(vocabulary, ensure_ascii=False), encoding="utf-8")
@@ -115,11 +130,7 @@ def save_corpus_vocabulary(vocabulary: list[str]) -> None:
 
 def run_incremental_refresh(paper_id: str) -> None:
     """Fast post-ingestion refresh for a single paper."""
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.embeddings import embed_summaries, query_similar
-    from wikify.core.store.models import Chunk, FigureRef, Paper
     from wikify.ingest.vault.linker import _extract_declared_keywords, _to_display
     from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
 
@@ -145,7 +156,6 @@ def run_incremental_refresh(paper_id: str) -> None:
             matched = _match_corpus_vocabulary(search_text, vocab)
             topics = [_to_display(kw) for kw in matched]
 
-        from wikify.core.store.models import PaperTopic
 
         with get_session() as topic_session:
             existing_topics = topic_session.exec(
@@ -162,7 +172,6 @@ def run_incremental_refresh(paper_id: str) -> None:
             topic_session.commit()
 
         embed_summaries([paper])
-        from wikify.core.store.embeddings import embed_chunks
 
         embed_chunks(chunks)
 
@@ -211,14 +220,8 @@ def run_background_refresh() -> None:
 
 def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     """Run all batch post-ingestion refresh steps."""
-    from collections import defaultdict
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from sqlmodel import func, select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.embeddings import embed_summaries, get_all_similar
-    from wikify.core.store.models import Chunk, Citation, FigureRef, Paper
     from wikify.ingest.vault.coupler import compute_coupling
     from wikify.ingest.vault.linker import compute_all_links, write_topic_notes
     from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
@@ -241,7 +244,6 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
-    from wikify.core.store.models import PaperTopic
     from wikify.ingest.extract.cite_match import build_citation_graph
     from wikify.ingest.extract.figure_refs import extract_figure_refs
 
@@ -278,9 +280,7 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
             return sess.exec(select(func.count(FigureRef.id))).one()
 
     def _task_embed():
-        import logging
 
-        from wikify.core.store.embeddings import embed_chunks
 
         logger = logging.getLogger("wikify.ingest")
         logger.info("Embedding %d paper summaries...", len(papers))
@@ -396,7 +396,6 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
             full_text=text_by_paper.get(paper.id),
         )
 
-    from wikify.core.config import settings
     from wikify.ingest.zotero.bibtex_library import rebuild_bibtex_library
 
     rebuild_bibtex_library(papers, settings.data_dir)

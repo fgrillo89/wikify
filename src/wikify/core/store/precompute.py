@@ -207,7 +207,7 @@ def _compute_boilerplate_ids() -> set[str]:
     distinct papers with similarity > 0.9, it's boilerplate.
     """
     from wikify.core.store.embeddings import _store, get_chunk_embeddings
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     if not chunks:
@@ -270,7 +270,7 @@ def _compute_divergent_gaps(
     from wikify.core.store.embeddings import get_chunk_embeddings
     from wikify.core.store.models import Paper
     from wikify.ingest.vault.coupler import compute_coupling
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -374,7 +374,7 @@ def _compute_concept_links_v2(
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import get_chunk_embeddings
     from wikify.core.store.models import Paper
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -640,7 +640,7 @@ def precompute_all() -> None:
 
     # 2. KMeans on chunk embeddings
     from wikify.core.store.embeddings import get_chunk_embeddings
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     all_ids = [c.id for c in chunks]

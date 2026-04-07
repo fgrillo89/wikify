@@ -160,7 +160,7 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
     import numpy as np
 
     from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
-    from wikify.papers.evaluate.coverage import load_corpus_chunks
+    from wikify.core.store.corpus import load_corpus_chunks
 
     vibes = get_paper_vibe_vectors()
     if not vibes:

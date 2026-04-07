@@ -233,7 +233,7 @@ def test_resolve_article_sources_updates_frontmatter(tmp_path):
     exec_result.all.return_value = [mock_paper]
     mock_session.exec.return_value = exec_result
 
-    with patch("wikify.core.store.db.get_session", return_value=mock_session):
+    with patch("wikify.wiki.builder.get_session", return_value=mock_session):
         resolved = resolve_article_sources(article)
 
     assert len(resolved) == 1
