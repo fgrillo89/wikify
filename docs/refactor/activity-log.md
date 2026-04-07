@@ -3,6 +3,22 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S5.A (test layout mirrors architecture)
+
+`tests/` now mirrors the four product boundaries:
+
+```
+tests/
+|-- test_core/    test_graph, test_llm, test_retrieve, test_store
+|-- test_ingest/  test_extract, test_html_ingester, test_markdown_ingester, ...
+|-- test_wiki/    test_concepts, test_discovery, test_runtime, ...
+|-- test_papers/  test_agent, test_evaluate, test_export, test_generate, test_prompts
+```
+
+10 test packages relocated via `git mv`. **852 tests pass.**
+
+---
+
 ## 2026-04-07 — Slice Phase 1.B / 2.B (extract, vault, zotero into ingest/)
 
 Final top-level cleanup. The src tree now matches the architecture
