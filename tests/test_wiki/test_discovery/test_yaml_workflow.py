@@ -1,8 +1,9 @@
-"""End-to-end YAML workflow execution test.
+"""End-to-end DAG-layer workflow execution test.
 
-Loads the bundled ``default_publication.yaml`` workflow, runs it against a
-synthetic document, and verifies that node timings, multimodal usage,
-config provenance, and coverage records are all reported.
+Exercises the lower-level ``load_workflow_yaml`` + ``DagExecutor`` path
+against a minimal hand-written DAG YAML kept as a test fixture. The
+user-facing wikification config is the recipe layer
+(``test_recipe.py``); this test guards the executor substrate.
 """
 
 from __future__ import annotations
@@ -18,13 +19,7 @@ from wikify.wiki.discovery.registry import default_registry
 from wikify.wiki.discovery.strategies import default_strategies
 
 WORKFLOW_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "wikify"
-    / "wiki"
-    / "discovery"
-    / "workflows"
-    / "default_publication.yaml"
+    Path(__file__).parent / "fixtures" / "minimal_workflow.yaml"
 )
 
 
