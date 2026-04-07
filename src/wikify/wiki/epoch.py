@@ -74,7 +74,6 @@ from wikify.wiki.concept_graph import (
     update_concept_importance,
 )
 from wikify.wiki.concepts import (
-    HAIKU_MODEL,
     clear_staged_extractions,
     discover_concepts,
     list_concepts,
@@ -84,7 +83,7 @@ from wikify.wiki.concepts import (
     store_parameters,
     store_relation_evidence,
 )
-from wikify.wiki.domains import discover_domains
+from wikify.wiki.domains import FAST_MODEL, discover_domains
 from wikify.wiki.linker import cross_link_articles
 from wikify.wiki.mapreduce import SourceExtraction, map_chunks_to_topic
 from wikify.wiki.template import refine_template
@@ -156,21 +155,21 @@ def epoch_log_to_summary(log: EpochLog) -> dict[str, object]:
 def should_update_article(
     existing_article: str,
     new_extractions: list[SourceExtraction],
-    model: str = HAIKU_MODEL,
+    model: str = FAST_MODEL,
 ) -> bool:
     """Two-gate check before spending a model rewrite on an existing article.
 
     Gate 1 (gradient pre-filter):
         Skip if new_evidence_tokens / existing_article_tokens < 0.05.
 
-    Gate 2 (haiku semantic check):
-        Ask haiku whether the new evidence adds facts not present in the article.
+    Gate 2 (fast-tier semantic check):
+        Ask the fast tier whether the new evidence adds facts not present in the article.
         Return True only when the response contains "YES".
 
     Args:
         existing_article: Current article body text.
         new_extractions:  Fresh SourceExtraction objects to evaluate.
-        model:            Model for the semantic gate (default haiku).
+        model:            Model for the semantic gate (default fast tier).
 
     Returns:
         True if the article should be rewritten with the new evidence.
@@ -196,7 +195,7 @@ def should_update_article(
         )
         return False
 
-    # Gate 2: haiku semantic check
+    # Gate 2: fast-tier semantic check
     prompt = (
         "You are reviewing whether new evidence warrants rewriting an existing article.\n\n"
         "--- EXISTING ARTICLE ---\n"
@@ -218,7 +217,7 @@ def should_update_article(
             use_cache=False,
         )
     except Exception:
-        logger.exception("should_update_article: haiku gate call failed, defaulting to False")
+        logger.exception("should_update_article: fast-tier gate call failed, defaulting to False")
         return False
 
     result = "YES" in response.upper()
@@ -543,7 +542,7 @@ def run_epoch(
         domain:       Domain filter for graph building and article writing.
                       Pass "" to process all domains.
         model:        Override the article-writing model.  When None, model
-                      selection follows the loss-based rule (haiku vs sonnet).
+                      selection follows the loss-based rule (fast vs balanced).
 
     Returns:
         Completed EpochLog row (persisted to DB).
@@ -597,9 +596,9 @@ def run_epoch(
             prev_loss = prev_log.loss_score
 
         if prev_loss >= 0.3:
-            article_model = HAIKU_MODEL
+            article_model = FAST_MODEL
             logger.info(
-                "run_epoch: prev_loss=%.3f >= 0.3 -> using haiku for article writing",
+                "run_epoch: prev_loss=%.3f >= 0.3 -> using fast tier for article writing",
                 prev_loss,
             )
         else:
@@ -622,7 +621,10 @@ def run_epoch(
     paper_ids = _get_all_paper_ids()
     logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
 
-    discovery = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
+    # Agent-native: the orchestrating agent supplies an extractor through
+    # the runtime in production. Without one, EchoExtractor surfaces a
+    # clean "no agent wired in" run that produces zero new concepts.
+    discovery = discover_concepts(paper_ids, epoch)
     log.concepts_discovered = len(discovery.concepts)
 
     # Store evidence and gaps from rich extraction results
@@ -683,7 +685,7 @@ def run_epoch(
     t0 = time.monotonic()
     logger.info("--- Pass 2b: Domain Discovery (epoch=%d) ---", epoch)
 
-    domain_clusters = discover_domains(graph, epoch, model=HAIKU_MODEL)
+    domain_clusters = discover_domains(graph, epoch, model=FAST_MODEL)
 
     # Build a concept -> primary domain label lookup for Pass 3 scoping
     _concept_domain: dict[str, str] = {}
@@ -750,7 +752,7 @@ def run_epoch(
                     topic_query=concept.name,
                     scope=concept.definition or concept.name,
                     domain=concept_domain,
-                    model=HAIKU_MODEL,
+                    model=FAST_MODEL,
                 )
                 relevant_extractions = [e for e in extractions if e.is_relevant]
                 record_retrieval(
@@ -843,7 +845,7 @@ def run_epoch(
                     topic_query=concept.name,
                     scope=concept.definition or concept.name,
                     domain=concept_domain,
-                    model=HAIKU_MODEL,
+                    model=FAST_MODEL,
                 )
 
                 # Bridge concepts: also pull evidence from adjacent domains
@@ -854,7 +856,7 @@ def run_epoch(
                                 topic_query=concept.name,
                                 scope=concept.definition or concept.name,
                                 domain=d_label,
-                                model=HAIKU_MODEL,
+                                model=FAST_MODEL,
                             )
                             new_extractions.extend(cross_ext)
 
@@ -982,7 +984,7 @@ def run_epoch(
     generate_all_domain_condensations(_WIKI_DIR)
 
     # Template refinement: evolve the extraction template based on gap feedback
-    _, template_delta = refine_template(_WIKI_DIR, epoch, model=HAIKU_MODEL)
+    _, template_delta = refine_template(_WIKI_DIR, epoch, model=FAST_MODEL)
     log.template_delta = template_delta
 
     loss_score, loss_delta = compute_loss(epoch)

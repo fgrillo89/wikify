@@ -1,6 +1,6 @@
 """Map-reduce corpus coverage for wiki article generation.
 
-MAP phase (haiku): for each candidate source, extract relevant claims
+MAP phase (fast tier): for each candidate source, extract relevant claims
 for a given topic + scope query.
 
 REDUCE phase (settings model): synthesise extracted evidence into a
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 MAP_SIMILARITY_THRESHOLD = 0.35  # cosine distance threshold (ChromaDB uses cosine distance)
 MAP_MAX_SOURCES = 60  # max sources fetched from search (embedding pre-rank pool)
-MAP_HAIKU_BUDGET = 15  # max haiku map calls per concept (after pre-ranking)
-HAIKU_MODEL = settings.llm_fast_model
+MAP_FAST_BUDGET = 15  # max fast-tier map calls per concept (after pre-ranking)
+FAST_MODEL = settings.llm_fast_model
 
 # Zone labels by domain register
 ZONE_LABELS: dict[str, tuple[str, str, str]] = {
@@ -44,14 +44,14 @@ ZONE_LABELS: dict[str, tuple[str, str, str]] = {
 
 @dataclass
 class SourceExtraction:
-    """Result of the haiku map call for a single source."""
+    """Result of the fast-tier map call for a single source."""
 
     source_id: str
     display_name: str
     doc_type: str
     graph_role: str  # "hub" | "bridge" | "frontier" | "standard"
     pagerank_score: float
-    extraction: str  # haiku output: 1-3 sentences or "NO"
+    extraction: str  # fast-tier output: 1-3 sentences or "NO"
     is_relevant: bool
     key_source_ids: list[str] = field(default_factory=list)  # extra context from entry
 
@@ -192,21 +192,21 @@ def map_chunks_to_topic(
     model: str | None = None,
     key_source_ids: list[str] | None = None,
 ) -> list[SourceExtraction]:
-    """Map all candidate corpus sources to the given topic via haiku extraction.
+    """Map all candidate corpus sources to the given topic via fast-tier extraction.
 
     Steps:
     1. Graph enrichment: get hub/bridge/frontier paper roles.
     2. Pre-filter: search_papers() returns top MAP_MAX_SOURCES candidates ranked
-       by embedding similarity.  Truncate to MAP_HAIKU_BUDGET before haiku calls,
+       by embedding similarity.  Truncate to MAP_FAST_BUDGET before fast-tier calls,
        always keeping forced (hub/bridge/key) papers first.
-    3. Haiku map: for each candidate, call haiku to extract relevant claims.
+    3. Fast-tier map: for each candidate, call the fast tier to extract relevant claims.
     4. Return list of SourceExtraction objects.
 
     Args:
         topic_query: Natural language topic for the article being written.
         scope: One-sentence description of the article scope.
         domain: Domain name (for logging only).
-        model: Model override for map calls. Defaults to HAIKU_MODEL.
+        model: Model override for map calls. Defaults to FAST_MODEL.
         key_source_ids: Optional list of paper IDs from the sitemap entry to
             always include in the candidate set.
 
@@ -216,7 +216,7 @@ def map_chunks_to_topic(
     """
     from sqlmodel import select
 
-    map_model = model or HAIKU_MODEL
+    map_model = model or FAST_MODEL
 
     # ── Step 1: Graph enrichment ──────────────────────────────────────────────
     graph_raw = get_graph_metrics()
@@ -249,10 +249,10 @@ def map_chunks_to_topic(
             seen_candidates.add(pid)
 
     # Hierarchical budget: forced (hub/bridge/key) always included; fill the
-    # remaining slots from the similarity-ranked candidates up to MAP_HAIKU_BUDGET.
+    # remaining slots from the similarity-ranked candidates up to MAP_FAST_BUDGET.
     forced_in_set = [pid for pid in candidate_set if pid in forced_ids]
     ranked_in_set = [pid for pid in candidate_set if pid not in forced_ids]
-    remaining_slots = max(0, MAP_HAIKU_BUDGET - len(forced_in_set))
+    remaining_slots = max(0, MAP_FAST_BUDGET - len(forced_in_set))
     candidate_set = forced_in_set + ranked_in_set[:remaining_slots]
 
     logger.info(
@@ -269,7 +269,7 @@ def map_chunks_to_topic(
         all_papers_list = session.exec(select(Paper)).all()
     paper_by_id: dict[str, Paper] = {p.id: p for p in all_papers_list}
 
-    # ── Step 3: Haiku map (parallel) ─────────────────────────────────────────
+    # ── Step 3: Fast-tier map (parallel) ─────────────────────────────────────────
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _map_one_source(pid: str) -> SourceExtraction | None:

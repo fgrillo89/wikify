@@ -4,7 +4,7 @@ Identifies hub papers from the graph, dispatches parallel subagents to
 explore each hub's neighborhood, and assembles a context from their
 dense syntheses and reading recommendations.
 
-This is the only strategy that uses LLM calls (haiku by default).
+This is the only strategy that uses LLM calls (fast tier by default).
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ class HubAndSpokeStrategy(RetrievalStrategy):
     expensive = True
     description = (
         "Parallel subagents explore hub neighborhoods, synthesize findings, "
-        "and recommend papers to deep-read. Uses haiku LLM calls."
+        "and recommend papers to deep-read. Uses fast-tier LLM calls."
     )
 
     def retrieve(
@@ -181,7 +181,7 @@ class HubAndSpokeStrategy(RetrievalStrategy):
 
     def estimate_cost(self) -> dict[str, float]:
         n_hubs = self.config.deep_read_limit + 1
-        # Haiku: ~$0.25/MTok input, ~$1.25/MTok output
+        # Fast tier: see settings.llm_fast_model for the active vendor pricing
         # Each subagent: ~2K input tokens, ~400 output tokens
         est_usd = n_hubs * (2000 * 0.00000025 + 400 * 0.00000125)
         return {"llm_calls": n_hubs, "est_usd": est_usd}

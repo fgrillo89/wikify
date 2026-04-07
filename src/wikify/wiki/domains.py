@@ -38,7 +38,7 @@ from wikify.wiki.persona import get_or_create_persona
 
 logger = logging.getLogger(__name__)
 
-HAIKU_MODEL = settings.llm_fast_model
+FAST_MODEL = settings.llm_fast_model
 
 # Minimum modularity Q below which we skip per-community LLM validation and
 # create a single catch-all domain instead.
@@ -65,7 +65,7 @@ def validate_community(
         concept_names: Display names of every concept in the community.
         definitions:   One-line definitions, parallel-indexed with concept_names.
         source_titles: Titles of papers that most frequently mention these concepts.
-        model:         litellm model string. Defaults to HAIKU_MODEL.
+        model:         litellm model string. Defaults to FAST_MODEL.
 
     Returns:
         Dict with keys:
@@ -76,7 +76,7 @@ def validate_community(
             split_proposal (list[dict] | None)
                 Each dict: {"label": str, "concepts": list[str]}
     """
-    resolved_model = model or HAIKU_MODEL
+    resolved_model = model or FAST_MODEL
 
     # Build the concept table for the prompt
     concept_rows = []
@@ -173,12 +173,12 @@ def check_community_merge(
         cluster_b_label: Label of the second community.
         cluster_b_scope: Scope sentence of the second community.
         shared_bridges:  Names of bridge concepts connecting the communities.
-        model:           litellm model string. Defaults to HAIKU_MODEL.
+        model:           litellm model string. Defaults to FAST_MODEL.
 
     Returns:
         True if the LLM recommends merging, False otherwise.
     """
-    resolved_model = model or HAIKU_MODEL
+    resolved_model = model or FAST_MODEL
 
     bridges_text = ", ".join(shared_bridges[:20]) if shared_bridges else "(none)"
 
@@ -487,12 +487,12 @@ def discover_domains(
     Args:
         graph:  Directed concept graph built in Pass 2.
         epoch:  Current epoch number.
-        model:  litellm model string. Defaults to HAIKU_MODEL.
+        model:  litellm model string. Defaults to FAST_MODEL.
 
     Returns:
         List of DomainCluster objects (persisted).
     """
-    resolved_model = model or HAIKU_MODEL
+    resolved_model = model or FAST_MODEL
 
     if graph.number_of_nodes() == 0:
         logger.warning("discover_domains: empty graph — no domains to discover")

@@ -2,7 +2,7 @@
 
 Two modes:
 - **Extractive** (default): First 1-2 sentences of each section. Free, instant.
-- **LLM** (opt-in): Haiku-generated factual summaries. ~$0.002/paper.
+- **LLM** (opt-in): fast-tier LLM factual summaries. ~$0.002/paper.
 
 Stored in Paper.section_summaries as JSON: {"section_path": "summary", ...}.
 """
@@ -106,7 +106,7 @@ def summarize_sections_llm(
 ) -> dict[str, str]:
     """Generate LLM-based section summaries (1-2 factual sentences per section).
 
-    Uses Haiku for cost efficiency (~$0.002 per paper). Opt-in for benchmarking.
+    Uses the fast tier model for cost efficiency. Opt-in for benchmarking.
 
     Args:
         paper_id: Paper ID to summarize.
@@ -243,7 +243,7 @@ def summarize_sections_batch(
     """Generate section summaries for all papers that don't have them yet.
 
     Args:
-        mode: "extractive" (free, default) or "llm" (Haiku, ~$0.002/paper).
+        mode: "extractive" (free, default) or "llm" (fast tier, opt-in).
         model: LLM model (only used when mode="llm").
         force: If True, re-summarize all papers.
 

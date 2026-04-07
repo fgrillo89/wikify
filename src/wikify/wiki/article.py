@@ -1,7 +1,7 @@
 """Wikipedia-format article writer for the epoch model (Pass 3).
 
 For each ConceptRecord, this module:
-1. Maps corpus chunks to the concept topic (haiku, map phase).
+1. Maps corpus chunks to the concept topic (fast tier, map phase).
 2. Queries ConceptRelation rows and neighbor ConceptRecords.
 3. Builds a Wikipedia-format article body using a custom reduce prompt
    that requests Definition / Mechanism-Process / Key Facts /
@@ -25,7 +25,7 @@ from wikify.store.db import get_session
 from wikify.store.models import ConceptRecord, ConceptRelation
 from wikify.wiki.maintenance import additive_update, detect_contradiction, revisionary_update
 from wikify.wiki.mapreduce import (
-    HAIKU_MODEL,
+    FAST_MODEL,
     SourceExtraction,
     _build_evidence_block,
     map_chunks_to_topic,
@@ -208,7 +208,7 @@ def write_concept_article(
 
     Steps:
     1. Retrieve or generate domain persona.
-    2. Map corpus chunks to the concept topic (haiku map phase).
+    2. Map corpus chunks to the concept topic (fast tier map phase).
     3. Build a Relationships table from graph neighbors + ConceptRelation rows.
     4. Call the LLM with a Wikipedia-format reduce prompt.
     5. Record SourceCoverage for all relevant extractions.
@@ -228,12 +228,12 @@ def write_concept_article(
     # Step 1: persona
     persona = get_or_create_persona(domain, model=reduce_model)
 
-    # Step 2: map phase (always haiku)
+    # Step 2: map phase (always fast tier)
     extractions = extractions or map_chunks_to_topic(
         topic_query=concept.name,
         scope=concept.definition or concept.name,
         domain=domain,
-        model=HAIKU_MODEL,
+        model=FAST_MODEL,
     )
 
     relevant = [e for e in extractions if e.is_relevant]

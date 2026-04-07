@@ -21,7 +21,7 @@ from wikify.config import settings
 
 logger = logging.getLogger(__name__)
 
-HAIKU_MODEL = settings.llm_fast_model
+FAST_MODEL = settings.llm_fast_model
 
 _TEMPLATE_FILENAME = "_template.md"
 _VERSIONS_DIR = "_template_versions"
@@ -232,7 +232,7 @@ def refine_template(
     1. Load all ExtractionGap rows from the last 3 epochs.
     2. Cluster by suggested_type (simple grouping).
     3. For clusters with 5+ gaps: generate a proposed template addition
-       via a haiku call.
+       via a fast-tier LLM call.
     4. Test the proposed section on 5 sample chunks -- if it produces
        meaningful output from at least 3, accept it.
     5. Save the new template version.
@@ -240,7 +240,7 @@ def refine_template(
     Args:
         wiki_dir: Root wiki directory.
         epoch: Current epoch number.
-        model: LLM model for proposal generation (default haiku).
+        model: LLM model for proposal generation (default fast tier).
 
     Returns:
         (new_template_content, template_delta) where template_delta is
@@ -254,7 +254,7 @@ def refine_template(
     from wikify.store.db import get_session
     from wikify.store.models import Chunk, ExtractionGap
 
-    resolved_model = model or HAIKU_MODEL
+    resolved_model = model or FAST_MODEL
 
     current_template = load_template(wiki_dir)
     original_section_count = _count_template_sections(current_template)

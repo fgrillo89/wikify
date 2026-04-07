@@ -67,11 +67,11 @@ def _cache_key(model: str, messages: list[dict], **kwargs: Any) -> str:
 
 
 def resolve_model_name(model: str | None = None) -> str:
-    """Resolve provider-neutral or legacy tier aliases to a concrete model id.
+    """Resolve a portable tier alias to a concrete model id.
 
-    Supported aliases intentionally cover both old Anthropic-centric names and
-    portable tier names so callers can keep saying "haiku"/"sonnet"/"opus" or
-    move to "fast"/"balanced"/"deep" without changing the rest of the code.
+    Tiers are vendor-neutral: ``fast``, ``balanced``, and ``deep`` map to
+    the corresponding ``settings.llm_*`` configuration entries. Vendor
+    identity lives in configuration, never in code.
     """
     if model is None or not str(model).strip():
         return settings.llm_model
@@ -82,16 +82,13 @@ def resolve_model_name(model: str | None = None) -> str:
     alias_map = {
         "fast": settings.llm_fast_model,
         "cheap": settings.llm_fast_model,
-        "haiku": settings.llm_fast_model,
         "map": settings.llm_fast_model,
         "balanced": settings.llm_model,
         "default": settings.llm_model,
         "writer": settings.llm_model,
-        "sonnet": settings.llm_model,
         "deep": settings.llm_deep_model or settings.llm_model,
         "reasoning": settings.llm_deep_model or settings.llm_model,
         "audit": settings.llm_deep_model or settings.llm_model,
-        "opus": settings.llm_deep_model or settings.llm_model,
         "vision": settings.vision_model or settings.llm_fast_model,
     }
     return alias_map.get(alias, requested)

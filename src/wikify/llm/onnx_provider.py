@@ -1,7 +1,7 @@
 """ONNX Runtime GenAI provider for local LLM inference.
 
 Wraps onnxruntime-genai to provide a complete() compatible interface for
-running quantized models on GPU. Used as an alternative to haiku for
+running quantized models on GPU. Used as an alternative to the fast tier for
 concept extraction (Pass 1) when cost or offline operation is a priority.
 
 Usage:

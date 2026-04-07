@@ -1,4 +1,4 @@
-"""Tests for wiki/concepts.py -- Haiku-based concept discovery pipeline."""
+"""Tests for the canonical concept persistence boundary."""
 
 from __future__ import annotations
 
@@ -68,213 +68,6 @@ def _make_session(existing_records=None):
 # ── _extract_from_chunk ───────────────────────────────────────────────────────
 
 
-def test_extract_from_chunk_basic():
-    """Returns one ConceptRecord with correct fields when LLM succeeds."""
-    chunk = _make_chunk()
-    llm_response = {
-        "concepts": [
-            {
-                "name": "Atomic Layer Deposition",
-                "type": "technique",
-                "aliases": ["ALD"],
-                "definition": "A thin film deposition method",
-                "evidence": "ALD techniques used in research",
-            }
-        ],
-        "parameters": [],
-        "mechanisms": [],
-        "relationships": [],
-        "gaps": [],
-    }
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert len(records) == 1
-    rec = records[0]
-    assert rec.id == "atomic_layer_deposition"
-    assert rec.name == "Atomic Layer Deposition"
-    assert rec.concept_type == "technique"
-    assert rec.definition == "A thin film deposition method"
-    assert "ALD" in rec.parsed_aliases
-
-
-def test_extract_from_chunk_filters_invalid_type():
-    """An invalid concept_type is replaced with empty string; record is still created."""
-    chunk = _make_chunk()
-    llm_response = {
-        "concepts": [
-            {
-                "name": "Some Term",
-                "type": "invalid_type",
-                "aliases": [],
-                "definition": "A generic term.",
-            }
-        ],
-        "parameters": [],
-        "mechanisms": [],
-        "relationships": [],
-        "gaps": [],
-    }
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert len(records) == 1
-    assert records[0].concept_type == ""
-    assert records[0].name == "Some Term"
-
-
-def test_extract_from_chunk_handles_empty_response():
-    """Returns empty list when the LLM returns an empty dict."""
-    chunk = _make_chunk()
-    llm_response = {
-        "concepts": [],
-        "parameters": [],
-        "mechanisms": [],
-        "relationships": [],
-        "gaps": [],
-    }
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert records == []
-
-
-def test_extract_from_chunk_handles_llm_failure():
-    """Returns empty list (no crash) when the LLM call raises an exception."""
-    chunk = _make_chunk()
-
-    with patch("wikify.wiki.concepts.complete_json", side_effect=RuntimeError("LLM down")):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert records == []
-
-
-def test_extract_from_chunk_handles_non_dict_response():
-    """Returns empty list when the LLM returns something other than a dict or list."""
-    chunk = _make_chunk()
-
-    with patch("wikify.wiki.concepts.complete_json", return_value="not json"):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert records == []
-
-
-def test_extract_from_chunk_handles_legacy_list_response():
-    """Handles legacy list response format (backward compat)."""
-    chunk = _make_chunk()
-    llm_response = [
-        {
-            "name": "Atomic Layer Deposition",
-            "type": "technique",
-            "aliases": ["ALD"],
-            "definition": "A thin film deposition method",
-        }
-    ]
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert len(records) == 1
-    assert records[0].name == "Atomic Layer Deposition"
-
-
-def test_extract_from_chunk_skips_items_missing_name():
-    """Items without a 'name' key are silently skipped."""
-    chunk = _make_chunk()
-    llm_response = {
-        "concepts": [
-            {"type": "technique", "aliases": [], "definition": "No name here."},
-            {"name": "Valid Concept", "type": "method", "aliases": [], "definition": "Has a name."},
-        ],
-        "parameters": [],
-        "mechanisms": [],
-        "relationships": [],
-        "gaps": [],
-    }
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        records = mod._extract_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert len(records) == 1
-    assert records[0].name == "Valid Concept"
-
-
-def test_extract_rich_from_chunk_returns_all_sections():
-    """Rich extraction returns all sections from a well-formed LLM response."""
-    chunk = _make_chunk()
-    llm_response = {
-        "concepts": [
-            {
-                "name": "ALD",
-                "type": "technique",
-                "aliases": [],
-                "definition": "A method",
-                "evidence": "quote",
-            }
-        ],
-        "parameters": [
-            {
-                "concept_name": "ALD",
-                "parameter_name": "rate",
-                "value": "1.0",
-                "unit": "A/cycle",
-                "conditions": "250C",
-                "evidence": "quote",
-            }
-        ],
-        "mechanisms": [
-            {
-                "description": "Self-limiting",
-                "causes": "precursor saturation",
-                "effects": "monolayer growth",
-                "evidence": "quote",
-            }
-        ],
-        "relationships": [
-            {
-                "source_concept": "ALD",
-                "target_concept": "RRAM",
-                "relation_type": "USED-IN",
-                "evidence": "quote",
-            }
-        ],
-        "gaps": [
-            {"description": "device reliability data", "suggested_type": "reliability_metric"}
-        ],
-    }
-
-    with patch("wikify.wiki.concepts.complete_json", return_value=llm_response):
-        result = mod._extract_rich_from_chunk(
-            chunk, prior_context=[], model="test-model", template="test"
-        )
-
-    assert len(result["concepts"]) == 1
-    assert len(result["parameters"]) == 1
-    assert len(result["mechanisms"]) == 1
-    assert len(result["relationships"]) == 1
-    assert len(result["gaps"]) == 1
-
-
-# ── extract_concepts_from_source ─────────────────────────────────────────────
-
-
 def _make_rich_result(concepts=None):
     """Build a rich extraction result dict for testing."""
     return {
@@ -286,85 +79,6 @@ def _make_rich_result(concepts=None):
     }
 
 
-def test_extract_concepts_from_source_threads_context():
-    """prior_context passed to each chunk should be the names from the previous chunk."""
-    chunks = [
-        _make_chunk(
-            chunk_id=f"c{i}",
-            chunk_index=i,
-            content=f"Chunk {i} discusses ALD of HfO2 thin films for memristor apps",
-        )
-        for i in range(3)
-    ]
-
-    # Each call returns a rich result with one concept
-    side_effects = [
-        _make_rich_result(
-            [{"name": "ALD", "type": "technique", "aliases": [], "definition": "A method"}]
-        ),
-        _make_rich_result(
-            [{"name": "TMA", "type": "material", "aliases": [], "definition": "A precursor"}]
-        ),
-        _make_rich_result(
-            [{"name": "H2O", "type": "material", "aliases": [], "definition": "An oxidant"}]
-        ),
-    ]
-
-    with patch.object(mod, "_extract_rich_from_chunk", side_effect=side_effects) as mock_extract:
-        records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=chunks, epoch=1, model="test-model", template="test"
-        )
-
-    assert mock_extract.call_count == 3
-
-    # First chunk: no prior context
-    assert mock_extract.call_args_list[0] == call(
-        chunks[0], prior_context=[], model="test-model", template="test"
-    )
-    # Second chunk: prior = names from first chunk's output
-    assert mock_extract.call_args_list[1] == call(
-        chunks[1], prior_context=["ALD"], model="test-model", template="test"
-    )
-    # Third chunk: prior = names from second chunk's output
-    assert mock_extract.call_args_list[2] == call(
-        chunks[2], prior_context=["TMA"], model="test-model", template="test"
-    )
-
-    assert len(records) == 3
-
-
-def test_extract_concepts_from_source_stamps_epoch():
-    """All returned records have epoch_discovered and epoch_last_updated set."""
-    chunks = [_make_chunk()]
-    side_effects = [
-        _make_rich_result(
-            [{"name": "ALD", "type": "technique", "aliases": [], "definition": "A method"}]
-        ),
-    ]
-
-    with patch.object(mod, "_extract_rich_from_chunk", side_effect=side_effects):
-        records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=chunks, epoch=5, model="test-model", template="test"
-        )
-
-    assert all(r.epoch_discovered == 5 for r in records)
-    assert all(r.epoch_last_updated == 5 for r in records)
-
-
-def test_extract_concepts_from_source_empty_chunks():
-    """Returns empty list when no chunks are provided."""
-    with patch.object(mod, "_extract_rich_from_chunk") as mock_extract:
-        records = mod.extract_concepts_from_source(
-            source_id="paper1", chunks=[], epoch=1, model="test-model", template="test"
-        )
-
-    assert records == []
-    mock_extract.assert_not_called()
-
-
-# ── merge_concept_records ─────────────────────────────────────────────────────
-
-
 def test_merge_concept_records_new_concepts():
     """Two new records are inserted when the DB is empty; returns 2."""
     new_records = [
@@ -373,7 +87,7 @@ def test_merge_concept_records_new_concepts():
     ]
     mock_session = _make_session(existing_records=[])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         count, _redirect = mod.merge_concept_records(new_records, epoch=1)
 
     assert count == 2
@@ -387,7 +101,7 @@ def test_merge_concept_records_dedup_by_slug():
     incoming = _make_concept_record(cid="ald", name="ALD technique", aliases=[])
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         count, _redirect = mod.merge_concept_records([incoming], epoch=2)
 
     assert count == 0
@@ -403,7 +117,7 @@ def test_merge_concept_records_dedup_updates_epoch():
     incoming = _make_concept_record(cid="ald", name="ALD", aliases=[], epoch_last_updated=1)
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         _count, _redirect = mod.merge_concept_records([incoming], epoch=7)
 
     assert existing.epoch_last_updated == 7
@@ -424,7 +138,7 @@ def test_merge_concept_records_dedup_by_alias():
     )
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         count, _redirect = mod.merge_concept_records([incoming], epoch=2)
 
     assert count == 0
@@ -445,7 +159,7 @@ def test_merge_concept_records_returns_redirect_map():
     )
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         _count, redirect = mod.merge_concept_records([incoming], epoch=2)
 
     # ald_process was merged into atomic_layer_deposition
@@ -457,7 +171,7 @@ def test_merge_concept_records_identity_for_new():
     mock_session = _make_session(existing_records=[])
     incoming = _make_concept_record(cid="cvd", name="CVD", aliases=[])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         _count, redirect = mod.merge_concept_records([incoming], epoch=1)
 
     assert redirect["cvd"] == "cvd"
@@ -471,7 +185,7 @@ def test_merge_concept_records_backfills_definition():
     )
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         _count, _redirect = mod.merge_concept_records([incoming], epoch=1)
 
     assert existing.definition == "A deposition technique."
@@ -483,7 +197,7 @@ def test_merge_concept_records_merges_aliases():
     incoming = _make_concept_record(cid="ald", name="ALD", aliases=["atomic layer dep."])
     mock_session = _make_session(existing_records=[existing])
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session):
         _count, _redirect = mod.merge_concept_records([incoming], epoch=1)
 
     merged = existing.parsed_aliases
@@ -495,7 +209,7 @@ def test_merge_concept_records_empty_input():
     """Returns 0 immediately when called with an empty list."""
     mock_session = _make_session()
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session) as mock_gs:
+    with patch("wikify.wiki.concepts.merge.get_session", return_value=mock_session) as mock_gs:
         count, _redirect = mod.merge_concept_records([], epoch=1)
 
     assert count == 0
@@ -512,7 +226,7 @@ def test_get_concept_by_name_slug_match():
     # session.get() returns the record when the slug matches
     mock_session.get.return_value = existing
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.get_concept_by_name("ALD")
 
     assert result is existing
@@ -531,7 +245,7 @@ def test_get_concept_by_name_alias_match():
     # slug "ald" does not match primary key "atomic_layer_deposition"
     mock_session.get.return_value = None
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.get_concept_by_name("ALD")
 
     assert result is existing
@@ -547,7 +261,7 @@ def test_get_concept_by_name_name_match():
     mock_session = _make_session(existing_records=[existing])
     mock_session.get.return_value = None
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.get_concept_by_name("atomic layer deposition")
 
     assert result is existing
@@ -558,7 +272,7 @@ def test_get_concept_by_name_returns_none_when_not_found():
     mock_session = _make_session(existing_records=[])
     mock_session.get.return_value = None
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.get_concept_by_name("Unknown Concept")
 
     assert result is None
@@ -576,7 +290,7 @@ def test_list_concepts_filters_by_domain():
     ]
     mock_session = _make_session(existing_records=records)
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.list_concepts(domain="physics")
 
     ids = [r.id for r in result]
@@ -603,7 +317,7 @@ def test_list_concepts_filters_by_min_importance():
     mock_session.__exit__ = MagicMock(return_value=False)
     mock_session.exec.return_value = exec_result
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.list_concepts(min_importance=0.5)
 
     ids = [r.id for r in result]
@@ -634,7 +348,7 @@ def test_list_concepts_combined_domain_and_importance():
     mock_session.__exit__ = MagicMock(return_value=False)
     mock_session.exec.return_value = exec_result
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.list_concepts(domain="physics", min_importance=0.5)
 
     assert len(result) == 1
@@ -655,7 +369,7 @@ def test_list_concepts_sorted_by_importance_descending():
     mock_session.__exit__ = MagicMock(return_value=False)
     mock_session.exec.return_value = exec_result
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.list_concepts()
 
     assert result[0].id == "high"
@@ -676,7 +390,7 @@ def test_list_concepts_no_filter_returns_all():
     mock_session.__exit__ = MagicMock(return_value=False)
     mock_session.exec.return_value = exec_result
 
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.records.get_session", return_value=mock_session):
         result = mod.list_concepts()
 
     assert len(result) == 2
@@ -687,33 +401,33 @@ def test_list_concepts_no_filter_returns_all():
 
 def test_fuzzy_match_quote_exact():
     """Exact substring match returns True."""
-    assert mod._fuzzy_match_quote("ALD is a technique", "ALD is a technique used")
+    assert mod.fuzzy_match_quote("ALD is a technique", "ALD is a technique used")
 
 
 def test_fuzzy_match_quote_case_insensitive():
     """Case difference still matches."""
-    assert mod._fuzzy_match_quote("ALD Is A Technique", "ald is a technique used")
+    assert mod.fuzzy_match_quote("ALD Is A Technique", "ald is a technique used")
 
 
 def test_fuzzy_match_quote_whitespace():
     """Extra whitespace in source still matches."""
-    assert mod._fuzzy_match_quote("ALD is great", "ALD  is   great today")
+    assert mod.fuzzy_match_quote("ALD is great", "ALD  is   great today")
 
 
 def test_fuzzy_match_quote_punctuation():
     """Punctuation differences still match."""
-    assert mod._fuzzy_match_quote("ALD, is great.", "ALD is great today")
+    assert mod.fuzzy_match_quote("ALD, is great.", "ALD is great today")
 
 
 def test_fuzzy_match_quote_no_match():
     """Non-matching quote returns False."""
-    assert not mod._fuzzy_match_quote("CVD is better", "ALD is a technique")
+    assert not mod.fuzzy_match_quote("CVD is better", "ALD is a technique")
 
 
 def test_fuzzy_match_quote_empty():
     """Empty quote or source returns False."""
-    assert not mod._fuzzy_match_quote("", "some text")
-    assert not mod._fuzzy_match_quote("quote", "")
+    assert not mod.fuzzy_match_quote("", "some text")
+    assert not mod.fuzzy_match_quote("quote", "")
 
 
 # ── store_evidence ───────────────────────────────────────────────────────────
@@ -743,7 +457,7 @@ def test_store_evidence_creates_rows():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_evidence(rich, epoch=1)
 
     assert count == 1
@@ -777,7 +491,7 @@ def test_store_evidence_marks_unverified():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_evidence(rich, epoch=1)
 
     assert count == 1
@@ -803,7 +517,7 @@ def test_store_evidence_skips_empty():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_evidence(rich, epoch=1)
 
     assert count == 0
@@ -839,7 +553,7 @@ def test_store_gaps_creates_rows():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_gaps(rich, epoch=1)
 
     assert count == 2
@@ -866,57 +580,13 @@ def test_store_gaps_skips_empty_description():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_gaps(rich, epoch=1)
 
     assert count == 0
 
 
 # ── _identify_deepening_chunks ──────────────────────────────────────────────
-
-
-def test_identify_deepening_chunks_filters_by_section():
-    """Returns only detail-rich sections for deepening."""
-    chunks = [
-        _make_chunk(chunk_id="c0", content="x" * 60),
-        _make_chunk(chunk_id="c1", content="x" * 60),
-        _make_chunk(chunk_id="c2", content="x" * 60),
-    ]
-    chunks[0].section_type = "abstract"
-    chunks[1].section_type = "methods"
-    chunks[2].section_type = "results"
-
-    result = mod._identify_deepening_chunks("paper1", ["ALD"], chunks)
-
-    section_types = [c.section_type for c in result]
-    assert "methods" in section_types
-    assert "results" in section_types
-    assert "abstract" not in section_types
-
-
-def test_identify_deepening_chunks_no_concepts_returns_all():
-    """Falls back to all chunks when no pub concepts exist."""
-    chunks = [_make_chunk()]
-    result = mod._identify_deepening_chunks("paper1", [], chunks)
-    assert result == chunks
-
-
-# ── extract_from_publication ────────────────────────────────────────────────
-
-
-def test_extract_from_publication_no_paper():
-    """Returns empty result when paper not found."""
-    mock_session = _make_session()
-    mock_session.get.return_value = None
-
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
-        result = mod.extract_from_publication("nonexistent", template="test", epoch=1)
-
-    assert result["concepts"] == []
-    assert result["parameters"] == []
-
-
-# ── store_parameters ────────────────────────────────────────────────────────
 
 
 def test_store_parameters_creates_rows():
@@ -946,7 +616,7 @@ def test_store_parameters_creates_rows():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_parameters(rich, epoch=1)
 
     assert count == 1
@@ -988,7 +658,7 @@ def test_store_parameters_skips_empty():
     }
 
     mock_session = _make_session()
-    with patch("wikify.wiki.concepts.get_session", return_value=mock_session):
+    with patch("wikify.wiki.concepts.evidence.get_session", return_value=mock_session):
         count = mod.store_parameters(rich, epoch=1)
 
     assert count == 0

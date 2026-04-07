@@ -4,7 +4,7 @@ from wikify.config import settings
 from wikify.llm.client import complete, resolve_model_name
 
 
-def test_resolve_model_name_maps_legacy_and_tier_aliases():
+def test_resolve_model_name_maps_tier_aliases():
     original_model = settings.llm_model
     original_fast = settings.llm_fast_model
     original_deep = settings.llm_deep_model
@@ -14,12 +14,11 @@ def test_resolve_model_name_maps_legacy_and_tier_aliases():
         settings.llm_deep_model = "deep-model"
 
         assert resolve_model_name(None) == "balanced-model"
-        assert resolve_model_name("sonnet") == "balanced-model"
         assert resolve_model_name("balanced") == "balanced-model"
-        assert resolve_model_name("haiku") == "fast-model"
         assert resolve_model_name("fast") == "fast-model"
-        assert resolve_model_name("opus") == "deep-model"
+        assert resolve_model_name("cheap") == "fast-model"
         assert resolve_model_name("deep") == "deep-model"
+        assert resolve_model_name("reasoning") == "deep-model"
         assert resolve_model_name("gpt-5-mini") == "gpt-5-mini"
     finally:
         settings.llm_model = original_model
@@ -41,7 +40,7 @@ def test_complete_resolves_alias_before_litellm_call():
 
             result = complete(
                 messages=[{"role": "user", "content": "hello"}],
-                model="haiku",
+                model="fast",
                 use_cache=False,
             )
 

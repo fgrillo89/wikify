@@ -537,7 +537,7 @@ _HTML = """<!DOCTYPE html>
       }],
       annotations: [{
         xref: "paper", x: 0.01, yref: "y", y: 0.3,
-        text: "L=0.3 (haiku→sonnet)", showarrow: false,
+        text: "L=0.3 (fast→balanced)", showarrow: false,
         font: { color: "#3fb950", size: 9 },
         xanchor: "left", yanchor: "bottom",
       }],

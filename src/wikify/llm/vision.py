@@ -1,6 +1,6 @@
 """Vision helpers for multimodal LLM calls.
 
-Sends images to vision-capable models (e.g., Haiku, Sonnet) for
+Sends images to vision-capable models for
 description, data extraction, or table parsing.
 """
 
@@ -34,7 +34,7 @@ def describe_figure(
         caption: Figure caption text (may be empty).
         paper_title: Title of the source paper.
         section: Section where the figure appears.
-        model: LLM model to use (defaults to fast/haiku tier).
+        model: LLM model to use (defaults to the fast tier).
 
     Returns:
         Dict with keys: description, data_points, concepts, values

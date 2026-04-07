@@ -1,0 +1,91 @@
+# Default publication recipe.
+#
+# This is the user-facing wikification config: a high-level description
+# of how a publication-oriented wiki run is structured. The recipe
+# compiler (wiki/discovery/recipe_compiler.py) lowers this into the
+# DAG run spec executed by wiki/discovery/executor.py.
+#
+# To change the model used at any step, edit the `model` line. Tier
+# names (`fast`, `balanced`, `deep`, `vision`) are vendor-neutral and
+# resolved at runtime against `settings.llm_*` in `wikify/config.py`.
+#
+# To change the prompt or schema for a step, edit the `prompt` /
+# `schema` paths. Both are repo-relative.
+#
+# See docs/design/workflow-config-redesign.md for the full design.
+
+recipe_id: default_publication
+description: >
+  Publication-oriented wiki run: profile documents, identify concepts and
+  people from text chunks, extract figure/table evidence, consolidate the
+  notes into canonical concepts, persist them, then cross-link, write
+  articles, and run maintenance gates.
+
+frontier:
+  strategy: eventual_coverage
+  budget_per_epoch: 64
+  exploration_rate: 0.05
+  priority: section_tier
+  filters:
+    skip_sections: [references, acknowledgments, appendix]
+    min_chunk_chars: 50
+
+steps:
+  - name: profile_documents
+    kind: profile_documents
+    model: fast
+    prompt: src/wikify/wiki/prompts/profile_document.md
+
+  - name: identify_concepts
+    kind: identify_concepts
+    model: fast
+    prompt: src/wikify/wiki/prompts/concept_extraction.md
+    schema: src/wikify/wiki/schemas/concept_extraction.json
+    units: [chunk, synopsis]
+    multimodal: false
+
+  - name: identify_people
+    kind: identify_people
+    model: fast
+    prompt: src/wikify/wiki/prompts/people_extraction.md
+    schema: src/wikify/wiki/schemas/people_extraction.json
+    units: [chunk]
+
+  - name: identify_figures_tables
+    kind: identify_figures_tables
+    model: vision
+    prompt: src/wikify/wiki/prompts/figure_extraction.md
+    schema: src/wikify/wiki/schemas/figure_extraction.json
+    units: [figure, table]
+
+  - name: consolidate
+    kind: consolidate
+    model: balanced
+    prompt: src/wikify/wiki/prompts/consolidate_notes.md
+    inputs_from: [identify_concepts, identify_people, identify_figures_tables]
+
+  - name: persist_canonical
+    kind: persist_canonical
+
+  - name: cross_link
+    kind: cross_link
+    model: fast
+    prompt: src/wikify/wiki/prompts/cross_link.md
+
+  - name: write_articles
+    kind: write_articles
+    model: balanced
+    prompt: src/wikify/wiki/prompts/article_writer.md
+    style_guide: src/wikify/prompts/style_guide.md
+    params:
+      revision:
+        enabled: true
+        model: deep
+        prompt: src/wikify/wiki/prompts/article_revision.md
+
+  - name: maintain
+    kind: maintain
+    model: fast
+    prompt: src/wikify/wiki/prompts/maintenance.md
+    params:
+      triggers: [contradiction, weak_support, unresolved_gap]

@@ -292,7 +292,7 @@ class SourceCoverage(SQLModel, table=True):
     source_id: str = Field(index=True)  # Paper.id
     article_slug: str = Field(index=True)  # WikiArticle.id
     domain: str = ""
-    extraction: str = ""  # haiku-extracted sentence(s) that were used
+    extraction: str = ""  # fast-tier extracted sentence(s) that were used
     covered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

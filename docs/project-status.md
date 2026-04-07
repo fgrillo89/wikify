@@ -136,11 +136,27 @@ The intended direction is:
   remain useful context, but they are no longer the current implementation
   surface.
 
+## Recently Landed
+- **S3.A scaffold**: `wikify.wiki.discovery` subsystem now exists with typed
+  contracts (`DocumentProfile`, `ExtractionUnit`, `ExtractionNote`,
+  `CandidateConcept`, `CoverageRecord`, `DagNodeSpec`, `DagRunSpec`),
+  validated DAG executor, node registry with built-in profile/plan/extract
+  /resolve/persist nodes, multimodal unit builders, eventual-coverage
+  scheduler, document-type-aware planner, strategy registry, and a
+  YAML workflow loader. One bundled workflow
+  (`discovery/workflows/default_publication.yaml`) executes end-to-end in
+  tests with multimodal usage and config-hash provenance reported. The
+  legacy `wikify.wiki.concepts` module is unchanged; integration is the
+  next slice.
+
 ## Next Priorities
 1. Complete the package-boundary refactor in
    `docs/refactor/wiki-deep-refactor-plan.md`.
-2. Extract discovery into explicit strategy, coverage, and note-emission
-   modules.
+2. Wire `wiki.epoch` to route concept extraction through the new discovery
+   DAG executor and decompose the legacy `wikify.wiki.concepts` module into
+   a `wiki/concepts/` subpackage (records / merge / evidence / persistence)
+   without breaking import paths. This requires renaming the legacy file
+   first to free the `concepts` namespace.
 3. Add validated DAG workflow configuration, likely YAML-backed, for
    experimental wikification strategies.
 4. Separate graph logic and observability into explicit wiki-owned modules.

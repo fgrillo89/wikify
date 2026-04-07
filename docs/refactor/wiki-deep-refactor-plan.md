@@ -100,6 +100,23 @@ Behavior that changes together should live together.
 - Avoid introducing broad horizontal packages like `frontend/` unless there are
   multiple products sharing the same implementation.
 
+### Cleanup Policy (Hard Rule)
+Compatibility shims and parallel-path layering are **not** allowed in this
+refactor. When a slice moves or splits code:
+
+- Update every caller in the same slice. Do not leave forwarding modules,
+  mirroring `__init__` shims, or "old path still works" wrappers.
+- Breaking changes are acceptable and expected. Tests must be updated in
+  the same slice as the code they cover.
+- Vendor- or provider-specific names (e.g. `HAIKU_MODEL`, `litellm`,
+  `claude`, `openai`) must not appear in module names, public symbols,
+  or runtime constants. Use neutral names (`FAST_MODEL`, `complete`,
+  `complete_json`) and let configuration carry the vendor identity.
+- Discovery and any other agent-driven subsystem must be **agent-native**:
+  no direct LLM SDK calls in core modules. The orchestrating agent
+  supplies the model behavior through injected protocols (e.g.
+  `AgentExtractor`).
+
 ### Coding Standards
 These rules apply to every touched slice.
 
@@ -615,6 +632,34 @@ Verification:
 - imports remain stable
 
 #### S3.A - Extract Discovery Pipeline
+
+> **Open design problem — workflow config UX:** the first-cut DAG YAML
+> at `wiki/discovery/workflows/default_publication.yaml` is too
+> low-level. A user-friendly recipe layer organized around conceptual
+> wiki steps (concept identification, people identification, frontier
+> strategy, article writing model, cross-linking, maintenance) with
+> prompts/schemas/templates exposed as standalone files is documented
+> as a separate design slice in
+> [`docs/design/workflow-config-redesign.md`](../design/workflow-config-redesign.md).
+> The DAG layer remains the execution substrate; the recipe layer is
+> the human/agent-facing config. Must be addressed before declaring
+> S3.A complete.
+>
+> **Status (in progress):** the discovery scaffold has landed under
+> `src/wikify/wiki/discovery/` as an additive, fully-typed, agent-native
+> subsystem (contracts, DAG validation/executor, node registry, built-in
+> nodes, multimodal unit builders, eventual-coverage scheduler, planner,
+> strategy registry, YAML workflow loader, `AgentExtractor` protocol with
+> `EchoExtractor` for tests). The legacy 1674-line monolithic concepts
+> module has been moved to `wikify.wiki.concepts._impl` and the
+> `wiki/concepts/` package is now the canonical import path with
+> sibling sub-modules `records` / `merge` / `evidence` / `persistence`.
+> Vendor-specific naming (`HAIKU_MODEL`, `MAP_HAIKU_BUDGET`) was removed
+> across the wiki package. **Remaining:** decomposing `_impl.py` into
+> the sibling sub-modules in place (no shims), and routing
+> `wiki.epoch` through the new DAG executor with a real
+> agent-supplied `AgentExtractor`.
+
 Write scope:
 
 - `src/wikify/wiki/concepts.py`

@@ -88,7 +88,7 @@ def detect_contradiction(existing_body: str, new_extraction: str) -> bool:
 
     Args:
         existing_body: Full article body (frontmatter already stripped).
-        new_extraction: Haiku-extracted sentence(s) for the new source.
+        new_extraction: Fast-tier extracted sentence(s) for the new source.
 
     Returns:
         True if a contradiction is likely; False otherwise.
