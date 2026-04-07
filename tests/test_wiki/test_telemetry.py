@@ -37,7 +37,7 @@ def test_snapshot_wiki_metrics_writes_metric_export(tmp_path: Path):
         domains=["materials"],
     )
 
-    with patch("wikify.wiki.observability.runs.get_session", side_effect=session_factory):
+    with patch("wikify.wiki.observability.stages.get_session", side_effect=session_factory):
         run_id = begin_run(workflow_type="epoch")
         with session_factory() as session:
             session.add(
@@ -62,7 +62,7 @@ def test_finish_run_writes_log_and_run_summary(tmp_path: Path):
     session_factory = _session_factory(tmp_path)
     wiki_dir = tmp_path / "wiki"
 
-    with patch("wikify.wiki.observability.runs.get_session", side_effect=session_factory):
+    with patch("wikify.wiki.observability.stages.get_session", side_effect=session_factory):
         run_id = begin_run(workflow_type="epoch")
         finish_run(
             wiki_dir,

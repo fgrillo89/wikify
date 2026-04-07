@@ -1,13 +1,18 @@
-"""Run-scoped telemetry helpers for wiki workflows."""
+"""Run lifecycle and stage timing helpers.
+
+Owns:
+- ``new_run_id``, ``begin_run``, ``update_run_metadata``
+- ``StageTimer`` + ``stage_timer``
+- per-stage counters: tool calls, retrieval, tokens, page deltas,
+  experiment tags, loss components
+"""
 
 from __future__ import annotations
 
 import json
 import time
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 from sqlmodel import select
@@ -15,26 +20,14 @@ from sqlmodel import select
 from wikify.core.store.db import get_session
 from wikify.core.store.models import (
     ExperimentTag,
-    GraphEdge,
     LossDefinitionResult,
-    MaintenanceFinding,
     PageDeltaTelemetry,
-    PageProvenance,
     RetrievalTelemetry,
     RunLog,
     RunTelemetry,
     StageTelemetry,
     TokenUsageTelemetry,
     ToolCallTelemetry,
-    WikiSnapshotMetric,
-)
-from wikify.wiki.presentation.layout import (
-    ensure_layout,
-    index_path,
-    iter_visible_page_files,
-    log_path,
-    metrics_dir,
-    runs_dir,
 )
 
 
@@ -84,7 +77,6 @@ def begin_run(
     model_tier: str = "",
     model_name: str = "",
 ) -> str:
-    """Create a new run log and telemetry envelope."""
     run_id = new_run_id(workflow_type)
     started_at = _utcnow()
     run_log = RunLog(
@@ -117,10 +109,11 @@ def begin_run(
 
 
 def update_run_metadata(run_id: str, **fields: str) -> None:
-    """Update descriptive metadata on the run tables."""
     with get_session() as session:
         run_log = session.get(RunLog, run_id)
-        run_telem = session.exec(select(RunTelemetry).where(RunTelemetry.run_id == run_id)).first()
+        run_telem = session.exec(
+            select(RunTelemetry).where(RunTelemetry.run_id == run_id)
+        ).first()
         for row in (run_log, run_telem):
             if row is None:
                 continue
@@ -270,152 +263,16 @@ def record_loss_components(
         session.commit()
 
 
-def _count_wikilinks(text: str) -> int:
-    return text.count("[[")
-
-
-def snapshot_wiki_metrics(wiki_dir: Path, run_id: str) -> dict[str, float]:
-    """Persist a lightweight wiki evolution snapshot for one run."""
-    ensure_layout(wiki_dir)
-    page_files = iter_visible_page_files(wiki_dir)
-    page_type_counter: Counter[str] = Counter()
-    total_links = 0
-    orphan_count = 0
-    source_note_count = 0
-
-    link_targets: set[str] = set()
-    slugs = {path.stem for path in page_files}
-
-    for path in page_files:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        frontmatter = _parse_frontmatter(path)
-        page_type = str(frontmatter.get("page_type") or frontmatter.get("type") or "concept")
-        page_type_counter[page_type] += 1
-        if page_type == "source-note":
-            source_note_count += 1
-        total_links += _count_wikilinks(text)
-        for candidate in slugs:
-            if f"[[{candidate}]]" in text:
-                link_targets.add(candidate)
-
-    orphan_count = sum(1 for slug in slugs if slug not in link_targets)
-
-    with get_session() as session:
-        graph_edge_count = len(list(session.exec(select(GraphEdge)).all()))
-        weak_support_count = len(
-            list(session.exec(select(MaintenanceFinding).where(MaintenanceFinding.finding_type == "weak_support")).all())
-        )
-        contradiction_count = len(
-            list(session.exec(select(MaintenanceFinding).where(MaintenanceFinding.finding_type == "contradiction")).all())
-        )
-        unresolved_gap_count = len(
-            list(session.exec(select(MaintenanceFinding).where(MaintenanceFinding.finding_type == "gap")).all())
-        )
-        cross_domain_edge_count = len(
-            list(
-                session.exec(
-                    select(GraphEdge).where(GraphEdge.is_cross_domain == True)  # noqa: E712
-                ).all()
-            )
-        )
-        provenance_rows = len(list(session.exec(select(PageProvenance)).all()))
-        page_rows = len(page_files)
-
-    metrics: dict[str, float] = {
-        "article_count": float(page_rows - source_note_count),
-        "source_note_count": float(source_note_count),
-        "link_count": float(total_links),
-        "orphan_count": float(orphan_count),
-        "graph_edge_count": float(graph_edge_count),
-        "cross_domain_edge_ratio": float(cross_domain_edge_count / graph_edge_count)
-        if graph_edge_count
-        else 0.0,
-        "evidence_density": float(provenance_rows / page_rows) if page_rows else 0.0,
-        "weak_support_count": float(weak_support_count),
-        "contradiction_count": float(contradiction_count),
-        "unresolved_gap_count": float(unresolved_gap_count),
-    }
-    for page_type, count in sorted(page_type_counter.items()):
-        metrics[f"page_type:{page_type}"] = float(count)
-
-    measured_at = _utcnow()
-    with get_session() as session:
-        for name, value in metrics.items():
-            session.add(
-                WikiSnapshotMetric(
-                    run_id=run_id,
-                    metric_name=name,
-                    metric_value=value,
-                    measured_at=measured_at,
-                )
-            )
-        session.commit()
-
-    metrics_path = metrics_dir(wiki_dir) / f"{run_id}.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
-    return metrics
-
-
-def append_log_entry(
-    wiki_dir: Path,
-    *,
-    workflow_type: str,
-    headline: str,
-    summary_lines: list[str],
-) -> None:
-    ensure_layout(wiki_dir)
-    path = log_path(wiki_dir)
-    date = _utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"## [{date}] {workflow_type} | {headline}", ""]
-    lines.extend(f"- {line}" for line in summary_lines if line)
-    lines.append("")
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines))
-
-
-def finish_run(
-    wiki_dir: Path,
-    run_id: str,
-    *,
-    status: str,
-    headline: str,
-    summary: dict,
-) -> None:
-    """Mark a run complete and export a machine-readable summary."""
-    ensure_layout(wiki_dir)
-    completed_at = _utcnow()
-    with get_session() as session:
-        run_log = session.get(RunLog, run_id)
-        run_telemetry = session.exec(select(RunTelemetry).where(RunTelemetry.run_id == run_id)).first()
-        for row in (run_log, run_telemetry):
-            if row is None:
-                continue
-            row.status = status
-            row.completed_at = completed_at
-            row.summary_json = json.dumps(summary, ensure_ascii=False)
-            session.add(row)
-        session.commit()
-
-    run_summary_path = runs_dir(wiki_dir) / f"{run_id}.json"
-    run_summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    append_log_entry(
-        wiki_dir,
-        workflow_type=str(summary.get("workflow_type", "")),
-        headline=headline,
-        summary_lines=[f"{key}: {value}" for key, value in summary.items() if key != "workflow_type"],
-    )
-
-
-def _parse_frontmatter(path: Path) -> dict:
-    from wikify.wiki.builder import read_article_frontmatter
-
-    return read_article_frontmatter(path)
-
-
-def rebuild_index_stub(wiki_dir: Path) -> None:
-    """Ensure the new visible-layer index/log files exist."""
-    ensure_layout(wiki_dir)
-    if not index_path(wiki_dir).exists():
-        index_path(wiki_dir).write_text("# Knowledge Base Index\n", encoding="utf-8")
-    if not log_path(wiki_dir).exists():
-        log_path(wiki_dir).write_text("# Wiki Change Log\n\n", encoding="utf-8")
+__all__ = [
+    "StageTimer",
+    "begin_run",
+    "new_run_id",
+    "record_experiment_tags",
+    "record_loss_components",
+    "record_page_delta",
+    "record_retrieval",
+    "record_tokens",
+    "record_tool_call",
+    "stage_timer",
+    "update_run_metadata",
+]
