@@ -31,7 +31,7 @@ def _session_factory(tmp_path: Path):
 
 def _patch_runtime_sessions(session_factory):
     return patch("wikify.wiki.runtime.get_session", side_effect=session_factory), patch(
-        "wikify.wiki.telemetry.get_session", side_effect=session_factory
+        "wikify.wiki.observability.runs.get_session", side_effect=session_factory
     )
 
 

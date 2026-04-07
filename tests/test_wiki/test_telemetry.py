@@ -8,7 +8,7 @@ from unittest.mock import patch
 from wikify.store.db import DatabaseManager
 from wikify.store.models import GraphEdge
 from wikify.wiki.builder import article_path, write_article
-from wikify.wiki.telemetry import begin_run, finish_run, snapshot_wiki_metrics
+from wikify.wiki.observability import begin_run, finish_run, snapshot_wiki_metrics
 
 
 def _session_factory(tmp_path: Path):
@@ -37,7 +37,7 @@ def test_snapshot_wiki_metrics_writes_metric_export(tmp_path: Path):
         domains=["materials"],
     )
 
-    with patch("wikify.wiki.telemetry.get_session", side_effect=session_factory):
+    with patch("wikify.wiki.observability.runs.get_session", side_effect=session_factory):
         run_id = begin_run(workflow_type="epoch")
         with session_factory() as session:
             session.add(
@@ -62,7 +62,7 @@ def test_finish_run_writes_log_and_run_summary(tmp_path: Path):
     session_factory = _session_factory(tmp_path)
     wiki_dir = tmp_path / "wiki"
 
-    with patch("wikify.wiki.telemetry.get_session", side_effect=session_factory):
+    with patch("wikify.wiki.observability.runs.get_session", side_effect=session_factory):
         run_id = begin_run(workflow_type="epoch")
         finish_run(
             wiki_dir,

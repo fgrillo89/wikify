@@ -41,7 +41,7 @@ from wikify.wiki.layout import (
     metrics_dir,
     visible_page_path,
 )
-from wikify.wiki.telemetry import (
+from wikify.wiki.observability import (
     begin_run,
     finish_run,
     record_page_delta,

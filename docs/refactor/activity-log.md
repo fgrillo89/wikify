@@ -3,6 +3,17 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S3.E (observability subpackage)
+
+Moved `wiki/telemetry.py` (423 LOC) into `wiki/observability/runs.py`
+with no shims; updated all 4 import sites (`wiki/epoch.py`,
+`wiki/runtime.py`, `tests/test_wiki/test_telemetry.py`,
+`tests/test_wiki/test_runtime.py`). 861 tests pass. Splitting `runs.py`
+into `stages.py` / `snapshots.py` / `logs.py` / `export.py` per the
+target layout is a follow-up.
+
+---
+
 ## 2026-04-07 — Slice S3.B (graph subpackage)
 
 Moved the wiki graph layer into its own subpackage with no shims.

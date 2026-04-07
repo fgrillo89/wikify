@@ -14,8 +14,6 @@ from sqlmodel import select
 
 from wikify.store.db import get_session
 from wikify.store.models import (
-    ConceptOccurrence,
-    DomainMembership,
     ExperimentTag,
     GraphEdge,
     LossDefinitionResult,

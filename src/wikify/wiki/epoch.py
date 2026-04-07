@@ -53,7 +53,7 @@ from wikify.wiki.builder import (
     write_article,
 )
 from wikify.wiki.layout import iter_visible_page_files
-from wikify.wiki.telemetry import (
+from wikify.wiki.observability import (
     begin_run,
     finish_run,
     rebuild_index_stub,
