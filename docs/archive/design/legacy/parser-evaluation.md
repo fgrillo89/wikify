@@ -65,7 +65,7 @@ needs, vault note types, and graph roles.
 PPTX files are ambiguous — they could be conference talks (literature) or the user's own slides.
 
 - **Detection heuristic**: If ingested from a `papers/` or `references/` input directory → literature
-- **CLI flag**: `wikify ingest slides.pptx --source-type literature|user`
+- **CLI flag**: `scholarforge ingest slides.pptx --source-type literature|user`
 - **Default**: user document (safer assumption)
 
 ## Format-Specific Parsing

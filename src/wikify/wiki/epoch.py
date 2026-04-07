@@ -31,7 +31,16 @@ from sqlmodel import select
 from wikify.config import settings
 from wikify.llm.client import complete
 from wikify.store.db import get_session
-from wikify.store.models import ConceptRecord, EpochLog, Paper, SourceCoverage
+from wikify.store.models import (
+    ConceptOccurrence,
+    ConceptRecord,
+    DomainMembership,
+    EpochLog,
+    GraphEdge,
+    PageProvenance,
+    Paper,
+    SourceCoverage,
+)
 from wikify.wiki.article import (
     should_write_full,
     upgrade_concept_article,
@@ -43,6 +52,19 @@ from wikify.wiki.builder import (
     generate_wiki_index,
     write_article,
 )
+from wikify.wiki.layout import iter_visible_page_files
+from wikify.wiki.telemetry import (
+    begin_run,
+    finish_run,
+    rebuild_index_stub,
+    record_experiment_tags,
+    record_loss_components,
+    record_page_delta,
+    record_retrieval,
+    snapshot_wiki_metrics,
+    stage_timer,
+    update_run_metadata,
+)
 from wikify.wiki.concept_graph import (
     build_concept_graph,
     classify_node_roles,
@@ -53,14 +75,14 @@ from wikify.wiki.concept_graph import (
 )
 from wikify.wiki.concepts import (
     HAIKU_MODEL,
-    clear_rich_extractions,
     clear_staged_extractions,
     discover_concepts,
-    get_rich_extractions,
     list_concepts,
     store_evidence,
     store_gaps,
+    store_occurrences,
     store_parameters,
+    store_relation_evidence,
 )
 from wikify.wiki.domains import discover_domains
 from wikify.wiki.linker import cross_link_articles
@@ -106,6 +128,26 @@ def _get_all_paper_ids() -> list[str]:
             session.exec(select(Paper).where(Paper.origin == "corpus")).all()
         )
     return [p.id for p in papers]
+
+
+def epoch_log_to_summary(log: EpochLog) -> dict[str, object]:
+    """Convert a persisted EpochLog into a stable summary shape."""
+    return {
+        "epoch": log.epoch,
+        "workflow_type": "epoch",
+        "triggered_by": log.triggered_by,
+        "concepts_discovered": log.concepts_discovered,
+        "articles_written": log.articles_written,
+        "stubs_upgraded": log.stubs_upgraded,
+        "contradictions_flagged": log.contradictions_flagged,
+        "cross_refs_added": log.cross_refs_added,
+        "loss": log.loss_score,
+        "loss_delta": log.loss_delta,
+        "template_delta": log.template_delta,
+        "converged": log.converged,
+        "started_at": log.started_at.isoformat() if log.started_at else "",
+        "completed_at": log.completed_at.isoformat() if log.completed_at else "",
+    }
 
 
 # ── Boolean gating agent ───────────────────────────────────────────────────────
@@ -197,9 +239,7 @@ def _count_warning_markers(wiki_dir: Path) -> tuple[int, int]:
     warning_count = 0
     warning_pattern = re.compile(r"\bWARNING\b", re.IGNORECASE)
 
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
         total_articles += 1
         try:
             text = md_file.read_text(encoding="utf-8", errors="replace")
@@ -222,9 +262,7 @@ def _count_wikilinks(wiki_dir: Path, total_articles: int) -> float:
     wikilink_pattern = re.compile(r"\[\[[^\]]+\]\]")
     total_links = 0
 
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
         try:
             text = md_file.read_text(encoding="utf-8", errors="replace")
             total_links += len(wikilink_pattern.findall(text))
@@ -253,6 +291,7 @@ def compute_loss(epoch: int) -> tuple[float, float]:
     """
     with get_session() as session:
         all_concepts: list[ConceptRecord] = list(session.exec(select(ConceptRecord)).all())
+        all_occurrences: list[ConceptOccurrence] = list(session.exec(select(ConceptOccurrence)).all())
         all_coverage: list[SourceCoverage] = list(session.exec(select(SourceCoverage)).all())
 
     total_concepts = len(all_concepts)
@@ -266,7 +305,11 @@ def compute_loss(epoch: int) -> tuple[float, float]:
     stub_ratio = stub_count / total_concepts
 
     # orphan_concept_rate — concepts with no SourceCoverage rows
-    covered_slugs: set[str] = {cov.article_slug for cov in all_coverage}
+    covered_slugs: set[str]
+    if all_occurrences:
+        covered_slugs = {occ.concept_id for occ in all_occurrences}
+    else:
+        covered_slugs = {cov.article_slug for cov in all_coverage}
     orphan_count = sum(1 for c in all_concepts if c.id not in covered_slugs)
     orphan_concept_rate = orphan_count / total_concepts
 
@@ -277,8 +320,9 @@ def compute_loss(epoch: int) -> tuple[float, float]:
     # cross_ref_density — [[wikilinks]] per article
     cross_ref_density = _count_wikilinks(_WIKI_DIR, total_articles)
 
-    # Clamp cross_ref_density to [0, 1] for the formula (density can exceed 1)
-    cross_ref_density_clamped = min(cross_ref_density / max(cross_ref_density, 1.0), 1.0)
+    # Convert link density into a smoother [0, 1) score without flattening too early.
+    # 0 links/article -> 0.0, 1 link/article -> 0.25, 3 links/article -> 0.5.
+    cross_ref_density_clamped = cross_ref_density / (cross_ref_density + 3.0)
 
     loss = (
         _ALPHA * stub_ratio
@@ -519,6 +563,24 @@ def run_epoch(
         triggered_by,
         domain,
     )
+    rebuild_index_stub(_WIKI_DIR)
+    run_id = begin_run(
+        workflow_type="epoch",
+        status="pending",
+        strategy_id="default_epoch",
+        loss_definition_id="wiki_loss_v1",
+        prompt_family="wiki_epoch_v1",
+        model_tier="balanced",
+        model_name=model or "",
+    )
+    record_experiment_tags(
+        run_id,
+        {
+            "workflow": "epoch",
+            "domain": domain or "all",
+            "triggered_by": triggered_by,
+        },
+    )
 
     # ── Determine article model based on previous epoch's loss ────────────────
     if model is not None:
@@ -547,33 +609,40 @@ def run_epoch(
                 prev_loss,
                 settings.llm_model,
             )
+    update_run_metadata(run_id, model_name=article_model, model_tier="balanced")
 
     # ── Pass 1: Concept Discovery ─────────────────────────────────────────────
+    pass1_stage = stage_timer(run_id, "concept_discovery")
+    pass2_stage = stage_timer(run_id, "graph_building")
+    pass3_stage = stage_timer(run_id, "article_writing")
     t0 = time.monotonic()
     logger.info("--- Pass 1: Concept Discovery (epoch=%d) ---", epoch)
 
     clear_staged_extractions(epoch)
-    clear_rich_extractions()
     paper_ids = _get_all_paper_ids()
     logger.info("Pass 1: processing %d corpus papers", len(paper_ids))
 
-    new_concepts = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
-    log.concepts_discovered = len(new_concepts)
+    discovery = discover_concepts(paper_ids, epoch, model=HAIKU_MODEL)
+    log.concepts_discovered = len(discovery.concepts)
 
     # Store evidence and gaps from rich extraction results
-    rich = get_rich_extractions()
+    rich = discovery.rich_extractions
     if rich:
         store_evidence(rich, epoch)
         store_gaps(rich, epoch)
         store_parameters(rich, epoch)
+        store_occurrences(rich, epoch)
+        store_relation_evidence(rich, epoch)
 
     logger.info(
         "Pass 1 complete in %.1fs: %d concepts discovered",
         time.monotonic() - t0,
         log.concepts_discovered,
     )
+    pass1_stage.finish(paper_count=len(paper_ids), concepts_discovered=log.concepts_discovered)
 
     # ── Pass 2: Graph Building ─────────────────────────────────────────────────
+    pass2_stage = stage_timer(run_id, "graph_building")
     t0 = time.monotonic()
     logger.info("--- Pass 2: Graph Building (epoch=%d) ---", epoch)
 
@@ -583,6 +652,18 @@ def run_epoch(
     classify_node_roles(graph, scores)  # side-effect: node role attributes stored in graph
     relations = extract_relations(graph, epoch)
     n_relations = save_relations(relations, epoch)
+    with get_session() as session:
+        for rel in relations:
+            session.add(
+                GraphEdge(
+                    source_slug=rel.source_concept,
+                    target_slug=rel.target_concept,
+                    relation_type=rel.relation_type,
+                    weight=rel.weight,
+                    epoch=epoch,
+                )
+            )
+        session.commit()
 
     logger.info(
         "Pass 2 complete in %.1fs: graph nodes=%d edges=%d relations_saved=%d",
@@ -591,8 +672,14 @@ def run_epoch(
         graph.number_of_edges(),
         n_relations,
     )
+    pass2_stage.finish(
+        graph_nodes=graph.number_of_nodes(),
+        graph_edges=graph.number_of_edges(),
+        relations_saved=n_relations,
+    )
 
     # ── Pass 2b: Domain Discovery ────────────────────────────────────────────
+    pass2b_stage = stage_timer(run_id, "domain_discovery")
     t0 = time.monotonic()
     logger.info("--- Pass 2b: Domain Discovery (epoch=%d) ---", epoch)
 
@@ -607,6 +694,17 @@ def run_epoch(
         for cid in cluster.parsed_bridge_concepts:
             _concept_is_bridge.add(cid)
             _concept_domain.setdefault(cid, cluster.label)
+    with get_session() as session:
+        for concept_id, concept_domain in _concept_domain.items():
+            session.add(
+                DomainMembership(
+                    page_slug=concept_id,
+                    domain=concept_domain,
+                    confidence=1.0,
+                    source="epoch_domain_discovery",
+                )
+            )
+        session.commit()
 
     # Map cluster id -> cluster for persona lookup
     _cluster_by_id: dict[str, object] = {c.id: c for c in domain_clusters}
@@ -616,8 +714,10 @@ def run_epoch(
         time.monotonic() - t0,
         len(domain_clusters),
     )
+    pass2b_stage.finish(domains_discovered=len(domain_clusters))
 
     # ── Pass 3: Article Writing ────────────────────────────────────────────────
+    pass3_stage = stage_timer(run_id, "article_writing")
     t0 = time.monotonic()
     logger.info("--- Pass 3: Article Writing (epoch=%d, model=%s) ---", epoch, article_model)
 
@@ -646,18 +746,33 @@ def run_epoch(
 
                 # Use domain-scoped label if available, fall back to epoch domain
                 concept_domain = _concept_domain.get(concept.id, domain)
-                body = write_concept_article(concept, neighbors, concept_domain, article_model)
-
                 extractions: list[SourceExtraction] = map_chunks_to_topic(
                     topic_query=concept.name,
                     scope=concept.definition or concept.name,
                     domain=concept_domain,
                     model=HAIKU_MODEL,
                 )
+                relevant_extractions = [e for e in extractions if e.is_relevant]
+                record_retrieval(
+                    run_id,
+                    stage_name="article_writing",
+                    query=concept.name,
+                    candidates_considered=len(extractions),
+                    chunks_selected=len(relevant_extractions),
+                    raw_fallback_used=False,
+                    domains=[concept_domain] if concept_domain else [],
+                )
+                body = write_concept_article(
+                    concept,
+                    neighbors,
+                    concept_domain,
+                    article_model,
+                    extractions=extractions,
+                )
 
                 status = "full" if should_write_full(concept, extractions) else "stub"
 
-                source_ids: list[str] = list({e.source_id for e in extractions if e.is_relevant})
+                source_ids: list[str] = list({e.source_id for e in relevant_extractions})
 
                 fpath = article_path(_WIKI_DIR, "concepts", concept.id)
                 write_article(
@@ -668,6 +783,8 @@ def run_epoch(
                     [concept.concept_type] if concept.concept_type else [],
                     status,
                     article_model,
+                    page_type="concept",
+                    domains=[concept_domain] if concept_domain else [],
                 )
 
                 with get_session() as session:
@@ -677,9 +794,25 @@ def run_epoch(
                         db_concept.article_path = str(fpath)
                         db_concept.epoch_last_updated = epoch
                         session.add(db_concept)
-                        session.commit()
+                    for ext in relevant_extractions:
+                        session.add(
+                            PageProvenance(
+                                page_slug=concept.id,
+                                paper_id=ext.source_id,
+                                section_name="article",
+                                evidence_quote=ext.extraction,
+                            )
+                        )
+                    session.commit()
 
                 articles_written += 1
+                record_page_delta(
+                    run_id,
+                    page_slug=concept.id,
+                    action="create",
+                    page_type="concept",
+                    source_count=len(source_ids),
+                )
                 logger.debug("Pass 3: wrote new article for %r (status=%s)", concept.name, status)
 
             except Exception:
@@ -726,6 +859,15 @@ def run_epoch(
                             new_extractions.extend(cross_ext)
 
                 relevant_extractions = [e for e in new_extractions if e.is_relevant]
+                record_retrieval(
+                    run_id,
+                    stage_name="article_writing",
+                    query=concept.name,
+                    candidates_considered=len(new_extractions),
+                    chunks_selected=len(relevant_extractions),
+                    raw_fallback_used=False,
+                    domains=[concept_domain] if concept_domain else [],
+                )
                 if not relevant_extractions:
                     continue
 
@@ -755,6 +897,8 @@ def run_epoch(
                     [concept.concept_type] if concept.concept_type else [],
                     new_status,
                     article_model,
+                    page_type="concept",
+                    domains=[concept_domain] if concept_domain else [],
                 )
 
                 with get_session() as session:
@@ -763,9 +907,25 @@ def run_epoch(
                         db_concept.article_status = new_status
                         db_concept.epoch_last_updated = epoch
                         session.add(db_concept)
-                        session.commit()
+                    for ext in relevant_extractions:
+                        session.add(
+                            PageProvenance(
+                                page_slug=concept.id,
+                                paper_id=ext.source_id,
+                                section_name="article",
+                                evidence_quote=ext.extraction,
+                            )
+                        )
+                    session.commit()
 
                 stubs_upgraded += 1
+                record_page_delta(
+                    run_id,
+                    page_slug=concept.id,
+                    action="update",
+                    page_type="concept",
+                    source_count=len(source_ids),
+                )
                 if new_status != concept.article_status:
                     logger.debug(
                         "Pass 3: upgraded %r: %s -> %s",
@@ -792,8 +952,14 @@ def run_epoch(
         stubs_upgraded,
         contradictions_flagged,
     )
+    pass3_stage.finish(
+        articles_written=articles_written,
+        stubs_upgraded=stubs_upgraded,
+        contradictions_flagged=contradictions_flagged,
+    )
 
     # ── Pass 4: Cross-linking ──────────────────────────────────────────────────
+    pass4_stage = stage_timer(run_id, "cross_linking")
     t0 = time.monotonic()
     logger.info("--- Pass 4: Cross-linking (epoch=%d) ---", epoch)
 
@@ -805,8 +971,10 @@ def run_epoch(
         time.monotonic() - t0,
         cross_refs,
     )
+    pass4_stage.finish(cross_refs_added=cross_refs)
 
     # ── Pass 5: Index Rebuild + Loss ──────────────────────────────────────────
+    pass5_stage = stage_timer(run_id, "index_and_loss")
     t0 = time.monotonic()
     logger.info("--- Pass 5: Index Rebuild + Loss (epoch=%d) ---", epoch)
 
@@ -820,6 +988,36 @@ def run_epoch(
     loss_score, loss_delta = compute_loss(epoch)
     log.loss_score = loss_score
     log.loss_delta = loss_delta
+    with get_session() as session:
+        occurrence_rows: list[ConceptOccurrence] = list(session.exec(select(ConceptOccurrence)).all())
+        coverage_rows: list[SourceCoverage] = list(session.exec(select(SourceCoverage)).all())
+    covered_slugs = (
+        {row.concept_id for row in occurrence_rows}
+        if occurrence_rows
+        else {cov.article_slug for cov in coverage_rows}
+    )
+    visible_pages = iter_visible_page_files(_WIKI_DIR)
+    visible_page_count = len(visible_pages)
+    cross_ref_density = _count_wikilinks(_WIKI_DIR, max(visible_page_count, 1))
+    loss_components = {
+        "stub_ratio": (
+            sum(1 for c in all_concepts if c.article_status in ("none", "stub")) / max(len(all_concepts), 1),
+            _ALPHA,
+        ),
+        "orphan_concept_rate": (
+            sum(1 for c in all_concepts if c.id not in covered_slugs) / max(len(all_concepts), 1),
+            _BETA,
+        ),
+        "contradiction_density": (
+            (contradictions_flagged / max(visible_page_count, 1)),
+            _GAMMA,
+        ),
+        "cross_ref_score": (
+            cross_ref_density / (cross_ref_density + 3.0) if visible_page_count else 0.0,
+            _DELTA,
+        ),
+    }
+    record_loss_components(run_id, loss_name="wiki_loss_v1", components=loss_components)
 
     # Gather recent logs for convergence check (include the current one)
     with get_session() as session:
@@ -848,6 +1046,31 @@ def run_epoch(
         session.add(log)
         session.commit()
         session.refresh(log)
+
+    metrics = snapshot_wiki_metrics(_WIKI_DIR, run_id)
+    pass5_stage.finish(
+        loss_score=loss_score,
+        loss_delta=loss_delta,
+        template_delta=template_delta,
+        converged=log.converged,
+        metric_count=len(metrics),
+    )
+    summary = epoch_log_to_summary(log)
+    summary.update(
+        {
+            "run_id": run_id,
+            "workflow_type": "epoch",
+            "total_visible_pages": visible_page_count,
+            "metric_count": len(metrics),
+        }
+    )
+    finish_run(
+        _WIKI_DIR,
+        run_id,
+        status="applied",
+        headline=f"Epoch {epoch}",
+        summary=summary,
+    )
 
     logger.info(
         "Pass 5 complete in %.1fs: loss=%.4f delta=%.4f converged=%s",
@@ -941,9 +1164,12 @@ def get_epoch_status() -> dict:
 
     return {
         "current_epoch": current_epoch,
+        "epochs_completed": current_epoch,
         "latest_loss": latest_loss,
+        "loss": latest_loss,
         "loss_delta": loss_delta,
         "converged": converged,
+        "last_run": current_epoch if current_epoch else "never",
         "total_concepts": total_concepts,
         "stub_count": status_counts["stub"],
         "draft_count": status_counts["draft"],

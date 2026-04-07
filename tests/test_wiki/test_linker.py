@@ -379,9 +379,8 @@ def test_generate_wiki_index_has_required_headers(tmp_path):
     assert "_Last updated:" in result
     assert "_Articles:" in result
     assert "Sources indexed:" in result
-    assert "## Themes" in result
+    assert "## Overviews" in result
     assert "## Concepts" in result
-    assert "## Syntheses" in result
 
 
 def test_generate_wiki_index_writes_file(tmp_path):

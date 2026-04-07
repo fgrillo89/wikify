@@ -22,8 +22,8 @@ Add to Claude Code MCP settings:
 ```json
 {
   "mcpServers": {
-    "wikify": {
-      "command": "wikify",
+    "scholarforge": {
+      "command": "scholarforge",
       "args": ["mcp"]
     }
   }
@@ -38,4 +38,4 @@ In the future, ScholarForge will be a user-facing app where users either bring t
 
 ## Where the code lives
 - `mcp_server.py` — FastMCP server with 6 tools
-- `cli.py` — `wikify mcp` command
+- `cli.py` — `scholarforge mcp` command

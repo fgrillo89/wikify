@@ -1,483 +1,508 @@
-# Wikify -- Architecture
+﻿# Wikify Architecture
 
-## What is Wikify?
+## Purpose
+Wikify is a local-first corpus platform with two product surfaces built on the
+same underlying source and structured state:
 
-A local-first Python pipeline with two distinct capabilities:
+- `wiki`: a general-purpose wiki builder and manager for curated knowledge pages
+- `papers`: a research-writing surface for papers, reviews, and presentations
 
-**A. Wikipedia Pipeline (primary focus):** Turns any corpus of PDFs, notes, and documents into
-a concept-first, self-correcting personal Wikipedia via an epoch-driven discovery and
-article-writing loop.
+The wiki is the primary knowledge product. It must remain domain-neutral and
+work across scientific, technical, historical, legal, policy, and mixed
+document corpora.
 
-**B. Research Paper Writing:** Generates literature reviews, research papers, and presentations
-from the same corpus via a generate -> evaluate -> revise pipeline. Will be enhanced later
-by using the wiki as a structured knowledge layer.
+## Current Docs
+The current documentation surface is intentionally small.
 
-Model-agnostic (Claude, GPT-4, DeepSeek, Ollama via litellm).
+- `docs/architecture.md`: architectural boundaries and system model
+- `docs/project-status.md`: current state and active priorities
+- `docs/refactor/wiki-deep-refactor-plan.md`: active implementation plan
+- `docs/design/wiki-runtime-refactor-plan.md`: focused design note for visible
+  wiki plus operational state
 
----
+Older design material has been moved to archive.
 
-## High-Level System Diagram
+## Architectural Principles
+1. Separate product boundaries clearly: `core`, `ingest`, `wiki`, `papers`.
+2. Keep visible wiki files and structured state aligned. They support each
+   other and should not become competing truths.
+3. Treat graph metrics and run observability as first-class wiki subsystems.
+4. Keep adapters thin: CLI, MCP, and agent/runtime-specific docs should compose
+   domain surfaces rather than own domain logic.
+5. Prefer locality of behavior. Code that changes together should live
+   together.
 
+## Top-Level Boundaries
+
+```text
+core
+  ^
+  |
+ingest
+  ^ \
+  |  \
+wiki  papers
+
+cli / mcp / runtime adapters sit at the edge.
 ```
-Raw files (PDF, DOCX, PPTX, Markdown, HTML)
+
+### `core`
+Shared infrastructure used by more than one product boundary.
+
+Examples:
+
+- config
+- SQLite/session management
+- embeddings/vector store clients
+- LLM client wrappers
+
+### `ingest`
+Source parsing and corpus-wide enrichment.
+
+Examples:
+
+- file parsing
+- chunking and metadata extraction
+- embeddings and precompute artifacts
+- BibTeX rebuilds
+- corpus refresh workflows
+- corpus projections such as vault generation when still owned at the corpus
+  level
+
+### `wiki`
+General-purpose wiki creation, query, maintenance, presentation, graph
+reasoning, and observability.
+
+Examples:
+
+- page contracts and mutation envelopes
+- concept discovery
+- graph construction and topology metrics
+- article writing and linking
+- epoch, query, maintain, and campaign operations
+- wiki HTML/dashboard presentation
+- run telemetry and cross-epoch comparisons
+
+### `papers`
+Research writing built on the shared corpus substrate, and later optionally on
+public wiki surfaces.
+
+Examples:
+
+- exploration and retrieval for writing
+- planning, drafting, verification, and revision
+- evaluation and export
+- paper-specific CLI and MCP surfaces
+
+`wiki` must not depend on `papers`. `papers` may depend on `wiki` only through
+public wiki contracts or runtime surfaces.
+
+## High-Level System Flow
+
+```text
+Raw sources
+PDF, DOCX, PPTX, Markdown, HTML, notes, web captures
         |
         v
-  INGEST PIPELINE (no LLM)
-  ingest/service.py  ->  extract/  ->  store/ (SQLite + ChromaDB)
-        |
-        |-- BibTeX: data/library.bib
-        |-- Vault:  data/vault/  (Obsidian notes)
-        |-- Cache:  data/cache/precomputed/
+Ingest
+parsing -> chunks -> metadata -> citations -> figures/equations
         |
         v
-  ENRICHED INDEX (data/papers.db + data/chromadb/)
+Structured substrate
+SQLite + embeddings + cache/precompute + corpus projections
         |
-        +---------------------------+---------------------------+
-        |                           |                           |
-        v                           v                           v
-  PIPELINE A                  PIPELINE B                 MCP SERVER
-  Research Paper Writing      Wikipedia / Epoch          agent/tools.py
-                                                         15 MCP tools exposed
-  generate/ + agent/          wiki/epoch.py              to Claude Code
-        |                     wiki/concepts.py
-        v                     wiki/concept_graph.py
-  data/output/                wiki/article.py
-  (.md, .docx, .pdf)          wiki/domains.py
-                              wiki/dashboard.py
-                                    |
-                              wiki/persona.py
-                              wiki/mapreduce.py
-                              wiki/maintenance.py
-                              wiki/builder.py
-                              wiki/linker.py
-                              wiki/sitemap.py (secondary)
-                                    |
-                                    v
-                              data/wiki/  (concept articles, indexes)
-                                    |
-                    (future)        v
-                    +-- feeds into Pipeline A for richer retrieval
+        +---------------------------+
+        |                           |
+        v                           v
+Wiki runtime                    Papers runtime
+epoch/query/maintain/...        generate/evaluate/revise/...
+        |                           |
+        v                           v
+Visible wiki                    Generated outputs
+data/wiki/                      data/output/
 ```
 
----
+## Target Package Map
 
-## Module Map
-
-```
+```text
 src/wikify/
-├── agent/                    # LLM agent loop, tools, workflows
-│   ├── core.py               # WikifyAgent, tool compaction, structured tool errors
-│   ├── tools.py              # 25+ KB tools (read, search, gaps, citations, vibes)
-│   ├── defaults.py           # Tool sets + prompt builders (explorer, writer)
-│   ├── workflows.py          # generate_paper, explore_corpus, export_paper
-│   ├── scripted.py           # Scripted pipeline (Python explore + LLM write)
-│   ├── fast_generate.py      # One-shot pipeline (pre-compute + single LLM call)
-│   ├── research_notes.py     # ResearchNotes + SourceSummary (explorer->writer handoff)
-│   ├── run_context.py        # Run-scoped state (summaries, reading log, concept graph)
-│   ├── concept_graph.py      # ConceptGraph (concept->paper edges, per-run, not persisted)
-│   ├── reading_log.py        # File-backed reading trace for the active run
-│   └── tool_schema.py        # fn -> litellm tool schema introspection
-│
-├── evaluate/                 # Quality metrics + exploration strategies (pure computation)
-│   ├── quality.py            # 10-component composite + comprehensive_quality_report()
-│   ├── coverage.py           # Semantic coverage, paper vibes
-│   ├── strategies.py         # greedy_submodular, max_distance, spectral, hub_bfs
-│   ├── frontier.py           # frontier_exploration_order (4-phase reading order)
-│   └── pi_review.py          # LLM-as-PI evaluation
-│
-├── store/                    # SQLite + ChromaDB + pre-compute cache
-│   ├── models.py             # All SQLite models (see Data Model section below)
-│   ├── db.py                 # Engine + session management + auto-migration
-│   ├── embeddings.py         # EmbeddingStore, paper vibes, science vibes
-│   └── precompute.py         # Ingest-time cache (KMeans, gaps, links, vibes)
-│
-├── ingest/                   # File ingestion (no LLM)
-│   ├── service.py            # PUBLIC BOUNDARY: ingest_file(), ingest_directory()
-│   ├── corpus_refresh.py     # PUBLIC BOUNDARY: post-ingest refresh (topics, vault, BibTeX)
-│   └── registry.py           # Legacy shim -- delegates to service.py
-│
-├── extract/                  # Parsing support (chunking, metadata, citations, figures)
-│   ├── media.py              # Unified image/table extraction pipeline (pymupdf4llm)
-│   └── equations.py          # LaTeX/chemical/inline equation detection and extraction
-│
-├── graph/                    # NetworkX: citation-only PageRank, betweenness, centrality
-├── generate/                 # Writing pipeline: planner, writer, verifier, references
-├── export/                   # Output formatting: DOCX, PDF, PPTX, chemistry subscripts
-├── vault/                    # Obsidian vault generation (enriched layer view)
-├── zotero/                   # BibTeX library generation
-├── llm/                      # litellm client + hooks
-│   └── vision.py             # Haiku vision: send figures for structured description
-│
-├── prompts/                  # Runtime prompt files (NOT documentation)
-│   ├── style_guide.md        # Base academic writing style
-│   ├── artifact_types/       # Per-document-type rules
-│   └── fields/               # Per-field writing guides
-│
-└── wiki/                     # Wikipedia pipeline (Pipeline B)
-    ├── concepts.py           # ConceptRecord, ConceptRelation, EpochLog SQLite models
-    │                         # + haiku discovery: discover_concepts, merge_concept_records
-    ├── concept_graph.py      # Co-occurrence graph, PageRank importance, Louvain communities,
-    │                         # relation classification: build_concept_graph, score_importance,
-    │                         # classify_relations
-    ├── article.py            # Wikipedia-format article writer (concept-aware):
-    │                         # write_concept_article
-    ├── epoch.py              # Epoch orchestrator: Passes 1-5, loss computation,
-    │                         # convergence tracking, trigger hooks:
-    │                         # run_epoch, run_until_convergence, check_convergence, compute_loss
-    ├── dashboard.py          # FastAPI dashboard: /api/epochs, /api/concepts,
-    │                         # /api/coverage, /api/gradient
-    ├── domains.py            # DomainCluster discovery, domain membrane model,
-    │                         # auto-domain routing: discover_domains, assign_concept_domain
-    ├── routing.py            # Concept-to-domain routing, domain boundary enforcement
-    ├── persona.py            # Domain persona: generate_domain_persona(),
-    │                         # get_or_create_persona()
-    ├── mapreduce.py          # map_chunks_to_topic(), reduce_to_article(),
-    │                         # record_coverage()
-    ├── maintenance.py        # detect_contradiction(), additive_update(),
-    │                         # revisionary_update(), structural_audit() -> StructuralReport
-    ├── builder.py            # write_article(), read_article_frontmatter(), slugify(),
-    │                         # generate_theme_index(), generate_domain_index(),
-    │                         # generate_library_catalog(), append_unanswered_question()
-    ├── linker.py             # cross_link_articles(), ensure_parent_backlinks()
-    ├── sitemap.py            # SitemapEntry, WikiSitemap, generate_sitemap()
-    │                         # (secondary role: optional user-directed topic focus)
-    ├── people.py             # Person discovery, name dedup, author cross-reference
-    ├── figure_enrichment.py  # Batch Haiku vision enrichment for figures at scale
-    ├── html.py               # Static HTML site generator (Wikipedia Vector skin, KaTeX)
-    ├── templates/            # Jinja2 templates for HTML site (article, index, sidebar)
-    └── agent.py              # build_wiki_from_sitemap(), build_article_from_entry(),
-                              # build_wiki_article()
+|-- core/
+|   |-- config.py
+|   |-- llm/
+|   `-- store/
+|
+|-- ingest/
+|   |-- service.py
+|   |-- refresh.py
+|   |-- corpus_refresh.py       # temporary shim during migration
+|   |-- bibtex.py
+|   |-- parsers/
+|   |-- extract/
+|   `-- vault/                  # if still owned by corpus refresh
+|
+|-- wiki/
+|   |-- contracts.py
+|   |-- runtime.py
+|   |-- operations/
+|   |-- discovery/
+|   |-- concepts/
+|   |-- graph/
+|   |-- articles/
+|   |-- observability/
+|   |-- presentation/
+|   |-- people.py
+|   |-- persona.py
+|   |-- figure_enrichment.py
+|   `-- legacy/
+|
+|-- papers/
+|   |-- agent/
+|   |-- generate/
+|   |-- retrieve/
+|   |-- evaluate/
+|   |-- export/
+|   |-- runtime.py
+|   |-- cli.py
+|   `-- mcp.py
+|
+|-- cli.py
+`-- mcp_server.py
 ```
 
----
+This is the target shape being executed in
+`docs/refactor/wiki-deep-refactor-plan.md`.
 
-## Pipeline A: Research Paper Writing
+## Wiki System Model
 
-```
-User: wikify generate "review on ALD memristors"
-          |
-          v
-   agent/workflows.py  (selects route based on --strategy)
-          |
-    +-----------+-----------+-----------+-----------+
-    |           |           |           |           |
-  Skill      Hier-      Scripted    Two-Agent     Fast
-  Route      archical   Route       Route        One-Shot
-  (v1)       (v2)
-    |           |           |           |           |
-    |           |      Python        Explorer    Pre-compute
-    |       4-level    explores,     LLM ->      10s, no LLM
-    |      progressive  LLM just    Notes ->
-    |       disclosure  writes      Writer LLM
-    |
-    +-----------+-----------+-----------+-----------+
-          |
-          v
-   ResearchNotes  (canonical explorer->writer handoff)
-   agent/research_notes.py
-          |
-          v
-   generate/  (writer + planner + verifier + references)
-          |
-          v
-   export/  (.md + .docx + .pdf + .pptx)
-          |
-          v
-   data/output/
-```
+### Visible Layer
+The visible wiki is the primary human-facing artifact.
 
-Progressive disclosure levels (all routes respect this):
-1. `get_paper` (~200 chars) -- overview
-2. `read_paper_digest` (~1.5KB) -- TOC + section summaries
-3. `read_section` (~5KB) -- full text of one section
-4. `deep_read` (~70KB) -- full paper (used sparingly)
+Canonical layout:
 
----
+- `data/wiki/index.md`
+- `data/wiki/log.md`
+- `data/wiki/articles/`
+- `data/wiki/sources/`
+- `data/wiki/_meta/`
 
-## Pipeline B: Wikipedia / Epoch
+Visible pages are curated markdown pages with shared frontmatter contracts such
+as `page_type`, `domains`, and `source_ids`.
 
-The epoch model is the authoritative design. See `docs/design/wiki-wikipedia-model.md`.
-Building-block modules (`persona.py`, `mapreduce.py`, `maintenance.py`, `builder.py`,
-`linker.py`) are reused inside the epoch orchestrator.
+### Structured Layer
+Structured state supports the visible wiki and agent/runtime behavior.
 
-```
-User: wikify wiki epoch
-          |
-          v
-   wiki/epoch.py
-          |
-    +----------+----------+----------+----------+----------+
-    |          |          |          |          |          |
-  Pass 1    Pass 2     Pass 3     Pass 4     Pass 5
-  Discovery  Graph      Article    Cross-Ref   Index
-  (haiku,   Construc-  Writing    (local)     Rebuild
-  parallel)  tion       (haiku/            +  (local)
-             (local)    sonnet,       Pass 5a:
-                        parallel)  Obsidian
-                                   dashboard
-    |          |          |          |          |
-    v          v          v          v          v
-  concepts.  concept_  article.py linker.py  builder.py
-  py         graph.py
-    |
-    v
-  ConceptRecord table (SQLite)   -- in concepts.py
-  ConceptRelation table (SQLite) -- in concepts.py
-  EpochLog table (SQLite)        -- in concepts.py
-  DomainCluster table (SQLite)   -- in domains.py
-          |
-          v
-   data/wiki/  (one .md per concept, domain indexes, _index.md)
-          |
-          v
-   wiki/html.py  ->  data/wiki/_site/  (static HTML, Wikipedia Vector skin)
-```
+Examples:
 
-Supporting modules:
-- `wiki/people.py` -- person discovery, name dedup, author cross-ref (feeds Pass 1)
-- `wiki/figure_enrichment.py` -- batch Haiku vision enrichment (feeds Pass 1/3)
-- `extract/equations.py` -- equation detection (feeds Pass 1)
-- `llm/vision.py` -- Haiku vision helper for figure descriptions
+- SQLite records for pages, provenance, domain membership, findings, and runs
+- embeddings for retrieval and similarity
+- graph edges and graph-derived metrics
+- telemetry and snapshot metrics
 
-Model-selection schedule within Pass 3:
-- While `L >= 0.3`: haiku for all article drafts
-- Once `L < 0.3`: switch to sonnet for remaining articles
+This layer exists to support:
 
-The sitemap pipeline (`wiki init`) remains available as an optional alternative for
-user-directed topic focus. It is NOT the primary epoch-driven pipeline.
+- retrieval
+- provenance
+- graph reasoning
+- maintenance
+- prioritization
+- comparison across runs and epochs
 
-### Planned: Conceptual Nexus Model
+It should not silently replace curated page truth.
 
-The Adaptive Knowledge Engine plan (`docs/design/adaptive-knowledge-engine.md`) introduces
-a **Conceptual Nexus Model** as Phase 6 of the Wikipedia pipeline's next evolution. It
-unifies the three existing knowledge layers into a single queryable representation:
+### Discovery And Extraction Layer
+Concept discovery is a first-class wiki subsystem. It sits between ingest and
+article writing and must be understandable on its own rather than buried inside
+`epoch`.
 
-- **Concept graph** (`wiki/concept_graph.py`) -- NetworkX DiGraph of co-occurrence relations
-- **Embedding layer** (ChromaDB `chunks` + concept definitions) -- semantic similarity
-- **Article layer** (`data/wiki/`) -- human-readable Markdown articles per concept
+Its job is to turn parsed source structure plus multimodal evidence into:
 
-The nexus model formalizes these as a sparse tensor `T[concept_i, concept_j, relation_k] =
-evidence_strength`, where the `ConceptRelation` table IS the tensor's non-zero entries and
-ChromaDB holds the vector projections. No new data store is added -- it is a computation
-layer over existing tables that enables structured gap detection, analogy discovery, and
-cluster coherence scoring.
+- extraction notes
+- candidate concepts, entities, and relationships
+- provenance and coverage records
+- scheduling state for future epochs
 
-Phases 1-5 of the Adaptive Knowledge Engine plan (yield feedback, UCB scoring, contradiction
-exploration, hierarchical taxonomy, schema evolution) are prerequisites before Phase 6 is built.
+The discovery layer should be organized so strategy can change without
+rewriting the rest of the wiki.
 
-### How Pipeline B Feeds Pipeline A (planned)
+The preferred execution model is a configurable DAG:
 
-Once the wiki reaches convergence (L < threshold), Pipeline A retrieval will gain a
-structured knowledge layer:
+- nodes are explicit processing steps
+- edges represent typed artifact dependencies
+- node inputs and outputs are declared rather than implied
+- a workflow config chooses which nodes run, with which parameters, and in
+  what dependency graph
 
-```
-data/wiki/  (concept articles, domain indexes)
-          |
-          v  (future: wiki-aware retrieval tools)
-   agent/tools.py  (search_concepts, get_concept_article, ...)
-          |
-          v
-   ResearchNotes  (richer context for the writer)
-          |
-          v
-   generate/  (better-cited, more synthesis-aware papers)
+Target responsibilities:
+
+- `wiki/discovery/`
+  - source triage and document profiling
+  - extraction-unit planning
+  - document-level synopsis passes
+  - chunk-, figure-, and table-level extraction passes
+  - strategy registry and configuration
+  - finite-coverage scheduling across epochs
+  - extraction-note emission
+- `wiki/concepts/`
+  - canonical concept records
+  - merge and deduplication
+  - evidence, occurrences, parameters, and relationship persistence
+
+This split is intentional:
+
+- discovery decides what to read, in what order, with which model and prompt
+- concepts owns the canonical structured knowledge produced by discovery
+
+### Discovery Pipeline
+The target discovery pipeline is a default DAG shape:
+
+```text
+Parsed document + media inventory + embeddings + metadata
+        |
+        v
+Document profile
+document type, structure quality, available modalities, priority
+        |
+        v
+Strategy planner
+choose strategy family and pass sequence for this document
+        |
+        v
+Extraction units
+document synopsis units, chunk units, image units, table units, mixed units
+        |
+        v
+Small-model passes
+structured notes / candidate findings / coverage marks
+        |
+        v
+Resolution
+deterministic parsing + optional second-pass consolidation
+        |
+        v
+Canonical concept and evidence state
+        |
+        v
+Graph, article writing, maintenance, observability
 ```
 
----
+This design allows multiple strategies, for example:
 
-## Data Model
+- synopsis-first then targeted deepening
+- full chunk sweep with note dumping
+- multimodal extraction on figures before chunk deepening
+- document-type-specific flows for publications, slide decks, HTML captures,
+  notes, or mixed corpora
 
-All SQLite models are in `src/wikify/store/models.py`.
+It should also allow non-linear variants, for example:
 
-### Core corpus tables
+- multiple extraction branches feeding one consolidation node
+- optional note-dump branches for later parsing
+- retry or escalation nodes when a first pass is low confidence
+- graph updates that depend on canonical concept state but not directly on page
+  writing
 
-| Table | Key fields | Purpose |
-|-------|-----------|---------|
-| `Paper` | `id` (SHA256), `origin`, `doc_type`, `title`, `year`, `doi` | One row per ingested file |
-| `Chunk` | `id` (UUID), `paper_id`, `section_path`, `section_type`, `content` | Section-aware text chunks |
-| `Citation` | `paper_id`, `cited_paper_id`, `raw_text` | Citation cross-references |
-| `Figure` | `id` (hash), `paper_id`, `media_type`, `caption`, `label`, `page_number`, `bbox`, `markdown_table`, `llm_description` | Extracted figures, tables, schemes with Haiku vision descriptions |
-| `Equation` | `id` (hash), `paper_id`, `chunk_id`, `latex`, `equation_type`, `variables`, `concept_links` | Extracted LaTeX/chemical/inline equations |
-| `FigureRef` | `paper_id`, `figure_key`, `caption_text` | Figure references (caption-first) |
-| `PaperTopic` | `paper_id`, `topic` | Topic tags extracted at ingest |
+### Discovery Data Contracts
+To keep the pipeline transparent and configurable, the main intermediate data
+objects should be explicit and serializable.
 
-`Paper.origin` is the isolation boundary:
-- `"corpus"` -- ingested documents, used in all metrics and retrieval
-- `"generated"` -- writing pipeline outputs, excluded from corpus metrics
+Examples:
 
-### Project/output tables
+- `DocumentProfile`: document type, parser confidence, structural sections,
+  modality inventory, token budget hints
+- `ArtifactRef`: typed reference to one persisted artifact or collection
+- `DiscoveryStrategy`: ordered pass definition plus coverage policy
+- `ExtractionUnit`: one addressable unit to interrogate
+- `ExtractionNote`: a model-produced note tied to one or more units
+- `CandidateConcept`: pre-merge concept/entity hypothesis
+- `CoverageRecord`: what has been processed, skipped, deferred, or retried
+- `DagNodeSpec`: one reusable step definition
+- `DagRunSpec`: one configured workflow instance
 
-| Table | Purpose |
-|-------|---------|
-| `Project` | Research project (groups papers + outputs) |
-| `ProjectPaper` | Many-to-many: which papers belong to a project |
-| `GeneratedOutput` | Tracks each writing run (strategy, cost, coverage, file paths) |
-| `JournalTemplate` | DOCX/LaTeX templates (path, publisher, source URL) |
+Each node should consume and emit typed artifacts rather than reaching into
+global mutable state. That keeps the workflow composable, testable, and easy to
+inspect.
 
-### Wiki tables (building blocks)
+### Workflow Configuration
+Workflow definitions should be externalizable, preferably as YAML, so the
+system can compare strategies without code churn.
 
-| Table | Key fields | Purpose |
-|-------|-----------|---------|
-| `WikiArticle` | `id` (slug), `status`, `domain`, `needs_update` | State machine for wiki articles |
-| `DomainPersona` | `domain` (PK), `persona_text` | Cached expert persona per domain |
-| `SourceCoverage` | `source_id`, `article_slug`, `extraction` | Which article each source contributed to |
+A workflow config should be able to express:
 
-### Wiki tables (epoch model)
+- node set and dependency edges
+- strategy family and per-node parameters
+- model selection and escalation rules
+- budgets such as synopsis length, chunk count, and image count
+- document-type routing overrides
+- note persistence and second-pass consolidation behavior
+- epoch coverage policy and retry limits
 
-| Table | Key fields | Purpose |
-|-------|-----------|---------|
-| `ConceptRecord` | `name`, `type`, `importance`, `article_status`, `domains` | One row per discovered concept; `domains` is a JSON list of domain slugs the concept belongs to |
-| `ConceptRelation` | `source`, `target`, `relation_type` | Directed edges (IS-A, ENABLES, CONTRASTS-WITH, etc.) |
-| `EpochLog` | `epoch`, `loss_score`, `loss_delta`, `convergence_flag`, `model_tier` | Per-epoch run log; records haiku->sonnet transition epoch |
-| `DomainCluster` | `slug`, `label`, `centroid_vector`, `concept_count` | Auto-discovered domain from corpus; basis of domain membrane model |
-| `TopologySnapshot` | `epoch`, `node_count`, `edge_count`, `modularity`, `diameter` | Graph topology snapshot per epoch for convergence analysis |
+The code should validate YAML configs into typed runtime objects before
+execution. YAML is a control surface, not the internal source of truth.
 
-### ChromaDB collections
+This should take inspiration from ML experiment tooling such as Hydra-style
+config composition, but the architecture should not require Hydra specifically.
+The value is in the operating model:
 
-| Collection | Content | Used by |
-|------------|---------|---------|
-| `summaries` | Per-paper summary embeddings (corpus only) | Retrieval, vibe computation |
-| `chunks` | Per-chunk embeddings (corpus only) | Semantic search, coverage metrics |
-| `section_summaries` | Per-section summary embeddings | `read_section` progressive disclosure |
+- hierarchical config composition
+- named experiment families
+- per-run overrides
+- reproducible config snapshots
+- sweep-friendly parameterization
 
----
+Whether a third-party config library adds enough value should be decided
+pragmatically. A library is justified only if it materially improves
+composition, validation, sweep ergonomics, and run reproducibility without
+making the workflow harder to understand.
 
-## File Layout
+These should be inspectable in structured state and exportable for experiments.
 
-```
-data/
-├── papers.db                 # SQLite (all models above)
-├── chromadb/                 # Embedding vectors (3 collections)
-├── cache/precomputed/        # Ingest-time cache (vibes, KMeans, gaps, links)
-│   ├── *.pkl
-│   └── ...
-├── library.bib               # Auto-generated BibTeX (regenerated on every ingest)
-├── output/                   # Generated papers (Pipeline A)
-│   ├── *.md
-│   ├── *.docx
-│   ├── *.pdf
-│   └── reading_log_*.json    # Per-run reading trace
-├── vault/                    # Obsidian vault (gitignored)
-│   ├── Papers/               # One note per paper
-│   ├── Authors/              # Author nodes
-│   ├── Topics/               # Topic hub notes
-│   └── Dashboard.md
-└── wiki/                     # Curated wiki (gitignored; Pipeline B output)
-    ├── _index.md             # Library catalog
-    ├── _epoch.json           # Epoch counter + convergence metrics
-    ├── _unanswered.jsonl     # Open questions from wiki query escalation
-    ├── _audit.md             # Structural audit report (wiki audit output)
-    ├── _health.md            # Health check report (wiki health output)
-    ├── _site/                # Static HTML site (generated by `wikify wiki html`)
-    ├── domains/
-    │   └── {domain}/
-    │       ├── _index.md     # Domain master index
-    │       ├── _dashboard.md # Dataview dashboard (written by Pass 5, planned)
-    │       ├── _index_{theme_slug}.md
-    │       ├── concepts/     # One .md per concept article
-    │       ├── people/       # Person biography articles
-    │       └── themes/       # Theme articles
-    └── syntheses/            # Cross-domain synthesis articles
-```
+### Document Types And Strategies
+Discovery strategy should not be hard-coded around research articles.
 
----
+The planner should choose behavior based on document profile, for example:
 
-## Pre-Compute Cache
+- publications: synopsis plus methods/results/deepening may still be useful
+- slide decks: slide-level sweep plus image-heavy extraction
+- HTML or markdown notes: heading-tree traversal and entity/concept sweep
+- mixed captures: fallback all-unit scan when structure is weak
 
-Built at ingest time by `store/precompute.py` and `ingest/corpus_refresh.py`. All load in <0.1s.
+Section summaries are therefore a strategy input, not a universal requirement.
+If ingest can provide trustworthy section summaries, discovery may use them. If
+not, discovery should be able to build a synopsis from representative chunks or
+other document units.
 
-| Artifact | What | Where |
-|----------|------|-------|
-| Paper vibe vectors | Token-weighted chunk centroids | ChromaDB / `data/cache/precomputed/` |
-| Science vibes | Centroids from results/discussion/conclusion only | `data/cache/precomputed/` |
-| KMeans centroids | 12 clusters on all chunk embeddings | `data/cache/precomputed/` |
-| Graph metrics | Citation-only PageRank, betweenness, degree | SQLite / cache |
-| Topic embeddings | Normalized topic name vectors | `data/cache/precomputed/` |
-| Boilerplate IDs | Chunks appearing in 5+ papers (k-NN detected) | `data/cache/precomputed/` |
-| Divergent gaps | Coupled-but-divergent paper pairs | `data/cache/precomputed/` |
-| Concept links | Section-filtered, IDF-labeled paper connections | `data/cache/precomputed/` |
-| Section summaries | Extractive (first 1-2 sentences per section) | `Paper.section_summaries` (SQLite JSON) |
-| Equations | LaTeX/chemical/inline equations per chunk | `Equation` table (SQLite) |
+The current 3000-character publication summary cap should be treated as an
+implementation detail to be made configurable. Strategy definitions should own
+limits like synopsis budget, chunk budget, and model tier rather than baking
+them into one path.
 
----
+### Finite Coverage Across Epochs
+Epoch scheduling may prioritize some units earlier, but it must not starve the
+rest of the corpus.
 
-## Generation Routes (Pipeline A)
+The intended contract is:
 
-```
-+------------------------------------------------------------------+
-|                       wikify generate                            |
-+----------+----------+----------+-----------+--------------------+
-|  Skill   | Hier-    | Scripted | Two-Agent |  Fast (exp.)       |
-|  Route   | archical |  Route   |  Route    |  One-Shot          |
-|  (v1)    | (v2)     |          |           |                    |
-|          |          |          |           |                    |
-| LLM runs | LLM uses | Python   | Explorer  | Pre-compute all    |
-| the whole| 4-level  | explores,| LLM ->    | context (10s),     |
-| loop via | progres- | LLM just | Notes ->  | single LLM call    |
-| tool_use | sive     | writes   | Writer    | (~5 min)           |
-|          | disclosure|          | LLM      |                    |
-|          |          |          |           |                    |
-| 25 min   | ~10 min  | 4 min    | 8 min     | 6 min              |
-| 133K tok | ~80K tok | 6K tok   | 70K tok   | 58K tok            |
-+----------+----------+----------+-----------+--------------------+
-              All share: tools, export, quality metrics
-```
+- every eligible extraction unit is eventually processed when enough epochs run
+- prioritization affects order and repetition, not permanent exclusion
+- exploration and targeted deepening are complements to eventual full coverage,
+  not replacements for it
 
----
+A dedicated coverage surface should own these rules rather than scattering them
+across orchestration code.
 
-## Run-Scoped State
+### Multimodal Discovery
+Concept discovery must include non-text evidence when available.
 
-`RunContext` (in `agent/run_context.py`) is the canonical mutable state for one run:
-- Reading log (which papers read, with reasons)
-- Paper summaries (distilled findings from `record_paper_summary`)
-- Per-run concept graph (concept -> paper edges, not persisted to DB)
-- Phase-level usage telemetry (token counts per phase)
-- Non-fatal run warnings
+The discovery layer should be able to create extraction units for:
 
-`WikifyAgent`, `workflows.py`, and `scripted.py` all bind tool calls to the active
-`RunContext`. This is important: compaction and summary reinjection operate on run-local
-state, not process globals.
+- figures and figure captions
+- tables
+- slide images
+- page screenshots or rendered regions for visually meaningful layouts
 
----
+Text-only chunk extraction remains useful, but it is not sufficient for a
+general wiki built from mixed document types.
 
-## Quality Metrics (Pipeline A)
+### Visible And Structured Coherence
+The intended contract is:
 
-### Automated Composite (10 components)
+- markdown pages are the authoritative human-facing synthesis artifacts
+- structured state is rebuilt, reconciled, and updated to stay aligned with
+  those pages and with source-backed evidence
+- reconciliation should favor rebuilding structured state over overwriting
+  curated pages
 
-| Metric | Weight | What it measures |
-|--------|--------|-----------------|
-| Prose quality | 0.20 | Citation clustering, synthesis depth, discourse quality |
-| Frontier shift | 0.14 | Push toward sparse embedding regions |
-| Gap detection | 0.14 | Embedding voids + gap-claim phrases |
-| Arg. coherence | 0.12 | Consecutive chunk pairs preserved in review |
-| Factual specificity | 0.12 | Numbers + formulas per 1k words |
-| Semantic coverage | 0.10 | Corpus chunks covered by review |
-| Bridge vectors | 0.10 | Chunks connecting dissimilar papers |
-| Semantic residual | 0.10 | Synthesis vs summarization (SVD) |
-| Topic coverage | 0.10 | PaperTopic vocabulary in review |
-| Centroid alignment | 0.08 | Review center vs corpus center |
+Agents and runtime flows should be able to use both:
 
-The automated composite is a proxy. PI-style review (`wikify evaluate --pi`) captures
-research judgment and contribution framing that no automated metric measures reliably.
+- visible pages for synthesized answers, navigation, and review
+- structured state for retrieval, embeddings, graph lookups, provenance,
+  ranking, and maintenance decisions
 
----
+### Graph And Observability
+Graph computation and observability are explicit parts of wiki architecture.
 
-## External Dependencies
+`wiki/graph/` owns:
 
-| Dependency | Role |
-|------------|------|
-| litellm | Model-agnostic LLM client (Claude, GPT-4, DeepSeek, Ollama) |
-| ChromaDB | Vector store for embeddings (summaries, chunks, section summaries) |
-| SQLite (via SQLModel) | Relational store for all structured data |
-| ONNX Runtime | Local embedding model (no LLM calls for embeddings) |
-| NetworkX | Citation graph analysis (PageRank, betweenness, centrality) |
-| pymupdf4llm / fitz | PDF parsing |
-| python-docx | DOCX generation and template manipulation |
-| FastAPI | Dashboard API server (wiki/dashboard.py) |
-| Jinja2 | HTML template rendering (wiki/html.py) |
-| pymdown-extensions | Math/chem markdown extensions for HTML site |
-| typer | CLI framework |
+- graph construction
+- importance scoring
+- topology metrics
+- routing support
+- domain and community analysis
 
-All LLM calls go through `llm/client.py:complete()`. No provider-specific annotations
-in any module. Haiku is used for cheap map-phase calls; sonnet for writing; opus is
-reserved and not used in any current pipeline by default.
+`wiki/observability/` owns:
+
+- run lifecycle tracking
+- stage timing and counters
+- page deltas
+- retrieval/tool/token telemetry
+- wiki snapshots
+- human-readable epoch logs
+- machine-readable run exports
+
+These are not implementation details hidden inside orchestration code.
+
+`wiki/discovery/` should also emit first-class observability:
+
+- strategy id and version
+- model used per pass
+- extraction units planned and processed
+- coverage deltas by epoch
+- note counts and consolidation outcomes
+- multimodal pass usage
+- cost and yield by strategy
+
+### Runtime Surface
+The wiki runtime should expose stable operations such as:
+
+- `epoch`
+- `query`
+- `maintain`
+- `campaign`
+- `reconcile_state`
+- `export_metrics`
+- `compare_runs`
+
+`wiki/runtime.py` is the small facade over those operations.
+
+## Papers System Model
+The papers surface is intentionally separate from wiki management.
+
+Responsibilities:
+
+- corpus exploration for writing
+- retrieval and handoff into writing
+- generation, evaluation, revision, and export
+
+The papers surface may later consume public wiki outputs for richer retrieval,
+but it should not own wiki page contracts, wiki graph logic, or wiki
+observability.
+
+## Storage Model
+
+### Durable Source And Structured Data
+- `data/papers.db`: relational state
+- `data/chromadb/`: embeddings
+- `data/cache/precomputed/`: precompute artifacts
+- `data/library.bib`: corpus-level BibTeX output
+
+### Visible Knowledge Artifacts
+- `data/wiki/`: curated wiki pages plus `_meta`
+- `data/output/`: generated paper/presentation outputs
+
+## Adapters
+CLI, MCP, and runtime-specific instructions are adapters, not the core
+architecture.
+
+Examples:
+
+- `src/wikify/cli.py`
+- `src/wikify/mcp_server.py`
+- `AGENTS.md`
+- optional runtime-specific guidance such as `CLAUDE.md`
+
+Architecture should remain valid even if any one adapter changes or disappears.
+
+## Migration State
+The repo is in transition from an organically grown mixed layout toward the
+boundary-driven shape above. The active implementation sequence lives in
+`docs/refactor/wiki-deep-refactor-plan.md`.

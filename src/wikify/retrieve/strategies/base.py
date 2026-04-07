@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from wikify.config import settings
 
 if TYPE_CHECKING:
     from wikify.graph.metrics import GraphMetrics
@@ -21,7 +23,7 @@ class StrategyConfig:
     shallow_chunk_count: int = 3
     max_traversal_depth: int = 2
     parallel_workers: int = 3
-    model_for_synthesis: str = "claude-haiku-4-5-20251001"
+    model_for_synthesis: str = field(default_factory=lambda: settings.llm_fast_model)
     user_focus: str = ""  # Optional focus hint from the user prompt
 
 

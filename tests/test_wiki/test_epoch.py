@@ -259,17 +259,18 @@ def test_compute_loss_basic(tmp_path: Path):
     # L = 0.09 + 0.04 + 0.2 - 0.2 = 0.13 (clamped to [0,1])
     expected_loss = max(0.0, min(1.0, 0.3 * 0.3 + 0.2 * 0.2 + 0.3 * (2 / 3) - 0.2 * 1.0))
 
-    # Two get_session calls: one for concepts+coverage, one for prev_logs
+    # Two get_session calls: one for concepts+occurrences+coverage, one for prev_logs
     exec_concepts_coverage = MagicMock()
-    exec_concepts_coverage.all.side_effect = [concepts, coverage]
+    exec_concepts_coverage.all.side_effect = [concepts, [], coverage]
     exec_prev_logs = MagicMock()
     exec_prev_logs.all.return_value = []  # no previous epoch
 
     session = MagicMock()
     session.__enter__ = MagicMock(return_value=session)
     session.__exit__ = MagicMock(return_value=False)
-    # First context-manager call: concepts+coverage; second: prev_logs
+    # First context-manager call: concepts+occurrences+coverage; second: prev_logs
     session.exec.side_effect = [
+        exec_concepts_coverage,
         exec_concepts_coverage,
         exec_concepts_coverage,
         exec_prev_logs,
@@ -282,7 +283,7 @@ def test_compute_loss_basic(tmp_path: Path):
         loss, delta = mod.compute_loss(epoch=1)
 
     assert abs(loss - expected_loss) < 0.001
-    assert delta == abs(expected_loss - 0.0)  # no previous epoch -> prev_loss=0
+    assert delta == pytest.approx(abs(expected_loss - 0.0))  # no previous epoch -> prev_loss=0
 
 
 # ── check_convergence ─────────────────────────────────────────────────────────
@@ -414,7 +415,10 @@ def test_run_epoch_orchestrates_all_passes():
         patch("wikify.wiki.epoch._get_next_epoch_number", return_value=1),
         patch("wikify.wiki.epoch.clear_staged_extractions") as mock_clear,
         patch("wikify.wiki.epoch._get_all_paper_ids", return_value=["paper1"]) as mock_ids,
-        patch("wikify.wiki.epoch.discover_concepts", return_value=[concept]) as mock_discover,
+        patch(
+            "wikify.wiki.epoch.discover_concepts",
+            return_value=MagicMock(concepts=[concept], rich_extractions={}),
+        ) as mock_discover,
         patch("wikify.wiki.epoch.build_concept_graph", return_value=nx.DiGraph()) as mock_graph,
         patch("wikify.wiki.epoch.score_importance", return_value={}) as mock_score,
         patch("wikify.wiki.epoch.update_concept_importance") as mock_update_importance,

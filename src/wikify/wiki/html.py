@@ -13,6 +13,7 @@ from pathlib import Path
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from wikify.wiki.layout import iter_visible_page_files, normalize_page_type
 from wikify.wiki.builder import read_article_frontmatter, slugify
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ _HIDDEN_FIELDS = frozenset(
     {
         "wiki_id",
         "sources",
+        "source_ids",
         "model",
         "concept_type",
     }
@@ -29,12 +31,15 @@ _HIDDEN_FIELDS = frozenset(
 
 # Fields to show in the infobox
 _INFOBOX_FIELDS = [
-    "type",
+    "page_type",
     "domain",
+    "domains",
     "status",
     "importance",
     "created",
     "updated",
+    "updated_at",
+    "confidence",
     "affiliations",
     "formula",
 ]
@@ -302,9 +307,7 @@ def build_slug_map(wiki_dir: Path) -> dict[str, str]:
     Returns {name_lower: relative_html_path}.
     """
     slug_map: dict[str, str] = {}
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
         meta = read_article_frontmatter(md_file)
         title = meta.get("title") or md_file.stem.replace("_", " ").title()
         rel = md_file.relative_to(wiki_dir)
@@ -432,7 +435,18 @@ def generate_category_pages(
 
 def generate_people_index(articles: list[dict], env: Environment, shared_ctx: dict) -> str:
     """Index page for people articles."""
-    people = [a for a in articles if a["frontmatter"].get("concept_type") == "person"]
+    people = [
+        a
+        for a in articles
+        if a["frontmatter"].get("concept_type") == "person"
+        or (
+            normalize_page_type(
+                a["frontmatter"].get("page_type") or a["frontmatter"].get("type"),
+                fallback_category=a.get("subfolder", ""),
+            )
+            == "entity"
+        )
+    ]
     people.sort(key=lambda a: a["title"].lower())
 
     template = env.get_template("people.html")
@@ -452,9 +466,7 @@ def generate_people_index(articles: list[dict], env: Environment, shared_ctx: di
 def _collect_articles(wiki_dir: Path) -> list[dict]:
     """Read all markdown articles under wiki_dir into structured dicts."""
     articles: list[dict] = []
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
 
         text = md_file.read_text(encoding="utf-8", errors="replace")
         frontmatter = read_article_frontmatter(md_file)
@@ -475,6 +487,8 @@ def _collect_articles(wiki_dir: Path) -> list[dict]:
                 "rel_path": str(rel).replace("\\", "/"),
                 "subfolder": subfolder,
                 "domain": frontmatter.get("domain", ""),
+                "domains": frontmatter.get("domains", []),
+                "page_type": frontmatter.get("page_type") or frontmatter.get("type") or "concept",
                 "importance": frontmatter.get("importance", 0),
                 "status": frontmatter.get("status", ""),
             }
@@ -500,9 +514,15 @@ def _extract_domains(articles: list[dict]) -> list[dict]:
     """Extract unique domains from articles."""
     domain_set: set[str] = set()
     for a in articles:
-        d = a.get("domain")
-        if d:
-            domain_set.add(str(d))
+        domains = a.get("domains")
+        if isinstance(domains, list):
+            for d in domains:
+                if d:
+                    domain_set.add(str(d))
+        else:
+            d = a.get("domain")
+            if d:
+                domain_set.add(str(d))
     return sorted(
         [{"slug": d, "label": d.replace("_", " ").title()} for d in domain_set],
         key=lambda x: x["label"],
@@ -513,7 +533,7 @@ def _compute_stats(articles: list[dict], wiki_dir: Path) -> dict:
     """Compute wiki statistics."""
     source_set: set[str] = set()
     for a in articles:
-        sources = a["frontmatter"].get("sources")
+        sources = a["frontmatter"].get("source_ids") or a["frontmatter"].get("sources")
         if isinstance(sources, list):
             for s in sources:
                 if isinstance(s, str):
@@ -536,7 +556,7 @@ def _compute_stats(articles: list[dict], wiki_dir: Path) -> dict:
 
 
 def _build_categories(frontmatter: dict) -> list[dict]:
-    """Build category list from frontmatter topics, concept_type, status."""
+    """Build category list from frontmatter topics, page role, concept_type, and status."""
     categories: list[dict] = []
 
     # Topics
@@ -554,10 +574,21 @@ def _build_categories(frontmatter: dict) -> list[dict]:
             if t_str:
                 categories.append({"name": t_str, "slug": slugify(t_str)})
 
+    page_type = frontmatter.get("page_type") or frontmatter.get("type")
+    if page_type:
+        categories.append({"name": str(page_type), "slug": slugify(str(page_type))})
+
     # Concept type
     ct = frontmatter.get("concept_type")
     if ct:
         categories.append({"name": str(ct), "slug": slugify(str(ct))})
+
+    domains = frontmatter.get("domains")
+    if isinstance(domains, list):
+        for domain in domains:
+            d = str(domain).strip()
+            if d:
+                categories.append({"name": f"Domain: {d}", "slug": slugify(f'domain {d}')})
 
     # Status
     status = frontmatter.get("status")
@@ -608,7 +639,10 @@ def _build_search_index(articles: list[dict], slug_map: dict[str, str]) -> list[
                 "title": a["title"],
                 "url": _article_html_relpath(a),
                 "excerpt": first_para,
-                "tags": topics if isinstance(topics, list) else [],
+                "tags": (
+                    topics if isinstance(topics, list) else []
+                )
+                + [str(a["frontmatter"].get("page_type") or a["frontmatter"].get("type") or "")],
             }
         )
     return index

@@ -66,8 +66,39 @@ def _cache_key(model: str, messages: list[dict], **kwargs: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def resolve_model_name(model: str | None = None) -> str:
+    """Resolve provider-neutral or legacy tier aliases to a concrete model id.
+
+    Supported aliases intentionally cover both old Anthropic-centric names and
+    portable tier names so callers can keep saying "haiku"/"sonnet"/"opus" or
+    move to "fast"/"balanced"/"deep" without changing the rest of the code.
+    """
+    if model is None or not str(model).strip():
+        return settings.llm_model
+
+    requested = str(model).strip()
+    alias = requested.lower()
+
+    alias_map = {
+        "fast": settings.llm_fast_model,
+        "cheap": settings.llm_fast_model,
+        "haiku": settings.llm_fast_model,
+        "map": settings.llm_fast_model,
+        "balanced": settings.llm_model,
+        "default": settings.llm_model,
+        "writer": settings.llm_model,
+        "sonnet": settings.llm_model,
+        "deep": settings.llm_deep_model or settings.llm_model,
+        "reasoning": settings.llm_deep_model or settings.llm_model,
+        "audit": settings.llm_deep_model or settings.llm_model,
+        "opus": settings.llm_deep_model or settings.llm_model,
+        "vision": settings.vision_model or settings.llm_fast_model,
+    }
+    return alias_map.get(alias, requested)
+
+
 def complete(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
@@ -77,12 +108,12 @@ def complete(
 
     Uses disk cache by default to avoid duplicate API calls.
     """
-    model = model or settings.llm_model
+    resolved_model = resolve_model_name(model)
 
     # litellm handles API key validation for all providers — no provider-specific checks here
 
     cache_params = {"temperature": temperature, "max_tokens": max_tokens}
-    key = _cache_key(model, messages, **cache_params)
+    key = _cache_key(resolved_model, messages, **cache_params)
 
     if use_cache:
         cache = _get_cache()
@@ -92,7 +123,7 @@ def complete(
 
     start = time.time()
     response = litellm.completion(
-        model=model,
+        model=resolved_model,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -100,7 +131,7 @@ def complete(
     elapsed = time.time() - start
 
     text = response.choices[0].message.content or ""
-    console.print(f"[dim]  LLM ({model}): {elapsed:.1f}s, {len(text)} chars[/dim]")
+    console.print(f"[dim]  LLM ({resolved_model}): {elapsed:.1f}s, {len(text)} chars[/dim]")
 
     if use_cache:
         cache = _get_cache()
@@ -110,7 +141,7 @@ def complete(
 
 
 def complete_json(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
@@ -153,16 +184,16 @@ def complete_json(
 
 
 def complete_streaming(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
 ):
     """Stream a chat completion, yielding text chunks."""
-    model = model or settings.llm_model
+    resolved_model = resolve_model_name(model)
 
     response = litellm.completion(
-        model=model,
+        model=resolved_model,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -252,7 +283,7 @@ def _run_hooks_after(
 
 
 def complete_structured(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     response_model: type[BaseModel],
     model: str | None = None,
     temperature: float = 0.3,
@@ -267,7 +298,7 @@ def complete_structured(
     """
     from wikify.llm.hooks import LLMEvent
 
-    resolved_model = model or settings.llm_model
+    resolved_model = resolve_model_name(model)
     active_hooks: list[LLMHook] = hooks or []
 
     # Inject schema instructions into the system message
@@ -290,7 +321,7 @@ def complete_structured(
         start_time = time.time()
         raw = complete(
             messages=enriched,
-            model=model,
+            model=resolved_model,
             temperature=temperature,
             max_tokens=max_tokens,
             use_cache=(attempt == 0),
@@ -329,7 +360,7 @@ def complete_structured(
 
 
 def validate_and_retry_text(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     response_model: type[BaseModel],
     content_field: str = "content",
     model: str | None = None,
@@ -350,7 +381,7 @@ def validate_and_retry_text(
     """
     from wikify.llm.hooks import LLMEvent
 
-    resolved_model = model or settings.llm_model
+    resolved_model = resolve_model_name(model)
     active_hooks: list[LLMHook] = hooks or []
 
     enriched: list[dict[str, str]] = list(messages)
@@ -370,7 +401,7 @@ def validate_and_retry_text(
         start_time = time.time()
         raw = complete(
             messages=enriched,
-            model=model,
+            model=resolved_model,
             temperature=temperature,
             max_tokens=max_tokens,
             use_cache=(attempt == 0),
@@ -416,9 +447,9 @@ def validate_and_retry_text(
 
 
 def _inject_schema(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     schema_instructions: str,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Append schema instructions to the system message."""
     enriched = list(messages)
     for i, msg in enumerate(enriched):
@@ -433,10 +464,10 @@ def _inject_schema(
 
 
 def _append_retry_context(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     raw_output: str,
     error: str,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Feed the failed output + error back for retry."""
     return [
         *messages,

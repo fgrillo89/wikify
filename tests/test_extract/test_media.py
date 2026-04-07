@@ -120,7 +120,19 @@ class TestMatchCaption:
 
 
 class TestStoreMedia:
-    def test_creates_nested_directory(self, tmp_path):
+    def test_creates_per_paper_directory(self, tmp_path):
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+            content = b"fake image content for testing"
+            h = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+            result = _store_media(content, h, "png", "Kim_2021_Memristive", "Fig_1.png")
+
+            expected = tmp_path / "figures" / "Kim_2021_Memristive" / "Fig_1.png"
+            assert result == expected
+            assert result.exists()
+            assert result.read_bytes() == content
+
+    def test_legacy_fallback_without_slug(self, tmp_path):
         with patch("wikify.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             content = b"fake image content for testing"
@@ -130,16 +142,26 @@ class TestStoreMedia:
             expected = tmp_path / "figures" / "ab" / "cd" / f"{h}.png"
             assert result == expected
             assert result.exists()
-            assert result.read_bytes() == content
 
     def test_idempotent_write(self, tmp_path):
         with patch("wikify.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             content = b"image bytes"
             h = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-            _store_media(content, h, "png")
-            path = _store_media(content, h, "png")
+            _store_media(content, h, "png", "test_paper", "p1_img0.png")
+            path = _store_media(content, h, "png", "test_paper", "p1_img0.png")
             assert path.read_bytes() == content
+
+    def test_collision_appends_hash(self, tmp_path):
+        with patch("wikify.extract.media.settings") as mock_settings:
+            mock_settings.figures_dir = tmp_path / "figures"
+            h1 = "aaaa" + "0" * 60
+            h2 = "bbbb" + "0" * 60
+            _store_media(b"content_a", h1, "png", "paper", "Fig_1.png")
+            path2 = _store_media(b"content_b", h2, "png", "paper", "Fig_1.png")
+            # Different content, same filename -> appended hash suffix
+            assert h2[:8] in path2.name
+            assert path2.read_bytes() == b"content_b"
 
 
 # ── Full extract_media with mocked fitz ────────────────────────────────────────
@@ -320,7 +342,7 @@ class TestScannedPageDetection:
             md_captions: list[_CaptionMatch] = []
 
             results = _extract_images_from_page(
-                doc, page, 0, "paper1", set(), page_captions, md_captions
+                doc, page, 0, "paper1", "test_paper", set(), page_captions, md_captions
             )
             # No captions means scanned page produces no figures
             assert results == []
@@ -350,7 +372,7 @@ class TestScannedPageDetection:
             md_captions: list[_CaptionMatch] = []
 
             results = _extract_images_from_page(
-                doc, page, 0, "paper1", set(), page_captions, md_captions
+                doc, page, 0, "paper1", "test_paper", set(), page_captions, md_captions
             )
             assert len(results) == 1
             assert results[0].label == "Fig. 3"
@@ -378,7 +400,7 @@ class TestScannedPageDetection:
                 "ext": "png",
             }
 
-            _extract_images_from_page(doc, page, 0, "paper1", set(), [], [])
+            _extract_images_from_page(doc, page, 0, "paper1", "test_paper", set(), [], [])
             # Should have called extract_image for each fragment
             assert doc.extract_image.call_count == 3
 
@@ -425,7 +447,7 @@ class TestCaptionConsumption:
             md_captions: list[_CaptionMatch] = []
 
             results = _extract_images_from_page(
-                doc, page, 0, "paper1", set(), page_captions, md_captions
+                doc, page, 0, "paper1", "test_paper", set(), page_captions, md_captions
             )
             assert len(results) == 2
             labeled = [r for r in results if r.label == "Fig. 7"]

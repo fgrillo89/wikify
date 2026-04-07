@@ -17,9 +17,11 @@ import re
 import shutil
 from pathlib import Path
 
+from wikify.config import settings
+
 logger = logging.getLogger(__name__)
 
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
+HAIKU_MODEL = settings.llm_fast_model
 
 _TEMPLATE_FILENAME = "_template.md"
 _VERSIONS_DIR = "_template_versions"

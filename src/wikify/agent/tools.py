@@ -2266,6 +2266,7 @@ def check_wiki_health() -> str:
     from wikify.store.db import get_session
     from wikify.store.gc import integrity_check
     from wikify.store.models import ConceptRecord
+    from wikify.wiki.layout import iter_visible_page_files
 
     wiki_dir = Path("data/wiki")
 
@@ -2281,9 +2282,9 @@ def check_wiki_health() -> str:
     # Count articles on disk
     articles_on_disk = 0
     broken_links: list[str] = []
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    visible_pages = iter_visible_page_files(wiki_dir)
+    visible_slugs = {path.stem for path in visible_pages}
+    for md_file in visible_pages:
         articles_on_disk += 1
 
         # Check wikilinks
@@ -2293,14 +2294,11 @@ def check_wiki_health() -> str:
             from wikify.wiki.builder import slugify
 
             slug = slugify(link.strip())
-            target = wiki_dir / "concepts" / f"{slug}.md"
-            if not target.exists():
+            if slug not in visible_slugs:
                 broken_links.append(f"{md_file.stem} -> [[{link}]]")
 
     # Orphan concepts (in DB, no article on disk)
-    concepts_with_articles = set()
-    for md_file in (wiki_dir / "concepts").rglob("*.md"):
-        concepts_with_articles.add(md_file.stem)
+    concepts_with_articles = set(visible_slugs)
 
     orphan_concepts = [
         cid for cid in concept_ids if cid not in concepts_with_articles and cid in concept_ids
@@ -2333,6 +2331,7 @@ def search_wiki(query: str, top_k: int = 10) -> str:
 
     from wikify.store.db import get_session
     from wikify.store.models import ConceptRecord
+    from wikify.wiki.layout import iter_visible_page_files
 
     # Search the concept definitions via ConceptRecord
     with get_session() as session:
@@ -2364,9 +2363,9 @@ def search_wiki(query: str, top_k: int = 10) -> str:
 
     results = []
     wiki_dir = Path("data/wiki")
+    visible_slugs = {path.stem for path in iter_visible_page_files(wiki_dir)}
     for concept, score in top:
-        article_path = wiki_dir / "concepts" / f"{concept.id}.md"
-        has_article = article_path.exists()
+        has_article = concept.id in visible_slugs
 
         results.append(
             {
@@ -2397,6 +2396,95 @@ def run_wiki_gc() -> str:
         redirected=result["redirected"],
         orphans_removed=result["orphans_removed"],
         staging_cleaned=result["staging_cleaned"],
+    )
+
+
+def reconcile_wiki_state() -> str:
+    """Rebuild operational wiki page state from visible markdown files."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import reconcile_state
+
+    return _tool_json_success(**reconcile_state(Path("data/wiki")))
+
+
+def run_wiki_maintain() -> str:
+    """Run the maintenance sweep over the visible wiki and operational layer."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import run_maintain
+
+    return _tool_json_success(**run_maintain(Path("data/wiki")))
+
+
+def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
+    """Export aggregated run telemetry and wiki metrics."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import export_metrics
+
+    return _tool_json_success(
+        **export_metrics(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
+    )
+
+
+def compare_wiki_runs(workflow_type: str = "", limit: int = 10) -> str:
+    """Compare recent wiki runs on cost, retrieval effort, and outcome metrics."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import compare_runs
+
+    return _tool_json_success(
+        **compare_runs(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
+    )
+
+
+def query_wiki_runtime(
+    question: str,
+    domain: str = "",
+    model: str | None = None,
+    promote: bool = False,
+) -> str:
+    """Answer a question from the visible wiki via the shared runtime."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import query_wiki
+
+    return _tool_json_success(
+        **query_wiki(
+            question,
+            wiki_dir=Path("data/wiki"),
+            domain=domain,
+            model=model,
+            promote=promote,
+            page_type="query",
+        )
+    )
+
+
+def run_wiki_campaign(
+    thesis: str,
+    name: str = "",
+    domain: str = "",
+    epochs: int = 1,
+    model: str | None = None,
+    promote: bool = True,
+) -> str:
+    """Run a thesis-driven wiki campaign through the shared runtime."""
+    from pathlib import Path
+
+    from wikify.wiki.runtime import run_campaign
+
+    return _tool_json_success(
+        **run_campaign(
+            thesis,
+            wiki_dir=Path("data/wiki"),
+            name=name,
+            domain=domain,
+            epochs=epochs,
+            model=model,
+            promote=promote,
+        )
     )
 
 

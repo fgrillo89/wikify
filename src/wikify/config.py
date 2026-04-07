@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     data_root: Path = Path("data")
 
     # LLM
+    # All models are litellm-compatible identifiers. This keeps the runtime
+    # portable across Claude, OpenAI/Codex, Ollama, and other providers.
     llm_model: str = "claude-sonnet-4-20250514"
+    llm_fast_model: str = "claude-haiku-4-5-20251001"
+    llm_deep_model: str = ""
+    vision_model: str = ""
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_backend: str = "onnx"  # "onnx" (faster) or "torch" (default)
     embedding_onnx_file: str = "onnx/model_quint8_avx2.onnx"  # quantized for CPU

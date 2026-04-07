@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from wikify.cli import app
+from wikify.store.models import EpochLog
 
 runner = CliRunner()
 
@@ -420,16 +421,20 @@ class TestWikiQuery:
     """Tests for 'wikify wiki query'."""
 
     def test_query_prints_answer(self, tmp_path: Path) -> None:
-        """Query returns an answer via the escalation protocol."""
+        """Query returns an answer via the shared runtime."""
         wiki_dir = tmp_path / "wiki"
         wiki_dir.mkdir()
-        index_file = wiki_dir / "_index.md"
+        index_file = wiki_dir / "index.md"
         index_file.write_text("# Knowledge Base Index\n\n## Concepts\n\n- [[ALD Fundamentals]]\n")
 
         with (
             patch(
-                "wikify.cli._answer_with_escalation",
-                return_value="ALD is atomic layer deposition, a technique for thin films.",
+                "wikify.wiki.runtime.query_wiki",
+                return_value={
+                    "answered": True,
+                    "answer": "ALD is atomic layer deposition, a technique for thin films.",
+                    "promoted_path": "",
+                },
             ),
             patch(
                 "wikify.cli.Path",
@@ -442,7 +447,7 @@ class TestWikiQuery:
         assert "ALD" in result.output
 
     def test_query_no_index_exits_nonzero(self, tmp_path: Path) -> None:
-        """Query exits with error when no _index.md exists."""
+        """Query exits with error when no visible wiki exists."""
         empty_wiki = tmp_path / "wiki_empty"
         empty_wiki.mkdir()
 
@@ -454,31 +459,141 @@ class TestWikiQuery:
 
         assert result.exit_code != 0
 
-    def test_query_promote_writes_db_row(self, tmp_path: Path) -> None:
-        """--promote creates a WikiArticle DB row after answering."""
+    def test_query_promote_reconciles_runtime_state(self, tmp_path: Path) -> None:
+        """--promote reports the promoted path and reconciles visible state."""
         wiki_dir = tmp_path / "wiki"
         wiki_dir.mkdir()
-        (wiki_dir / "_index.md").write_text("# Knowledge Base Index\n")
-
-        mock_sess = MagicMock()
-        mock_sess.__enter__ = MagicMock(return_value=mock_sess)
-        mock_sess.__exit__ = MagicMock(return_value=False)
+        (wiki_dir / "index.md").write_text("# Knowledge Base Index\n")
 
         with (
             patch(
-                "wikify.cli._answer_with_escalation",
-                return_value="ALD is great for thin films.",
+                "wikify.wiki.runtime.query_wiki",
+                return_value={
+                    "answered": True,
+                    "answer": "ALD is great for thin films.",
+                    "promoted_path": str(wiki_dir / "articles" / "ald-overview.md"),
+                },
             ),
             patch(
                 "wikify.cli.Path",
                 new=lambda p: wiki_dir if p == "data/wiki" else Path(p),
             ),
-            patch("wikify.store.db.get_engine"),
-            patch("sqlmodel.Session", return_value=mock_sess),
+            patch("wikify.wiki.runtime.reconcile_state", return_value={}),
         ):
             result = runner.invoke(app, ["wiki", "query", "what is ALD overview?", "--promote"])
 
         assert result.exit_code == 0, result.output
-        assert "promoted" in result.output.lower() or "queries" in result.output.lower()
-        # DB merge was called
-        mock_sess.merge.assert_called_once()
+        assert "promoted" in result.output.lower() or "ald-overview" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# wiki runtime services
+# ---------------------------------------------------------------------------
+
+
+class TestWikiRuntimeCommands:
+    def test_campaign_command_prints_summary(self) -> None:
+        with patch(
+            "wikify.wiki.runtime.run_campaign",
+            return_value={
+                "campaign_id": "ald-thesis",
+                "epochs_run": 2,
+                "answered": True,
+                "promoted_path": "data/wiki/articles/ald-thesis.md",
+                "answer": "The campaign answer.",
+            },
+        ):
+            result = runner.invoke(app, ["wiki", "campaign", "ALD thesis", "--epochs", "2"])
+
+        assert result.exit_code == 0, result.output
+        assert "ald-thesis" in result.output
+        assert "The campaign answer." in result.output
+
+    def test_maintain_command_prints_summary(self) -> None:
+        with patch(
+            "wikify.wiki.runtime.run_maintain",
+            return_value={
+                "pages_seen": 3,
+                "findings": 5,
+                "pages_updated": 2,
+                "pages_created": 1,
+                "pages_deleted": 0,
+            },
+        ):
+            result = runner.invoke(app, ["wiki", "maintain"])
+
+        assert result.exit_code == 0, result.output
+        assert "Findings" in result.output
+        assert "5" in result.output
+
+    def test_reconcile_state_command_prints_summary(self) -> None:
+        with patch(
+            "wikify.wiki.runtime.reconcile_state",
+            return_value={
+                "pages_seen": 4,
+                "pages_created": 1,
+                "pages_updated": 3,
+                "pages_deleted": 0,
+            },
+        ):
+            result = runner.invoke(app, ["wiki", "reconcile-state"])
+
+        assert result.exit_code == 0, result.output
+        assert "Pages seen" in result.output
+        assert "4" in result.output
+
+    def test_export_metrics_command_prints_output_path(self) -> None:
+        with patch(
+            "wikify.wiki.runtime.export_metrics",
+            return_value={"run_count": 2, "export_path": "data/wiki/_meta/metrics/export.json"},
+        ):
+            result = runner.invoke(app, ["wiki", "export-metrics"])
+
+        assert result.exit_code == 0, result.output
+        assert "export.json" in result.output
+
+
+# ---------------------------------------------------------------------------
+# wiki epoch
+# ---------------------------------------------------------------------------
+
+
+class TestWikiEpoch:
+    def test_epoch_command_reads_epochlog_object(self) -> None:
+        log = EpochLog(
+            epoch=1,
+            triggered_by="user",
+            concepts_discovered=3,
+            articles_written=2,
+            stubs_upgraded=1,
+            loss_score=0.2,
+            loss_delta=0.05,
+            converged=False,
+        )
+
+        with patch("wikify.wiki.epoch.run_epoch", return_value=log):
+            result = runner.invoke(app, ["wiki", "epoch"])
+
+        assert result.exit_code == 0, result.output
+        assert "Concepts discovered : 3" in result.output
+        assert "Articles written    : 2" in result.output
+
+    def test_epoch_until_convergence_reads_epochlog_list(self) -> None:
+        logs = [
+            EpochLog(epoch=1, triggered_by="schedule", loss_score=0.4, converged=False),
+            EpochLog(
+                epoch=2,
+                triggered_by="schedule",
+                articles_written=4,
+                stubs_upgraded=2,
+                loss_score=0.1,
+                converged=True,
+            ),
+        ]
+
+        with patch("wikify.wiki.epoch.run_until_convergence", return_value=logs):
+            result = runner.invoke(app, ["wiki", "epoch", "--until-convergence", "--n", "2"])
+
+        assert result.exit_code == 0, result.output
+        assert "Converged after 2 epoch(s)" in result.output
+        assert "Final loss : 0.1000" in result.output

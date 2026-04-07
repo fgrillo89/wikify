@@ -39,12 +39,12 @@ def test_slugify_multiple_spaces():
 
 def test_article_path_returns_correct_path(tmp_path):
     path = article_path(tmp_path, "concepts", "hafnium_oxide")
-    assert path == tmp_path / "concepts" / "hafnium_oxide.md"
+    assert path == tmp_path / "articles" / "hafnium_oxide.md"
 
 
 def test_article_path_different_categories(tmp_path):
     assert article_path(tmp_path, "syntheses", "ald_review").name == "ald_review.md"
-    assert article_path(tmp_path, "gaps", "missing_topic").parent.name == "gaps"
+    assert article_path(tmp_path, "gaps", "missing_topic").parent.name == "articles"
 
 
 # ── write_article and read_article_frontmatter ────────────────────────────────
@@ -249,7 +249,7 @@ def test_resolve_article_sources_updates_frontmatter(tmp_path):
 
 
 def test_file_back_answer_creates_query_article(tmp_path):
-    """Files a Q&A answer as a wiki article in queries/."""
+    """Files a Q&A answer as a visible query page in articles/."""
     from wikify.wiki.builder import file_back_answer
 
     fpath = file_back_answer(
@@ -261,14 +261,14 @@ def test_file_back_answer_creates_query_article(tmp_path):
     )
 
     assert fpath.exists()
-    assert fpath.parent.name == "queries"
+    assert fpath.parent.name == "articles"
 
     content = fpath.read_text(encoding="utf-8")
     assert "How does ALD affect memristor switching?" in content
     assert "ALD controls oxide composition" in content
     assert "abc123" in content
     assert "0.80" in content
-    assert "type: query" in content
+    assert "page_type: query" in content
 
 
 def test_file_back_answer_no_sources(tmp_path):

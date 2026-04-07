@@ -1,8 +1,9 @@
-"""Figure extraction from PDFs with content-addressed storage."""
+"""Figure extraction from PDFs with per-paper directory storage (legacy fallback)."""
 
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import fitz
@@ -12,13 +13,14 @@ from wikify.store.models import Figure
 
 
 def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
-    """Extract images from a PDF and store them content-addressed.
+    """Extract images from a PDF and store them in a per-paper directory.
 
     Returns Figure model instances (not yet persisted).
     """
     doc = fitz.open(pdf_path)
     figures: list[Figure] = []
     seen_hashes: set[str] = set()
+    paper_slug = _make_paper_slug(pdf_path)
 
     max_figures_per_paper = 50
 
@@ -56,7 +58,8 @@ def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
                 continue
 
             ext = base_image.get("ext", "png")
-            image_path = _store_figure(image_bytes, img_hash, ext)
+            fig_number = f"p{page_num + 1}_img{img_index}"
+            image_path = _store_figure(image_bytes, img_hash, ext, paper_slug, fig_number)
 
             # Try to find caption near the image
             caption = _find_caption(page, page_num, img_index)
@@ -66,7 +69,7 @@ def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
                     id=img_hash,
                     paper_id=paper_id,
                     caption=caption,
-                    figure_number=f"p{page_num + 1}_img{img_index}",
+                    figure_number=fig_number,
                     image_path=str(image_path),
                     width_px=width,
                     height_px=height,
@@ -78,11 +81,33 @@ def extract_figures(pdf_path: str, paper_id: str) -> list[Figure]:
     return figures
 
 
-def _store_figure(image_bytes: bytes, img_hash: str, ext: str) -> Path:
-    """Store figure bytes in content-addressed directory."""
-    subdir = settings.figures_dir / img_hash[:2] / img_hash[2:4]
+def _make_paper_slug(pdf_path: str) -> str:
+    """Derive a short, filesystem-safe folder name from a PDF filename."""
+    stem = Path(pdf_path).stem
+    slug = re.sub(r"[^\w\s-]", "", stem)
+    slug = re.sub(r"[\s]+", "_", slug)
+    slug = slug.strip("_")
+    return slug[:80]
+
+
+def _store_figure(
+    image_bytes: bytes, img_hash: str, ext: str, paper_slug: str, fig_number: str
+) -> Path:
+    """Store figure bytes in a per-paper directory."""
+    safe_name = re.sub(r"[^\w.-]", "_", fig_number)
+    safe_name = re.sub(r"_+", "_", safe_name).strip("_")
+
+    subdir = settings.figures_dir / paper_slug
     subdir.mkdir(parents=True, exist_ok=True)
-    filepath = subdir / f"{img_hash}.{ext}"
+    filepath = subdir / f"{safe_name}.{ext}"
+
+    # Handle collisions with different content
+    if filepath.exists():
+        existing_hash = hashlib.sha256(filepath.read_bytes()).hexdigest()
+        if existing_hash == img_hash:
+            return filepath
+        filepath = subdir / f"{safe_name}_{img_hash[:8]}.{ext}"
+
     if not filepath.exists():
         filepath.write_bytes(image_bytes)
     return filepath

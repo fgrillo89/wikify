@@ -25,12 +25,15 @@ import logging
 import os
 import random
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import numpy as np
 from sqlmodel import select
 
+from wikify.config import settings
 from wikify.llm.client import complete_json
 from wikify.store.db import get_session
 from wikify.store.embeddings import _store
@@ -38,9 +41,11 @@ from wikify.store.models import (
     Chunk,
     ChunkMiningLog,
     ConceptEvidence,
+    ConceptOccurrence,
     ConceptRecord,
     ExtractionGap,
     ParameterExtraction,
+    RelationEvidence,
 )
 from wikify.wiki.builder import slugify
 from wikify.wiki.template import build_extraction_prompt, load_template
@@ -50,7 +55,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _WIKI_DIR = Path("data/wiki")
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
+HAIKU_MODEL = settings.llm_fast_model
 _STAGING_COLLECTION = "concept_staging"
 _VALID_CONCEPT_TYPES = frozenset(
     {"technique", "material", "phenomenon", "method", "theory", "dataset", "synthesis"}
@@ -74,13 +79,17 @@ _DEFAULT_TIER = 2  # anything not in the map
 # 5% of unmined lower-tier chunks explored randomly each epoch
 _EXPLORATION_RATE = 0.05
 
-# Module-level storage for rich extraction results from the last extraction run.
-# Maps paper_id -> list of per-chunk rich dicts. Populated by
-# extract_concepts_from_source(), consumed by evidence/gap/parameter processors.
-_last_rich_extractions: dict[str, list[dict[str, Any]]] = {}
-
 # Minimum cosine similarity to any known concept definition to keep a chunk
 _CONCEPT_SIM_THRESHOLD = 0.15
+
+
+@dataclass(slots=True)
+class DiscoveryResult:
+    """Explicit discovery output for one epoch run."""
+
+    concepts: list[ConceptRecord] = field(default_factory=list)
+    rich_extractions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    redirect_map: dict[str, str] = field(default_factory=dict)
 
 
 def apply_redirect_map(
@@ -92,11 +101,12 @@ def apply_redirect_map(
     After merge_concept_records, some concept slugs have been redirected
     (e.g. "ald" -> "atomic_layer_deposition"). This function fixes all
     concept references in the rich extraction data so that downstream
-    consumers (store_evidence, store_gaps, store_parameters) use the
+    consumers (store_evidence, store_gaps, store_parameters, store_occurrences)
+    use the
     canonical DB slug, preventing orphaned rows.
 
     Args:
-        rich_extractions: Dict from get_rich_extractions().
+        rich_extractions: Dict from the discovery result.
         redirect_map: Dict from merge_concept_records().
     """
     for _paper_id, chunk_results in rich_extractions.items():
@@ -122,22 +132,19 @@ def apply_redirect_map(
                     slug = slugify(cname)
                     if slug in redirect_map:
                         param["_canonical_id"] = redirect_map[slug]
-
-
-def get_rich_extractions() -> dict[str, list[dict[str, Any]]]:
-    """Return the rich extraction results from the last extraction run.
-
-    Returns:
-        Dict mapping paper_id -> list of per-chunk rich extraction dicts.
-        Each dict has keys: concepts, parameters, mechanisms, relationships,
-        gaps, _chunk_id, _paper_id, _chunk_content.
-    """
-    return _last_rich_extractions
-
-
-def clear_rich_extractions() -> None:
-    """Clear the stored rich extraction results."""
-    _last_rich_extractions.clear()
+            for relation in chunk_result.get("relationships", []):
+                if not isinstance(relation, dict):
+                    continue
+                source_name = (relation.get("source_concept") or "").strip()
+                target_name = (relation.get("target_concept") or "").strip()
+                if source_name:
+                    source_slug = slugify(source_name)
+                    if source_slug in redirect_map:
+                        relation["_source_canonical_id"] = redirect_map[source_slug]
+                if target_name:
+                    target_slug = slugify(target_name)
+                    if target_slug in redirect_map:
+                        relation["_target_canonical_id"] = redirect_map[target_slug]
 
 
 def _fuzzy_match_quote(quote: str, source_text: str) -> bool:
@@ -185,7 +192,7 @@ def store_evidence(
 
     Args:
         rich_extractions: Dict mapping paper_id -> list of per-chunk rich
-            extraction dicts (from get_rich_extractions()).
+            extraction dicts from the current discovery run.
         epoch: Current epoch number.
 
     Returns:
@@ -265,7 +272,7 @@ def store_gaps(
 
     Args:
         rich_extractions: Dict mapping paper_id -> list of per-chunk rich
-            extraction dicts (from get_rich_extractions()).
+            extraction dicts from the current discovery run.
         epoch: Current epoch number.
 
     Returns:
@@ -322,7 +329,7 @@ def store_parameters(
 
     Args:
         rich_extractions: Dict mapping paper_id -> list of per-chunk rich
-            extraction dicts (from get_rich_extractions()).
+            extraction dicts from the current discovery run.
         epoch: Current epoch number.
 
     Returns:
@@ -374,6 +381,93 @@ def store_parameters(
         len(param_rows),
     )
     return len(param_rows)
+
+
+def store_occurrences(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    epoch: int,
+) -> int:
+    """Store chunk-level concept mentions for graphing and routing."""
+    rows: list[ConceptOccurrence] = []
+
+    for paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            chunk_id = str(chunk_result.get("_chunk_id") or "")
+            for concept in chunk_result.get("concepts", []):
+                if not isinstance(concept, dict):
+                    continue
+                name = (concept.get("name") or "").strip()
+                if not name:
+                    continue
+                canonical_id = concept.get("_canonical_id", slugify(name))
+                mention_text = (concept.get("evidence") or concept.get("definition") or name).strip()
+                rows.append(
+                    ConceptOccurrence(
+                        concept_id=canonical_id,
+                        paper_id=paper_id,
+                        chunk_id=chunk_id,
+                        mention_text=mention_text,
+                        weight=1.0,
+                        epoch=epoch,
+                    )
+                )
+
+    if rows:
+        with get_session() as session:
+            for row in rows:
+                session.add(row)
+            session.commit()
+
+    logger.info(
+        "store_occurrences: epoch %d -> %d occurrence rows stored",
+        epoch,
+        len(rows),
+    )
+    return len(rows)
+
+
+def store_relation_evidence(
+    rich_extractions: dict[str, list[dict[str, Any]]],
+    epoch: int,
+) -> int:
+    """Store evidence-backed relation candidates from rich extraction output."""
+    rows: list[RelationEvidence] = []
+
+    for paper_id, chunk_results in rich_extractions.items():
+        for chunk_result in chunk_results:
+            chunk_id = str(chunk_result.get("_chunk_id") or "")
+            for relation in chunk_result.get("relationships", []):
+                if not isinstance(relation, dict):
+                    continue
+                source_name = (relation.get("source_concept") or "").strip()
+                target_name = (relation.get("target_concept") or "").strip()
+                if not source_name or not target_name:
+                    continue
+                rows.append(
+                    RelationEvidence(
+                        source_concept=relation.get("_source_canonical_id", slugify(source_name)),
+                        target_concept=relation.get("_target_canonical_id", slugify(target_name)),
+                        paper_id=paper_id,
+                        chunk_id=chunk_id,
+                        relation_type=(relation.get("relation_type") or "").strip(),
+                        evidence_quote=(relation.get("evidence") or "").strip(),
+                        weight=1.0,
+                        epoch=epoch,
+                    )
+                )
+
+    if rows:
+        with get_session() as session:
+            for row in rows:
+                session.add(row)
+            session.commit()
+
+    logger.info(
+        "store_relation_evidence: epoch %d -> %d relation evidence rows stored",
+        epoch,
+        len(rows),
+    )
+    return len(rows)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -700,13 +794,13 @@ def _identify_deepening_chunks(
     return candidates
 
 
-def extract_concepts_from_source(
+def _extract_concepts_bundle_from_source(
     source_id: str,
     chunks: list[Chunk],
     epoch: int,
     model: str = HAIKU_MODEL,
     template: str | None = None,
-) -> list[ConceptRecord]:
+) -> tuple[list[ConceptRecord], list[dict[str, Any]]]:
     """Extract concepts from a (possibly pre-filtered) list of chunks for one source.
 
     Threads concept names forward across chunks so haiku can avoid repeating
@@ -717,9 +811,9 @@ def extract_concepts_from_source(
     the profiler or tests), this function applies only the baseline _SKIP_SECTIONS
     and minimum-length guards.
 
-    Also stores rich extraction results (parameters, mechanisms, relationships,
-    gaps) in the module-level _last_rich_extractions dict for downstream
-    consumers (evidence linkage, gap reporting, parameter extraction).
+    Returns both concept records and the rich per-chunk extraction bundle so
+    downstream consumers can persist evidence, occurrences, parameters, and
+    relationships without relying on module-level shared state.
 
     Args:
         source_id: Paper.id for the source being processed.
@@ -730,7 +824,9 @@ def extract_concepts_from_source(
         template:  Extraction template content. If None, loads from disk.
 
     Returns:
-        All ConceptRecord objects extracted across every supplied chunk.
+        Tuple of:
+        - all ConceptRecord objects extracted across every supplied chunk
+        - all rich per-chunk extraction dicts with chunk metadata attached
     """
     # Baseline pre-filter: skip sections that never yield extractable concepts
     relevant_chunks = [c for c in chunks if c.section_type not in _SKIP_SECTIONS]
@@ -739,7 +835,7 @@ def extract_concepts_from_source(
 
     if not relevant_chunks:
         logger.debug("extract_concepts_from_source(%s): all chunks filtered out", source_id[:16])
-        return []
+        return [], []
 
     logger.info(
         "extract_concepts_from_source(%s): %d/%d chunks after pre-filter",
@@ -771,9 +867,6 @@ def extract_concepts_from_source(
         # Thread names forward so the next chunk prompt knows what was already seen
         prior_concepts = [r.name for r in chunk_records]
 
-    # Store rich results for downstream consumers
-    _last_rich_extractions[source_id] = all_rich
-
     # Stamp epoch fields (discovery will be refined at merge time)
     for record in all_records:
         record.epoch_discovered = epoch
@@ -785,7 +878,25 @@ def extract_concepts_from_source(
         len(relevant_chunks),
         len(all_records),
     )
-    return all_records
+    return all_records, all_rich
+
+
+def extract_concepts_from_source(
+    source_id: str,
+    chunks: list[Chunk],
+    epoch: int,
+    model: str = HAIKU_MODEL,
+    template: str | None = None,
+) -> list[ConceptRecord]:
+    """Backward-compatible wrapper returning only concept records."""
+    records, _rich_results = _extract_concepts_bundle_from_source(
+        source_id=source_id,
+        chunks=chunks,
+        epoch=epoch,
+        model=model,
+        template=template,
+    )
+    return records
 
 
 # ── Progressive mining frontier ────────────────────────────────────────────────
@@ -1110,7 +1221,7 @@ def stage_extractions(epoch: int, source_id: str, extractions: list[ConceptRecor
     )
 
 
-def commit_staged_extractions(epoch: int) -> int:
+def commit_staged_extractions(epoch: int) -> tuple[int, dict[str, str]]:
     """Read all staged extractions for the epoch and merge into ConceptRecord table.
 
     Args:
@@ -1126,11 +1237,11 @@ def commit_staged_extractions(epoch: int) -> int:
         result = collection.get(where={"epoch": epoch}, include=["metadatas"])
     except Exception:
         logger.exception("commit_staged_extractions: failed to query staging collection")
-        return 0
+        return 0, {}
 
     if not result or not result.get("ids"):
         logger.info("commit_staged_extractions: no staged entries for epoch %d", epoch)
-        return 0
+        return 0, {}
 
     metadatas = result.get("metadatas") or []
     new_records: list[ConceptRecord] = []
@@ -1149,14 +1260,14 @@ def commit_staged_extractions(epoch: int) -> int:
         )
 
     new_records = [r for r in new_records if r.id]
-    count, _redirect = merge_concept_records(new_records, epoch)
+    count, redirect_map = merge_concept_records(new_records, epoch)
 
     logger.info(
         "commit_staged_extractions: epoch %d -> %d new concepts committed",
         epoch,
         count,
     )
-    return count
+    return count, redirect_map
 
 
 def clear_staged_extractions(epoch: int) -> None:
@@ -1309,7 +1420,7 @@ def discover_concepts(
     paper_ids: list[str],
     epoch: int,
     model: str | None = None,
-) -> list[ConceptRecord]:
+) -> DiscoveryResult:
     """Pass 1 orchestrator: run concept discovery across a set of corpus papers.
 
     Progressive mining pipeline:
@@ -1331,13 +1442,14 @@ def discover_concepts(
         model:     litellm model string.  Defaults to HAIKU_MODEL.
 
     Returns:
-        All ConceptRecord rows whose epoch_last_updated == epoch.
+        DiscoveryResult with all concept rows touched this epoch plus the
+        rich extraction bundle needed for downstream operational persistence.
     """
     resolved_model = model or HAIKU_MODEL
 
     if not paper_ids:
         logger.info("discover_concepts: no paper_ids provided, nothing to do")
-        return []
+        return DiscoveryResult()
 
     # Determine worker count: 60% of CPU cores, min 2, max 8
     max_workers = max(2, min(8, int((os.cpu_count() or 1) * 0.6)))
@@ -1358,10 +1470,12 @@ def discover_concepts(
         )
         # Still return any records already in DB for this epoch
         with get_session() as session:
-            return list(
-                session.exec(
-                    select(ConceptRecord).where(ConceptRecord.epoch_last_updated == epoch)
-                ).all()
+            return DiscoveryResult(
+                concepts=list(
+                    session.exec(
+                        select(ConceptRecord).where(ConceptRecord.epoch_last_updated == epoch)
+                    ).all()
+                )
             )
 
     # ── Step 2: concept-aware pre-filter (epoch > 1 only) ─────────────────────
@@ -1392,6 +1506,8 @@ def discover_concepts(
     # ── Step 4: parallel per-paper processing (two-pass) ───────────────────────
     # Load template once for all papers
     _template = load_template(_WIKI_DIR)
+    rich_extractions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rich_lock = Lock()
 
     def _process_paper(paper_id: str, chunk_reasons: list[tuple[Chunk, str]]) -> None:
         """Process one paper: pub-level extraction then targeted chunk deepening."""
@@ -1410,20 +1526,17 @@ def discover_concepts(
             epoch=epoch,
             model=resolved_model,
         )
+        pub_rich["_paper_id"] = paper_id
+        pub_rich["_chunk_id"] = ""
+        pub_rich["_chunk_content"] = ""
         pub_concepts = _parse_concepts_from_rich(pub_rich)
         pub_concept_names = [c.name for c in pub_concepts]
-
-        # Store pub-level rich results
-        if pub_concepts:
-            if paper_id not in _last_rich_extractions:
-                _last_rich_extractions[paper_id] = []
-            _last_rich_extractions[paper_id].append(pub_rich)
 
         # Pass 1b: Targeted chunk deepening
         deepening_chunks = _identify_deepening_chunks(paper_id, pub_concept_names, chunks_only)
 
         if deepening_chunks:
-            extractions = extract_concepts_from_source(
+            extractions, deep_rich = _extract_concepts_bundle_from_source(
                 source_id=paper_id,
                 chunks=deepening_chunks,
                 epoch=epoch,
@@ -1432,14 +1545,19 @@ def discover_concepts(
             )
         else:
             extractions = []
+            deep_rich = []
 
         # Merge pub-level concepts with chunk-level
         all_extractions = pub_concepts + extractions
+        paper_rich = [pub_rich] + deep_rich
 
         # Stamp epoch on pub-level concepts
         for rec in pub_concepts:
             rec.epoch_discovered = epoch
             rec.epoch_last_updated = epoch
+
+        with rich_lock:
+            rich_extractions[paper_id].extend(paper_rich)
 
         stage_extractions(epoch=epoch, source_id=paper_id, extractions=all_extractions)
 
@@ -1470,7 +1588,9 @@ def discover_concepts(
                 logger.exception("discover_concepts: failed on paper %s", pid[:16])
 
     # ── Step 5: commit all staged extractions ─────────────────────────────────
-    commit_staged_extractions(epoch)
+    _count, redirect_map = commit_staged_extractions(epoch)
+    if redirect_map:
+        apply_redirect_map(rich_extractions, redirect_map)
 
     # Return all records touched in this epoch
     with get_session() as session:
@@ -1486,7 +1606,11 @@ def discover_concepts(
         len(results),
         epoch,
     )
-    return results
+    return DiscoveryResult(
+        concepts=results,
+        rich_extractions={pid: list(items) for pid, items in rich_extractions.items()},
+        redirect_map=redirect_map,
+    )
 
 
 # ── Query helpers ─────────────────────────────────────────────────────────────

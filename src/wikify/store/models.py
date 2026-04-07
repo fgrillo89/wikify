@@ -212,6 +212,53 @@ class PaperTopic(SQLModel, table=True):
     is_declared: bool = False  # True = from paper's own keywords
 
 
+class PageType(str, Enum):
+    """Visible wiki page roles."""
+
+    ENTITY = "entity"
+    CONCEPT = "concept"
+    OVERVIEW = "overview"
+    COMPARISON = "comparison"
+    QUERY = "query"
+    SOURCE_NOTE = "source-note"
+
+
+class RunStatus(str, Enum):
+    """State machine for a wiki mutation run."""
+
+    PENDING = "pending"
+    APPLIED = "applied"
+    RECONCILE_NEEDED = "reconcile_needed"
+    RECONCILED = "reconciled"
+    FAILED = "failed"
+
+
+class WorkflowType(str, Enum):
+    """Top-level workflow names shared by the runtime surface."""
+
+    INGEST = "ingest"
+    EPOCH = "epoch"
+    QUERY = "query"
+    MAINTAIN = "maintain"
+    CAMPAIGN = "campaign"
+
+
+class WikiPage(SQLModel, table=True):
+    """Canonical visible wiki page record keyed to a single markdown file."""
+
+    slug: str = Field(primary_key=True)
+    title: str
+    file_path: str = ""
+    page_type: str = PageType.CONCEPT
+    domains: str = "[]"
+    source_ids: str = "[]"
+    status: str = "draft"
+    confidence: float = 0.0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    model: str = ""
+
+
 class WikiArticle(SQLModel, table=True):
     """A curated wiki article authored or updated by the LLM."""
 
@@ -297,6 +344,82 @@ class ConceptEvidence(SQLModel, table=True):
     evidence_quote: str = ""  # exact text from source
     epoch_extracted: int = 0
     verified: bool = False  # True if quote found in source text
+
+
+class ConceptOccurrence(SQLModel, table=True):
+    """Chunk-level mention of a concept used for graph construction and routing."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    concept_id: str = Field(index=True)
+    page_slug: str = Field(default="", index=True)
+    paper_id: str = Field(index=True)
+    chunk_id: str = Field(default="", index=True)
+    mention_text: str = ""
+    weight: float = 1.0
+    epoch: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RelationEvidence(SQLModel, table=True):
+    """Evidence-backed relation candidate between two concepts."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    source_concept: str = Field(index=True)
+    target_concept: str = Field(index=True)
+    paper_id: str = Field(index=True)
+    chunk_id: str = Field(default="", index=True)
+    relation_type: str = ""
+    evidence_quote: str = ""
+    weight: float = 0.0
+    epoch: int = 0
+
+
+class PageProvenance(SQLModel, table=True):
+    """Support rows linking a visible page section back to source evidence."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    page_slug: str = Field(index=True)
+    paper_id: str = Field(index=True)
+    chunk_id: str = Field(default="", index=True)
+    section_name: str = ""
+    evidence_quote: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DomainMembership(SQLModel, table=True):
+    """Derived domain assignment for a visible page or concept."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    page_slug: str = Field(index=True)
+    domain: str = Field(index=True)
+    confidence: float = 0.0
+    source: str = "graph"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class GraphEdge(SQLModel, table=True):
+    """Materialized graph edge for operational routing and metrics."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    source_slug: str = Field(index=True)
+    target_slug: str = Field(index=True)
+    relation_type: str = ""
+    weight: float = 0.0
+    epoch: int = 0
+    is_cross_domain: bool = False
+
+
+class MaintenanceFinding(SQLModel, table=True):
+    """Actionable structural or evidence issue discovered during maintenance."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    page_slug: str = Field(index=True)
+    finding_type: str = Field(index=True)
+    severity: str = "info"
+    details: str = ""
+    status: str = "open"
+    epoch: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ParameterExtraction(SQLModel, table=True):
@@ -406,6 +529,136 @@ class EpochLog(SQLModel, table=True):
     loss_score: float = 0.0  # L computed after Pass 5
     loss_delta: float = 0.0  # |L(epoch_n) - L(epoch_n-1)|
     template_delta: float = 0.0  # |sections_added| / total_sections
+
+
+class RunLog(SQLModel, table=True):
+    """Canonical run record for ingest/epoch/query/maintain/campaign workflows."""
+
+    id: str = Field(primary_key=True)
+    workflow_type: str = WorkflowType.EPOCH
+    status: str = RunStatus.PENDING
+    strategy_id: str = ""
+    loss_definition_id: str = ""
+    prompt_family: str = ""
+    model_tier: str = ""
+    model_name: str = ""
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    summary_json: str = "{}"
+
+
+class RunTelemetry(SQLModel, table=True):
+    """Run-level telemetry summary row."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    workflow_type: str = WorkflowType.EPOCH
+    status: str = RunStatus.PENDING
+    strategy_id: str = ""
+    loss_definition_id: str = ""
+    prompt_family: str = ""
+    model_tier: str = ""
+    model_name: str = ""
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    summary_json: str = "{}"
+
+
+class StageTelemetry(SQLModel, table=True):
+    """Stage-level timing and counter summary."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    stage_name: str = Field(index=True)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    duration_s: float = 0.0
+    counts_json: str = "{}"
+
+
+class ToolCallTelemetry(SQLModel, table=True):
+    """Per-tool-call telemetry, useful for agent/runtime comparisons."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    stage_name: str = Field(index=True)
+    tool_name: str = Field(index=True)
+    status: str = "ok"
+    latency_ms: float = 0.0
+    input_summary: str = ""
+    output_summary: str = ""
+
+
+class RetrievalTelemetry(SQLModel, table=True):
+    """Retrieval and evidence-selection counters for one stage."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    stage_name: str = Field(index=True)
+    query: str = ""
+    candidates_considered: int = 0
+    chunks_read: int = 0
+    chunks_selected: int = 0
+    pages_read: int = 0
+    raw_fallback_used: bool = False
+    domains_json: str = "[]"
+
+
+class TokenUsageTelemetry(SQLModel, table=True):
+    """Token and cost counters where provider metadata is available."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    stage_name: str = Field(index=True)
+    model_name: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+
+
+class PageDeltaTelemetry(SQLModel, table=True):
+    """Visible page deltas emitted by one run."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    page_slug: str = Field(index=True)
+    action: str = ""
+    page_type: str = PageType.CONCEPT
+    source_count: int = 0
+    link_delta: int = 0
+
+
+class WikiSnapshotMetric(SQLModel, table=True):
+    """Point-in-time wiki metrics for experimentation and regression analysis."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    metric_name: str = Field(index=True)
+    metric_value: float = 0.0
+    measured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ExperimentTag(SQLModel, table=True):
+    """Simple key/value labels for grouping runs into experiments."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    tag_key: str = Field(index=True)
+    tag_value: str = ""
+
+
+class LossDefinitionResult(SQLModel, table=True):
+    """Named loss component results attached to one run."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    loss_name: str = Field(index=True)
+    component: str = Field(index=True)
+    value: float = 0.0
+    weight: float = 0.0
 
 
 class ChunkMiningLog(SQLModel, table=True):

@@ -1,117 +1,149 @@
-# Claude Code — Working Conventions
+﻿# Claude Code -- Working Conventions
 
-General rules for how Claude should operate in this project.
+Runtime-specific guidance for using this repo through Claude Code.
+This file is not the architecture source of truth.
 
-**What this project is**: Wikify turns any corpus (PDFs, notes, web articles, READMEs) into
-a concept-first, self-correcting personal Wikipedia. It also contains a writing pipeline
-(generate → evaluate → revise) for producing literature reviews and research papers.
+## Read First
+1. `docs/project-status.md` -- current state and priorities
+2. `docs/architecture.md` -- architectural boundaries and system model
+3. `docs/refactor/wiki-deep-refactor-plan.md` -- active implementation plan
+4. `docs/design/wiki-runtime-refactor-plan.md` -- focused wiki runtime design note
 
-**Key docs (read in order):**
-1. `docs/project-status.md` — current state, what works, what is planned, known issues
-2. `docs/architecture.md` — module layout, both pipelines, data model, file layout
-3. `docs/design/wiki-wikipedia-model.md` — authoritative spec for the Wikipedia/epoch pipeline
+## What This Repo Is
+Wikify is a local-first corpus platform with two product surfaces:
 
-**Runtime prompts** (loaded by code, NOT documentation):
-- `src/wikify/prompts/style_guide.md` — base writing style
-- `src/wikify/prompts/artifact_types/` — per-document-type rules
-- `src/wikify/prompts/fields/` — per-field writing guides
+- `wiki`: the primary knowledge product
+- `papers`: a separate writing surface for papers, reviews, and presentations
 
-**Design docs**: `docs/design/` — architecture decisions and design plans (reference only)
+The wiki is general-purpose. Do not treat it as science-only, even though
+scientific corpora remain an important use case.
 
-**Two pipelines — do not confuse them:**
-- **Writing pipeline**: `wikify generate` → `wikify evaluate` → `wikify revise` (fully working)
-- **Wikipedia pipeline**: `/wiki-epoch` → `/wiki-campaign` → `/wiki-ask` → `/wiki-maintain` (fully working)
+## Architecture Reminder
+The current target boundaries are:
 
-**Skills** (`.claude/skills/`) — four wiki modes + two writing modes:
+- `core`
+- `ingest`
+- `wiki`
+- `papers`
 
-| Skill | Mode | When to use |
-|-------|------|-------------|
-| `/wiki-epoch` | Build | After ingest, grow the wiki encyclopedically |
-| `/wiki-campaign` | Investigate | Thesis-driven research, opinionated epochs |
-| `/wiki-ask` | Query | Answer questions, file answers back into wiki |
-| `/wiki-maintain` | Maintain | Lint + auto-fix + self-enhance (find & fill gaps) |
-| `/generate` | Write | Generate a paper from the corpus |
-| `/ingest` | Ingest | Ingest PDFs into the knowledge base |
+Important rules:
 
-**The wiki cycle:** ingest → epoch → ask → maintain → (repeat). Each mode enriches the wiki. Campaigns are user-initiated research threads that layer on top.
+- `wiki` must not depend on `papers`
+- visible wiki files and structured state must stay aligned
+- graph metrics and run observability are first-class wiki concerns
+- CLI, MCP, and runtime-specific skills are adapters, not architecture
 
-## Architecture: Skills + Tools
+## Claude Code In This Repo
+Claude Code is one adapter over the same repo and runtime surfaces described in
+the main docs.
 
-**The LLM is the orchestrator.** Pipelines are skills, not Python scripts calling litellm.
+Use `.claude/skills/` as Claude-specific operating guidance, but do not treat
+those skill files as the canonical product design.
 
-- **Skills** describe what to do (markdown in `.claude/skills/`)
-- **Tools** are Python functions for DB, graph, file I/O, embeddings (no LLM needed)
-- **Agents** (haiku subagents) handle LLM-heavy batch work (extraction, article writing)
-- **Python code** handles: DB operations, graph computation, file I/O, embedding search
-- **The LLM** handles: extraction, synthesis, article writing, quality judgment, orchestration
+When working in Claude Code:
 
-This means no API key dependency for the primary workflow. The scripted path
-(`epoch.py` via litellm) exists for automated/scheduled runs but is secondary.
+- prefer the current docs over archived design material
+- follow the package boundaries in `docs/architecture.md`
+- follow the execution slices in `docs/refactor/wiki-deep-refactor-plan.md`
+- keep runtime-specific assumptions out of product docs and core modules
 
-## Agent Usage
+## Claude-Specific Skills
+Available skill files under `.claude/skills/` are Claude Code helpers, not the
+architecture source of truth.
 
-- **Always prefer sub-agents** for parallelizable work — launch independent tasks simultaneously
-- **Cost tier triaging** (model-agnostic):
-  - **fast**: Bulk extraction, classification, yes/no checks (haiku, Codex mini, Gemini Flash)
-  - **balanced**: Article writing, synthesis, code generation (sonnet, Codex, Gemini Pro)  
-  - **deep**: Complex reasoning, structural audits, conflict resolution (opus, o3)
-- Foreground agents only when results are needed before proceeding; background otherwise
-- **Batch processing**: For LLM-heavy passes (extraction, article writing), split work into N batches and spawn N haiku agents in parallel
+Examples:
+
+- `/wiki-epoch`
+- `/wiki-campaign`
+- `/wiki-ask`
+- `/wiki-maintain`
+- `/generate`
+- `/ingest`
+
+These may be useful operating surfaces in Claude Code, but the repo itself must
+also remain coherent for other runtimes.
+
+## Working Model
+Use the repo as a combination of:
+
+- Python and domain code for ingest, storage, graph logic, wiki operations, and exports
+- structured state for retrieval, provenance, graph reasoning, maintenance, and telemetry
+- visible wiki files for curated human-facing knowledge
+
+Claude Code may help orchestrate work, but product behavior should not be
+defined in Claude-specific terms.
+
+## Preferred Operations
+Prefer these workflows over ad hoc file mutation when appropriate:
+
+- `wikify ingest`
+- `wikify refresh`
+- `wikify wiki epoch`
+- `wikify wiki query`
+- `wikify wiki maintain`
+- `wikify wiki campaign`
+- `wikify wiki html`
+
+## Runtime Prompts
+These are loaded by code and are not product documentation:
+
+- `src/wikify/prompts/style_guide.md`
+- `src/wikify/prompts/artifact_types/`
+- `src/wikify/prompts/fields/`
 
 ## Python Tooling
-
-- **Package manager**: Always use `uv` (never pip/pip-tools)
-- **Formatting/linting**: Use `ruff` for all Python files (`uv run ruff format .` and `uv run ruff check --fix .`)
-- **Type checking**: Run `uv run ty` on all code after changes
-- **Testing**: `uv run pytest`
+- Package manager: `uv`
+- Formatting and linting: `uv run ruff format .` and `uv run ruff check --fix .`
+- Type checking: `uv run ty`
+- Testing: `uv run pytest`
 
 ## Code Quality
-
-- Follow **SOLID principles** where applicable:
-  - **S**ingle Responsibility — one reason to change per module/class
-  - **O**pen/Closed — extend via new classes, not modifying existing ones
-  - **L**iskov Substitution — subtypes must be substitutable for base types
-  - **I**nterface Segregation — small, focused interfaces over fat ones
-  - **D**ependency Inversion — depend on abstractions, not concretions
+- Prefer small responsibility-focused modules
+- Prefer explicit boundaries and dependency direction
+- Prefer dependency injection over hidden mutable globals
+- Prefer contracts for real extension points
+- Keep graph metric definition separate from orchestration code
+- Keep visible wiki files and structured state aligned
 
 ## Git Workflow
-
-- **Commit and push regularly**: Commit and push after every meaningful progress — don't batch up changes. This includes code changes, doc updates, and bug fixes. Small frequent commits are better than large infrequent ones.
+- Commit and push regularly after meaningful progress
 
 ## Output Quality Review Criteria
-
-When scoring or reviewing generated text (strategy comparisons, quality assessments, etc.), always evaluate these criteria alongside thematic organization, citation density, and style guide compliance:
+When scoring or reviewing generated text, evaluate these criteria alongside
+organization, citation quality, and style-guide compliance:
 
 | Criterion | What to measure |
-|-----------|----------------|
-| **Sentence simplicity** | Avg words per sentence; % of sentences > 30 words; are sentences parseable on first read? |
-| **Concept density** | New concepts introduced per sentence (target: 1). Flag sentences that stack 2+ unfamiliar terms. |
-| **Relative clause usage** | Count of which/that/who clauses; flag sentences with 2+ nested clauses. |
-| **Subordinate clause frequency** | % of sentences opening with although/because/while/since (target: <20%). |
-| **Abstract readability** | First sentence <15 words? One concept per sentence? Zero citations (unless foundational)? |
-| **Em-dash violations** | Count of " -- ", " --- ", unicode em/en-dashes used as parenthetical separators (target: 0). |
+|-----------|-----------------|
+| Sentence simplicity | Average words per sentence, percent of sentences over 30 words, and first-read parseability |
+| Concept density | New concepts introduced per sentence; flag sentences that stack too many unfamiliar terms |
+| Relative clause usage | Count `which` and `that` and `who` clauses; flag sentences with nested clauses |
+| Subordinate clause frequency | Percent of sentences opening with `although`, `because`, `while`, or `since` |
+| Abstract readability | Short clear opening sentence, one concept per sentence, and no unnecessary citations |
+| Em-dash violations | Count ` -- `, ` --- `, and Unicode em/en dashes used as parenthetical separators |
 
-## Corrections & Lessons Learned
+## Corrections And Lessons Learned
+When the user corrects a mistake or misinterpretation, add an entry below so the
+same mistake is less likely to be repeated.
 
-When the user corrects a mistake or misinterpretation, **add an entry below** so the
-same mistake is never repeated. Format: `- **Topic**: What went wrong → what to do instead.`
+Format:
+`- **Topic**: What went wrong -> what to do instead.`
 
 <!-- Add corrections below this line -->
 - **Data libraries**: Always use polars over pandas. User strongly prefers polars.
-- **Package installs**: Always use `uv add` (not `uv pip install`) to add dependencies. This keeps pyproject.toml in sync.
-- **Commit messages**: Never include absolute paths or personal PC paths in commit messages. Use relative paths or project-relative references only.
-- **Vault output location**: The Obsidian vault output goes under `data/vault/` (gitignored), NOT at project root. The vault Python *code* lives in `src/wikify/vault/` — don't confuse code with output.
-- **No mock generation scripts**: Don't hardcode paper text in scripts. Use the MCP server + Claude Code agents to generate real papers from the knowledge base.
-- **DOCX templates**: When using a publisher template, clone paragraph exemplars from the template XML. Never override template fonts/spacing programmatically — let the template's native styles handle formatting.
-- **BibTeX is corpus-level**: `library.bib` is auto-generated on ingest/refresh at `data/library.bib`, not per-output.
-- **Chemistry subscripts**: Apply Unicode subscripts (HfO₂) only to markdown output. DOCX gets raw text (HfO2) and the exporter renders native Word subscripts.
-- **Unicode on Windows**: Avoid Unicode arrows/special chars in console print statements. Use ASCII alternatives.
-- **No silent error swallowing**: NEVER use bare `except: pass` or `try/except` that hides failures. If something fails, log it or raise it. Silent swallowing is obfuscation by design. If ChromaDB fails, the user needs to know and fix it, not get silently degraded results.
-- **Module-level instances are fine, mutable globals are not**: A module-level constant like `_db = DatabaseManager()` (assigned once, never reassigned) is acceptable — same pattern as `settings = Settings()`. The `global` keyword for mutation (`global _foo; _foo = ...`) is banned. Prefer dependency injection (pass the instance as a constructor/function argument) when the instance needs to be swapped in tests.
-- **Performance-critical paths**: Consider whether hot paths (embedding, graph computation, chunk retrieval) should eventually be compiled (Rust via PyO3/maturin, or Cython). Python's GIL and startup cost are real bottlenecks for a responsive app.
-- **Wikipedia pipeline is concept-first**: The wiki is built by discovering concepts from the corpus (haiku extraction), not from a pre-planned sitemap. `sitemap.py` is a secondary tool for user-directed focus, not the primary pipeline. Never make the sitemap the entry point for new wiki work.
-- **Epoch model for convergence**: Wiki building is iterative. Each epoch runs 5 passes: discovery → graph → article writing → cross-reference → index rebuild. Convergence is tracked via a scalar loss L and per-concept information gradient. See `wiki-wikipedia-model.md` for formulas.
-- **Model selection in epochs**: Use haiku for Pass 1 (extraction) always. Use haiku for Pass 3 (article writing) while L >= 0.3; switch to sonnet once L < 0.3. Reserve opus only for structural audit or complex synthesis.
-- **Package name**: The Python package is `wikify` (renamed from `scholarforge`). CLI command is `wikify`. GitHub repo is `github.com/fgrillo89/wikify`. Project root directory is still `C:\dev\scholarforge`.
-- **Skill-first architecture**: Pipelines are skills orchestrated by the LLM, not Python scripts calling litellm. The LLM spins up haiku agents for batch work and uses Python tools for DB/graph/file ops. The scripted path (litellm) is secondary, for automated/scheduled runs only. Never ask for API keys -- use subagents.
-- **Extraction template evolves**: The extraction template (`data/wiki/_template.md`) is versioned per epoch. It grows via gap-driven refinement and shrinks via zero-yield pruning. An overfitting guard rejects corpus-specific sections.
+- **Package installs**: Always use `uv add` instead of `uv pip install` so `pyproject.toml` stays in sync.
+- **Commit messages**: Never include absolute paths or personal PC paths in commit messages.
+- **Vault output location**: The Obsidian vault output goes under `data/vault/`, not at project root.
+- **No mock generation scripts**: Do not hardcode paper text in scripts; use the real corpus and runtime surfaces.
+- **DOCX templates**: Let template-native styles handle formatting; do not override fonts or spacing programmatically.
+- **BibTeX is corpus-level**: `data/library.bib` is generated on ingest and refresh, not per output.
+- **Chemistry subscripts**: Apply Unicode subscripts only to markdown output; let DOCX export handle native subscripts.
+- **Unicode on Windows**: Avoid special Unicode characters in console output; use ASCII.
+- **No silent error swallowing**: Never hide failures with bare `except` or silent `pass` blocks.
+- **Module-level instances**: Immutable module-level instances can be acceptable, but hidden mutable globals are not.
+- **Performance-critical paths**: Keep an eye on embedding, graph, and retrieval hot paths if responsiveness becomes a problem.
+- **Wikipedia pipeline is concept-first**: The wiki is built by discovering concepts from the corpus, not from a pre-planned sitemap.
+- **Epoch model for convergence**: Wiki building is iterative, and the current model is documented in `docs/architecture.md` and `docs/design/wiki-runtime-refactor-plan.md`.
+- **Model selection in epochs**: Use cheaper models for extraction and early drafting; reserve more capable models for harder synthesis or audit work.
+- **Package name**: The Python package is `wikify`; the project root directory still happens to be `C:\dev\scholarforge`.
+- **Skill files are adapters**: Claude-specific skill files are useful operating surfaces, but they are not the architecture source of truth.
+- **Extraction template evolves**: The extraction template can evolve across epochs, but it must not drift into corpus-specific overfitting.

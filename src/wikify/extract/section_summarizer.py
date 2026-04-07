@@ -101,7 +101,7 @@ def summarize_sections_extractive(paper_id: str, force: bool = False) -> dict[st
 
 def summarize_sections_llm(
     paper_id: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     force: bool = False,
 ) -> dict[str, str]:
     """Generate LLM-based section summaries (1-2 factual sentences per section).
@@ -118,6 +118,8 @@ def summarize_sections_llm(
     """
     from sqlmodel import select
 
+    from wikify.config import settings
+    from wikify.llm.client import complete_json
     from wikify.extract.section_classifier import classify_section_path
     from wikify.store.db import get_session
     from wikify.store.models import Chunk, Paper
@@ -191,7 +193,7 @@ def summarize_sections_llm(
     if current_batch:
         batches.append(current_batch)
 
-    import litellm
+    resolved_model = model or settings.llm_fast_model
 
     for batch in batches:
         prompt_parts = []
@@ -206,8 +208,7 @@ def summarize_sections_llm(
         )
 
         try:
-            response = litellm.completion(
-                model=model,
+            batch_summaries = complete_json(
                 messages=[
                     {
                         "role": "system",
@@ -215,15 +216,10 @@ def summarize_sections_llm(
                     },
                     {"role": "user", "content": user_prompt},
                 ],
+                model=resolved_model,
                 max_tokens=1024,
                 temperature=0.0,
             )
-            raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            batch_summaries = json.loads(raw)
             summaries.update(batch_summaries)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Section summary LLM call failed: %s", exc)
@@ -241,7 +237,7 @@ summarize_sections = summarize_sections_extractive
 
 def summarize_sections_batch(
     mode: str = "extractive",
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     force: bool = False,
 ) -> int:
     """Generate section summaries for all papers that don't have them yet.

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from wikify.wiki.builder import read_article_frontmatter
+from wikify.wiki.layout import iter_visible_page_files
 from wikify.wiki.sitemap import WikiSitemap
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,7 @@ def _slug_to_title(wiki_dir: Path) -> dict[str, str]:
     Skips files whose names start with '_' (index, sitemap, etc.).
     """
     result: dict[str, str] = {}
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
         meta = read_article_frontmatter(md_file)
         title = meta.get("title") or md_file.stem
         slug = md_file.stem
@@ -64,9 +63,8 @@ def cross_link_articles(wiki_dir: Path, sitemap: WikiSitemap | None) -> int:
         # Slug-matching fallback: check for verbatim title occurrences in body text.
         # Build a map of all article file paths for body reading.
         slug_to_path: dict[str, Path] = {}
-        for md_file in wiki_dir.rglob("*.md"):
-            if not md_file.name.startswith("_"):
-                slug_to_path[md_file.stem] = md_file
+        for md_file in iter_visible_page_files(wiki_dir):
+            slug_to_path[md_file.stem] = md_file
 
         for slug, path in slug_to_path.items():
             body = _read_body(path)
@@ -77,9 +75,7 @@ def cross_link_articles(wiki_dir: Path, sitemap: WikiSitemap | None) -> int:
                     links.setdefault(slug, set()).add(other_title)
 
     updated = 0
-    for md_file in wiki_dir.rglob("*.md"):
-        if md_file.name.startswith("_"):
-            continue
+    for md_file in iter_visible_page_files(wiki_dir):
         slug = md_file.stem
         titles_to_add = links.get(slug, set())
         if not titles_to_add:
@@ -135,8 +131,8 @@ def _read_body(path: Path) -> str:
 
 def _find_article_path(wiki_dir: Path, slug: str) -> Path | None:
     """Search wiki_dir recursively for a .md file matching slug."""
-    for md_file in wiki_dir.rglob(f"{slug}.md"):
-        if not md_file.name.startswith("_"):
+    for md_file in iter_visible_page_files(wiki_dir):
+        if md_file.name == f"{slug}.md":
             return md_file
     return None
 

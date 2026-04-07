@@ -16,6 +16,16 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from wikify.wiki.layout import (
+    LEGACY_VISIBLE_DIRS,
+    article_path_for_category,
+    ensure_layout,
+    index_path,
+    log_path,
+    normalize_page_type,
+    visible_page_path,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,10 +67,15 @@ def article_path(wiki_dir: Path, category: str, slug: str) -> Path:
         category: Subdirectory name (e.g. "concepts", "syntheses", "gaps").
         slug: Filename slug (without .md extension).
 
+    Legacy categories are normalized into the simplified visible wiki layout.
+    Most visible pages now live under ``articles/`` and use frontmatter
+    ``page_type`` to capture their editorial role.
+
     Returns:
-        Full Path object: wiki_dir / category / slug.md
+        Full Path object for the canonical visible page path.
     """
-    return wiki_dir / category / f"{slug}.md"
+    ensure_layout(wiki_dir)
+    return article_path_for_category(wiki_dir, category, slug)
 
 
 def file_back_answer(
@@ -74,7 +89,7 @@ def file_back_answer(
 
     Answers from chat, MCP queries, or campaign synthesis are saved
     as wiki articles so they become part of the searchable knowledge base.
-    Stored in wiki_dir/queries/.
+    Stored in wiki_dir/articles/ with ``page_type: query``.
 
     Args:
         wiki_dir: Root wiki directory.
@@ -87,8 +102,7 @@ def file_back_answer(
         Path to the saved query article.
     """
     query_slug = slugify(question)[:60]
-    query_dir = wiki_dir / "queries"
-    query_dir.mkdir(parents=True, exist_ok=True)
+    ensure_layout(wiki_dir)
 
     now = datetime.now(timezone.utc).date().isoformat()
 
@@ -98,11 +112,16 @@ def file_back_answer(
     frontmatter = f"""\
 ---
 title: "{question[:100]}"
-type: query
+slug: {query_slug}
+page_type: query
 wiki_id: {query_slug}
 status: answered
 confidence: {confidence_str}
 created: {now}
+updated_at: {now}
+domains: []
+source_ids:
+{sources_yaml}
 sources:
 {sources_yaml}
 ---
@@ -110,7 +129,7 @@ sources:
 """
 
     full_content = frontmatter + f"# {question}\n\n{answer}"
-    fpath = query_dir / f"{query_slug}.md"
+    fpath = visible_page_path(wiki_dir, slug=query_slug, page_type="query")
     fpath.write_text(full_content, encoding="utf-8")
 
     logger.info("file_back_answer: saved %s (%d chars)", fpath.name, len(answer))
@@ -125,6 +144,9 @@ def write_article(
     topics: list[str],
     status: str = "full",
     model: str = "",
+    page_type: str | None = None,
+    domains: list[str] | None = None,
+    confidence: float = 0.0,
 ) -> None:
     """Write a wiki article markdown file with YAML frontmatter.
 
@@ -140,24 +162,41 @@ def write_article(
         model: Model identifier used to write the article.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    wiki_root = (
+        path.parent.parent
+        if path.parent.name in {"articles", "sources"} or path.parent.name in LEGACY_VISIBLE_DIRS
+        else path.parent
+    )
+    ensure_layout(wiki_root)
 
     now = datetime.now(timezone.utc).date().isoformat()
     slug = path.stem
+    normalized_page_type = normalize_page_type(page_type, fallback_category=path.parent.name)
+    domain_list = domains or []
 
     # Format YAML lists
     sources_yaml = "\n".join(f"  - {s}" for s in sources) if sources else "  []"
     topics_yaml = "[" + ", ".join(topics) + "]" if topics else "[]"
+    domains_yaml = "[" + ", ".join(domain_list) + "]" if domain_list else "[]"
 
     frontmatter = f"""\
 ---
 title: {title}
+slug: {slug}
+page_type: {normalized_page_type}
 wiki_id: {slug}
 status: {status}
 created: {now}
 updated: {now}
+updated_at: {now}
+domains: {domains_yaml}
+confidence: {confidence:.2f}
+source_ids:
+{sources_yaml if sources else "  []"}
 sources:
 {sources_yaml if sources else "  []"}
 topics: {topics_yaml}
+type: {normalized_page_type}
 model: {model}
 ---
 
@@ -1200,36 +1239,30 @@ def append_unanswered_question(
 
 
 def generate_wiki_index(wiki_dir: Path) -> str:
-    """Scan wiki directory and generate _index.md content.
+    """Generate the visible-layer wiki index.
 
-    Groups articles by their frontmatter ``category`` field (theme, concept,
-    synthesis, query).  Falls back to the subdirectory name when the field is
-    absent.  Produces a structured Markdown index and writes it to
-    ``wiki_dir/_index.md``.
-
-    This is the backward-compatibility wrapper for existing CLI commands.
-    It calls generate_domain_index (for domain="general") then
-    generate_library_catalog with that single domain.
-
-    Returns the generated index as a string.
+    The simplified wiki keeps one visible article tree and distinguishes page
+    roles with frontmatter ``page_type`` instead of deep folder taxonomy.
+    For backward compatibility, this function still writes ``_index.md`` as
+    well as the new canonical ``index.md``.
     """
+    ensure_layout(wiki_dir)
     now = datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%d %H:%M UTC")
 
-    # Collect all non-index articles and their metadata.
-    category_order = ["theme", "concept", "synthesis", "query"]
-    buckets: dict[str, list[dict]] = {cat: [] for cat in category_order}
+    page_type_order = ["overview", "concept", "entity", "comparison", "query", "source-note"]
+    buckets: dict[str, list[dict]] = {page_type: [] for page_type in page_type_order}
     all_source_ids: set[str] = set()
 
-    for md_file in sorted(wiki_dir.rglob("*.md")):
-        if md_file.name.startswith("_"):
-            continue
+    from wikify.wiki.layout import iter_visible_page_files
+
+    for md_file in iter_visible_page_files(wiki_dir):
         meta = read_article_frontmatter(md_file)
         title = str(meta.get("title") or md_file.stem)
         scope = str(meta.get("scope", ""))
         updated_raw = meta.get("updated") or meta.get("updated_at") or ""
         parent_raw = meta.get("parent") or meta.get("parent_slug") or ""
-        sources_raw = meta.get("sources", [])
+        sources_raw = meta.get("source_ids") or meta.get("sources", [])
         if isinstance(sources_raw, list):
             for sid in sources_raw:
                 all_source_ids.add(str(sid))
@@ -1239,19 +1272,10 @@ def generate_wiki_index(wiki_dir: Path) -> str:
                 if sid:
                     all_source_ids.add(sid)
 
-        # Determine category.
-        category = str(meta.get("category", "")).lower()
-        if category not in category_order:
-            # Fall back to subdirectory name mapping.
-            subdir_name = md_file.parent.name.lower()
-            _dir_map = {
-                "themes": "theme",
-                "concepts": "concept",
-                "syntheses": "synthesis",
-                "queries": "query",
-                "gaps": "synthesis",
-            }
-            category = _dir_map.get(subdir_name, "concept")
+        page_type = normalize_page_type(
+            str(meta.get("page_type") or meta.get("type") or ""),
+            fallback_category=md_file.parent.name,
+        )
 
         entry = {
             "title": title,
@@ -1260,30 +1284,34 @@ def generate_wiki_index(wiki_dir: Path) -> str:
             "updated": str(updated_raw),
             "parent": str(parent_raw),
         }
-        buckets.setdefault(category, []).append(entry)
+        buckets.setdefault(page_type, []).append(entry)
 
-    article_count = sum(len(v) for v in buckets.values())
+    article_count = sum(
+        len(entries) for page_type, entries in buckets.items() if page_type != "source-note"
+    )
 
     lines: list[str] = [
         "# Knowledge Base Index",
         "",
         f"_Last updated: {now_str}_",
-        f"_Articles: {article_count} | Sources indexed: {len(all_source_ids)}_",
+        f"_Articles: {article_count} | Source notes: {len(buckets.get('source-note', []))} | Sources indexed: {len(all_source_ids)}_",
     ]
 
     section_labels = {
-        "theme": "Themes",
+        "overview": "Overviews",
         "concept": "Concepts",
-        "synthesis": "Syntheses",
+        "entity": "Entities",
+        "comparison": "Comparisons",
         "query": "Queries",
+        "source-note": "Source Notes",
     }
 
-    for cat in category_order:
-        entries = buckets.get(cat, [])
+    for page_type in page_type_order:
+        entries = buckets.get(page_type, [])
         if not entries:
             continue
         lines.append("")
-        lines.append(f"## {section_labels[cat]}")
+        lines.append(f"## {section_labels[page_type]}")
         lines.append("")
         for e in entries:
             scope_part = f" -- {e['scope']}" if e["scope"] else ""
@@ -1291,7 +1319,7 @@ def generate_wiki_index(wiki_dir: Path) -> str:
             lines.append(f"- [[{e['title']}]]{scope_part}{parent_part}")
 
     # Recent updates: top 5 by updated field (string sort; ISO dates compare lexically).
-    all_entries = [e for cat_entries in buckets.values() for e in cat_entries]
+    all_entries = [e for bucket_entries in buckets.values() for e in bucket_entries]
     recent = sorted(
         (e for e in all_entries if e["updated"]),
         key=lambda e: e["updated"],
@@ -1306,6 +1334,8 @@ def generate_wiki_index(wiki_dir: Path) -> str:
             lines.append(f"- {e['title']} -- {e['updated']}")
 
     content = "\n".join(lines) + "\n"
-    index_path = wiki_dir / "_index.md"
-    index_path.write_text(content, encoding="utf-8")
+    index_path(wiki_dir).write_text(content, encoding="utf-8")
+    (wiki_dir / "_index.md").write_text(content, encoding="utf-8")
+    if not log_path(wiki_dir).exists():
+        log_path(wiki_dir).write_text("# Wiki Change Log\n\n", encoding="utf-8")
     return content

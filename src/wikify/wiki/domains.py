@@ -27,6 +27,7 @@ import networkx as nx
 import numpy as np
 from sqlmodel import select
 
+from wikify.config import settings
 from wikify.llm.client import complete_json
 from wikify.store.db import get_session
 from wikify.store.embeddings import _store
@@ -37,7 +38,7 @@ from wikify.wiki.persona import get_or_create_persona
 
 logger = logging.getLogger(__name__)
 
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
+HAIKU_MODEL = settings.llm_fast_model
 
 # Minimum modularity Q below which we skip per-community LLM validation and
 # create a single catch-all domain instead.

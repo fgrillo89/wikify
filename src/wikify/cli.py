@@ -498,9 +498,9 @@ def mcp(
         "default", "--library", "-l", help="Library name (for multi-domain research)"
     ),
 ):
-    """Start the ScholarForge MCP server (stdio transport for Claude Code / LLM clients).
+    """Start the ScholarForge MCP server (stdio transport for MCP-compatible clients).
 
-    Example usage in Claude Code settings:
+    Example usage in an MCP client config:
         {
           "mcpServers": {
             "wikify": {
@@ -1461,36 +1461,29 @@ def wiki_query(
     deep: bool = typer.Option(False, "--deep", help="Build ephemeral mini-wiki before escalation"),
     promote: bool = typer.Option(False, "--promote", help="Save the answer as a new wiki article"),
 ):
-    """Answer a question via 5-level escalation through the wiki.
-
-    Level 0 -> global index, Level 1 -> domain/theme indexes,
-    Level 2 -> specific article(s), Level 3 -> source digests,
-    Level 4 -> source sections. If still unanswered, records the gap.
-
-    Use --deep to build an ephemeral mini-wiki targeted at the question first.
-    Use --promote to save the answer as a new wiki article.
-    """
-    import json
+    """Answer a question from the visible wiki with optional promotion."""
     import tempfile
-    from datetime import datetime, timezone
 
-    from wikify.wiki.builder import append_unanswered_question, slugify, write_article
+    from wikify.wiki.layout import iter_visible_page_files
+    from wikify.wiki.runtime import query_wiki, reconcile_state
 
     wiki_dir = Path("data/wiki")
-    index_path = wiki_dir / "_index.md"
+    index_path = wiki_dir / "index.md"
+    legacy_index_path = wiki_dir / "_index.md"
 
-    if not index_path.exists():
-        console.print("[red]No wiki index found. Run 'wikify wiki init' first.[/red]")
+    if not index_path.exists() and not legacy_index_path.exists() and not iter_visible_page_files(
+        wiki_dir
+    ):
+        console.print("[red]No visible wiki found. Run 'wikify wiki epoch' first.[/red]")
         raise typer.Exit(1)
 
     # ── --deep mode: build ephemeral mini-wiki ────────────────────────────────
     query_wiki_dir = wiki_dir
-    temp_dir_obj: object = None
-
     if deep:
         console.print("[dim]--deep: building ephemeral mini-wiki for this query...[/dim]")
         try:
             from wikify.wiki.agent import build_wiki_from_sitemap
+            from wikify.wiki.builder import generate_wiki_index
             from wikify.wiki.sitemap import generate_sitemap
 
             temp_dir_obj = tempfile.mkdtemp()
@@ -1502,71 +1495,150 @@ def wiki_query(
                 model=model,
             )
             build_wiki_from_sitemap(sitemap, wiki_dir=temp_wiki_dir, model=model)
+            generate_wiki_index(temp_wiki_dir)
             query_wiki_dir = temp_wiki_dir
             console.print(f"[dim]Ephemeral wiki built in {temp_wiki_dir}[/dim]")
-
-            if promote:
-                import shutil
-
-                queries_dir = wiki_dir / "queries"
-                queries_dir.mkdir(parents=True, exist_ok=True)
-                for md_file in temp_wiki_dir.rglob("*.md"):
-                    dest = queries_dir / md_file.name
-                    shutil.copy2(md_file, dest)
-                console.print(f"[dim]Promoted {temp_wiki_dir} contents to {queries_dir}[/dim]")
         except Exception as exc:
             console.print(f"[yellow]--deep build failed ({exc}), using existing wiki.[/yellow]")
 
     # ── Run escalation ────────────────────────────────────────────────────────
-    answer = _answer_with_escalation(question, query_wiki_dir, domain, model)
+    if (
+        not deep
+        and query_wiki_dir == wiki_dir
+        and legacy_index_path.exists()
+        and not iter_visible_page_files(query_wiki_dir)
+    ):
+        from wikify.wiki.builder import append_unanswered_question
 
-    if answer is None:
-        append_unanswered_question(wiki_dir, question, domain)
+        answer = _answer_with_escalation(question, query_wiki_dir, domain, model)
+        if answer is None:
+            append_unanswered_question(wiki_dir, question, domain)
+            console.print("[yellow]Gap recorded in wiki. Run 'wiki expand' to address.[/yellow]")
+            return
+        console.print(answer)
+        return
+
+    result = query_wiki(
+        question,
+        wiki_dir=query_wiki_dir,
+        domain=domain,
+        model=model,
+        promote=promote,
+        page_type="query",
+        promotion_wiki_dir=wiki_dir,
+    )
+    answer = str(result.get("answer", "")).strip()
+
+    if not result.get("answered"):
         console.print("[yellow]Gap recorded in wiki. Run 'wiki expand' to address.[/yellow]")
         return
 
     console.print(answer)
 
     # ── --promote (non-deep path) ─────────────────────────────────────────────
-    if promote and not deep:
-        from sqlmodel import Session
+    if promote and result.get("promoted_path"):
+        reconcile_state(wiki_dir)
+        console.print(f"[green]Answer promoted to: {result['promoted_path']}[/green]")
 
-        from wikify.store.db import get_engine
-        from wikify.store.models import WikiArticle
 
-        slug = slugify(question[:60])
-        queries_dir = wiki_dir / "queries"
-        out_path = queries_dir / f"{slug}.md"
+@wiki_app.command("campaign")
+def wiki_campaign(
+    thesis: str = typer.Argument(..., help="Research thesis or guiding question"),
+    name: str = typer.Option("", "--name", help="Optional campaign name"),
+    domain: str = typer.Option("", "--domain", "-d", help="Limit campaign to one domain"),
+    epochs: int = typer.Option(1, "--epochs", min=1, help="Number of epochs to run first"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
+    promote: bool = typer.Option(
+        True,
+        "--promote/--no-promote",
+        help="Promote the final campaign answer back into the visible wiki",
+    ),
+):
+    """Run a thesis-driven campaign over the shared wiki runtime."""
+    from wikify.wiki.runtime import run_campaign
 
-        write_article(
-            path=out_path,
-            title=question,
-            content=answer,
-            sources=[],
-            topics=[slug],
-            status="full",
-            model=model or "",
+    result = run_campaign(
+        thesis,
+        wiki_dir=Path("data/wiki"),
+        name=name,
+        domain=domain,
+        epochs=epochs,
+        model=model,
+        promote=promote,
+    )
+    console.print("\n[bold]Wiki Campaign[/bold]")
+    console.print(f"  Campaign id       : {result.get('campaign_id', '')}")
+    console.print(f"  Epochs run        : {result.get('epochs_run', 0)}")
+    console.print(f"  Answered          : {result.get('answered', False)}")
+    if result.get("promoted_path"):
+        console.print(f"  Promoted path     : {result.get('promoted_path', '')}")
+    answer = str(result.get("answer", "")).strip()
+    if answer:
+        console.print("")
+        console.print(answer)
+
+
+@wiki_app.command("maintain")
+def wiki_maintain():
+    """Run a maintenance sweep over the visible wiki and operational state."""
+    from wikify.wiki.runtime import run_maintain
+
+    summary = run_maintain(Path("data/wiki"))
+    console.print("\n[bold]Wiki Maintain[/bold]")
+    console.print(f"  Pages seen        : {summary.get('pages_seen', 0)}")
+    console.print(f"  Findings          : {summary.get('findings', 0)}")
+    console.print(f"  Pages reconciled  : {summary.get('pages_updated', 0)}")
+    console.print(f"  Pages created     : {summary.get('pages_created', 0)}")
+    console.print(f"  Pages deleted     : {summary.get('pages_deleted', 0)}")
+
+
+@wiki_app.command("reconcile-state")
+def wiki_reconcile_state():
+    """Rebuild operational page state from visible markdown files."""
+    from wikify.wiki.runtime import reconcile_state
+
+    summary = reconcile_state(Path("data/wiki"))
+    console.print("\n[bold]Reconcile State[/bold]")
+    console.print(f"  Pages seen        : {summary.get('pages_seen', 0)}")
+    console.print(f"  Pages created     : {summary.get('pages_created', 0)}")
+    console.print(f"  Pages updated     : {summary.get('pages_updated', 0)}")
+    console.print(f"  Pages deleted     : {summary.get('pages_deleted', 0)}")
+
+
+@wiki_app.command("export-metrics")
+def wiki_export_metrics(
+    workflow_type: str = typer.Option("", "--workflow", help="Optional workflow filter"),
+    limit: int = typer.Option(20, "--limit", help="Maximum number of runs to export"),
+):
+    """Export aggregated telemetry and wiki metrics to data/wiki/_meta/metrics/export.json."""
+    from wikify.wiki.runtime import export_metrics
+
+    payload = export_metrics(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
+    console.print("\n[bold]Export Metrics[/bold]")
+    console.print(f"  Runs exported     : {payload.get('run_count', 0)}")
+    console.print(f"  Output            : {payload.get('export_path', '')}")
+
+
+@wiki_app.command("compare-runs")
+def wiki_compare_runs(
+    workflow_type: str = typer.Option("", "--workflow", help="Optional workflow filter"),
+    limit: int = typer.Option(10, "--limit", help="Maximum number of runs to compare"),
+):
+    """Compare recent runs on cost, retrieval effort, and wiki outcome metrics."""
+    from wikify.wiki.runtime import compare_runs
+
+    payload = compare_runs(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
+    console.print("\n[bold]Compare Runs[/bold]")
+    console.print(f"  Runs compared     : {payload.get('run_count', 0)}")
+    for row in payload.get("runs", [])[:5]:
+        console.print(
+            "  "
+            f"{row.get('run_id', '')}: "
+            f"tokens={row.get('total_tokens', 0)} "
+            f"pages={row.get('pages_touched', 0)} "
+            f"orphans={row.get('orphan_count', 0)} "
+            f"evidence={row.get('evidence_density', 0.0):.2f}"
         )
-
-        now = datetime.now(timezone.utc)
-        engine = get_engine()
-        with Session(engine) as session:
-            row = WikiArticle(
-                id=f"query_{slug}",
-                title=question,
-                status="full",
-                file_path=str(out_path.relative_to(wiki_dir.parent)),
-                source_ids=json.dumps([]),
-                topic_keys=json.dumps([slug]),
-                created_at=now,
-                updated_at=now,
-                model=model or "",
-                needs_update=False,
-            )
-            session.merge(row)
-            session.commit()
-
-        console.print(f"[green]Answer promoted to: {out_path}[/green]")
 
 
 @wiki_app.command("epoch")
@@ -1608,26 +1680,30 @@ def wiki_epoch(
 
     if until_convergence:
         max_epochs = n if n > 1 else 10
-        summary = run_until_convergence(domain=domain, max_epochs=max_epochs, model=model)
-        epochs_run = summary.get("epochs_run", "?")
+        logs = run_until_convergence(domain=domain, max_epochs=max_epochs, model=model)
+        epochs_run = len(logs)
+        final_log = logs[-1] if logs else None
         console.print(f"\n[bold green]Converged after {epochs_run} epoch(s)[/bold green]")
-        console.print(f"  Final loss : {summary.get('loss', 'n/a')}")
-        console.print(f"  Concepts   : {summary.get('total_concepts', 'n/a')}")
-        console.print(f"  Articles   : {summary.get('total_articles', 'n/a')}")
+        console.print(
+            f"  Final loss : {f'{final_log.loss_score:.4f}' if final_log is not None else 'n/a'}"
+        )
+        if final_log is not None:
+            console.print(f"  Articles   : {final_log.articles_written}")
+            console.print(f"  Upgrades   : {final_log.stubs_upgraded}")
         return
 
     for i in range(n):
         console.print(f"\n[bold]Epoch {i + 1}/{n}[/bold]")
         result = run_epoch(triggered_by="user", domain=domain, model=model)
-        console.print(f"  Concepts discovered : {result.get('concepts_discovered', 0)}")
-        console.print(f"  Articles written    : {result.get('articles_written', 0)}")
-        console.print(f"  Stubs upgraded      : {result.get('stubs_upgraded', 0)}")
-        loss = result.get("loss")
-        loss_delta = result.get("loss_delta")
+        console.print(f"  Concepts discovered : {result.concepts_discovered}")
+        console.print(f"  Articles written    : {result.articles_written}")
+        console.print(f"  Stubs upgraded      : {result.stubs_upgraded}")
+        loss = result.loss_score
+        loss_delta = result.loss_delta
         loss_str = f"{loss:.4f}" if loss is not None else "n/a"
         delta_str = f"{loss_delta:+.4f}" if loss_delta is not None else "n/a"
         console.print(f"  Loss (L)            : {loss_str}  (delta: {delta_str})")
-        converged = result.get("converged", False)
+        converged = result.converged
         converged_label = "[green]yes[/green]" if converged else "no"
         console.print(f"  Converged           : {converged_label}")
         if converged:
@@ -1673,6 +1749,126 @@ def wiki_html(
 
     if serve:
         serve_site(site_path, port=port)
+
+
+@wiki_app.command("migrate-figures")
+def wiki_migrate_figures(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be moved without moving"),
+):
+    """Reorganize figures from hash-based dirs to per-paper folders.
+
+    Moves figures from data/figures/{hash[:2]}/{hash[2:4]}/{hash}.{ext}
+    to data/figures/{paper_slug}/{figure_label}.{ext} and updates the DB.
+    """
+    import re
+    import shutil
+    import sqlite3
+
+    from wikify.config import settings
+    from wikify.extract.media import _make_figure_filename, _make_paper_slug
+
+    db_path = settings.db_path
+    figures_dir = settings.figures_dir
+
+    conn = sqlite3.connect(str(db_path))
+    c = conn.cursor()
+
+    # Get all figures with their paper source_path
+    c.execute("""
+        SELECT f.id, f.figure_number, f.format, f.image_path, p.source_path, p.title
+        FROM figure f JOIN paper p ON f.paper_id = p.id
+    """)
+    rows = c.fetchall()
+    console.print(f"Found [bold]{len(rows)}[/bold] figures to migrate")
+
+    moved = 0
+    skipped = 0
+    for fig_id, fig_number, fmt, old_path_str, source_path, title in rows:
+        ext = fmt or "png"
+        # Derive paper slug from source PDF path (or title as fallback)
+        if source_path:
+            paper_slug = _make_paper_slug(source_path)
+        elif title:
+            slug = re.sub(r"[^\w\s-]", "", title)
+            slug = re.sub(r"[\s]+", "_", slug).strip("_")
+            paper_slug = slug[:80]
+        else:
+            paper_slug = fig_id[:16]
+
+        fig_filename = _make_figure_filename(fig_number or f"img_{fig_id[:8]}", ext)
+        new_dir = figures_dir / paper_slug
+        new_path = new_dir / fig_filename
+
+        # Resolve old file location
+        old_path = Path(old_path_str) if old_path_str else None
+        if old_path and not old_path.is_absolute():
+            old_path = Path.cwd() / old_path
+        if old_path is None or not old_path.exists():
+            # Try content-addressed fallback
+            old_path = figures_dir / fig_id[:2] / fig_id[2:4] / f"{fig_id}.{ext}"
+
+        if not old_path.exists():
+            skipped += 1
+            continue
+
+        # Already in new location?
+        if old_path == new_path or str(new_path) in old_path_str:
+            skipped += 1
+            continue
+
+        if dry_run:
+            console.print(
+                f"  [dim]{old_path.name}[/dim] -> [bold]{paper_slug}/{fig_filename}[/bold]",
+                highlight=False,
+            )
+            moved += 1
+            continue
+
+        new_dir.mkdir(parents=True, exist_ok=True)
+
+        # Handle collisions
+        if new_path.exists():
+            import hashlib
+
+            existing_hash = hashlib.sha256(new_path.read_bytes()).hexdigest()
+            if existing_hash == fig_id:
+                # Same content, just update DB
+                pass
+            else:
+                stem = new_path.stem
+                new_path = new_dir / f"{stem}_{fig_id[:8]}.{ext}"
+
+        if not new_path.exists():
+            shutil.copy2(str(old_path), str(new_path))
+
+        # Copy sidecar if exists
+        meta_old = old_path.with_suffix(f".{ext}.meta.json")
+        if meta_old.exists():
+            meta_new = new_path.with_suffix(f".{ext}.meta.json")
+            if not meta_new.exists():
+                shutil.copy2(str(meta_old), str(meta_new))
+
+        # Update DB
+        c.execute(
+            "UPDATE figure SET image_path = ? WHERE id = ?",
+            (str(new_path), fig_id),
+        )
+        moved += 1
+
+    if not dry_run:
+        conn.commit()
+
+    conn.close()
+
+    action = "Would move" if dry_run else "Moved"
+    console.print(
+        f"[green]{action} {moved} figures[/green], skipped {skipped}"
+    )
+
+    if not dry_run and moved > 0:
+        console.print(
+            "[dim]Old hash-based directories can be removed manually after verifying.[/dim]"
+        )
 
 
 if __name__ == "__main__":

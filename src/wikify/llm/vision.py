@@ -16,8 +16,8 @@ from wikify.llm.client import complete
 
 logger = logging.getLogger(__name__)
 
-# Default to a fast vision-capable model for cost efficiency
-_DEFAULT_VISION_MODEL = "claude-haiku-3-20240307"
+# Default to a configurable vision model, falling back to the fast text tier.
+_DEFAULT_VISION_MODEL = settings.vision_model or settings.llm_fast_model
 
 
 def describe_figure(

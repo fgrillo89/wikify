@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import networkx as nx
 
 import wikify.wiki.concept_graph as mod
-from wikify.store.models import ConceptRecord, ConceptRelation, SourceCoverage
+from wikify.store.models import ConceptOccurrence, ConceptRecord, ConceptRelation, SourceCoverage
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +27,10 @@ def _make_concept(id: str, name: str, concept_type: str = "", domain: str = "ald
 
 def _make_coverage(source_id: str, article_slug: str, domain: str = "ald") -> SourceCoverage:
     return SourceCoverage(source_id=source_id, article_slug=article_slug, domain=domain)
+
+
+def _make_occurrence(paper_id: str, concept_id: str, chunk_id: str = "") -> ConceptOccurrence:
+    return ConceptOccurrence(paper_id=paper_id, concept_id=concept_id, chunk_id=chunk_id)
 
 
 def _make_session_mock(exec_results: list) -> MagicMock:
@@ -82,29 +86,27 @@ class TestBuildConceptGraph:
         assert graph.number_of_edges() == 0
 
     def test_build_concept_graph_with_cooccurrence(self):
-        """3 concepts + SourceCoverage co-occurrences -> correct nodes and edges."""
+        """3 concepts + ConceptOccurrence co-occurrences -> correct nodes and edges."""
         concepts = [
             _make_concept("ald", "ALD"),
             _make_concept("hfo2", "HfO2"),
             _make_concept("memristor", "Memristor"),
         ]
-        coverage_rows = [
-            # paper1 covers ald and hfo2
-            _make_coverage("paper1", "ald"),
-            _make_coverage("paper1", "hfo2"),
-            # paper2 covers ald and memristor
-            _make_coverage("paper2", "ald"),
-            _make_coverage("paper2", "memristor"),
+        occurrence_rows = [
+            _make_occurrence("paper1", "ald", "c1"),
+            _make_occurrence("paper1", "hfo2", "c2"),
+            _make_occurrence("paper2", "ald", "c3"),
+            _make_occurrence("paper2", "memristor", "c4"),
         ]
 
-        # build_concept_graph opens two sessions: first for concepts, second for coverage
-        # _make_session_mock iterates exec_results once per .exec() call; each session
-        # makes exactly one exec() call, so each list has one entry.
+        # build_concept_graph opens three sessions: first for concepts,
+        # then operational evidence, then relation evidence.
         session1 = _make_session_mock([concepts])
-        session2 = _make_session_mock([coverage_rows])
+        session2 = _make_session_mock([occurrence_rows])
+        session3 = _make_session_mock([[]])
 
         call_count = 0
-        sessions = [session1, session2]
+        sessions = [session1, session2, session3]
 
         def get_session_factory():
             nonlocal call_count
@@ -141,7 +143,7 @@ class TestBuildConceptGraph:
 
         sessions = [
             _make_session_mock([concepts]),
-            _make_session_mock([coverage_rows]),
+            _make_session_mock([[], coverage_rows]),
         ]
         call_count = 0
 
@@ -194,24 +196,20 @@ class TestScoreImportance:
         }
 
         node_ids = ["ald", "hfo2", "tma"]
-        call_count = 0
 
         def get_session_factory():
             session = MagicMock()
             session.__enter__ = lambda s: session
             session.__exit__ = MagicMock(return_value=False)
 
-            nonlocal call_count
-            current = call_count
-            call_count += 1
-
             def exec_side(stmt):
                 result = MagicMock()
-                # The session is used in a loop over node_ids
-                # We derive which concept from the call order within the session
                 idx = session.exec.call_count - 1
-                cid = node_ids[idx] if idx < len(node_ids) else "ald"
-                result.all.return_value = coverage_map.get(cid, [])
+                if idx == 0:
+                    result.all.return_value = []  # no ConceptEvidence rows -> coverage fallback
+                else:
+                    cid = node_ids[idx - 1] if idx - 1 < len(node_ids) else "ald"
+                    result.all.return_value = coverage_map.get(cid, [])
                 return result
 
             session.exec.side_effect = exec_side
@@ -233,9 +231,11 @@ class TestScoreImportance:
         session = MagicMock()
         session.__enter__ = lambda s: session
         session.__exit__ = MagicMock(return_value=False)
-        exec_result = MagicMock()
-        exec_result.all.return_value = [_make_coverage("p1", "ald")]
-        session.exec.return_value = exec_result
+        exec_result_1 = MagicMock()
+        exec_result_1.all.return_value = []
+        exec_result_2 = MagicMock()
+        exec_result_2.all.return_value = [_make_coverage("p1", "ald")]
+        session.exec.side_effect = [exec_result_1, exec_result_2]
 
         with patch("wikify.wiki.concept_graph.get_session", return_value=session):
             scores = mod.score_importance(graph)

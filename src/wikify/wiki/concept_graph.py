@@ -2,7 +2,7 @@
 
 Implements Pass 2 of the Wikipedia/epoch pipeline:
 
-    build_concept_graph  -- Load ConceptRecords + SourceCoverage from DB,
+    build_concept_graph  -- Load ConceptRecords + ConceptOccurrence from DB,
                             build a weighted directed graph of co-occurrences.
     score_importance     -- PageRank + degree centrality + source diversity,
                             normalised to [0, 1].
@@ -24,7 +24,14 @@ import numpy as np
 from sqlmodel import select
 
 from wikify.store.db import get_session
-from wikify.store.models import ConceptRecord, ConceptRelation, SourceCoverage
+from wikify.store.models import (
+    ConceptEvidence,
+    ConceptOccurrence,
+    ConceptRecord,
+    ConceptRelation,
+    RelationEvidence,
+    SourceCoverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +44,10 @@ logger = logging.getLogger(__name__)
 def build_concept_graph(domain: str, epoch: int) -> nx.DiGraph:
     """Build a co-occurrence graph for all ConceptRecords in a domain.
 
-    Nodes are concept slugs (ConceptRecord.id).  An edge (A, B) exists when
-    concepts A and B were both extracted from the same source document (as
-    recorded in SourceCoverage) or appear together in chunks of the same paper.
-    Edge weight is the number of shared sources.
+    Nodes are concept slugs (ConceptRecord.id). An edge (A, B) exists when
+    concepts A and B were both observed in the same source via
+    ConceptOccurrence (preferred), ConceptEvidence (fallback), or legacy
+    SourceCoverage rows. RelationEvidence adds extra weight to direct edges.
 
     Node attributes stored:
         name          -- ConceptRecord.name
@@ -87,16 +94,31 @@ def build_concept_graph(domain: str, epoch: int) -> nx.DiGraph:
     source_to_concepts: dict[str, set[str]] = defaultdict(set)
 
     with get_session() as session:
-        if domain:
-            rows = list(
+        occurrence_rows = list(session.exec(select(ConceptOccurrence)).all())
+        if occurrence_rows:
+            for row in occurrence_rows:
+                if row.concept_id in concept_ids:
+                    source_to_concepts[row.paper_id].add(row.concept_id)
+        else:
+            evidence_rows = list(session.exec(select(ConceptEvidence)).all())
+            if evidence_rows:
+                for row in evidence_rows:
+                    concept_id = getattr(row, "concept_id", "")
+                    paper_id = getattr(row, "paper_id", "")
+                    if concept_id in concept_ids and paper_id:
+                        source_to_concepts[paper_id].add(concept_id)
+        if not source_to_concepts and domain:
+            coverage_rows = list(
                 session.exec(select(SourceCoverage).where(SourceCoverage.domain == domain)).all()
             )
-        else:
-            rows = list(session.exec(select(SourceCoverage)).all())
-
-    for row in rows:
-        if row.article_slug in concept_ids:
-            source_to_concepts[row.source_id].add(row.article_slug)
+            for row in coverage_rows:
+                if row.article_slug in concept_ids:
+                    source_to_concepts[row.source_id].add(row.article_slug)
+        elif not source_to_concepts:
+            coverage_rows = list(session.exec(select(SourceCoverage)).all())
+            for row in coverage_rows:
+                if row.article_slug in concept_ids:
+                    source_to_concepts[row.source_id].add(row.article_slug)
 
     # co-occurrence weight: number of shared sources
     cooccurrence: dict[tuple[str, str], int] = defaultdict(int)
@@ -106,11 +128,25 @@ def build_concept_graph(domain: str, epoch: int) -> nx.DiGraph:
             for b in concepts_list[i + 1 :]:
                 cooccurrence[(a, b)] += 1
 
+    relation_weights: dict[tuple[str, str], float] = defaultdict(float)
+    with get_session() as session:
+        relation_rows = list(session.exec(select(RelationEvidence)).all())
+    for row in relation_rows:
+        source_concept = getattr(row, "source_concept", "")
+        target_concept = getattr(row, "target_concept", "")
+        weight = getattr(row, "weight", 1.0)
+        if source_concept in concept_ids and target_concept in concept_ids:
+            relation_weights[(source_concept, target_concept)] += max(weight, 1.0)
+
     # Add edges in both directions with equal weight
     for (a, b), weight in cooccurrence.items():
         if a in concept_ids and b in concept_ids:
-            graph.add_edge(a, b, weight=float(weight))
-            graph.add_edge(b, a, weight=float(weight))
+            graph.add_edge(a, b, weight=float(weight) + relation_weights.get((a, b), 0.0))
+            graph.add_edge(b, a, weight=float(weight) + relation_weights.get((b, a), 0.0))
+
+    for (a, b), weight in relation_weights.items():
+        if a in concept_ids and b in concept_ids and not graph.has_edge(a, b):
+            graph.add_edge(a, b, weight=weight)
 
     logger.info(
         "build_concept_graph: domain=%r epoch=%d nodes=%d edges=%d",
@@ -134,7 +170,8 @@ def score_importance(graph: nx.DiGraph) -> dict[str, float]:
         raw = 0.5 * pagerank + 0.3 * degree_centrality + 0.2 * source_diversity
 
     where source_diversity is the number of unique source_ids that mention this
-    concept (from SourceCoverage), normalised by the maximum across all concepts.
+    concept (from ConceptOccurrence when available), normalised by the maximum
+    across all concepts.
 
     Final scores are normalised to [0, 1] by dividing by the maximum raw score.
 
@@ -164,15 +201,35 @@ def score_importance(graph: nx.DiGraph) -> dict[str, float]:
     # ── Source diversity: unique source_ids per concept ──────────────────────
     source_counts: dict[str, int] = defaultdict(int)
     with get_session() as session:
-        for cid in node_ids:
-            n_sources = len(
-                list(
-                    session.exec(
-                        select(SourceCoverage).where(SourceCoverage.article_slug == cid)
-                    ).all()
-                )
-            )
-            source_counts[cid] = n_sources
+        occurrence_rows = list(session.exec(select(ConceptOccurrence)).all())
+        if occurrence_rows:
+            occurrence_map: dict[str, set[str]] = defaultdict(set)
+            for row in occurrence_rows:
+                if row.concept_id in node_ids:
+                    occurrence_map[row.concept_id].add(row.paper_id)
+            for cid in node_ids:
+                source_counts[cid] = len(occurrence_map.get(cid, set()))
+        else:
+            evidence_rows = list(session.exec(select(ConceptEvidence)).all())
+            if evidence_rows:
+                evidence_map: dict[str, set[str]] = defaultdict(set)
+                for row in evidence_rows:
+                    concept_id = getattr(row, "concept_id", "")
+                    paper_id = getattr(row, "paper_id", "")
+                    if concept_id in node_ids and paper_id:
+                        evidence_map[concept_id].add(paper_id)
+                for cid in node_ids:
+                    source_counts[cid] = len(evidence_map.get(cid, set()))
+            if not source_counts:
+                for cid in node_ids:
+                    n_sources = len(
+                        list(
+                            session.exec(
+                                select(SourceCoverage).where(SourceCoverage.article_slug == cid)
+                            ).all()
+                        )
+                    )
+                    source_counts[cid] = n_sources
 
     max_sources = max(source_counts.values(), default=1) or 1
     source_diversity: dict[str, float] = {cid: source_counts[cid] / max_sources for cid in node_ids}

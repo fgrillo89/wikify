@@ -48,15 +48,44 @@ _CAPTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def _make_paper_slug(pdf_path: str) -> str:
+    """Derive a short, filesystem-safe folder name from a PDF filename.
+
+    Example: "Kim 2021 - 4K-memristor array.pdf" -> "Kim_2021_4K-memristor_array"
+    """
+    stem = Path(pdf_path).stem
+    # Replace spaces and problematic chars, keep hyphens and alphanumerics
+    slug = re.sub(r"[^\w\s-]", "", stem)
+    slug = re.sub(r"[\s]+", "_", slug)
+    slug = slug.strip("_")
+    # Truncate to keep paths reasonable (max 80 chars)
+    return slug[:80]
+
+
+def _make_figure_filename(figure_number: str, ext: str) -> str:
+    """Build a human-readable filename from a figure label.
+
+    Examples:
+        "Fig. 1"  -> "Fig_1.png"
+        "Table 2" -> "Table_2.png"
+        "p3_img0" -> "p3_img0.png"
+    """
+    safe = re.sub(r"[^\w.-]", "_", figure_number)
+    safe = re.sub(r"_+", "_", safe).strip("_")
+    return f"{safe}.{ext}"
+
+
 def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
     """Extract all figures and tables from a PDF.
 
     Strategy:
-    1. Use fitz page.get_images() for binary image extraction with
-       content-addressed storage.
-    2. Use fitz page.find_tables() for structured table extraction.
-    3. Match captions from markdown text and page text blocks using
+    1. Use fitz page.get_images() for binary image extraction, stored
+       per-paper in human-readable directories.
+    2. Match captions from markdown text and page text blocks using
        page proximity.
+
+    Files are stored as: figures_dir / {paper_slug} / {figure_label}.{ext}
+    Content hashes remain the Figure.id for deduplication.
 
     Args:
         pdf_path: Path to the PDF file.
@@ -69,6 +98,7 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
     doc = fitz.open(pdf_path)
     figures: list[Figure] = []
     seen_hashes: set[str] = set()
+    paper_slug = _make_paper_slug(pdf_path)
 
     try:
         # Pre-extract all captions from markdown text, keyed by page estimate
@@ -86,7 +116,8 @@ def extract_media(pdf_path: str, paper_id: str, md_text: str) -> list[Figure]:
             # Extract images (tables are already in the markdown via pymupdf4llm,
             # which produces higher-quality table output than find_tables())
             image_figures = _extract_images_from_page(
-                doc, page, page_num, paper_id, seen_hashes, page_captions, md_captions
+                doc, page, page_num, paper_id, paper_slug,
+                seen_hashes, page_captions, md_captions
             )
             figures.extend(image_figures)
     finally:
@@ -100,6 +131,7 @@ def _extract_images_from_page(
     page: fitz.Page,
     page_num: int,
     paper_id: str,
+    paper_slug: str,
     seen_hashes: set[str],
     page_captions: list[_CaptionMatch],
     md_captions: list[_CaptionMatch],
@@ -116,7 +148,7 @@ def _extract_images_from_page(
             len(image_list),
         )
         return _extract_scanned_page_figures(
-            doc, page, page_num, paper_id, seen_hashes, page_captions, md_captions
+            doc, page, page_num, paper_id, paper_slug, seen_hashes, page_captions, md_captions
         )
 
     # Collect all valid images first so we can resolve caption conflicts
@@ -144,9 +176,6 @@ def _extract_images_from_page(
         if img_hash in seen_hashes:
             continue
         seen_hashes.add(img_hash)
-
-        image_path = _store_media(image_bytes, img_hash, ext)
-        _write_meta_sidecar(image_path, paper_id, page_num, width, height, ext)
 
         bbox = _find_image_bbox(page, xref)
         extracted.append((img_index, img_hash, image_bytes, width, height, ext, bbox))
@@ -204,14 +233,19 @@ def _extract_images_from_page(
         label = caption_match.label if caption_match else None
         media_type = caption_match.media_type if caption_match else "figure"
 
-        img_path = settings.figures_dir / img_hash[:2] / img_hash[2:4] / f"{img_hash}.{ext}"
+        fig_number = label or f"p{page_num + 1}_img{img_index}"
+        fig_filename = _make_figure_filename(fig_number, ext)
+        img_path = _store_media(
+            extracted[idx][2], img_hash, ext, paper_slug, fig_filename
+        )
+        _write_meta_sidecar(img_path, paper_id, page_num, width, height, ext)
 
         figures.append(
             Figure(
                 id=img_hash,
                 paper_id=paper_id,
                 caption=caption,
-                figure_number=label or f"p{page_num + 1}_img{img_index}",
+                figure_number=fig_number,
                 image_path=str(img_path),
                 width_px=width,
                 height_px=height,
@@ -237,6 +271,7 @@ def _extract_scanned_page_figures(
     page: fitz.Page,
     page_num: int,
     paper_id: str,
+    paper_slug: str,
     seen_hashes: set[str],
     page_captions: list[_CaptionMatch],
     md_captions: list[_CaptionMatch],
@@ -269,7 +304,8 @@ def _extract_scanned_page_figures(
             continue
         seen_hashes.add(img_hash)
 
-        image_path = _store_media(page_bytes, img_hash, "png")
+        fig_filename = _make_figure_filename(cap.label, "png")
+        image_path = _store_media(page_bytes, img_hash, "png", paper_slug, fig_filename)
         width = pixmap.width
         height = pixmap.height
         _write_meta_sidecar(image_path, paper_id, page_num, width, height, "png")
@@ -447,14 +483,37 @@ def _match_caption(
 # ── Storage helpers ────────────────────────────────────────────────────────────
 
 
-def _store_media(image_bytes: bytes, content_hash: str, ext: str) -> Path:
-    """Store media bytes in content-addressed directory.
+def _store_media(
+    image_bytes: bytes,
+    content_hash: str,
+    ext: str,
+    paper_slug: str = "",
+    figure_filename: str = "",
+) -> Path:
+    """Store media bytes in a per-paper directory with a readable filename.
 
-    Path: figures_dir / hash[:2] / hash[2:4] / {hash}.{ext}
+    Path: figures_dir / {paper_slug} / {figure_filename}
+    Falls back to content-addressed layout if no slug/filename provided.
+    Deduplication: if file already exists with same content hash, skip write.
     """
-    subdir = settings.figures_dir / content_hash[:2] / content_hash[2:4]
-    subdir.mkdir(parents=True, exist_ok=True)
-    filepath = subdir / f"{content_hash}.{ext}"
+    if paper_slug and figure_filename:
+        subdir = settings.figures_dir / paper_slug
+        subdir.mkdir(parents=True, exist_ok=True)
+        filepath = subdir / figure_filename
+        # Handle filename collisions (e.g. two images both labeled "p3_img0")
+        if filepath.exists():
+            existing_hash = hashlib.sha256(filepath.read_bytes()).hexdigest()
+            if existing_hash == content_hash:
+                return filepath
+            # Collision with different content: append short hash
+            stem = filepath.stem
+            filepath = subdir / f"{stem}_{content_hash[:8]}.{ext}"
+    else:
+        # Legacy fallback: content-addressed
+        subdir = settings.figures_dir / content_hash[:2] / content_hash[2:4]
+        subdir.mkdir(parents=True, exist_ok=True)
+        filepath = subdir / f"{content_hash}.{ext}"
+
     if not filepath.exists():
         filepath.write_bytes(image_bytes)
     return filepath

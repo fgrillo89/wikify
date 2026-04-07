@@ -275,7 +275,7 @@ and useful for almost every query. Returning it as a resource means Claude Code 
 knows the corpus shape without a tool call.
 
 ```python
-@mcp.resource("wikify://corpus")
+@mcp.resource("scholarforge://corpus")
 def corpus_resource() -> str:
     """Auto-injected corpus overview for every session."""
     # Returns the same output as get_corpus_summary()
@@ -290,7 +290,7 @@ def corpus_resource() -> str:
 that returns a few hundred tokens of corpus metadata costs essentially nothing and
 eliminates the "summarize my corpus" tool call sequence entirely.
 
-**Claude Code experience:** When the `wikify://corpus` resource is defined, Claude
+**Claude Code experience:** When the `scholarforge://corpus` resource is defined, Claude
 Code auto-injects it into every conversation. The researcher opens Claude Code, and
 without calling any tool, Claude already knows "you have 63 papers on memristors and
 ALD, the top hubs are Kim 2021 and Jo 2010." This is the `instructions` field in
@@ -362,7 +362,7 @@ def get_corpus_summary() -> str:
 
 **Implementation:** Calls `compute_metrics()` once, queries `PaperTopic` for topic
 counts, formats as markdown. Should take <1s for a 100-paper corpus. This can be the
-same function backing both the `get_corpus_summary` tool and the `wikify://corpus`
+same function backing both the `get_corpus_summary` tool and the `scholarforge://corpus`
 resource — the resource just calls it at session start.
 
 ---
@@ -478,8 +478,8 @@ Ordered by researcher value-per-effort:
 
 ## Where the code lives
 
-- `src/wikify/mcp_server.py` — FastMCP server (current)
-- `src/wikify/store/models.py` — add `PaperTopic` table here
-- `src/wikify/vault/linker.py` — topics source of truth
-- `src/wikify/retrieve/context.py` — `as_text()` formatter
-- `src/wikify/generate/planner.py` + `writer.py` — generation pipeline to wrap
+- `src/scholarforge/mcp_server.py` — FastMCP server (current)
+- `src/scholarforge/store/models.py` — add `PaperTopic` table here
+- `src/scholarforge/vault/linker.py` — topics source of truth
+- `src/scholarforge/retrieve/context.py` — `as_text()` formatter
+- `src/scholarforge/generate/planner.py` + `writer.py` — generation pipeline to wrap

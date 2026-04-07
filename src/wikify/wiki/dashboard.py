@@ -18,7 +18,9 @@ from wikify.store.models import (
     ConceptRecord,
     EpochLog,
     ExtractionGap,
-    SourceCoverage,
+    PageDeltaTelemetry,
+    PageProvenance,
+    WikiPage,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,15 +80,39 @@ def api_concepts() -> list[dict]:
 
 @app.get("/api/coverage")
 def api_coverage() -> list[dict]:
-    """Return SourceCoverage aggregated as source -> domain -> count matrix."""
+    """Return provenance/frontmatter coverage aggregated as source -> domain -> count matrix."""
     with get_session() as session:
-        rows = session.exec(select(SourceCoverage)).all()
+        provenance_rows = session.exec(select(PageProvenance)).all()
+        page_rows = session.exec(select(WikiPage)).all()
 
-    # Aggregate: {source_id: {domain: count}}
+    page_domains: dict[str, list[str]] = {}
+    page_sources: dict[str, list[str]] = {}
+    for row in page_rows:
+        try:
+            import json
+
+            domains = json.loads(row.domains or "[]")
+            source_ids = json.loads(row.source_ids or "[]")
+        except Exception:
+            domains = []
+            source_ids = []
+        page_domains[row.slug] = [str(domain) for domain in domains if str(domain).strip()]
+        page_sources[row.slug] = [
+            str(source_id) for source_id in source_ids if str(source_id).strip()
+        ]
+
     matrix: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for row in rows:
-        domain = row.domain or "unspecified"
-        matrix[row.source_id][domain] += 1
+    for row in provenance_rows:
+        domains = page_domains.get(row.page_slug) or ["unspecified"]
+        for domain in domains:
+            matrix[row.paper_id][domain] += 1
+
+    if not matrix:
+        for slug, source_ids in page_sources.items():
+            domains = page_domains.get(slug) or ["unspecified"]
+            for source_id in source_ids:
+                for domain in domains:
+                    matrix[source_id][domain] += 1
 
     return [
         {"source_id": source_id, "domains": dict(domain_counts)}
@@ -96,37 +122,51 @@ def api_coverage() -> list[dict]:
 
 @app.get("/api/gradient")
 def api_gradient() -> list[dict]:
-    """Return top-20 concepts by information gradient proxy.
-
-    Gradient = coverage_count / max_coverage_count across all concepts.
-    """
+    """Return top-20 pages by evidence/change gradient proxy."""
     with get_session() as session:
-        # Count SourceCoverage rows per article_slug
-        coverage_counts = session.exec(
-            select(SourceCoverage.article_slug, func.count(SourceCoverage.id).label("cnt"))
-            .group_by(SourceCoverage.article_slug)
-            .order_by(func.count(SourceCoverage.id).desc())
-            .limit(20)
-        ).all()
+        provenance_counts = {
+            slug: cnt
+            for slug, cnt in session.exec(
+                select(PageProvenance.page_slug, func.count(PageProvenance.id).label("cnt"))
+                .group_by(PageProvenance.page_slug)
+            ).all()
+        }
+        delta_counts = {
+            slug: cnt
+            for slug, cnt in session.exec(
+                select(PageDeltaTelemetry.page_slug, func.count(PageDeltaTelemetry.id).label("cnt"))
+                .group_by(PageDeltaTelemetry.page_slug)
+            ).all()
+        }
+        pages = session.exec(select(WikiPage)).all()
 
-        if not coverage_counts:
-            return []
+    if not pages:
+        return []
 
-        max_count = coverage_counts[0][1] if coverage_counts[0][1] > 0 else 1
+    scored = []
+    for page in pages:
+        coverage_count = int(provenance_counts.get(page.slug, 0))
+        delta_count = int(delta_counts.get(page.slug, 0))
+        score = float(coverage_count + delta_count)
+        if score <= 0:
+            continue
+        scored.append((page.slug, page.title, coverage_count, delta_count, score))
 
-        result = []
-        for slug, cnt in coverage_counts:
-            concept = session.get(ConceptRecord, slug)
-            name = concept.name if concept else slug
-            result.append(
-                {
-                    "concept_id": slug,
-                    "name": name,
-                    "gradient": round(cnt / max_count, 4),
-                    "coverage_count": cnt,
-                }
-            )
-        return result
+    if not scored:
+        return []
+
+    scored.sort(key=lambda item: item[4], reverse=True)
+    max_score = scored[0][4] if scored[0][4] > 0 else 1.0
+    return [
+        {
+            "concept_id": slug,
+            "name": title,
+            "gradient": round(score / max_score, 4),
+            "coverage_count": coverage_count,
+            "delta_count": delta_count,
+        }
+        for slug, title, coverage_count, delta_count, score in scored[:20]
+    ]
 
 
 @app.get("/api/gaps")

@@ -1,7 +1,8 @@
 """ScholarForge MCP Server — exposes the knowledge base as tools for LLMs.
 
-Implements the Model Context Protocol (MCP) using FastMCP so that Claude Code
-or other MCP-compatible clients can query the literature corpus directly.
+Implements the Model Context Protocol (MCP) using FastMCP so that Codex,
+Claude Code, or other MCP-compatible clients can query the literature corpus
+directly.
 
 Launch via:
     wikify mcp [--library <name>]
@@ -16,41 +17,23 @@ from mcp.server.fastmcp import FastMCP
 
 from wikify.agent.tools import (
     _build_corpus_summary,
-)
-from wikify.agent.tools import (
     check_wiki_health as _check_wiki_health,
-)
-from wikify.agent.tools import (
+    compare_wiki_runs as _compare_wiki_runs,
     deep_read as _deep_read,
-)
-from wikify.agent.tools import (
+    export_wiki_metrics as _export_wiki_metrics,
     get_corpus_summary as _get_corpus_summary,
-)
-from wikify.agent.tools import (
     get_graph_metrics as _get_graph_metrics,
-)
-from wikify.agent.tools import (
     get_paper as _get_paper,
-)
-from wikify.agent.tools import (
     get_sections as _get_sections,
-)
-from wikify.agent.tools import (
     ingest_paper as _ingest_paper,
-)
-from wikify.agent.tools import (
     list_papers as _list_papers,
-)
-from wikify.agent.tools import (
     list_topics as _list_topics,
-)
-from wikify.agent.tools import (
+    query_wiki_runtime as _query_wiki_runtime,
+    reconcile_wiki_state as _reconcile_wiki_state,
+    run_wiki_campaign as _run_wiki_campaign,
     run_wiki_gc as _run_wiki_gc,
-)
-from wikify.agent.tools import (
+    run_wiki_maintain as _run_wiki_maintain,
     search_papers as _search_papers,
-)
-from wikify.agent.tools import (
     search_wiki as _search_wiki,
 )
 
@@ -62,7 +45,11 @@ mcp = FastMCP(
         "get_graph_metrics for network analysis, check_wiki_health for integrity, "
         "list_papers/list_topics for browsing, deep_read for full text retrieval, "
         "get_corpus_summary for a high-level corpus overview, "
-        "run_wiki_gc for database cleanup, "
+        "run_wiki_gc for database cleanup, run_wiki_maintain and "
+        "reconcile_wiki_state for operational upkeep, export_wiki_metrics and "
+        "compare_wiki_runs for telemetry and run analysis, query_wiki_runtime "
+        "for wiki-first question answering, run_wiki_campaign for thesis-driven "
+        "wiki investigations, "
         "and ingest_paper to add new documents."
     ),
 )
@@ -291,6 +278,66 @@ def run_wiki_gc() -> str:
     and cleans ChromaDB staging. Safe to run at any time.
     """
     return _run_wiki_gc()
+
+
+@mcp.tool()
+def reconcile_wiki_state() -> str:
+    """Rebuild operational wiki page state from visible markdown files."""
+    return _reconcile_wiki_state()
+
+
+@mcp.tool()
+def run_wiki_maintain() -> str:
+    """Run the maintenance sweep over the visible wiki and operational layer."""
+    return _run_wiki_maintain()
+
+
+@mcp.tool()
+def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
+    """Export aggregated run telemetry and wiki metrics."""
+    return _export_wiki_metrics(workflow_type=workflow_type, limit=limit)
+
+
+@mcp.tool()
+def compare_wiki_runs(workflow_type: str = "", limit: int = 10) -> str:
+    """Compare recent wiki runs on cost, retrieval effort, and outcome metrics."""
+    return _compare_wiki_runs(workflow_type=workflow_type, limit=limit)
+
+
+@mcp.tool()
+def query_wiki_runtime(
+    question: str,
+    domain: str = "",
+    model: str = "",
+    promote: bool = False,
+) -> str:
+    """Answer a question from the visible wiki via the shared runtime."""
+    return _query_wiki_runtime(
+        question=question,
+        domain=domain,
+        model=model or None,
+        promote=promote,
+    )
+
+
+@mcp.tool()
+def run_wiki_campaign(
+    thesis: str,
+    name: str = "",
+    domain: str = "",
+    epochs: int = 1,
+    model: str = "",
+    promote: bool = True,
+) -> str:
+    """Run a thesis-driven campaign over the visible wiki and operational state."""
+    return _run_wiki_campaign(
+        thesis=thesis,
+        name=name,
+        domain=domain,
+        epochs=epochs,
+        model=model or None,
+        promote=promote,
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

@@ -202,6 +202,7 @@ def write_concept_article(
     neighbors: list[ConceptRecord],
     domain: str,
     model: str | None = None,
+    extractions: list[SourceExtraction] | None = None,
 ) -> str:
     """Write a Wikipedia-format article body for a ConceptRecord.
 
@@ -228,7 +229,7 @@ def write_concept_article(
     persona = get_or_create_persona(domain, model=reduce_model)
 
     # Step 2: map phase (always haiku)
-    extractions: list[SourceExtraction] = map_chunks_to_topic(
+    extractions = extractions or map_chunks_to_topic(
         topic_query=concept.name,
         scope=concept.definition or concept.name,
         domain=domain,

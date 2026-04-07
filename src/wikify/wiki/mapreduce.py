@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass, field
 
 from wikify.agent.tools import get_graph_metrics, read_paper_digest, search_papers
+from wikify.config import settings
 from wikify.llm.client import complete
 from wikify.store.db import get_session
 from wikify.store.models import Paper, SourceCoverage
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 MAP_SIMILARITY_THRESHOLD = 0.35  # cosine distance threshold (ChromaDB uses cosine distance)
 MAP_MAX_SOURCES = 60  # max sources fetched from search (embedding pre-rank pool)
 MAP_HAIKU_BUDGET = 15  # max haiku map calls per concept (after pre-ranking)
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
+HAIKU_MODEL = settings.llm_fast_model
 
 # Zone labels by domain register
 ZONE_LABELS: dict[str, tuple[str, str, str]] = {
