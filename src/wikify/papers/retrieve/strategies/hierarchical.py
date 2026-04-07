@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.core.retrieve.strategies.base import RetrievalStrategy
+from wikify.papers.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
     from wikify.core.graph.metrics import GraphMetrics
@@ -37,7 +37,8 @@ class HierarchicalStrategy(RetrievalStrategy):
         plan: PaperPlan | None = None,
     ):
         from wikify.core.graph.metrics import compute_metrics
-        from wikify.core.retrieve.context import RetrievedContext, SectionContext
+        from wikify.core.retrieve.context import RetrievedContext
+        from wikify.papers.retrieve.paper_context import SectionContext
         from wikify.core.store.db import get_session
         from wikify.core.store.embeddings import (
             _get_collection,
@@ -50,7 +51,7 @@ class HierarchicalStrategy(RetrievalStrategy):
         metrics = graph_metrics or compute_metrics()
 
         if not plan:
-            from wikify.core.retrieve.strategies.flat import FlatStrategy
+            from wikify.papers.retrieve.strategies.flat import FlatStrategy
 
             return FlatStrategy(self.config).retrieve(graph_metrics=metrics)
 

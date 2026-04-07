@@ -136,35 +136,53 @@ class BM25Index:
         return scores[:n_results]
 
 
-# Module-level index instance (lazily built)
-_chunk_index: BM25Index | None = None
+class _ChunkIndexCache:
+    """Singleton-style cache for the BM25 chunk index.
+
+    Replaces a module-level mutable global with a class instance whose
+    state lives on the instance, not on the module. The instance itself
+    is created exactly once at import time and exposes ``get`` and
+    ``invalidate``.
+    """
+
+    def __init__(self) -> None:
+        self._index: BM25Index | None = None
+
+    def get(self) -> BM25Index:
+        if self._index is not None:
+            return self._index
+
+        index = BM25Index()
+        with get_session() as session:
+            chunks: list[Chunk] = list(
+                session.exec(select(Chunk).where(Chunk.token_count > 10)).all()
+            )
+        if chunks:
+            index.build(
+                doc_ids=[c.id for c in chunks],
+                doc_texts=[c.content for c in chunks],
+            )
+        self._index = index
+        return index
+
+    def invalidate(self) -> None:
+        self._index = None
+        logger.info("BM25 chunk index invalidated")
+
+
+_chunk_index_cache = _ChunkIndexCache()
 
 
 def get_chunk_bm25_index() -> BM25Index:
     """Return the BM25 index over corpus chunks, building if needed."""
-    global _chunk_index  # noqa: PLW0603
-    if _chunk_index is not None:
-        return _chunk_index
 
-    _chunk_index = BM25Index()
-
-    with get_session() as session:
-        chunks: list[Chunk] = list(session.exec(select(Chunk).where(Chunk.token_count > 10)).all())
-
-    if chunks:
-        _chunk_index.build(
-            doc_ids=[c.id for c in chunks],
-            doc_texts=[c.content for c in chunks],
-        )
-
-    return _chunk_index
+    return _chunk_index_cache.get()
 
 
 def invalidate_bm25_index() -> None:
     """Invalidate the cached BM25 index (e.g. after new ingestion)."""
-    global _chunk_index  # noqa: PLW0603
-    _chunk_index = None
-    logger.info("BM25 chunk index invalidated")
+
+    _chunk_index_cache.invalidate()
 
 
 def bm25_search(

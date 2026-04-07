@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.core.retrieve.strategies.base import RetrievalStrategy
+from wikify.papers.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
     from wikify.core.graph.metrics import GraphMetrics
@@ -39,7 +39,7 @@ class SnowballStrategy(RetrievalStrategy):
         metrics = graph_metrics or compute_metrics()
         if not metrics or not metrics.hub_papers:
             # Fallback to flat
-            from wikify.core.retrieve.strategies.flat import FlatStrategy
+            from wikify.papers.retrieve.strategies.flat import FlatStrategy
 
             return FlatStrategy(self.config).retrieve(graph_metrics=metrics)
 

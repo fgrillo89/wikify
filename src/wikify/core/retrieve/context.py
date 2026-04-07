@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlmodel import select
 
@@ -23,44 +24,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SectionContext:
-    """Context tailored for a specific section of a generated paper."""
-
-    section_heading: str = ""
-    chunks: list[Chunk] = field(default_factory=list)
-    synthesis_notes: str = ""  # LLM-generated synthesis (for agent strategies)
-    token_count: int = 0
-
-    def as_text(self, paper_map: dict[str, Paper] | None = None) -> str:
-        """Format section-specific context for the LLM prompt.
-
-        Args:
-            paper_map: If provided, emit [REF:display_name] headers per paper
-                       so the writer can cite sources. Backwards-compatible.
-        """
-        parts: list[str] = []
-        if self.synthesis_notes:
-            parts.append(f"--- Synthesis ---\n{self.synthesis_notes}")
-
-        # Group chunks by paper
-        chunks_by_paper: dict[str, list[Chunk]] = {}
-        for c in self.chunks:
-            chunks_by_paper.setdefault(c.paper_id, []).append(c)
-
-        if chunks_by_paper:
-            parts.append("--- Source excerpts ---")
-            for pid, pchunks in chunks_by_paper.items():
-                paper = paper_map.get(pid) if paper_map else None
-                if paper:
-                    marker = paper.display_name()
-                    parts.append(f"[REF:{marker}] ({paper.year or '?'})")
-                body = "\n\n".join(c.content for c in pchunks)
-                parts.append(body)
-
-        return "\n\n".join(parts)
-
-
-@dataclass
 class RetrievedContext:
     """Context assembled for a generation or chat request."""
 
@@ -68,7 +31,10 @@ class RetrievedContext:
     chunks: list[Chunk] = field(default_factory=list)
     total_tokens: int = 0
     graph_metrics: GraphMetrics | None = None
-    section_contexts: dict[str, SectionContext] = field(default_factory=dict)
+    # ``section_contexts`` is populated only by paper-writing strategies in
+    # ``wikify.papers.retrieve``. Typed as ``dict[str, Any]`` so this
+    # corpus-level dataclass does not pull in paper-specific types.
+    section_contexts: dict[str, Any] = field(default_factory=dict)
     strategy_name: str = "flat"
 
     def as_text(self) -> str:
@@ -253,57 +219,3 @@ def retrieve_for_query(
     )
     return ctx
 
-
-def retrieve_all_papers(
-    include_metrics: bool = True,
-    deep_read_top_n: int = 3,
-) -> RetrievedContext:
-    """Load all papers with their summaries (for review-style generation).
-
-    Top N hub papers (by PageRank) get ALL chunks (deep read).
-    Remaining papers get first ~3 chunks (shallow read).
-    """
-    from wikify.core.graph.metrics import compute_metrics
-
-    metrics = compute_metrics() if include_metrics else None
-
-    # Identify hub papers for deep reading
-    deep_read_ids: set[str] = set()
-    if metrics and metrics.hub_papers:
-        deep_read_ids = set(metrics.hub_papers[:deep_read_top_n])
-
-    with get_session() as session:
-        papers = session.exec(select(Paper)).all()
-        chunks: list[Chunk] = []
-        for paper in papers:
-            paper_chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == paper.id).order_by(Chunk.chunk_index)
-            ).all()
-            if paper.id in deep_read_ids:
-                chunks.extend(paper_chunks)  # Deep read for hub papers
-            else:
-                chunks.extend(paper_chunks[:3])  # Shallow for the rest
-
-    total = sum(c.token_count for c in chunks)
-    return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total, graph_metrics=metrics)
-
-
-def retrieve_deep(paper_ids: list[str]) -> RetrievedContext:
-    """Load ALL chunks for specific papers (deep read mode).
-
-    Use this when the user explicitly asks to read full papers.
-    This is expensive — only use for a small number of papers.
-    """
-    with get_session() as session:
-        papers = [session.get(Paper, pid) for pid in paper_ids]
-        papers = [p for p in papers if p is not None]
-
-        chunks: list[Chunk] = []
-        for pid in paper_ids:
-            paper_chunks = session.exec(
-                select(Chunk).where(Chunk.paper_id == pid).order_by(Chunk.chunk_index)
-            ).all()
-            chunks.extend(paper_chunks)
-
-    total = sum(c.token_count for c in chunks)
-    return RetrievedContext(papers=papers, chunks=chunks, total_tokens=total)

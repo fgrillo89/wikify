@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.core.retrieve.strategies.base import RetrievalStrategy
+from wikify.papers.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
     from wikify.core.graph.metrics import GraphMetrics

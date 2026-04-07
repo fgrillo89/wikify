@@ -3,6 +3,64 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: paper-writing code out of core/, code-quality cleanup begins
+
+The user pointed out that paper-writing code was still under
+``core/retrieve/`` (the strategies subpackage and several helpers in
+``context.py``) and that ``onnx_provider.py`` still violated the
+"no module-level mutable globals" coding standard. This slice
+addresses both.
+
+### `core/retrieve/strategies/` → `papers/retrieve/strategies/`
+
+The retrieval *strategies* subpackage (snowball, topic_cluster,
+hub_spoke, query_driven, hierarchical, flat, plus the
+``RetrievalStrategy`` base and ``StrategyConfig``) is paper-writing
+substrate, not corpus-level infra. Moved wholesale; bulk-rebound 9
+import sites; moved ``tests/test_core/test_retrieve/test_strategies.py``
+to ``tests/test_papers/test_retrieve/test_strategies.py``.
+
+### Paper-writing helpers extracted from `core/retrieve/context.py`
+
+- ``SectionContext`` class
+- ``retrieve_all_papers(...)`` (used only by ``cli papers slides``)
+- ``retrieve_deep(...)`` (deep-read mode for paper writing)
+
+→ moved to new ``src/wikify/papers/retrieve/paper_context.py``.
+``RetrievedContext.section_contexts`` now has type ``dict[str, Any]``
+instead of importing ``SectionContext``, so the corpus-level
+dataclass no longer pulls in any paper-specific types.
+
+### Code-quality fixes
+
+- ``core/llm/onnx_provider.py``: replaced the module-level mutable
+  ``_nvidia_path_added`` flag with an ``@functools.lru_cache(maxsize=1)``
+  factory; hoisted ``glob``, ``os``, ``sys`` to top-of-file (the
+  ``onnxruntime_genai`` import remains lazy because it's an optional
+  dependency).
+- ``core/retrieve/bm25.py``: replaced the module-level mutable
+  ``_chunk_index: BM25Index | None`` global with a ``_ChunkIndexCache``
+  class instance. ``get_chunk_bm25_index()`` and
+  ``invalidate_bm25_index()`` are now thin facades over the cache.
+
+### What's left for the broader code-quality sweep
+
+A grep across the codebase found ~640 function-level imports across
+src/wikify. Most are legitimate exceptions (Typer command bodies for
+CLI startup speed; optional dependencies; cycle-breaking). The next
+slice should:
+
+1. Walk the worst offenders (papers/agent/tools.py with 132,
+   ingest/corpus_refresh.py with 36, core/store/precompute.py with
+   31, wiki/builder.py with 23, papers/agent/workflows.py with 22)
+   and hoist any pure-laziness imports.
+2. Document a small allowlist for legitimate lazy imports
+   (CLI startup, optional deps, cycle breaks).
+
+**Verification:** 818 tests pass.
+
+---
+
 ## 2026-04-07 — Slice: cli cleanup + wiki sub-CLI extraction
 
 ### Dead code removed (318 lines)
