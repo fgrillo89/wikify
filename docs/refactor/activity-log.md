@@ -3,6 +3,39 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: cli cleanup + wiki sub-CLI extraction
+
+### Dead code removed (318 lines)
+
+- `_answer_with_escalation` (~200 LOC) — was the helper for the
+  deleted `wiki query --deep` mini-wiki branch. No remaining callers.
+- `wiki migrate-figures` command (~120 LOC) — one-time data
+  migration from hash-based dirs to per-paper folders. Already done
+  in production; keeping it as a CLI command was just dead weight.
+
+### CLI converted to a package and split
+
+- `src/wikify/cli.py` → `src/wikify/cli/__init__.py` (the entry
+  point Typer app and the root commands)
+- New `src/wikify/cli/wiki.py` — 669 LOC containing the entire
+  `wiki_app` (sync, audit, health, query, campaign, maintain,
+  reconcile-state, export-metrics, compare-runs, epoch, dashboard,
+  html). Defines its own `wiki_app = typer.Typer(...)` and
+  `cli/__init__.py` mounts it via `app.add_typer(wiki_app)`.
+- New `src/wikify/cli/_helpers.py` — shared `console` instance.
+
+`cli/__init__.py` shrank from 1610 LOC (before this turn) → 641 LOC.
+The wiki sub-CLI is now its own self-contained module with ~13
+commands. Per-boundary modules for `papers` (generate / agent-generate
+/ scripted-generate / fast-generate / chat / evaluate / revise /
+slides / templates) and `ingest` (ingest / refresh / stats / graph)
+are the next mechanical step.
+
+**Verification:** 818 tests pass; tests' `wikify.cli.Path` patches
+rebound to `wikify.cli.wiki.Path` in the same slice.
+
+---
+
 ## 2026-04-07 — Slice: split graph/build, split observability/runs, extract concept prompt, wire epoch to recipe layer
 
 Four follow-up cleanups landed in one sweep.

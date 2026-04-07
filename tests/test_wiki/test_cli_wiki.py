@@ -186,7 +186,7 @@ class TestWikiHealth:
             ),
             # Redirect wiki_dir so the _health.md write succeeds
             patch(
-                "wikify.cli.Path",
+                "wikify.cli.wiki.Path",
                 new=lambda p: tmp_path if p == "data/wiki" else Path(p),
             ),
         ):
@@ -229,7 +229,7 @@ class TestWikiHealth:
                 return_value="",
             ),
             patch(
-                "wikify.cli.Path",
+                "wikify.cli.wiki.Path",
                 new=lambda p: tmp_path if p == "data/wiki" else Path(p),
             ),
         ):
@@ -264,7 +264,7 @@ class TestWikiQuery:
                 },
             ),
             patch(
-                "wikify.cli.Path",
+                "wikify.cli.wiki.Path",
                 new=lambda p: wiki_dir if p == "data/wiki" else Path(p),
             ),
         ):
@@ -279,7 +279,7 @@ class TestWikiQuery:
         empty_wiki.mkdir()
 
         with patch(
-            "wikify.cli.Path",
+            "wikify.cli.wiki.Path",
             new=lambda p: empty_wiki if p == "data/wiki" else Path(p),
         ):
             result = runner.invoke(app, ["wiki", "query", "what is ALD?"])
@@ -302,7 +302,7 @@ class TestWikiQuery:
                 },
             ),
             patch(
-                "wikify.cli.Path",
+                "wikify.cli.wiki.Path",
                 new=lambda p: wiki_dir if p == "data/wiki" else Path(p),
             ),
             patch("wikify.wiki.runtime.reconcile_state", return_value={}),
