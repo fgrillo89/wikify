@@ -22,6 +22,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlmodel import select
+
+from wikify.core.config import settings
+from wikify.core.store.db import get_session
+from wikify.core.store.models import Paper
 from wikify.papers.agent.run_context import record_phase_usage
 from wikify.papers.agent.writer_input import DEFAULT_TOPIC, build_writer_input, normalize_topic
 
@@ -94,10 +99,7 @@ def scripted_explore(
         order = frontier_exploration_order(max_papers=max_papers)
 
         # Resolve paper IDs to display names
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
 
         with get_session() as session:
             papers_db = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -180,7 +182,6 @@ def scripted_summarize(
     """
     import litellm
 
-    from wikify.core.config import settings
     from wikify.papers.agent.research_notes import ResearchNotes, SourceSummary
     from wikify.papers.agent.tools import record_paper_summary
 
@@ -309,7 +310,6 @@ def scripted_write(
     """
     import litellm
 
-    from wikify.core.config import settings
     from wikify.papers.agent.defaults import build_writer_prompt
 
     model = model or settings.llm_model

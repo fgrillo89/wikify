@@ -3,6 +3,47 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: focused lazy-import sweep across the worst offenders
+
+Continues the code-quality sweep. Walked the top non-CLI offenders
+and hoisted pure-laziness imports to module top. Results
+(lazy-import counts before → after):
+
+| File | Before | After |
+|---|---:|---:|
+| `papers/agent/tools.py` | 132 | 53 |
+| `core/store/precompute.py` | 31 | 5 |
+| `wiki/builder.py` | 23 | 0 |
+| `papers/agent/workflows.py` | 22 | 16 |
+| `ingest/corpus_refresh.py` | 36 | 14 |
+| `papers/evaluate/coverage.py` | 18 | 0 |
+| `papers/evaluate/quality.py` | 10 | 1 |
+| `papers/evaluate/strategies.py` | 11 | 0 |
+| `papers/evaluate/frontier.py` | 11 | 1 |
+| `papers/agent/scripted.py` | 17 | 6 |
+| `papers/agent/fast_generate.py` | 13 | 0 |
+
+**Codebase-wide:** 640 → **425 lazy imports**. The remaining 425 fall
+under one of three legitimate categories now codified in the refactor
+plan's "Lazy-Import Allowlist":
+
+1. Optional dependencies (`onnxruntime_genai`, `sklearn`, `litellm`,
+   `win32com.client`).
+2. Cycle breaks inside `papers/agent/*`, `ingest/extract/*`, and
+   `ingest/vault/*` where hoisting would cause circular imports.
+3. Typer command bodies under `src/wikify/cli/` (kept lazy on
+   purpose so `wikify --help` is fast).
+
+### Test patches updated
+
+- `tests/test_papers/test_agent/test_ingest_tool.py`: rebound
+  `wikify.core.store.db.get_session` → `wikify.papers.agent.tools.get_session`
+  (patch-where-it's-used after the import was hoisted).
+
+**Verification:** 818 tests pass.
+
+---
+
 ## 2026-04-07 — Slice: code-quality sweep + close core->papers boundary
 
 ### Boundary violation fixed

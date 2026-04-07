@@ -17,7 +17,15 @@ Strategies:
 
 from __future__ import annotations
 
+import heapq
+
 import numpy as np
+from sqlmodel import select
+
+from wikify.core.graph.metrics import compute_metrics
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import get_paper_vibe_vectors
+from wikify.core.store.models import Paper
 
 
 def compute_paper_density() -> list[tuple[str, float, str]]:
@@ -29,11 +37,7 @@ def compute_paper_density() -> list[tuple[str, float, str]]:
     Returns list of (paper_id, density, display_name) sorted by density
     ascending (frontier papers first).
     """
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.embeddings import get_paper_vibe_vectors
-    from wikify.core.store.models import Paper
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -98,9 +102,7 @@ def frontier_exploration_order(
         return []
 
     # Phase 1: Seeds = #1 citation PageRank + #2-3 greedy coverage
-    import heapq
 
-    from wikify.core.graph.metrics import compute_metrics
 
     metrics = compute_metrics()
 
@@ -153,7 +155,6 @@ def frontier_exploration_order(
             heapq.heappush(heap, (-fresh, iteration, pid))
 
     # Get vibe vectors for all remaining phases
-    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     seed_ids = [pid for pid, _, _ in selected]
@@ -264,10 +265,7 @@ def frontier_exploration_order(
 
 def format_frontier_order_for_agent(order: list[tuple[str, str, str]]) -> str:
     """Format the frontier exploration order as text for the agent."""
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}

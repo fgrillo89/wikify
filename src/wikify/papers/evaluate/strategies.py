@@ -8,12 +8,20 @@ coverage at each step.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import heapq
+import logging
+from collections import deque
 
 import numpy as np
 
-if TYPE_CHECKING:
-    pass
+from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
+from wikify.core.store.corpus import load_corpus_chunks
+from wikify.core.store.embeddings import (
+    get_chunk_embeddings,
+    get_paper_vibe_vectors,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
@@ -23,8 +31,6 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
         (corpus_embs, paper_embs) where corpus_embs is (N, 384) normalized
         and paper_embs maps paper_id -> (K, 384) normalized chunk embeddings.
     """
-    from wikify.core.store.embeddings import get_chunk_embeddings
-    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
 
@@ -33,7 +39,6 @@ def _load_corpus_and_paper_embs() -> tuple[np.ndarray, dict[str, np.ndarray]]:
 
     missing = len(all_ids) - len(stored)
     if missing > 0:
-        import logging
 
         logging.getLogger(__name__).warning(
             "%d/%d chunks have no stored embedding — run `embed_chunks` first",
@@ -109,7 +114,6 @@ def greedy_submodular_order(
     Returns:
         List of (paper_id, "full") pairs in greedy order.
     """
-    import heapq
 
     corpus_embs, paper_embs = _load_corpus_and_paper_embs()
     if not paper_embs:
@@ -170,7 +174,6 @@ def max_distance_order(
 
     Provides a 2-approximation guarantee for coverage.
     """
-    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -221,7 +224,6 @@ def spectral_cluster_order(
 
     Ensures cross-topic coverage before depth in any single topic.
     """
-    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -278,9 +280,7 @@ def hub_bfs_order(
     max_papers: int = 20,
 ) -> list[tuple[str, str]]:
     """Classic BFS from top-PageRank hub (baseline snowball)."""
-    from collections import deque
 
-    from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
 
     metrics = compute_metrics()
     if not metrics.hub_papers:
@@ -318,8 +318,6 @@ def compute_cumulative_coverage(
 
     Returns a list of dicts with coverage metrics at each step.
     """
-    from wikify.core.store.embeddings import get_chunk_embeddings
-    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
 

@@ -17,18 +17,24 @@ Metrics produced:
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import numpy as np
+from sqlmodel import select
 
 # Re-exported for backwards compatibility with code that used to import
 # these from ``wikify.papers.evaluate.coverage``. New code should import
 # from ``wikify.core.store.corpus`` directly.
 from wikify.core.store.corpus import get_corpus_paper_ids, load_corpus_chunks
-
-if TYPE_CHECKING:
-    from wikify.core.store.models import Chunk
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import (
+    _store,
+    get_chunk_embeddings,
+    get_paper_vibe_vectors,
+)
+from wikify.core.store.models import Chunk, Paper
 
 
 @dataclass
@@ -90,13 +96,8 @@ def compute_coverage(
     Returns:
         CoverageResult with all metrics.
     """
-    import re
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.embeddings import _store, get_chunk_embeddings
-    from wikify.core.store.models import Paper
 
     # 1. Get corpus chunks only (excludes generated output)
     chunks = load_corpus_chunks()
@@ -251,13 +252,8 @@ def compute_paper_vibes() -> list[PaperVibe]:
     Returns:
         List of PaperVibe objects sorted by paper display_name.
     """
-    from collections import Counter
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
-    from wikify.core.store.models import Paper
 
     # Load only corpus chunks (excludes generated output)
     chunks = load_corpus_chunks()
@@ -305,7 +301,6 @@ def compute_paper_vibes() -> list[PaperVibe]:
 
     # If no chunk embeddings stored, encode from scratch
     if not stored_embs:
-        from wikify.core.store.embeddings import _store
 
         model = _store.model
         all_texts = [c.content for c in chunks]

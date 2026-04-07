@@ -100,6 +100,23 @@ Behavior that changes together should live together.
 - Avoid introducing broad horizontal packages like `frontend/` unless there are
   multiple products sharing the same implementation.
 
+### Lazy-Import Allowlist
+Function-level (lazy) imports are forbidden by default. The exceptions
+are limited and must be commented:
+
+1. **Optional dependencies** that may not be installed (e.g.
+   `onnxruntime_genai`, `sklearn`, `litellm`, `win32com.client`).
+   Mark with `# noqa: PLC0415  (optional dep)`.
+2. **Cycle breaks**: when hoisting an import to module top would cause
+   a circular import that cannot be untangled in the current slice.
+   Comment must reference the cycle.
+3. **Typer / CLI command bodies**: keeping imports inside command
+   functions is allowed because it keeps `wikify --help` startup fast
+   (one Typer command should not load the entire dependency graph).
+   This applies only to files under `src/wikify/cli/`.
+
+Anything else is pure laziness and must be hoisted to module top.
+
 ### Cleanup Policy (Hard Rule)
 Compatibility shims and parallel-path layering are **not** allowed in this
 refactor. When a slice moves or splits code:

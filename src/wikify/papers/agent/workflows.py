@@ -99,7 +99,6 @@ def explore_corpus(
         # The explorer's final message often contains the outline
         if "outline" in content.lower() or "section" in content.lower():
             # Extract lines that look like outline items
-            import re
 
             outline_lines = re.findall(r"^\d+\.\s+.+$", content, re.MULTILINE)
             if outline_lines:
@@ -285,8 +284,6 @@ def export_paper(
 
 def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
     """Convert DOCX to PDF using LibreOffice or Word. Returns True if successful."""
-    import shutil
-    import subprocess
 
     # Try LibreOffice first (cross-platform)
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
@@ -350,7 +347,6 @@ def _strip_emdashes(md: str) -> str:
 
     Catches: ' -- ', ' --- ', unicode em-dash, unicode en-dash used as separators.
     """
-    import re
 
     # Paired em-dashes: "word -- aside -- word" -> "word, aside, word"
     md = re.sub(r"\s*\u2014\s*([^.!?\n\u2014]+?)\s*\u2014\s*", r", \1, ", md)
@@ -365,7 +361,6 @@ def _strip_emdashes(md: str) -> str:
 
 def _strip_references_section(md: str) -> str:
     """Remove any existing ## References section so we can append a clean one."""
-    import re
 
     # Match ## References (or ### References) and everything after it until the next
     # same-or-higher-level heading or end of document
@@ -374,10 +369,7 @@ def _strip_references_section(md: str) -> str:
 
 def _resolve_references(markdown: str, profile) -> str:
     """Resolve [REF:...] markers to numbered citations and append bibliography."""
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
     from wikify.papers.generate.references import ReferenceResolver
 
     with get_session() as session:

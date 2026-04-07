@@ -19,6 +19,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+from sqlmodel import select
+
+from wikify.core.config import settings
+from wikify.core.store.corpus import load_corpus_chunks
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
+from wikify.core.store.models import Paper
 from wikify.papers.agent.research_notes import ResearchNotes
 from wikify.papers.agent.run_context import create_run_context, record_phase_usage, use_run_context
 from wikify.papers.agent.writer_input import DEFAULT_TOPIC, build_writer_input, normalize_topic
@@ -77,10 +85,7 @@ def precompute_context(
     # 1. Frontier order
     order = frontier_exploration_order(max_papers=max_papers)
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
 
     with get_session() as session:
         papers_db = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -157,10 +162,7 @@ def _precompute_concept_links(papers_db: dict, max_links: int = 30) -> str:
         pass
 
     # Fall back to original computation
-    import numpy as np
 
-    from wikify.core.store.embeddings import get_chunk_embeddings, get_paper_vibe_vectors
-    from wikify.core.store.corpus import load_corpus_chunks
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -285,7 +287,6 @@ def fast_generate(
     """
     import litellm
 
-    from wikify.core.config import settings
     from wikify.papers.agent.workflows import export_paper
 
     model = model or settings.llm_model

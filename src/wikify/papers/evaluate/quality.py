@@ -27,10 +27,21 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
+from sqlmodel import select
+
+from wikify.core.store.corpus import load_corpus_chunks
+from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import (
+    _store,
+    get_chunk_embeddings,
+    get_paper_vibe_vectors,
+)
+from wikify.core.store.models import PaperTopic
 
 # ---------------------------------------------------------------------------
 # EmbeddingContext: pre-computed data shared across all metrics
@@ -56,8 +67,6 @@ class EmbeddingContext:
 
 def _build_embedding_context(review_text: str, chunk_size: int = 150) -> Optional[EmbeddingContext]:
     """Build the shared EmbeddingContext.  Returns None if corpus is unavailable."""
-    from wikify.core.store.embeddings import _store, get_chunk_embeddings
-    from wikify.core.store.corpus import load_corpus_chunks
 
     chunks = load_corpus_chunks()
     if not chunks:
@@ -453,7 +462,6 @@ def compute_bridge_vectors(
     This avoids the cluster-centroid problem where no chunk can be
     geometrically close to two distant centroids.
     """
-    from wikify.core.store.embeddings import get_paper_vibe_vectors
 
     vibes = get_paper_vibe_vectors()
     if not vibes:
@@ -549,7 +557,6 @@ class GapDetectionResult:
     def score(self) -> float:
         # Scale gap_claim_ratio: 5% gap sentences = score 1.0
         # (9 gaps in 200 sentences = 4.5% -> score ~0.9)
-        import math
 
         claim_score = min(1.0, math.log1p(self.gap_claim_ratio * 100) / math.log1p(5))
         return max(0.0, 0.3 * min(self.void_ratio * 5, 1.0) + 0.7 * claim_score)
@@ -636,10 +643,7 @@ class TopicCoverageResult:
 def compute_topic_coverage(review_text: str) -> Optional[TopicCoverageResult]:
     """Check which PaperTopic entries appear in the review (no embeddings needed)."""
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import PaperTopic
 
         with get_session() as session:
             all_topics = session.exec(select(PaperTopic)).all()
@@ -982,7 +986,6 @@ def compute_prose_quality(review_text: str) -> ProseQualityResult:
             author_et_al += 1
 
     # Shannon entropy
-    from collections import Counter
 
     opening_counts = Counter(openings)
     total_openings = max(sum(opening_counts.values()), 1)

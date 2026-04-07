@@ -6,8 +6,24 @@ They can be used directly by agent loops without going through MCP.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from collections import Counter, defaultdict
+from pathlib import Path
+
+import numpy as np
+from sqlmodel import func, select
+
+from wikify.core.store.db import get_session
+from wikify.core.store.models import (
+    Chunk,
+    ConceptRecord,
+    DomainCluster,
+    Figure,
+    Paper,
+    PaperTopic,
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -121,12 +137,8 @@ def _match_papers_by_pattern(all_papers: list, pattern: str) -> list:
 
 def _build_corpus_summary() -> str:
     """Build a pre-formatted markdown summary of the corpus for LLM consumption."""
-    from collections import Counter
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
     from wikify.ingest.corpus_refresh import load_corpus_vocabulary
 
     with get_session() as session:
@@ -311,10 +323,7 @@ def lookup_citation(
         Citation metadata for all matches, or error if none found.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -371,10 +380,7 @@ def get_paper(
         Formatted text with paper metadata and abstract. Use deep_read for full text.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -433,11 +439,8 @@ def get_graph_metrics() -> str:
             - error: present only if something went wrong
     """
     try:
-        from sqlmodel import select
 
         from wikify.core.graph.metrics import compute_metrics
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
 
         with get_session() as session:
             papers = session.exec(select(Paper)).all()
@@ -512,10 +515,7 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
         ordered by citation PageRank descending.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -570,10 +570,7 @@ def list_papers(
             - error: present only if something went wrong
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -601,10 +598,7 @@ def list_topics() -> str:
             - error: present only if something went wrong
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             papers = session.exec(select(Paper)).all()
@@ -656,10 +650,7 @@ def read_paper_digest(
         Formatted markdown digest of the paper.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper, PaperTopic
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -778,10 +769,7 @@ def deep_read(
             - error: present when no paper matched or something went wrong
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -861,10 +849,7 @@ def read_section(
         Formatted markdown with the section text, or error message.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
 
         with get_session() as session:
             all_papers = session.exec(select(Paper)).all()
@@ -936,12 +921,8 @@ def get_sections(
         Formatted text with sections grouped by paper, or error message.
     """
     try:
-        from collections import defaultdict
 
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
 
         valid_types = {
             "abstract",
@@ -1070,10 +1051,7 @@ def get_sections(
 
 def _resolve_to_paper_ids(patterns: list[str]) -> list[str]:
     """Resolve display name patterns to paper IDs (internal helper)."""
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import Paper
 
     with get_session() as session:
         all_papers = session.exec(select(Paper)).all()
@@ -1093,7 +1071,6 @@ def _compute_read_centroid(
     vibe_map: dict,
 ):
     """Token-weighted centroid of already-read papers (internal helper)."""
-    import numpy as np
 
     vibes = [vibe_map[pid] for pid in read_ids if pid in vibe_map]
     if not vibes:
@@ -1125,7 +1102,6 @@ def suggest_next_papers(
         Ranked list of suggested papers with scores and rationale.
     """
     try:
-        import numpy as np
 
         from wikify.core.graph.metrics import build_corpus_graph
         from wikify.papers.evaluate.coverage import compute_paper_vibes
@@ -1238,12 +1214,8 @@ def get_coverage_gaps(
         Coverage report with delta, per-paper gaps, and convergence signal.
     """
     try:
-        from collections import Counter
 
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Paper
         from wikify.papers.evaluate.coverage import compute_coverage
 
         result = compute_coverage(review_text, threshold=threshold)
@@ -1336,7 +1308,6 @@ def find_jump_target(
         neighborhood is not yet exhausted.
     """
     try:
-        import numpy as np
 
         from wikify.core.graph.metrics import build_corpus_graph
         from wikify.papers.evaluate.coverage import compute_coverage, compute_paper_vibes
@@ -1517,13 +1488,9 @@ def find_corpus_gaps() -> str:
 
     # Fall back to embedding void + topical intersection approach
     try:
-        import numpy as np
         from sklearn.cluster import KMeans
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
         from wikify.core.store.embeddings import _store, get_chunk_embeddings
-        from wikify.core.store.models import Paper, PaperTopic
         from wikify.core.store.corpus import load_corpus_chunks
 
         chunks = load_corpus_chunks()
@@ -1715,12 +1682,8 @@ def find_synthesis_opportunities() -> str:
 
     # Fall back to vibe-based pair selection
     try:
-        import numpy as np
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
         from wikify.core.store.embeddings import get_paper_vibe_vectors
-        from wikify.core.store.models import Paper
 
         vibes = get_paper_vibe_vectors()
         if not vibes:
@@ -2034,10 +1997,7 @@ def list_domain_clusters() -> str:
     labels, concept counts, and bridge concepts.
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import DomainCluster
 
         with get_session() as session:
             clusters = list(session.exec(select(DomainCluster)).all())
@@ -2160,13 +2120,8 @@ def ingest_paper(file_path: str) -> str:
         Status message with paper title, chunk count, and background refresh status.
     """
     try:
-        import hashlib
-        from pathlib import Path
 
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Chunk, Paper
         from wikify.ingest.service import ingest_file
 
         path = Path(file_path)
@@ -2258,14 +2213,9 @@ def check_wiki_health() -> str:
     Combines DB integrity checks with filesystem wiki health scan.
     Returns a structured JSON health report.
     """
-    import re
-    from pathlib import Path
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
     from wikify.core.store.gc import integrity_check
-    from wikify.core.store.models import ConceptRecord
     from wikify.wiki.presentation.layout import iter_visible_page_files
 
     wiki_dir = Path("data/wiki")
@@ -2325,12 +2275,8 @@ def search_wiki(query: str, top_k: int = 10) -> str:
     Returns matching wiki article summaries with wikilinks.
     Useful for /wiki-ask and /wiki-campaign to check existing knowledge.
     """
-    from pathlib import Path
 
-    from sqlmodel import select
 
-    from wikify.core.store.db import get_session
-    from wikify.core.store.models import ConceptRecord
     from wikify.wiki.presentation.layout import iter_visible_page_files
 
     # Search the concept definitions via ConceptRecord
@@ -2401,7 +2347,6 @@ def run_wiki_gc() -> str:
 
 def reconcile_wiki_state() -> str:
     """Rebuild operational wiki page state from visible markdown files."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import reconcile_state
 
@@ -2410,7 +2355,6 @@ def reconcile_wiki_state() -> str:
 
 def run_wiki_maintain() -> str:
     """Run the maintenance sweep over the visible wiki and operational layer."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import run_maintain
 
@@ -2419,7 +2363,6 @@ def run_wiki_maintain() -> str:
 
 def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
     """Export aggregated run telemetry and wiki metrics."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import export_metrics
 
@@ -2430,7 +2373,6 @@ def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
 
 def compare_wiki_runs(workflow_type: str = "", limit: int = 10) -> str:
     """Compare recent wiki runs on cost, retrieval effort, and outcome metrics."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import compare_runs
 
@@ -2446,7 +2388,6 @@ def query_wiki_runtime(
     promote: bool = False,
 ) -> str:
     """Answer a question from the visible wiki via the shared runtime."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import query_wiki
 
@@ -2471,7 +2412,6 @@ def run_wiki_campaign(
     promote: bool = True,
 ) -> str:
     """Run a thesis-driven wiki campaign through the shared runtime."""
-    from pathlib import Path
 
     from wikify.wiki.runtime import run_campaign
 
@@ -2527,10 +2467,7 @@ def get_paper_figures(paper_id: str) -> str:
             - total: number of figures found
     """
     try:
-        from sqlmodel import select
 
-        from wikify.core.store.db import get_session
-        from wikify.core.store.models import Figure
 
         with get_session() as session:
             figures = session.exec(select(Figure).where(Figure.paper_id == paper_id)).all()
