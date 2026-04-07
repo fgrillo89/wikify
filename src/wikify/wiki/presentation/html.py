@@ -13,7 +13,7 @@ from pathlib import Path
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from wikify.wiki.layout import iter_visible_page_files, normalize_page_type
+from wikify.wiki.presentation.layout import iter_visible_page_files, normalize_page_type
 from wikify.wiki.builder import read_article_frontmatter, slugify
 
 logger = logging.getLogger(__name__)

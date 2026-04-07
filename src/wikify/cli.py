@@ -1464,7 +1464,7 @@ def wiki_query(
     """Answer a question from the visible wiki with optional promotion."""
     import tempfile
 
-    from wikify.wiki.layout import iter_visible_page_files
+    from wikify.wiki.presentation.layout import iter_visible_page_files
     from wikify.wiki.runtime import query_wiki, reconcile_state
 
     wiki_dir = Path("data/wiki")
@@ -1719,7 +1719,7 @@ def wiki_dashboard(
     """Serve the live wiki dashboard (requires uvicorn + wikify.wiki.dashboard)."""
     import uvicorn
 
-    from wikify.wiki.dashboard import app as dashboard_app
+    from wikify.wiki.presentation.dashboard import app as dashboard_app
 
     console.print(f"[bold]Serving wiki dashboard at[/bold] http://{host}:{port}")
     uvicorn.run(dashboard_app, host=host, port=port)
@@ -1735,7 +1735,7 @@ def wiki_html(
     ),
 ):
     """Build Wikipedia-style HTML site from wiki."""
-    from wikify.wiki.html import build_site, serve_site
+    from wikify.wiki.presentation.html import build_site, serve_site
 
     src = Path(wiki_dir)
     if not src.exists():

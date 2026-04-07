@@ -3,6 +3,25 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S3.F (presentation subpackage)
+
+Moved the wiki presentation layer into its own subpackage:
+
+- `wiki/html.py`       → `wiki/presentation/html.py`
+- `wiki/dashboard.py`  → `wiki/presentation/dashboard.py`
+- `wiki/layout.py`     → `wiki/presentation/layout.py`
+- `wiki/templates/`    → `wiki/presentation/templates/`
+- New `wiki/presentation/__init__.py`
+
+Updated all 9 import sites in the same slice (`agent/tools.py`,
+`cli.py`, `wiki/builder.py`, `wiki/epoch.py`, `wiki/linker.py`,
+`wiki/observability/runs.py`, `wiki/runtime.py`, plus the moved
+`html.py` and `dashboard.py` themselves). 861 tests pass; the Jinja
+template loader resolves relative to the moved file so no path
+config needed updating.
+
+---
+
 ## 2026-04-07 — Slice S3.E (observability subpackage)
 
 Moved `wiki/telemetry.py` (423 LOC) into `wiki/observability/runs.py`

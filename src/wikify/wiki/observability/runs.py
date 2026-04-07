@@ -28,7 +28,7 @@ from wikify.store.models import (
     ToolCallTelemetry,
     WikiSnapshotMetric,
 )
-from wikify.wiki.layout import (
+from wikify.wiki.presentation.layout import (
     ensure_layout,
     index_path,
     iter_visible_page_files,

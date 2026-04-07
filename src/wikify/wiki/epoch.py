@@ -52,7 +52,7 @@ from wikify.wiki.builder import (
     generate_wiki_index,
     write_article,
 )
-from wikify.wiki.layout import iter_visible_page_files
+from wikify.wiki.presentation.layout import iter_visible_page_files
 from wikify.wiki.observability import (
     begin_run,
     finish_run,

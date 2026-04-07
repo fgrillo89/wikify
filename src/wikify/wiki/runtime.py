@@ -35,7 +35,7 @@ from wikify.wiki.builder import (
     slugify,
     write_article,
 )
-from wikify.wiki.layout import (
+from wikify.wiki.presentation.layout import (
     ensure_layout,
     iter_visible_page_files,
     metrics_dir,

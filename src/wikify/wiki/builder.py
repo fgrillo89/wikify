@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from wikify.wiki.layout import (
+from wikify.wiki.presentation.layout import (
     LEGACY_VISIBLE_DIRS,
     article_path_for_category,
     ensure_layout,
@@ -1254,7 +1254,7 @@ def generate_wiki_index(wiki_dir: Path) -> str:
     buckets: dict[str, list[dict]] = {page_type: [] for page_type in page_type_order}
     all_source_ids: set[str] = set()
 
-    from wikify.wiki.layout import iter_visible_page_files
+    from wikify.wiki.presentation.layout import iter_visible_page_files
 
     for md_file in iter_visible_page_files(wiki_dir):
         meta = read_article_frontmatter(md_file)

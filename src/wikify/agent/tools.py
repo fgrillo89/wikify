@@ -2266,7 +2266,7 @@ def check_wiki_health() -> str:
     from wikify.store.db import get_session
     from wikify.store.gc import integrity_check
     from wikify.store.models import ConceptRecord
-    from wikify.wiki.layout import iter_visible_page_files
+    from wikify.wiki.presentation.layout import iter_visible_page_files
 
     wiki_dir = Path("data/wiki")
 
@@ -2331,7 +2331,7 @@ def search_wiki(query: str, top_k: int = 10) -> str:
 
     from wikify.store.db import get_session
     from wikify.store.models import ConceptRecord
-    from wikify.wiki.layout import iter_visible_page_files
+    from wikify.wiki.presentation.layout import iter_visible_page_files
 
     # Search the concept definitions via ConceptRecord
     with get_session() as session:
