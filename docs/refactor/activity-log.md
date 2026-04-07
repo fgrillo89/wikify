@@ -3,6 +3,26 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S3.G (legacy sitemap path isolated)
+
+Moved the sitemap-first wiki flow into `wiki/legacy/`:
+
+- `wiki/sitemap.py` → `wiki/legacy/sitemap.py`
+- `wiki/agent.py`   → `wiki/legacy/agent.py`
+- New `wiki/legacy/__init__.py` with a clear "slated for deletion"
+  doc header.
+
+Updated all 9 import sites in the same slice (`cli.py`,
+`wiki/builder.py`, `wiki/linker.py`, `wiki/__init__.py`, the moved
+`legacy/agent.py`, plus 4 test files). 861 tests pass.
+
+The legacy modules are retained for now because the CLI still exposes
+the sitemap-first commands and tests cover them. They will be deleted
+when those CLI commands are migrated to the agent-native runtime
+(epoch / query / maintain).
+
+---
+
 ## 2026-04-07 — Slice S3.F (presentation subpackage)
 
 Moved the wiki presentation layer into its own subpackage:

@@ -471,4 +471,4 @@ def build_wiki_from_sitemap(
 from typing import TYPE_CHECKING  # noqa: E402
 
 if TYPE_CHECKING:
-    from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
+    from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap

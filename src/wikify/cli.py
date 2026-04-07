@@ -654,10 +654,10 @@ def wiki_init(
     Phase 3 writes all articles in dependency order (themes then concepts).
     """
 
-    from wikify.wiki.agent import build_wiki_from_sitemap
+    from wikify.wiki.legacy.agent import build_wiki_from_sitemap
     from wikify.wiki.builder import generate_wiki_index
     from wikify.wiki.linker import cross_link_articles, ensure_parent_backlinks
-    from wikify.wiki.sitemap import generate_sitemap
+    from wikify.wiki.legacy.sitemap import generate_sitemap
 
     wiki_dir = Path("data/wiki")
     wiki_dir.mkdir(parents=True, exist_ok=True)
@@ -724,14 +724,14 @@ def wiki_expand(
         write_article,
     )
     from wikify.wiki.linker import cross_link_articles
-    from wikify.wiki.sitemap import WikiSitemap
+    from wikify.wiki.legacy.sitemap import WikiSitemap
 
     wiki_dir = Path("data/wiki")
     sitemap = WikiSitemap.load(wiki_dir)
     engine = get_engine()
 
     def _expand_entry(entry: "WikiSitemap.entries.__class__") -> None:  # type: ignore[name-defined]
-        from wikify.wiki.agent import build_article_from_entry
+        from wikify.wiki.legacy.agent import build_article_from_entry
 
         content, source_ids = build_article_from_entry(entry, wiki_dir, model=model)
 
@@ -820,7 +820,7 @@ def wiki_expand(
             console.print("[red]No sitemap found and no concept given.[/red]")
             raise typer.Exit(1)
 
-        from wikify.wiki.agent import build_wiki_article
+        from wikify.wiki.legacy.agent import build_wiki_article
 
         console.print(f"[bold]Expanding (no-sitemap fallback): {concept}[/bold]")
         content, source_ids = build_wiki_article(concept, concept, status="full", model=model)
@@ -1482,9 +1482,9 @@ def wiki_query(
     if deep:
         console.print("[dim]--deep: building ephemeral mini-wiki for this query...[/dim]")
         try:
-            from wikify.wiki.agent import build_wiki_from_sitemap
+            from wikify.wiki.legacy.agent import build_wiki_from_sitemap
             from wikify.wiki.builder import generate_wiki_index
-            from wikify.wiki.sitemap import generate_sitemap
+            from wikify.wiki.legacy.sitemap import generate_sitemap
 
             temp_dir_obj = tempfile.mkdtemp()
             temp_wiki_dir = Path(str(temp_dir_obj))

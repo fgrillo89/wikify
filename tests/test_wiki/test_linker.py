@@ -10,7 +10,7 @@ from wikify.wiki.linker import (
     cross_link_articles,
     ensure_parent_backlinks,
 )
-from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
+from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap
 
 # ---------------------------------------------------------------------------
 # Helpers

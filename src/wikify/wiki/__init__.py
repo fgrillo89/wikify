@@ -1,6 +1,6 @@
 """Wiki layer: LLM-authored concept articles built from the corpus."""
 
-from wikify.wiki.agent import build_article_from_entry, build_wiki_from_sitemap
+from wikify.wiki.legacy.agent import build_article_from_entry, build_wiki_from_sitemap
 from wikify.wiki.builder import (
     article_path,
     find_stale_articles,
@@ -19,7 +19,7 @@ from wikify.wiki.persona import (
     get_or_create_persona,
     invalidate_persona,
 )
-from wikify.wiki.sitemap import SitemapEntry, WikiSitemap, generate_sitemap
+from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap, generate_sitemap
 
 __all__ = [
     # builder

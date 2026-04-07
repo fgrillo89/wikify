@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from wikify.wiki.sitemap import (
+from wikify.wiki.legacy.sitemap import (
     SitemapEntry,
     WikiSitemap,
     _build_graph_context_block,
@@ -264,7 +264,7 @@ class TestExploreCorpusForSitemapGraphContext:
 
 class TestGenerateSitemapDomain:
     # Deferred imports in generate_sitemap:
-    _EXPLORE = "wikify.wiki.sitemap.explore_corpus_for_sitemap"
+    _EXPLORE = "wikify.wiki.legacy.sitemap.explore_corpus_for_sitemap"
     _COMPLETE = "wikify.llm.client.complete"
     _SETTINGS = "wikify.config.settings"
 
@@ -419,7 +419,7 @@ class TestGenerateMultiDomainSitemap:
     _GET_SESSION = "wikify.store.db.get_session"
     _FIND_SYNTH = "wikify.agent.tools.find_synthesis_opportunities"
     # generate_sitemap is in the same module -- patch the module-level name
-    _GEN_SITEMAP = "wikify.wiki.sitemap.generate_sitemap"
+    _GEN_SITEMAP = "wikify.wiki.legacy.sitemap.generate_sitemap"
 
     def _make_papers_and_topics(self):
         """Return 6 material_science papers and 6 machine_learning papers + topics."""

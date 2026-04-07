@@ -27,7 +27,7 @@ runner = CliRunner()
 
 def _make_fake_sitemap() -> "WikiSitemap":  # noqa: F821
     """Build a minimal in-memory WikiSitemap (does not touch disk)."""
-    from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
+    from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap
 
     entries = [
         SitemapEntry(
@@ -77,11 +77,11 @@ class TestWikiInit:
 
         with (
             patch(
-                "wikify.wiki.sitemap.generate_sitemap",
+                "wikify.wiki.legacy.sitemap.generate_sitemap",
                 return_value=fake_sitemap,
             ) as mock_gen,
             patch(
-                "wikify.wiki.agent.build_wiki_from_sitemap",
+                "wikify.wiki.legacy.agent.build_wiki_from_sitemap",
                 return_value=[],
             ) as mock_build,
             patch("wikify.wiki.linker.cross_link_articles", return_value=2),
@@ -102,7 +102,7 @@ class TestWikiInit:
         assert "planned" in result.output.lower() or "themes" in result.output.lower()
 
     def test_init_prints_summary_counts(self, tmp_path: Path) -> None:
-        from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
+        from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap
 
         entries = [
             SitemapEntry(
@@ -132,10 +132,10 @@ class TestWikiInit:
 
         with (
             patch(
-                "wikify.wiki.sitemap.generate_sitemap",
+                "wikify.wiki.legacy.sitemap.generate_sitemap",
                 return_value=fake_sitemap,
             ),
-            patch("wikify.wiki.agent.build_wiki_from_sitemap", return_value=[]),
+            patch("wikify.wiki.legacy.agent.build_wiki_from_sitemap", return_value=[]),
             patch("wikify.wiki.linker.cross_link_articles", return_value=1),
             patch("wikify.wiki.linker.ensure_parent_backlinks"),
             patch(
@@ -172,9 +172,9 @@ class TestWikiExpand:
         mock_session.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=None),
+            patch("wikify.wiki.legacy.sitemap.WikiSitemap.load", return_value=None),
             patch(
-                "wikify.wiki.agent.build_wiki_article",
+                "wikify.wiki.legacy.agent.build_wiki_article",
                 return_value=(fake_content, fake_source_ids),
             ) as mock_bwa,
             patch("wikify.wiki.builder.write_article") as mock_write,
@@ -193,12 +193,12 @@ class TestWikiExpand:
         mock_write.assert_called_once()
 
     def test_expand_no_sitemap_no_concept_exits_nonzero(self) -> None:
-        with patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=None):
+        with patch("wikify.wiki.legacy.sitemap.WikiSitemap.load", return_value=None):
             result = runner.invoke(app, ["wiki", "expand"])
         assert result.exit_code != 0
 
     def test_expand_all_from_sitemap(self, tmp_path: Path) -> None:
-        from wikify.wiki.sitemap import SitemapEntry, WikiSitemap
+        from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap
 
         stub_entry = SitemapEntry(
             title="Stub Topic",
@@ -220,9 +220,9 @@ class TestWikiExpand:
         mock_session.exec.return_value.first.return_value = None
 
         with (
-            patch("wikify.wiki.sitemap.WikiSitemap.load", return_value=fake_sitemap),
+            patch("wikify.wiki.legacy.sitemap.WikiSitemap.load", return_value=fake_sitemap),
             patch(
-                "wikify.wiki.agent.build_article_from_entry",
+                "wikify.wiki.legacy.agent.build_article_from_entry",
                 return_value=("body text", []),
             ),
             patch("wikify.wiki.builder.write_article"),
