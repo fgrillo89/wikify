@@ -562,10 +562,38 @@ def run_epoch(
         domain,
     )
     rebuild_index_stub(_WIKI_DIR)
+
+    # Compile the active recipe so observability can record the
+    # workflow id, recipe config hash, and any deferred conceptual steps
+    # the orchestrating agent is expected to handle. The recipe is
+    # currently informational — the existing pass1/2/3 hot-path still
+    # runs — but it gives a single source of truth for "which recipe is
+    # this run". A follow-up slice will replace the hot-path with a
+    # DagExecutor.run(compiled_spec) call.
+    from wikify.wiki.discovery.recipe import load_recipe_yaml
+    from wikify.wiki.discovery.recipe_compiler import compile_recipe
+
+    _RECIPE_PATH = Path(__file__).parent / "recipes" / "default_publication.yaml"
+    try:
+        _recipe = load_recipe_yaml(_RECIPE_PATH)
+        _compiled = compile_recipe(_recipe)
+        recipe_id = _recipe.recipe_id
+        recipe_hash = _recipe.config_hash
+        workflow_id = _compiled.workflow_id
+        deferred_step_names = ",".join(
+            d.get("step_name", "") for d in _compiled.params.get("deferred_steps", [])
+        )
+    except Exception as exc:
+        logger.warning("epoch: failed to compile recipe: %s", exc)
+        recipe_id = "default_publication"
+        recipe_hash = ""
+        workflow_id = "recipe::default_publication"
+        deferred_step_names = ""
+
     run_id = begin_run(
         workflow_type="epoch",
         status="pending",
-        strategy_id="default_epoch",
+        strategy_id=recipe_id,
         loss_definition_id="wiki_loss_v1",
         prompt_family="wiki_epoch_v1",
         model_tier="balanced",
@@ -577,6 +605,10 @@ def run_epoch(
             "workflow": "epoch",
             "domain": domain or "all",
             "triggered_by": triggered_by,
+            "recipe_id": recipe_id,
+            "recipe_config_hash": recipe_hash,
+            "workflow_id": workflow_id,
+            "deferred_steps": deferred_step_names,
         },
     )
 

@@ -3,6 +3,45 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: split graph/build, split observability/runs, extract concept prompt, wire epoch to recipe layer
+
+Four follow-up cleanups landed in one sweep.
+
+1. **`wiki/graph/build.py` → `build` + `importance` + `topology`** —
+   Decomposes the 650-line concept_graph monolith into the target
+   layout. `build.py` keeps construction + relation extraction + DB
+   persistence; `importance.py` owns `score_importance` +
+   `classify_node_roles`; `topology.py` owns community detection and
+   modularity / gini / spectral gap. `wiki/graph/__init__.py`
+   re-exports the public surface.
+
+2. **`wiki/observability/runs.py` → `stages` + `snapshots` + `logs` + `export`**
+   The 423-line telemetry monolith is gone. `stages.py` owns run
+   lifecycle and per-stage counters; `snapshots.py` owns the wiki
+   snapshot metric; `logs.py` owns the human-readable change log;
+   `export.py` owns `finish_run`. `wiki/observability/__init__.py`
+   re-exports the public surface.
+
+3. **First prompt + schema extracted to standalone files** —
+   `wiki/prompts/concept_extraction.md` holds the prompt scaffolding
+   with `{{TEMPLATE}}` / `{{PRIOR_CONCEPTS}}` / `{{CHUNK_CONTENT}}`
+   placeholders. `wiki/schemas/concept_extraction.json` documents the
+   expected JSON shape. `build_extraction_prompt` reads from the file
+   and accepts a `prompt_path` override so recipes can swap it.
+
+4. **`wiki/epoch.py` wired to the recipe layer** — `run_epoch` now
+   loads `wiki/recipes/default_publication.yaml`, compiles it into a
+   `DagRunSpec`, and records `recipe_id`, `recipe_config_hash`,
+   `workflow_id`, and `deferred_steps` as experiment tags on the run.
+   The existing pass1/2/3 hot path still executes; the recipe is
+   informational for now. Replacing the hot-path with
+   `DagExecutor.run(compiled_spec)` is the next slice and depends on
+   the orchestrating agent supplying an `AgentExtractor`.
+
+**Verification:** 818 tests pass; ruff clean on all touched packages.
+
+---
+
 ## 2026-04-07 — Slice S3.G.2 (delete legacy sitemap-first flow)
 
 The user directive to "remove legacy code/packages once they are
