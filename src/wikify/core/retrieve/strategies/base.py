@@ -10,7 +10,7 @@ from wikify.config import settings
 
 if TYPE_CHECKING:
     from wikify.graph.metrics import GraphMetrics
-    from wikify.papers.retrieve.context import RetrievedContext
+    from wikify.core.retrieve.context import RetrievedContext
     from wikify.store.models import PaperPlan
 
 

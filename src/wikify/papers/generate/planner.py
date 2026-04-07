@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from wikify.llm.client import complete_json, complete_structured, schema_to_prompt
 from wikify.llm.schemas import PaperPlanOutput
-from wikify.papers.retrieve.context import RetrievedContext
+from wikify.core.retrieve.context import RetrievedContext
 from wikify.store.models import PaperPlan, SectionPlan
 
 if TYPE_CHECKING:

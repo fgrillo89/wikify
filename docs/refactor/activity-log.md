@@ -3,6 +3,59 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice Phase 1.A.2 / Phase 2.A (core/, corpus_tools, boundary clean)
+
+Closes the boundary violation surfaced by Phase 1.A: no non-legacy wiki
+module imports from `wikify.papers` anymore.
+
+### What landed
+
+- New `src/wikify/core/` package with `__init__.py` (no shared code yet
+  beyond what's needed for this slice).
+- `src/wikify/papers/retrieve/` → `src/wikify/core/retrieve/`. The
+  retrieve package only depends on `store`, `config`, `graph`, `llm` —
+  it was misnamed as a paper concern. All importers (cli, papers/agent,
+  papers/generate, internal retrieve files) rebound in the same slice.
+- New `src/wikify/core/corpus_tools.py` with three clean primitives:
+  - `compute_graph_metrics() -> CorpusGraphMetrics` — no JSON wrapping;
+    returns `by_paper`/`hub_ids`/`bridge_ids`/`frontier_ids`.
+  - `search_corpus(query, *, top_k, max_tokens) -> CorpusSearchResult`
+    — embedding-based corpus search returning paper ids + text bundle;
+    no agent reading-log.
+  - `read_paper_digest_text(paper_id, *, max_chars) -> str` — pure
+    Python markdown digest, no JSON wrapping, no logging.
+- Wiki callers rewired to `core.corpus_tools`:
+  - `wiki/builder.py::_load_graph_metrics` — calls
+    `compute_graph_metrics()` and looks up display names locally.
+  - `wiki/maintenance.py` — uses `compute_graph_metrics().by_paper`,
+    deletes the dependency on `wiki.mapreduce._parse_graph_metrics`.
+  - `wiki/mapreduce.py` — uses `compute_graph_metrics()`,
+    `search_corpus()`, `read_paper_digest_text()`. Deletes
+    `_parse_graph_metrics` and `_extract_paper_ids_from_search` (no
+    longer needed since `search_corpus` returns ids directly).
+  - `wiki/graph/routing.py::_fallback_search` — uses `search_corpus()`.
+- `tests/test_wiki/test_mapreduce.py` rewritten against the new
+  primitives (mocks `compute_graph_metrics` / `search_corpus` /
+  `read_paper_digest_text` instead of the old JSON-wrapped functions).
+
+### Boundary verification
+
+```
+$ grep -rn "from wikify.papers" src/wikify/wiki src/wikify/ingest \
+    | grep -v wiki/legacy
+(no matches)
+```
+
+The `wiki must not import papers` rule now holds for every non-legacy
+wiki module. The `wiki/legacy/` modules are exempt by design — they
+are slated for deletion when the legacy CLI commands are migrated.
+
+**Verification:** 852 tests pass. Test count dropped from 861 because
+the rewritten `test_mapreduce.py` consolidated several JSON-parsing
+tests that no longer apply (the JSON parser is gone).
+
+---
+
 ## 2026-04-07 — Slice Phase 1.A (papers boundary extraction)
 
 Moved every paper-writing concern under a dedicated `wikify.papers`

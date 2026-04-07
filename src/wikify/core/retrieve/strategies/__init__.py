@@ -6,13 +6,13 @@ into a RetrievedContext for the generation pipeline.
 
 from __future__ import annotations
 
-from wikify.papers.retrieve.strategies.base import RetrievalStrategy, StrategyConfig
-from wikify.papers.retrieve.strategies.flat import FlatStrategy
-from wikify.papers.retrieve.strategies.hierarchical import HierarchicalStrategy
-from wikify.papers.retrieve.strategies.hub_spoke import HubAndSpokeStrategy
-from wikify.papers.retrieve.strategies.query_driven import QueryDrivenStrategy
-from wikify.papers.retrieve.strategies.snowball import SnowballStrategy
-from wikify.papers.retrieve.strategies.topic_cluster import TopicClusteredStrategy
+from wikify.core.retrieve.strategies.base import RetrievalStrategy, StrategyConfig
+from wikify.core.retrieve.strategies.flat import FlatStrategy
+from wikify.core.retrieve.strategies.hierarchical import HierarchicalStrategy
+from wikify.core.retrieve.strategies.hub_spoke import HubAndSpokeStrategy
+from wikify.core.retrieve.strategies.query_driven import QueryDrivenStrategy
+from wikify.core.retrieve.strategies.snowball import SnowballStrategy
+from wikify.core.retrieve.strategies.topic_cluster import TopicClusteredStrategy
 
 STRATEGY_REGISTRY: dict[str, type[RetrievalStrategy]] = {
     "flat": FlatStrategy,

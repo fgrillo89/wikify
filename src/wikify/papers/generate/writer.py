@@ -14,12 +14,12 @@ from wikify.papers.generate.references import ReferenceResolver
 from wikify.papers.generate.verifier import verify_paper, verify_section_against_plan
 from wikify.llm.client import LLMOutputError, complete, validate_and_retry_text
 from wikify.llm.schemas import SectionOutput
-from wikify.papers.retrieve.context import RetrievedContext
+from wikify.core.retrieve.context import RetrievedContext
 from wikify.store.models import PaperPlan, SectionPlan
 
 if TYPE_CHECKING:
     from wikify.papers.export.journal_profile import JournalProfile
-    from wikify.papers.retrieve.context import SectionContext
+    from wikify.core.retrieve.context import SectionContext
     from wikify.store.models import Paper
 
 console = Console()

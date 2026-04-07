@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from wikify.papers.retrieve.strategies import (
+from wikify.core.retrieve.strategies import (
     FlatStrategy,
     HubAndSpokeStrategy,
     StrategyConfig,

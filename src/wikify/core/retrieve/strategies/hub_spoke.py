@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.papers.retrieve.strategies.base import RetrievalStrategy
+from wikify.core.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
     import networkx as nx
 
     from wikify.graph.metrics import GraphMetrics
-    from wikify.papers.retrieve.strategies.base import StrategyConfig
+    from wikify.core.retrieve.strategies.base import StrategyConfig
     from wikify.store.models import Chunk, Paper, PaperPlan
 
 logger = logging.getLogger(__name__)
@@ -88,13 +88,13 @@ class HubAndSpokeStrategy(RetrievalStrategy):
         plan: PaperPlan | None = None,  # noqa: ARG002
     ):
         from wikify.graph.metrics import build_corpus_graph, compute_metrics
-        from wikify.papers.retrieve.context import RetrievedContext, SectionContext
+        from wikify.core.retrieve.context import RetrievedContext, SectionContext
         from wikify.store.db import get_session
         from wikify.store.models import Chunk, Paper
 
         metrics = graph_metrics or compute_metrics()
         if not metrics or not metrics.hub_papers:
-            from wikify.papers.retrieve.strategies.flat import FlatStrategy
+            from wikify.core.retrieve.strategies.flat import FlatStrategy
 
             return FlatStrategy(self.config).retrieve(graph_metrics=metrics)
 

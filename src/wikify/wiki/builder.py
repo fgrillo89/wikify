@@ -16,6 +16,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlmodel import select
+
 from wikify.wiki.presentation.layout import (
     LEGACY_VISIBLE_DIRS,
     article_path_for_category,
@@ -783,19 +785,28 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
 
 
 def _load_graph_metrics() -> dict:
-    """Return parsed graph metrics dict, or empty dict on failure."""
-    try:
-        from wikify.papers.agent.tools import get_graph_metrics
+    """Return graph metrics in the dict shape index generation expects."""
+    from wikify.core.corpus_tools import compute_graph_metrics
+    from wikify.store.db import get_session
+    from wikify.store.models import Paper
 
-        raw = get_graph_metrics()
-        data = json.loads(raw)
-        if data.get("error"):
-            logger.warning("Graph metrics error: %s", data["error"])
-            return {}
-        return data
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not load graph metrics for index generation: %s", exc)
+    metrics = compute_graph_metrics()
+    if metrics.error:
+        logger.warning("Graph metrics error: %s", metrics.error)
         return {}
+
+    with get_session() as session:
+        papers = list(session.exec(select(Paper)).all())
+    name_by_id = {p.id: p.display_name() for p in papers}
+
+    def _entries(ids: list[str]) -> list[dict]:
+        return [{"id": pid, "display_name": name_by_id.get(pid, pid[:16])} for pid in ids]
+
+    return {
+        "hub_papers": _entries(metrics.hub_ids),
+        "bridge_papers": _entries(metrics.bridge_ids),
+        "frontier_papers": _entries(metrics.frontier_ids),
+    }
 
 
 def _graph_display_names(entries: list[dict]) -> list[str]:

@@ -262,10 +262,9 @@ def structural_audit(
     """
     from sqlmodel import func, select
 
-    from wikify.papers.agent.tools import get_graph_metrics
+    from wikify.core.corpus_tools import compute_graph_metrics
     from wikify.store.db import get_session
     from wikify.store.models import Paper, SourceCoverage, WikiArticle
-    from wikify.wiki.mapreduce import _parse_graph_metrics
 
     report = StructuralReport(domain=domain)
 
@@ -344,8 +343,7 @@ def structural_audit(
 
     # ── Graph drift: hub/bridge papers not in any article source_ids ─────────
     try:
-        graph_raw = get_graph_metrics()
-        graph_lookup = _parse_graph_metrics(graph_raw)
+        graph_lookup = compute_graph_metrics().by_paper
 
         all_source_ids: set[str] = set()
         for src_set in slug_to_sources.values():

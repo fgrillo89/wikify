@@ -168,8 +168,8 @@ def retrieve_for_query(
 
     Falls through tiers until a confident result is found.
     """
-    from wikify.papers.retrieve.bm25 import bm25_is_confident, bm25_search
-    from wikify.papers.retrieve.cache import get_query_cache
+    from wikify.core.retrieve.bm25 import bm25_is_confident, bm25_search
+    from wikify.core.retrieve.cache import get_query_cache
     from wikify.store.embeddings import query_chunks
 
     cache = get_query_cache()

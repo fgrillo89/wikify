@@ -12,7 +12,7 @@ from wikify.store.models import PaperTopic
 
 if TYPE_CHECKING:
     from wikify.papers.export.journal_profile import JournalProfile
-    from wikify.papers.retrieve.context import RetrievedContext
+    from wikify.core.retrieve.context import RetrievedContext
 
 
 def _find_style_guide() -> Path | None:

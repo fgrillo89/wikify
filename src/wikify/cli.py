@@ -132,7 +132,7 @@ def generate(
     from wikify.papers.export.journal_profile import load_journal_profile
     from wikify.papers.generate.planner import plan_paper
     from wikify.papers.generate.writer import write_paper
-    from wikify.papers.retrieve.strategies import StrategyConfig, get_strategy
+    from wikify.core.retrieve.strategies import StrategyConfig, get_strategy
 
     start = time.time()
     journal_profile = load_journal_profile(journal)
@@ -344,7 +344,7 @@ def slides(
 
     from wikify.papers.export.pptx_export import export_slides
     from wikify.papers.generate.planner import plan_slides
-    from wikify.papers.retrieve.context import retrieve_all_papers
+    from wikify.core.retrieve.context import retrieve_all_papers
 
     start = time.time()
 

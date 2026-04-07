@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from wikify.llm.client import complete
-from wikify.papers.retrieve.context import retrieve_for_query
+from wikify.core.retrieve.context import retrieve_for_query
 
 console = Console()
 

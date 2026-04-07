@@ -245,7 +245,7 @@ def search_papers(
         Formatted text of relevant paper excerpts followed by a metadata summary line.
     """
     try:
-        from wikify.papers.retrieve.context import retrieve_for_query
+        from wikify.core.retrieve.context import retrieve_for_query
 
         ctx = retrieve_for_query(query, max_papers=top_k, max_tokens=max_tokens)
 

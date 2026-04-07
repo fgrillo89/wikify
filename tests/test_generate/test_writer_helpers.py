@@ -7,7 +7,7 @@ from wikify.papers.generate.writer import (
     _compact_prior_sections,
     _extract_section_summary,
 )
-from wikify.papers.retrieve.context import RetrievedContext
+from wikify.core.retrieve.context import RetrievedContext
 from wikify.store.models import Paper, PaperPlan, SectionPlan
 
 # ── Context compaction tests ─────────────────────────────────────────────────

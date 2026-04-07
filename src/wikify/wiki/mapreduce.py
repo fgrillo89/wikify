@@ -15,8 +15,12 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from wikify.papers.agent.tools import get_graph_metrics, read_paper_digest, search_papers
 from wikify.config import settings
+from wikify.core.corpus_tools import (
+    compute_graph_metrics,
+    read_paper_digest_text,
+    search_corpus,
+)
 from wikify.llm.client import complete
 from wikify.store.db import get_session
 from wikify.store.models import Paper, SourceCoverage
@@ -59,80 +63,8 @@ class SourceExtraction:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _parse_graph_metrics(raw: str) -> dict[str, dict]:
-    """Parse the JSON string returned by get_graph_metrics().
-
-    Returns a dict mapping paper_id -> {role, pagerank, betweenness}.
-    Falls back to empty dict on any parse error.
-    """
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Could not parse graph metrics JSON")
-        return {}
-
-    if "error" in data:
-        logger.warning("get_graph_metrics returned error: %s", data["error"])
-        return {}
-
-    lookup: dict[str, dict] = {}
-
-    for entry in data.get("hub_papers", []):
-        pid = entry.get("id", "")
-        if pid:
-            lookup[pid] = {
-                "role": "hub",
-                "pagerank": entry.get("pagerank", 0.0),
-                "betweenness": 0.0,
-                "display_name": entry.get("display_name", ""),
-            }
-
-    for entry in data.get("bridge_papers", []):
-        pid = entry.get("id", "")
-        if pid:
-            lookup[pid] = {
-                "role": "bridge",
-                "pagerank": 0.0,
-                "betweenness": entry.get("betweenness", 0.0),
-                "display_name": entry.get("display_name", ""),
-            }
-
-    for entry in data.get("frontier_papers", []):
-        pid = entry.get("id", "")
-        if pid and pid not in lookup:
-            lookup[pid] = {
-                "role": "frontier",
-                "pagerank": 0.0,
-                "betweenness": 0.0,
-                "display_name": entry.get("display_name", ""),
-            }
-
-    # full_ranking fills in pagerank + role for standard papers
-    for entry in data.get("full_ranking", []):
-        pid = entry.get("id", "")
-        if pid and pid not in lookup:
-            lookup[pid] = {
-                "role": entry.get("role", "standard"),
-                "pagerank": entry.get("pagerank", 0.0),
-                "betweenness": entry.get("betweenness", 0.0),
-                "display_name": entry.get("display_name", ""),
-            }
-
-    return lookup
-
-
-def _extract_paper_ids_from_search(search_result: str) -> list[str]:
-    """Extract ordered, deduplicated paper IDs from a search_papers() result."""
-    import re
-
-    raw_ids: list[str] = re.findall(r"Paper:\s*([a-f0-9]{8,})", search_result)
-    seen: set[str] = set()
-    unique: list[str] = []
-    for pid in raw_ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique.append(pid)
-    return unique
+# Graph metrics and corpus search now come straight from
+# wikify.core.corpus_tools — no JSON wrappers, no agent reading log.
 
 
 def _determine_register(extractions: list[SourceExtraction]) -> str:
@@ -219,20 +151,13 @@ def map_chunks_to_topic(
     map_model = model or FAST_MODEL
 
     # ── Step 1: Graph enrichment ──────────────────────────────────────────────
-    graph_raw = get_graph_metrics()
-    graph_lookup = _parse_graph_metrics(graph_raw)
+    metrics = compute_graph_metrics()
+    graph_lookup = metrics.by_paper
+    hub_and_bridge_ids = set(metrics.hub_ids) | set(metrics.bridge_ids)
 
-    hub_and_bridge_ids = {
-        pid for pid, info in graph_lookup.items() if info["role"] in ("hub", "bridge")
-    }
-
-    # ── Step 2: Pre-filter via search_papers ──────────────────────────────────
-    search_result = search_papers(
-        topic_query,
-        top_k=MAP_MAX_SOURCES,
-        reason=f"map-reduce: {topic_query}",
-    )
-    candidate_ids = _extract_paper_ids_from_search(search_result)
+    # ── Step 2: Pre-filter via corpus search ─────────────────────────────────
+    search_result = search_corpus(topic_query, top_k=MAP_MAX_SOURCES)
+    candidate_ids = list(search_result.paper_ids)
 
     # Always include hub/bridge papers and key_source_ids from entry
     forced_ids = hub_and_bridge_ids.copy()
@@ -279,11 +204,7 @@ def map_chunks_to_topic(
             logger.debug("map_chunks_to_topic: paper %s not found, skipping", pid)
             return None
 
-        digest_text = read_paper_digest(
-            pid[:16],
-            max_chars=800,
-            reason=f"map for wiki: {topic_query}",
-        )
+        digest_text = read_paper_digest_text(pid, max_chars=800)
 
         map_prompt = (
             f"Source: {paper.display_name()} ({paper.doc_type})\n"

@@ -436,20 +436,22 @@ def get_domain_context(concept_id: str) -> dict:
 
 
 def _fallback_search(query: str, top_k: int) -> list[dict]:
-    """Delegate to unscoped search_papers and wrap result in the standard dict shape."""
+    """Delegate to unscoped corpus search and wrap result in the standard dict shape."""
     try:
-        from wikify.papers.agent.tools import search_papers
+        from wikify.core.corpus_tools import search_corpus
 
-        raw_text = search_papers(query, top_k=top_k)
+        result = search_corpus(query, top_k=top_k)
         return [
             {
                 "source_id": "",
                 "chunk_id": "",
                 "score": 0.0,
                 "domain": "unscoped",
-                "content_preview": raw_text[:500] + "..." if len(raw_text) > 500 else raw_text,
+                "content_preview": (
+                    result.text[:500] + "..." if len(result.text) > 500 else result.text
+                ),
             }
         ]
     except Exception:
-        logger.exception("_fallback_search: search_papers failed for query %r", query)
+        logger.exception("_fallback_search: corpus search failed for query %r", query)
         return []

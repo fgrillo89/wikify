@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from wikify.papers.retrieve.strategies.base import RetrievalStrategy
+from wikify.core.retrieve.strategies.base import RetrievalStrategy
 
 if TYPE_CHECKING:
     from wikify.graph.metrics import GraphMetrics
@@ -30,7 +30,7 @@ class FlatStrategy(RetrievalStrategy):
         plan: PaperPlan | None = None,  # noqa: ARG002
     ):
         from wikify.graph.metrics import compute_metrics
-        from wikify.papers.retrieve.context import RetrievedContext
+        from wikify.core.retrieve.context import RetrievedContext
         from wikify.store.db import get_session
         from wikify.store.models import Chunk, Paper
 
