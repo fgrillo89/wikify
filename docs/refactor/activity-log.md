@@ -3,6 +3,59 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice: last lazy-import follow-up (papers/agent/tools.py drained)
+
+Walked the remaining 53 lazy imports in ``papers/agent/tools.py`` and
+verified — by grepping each candidate's source for back-imports of
+``wikify.papers.agent.tools`` — that none of them would create a
+cycle. All hoistable imports were lifted to module top:
+
+- ``wikify.papers.agent.{reading_log, run_context, concept_graph}``
+  (15 imports across the file — these are siblings of tools.py and
+  do not back-import it)
+- ``wikify.wiki.runtime`` (6 different functions: ``run_maintain``,
+  ``run_campaign``, ``query_wiki``, ``reconcile_state``,
+  ``export_metrics``, ``compare_runs``) — ``papers → wiki`` is allowed
+  by the architecture
+- ``wikify.wiki.{builder, presentation.layout, graph.routing}``
+- ``wikify.papers.evaluate.{coverage, frontier}``
+- ``wikify.core.{graph.metrics, llm.vision, retrieve.context,
+  store.{corpus, db, embeddings, gc, models, precompute}}``
+- ``wikify.ingest.{service, corpus_refresh}``
+- ``networkx as nx``
+
+After this slice ``papers/agent/tools.py`` has **2** lazy imports
+remaining, both legitimate:
+
+1. ``from sklearn.cluster import KMeans`` — optional dependency.
+2. One comment-line false positive in the docstring grep.
+
+### Test patch updates
+
+- ``tests/test_papers/test_agent/test_ingest_tool.py``: rebound
+  ``wikify.ingest.service.ingest_file`` →
+  ``wikify.papers.agent.tools.ingest_file`` (patch-where-it's-used
+  after the import was hoisted).
+
+### Codebase totals
+
+| Metric | Before this slice | After |
+|---|---:|---:|
+| Lazy imports in ``papers/agent/tools.py`` | 53 | 2 |
+| Lazy imports across ``src/wikify`` | 425 | 374 |
+
+**Verification:** 818 tests pass.
+
+The remaining 374 lazy imports across the codebase fall into the
+three allowlisted categories (optional deps, cycle breaks inside
+``papers/agent/*`` / ``ingest/extract/*`` / ``ingest/vault/*``, and
+Typer command bodies under ``src/wikify/cli/``). At this point the
+lazy-import sweep is **complete** — further reductions would either
+need a deeper untangling of the agent-package cycles (its own slice)
+or would violate the allowlist.
+
+---
+
 ## 2026-04-07 — Slice: focused lazy-import sweep across the worst offenders
 
 Continues the code-quality sweep. Walked the top non-CLI offenders

@@ -40,7 +40,7 @@ def test_ingest_paper_returns_structured_already_ingested(monkeypatch, tmp_path)
         source_path=str(file_path),
     )
 
-    monkeypatch.setattr("wikify.ingest.service.ingest_file", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("wikify.papers.agent.tools.ingest_file", lambda *args, **kwargs: 0)
 
     class _Session:
         def __enter__(self):
@@ -74,7 +74,7 @@ def test_ingest_paper_returns_structured_success(monkeypatch, tmp_path):
         source_path=str(file_path),
     )
 
-    monkeypatch.setattr("wikify.ingest.service.ingest_file", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("wikify.papers.agent.tools.ingest_file", lambda *args, **kwargs: 1)
 
     class _ExecResult:
         def all(self):

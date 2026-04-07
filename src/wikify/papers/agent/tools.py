@@ -13,9 +13,20 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
+import networkx as nx
 from sqlmodel import func, select
 
+from wikify.core.graph.metrics import build_corpus_graph, compute_metrics
+from wikify.core.llm.vision import view_figure
+from wikify.core.retrieve.context import retrieve_for_query
+from wikify.core.store.corpus import load_corpus_chunks
 from wikify.core.store.db import get_session
+from wikify.core.store.embeddings import (
+    _store,
+    get_chunk_embeddings,
+    get_paper_vibe_vectors,
+)
+from wikify.core.store.gc import gc_run, integrity_check
 from wikify.core.store.models import (
     Chunk,
     ConceptRecord,
@@ -23,6 +34,37 @@ from wikify.core.store.models import (
     Figure,
     Paper,
     PaperTopic,
+)
+from wikify.core.store.precompute import (
+    load_concept_links,
+    load_divergent_gaps,
+    load_kmeans,
+)
+from wikify.ingest.corpus_refresh import load_corpus_vocabulary
+from wikify.ingest.service import ingest_file
+from wikify.papers.agent.concept_graph import get_concept_graph
+from wikify.papers.agent.reading_log import get_reading_log
+from wikify.papers.agent.run_context import get_current_run_context
+from wikify.papers.evaluate.coverage import (
+    compute_coverage,
+    compute_paper_vibes,
+    vibe_map_for_llm,
+)
+from wikify.papers.evaluate.frontier import (
+    compute_paper_density,
+    format_frontier_order_for_agent,
+    frontier_exploration_order,
+)
+from wikify.wiki.builder import slugify
+from wikify.wiki.graph.routing import domain_aware_search, get_domain_context
+from wikify.wiki.presentation.layout import iter_visible_page_files
+from wikify.wiki.runtime import (
+    compare_runs,
+    export_metrics,
+    query_wiki,
+    reconcile_state,
+    run_campaign,
+    run_maintain,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -139,7 +181,6 @@ def _build_corpus_summary() -> str:
     """Build a pre-formatted markdown summary of the corpus for LLM consumption."""
 
 
-    from wikify.ingest.corpus_refresh import load_corpus_vocabulary
 
     with get_session() as session:
         papers = session.exec(select(Paper)).all()
@@ -170,7 +211,6 @@ def _build_corpus_summary() -> str:
 
     # Graph metrics (hub / bridge / frontier) — wrapped defensively
     try:
-        from wikify.core.graph.metrics import compute_metrics
 
         metrics = compute_metrics()
         id_to_paper = {p.id: p for p in papers}
@@ -257,13 +297,11 @@ def search_papers(
         Formatted text of relevant paper excerpts followed by a metadata summary line.
     """
     try:
-        from wikify.core.retrieve.context import retrieve_for_query
 
         ctx = retrieve_for_query(query, max_papers=top_k, max_tokens=max_tokens)
 
         # Log this search
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             get_reading_log().log(
                 paper=f"[search: {query}]", tool="search_papers", reason=reason, depth="search"
@@ -297,7 +335,6 @@ def search_wiki_domains(query: str, top_k: int = 10) -> str:
         JSON with domain-scoped search results including domain labels.
     """
     try:
-        from wikify.wiki.graph.routing import domain_aware_search
 
         results = domain_aware_search(query, top_k)
         return _tool_json_success(results=results, count=len(results))
@@ -393,7 +430,6 @@ def get_paper(
 
         # Log this read
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             get_reading_log().log(
                 paper=paper.display_name(), tool="get_paper", reason=reason, depth="metadata"
@@ -440,7 +476,6 @@ def get_graph_metrics() -> str:
     """
     try:
 
-        from wikify.core.graph.metrics import compute_metrics
 
         with get_session() as session:
             papers = session.exec(select(Paper)).all()
@@ -522,7 +557,6 @@ def scan_all_abstracts(max_papers: int = 50) -> str:
 
         # Order by citation PageRank (most influential first)
         try:
-            from wikify.core.graph.metrics import compute_metrics
 
             metrics = compute_metrics()
             all_papers.sort(key=lambda p: metrics.pagerank.get(p.id, 0), reverse=True)
@@ -666,7 +700,6 @@ def read_paper_digest(
 
         # Log this read
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             get_reading_log().log(
                 paper=paper.display_name(), tool="read_paper_digest", reason=reason, depth="digest"
@@ -791,7 +824,6 @@ def deep_read(
 
         # Log this read
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             get_reading_log().log(
                 paper=paper.display_name(), tool="deep_read", reason=reason, depth="full"
@@ -876,7 +908,6 @@ def read_section(
 
         # Log this read
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             get_reading_log().log(
                 paper=paper.display_name(),
@@ -1017,7 +1048,6 @@ def get_sections(
 
         # Log this section read
         if reason:
-            from wikify.papers.agent.reading_log import get_reading_log
 
             label = f"[sections: {st}]"
             if paper_pattern:
@@ -1103,8 +1133,6 @@ def suggest_next_papers(
     """
     try:
 
-        from wikify.core.graph.metrics import build_corpus_graph
-        from wikify.papers.evaluate.coverage import compute_paper_vibes
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1156,7 +1184,6 @@ def suggest_next_papers(
             min_dist = 999
             for rid in read_ids:
                 try:
-                    import networkx as nx
 
                     d = nx.shortest_path_length(undirected, source=rid, target=cid)
                     min_dist = min(min_dist, d)
@@ -1216,7 +1243,6 @@ def get_coverage_gaps(
     try:
 
 
-        from wikify.papers.evaluate.coverage import compute_coverage
 
         result = compute_coverage(review_text, threshold=threshold)
         delta = result.coverage_ratio - previous_coverage
@@ -1309,8 +1335,6 @@ def find_jump_target(
     """
     try:
 
-        from wikify.core.graph.metrics import build_corpus_graph
-        from wikify.papers.evaluate.coverage import compute_coverage, compute_paper_vibes
 
         read_ids = _resolve_to_paper_ids(already_read)
         if not read_ids:
@@ -1429,10 +1453,6 @@ def get_frontier_exploration_order(max_papers: int = 15) -> str:
         Ordered list of papers with depth (full/digest) and rationale.
     """
     try:
-        from wikify.papers.evaluate.frontier import (
-            format_frontier_order_for_agent,
-            frontier_exploration_order,
-        )
 
         order = frontier_exploration_order(max_papers=max_papers)
         return format_frontier_order_for_agent(order)
@@ -1465,7 +1485,6 @@ def find_corpus_gaps() -> str:
     """
     # Try cached divergent gaps first (computed at ingest time)
     try:
-        from wikify.core.store.precompute import load_divergent_gaps
 
         gaps = load_divergent_gaps()
         if gaps:
@@ -1490,8 +1509,6 @@ def find_corpus_gaps() -> str:
     try:
         from sklearn.cluster import KMeans
 
-        from wikify.core.store.embeddings import _store, get_chunk_embeddings
-        from wikify.core.store.corpus import load_corpus_chunks
 
         chunks = load_corpus_chunks()
         if not chunks:
@@ -1506,7 +1523,6 @@ def find_corpus_gaps() -> str:
         corpus_embs = corpus_embs / corpus_norms
 
         # Try cached KMeans first (computed at ingest time)
-        from wikify.core.store.precompute import load_kmeans
 
         cached = load_kmeans()
         if cached is not None:
@@ -1661,7 +1677,6 @@ def find_synthesis_opportunities() -> str:
     """
     # Try cached concept links first (section-filtered, boilerplate-free)
     try:
-        from wikify.core.store.precompute import load_concept_links
 
         links = load_concept_links()
         if links:
@@ -1683,7 +1698,6 @@ def find_synthesis_opportunities() -> str:
     # Fall back to vibe-based pair selection
     try:
 
-        from wikify.core.store.embeddings import get_paper_vibe_vectors
 
         vibes = get_paper_vibe_vectors()
         if not vibes:
@@ -1753,7 +1767,6 @@ def get_paper_vibes(top_k: int = 5) -> str:
         Markdown-formatted vibe map showing paper similarities.
     """
     try:
-        from wikify.papers.evaluate.coverage import compute_paper_vibes, vibe_map_for_llm
 
         vibes = compute_paper_vibes()
         return vibe_map_for_llm(vibes, top_k=top_k)
@@ -1777,7 +1790,6 @@ def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
         Coverage report with overall score, per-paper coverage, gaps, and redundancy.
     """
     try:
-        from wikify.papers.evaluate.coverage import compute_coverage
 
         result = compute_coverage(review_text, threshold=threshold)
 
@@ -1810,14 +1822,12 @@ def evaluate_coverage(review_text: str, threshold: float = 0.5) -> str:
 
 def reset_paper_summaries() -> None:
     """Clear the session paper summary store. Call at the start of each run."""
-    from wikify.papers.agent.run_context import get_current_run_context
 
     get_current_run_context().paper_summaries.clear()
 
 
 def get_paper_summaries() -> list[dict]:
     """Return all recorded paper summaries (internal helper)."""
-    from wikify.papers.agent.run_context import get_current_run_context
 
     return list(get_current_run_context().paper_summaries)
 
@@ -1869,20 +1879,17 @@ def record_paper_summary(
         "read_depth": read_depth,
         "role": role,
     }
-    from wikify.papers.agent.run_context import get_current_run_context
 
     get_current_run_context().paper_summaries.append(summary)
 
     # Build concept graph edges
     n_links = 0
     if concept_links:
-        from wikify.papers.agent.concept_graph import get_concept_graph
 
         graph = get_concept_graph()
         n_links = graph.add_from_summary(paper_name, concept_links)
 
     # Also log to reading log
-    from wikify.papers.agent.reading_log import get_reading_log
 
     get_reading_log().log(
         paper=paper_name,
@@ -1944,7 +1951,6 @@ def query_concept_graph(concept: str) -> str:
     Returns:
         List of connected concepts with papers and evidence.
     """
-    from wikify.papers.agent.concept_graph import get_concept_graph
 
     graph = get_concept_graph()
     neighbors = graph.neighbors(concept)
@@ -1981,8 +1987,6 @@ def get_concept_domain_context(concept: str) -> str:
         JSON with primary_domain, all_domains, is_bridge, neighbors_in_other_domains.
     """
     try:
-        from wikify.wiki.builder import slugify
-        from wikify.wiki.graph.routing import get_domain_context
 
         context = get_domain_context(slugify(concept))
         return _tool_json_success(**context)
@@ -2031,7 +2035,6 @@ def find_citation_for(claim: str) -> str:
     Returns:
         Best matching paper with display_name and evidence.
     """
-    from wikify.papers.agent.concept_graph import get_concept_graph
 
     graph = get_concept_graph()
 
@@ -2077,7 +2080,6 @@ def get_reading_log_text() -> str:
     which tool was used and the reason for each read. Returns empty
     message if no papers have been read yet.
     """
-    from wikify.papers.agent.reading_log import get_reading_log
 
     log = get_reading_log()
     if not log.entries:
@@ -2097,7 +2099,6 @@ def save_reading_log(output_dir: str, basename: str = "reading_log") -> str:
     Returns:
         Path to the saved markdown log.
     """
-    from wikify.papers.agent.reading_log import get_reading_log
 
     log = get_reading_log()
     if not log.entries:
@@ -2122,7 +2123,6 @@ def ingest_paper(file_path: str) -> str:
     try:
 
 
-        from wikify.ingest.service import ingest_file
 
         path = Path(file_path)
         if not path.exists():
@@ -2215,8 +2215,6 @@ def check_wiki_health() -> str:
     """
 
 
-    from wikify.core.store.gc import integrity_check
-    from wikify.wiki.presentation.layout import iter_visible_page_files
 
     wiki_dir = Path("data/wiki")
 
@@ -2241,7 +2239,6 @@ def check_wiki_health() -> str:
         text = md_file.read_text(encoding="utf-8", errors="replace")
         links = re.findall(r"\[\[([^\]|]+)", text)
         for link in links:
-            from wikify.wiki.builder import slugify
 
             slug = slugify(link.strip())
             if slug not in visible_slugs:
@@ -2277,7 +2274,6 @@ def search_wiki(query: str, top_k: int = 10) -> str:
     """
 
 
-    from wikify.wiki.presentation.layout import iter_visible_page_files
 
     # Search the concept definitions via ConceptRecord
     with get_session() as session:
@@ -2334,7 +2330,6 @@ def run_wiki_gc() -> str:
     Redirects merged concept references, removes orphaned rows,
     and cleans ChromaDB staging. Safe to run at any time.
     """
-    from wikify.core.store.gc import gc_run
 
     result = gc_run()
     return _tool_json_success(
@@ -2348,7 +2343,6 @@ def run_wiki_gc() -> str:
 def reconcile_wiki_state() -> str:
     """Rebuild operational wiki page state from visible markdown files."""
 
-    from wikify.wiki.runtime import reconcile_state
 
     return _tool_json_success(**reconcile_state(Path("data/wiki")))
 
@@ -2356,7 +2350,6 @@ def reconcile_wiki_state() -> str:
 def run_wiki_maintain() -> str:
     """Run the maintenance sweep over the visible wiki and operational layer."""
 
-    from wikify.wiki.runtime import run_maintain
 
     return _tool_json_success(**run_maintain(Path("data/wiki")))
 
@@ -2364,7 +2357,6 @@ def run_wiki_maintain() -> str:
 def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
     """Export aggregated run telemetry and wiki metrics."""
 
-    from wikify.wiki.runtime import export_metrics
 
     return _tool_json_success(
         **export_metrics(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
@@ -2374,7 +2366,6 @@ def export_wiki_metrics(workflow_type: str = "", limit: int = 20) -> str:
 def compare_wiki_runs(workflow_type: str = "", limit: int = 10) -> str:
     """Compare recent wiki runs on cost, retrieval effort, and outcome metrics."""
 
-    from wikify.wiki.runtime import compare_runs
 
     return _tool_json_success(
         **compare_runs(Path("data/wiki"), workflow_type=workflow_type, limit=limit)
@@ -2389,7 +2380,6 @@ def query_wiki_runtime(
 ) -> str:
     """Answer a question from the visible wiki via the shared runtime."""
 
-    from wikify.wiki.runtime import query_wiki
 
     return _tool_json_success(
         **query_wiki(
@@ -2413,7 +2403,6 @@ def run_wiki_campaign(
 ) -> str:
     """Run a thesis-driven wiki campaign through the shared runtime."""
 
-    from wikify.wiki.runtime import run_campaign
 
     return _tool_json_success(
         **run_campaign(
@@ -2445,7 +2434,6 @@ def get_figure_details(figure_id: str) -> str:
         media_type, image_base64 (or error).
     """
     try:
-        from wikify.core.llm.vision import view_figure
 
         result = view_figure(figure_id)
         if "error" in result:
