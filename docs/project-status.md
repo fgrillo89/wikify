@@ -52,12 +52,12 @@ Key architectural themes in the current work:
 
 | Boundary | Status | Notes |
 |----------|--------|-------|
-| `core` | In progress | Shared infrastructure exists today but still needs cleaner ownership under a dedicated `core/` boundary. |
-| `ingest` | Working, needs consolidation | Parsing, chunking, embeddings, BibTeX, and refresh exist; refresh and parser organization still need cleanup. |
-| `wiki` | Working, active refactor target | Epoch/query/maintain/campaign and visible wiki outputs exist, but the package needs clearer internal boundaries and smaller modules. |
-| `papers` | Working, boundary extraction pending | Writing and export capabilities exist, but they still bleed into the root package layout and adapters. |
-| adapters | Working, needs thinning | CLI and MCP work today, but still carry too much product logic and historical coupling. |
-| docs | In progress | Architecture and status are being simplified; stale design docs are being archived. |
+| `core` | **Landed** | `src/wikify/core/` owns config, llm, store, graph, retrieve, corpus_tools. |
+| `ingest` | **Landed** | `src/wikify/ingest/` owns parsers, extract, vault, zotero, refresh. |
+| `wiki` | **Landed** | `src/wikify/wiki/` is decomposed into concepts, discovery, graph, observability, presentation, articles, recipes, legacy. |
+| `papers` | **Landed** | `src/wikify/papers/` owns agent, generate, evaluate, export, prompts. |
+| adapters | Working, still thick | `cli.py` and `mcp_server.py` exist but still contain product logic; thinning is the next slice. |
+| docs | **Updated** | Architecture, status, and the active refactor activity log all reflect the current code layout. |
 
 ## What Works Today
 
@@ -136,7 +136,33 @@ The intended direction is:
   remain useful context, but they are no longer the current implementation
   surface.
 
-## Recently Landed
+## Recently Landed (2026-04-07 refactor sweep)
+
+The four-boundary architecture now exists in code. The slices that
+landed in this sweep:
+
+- **S3.A** — discovery scaffold, agent-native concepts decomposition,
+  recipe layer, vendor naming purge.
+- **S3.B** — `wiki/graph/` subpackage (concept_graph, domains, routing).
+- **S3.E** — `wiki/observability/` subpackage (telemetry).
+- **S3.F** — `wiki/presentation/` subpackage (HTML, dashboard, layout, templates).
+- **S3.G** — `wiki/legacy/` namespace for the sitemap-first flow.
+- **Phase 1.A** — papers boundary: `agent`, `generate`, `retrieve`,
+  `evaluate`, `export`, `prompts` moved under `wikify.papers.*`.
+- **Phase 1.A.2 / 2.A** — `core/retrieve` extracted from papers,
+  `core/corpus_tools.py` introduced, wiki callers rewired to core.
+  The `wiki must not import papers` rule now holds for all
+  non-legacy wiki modules.
+- **Phase 2.A** — `config`, `llm`, `store`, `graph` moved into `core/`.
+- **Phase 1.B / 2.B** — `extract`, `vault`, `zotero` moved into `ingest/`.
+- **S5.A** — `tests/` mirrored to `test_core / test_ingest / test_wiki / test_papers`.
+
+Final top-level layout matches the architecture target exactly.
+**852 tests pass.** Each slice was committed and pushed individually
+with a clear scope; the full chronology is in
+`docs/refactor/activity-log.md`.
+
+## Older "Recently Landed" notes
 - **S3.A scaffold**: `wikify.wiki.discovery` subsystem now exists with typed
   contracts (`DocumentProfile`, `ExtractionUnit`, `ExtractionNote`,
   `CandidateConcept`, `CoverageRecord`, `DagNodeSpec`, `DagRunSpec`),
