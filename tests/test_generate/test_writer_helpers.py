@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from wikify.generate.writer import (
+from wikify.papers.generate.writer import (
     _check_context_sufficiency,
     _compact_prior_sections,
     _extract_section_summary,
 )
-from wikify.retrieve.context import RetrievedContext
+from wikify.papers.retrieve.context import RetrievedContext
 from wikify.store.models import Paper, PaperPlan, SectionPlan
 
 # ── Context compaction tests ─────────────────────────────────────────────────

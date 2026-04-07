@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-from wikify.agent.core import AgentResult, ScholarForgeAgent
+from wikify.papers.agent.core import AgentResult, ScholarForgeAgent
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

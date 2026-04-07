@@ -3,6 +3,45 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice Phase 1.A (papers boundary extraction)
+
+Moved every paper-writing concern under a dedicated `wikify.papers`
+namespace. No shims, no parallel paths.
+
+- `src/wikify/agent/`    → `src/wikify/papers/agent/`
+- `src/wikify/generate/` → `src/wikify/papers/generate/`
+- `src/wikify/retrieve/` → `src/wikify/papers/retrieve/`
+- `src/wikify/evaluate/` → `src/wikify/papers/evaluate/`
+- `src/wikify/export/`   → `src/wikify/papers/export/`
+- `src/wikify/prompts/`  → `src/wikify/papers/prompts/`
+- New `src/wikify/papers/__init__.py`
+
+Bulk-rebound 64 files (`wikify.{agent,generate,retrieve,evaluate,export,prompts}`
+→ `wikify.papers.*`) plus the recipe YAML. **861 tests pass.**
+
+### Known boundary violation surfaced by this move
+
+Several wiki modules still import corpus-level tool helpers from
+`wikify.papers.agent.tools`:
+
+- `wiki/builder.py`        → `get_graph_metrics`
+- `wiki/graph/routing.py`  → `search_papers`
+- `wiki/maintenance.py`    → `get_graph_metrics`
+- `wiki/mapreduce.py`      → `get_graph_metrics`, `read_paper_digest`,
+                              `search_papers`
+- `wiki/legacy/agent.py`, `wiki/legacy/sitemap.py` (legacy — fine for now)
+
+These are not paper-writing concerns; they are corpus-level retrieval
+helpers that happen to live in the agent tools module. **Next slice:**
+extract `get_graph_metrics`, `search_papers`, `read_paper_digest`,
+`read_section`, `deep_read`, and `find_synthesis_opportunities` into a
+shared corpus-tools module (e.g. `src/wikify/core/corpus_tools.py`),
+update both the wiki callers and the papers agent to import from
+there. After that the boundary rule (`wiki must not import from papers`)
+will hold for all non-legacy code.
+
+---
+
 ## 2026-04-07 — Slice S3.G (legacy sitemap path isolated)
 
 Moved the sitemap-first wiki flow into `wiki/legacy/`:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wikify.retrieve.bm25 import BM25Index, _tokenize, bm25_is_confident
+from wikify.papers.retrieve.bm25 import BM25Index, _tokenize, bm25_is_confident
 
 # ── Tokenization ────────────────────────────────────────────────────────────
 

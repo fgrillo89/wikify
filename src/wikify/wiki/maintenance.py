@@ -262,7 +262,7 @@ def structural_audit(
     """
     from sqlmodel import func, select
 
-    from wikify.agent.tools import get_graph_metrics
+    from wikify.papers.agent.tools import get_graph_metrics
     from wikify.store.db import get_session
     from wikify.store.models import Paper, SourceCoverage, WikiArticle
     from wikify.wiki.mapreduce import _parse_graph_metrics

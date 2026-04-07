@@ -206,7 +206,7 @@ def _compute_boilerplate_ids() -> set[str]:
     Uses ChromaDB k-NN: if a chunk's 10 nearest neighbors span 5+
     distinct papers with similarity > 0.9, it's boilerplate.
     """
-    from wikify.evaluate.coverage import load_corpus_chunks
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.store.embeddings import _store, get_chunk_embeddings
 
     chunks = load_corpus_chunks()
@@ -266,7 +266,7 @@ def _compute_divergent_gaps(
     """
     from sqlmodel import select
 
-    from wikify.evaluate.coverage import load_corpus_chunks
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.store.db import get_session
     from wikify.store.embeddings import get_chunk_embeddings
     from wikify.store.models import Paper
@@ -371,7 +371,7 @@ def _compute_concept_links_v2(
 
     from sqlmodel import select
 
-    from wikify.evaluate.coverage import load_corpus_chunks
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.store.db import get_session
     from wikify.store.embeddings import get_chunk_embeddings
     from wikify.store.models import Paper
@@ -639,7 +639,7 @@ def precompute_all() -> None:
         logger.info("Cached %d vibe vectors", len(vibes))
 
     # 2. KMeans on chunk embeddings
-    from wikify.evaluate.coverage import load_corpus_chunks
+    from wikify.papers.evaluate.coverage import load_corpus_chunks
     from wikify.store.embeddings import get_chunk_embeddings
 
     chunks = load_corpus_chunks()

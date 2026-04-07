@@ -129,10 +129,10 @@ def generate(
     """Generate a review paper from the literature corpus."""
     import time
 
-    from wikify.export.journal_profile import load_journal_profile
-    from wikify.generate.planner import plan_paper
-    from wikify.generate.writer import write_paper
-    from wikify.retrieve.strategies import StrategyConfig, get_strategy
+    from wikify.papers.export.journal_profile import load_journal_profile
+    from wikify.papers.generate.planner import plan_paper
+    from wikify.papers.generate.writer import write_paper
+    from wikify.papers.retrieve.strategies import StrategyConfig, get_strategy
 
     start = time.time()
     journal_profile = load_journal_profile(journal)
@@ -177,14 +177,14 @@ def generate(
 
     # Export to additional formats
     if docx:
-        from wikify.export.docx_export import DocxExporter
+        from wikify.papers.export.docx_export import DocxExporter
 
         docx_path = out_path.with_suffix(".docx")
         DocxExporter(journal_profile).export(paper_md, ordered_papers, docx_path)
         console.print(f"[green]DOCX:[/green] {docx_path}")
 
     if pdf:
-        from wikify.export.pdf_export import PdfExporter
+        from wikify.papers.export.pdf_export import PdfExporter
 
         pdf_path = out_path.with_suffix(".pdf")
         PdfExporter(journal_profile).export(paper_md, ordered_papers, pdf_path)
@@ -204,7 +204,7 @@ def agent_generate(
     pdf: bool = typer.Option(True, "--pdf/--no-pdf", help="Export PDF"),
 ):
     """Generate a paper using the agent loop (LLM explores corpus via tools)."""
-    from wikify.agent.workflows import export_paper, generate_paper
+    from wikify.papers.agent.workflows import export_paper, generate_paper
 
     console.print(f"[bold]Generating with agent loop[/bold] (model: {model or 'default'})...")
     console.print(f"  Type: {artifact_type}, Journal: {journal or 'generic'}")
@@ -260,7 +260,7 @@ def scripted_generate(
     The LLM is used only for paper summarization and final writing.
     Supports local models (e.g., ollama/qwen2.5:14b).
     """
-    from wikify.agent.scripted import run_scripted
+    from wikify.papers.agent.scripted import run_scripted
 
     console.print("[bold]Scripted generation[/bold]")
     console.print(f"  Topic: {prompt}")
@@ -306,7 +306,7 @@ def fast_generate_cmd(
     links), then writes the review in a single LLM call. Much faster than
     agent-generate but may produce lower quality. Use for rapid iteration.
     """
-    from wikify.agent.fast_generate import fast_generate
+    from wikify.papers.agent.fast_generate import fast_generate
 
     console.print("[bold]Fast generation (experimental)[/bold]")
     console.print(f"  Topic: {prompt}")
@@ -342,9 +342,9 @@ def slides(
     """Generate a PowerPoint presentation from the literature corpus."""
     import time
 
-    from wikify.export.pptx_export import export_slides
-    from wikify.generate.planner import plan_slides
-    from wikify.retrieve.context import retrieve_all_papers
+    from wikify.papers.export.pptx_export import export_slides
+    from wikify.papers.generate.planner import plan_slides
+    from wikify.papers.retrieve.context import retrieve_all_papers
 
     start = time.time()
 
@@ -368,7 +368,7 @@ def slides(
 @app.command()
 def chat():
     """Interactive chat with the literature corpus."""
-    from wikify.generate.chat import chat_interactive
+    from wikify.papers.generate.chat import chat_interactive
 
     chat_interactive()
 
@@ -393,14 +393,14 @@ def evaluate(
 
     if not pi:
         # Automated metrics only
-        from wikify.evaluate.quality import comprehensive_quality_report
+        from wikify.papers.evaluate.quality import comprehensive_quality_report
 
         console.print("[bold]Running automated quality metrics...[/bold]")
         report = comprehensive_quality_report(review_text)
         console.print(report.summary())
     else:
         # LLM-as-PI qualitative scoring
-        from wikify.evaluate.pi_review import evaluate_pi, parse_pi_review
+        from wikify.papers.evaluate.pi_review import evaluate_pi, parse_pi_review
 
         console.print("[bold]Running LLM-as-PI review...[/bold]")
         if domain:
@@ -447,8 +447,8 @@ def revise(
       5. Save the revised review.
     """
 
-    from wikify.agent.revision import revise_weakest_section
-    from wikify.evaluate.pi_review import evaluate_pi, parse_pi_review
+    from wikify.papers.agent.revision import revise_weakest_section
+    from wikify.papers.evaluate.pi_review import evaluate_pi, parse_pi_review
 
     path = Path(review_path)
     if not path.exists():
@@ -526,7 +526,7 @@ def templates_list():
     """List all available journal templates (from SQLite + filesystem)."""
     from rich.table import Table
 
-    from wikify.export.templates.registry import list_templates
+    from wikify.papers.export.templates.registry import list_templates
 
     items = list_templates()
     if not items:
@@ -556,7 +556,7 @@ def templates_list():
 @templates_app.command("sources")
 def templates_sources():
     """Show known publisher template sources and download instructions."""
-    from wikify.export.templates.registry import show_download_instructions
+    from wikify.papers.export.templates.registry import show_download_instructions
 
     show_download_instructions()
 
@@ -569,7 +569,7 @@ def templates_download(
 
     Uses a stealth browser under the hood — no visible window.
     """
-    from wikify.export.templates.registry import download_template
+    from wikify.papers.export.templates.registry import download_template
 
     result = download_template(template_id)
     if result:
@@ -592,7 +592,7 @@ def templates_import(
         wikify templates import my_old_paper.docx --name "my_style"
     """
 
-    from wikify.export.templates.registry import import_template
+    from wikify.papers.export.templates.registry import import_template
 
     import_template(Path(path), name=name, publisher=publisher)
 
@@ -608,7 +608,7 @@ def templates_styles(
 
     from rich.table import Table
 
-    from wikify.export.templates.registry import extract_styles, suggest_style_map
+    from wikify.papers.export.templates.registry import extract_styles, suggest_style_map
 
     docx_path = Path(path)
     styles = extract_styles(docx_path)
@@ -1201,7 +1201,7 @@ def wiki_health():
     try:
         import re
 
-        from wikify.agent.tools import find_synthesis_opportunities
+        from wikify.papers.agent.tools import find_synthesis_opportunities
 
         opportunities = find_synthesis_opportunities()
         opp_concepts: list[str] = []
@@ -1276,7 +1276,7 @@ def _answer_with_escalation(
     """
     import re
 
-    from wikify.agent.tools import read_paper_digest, read_section
+    from wikify.papers.agent.tools import read_paper_digest, read_section
     from wikify.llm.client import complete
 
     decision_prompt_template = (

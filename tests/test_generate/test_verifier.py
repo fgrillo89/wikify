@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wikify.generate.verifier import (
+from wikify.papers.generate.verifier import (
     PaperVerificationResult,
     _extract_key_terms,
     _extract_numbered_refs,

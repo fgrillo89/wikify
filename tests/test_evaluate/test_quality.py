@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from wikify.evaluate.quality import (
+from wikify.papers.evaluate.quality import (
     FactualSpecificityResult,
     ProseQualityResult,
     QualityReport,
@@ -76,7 +76,7 @@ def test_quality_report_summary_includes_prose_quality() -> None:
 def test_comprehensive_quality_report_populates_prose_quality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from wikify.evaluate import quality as quality_module
+    from wikify.papers.evaluate import quality as quality_module
 
     prose = _high_prose_quality()
     factual = _high_factual_specificity()

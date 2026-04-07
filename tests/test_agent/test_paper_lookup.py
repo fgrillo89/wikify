@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from wikify.agent.scripted import scripted_explore
-from wikify.agent.tools import deep_read, read_paper_digest
+from wikify.papers.agent.scripted import scripted_explore
+from wikify.papers.agent.tools import deep_read, read_paper_digest
 from wikify.store import db as db_module
 from wikify.store.db import DatabaseManager
 from wikify.store.models import Chunk, Paper
@@ -101,20 +101,20 @@ def test_scripted_explore_uses_title_pattern_and_surfaces_deep_read_fallback(mon
     seen: dict[str, str] = {}
 
     monkeypatch.setattr(
-        "wikify.agent.reading_log.reset_reading_log",
+        "wikify.papers.agent.reading_log.reset_reading_log",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        "wikify.agent.concept_graph.reset_concept_graph", lambda *args, **kwargs: None
+        "wikify.papers.agent.concept_graph.reset_concept_graph", lambda *args, **kwargs: None
     )
-    monkeypatch.setattr("wikify.agent.tools.reset_paper_summaries", lambda: None)
+    monkeypatch.setattr("wikify.papers.agent.tools.reset_paper_summaries", lambda: None)
     monkeypatch.setattr(
-        "wikify.evaluate.frontier.frontier_exploration_order",
+        "wikify.papers.evaluate.frontier.frontier_exploration_order",
         lambda max_papers=12: [(paper["id"], "full", "Seed paper for review")],
     )
-    monkeypatch.setattr("wikify.agent.tools.find_corpus_gaps", lambda: "gaps")
+    monkeypatch.setattr("wikify.papers.agent.tools.find_corpus_gaps", lambda: "gaps")
     monkeypatch.setattr(
-        "wikify.agent.tools.find_synthesis_opportunities", lambda: "synthesis"
+        "wikify.papers.agent.tools.find_synthesis_opportunities", lambda: "synthesis"
     )
 
     def fake_deep_read(pattern: str, reason: str = "") -> str:
@@ -129,9 +129,9 @@ def test_scripted_explore_uses_title_pattern_and_surfaces_deep_read_fallback(mon
             }
         )
 
-    monkeypatch.setattr("wikify.agent.tools.deep_read", fake_deep_read)
+    monkeypatch.setattr("wikify.papers.agent.tools.deep_read", fake_deep_read)
     monkeypatch.setattr(
-        "wikify.agent.tools.read_paper_digest",
+        "wikify.papers.agent.tools.read_paper_digest",
         lambda pattern, reason="": f"DIGEST FALLBACK for {pattern}",
     )
 

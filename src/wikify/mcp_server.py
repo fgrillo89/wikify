@@ -15,7 +15,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from wikify.agent.tools import (
+from wikify.papers.agent.tools import (
     _build_corpus_summary,
     check_wiki_health as _check_wiki_health,
     compare_wiki_runs as _compare_wiki_runs,

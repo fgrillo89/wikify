@@ -76,7 +76,7 @@ def build_wiki_article(
     Returns:
         (article_markdown_content, list_of_source_paper_ids)
     """
-    from wikify.agent.tools import read_paper_digest, search_papers
+    from wikify.papers.agent.tools import read_paper_digest, search_papers
     from wikify.llm.client import complete
 
     # If a domain is provided and no persona given, look up/create the persona
@@ -211,7 +211,7 @@ def _fetch_evidence_for_entry(
     """
     import re
 
-    from wikify.agent.tools import deep_read, read_paper_digest, read_section, search_papers
+    from wikify.papers.agent.tools import deep_read, read_paper_digest, read_section, search_papers
 
     query = f"{entry.scope} {entry.title}"
     search_result = search_papers(query, top_k=10, reason=f"wiki evidence: {entry.title}")

@@ -76,7 +76,7 @@ steps:
     kind: write_articles
     model: balanced
     prompt: src/wikify/wiki/prompts/article_writer.md
-    style_guide: src/wikify/prompts/style_guide.md
+    style_guide: src/wikify/papers/prompts/style_guide.md
     params:
       revision:
         enabled: true

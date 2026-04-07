@@ -15,7 +15,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from wikify.agent.tools import get_graph_metrics, read_paper_digest, search_papers
+from wikify.papers.agent.tools import get_graph_metrics, read_paper_digest, search_papers
 from wikify.config import settings
 from wikify.llm.client import complete
 from wikify.store.db import get_session

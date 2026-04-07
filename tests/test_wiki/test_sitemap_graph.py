@@ -149,14 +149,14 @@ class TestExploreCorpusForSitemapGraphContext:
     """Verify that explore_corpus_for_sitemap injects graph context into system prompt."""
 
     # Patch targets: deferred imports live in their source modules; patch there.
-    _GRAPH_METRICS = "wikify.agent.tools.get_graph_metrics"
-    _FIND_GAPS = "wikify.agent.tools.find_corpus_gaps"
-    _FIND_SYNTH = "wikify.agent.tools.find_synthesis_opportunities"
-    _AGENT_CLS = "wikify.agent.core.ScholarForgeAgent"
-    _HOOKS = "wikify.agent.defaults.get_default_hooks"
-    _TOOLS = "wikify.agent.defaults.get_explorer_tools"
-    _CREATE_CTX = "wikify.agent.run_context.create_run_context"
-    _USE_CTX = "wikify.agent.run_context.use_run_context"
+    _GRAPH_METRICS = "wikify.papers.agent.tools.get_graph_metrics"
+    _FIND_GAPS = "wikify.papers.agent.tools.find_corpus_gaps"
+    _FIND_SYNTH = "wikify.papers.agent.tools.find_synthesis_opportunities"
+    _AGENT_CLS = "wikify.papers.agent.core.ScholarForgeAgent"
+    _HOOKS = "wikify.papers.agent.defaults.get_default_hooks"
+    _TOOLS = "wikify.papers.agent.defaults.get_explorer_tools"
+    _CREATE_CTX = "wikify.papers.agent.run_context.create_run_context"
+    _USE_CTX = "wikify.papers.agent.run_context.use_run_context"
 
     def _run_explore(self, graph_json, agent_result=None, gaps="gaps text", synth="synth text"):
         """Helper that patches all external calls and runs explore_corpus_for_sitemap."""
@@ -417,7 +417,7 @@ class TestDomainClassification:
 class TestGenerateMultiDomainSitemap:
     # Deferred imports in generate_multi_domain_sitemap live in these modules:
     _GET_SESSION = "wikify.store.db.get_session"
-    _FIND_SYNTH = "wikify.agent.tools.find_synthesis_opportunities"
+    _FIND_SYNTH = "wikify.papers.agent.tools.find_synthesis_opportunities"
     # generate_sitemap is in the same module -- patch the module-level name
     _GEN_SITEMAP = "wikify.wiki.legacy.sitemap.generate_sitemap"
 

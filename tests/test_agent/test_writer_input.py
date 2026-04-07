@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from wikify.agent.fast_generate import build_one_shot_prompt
-from wikify.agent.research_notes import ResearchNotes, SourceSummary
-from wikify.agent.writer_input import build_writer_input, normalize_topic
+from wikify.papers.agent.fast_generate import build_one_shot_prompt
+from wikify.papers.agent.research_notes import ResearchNotes, SourceSummary
+from wikify.papers.agent.writer_input import build_writer_input, normalize_topic
 
 
 def test_normalize_topic_falls_back_to_default():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from wikify.agent.run_context import (
+from wikify.papers.agent.run_context import (
     add_run_warning,
     create_run_context,
     record_phase_usage,

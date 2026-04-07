@@ -438,7 +438,7 @@ def get_domain_context(concept_id: str) -> dict:
 def _fallback_search(query: str, top_k: int) -> list[dict]:
     """Delegate to unscoped search_papers and wrap result in the standard dict shape."""
     try:
-        from wikify.agent.tools import search_papers
+        from wikify.papers.agent.tools import search_papers
 
         raw_text = search_papers(query, top_k=top_k)
         return [

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wikify.retrieve.cache import QueryCache, _jaccard, _tokenize
+from wikify.papers.retrieve.cache import QueryCache, _jaccard, _tokenize
 
 # ── Tokenization ────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from wikify.agent.run_context import RunContext
+    from wikify.papers.agent.run_context import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -267,10 +267,10 @@ def explore_corpus_for_sitemap(
     Returns:
         (agent_result_content, list_of_explored_source_ids)
     """
-    from wikify.agent.core import ScholarForgeAgent
-    from wikify.agent.defaults import get_default_hooks, get_explorer_tools
-    from wikify.agent.run_context import create_run_context, use_run_context
-    from wikify.agent.tools import (
+    from wikify.papers.agent.core import ScholarForgeAgent
+    from wikify.papers.agent.defaults import get_default_hooks, get_explorer_tools
+    from wikify.papers.agent.run_context import create_run_context, use_run_context
+    from wikify.papers.agent.tools import (
         find_corpus_gaps,
         find_synthesis_opportunities,
         get_graph_metrics,
@@ -655,7 +655,7 @@ def generate_multi_domain_sitemap(
     """
     from sqlmodel import select
 
-    from wikify.agent.tools import find_synthesis_opportunities
+    from wikify.papers.agent.tools import find_synthesis_opportunities
     from wikify.store.db import get_session
     from wikify.store.models import Paper, PaperTopic
 

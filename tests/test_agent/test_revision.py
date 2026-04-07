@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from wikify.agent.revision import _find_section_bounds, revise_weakest_section
-from wikify.evaluate.pi_review import PIReviewResult
+from wikify.papers.agent.revision import _find_section_bounds, revise_weakest_section
+from wikify.papers.evaluate.pi_review import PIReviewResult
 
 _SAMPLE_REVIEW = """\
 ## Abstract
@@ -79,7 +79,7 @@ def test_revise_weakest_section_replaces_section() -> None:
 
     with (
         patch(
-            "wikify.agent.revision._fetch_section_evidence",
+            "wikify.papers.agent.revision._fetch_section_evidence",
             return_value="evidence text",
         ),
         patch(
@@ -106,7 +106,7 @@ def test_revise_weakest_section_no_weakest_returns_original() -> None:
 def test_revise_weakest_section_missing_section_returns_original() -> None:
     pi_result = _make_pi_result("Methodology -- not found")
 
-    with patch("wikify.agent.revision._fetch_section_evidence", return_value=""):
+    with patch("wikify.papers.agent.revision._fetch_section_evidence", return_value=""):
         result = revise_weakest_section(_SAMPLE_REVIEW, pi_result)
 
     assert result == _SAMPLE_REVIEW

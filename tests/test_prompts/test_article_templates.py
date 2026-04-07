@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wikify.prompts.article_templates import (
+from wikify.papers.prompts.article_templates import (
     WRITING_RULES,
     get_article_template,
 )

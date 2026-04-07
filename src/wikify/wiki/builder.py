@@ -785,7 +785,7 @@ def generate_all_domain_condensations(wiki_dir: Path) -> int:
 def _load_graph_metrics() -> dict:
     """Return parsed graph metrics dict, or empty dict on failure."""
     try:
-        from wikify.agent.tools import get_graph_metrics
+        from wikify.papers.agent.tools import get_graph_metrics
 
         raw = get_graph_metrics()
         data = json.loads(raw)

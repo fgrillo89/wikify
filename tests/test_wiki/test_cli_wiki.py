@@ -354,7 +354,7 @@ class TestWikiHealth:
             patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", side_effect=Exception("No DB")),
             patch(
-                "wikify.agent.tools.find_synthesis_opportunities",
+                "wikify.papers.agent.tools.find_synthesis_opportunities",
                 return_value="",
             ),
             # Redirect wiki_dir so the _health.md write succeeds
@@ -398,7 +398,7 @@ class TestWikiHealth:
             patch("wikify.store.db.get_engine"),
             patch("sqlmodel.Session", return_value=mock_session),
             patch(
-                "wikify.agent.tools.find_synthesis_opportunities",
+                "wikify.papers.agent.tools.find_synthesis_opportunities",
                 return_value="",
             ),
             patch(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from wikify.agent.tools import ingest_paper
+from wikify.papers.agent.tools import ingest_paper
 from wikify.store.models import Paper
 
 

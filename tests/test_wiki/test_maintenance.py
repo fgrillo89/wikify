@@ -302,7 +302,7 @@ class TestStructuralAudit:
 
         with (
             patch("wikify.store.db.get_session") as mock_gs,
-            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock
@@ -355,7 +355,7 @@ class TestStructuralAudit:
 
         with (
             patch("wikify.store.db.get_session") as mock_gs,
-            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock
@@ -411,7 +411,7 @@ class TestStructuralAudit:
 
         with (
             patch("wikify.store.db.get_session") as mock_gs,
-            patch("wikify.agent.tools.get_graph_metrics") as mock_gm,
+            patch("wikify.papers.agent.tools.get_graph_metrics") as mock_gm,
         ):
             session_mock = MagicMock()
             session_mock.__enter__ = lambda s: session_mock
