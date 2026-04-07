@@ -11,13 +11,13 @@ import fitz
 import pymupdf4llm
 from rich.console import Console
 
-from wikify.extract.chunker import chunk_sections
-from wikify.extract.citations import extract_citations
-from wikify.extract.equations import extract_equations
-from wikify.extract.figure_refs import extract_figure_refs
-from wikify.extract.figures import extract_figures
-from wikify.extract.media import extract_media
-from wikify.extract.metadata import extract_metadata
+from wikify.ingest.extract.chunker import chunk_sections
+from wikify.ingest.extract.citations import extract_citations
+from wikify.ingest.extract.equations import extract_equations
+from wikify.ingest.extract.figure_refs import extract_figure_refs
+from wikify.ingest.extract.figures import extract_figures
+from wikify.ingest.extract.media import extract_media
+from wikify.ingest.extract.metadata import extract_metadata
 from wikify.core.store.models import Chunk, Citation, Equation, Figure, FigureRef, Paper
 
 console = Console()
@@ -171,7 +171,7 @@ def parse_pdf(path: Path) -> ParsedPaper:
 def persist_parsed(parsed: ParsedPaper) -> None:
     """Persist a parsed paper to SQLite and vault."""
     from wikify.core.store.db import get_session
-    from wikify.vault.writer import ensure_vault_dirs, write_paper_note
+    from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
 
     ensure_vault_dirs()
 

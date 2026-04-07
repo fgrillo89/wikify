@@ -9,7 +9,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from wikify.extract.chunker import chunk_sections
+from wikify.ingest.extract.chunker import chunk_sections
 from wikify.core.store.models import DocType, Paper
 
 console = Console()
@@ -212,7 +212,7 @@ def ingest_html(path: Path, return_id: bool = False) -> int | str | None:
 def _persist_html(paper: Paper, chunks: list, path: Path) -> None:
     """Persist parsed HTML to SQLite and vault."""
     from wikify.core.store.db import get_session
-    from wikify.vault.writer import ensure_vault_dirs, write_paper_note
+    from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
 
     ensure_vault_dirs()
 

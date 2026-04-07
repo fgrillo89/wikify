@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from wikify.extract.equations import (
+from wikify.ingest.extract.equations import (
     CHEM_EQUATION_RE,
     DISPLAY_MATH_PATTERNS,
     INLINE_MATH_RE,

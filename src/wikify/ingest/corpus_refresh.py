@@ -120,8 +120,8 @@ def run_incremental_refresh(paper_id: str) -> None:
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import embed_summaries, query_similar
     from wikify.core.store.models import Chunk, FigureRef, Paper
-    from wikify.vault.linker import _extract_declared_keywords, _to_display
-    from wikify.vault.writer import ensure_vault_dirs, write_paper_note
+    from wikify.ingest.vault.linker import _extract_declared_keywords, _to_display
+    from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
 
     ensure_vault_dirs()
 
@@ -139,7 +139,7 @@ def run_incremental_refresh(paper_id: str) -> None:
         if declared:
             topics = [_to_display(kw) for kw in declared]
         else:
-            from wikify.vault.linker import _match_corpus_vocabulary
+            from wikify.ingest.vault.linker import _match_corpus_vocabulary
 
             vocab = load_corpus_vocabulary()
             matched = _match_corpus_vocabulary(search_text, vocab)
@@ -219,9 +219,9 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import embed_summaries, get_all_similar
     from wikify.core.store.models import Chunk, Citation, FigureRef, Paper
-    from wikify.vault.coupler import compute_coupling
-    from wikify.vault.linker import compute_all_links, write_topic_notes
-    from wikify.vault.writer import ensure_vault_dirs, write_paper_note
+    from wikify.ingest.vault.coupler import compute_coupling
+    from wikify.ingest.vault.linker import compute_all_links, write_topic_notes
+    from wikify.ingest.vault.writer import ensure_vault_dirs, write_paper_note
 
     ensure_vault_dirs()
 
@@ -241,8 +241,8 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
     paper_ids = [p.id for p in papers]
     console.print(f"[bold]Running batch steps on {len(papers)} papers...[/bold]")
 
-    from wikify.extract.cite_match import build_citation_graph
-    from wikify.extract.figure_refs import extract_figure_refs
+    from wikify.ingest.extract.cite_match import build_citation_graph
+    from wikify.ingest.extract.figure_refs import extract_figure_refs
     from wikify.core.store.models import PaperTopic
 
     citations_by_paper: dict[str, list[str]] = {}
@@ -357,7 +357,7 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
 
     write_topic_notes(topic_papers)
 
-    from wikify.vault.writer import vault_dir, write_graph_config
+    from wikify.ingest.vault.writer import vault_dir, write_graph_config
 
     write_graph_config()
 
@@ -397,7 +397,7 @@ def refresh_corpus(new_paper_ids: set[str] | None = None) -> None:
         )
 
     from wikify.core.config import settings
-    from wikify.zotero.bibtex_library import rebuild_bibtex_library
+    from wikify.ingest.zotero.bibtex_library import rebuild_bibtex_library
 
     rebuild_bibtex_library(papers, settings.data_dir)
 

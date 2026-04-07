@@ -14,8 +14,8 @@ from __future__ import annotations
 import re
 
 from wikify.core.store.models import Paper
-from wikify.vault.templates import topic_note
-from wikify.vault.writer import _sanitize_filename, vault_dir
+from wikify.ingest.vault.templates import topic_note
+from wikify.ingest.vault.writer import _sanitize_filename, vault_dir
 
 # ── Keyword extraction ───────────────────────────────────────────────────────
 

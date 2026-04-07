@@ -8,7 +8,7 @@ import uuid
 import tiktoken
 
 from wikify.core.config import settings
-from wikify.extract.section_classifier import classify_section_path
+from wikify.ingest.extract.section_classifier import classify_section_path
 from wikify.core.store.models import Chunk
 
 _enc = tiktoken.get_encoding("cl100k_base")

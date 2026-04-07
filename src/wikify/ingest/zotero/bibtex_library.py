@@ -13,7 +13,7 @@ from pathlib import Path
 from rich.console import Console
 
 from wikify.core.store.models import Paper
-from wikify.zotero.bibtex_builder import paper_to_bibtex
+from wikify.ingest.zotero.bibtex_builder import paper_to_bibtex
 
 console = Console()
 

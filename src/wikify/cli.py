@@ -1765,7 +1765,7 @@ def wiki_migrate_figures(
     import sqlite3
 
     from wikify.core.config import settings
-    from wikify.extract.media import _make_figure_filename, _make_paper_slug
+    from wikify.ingest.extract.media import _make_figure_filename, _make_paper_slug
 
     db_path = settings.db_path
     figures_dir = settings.figures_dir

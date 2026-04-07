@@ -74,7 +74,7 @@ def build_citation_only_graph() -> nx.DiGraph:
     No similarity or coupling edges. Used for pure citation-based
     PageRank as an orthogonal signal to embedding-based metrics.
     """
-    from wikify.extract.cite_match import build_citation_graph
+    from wikify.ingest.extract.cite_match import build_citation_graph
     from wikify.core.store.models import Citation
 
     graph = nx.DiGraph()
@@ -109,7 +109,7 @@ def build_corpus_graph() -> nx.DiGraph:
     3. Bibliographic coupling (undirected)
     """
     from wikify.core.store.embeddings import get_all_similar
-    from wikify.vault.coupler import compute_coupling
+    from wikify.ingest.vault.coupler import compute_coupling
 
     graph = nx.DiGraph()
 
@@ -122,7 +122,7 @@ def build_corpus_graph() -> nx.DiGraph:
         graph.add_node(p.id, title=p.title, year=p.year, authors=authors)
 
     # 1. Citation edges (directed)
-    from wikify.extract.cite_match import build_citation_graph
+    from wikify.ingest.extract.cite_match import build_citation_graph
     from wikify.core.store.models import Citation
 
     citations_by_paper: dict[str, list[str]] = {}

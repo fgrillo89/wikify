@@ -270,7 +270,7 @@ def _compute_divergent_gaps(
     from wikify.core.store.db import get_session
     from wikify.core.store.embeddings import get_chunk_embeddings
     from wikify.core.store.models import Paper
-    from wikify.vault.coupler import compute_coupling
+    from wikify.ingest.vault.coupler import compute_coupling
 
     with get_session() as session:
         papers = {p.id: p for p in session.exec(select(Paper)).all()}
@@ -737,7 +737,7 @@ def precompute_all() -> None:
 
     # 9. Section summaries (extractive by default, free and instant)
     try:
-        from wikify.extract.section_summarizer import summarize_sections_batch
+        from wikify.ingest.extract.section_summarizer import summarize_sections_batch
         from wikify.core.store.embeddings import embed_section_summaries
 
         n_summarized = summarize_sections_batch(mode="extractive", force=False)

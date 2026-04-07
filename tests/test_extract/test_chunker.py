@@ -1,10 +1,10 @@
-"""Tests for wikify.extract.chunker."""
+"""Tests for wikify.ingest.extract.chunker."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
-from wikify.extract.chunker import _split_into_sections, chunk_sections
+from wikify.ingest.extract.chunker import _split_into_sections, chunk_sections
 
 PAPER_ID = "test-paper-001"
 
@@ -108,7 +108,7 @@ def test_chunk_sections_chunk_index_ordered():
     long_text = "\n\n".join(_make_long_paragraph(200) for _ in range(5))
     md = f"# BigSection\n\n{long_text}"
 
-    with patch("wikify.extract.chunker.settings") as mock_settings:
+    with patch("wikify.ingest.extract.chunker.settings") as mock_settings:
         mock_settings.chunk_target_tokens = 200
         mock_settings.chunk_max_tokens = 250
         mock_settings.chunk_overlap_tokens = 20

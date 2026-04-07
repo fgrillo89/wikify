@@ -12,10 +12,10 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from rich.console import Console
 
-from wikify.extract.chunker import chunk_sections
-from wikify.extract.citations import extract_citations
-from wikify.extract.figure_refs import extract_figure_refs
-from wikify.extract.metadata import (
+from wikify.ingest.extract.chunker import chunk_sections
+from wikify.ingest.extract.citations import extract_citations
+from wikify.ingest.extract.figure_refs import extract_figure_refs
+from wikify.ingest.extract.metadata import (
     _extract_doi,
     _extract_summary,
     _first_heading,

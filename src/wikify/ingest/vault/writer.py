@@ -8,7 +8,7 @@ from pathlib import Path
 
 from wikify.core.config import settings
 from wikify.core.store.models import Paper
-from wikify.vault.templates import author_note, paper_note
+from wikify.ingest.vault.templates import author_note, paper_note
 
 
 def _sanitize_filename(name: str) -> str:

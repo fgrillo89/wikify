@@ -3,6 +3,35 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice Phase 1.B / 2.B (extract, vault, zotero into ingest/)
+
+Final top-level cleanup. The src tree now matches the architecture
+target exactly.
+
+- `src/wikify/extract/` → `src/wikify/ingest/extract/` (parsers)
+- `src/wikify/vault/`   → `src/wikify/ingest/vault/`   (corpus projection)
+- `src/wikify/zotero/`  → `src/wikify/ingest/zotero/`  (BibTeX lifecycle)
+
+19 import sites bulk-rebound in the same slice. **852 tests pass.**
+
+Final top-level layout:
+
+```
+src/wikify/
+|-- core/        shared infra (config, llm, store, graph, retrieve, corpus_tools)
+|-- ingest/      source parsing + corpus enrichment (extract, vault, zotero, refresh)
+|-- wiki/        wiki creation/management (concepts, discovery, graph, observability,
+|                presentation, recipes, articles, legacy)
+|-- papers/      research writing (agent, generate, evaluate, export, prompts)
+|-- cli.py       thin adapter
+`-- mcp_server.py thin adapter
+```
+
+The four product boundaries (`core`, `ingest`, `wiki`, `papers`)
+exist in code exactly as the architecture document describes them.
+
+---
+
 ## 2026-04-07 — Slice Phase 2.A (move config / llm / store / graph into core/)
 
 Completes the `core/` boundary. The shared infrastructure layer is now

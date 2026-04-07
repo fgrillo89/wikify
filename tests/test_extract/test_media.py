@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from wikify.extract.media import (
+from wikify.ingest.extract.media import (
     _SCAN_THRESHOLD,
     _CaptionMatch,
     _consume_md_caption,
@@ -121,7 +121,7 @@ class TestMatchCaption:
 
 class TestStoreMedia:
     def test_creates_per_paper_directory(self, tmp_path):
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             content = b"fake image content for testing"
             h = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -133,7 +133,7 @@ class TestStoreMedia:
             assert result.read_bytes() == content
 
     def test_legacy_fallback_without_slug(self, tmp_path):
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             content = b"fake image content for testing"
             h = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -144,7 +144,7 @@ class TestStoreMedia:
             assert result.exists()
 
     def test_idempotent_write(self, tmp_path):
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             content = b"image bytes"
             h = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
@@ -153,7 +153,7 @@ class TestStoreMedia:
             assert path.read_bytes() == content
 
     def test_collision_appends_hash(self, tmp_path):
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
             h1 = "aaaa" + "0" * 60
             h2 = "bbbb" + "0" * 60
@@ -214,8 +214,8 @@ class TestExtractMedia:
 
     def test_extracts_images(self, tmp_path):
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
             doc = self._make_mock_doc(
@@ -236,8 +236,8 @@ class TestExtractMedia:
 
     def test_caption_matching_from_md(self, tmp_path):
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
             doc = self._make_mock_doc(
@@ -255,8 +255,8 @@ class TestExtractMedia:
 
     def test_skips_tiny_images(self, tmp_path):
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
             doc = self._make_mock_doc(
@@ -279,8 +279,8 @@ class TestExtractMedia:
 
     def test_deduplicates_images(self, tmp_path):
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
             # Two identical images on the same page
@@ -297,8 +297,8 @@ class TestExtractMedia:
 
     def test_meta_sidecar_written(self, tmp_path):
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
             doc = self._make_mock_doc(
@@ -325,7 +325,7 @@ class TestScannedPageDetection:
 
     def test_many_images_triggers_scan_path(self, tmp_path):
         """A page with >SCAN_THRESHOLD images should skip fragment extraction."""
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
 
             doc = MagicMock()
@@ -351,7 +351,7 @@ class TestScannedPageDetection:
 
     def test_scanned_page_with_caption_renders_full_page(self, tmp_path):
         """Scanned page with captions renders page as pixmap."""
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
 
             doc = MagicMock()
@@ -383,7 +383,7 @@ class TestScannedPageDetection:
 
     def test_normal_page_not_affected(self, tmp_path):
         """Pages with <=SCAN_THRESHOLD images use normal extraction."""
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
 
             doc = MagicMock()
@@ -413,7 +413,7 @@ class TestCaptionConsumption:
 
     def test_same_caption_not_assigned_twice(self, tmp_path):
         """Multiple images matching same caption: only largest gets it."""
-        with patch("wikify.extract.media.settings") as mock_settings:
+        with patch("wikify.ingest.extract.media.settings") as mock_settings:
             mock_settings.figures_dir = tmp_path / "figures"
 
             doc = MagicMock()
@@ -460,8 +460,8 @@ class TestCaptionConsumption:
     def test_md_caption_consumed_across_pages(self, tmp_path):
         """md_captions should be depleted after first use (Issue 3)."""
         with (
-            patch("wikify.extract.media.fitz") as mock_fitz,
-            patch("wikify.extract.media.settings") as mock_settings,
+            patch("wikify.ingest.extract.media.fitz") as mock_fitz,
+            patch("wikify.ingest.extract.media.settings") as mock_settings,
         ):
             mock_settings.figures_dir = tmp_path / "figures"
 
