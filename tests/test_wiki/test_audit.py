@@ -304,35 +304,3 @@ class TestWikiSyncRouting:
 # ── wiki query escalation tests ───────────────────────────────────────────────
 
 
-class TestWikiQueryEscalation:
-    def test_query_returns_answer_at_level0(self, tmp_path, monkeypatch):
-        """If escalation returns an answer, it should be printed."""
-        wiki_dir = tmp_path / "data" / "wiki"
-        wiki_dir.mkdir(parents=True)
-        (wiki_dir / "_index.md").write_text("# KB\nSome domain info.\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-
-        with patch("wikify.cli._answer_with_escalation") as mock_esc:
-            mock_esc.return_value = "The answer from the wiki."
-            result = runner.invoke(app, ["wiki", "query", "What is ALD?"])
-
-        assert result.exit_code == 0, result.output
-        assert "The answer from the wiki." in result.output
-
-    def test_query_records_gap_when_unanswered(self, tmp_path, monkeypatch):
-        """If escalation returns None, the gap should be recorded."""
-        wiki_dir = tmp_path / "data" / "wiki"
-        wiki_dir.mkdir(parents=True)
-        (wiki_dir / "_index.md").write_text("# KB\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-
-        with (
-            patch("wikify.cli._answer_with_escalation") as mock_esc,
-            patch("wikify.wiki.builder.append_unanswered_question") as mock_append,
-        ):
-            mock_esc.return_value = None
-            result = runner.invoke(app, ["wiki", "query", "Unanswerable question"])
-
-        assert result.exit_code == 0, result.output
-        assert mock_append.called
-        assert "Gap recorded" in result.output

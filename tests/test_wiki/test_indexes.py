@@ -13,7 +13,7 @@ from wikify.wiki.builder import (
     generate_wiki_index,
     write_article,
 )
-from wikify.wiki.legacy.sitemap import SitemapEntry, WikiSitemap
+from wikify.wiki.sitemap_data import SitemapEntry, WikiSitemap
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from wikify.wiki.builder import read_article_frontmatter
 from wikify.wiki.presentation.layout import iter_visible_page_files
-from wikify.wiki.legacy.sitemap import WikiSitemap
+from wikify.wiki.sitemap_data import WikiSitemap
 
 logger = logging.getLogger(__name__)
 

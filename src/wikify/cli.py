@@ -638,227 +638,10 @@ wiki_app = typer.Typer(name="wiki", help="Build and maintain the curated wiki la
 app.add_typer(wiki_app)
 
 
-@wiki_app.command("init")
-def wiki_init(
-    topic: str = typer.Option("", "--topic", help="Optional topic hint to focus exploration"),
-    max_papers: int = typer.Option(
-        20, "--max-papers", help="Max sources to read during corpus exploration"
-    ),
-    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
-    resume: bool = typer.Option(False, "--resume", help="Skip articles whose files already exist"),
-):
-    """Bootstrap the wiki from the corpus using the two-phase sitemap pipeline.
-
-    Phase 1 explores the corpus broadly to discover thematic structure.
-    Phase 2 generates a structured article plan (sitemap).
-    Phase 3 writes all articles in dependency order (themes then concepts).
-    """
-
-    from wikify.wiki.legacy.agent import build_wiki_from_sitemap
-    from wikify.wiki.builder import generate_wiki_index
-    from wikify.wiki.linker import cross_link_articles, ensure_parent_backlinks
-    from wikify.wiki.legacy.sitemap import generate_sitemap
-
-    wiki_dir = Path("data/wiki")
-    wiki_dir.mkdir(parents=True, exist_ok=True)
-
-    # Phase 1 + 2: explore corpus and generate structured sitemap
-    console.print("[bold]Phase 1: Exploring corpus...[/bold]")
-    sitemap = generate_sitemap(
-        topic_hint=topic,
-        model=model,
-        wiki_dir=wiki_dir,
-        max_explore_papers=max_papers,
-        run_context=None,
-    )
-    theme_count = len(sitemap.themes())
-    concept_count = len(sitemap.concepts())
-    total = len(sitemap.entries)
-    console.print(f"  Planned {total} articles: {theme_count} themes, {concept_count} concepts")
-
-    # Phase 3: write articles
-    console.print(f"[bold]Phase 2: Writing {theme_count} theme articles...[/bold]")
-    build_wiki_from_sitemap(sitemap, wiki_dir, model=model, resume=resume)
-
-    # Cross-link
-    linked = cross_link_articles(wiki_dir, sitemap)
-    console.print(f"  Cross-linked {linked} articles")
-
-    # Parent backlinks
-    ensure_parent_backlinks(wiki_dir, sitemap)
-
-    # Index
-    generate_wiki_index(wiki_dir)
-    index_path = wiki_dir / "_index.md"
-    console.print(f"[green]Wiki index written to {index_path}[/green]")
-
-    console.print(
-        f"[green]Wiki built: {theme_count} themes, {concept_count} concepts,"
-        f" {total} articles[/green]"
-    )
-
-
-@wiki_app.command("expand")
-def wiki_expand(
-    concept: str = typer.Argument("", help="Concept slug or title to expand"),
-    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
-    all_stubs: bool = typer.Option(False, "--all", help="Expand all stubs/drafts"),
-):
-    """Expand a stub/draft wiki article into a full article.
-
-    If CONCEPT is given, expands that specific article.
-    If --all is given, expands every stub and draft in the sitemap.
-    Falls back to build_wiki_article when no sitemap exists.
-    """
-    import json
-    from datetime import datetime, timezone
-
-    from sqlmodel import Session, select
-
-    from wikify.core.store.db import get_engine
-    from wikify.core.store.models import WikiArticle
-    from wikify.wiki.builder import (
-        article_path,
-        generate_wiki_index,
-        slugify,
-        write_article,
-    )
-    from wikify.wiki.linker import cross_link_articles
-    from wikify.wiki.legacy.sitemap import WikiSitemap
-
-    wiki_dir = Path("data/wiki")
-    sitemap = WikiSitemap.load(wiki_dir)
-    engine = get_engine()
-
-    def _expand_entry(entry: "WikiSitemap.entries.__class__") -> None:  # type: ignore[name-defined]
-        from wikify.wiki.legacy.agent import build_article_from_entry
-
-        content, source_ids = build_article_from_entry(entry, wiki_dir, model=model)
-
-        category_dir = {
-            "theme": "concepts",
-            "concept": "concepts",
-            "synthesis": "syntheses",
-            "query": "queries",
-        }.get(entry.category, "concepts")
-        out_path = article_path(wiki_dir, category_dir, entry.slug)
-
-        write_article(
-            path=out_path,
-            title=entry.title,
-            content=content,
-            sources=source_ids,
-            topics=[entry.slug] + entry.related_slugs,
-            status="full",
-            model=model or "",
-        )
-
-        now = datetime.now(timezone.utc)
-        with Session(engine) as session:
-            row = session.exec(select(WikiArticle).where(WikiArticle.id == entry.slug)).first()
-            if row is None:
-                row = WikiArticle(
-                    id=entry.slug,
-                    title=entry.title,
-                    status="full",
-                    file_path=str(out_path.relative_to(wiki_dir.parent)),
-                    source_ids=json.dumps(source_ids),
-                    topic_keys=json.dumps([entry.slug]),
-                    created_at=now,
-                    updated_at=now,
-                    model=model or "",
-                    needs_update=False,
-                )
-            else:
-                row.status = "full"
-                row.source_ids = json.dumps(source_ids)
-                row.updated_at = now
-                row.model = model or row.model
-                row.needs_update = False
-            session.add(row)
-            session.commit()
-
-        console.print(f"  Expanded: {entry.title}")
-
-    if sitemap is not None:
-        if all_stubs:
-            targets = [e for e in sitemap.entries if e.depth in ("stub", "draft")]
-        elif concept:
-            slug = slugify(concept)
-            by_slug = sitemap.by_slug()
-            entry = by_slug.get(slug)
-            if entry is None:
-                # Try title match
-                matches = [e for e in sitemap.entries if concept.lower() in e.title.lower()]
-                if not matches:
-                    console.print(f"[red]No sitemap entry found for: {concept}[/red]")
-                    raise typer.Exit(1)
-                entry = matches[0]
-            targets = [entry]
-        else:
-            console.print("[yellow]Provide a CONCEPT or --all to expand stubs.[/yellow]")
-            raise typer.Exit(1)
-
-        if not targets:
-            console.print("[yellow]No stubs to expand.[/yellow]")
-            return
-
-        console.print(f"[bold]Expanding {len(targets)} article(s)...[/bold]")
-        for entry in targets:
-            try:
-                _expand_entry(entry)
-            except Exception as exc:
-                console.print(f"[red]  Failed ({entry.title}): {exc}[/red]")
-
-        # After expanding: cross-link and regenerate index
-        cross_link_articles(wiki_dir, sitemap)
-        generate_wiki_index(wiki_dir)
-
-    else:
-        # No sitemap: fall back to build_wiki_article for the given concept string
-        if not concept:
-            console.print("[red]No sitemap found and no concept given.[/red]")
-            raise typer.Exit(1)
-
-        from wikify.wiki.legacy.agent import build_wiki_article
-
-        console.print(f"[bold]Expanding (no-sitemap fallback): {concept}[/bold]")
-        content, source_ids = build_wiki_article(concept, concept, status="full", model=model)
-
-        slug = slugify(concept)
-        out_path = article_path(wiki_dir, "concepts", slug)
-        write_article(
-            path=out_path,
-            title=concept,
-            content=content,
-            sources=source_ids,
-            topics=[slug],
-            status="full",
-            model=model or "",
-        )
-
-        now = datetime.now(timezone.utc)
-        with Session(engine) as session:
-            row = WikiArticle(
-                id=slug,
-                title=concept,
-                status="full",
-                file_path=str(out_path.relative_to(wiki_dir.parent)),
-                source_ids=json.dumps(source_ids),
-                topic_keys=json.dumps([slug]),
-                created_at=now,
-                updated_at=now,
-                model=model or "",
-                needs_update=False,
-            )
-            session.merge(row)
-            session.commit()
-
-        cross_link_articles(wiki_dir, None)
-        generate_wiki_index(wiki_dir)
-        console.print(f"[green]Expanded: {concept} -> {out_path}[/green]")
-
-    console.print("[green]Expand complete.[/green]")
+# NOTE: the legacy `wiki init` and `wiki expand` commands and the
+# `wiki query --deep` mini-wiki branch were removed when the
+# sitemap-first build flow was deleted. Bootstrap a new wiki by running
+# `wikify wiki epoch` against an ingested corpus instead.
 
 
 @wiki_app.command("sync")
@@ -1458,69 +1241,22 @@ def wiki_query(
     question: str = typer.Argument(..., help="Question to answer from the wiki"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
     domain: str = typer.Option("", "--domain", "-d", help="Limit search to a domain"),
-    deep: bool = typer.Option(False, "--deep", help="Build ephemeral mini-wiki before escalation"),
     promote: bool = typer.Option(False, "--promote", help="Save the answer as a new wiki article"),
 ):
     """Answer a question from the visible wiki with optional promotion."""
-    import tempfile
-
     from wikify.wiki.presentation.layout import iter_visible_page_files
     from wikify.wiki.runtime import query_wiki, reconcile_state
 
     wiki_dir = Path("data/wiki")
     index_path = wiki_dir / "index.md"
-    legacy_index_path = wiki_dir / "_index.md"
 
-    if not index_path.exists() and not legacy_index_path.exists() and not iter_visible_page_files(
-        wiki_dir
-    ):
+    if not index_path.exists() and not iter_visible_page_files(wiki_dir):
         console.print("[red]No visible wiki found. Run 'wikify wiki epoch' first.[/red]")
         raise typer.Exit(1)
 
-    # ── --deep mode: build ephemeral mini-wiki ────────────────────────────────
-    query_wiki_dir = wiki_dir
-    if deep:
-        console.print("[dim]--deep: building ephemeral mini-wiki for this query...[/dim]")
-        try:
-            from wikify.wiki.legacy.agent import build_wiki_from_sitemap
-            from wikify.wiki.builder import generate_wiki_index
-            from wikify.wiki.legacy.sitemap import generate_sitemap
-
-            temp_dir_obj = tempfile.mkdtemp()
-            temp_wiki_dir = Path(str(temp_dir_obj))
-            sitemap = generate_sitemap(
-                wiki_dir=temp_wiki_dir,
-                topic_hint=question,
-                max_explore_papers=15,
-                model=model,
-            )
-            build_wiki_from_sitemap(sitemap, wiki_dir=temp_wiki_dir, model=model)
-            generate_wiki_index(temp_wiki_dir)
-            query_wiki_dir = temp_wiki_dir
-            console.print(f"[dim]Ephemeral wiki built in {temp_wiki_dir}[/dim]")
-        except Exception as exc:
-            console.print(f"[yellow]--deep build failed ({exc}), using existing wiki.[/yellow]")
-
-    # ── Run escalation ────────────────────────────────────────────────────────
-    if (
-        not deep
-        and query_wiki_dir == wiki_dir
-        and legacy_index_path.exists()
-        and not iter_visible_page_files(query_wiki_dir)
-    ):
-        from wikify.wiki.builder import append_unanswered_question
-
-        answer = _answer_with_escalation(question, query_wiki_dir, domain, model)
-        if answer is None:
-            append_unanswered_question(wiki_dir, question, domain)
-            console.print("[yellow]Gap recorded in wiki. Run 'wiki expand' to address.[/yellow]")
-            return
-        console.print(answer)
-        return
-
     result = query_wiki(
         question,
-        wiki_dir=query_wiki_dir,
+        wiki_dir=wiki_dir,
         domain=domain,
         model=model,
         promote=promote,
@@ -1530,12 +1266,11 @@ def wiki_query(
     answer = str(result.get("answer", "")).strip()
 
     if not result.get("answered"):
-        console.print("[yellow]Gap recorded in wiki. Run 'wiki expand' to address.[/yellow]")
+        console.print("[yellow]Gap recorded in wiki.[/yellow]")
         return
 
     console.print(answer)
 
-    # ── --promote (non-deep path) ─────────────────────────────────────────────
     if promote and result.get("promoted_path"):
         reconcile_state(wiki_dir)
         console.print(f"[green]Answer promoted to: {result['promoted_path']}[/green]")

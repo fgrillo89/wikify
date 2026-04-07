@@ -3,6 +3,51 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S3.G.2 (delete legacy sitemap-first flow)
+
+The user directive to "remove legacy code/packages once they are
+addressed by the refactor" applied to the sitemap-first wiki build.
+This slice deletes it.
+
+### What was deleted
+
+- `src/wikify/wiki/legacy/sitemap.py` — the LLM-driven
+  `generate_sitemap`, `explore_corpus_for_sitemap`,
+  `_build_graph_context_block`, etc. (~600 LOC)
+- `src/wikify/wiki/legacy/agent.py` — the LLM-driven
+  `build_wiki_from_sitemap`, `build_article_from_entry`,
+  `build_wiki_article` (~480 LOC)
+- `src/wikify/wiki/legacy/__init__.py` and the package itself
+- CLI commands: `wiki init`, `wiki expand`, and the `wiki query --deep`
+  ephemeral mini-wiki branch
+- `tests/test_wiki/test_sitemap_graph.py` (~580 LOC, exclusively
+  legacy LLM helpers)
+- `TestWikiInit`, `TestWikiExpand` classes from
+  `tests/test_wiki/test_cli_wiki.py` (~170 LOC)
+- `TestWikiQueryEscalation` class from `tests/test_wiki/test_audit.py`
+  (32 LOC)
+
+### What survives
+
+- `src/wikify/wiki/sitemap_data.py` — the pure data classes
+  `SitemapEntry` and `WikiSitemap` (with json save/load) survive
+  because `wiki/builder.py` index generators still consume that
+  shape. They contain no LLM calls and no agent logic.
+- `wiki/linker.py` keeps its dual-mode `cross_link_articles(wiki_dir, sitemap | None)`
+  signature; the sitemap branch is now only exercised by
+  `wiki/builder.py` index generation, not by any agent flow.
+
+### Bootstrap migration
+
+The bootstrap path `wikify wiki init` is gone. Users now bootstrap a
+new wiki by running `wikify wiki epoch` against an ingested corpus.
+The CLI command list is documented in the help output.
+
+**Verification:** 818 tests pass (down from 852 — the 34 deleted tests
+exercised the deleted code).
+
+---
+
 ## 2026-04-07 — Slice S5.A (test layout mirrors architecture)
 
 `tests/` now mirrors the four product boundaries:
