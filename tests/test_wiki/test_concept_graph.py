@@ -1,4 +1,4 @@
-"""Tests for wikify.wiki.concept_graph."""
+"""Tests for wikify.wiki.graph.build."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import networkx as nx
 
-import wikify.wiki.concept_graph as mod
+import wikify.wiki.graph.build as mod
 from wikify.store.models import ConceptOccurrence, ConceptRecord, ConceptRelation, SourceCoverage
 
 
@@ -78,7 +78,7 @@ class TestBuildConceptGraph:
         """No ConceptRecords -> empty DiGraph."""
         session = _make_session_mock(exec_results=[[]])  # concepts query returns nothing
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             graph = mod.build_concept_graph(domain="ald", epoch=1)
 
         assert isinstance(graph, nx.DiGraph)
@@ -114,7 +114,7 @@ class TestBuildConceptGraph:
             call_count += 1
             return s
 
-        with patch("wikify.wiki.concept_graph.get_session", side_effect=get_session_factory):
+        with patch("wikify.wiki.graph.build.get_session", side_effect=get_session_factory):
             graph = mod.build_concept_graph(domain="ald", epoch=1)
 
         assert graph.number_of_nodes() == 3
@@ -153,7 +153,7 @@ class TestBuildConceptGraph:
             call_count += 1
             return s
 
-        with patch("wikify.wiki.concept_graph.get_session", side_effect=get_session_factory):
+        with patch("wikify.wiki.graph.build.get_session", side_effect=get_session_factory):
             graph = mod.build_concept_graph(domain="ald", epoch=1)
 
         assert graph.number_of_nodes() == 2
@@ -170,7 +170,7 @@ class TestScoreImportance:
         """Empty graph -> empty dict."""
         graph = nx.DiGraph()
         # score_importance returns early before touching DB for empty graph
-        with patch("wikify.wiki.concept_graph.get_session"):
+        with patch("wikify.wiki.graph.build.get_session"):
             result = mod.score_importance(graph)
         assert result == {}
 
@@ -215,7 +215,7 @@ class TestScoreImportance:
             session.exec.side_effect = exec_side
             return session
 
-        with patch("wikify.wiki.concept_graph.get_session", side_effect=get_session_factory):
+        with patch("wikify.wiki.graph.build.get_session", side_effect=get_session_factory):
             scores = mod.score_importance(graph)
 
         assert len(scores) == 3
@@ -237,7 +237,7 @@ class TestScoreImportance:
         exec_result_2.all.return_value = [_make_coverage("p1", "ald")]
         session.exec.side_effect = [exec_result_1, exec_result_2]
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             scores = mod.score_importance(graph)
 
         assert "ald" in scores
@@ -502,7 +502,7 @@ class TestUpdateConceptImportance:
         exec_result.all.return_value = [record]
         session.exec.return_value = exec_result
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             mod.update_concept_importance({"ald": 0.85})
 
         assert record.importance == 0.85
@@ -519,7 +519,7 @@ class TestUpdateConceptImportance:
         exec_result.all.return_value = []  # concept not in DB
         session.exec.return_value = exec_result
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             mod.update_concept_importance({"unknown_concept": 0.5})
 
         session.add.assert_not_called()
@@ -527,7 +527,7 @@ class TestUpdateConceptImportance:
 
     def test_update_concept_importance_no_op_on_empty_scores(self):
         """Empty scores dict -> no DB access at all."""
-        with patch("wikify.wiki.concept_graph.get_session") as mock_gs:
+        with patch("wikify.wiki.graph.build.get_session") as mock_gs:
             mod.update_concept_importance({})
         mock_gs.assert_not_called()
 
@@ -551,7 +551,7 @@ class TestUpdateConceptImportance:
 
         session.exec.side_effect = exec_side
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             mod.update_concept_importance({"ald": 0.9, "hfo2": 0.7})
 
         assert rec_a.importance == 0.9
@@ -589,7 +589,7 @@ class TestSaveRelations:
         exec_result.all.return_value = [old_rel]
         session.exec.return_value = exec_result
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             count = mod.save_relations([new_rel], epoch=1)
 
         session.delete.assert_called_once_with(old_rel)
@@ -600,7 +600,7 @@ class TestSaveRelations:
 
     def test_save_relations_no_op_on_empty_list(self):
         """Empty relations list -> no DB access; returns 0."""
-        with patch("wikify.wiki.concept_graph.get_session") as mock_gs:
+        with patch("wikify.wiki.graph.build.get_session") as mock_gs:
             count = mod.save_relations([], epoch=1)
 
         mock_gs.assert_not_called()
@@ -622,7 +622,7 @@ class TestSaveRelations:
         exec_result.all.return_value = []  # no pre-existing rows
         session.exec.return_value = exec_result
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             count = mod.save_relations(new_rels, epoch=2)
 
         assert count == 3
@@ -645,7 +645,7 @@ class TestSaveRelations:
         exec_result.all.return_value = old_rels
         session.exec.return_value = exec_result
 
-        with patch("wikify.wiki.concept_graph.get_session", return_value=session):
+        with patch("wikify.wiki.graph.build.get_session", return_value=session):
             mod.save_relations([new_rel], epoch=1)
 
         assert session.delete.call_count == 3

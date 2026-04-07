@@ -1,11 +1,11 @@
-"""Tests for topology metric functions in wikify.wiki.concept_graph."""
+"""Tests for topology metric functions in wikify.wiki.graph.build."""
 
 from __future__ import annotations
 
 import networkx as nx
 import pytest
 
-from wikify.wiki.concept_graph import (
+from wikify.wiki.graph.build import (
     compute_bridge_density,
     compute_community_gini,
     compute_inter_community_edge_ratio,

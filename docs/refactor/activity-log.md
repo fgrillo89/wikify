@@ -3,6 +3,27 @@
 A running log of refactor work for review purposes. Each entry records
 what changed, why, what was verified, and what remains. Append-only.
 
+## 2026-04-07 — Slice S3.B (graph subpackage)
+
+Moved the wiki graph layer into its own subpackage with no shims.
+
+- `src/wikify/wiki/concept_graph.py` → `src/wikify/wiki/graph/build.py`
+- `src/wikify/wiki/domains.py` → `src/wikify/wiki/graph/domains.py`
+- `src/wikify/wiki/routing.py` → `src/wikify/wiki/graph/routing.py`
+- New `src/wikify/wiki/graph/__init__.py` re-exports the public surface.
+- Updated all 7 import sites in the same slice (`wiki/epoch.py`,
+  `wiki/graph/domains.py`, `wiki/graph/routing.py`, `agent/tools.py`,
+  plus 3 test files).
+
+`wiki/graph/build.py` is the original 650-line `concept_graph.py`
+unchanged. Splitting it into `build.py` / `importance.py` /
+`topology.py` per the target layout is a follow-up slice — the move
+itself was the prerequisite.
+
+**Verification:** 861 tests pass; ruff clean on `wiki/graph/`.
+
+---
+
 ## 2026-04-07 — Slice S3.A.3 (recipe layer landed)
 
 Implements step 1–4 of the recipe migration plan from

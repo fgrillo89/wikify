@@ -65,7 +65,7 @@ from wikify.wiki.telemetry import (
     stage_timer,
     update_run_metadata,
 )
-from wikify.wiki.concept_graph import (
+from wikify.wiki.graph.build import (
     build_concept_graph,
     classify_node_roles,
     extract_relations,
@@ -83,7 +83,7 @@ from wikify.wiki.concepts import (
     store_parameters,
     store_relation_evidence,
 )
-from wikify.wiki.domains import FAST_MODEL, discover_domains
+from wikify.wiki.graph.domains import FAST_MODEL, discover_domains
 from wikify.wiki.linker import cross_link_articles
 from wikify.wiki.mapreduce import SourceExtraction, map_chunks_to_topic
 from wikify.wiki.template import refine_template

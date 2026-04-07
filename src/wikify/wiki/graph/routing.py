@@ -21,7 +21,7 @@ from sqlmodel import select
 from wikify.store.db import get_session
 from wikify.store.embeddings import _store
 from wikify.store.models import ConceptRecord, DomainCluster, SourceCoverage
-from wikify.wiki.domains import expand_via_bridges, get_domain_for_query
+from wikify.wiki.graph.domains import expand_via_bridges, get_domain_for_query
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +329,7 @@ def domain_aware_search(
     if expansion:
         # Need the concept graph for bridge traversal
         try:
-            from wikify.wiki.concept_graph import build_concept_graph
+            from wikify.wiki.graph.build import build_concept_graph
 
             graph = build_concept_graph()
         except Exception:
@@ -399,7 +399,7 @@ def get_domain_context(concept_id: str) -> dict:
     # Find graph neighbours in different domains (requires concept graph)
     neighbors_in_other_domains: list[str] = []
     try:
-        from wikify.wiki.concept_graph import build_concept_graph
+        from wikify.wiki.graph.build import build_concept_graph
 
         graph = build_concept_graph()
         if concept_id in graph:

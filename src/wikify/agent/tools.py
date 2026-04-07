@@ -285,7 +285,7 @@ def search_wiki_domains(query: str, top_k: int = 10) -> str:
         JSON with domain-scoped search results including domain labels.
     """
     try:
-        from wikify.wiki.routing import domain_aware_search
+        from wikify.wiki.graph.routing import domain_aware_search
 
         results = domain_aware_search(query, top_k)
         return _tool_json_success(results=results, count=len(results))
@@ -2019,7 +2019,7 @@ def get_concept_domain_context(concept: str) -> str:
     """
     try:
         from wikify.wiki.builder import slugify
-        from wikify.wiki.routing import get_domain_context
+        from wikify.wiki.graph.routing import get_domain_context
 
         context = get_domain_context(slugify(concept))
         return _tool_json_success(**context)

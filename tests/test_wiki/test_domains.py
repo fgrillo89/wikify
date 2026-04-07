@@ -1,4 +1,4 @@
-"""Tests for wikify.wiki.domains."""
+"""Tests for wikify.wiki.graph.domains."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call, patch
 import networkx as nx
 import pytest
 
-import wikify.wiki.domains as mod
+import wikify.wiki.graph.domains as mod
 from wikify.store.models import ConceptRecord, DomainCluster, TopologySnapshot
 
 
@@ -94,7 +94,7 @@ class TestValidateCommunity:
             "core_concepts": ["ALD", "CVD"],
             "split_proposal": None,
         }
-        with patch("wikify.wiki.domains.complete_json", return_value=llm_response):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=llm_response):
             result = mod.validate_community(
                 ["ALD", "CVD", "HfO2"],
                 ["def1", "def2", "def3"],
@@ -119,7 +119,7 @@ class TestValidateCommunity:
                 {"label": "Methods", "concepts": ["ALD"]},
             ],
         }
-        with patch("wikify.wiki.domains.complete_json", return_value=llm_response):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=llm_response):
             result = mod.validate_community(
                 ["ALD", "HfO2"],
                 ["def1", "def2"],
@@ -134,7 +134,7 @@ class TestValidateCommunity:
     def test_llm_failure_returns_fallback(self):
         """When complete_json raises, validate_community returns a safe fallback."""
         with patch(
-            "wikify.wiki.domains.complete_json",
+            "wikify.wiki.graph.domains.complete_json",
             side_effect=RuntimeError("LLM timeout"),
         ):
             result = mod.validate_community(
@@ -153,7 +153,7 @@ class TestValidateCommunity:
 
     def test_llm_returns_non_dict_falls_back(self):
         """When complete_json returns something that is not a dict, fall back gracefully."""
-        with patch("wikify.wiki.domains.complete_json", return_value="not a dict"):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value="not a dict"):
             result = mod.validate_community(
                 ["ALD"],
                 ["def1"],
@@ -174,7 +174,7 @@ class TestValidateCommunity:
             "core_concepts": [],
             "split_proposal": None,
         }
-        with patch("wikify.wiki.domains.complete_json", return_value=llm_response):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=llm_response):
             result = mod.validate_community(
                 ["ALD", "CVD"],
                 ["def1", "def2"],
@@ -195,7 +195,7 @@ class TestCheckCommunityMerge:
     def test_merge_true(self):
         """LLM returns merge=True -> function returns True."""
         llm_response = {"merge": True, "reason": "Strongly overlapping scope."}
-        with patch("wikify.wiki.domains.complete_json", return_value=llm_response):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=llm_response):
             result = mod.check_community_merge(
                 "ALD Process", "Scope A",
                 "CVD Process", "Scope B",
@@ -207,7 +207,7 @@ class TestCheckCommunityMerge:
     def test_merge_false(self):
         """LLM returns merge=False -> function returns False."""
         llm_response = {"merge": False, "reason": "Distinct research areas."}
-        with patch("wikify.wiki.domains.complete_json", return_value=llm_response):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=llm_response):
             result = mod.check_community_merge(
                 "ALD Process", "Scope A",
                 "Machine Learning", "Scope B",
@@ -219,7 +219,7 @@ class TestCheckCommunityMerge:
     def test_llm_failure_defaults_to_no_merge(self):
         """When LLM raises, defaults to False (no merge)."""
         with patch(
-            "wikify.wiki.domains.complete_json",
+            "wikify.wiki.graph.domains.complete_json",
             side_effect=RuntimeError("network error"),
         ):
             result = mod.check_community_merge(
@@ -232,7 +232,7 @@ class TestCheckCommunityMerge:
 
     def test_llm_returns_non_dict_defaults_false(self):
         """Non-dict LLM response -> False."""
-        with patch("wikify.wiki.domains.complete_json", return_value=["merge"]):
+        with patch("wikify.wiki.graph.domains.complete_json", return_value=["merge"]):
             result = mod.check_community_merge(
                 "A", "",
                 "B", "",
@@ -319,8 +319,8 @@ class TestComputeTopologyMetrics:
 
         # score_importance is imported inside the function body from concept_graph;
         # classify_node_roles is imported at module level in domains.py.
-        with patch("wikify.wiki.concept_graph.score_importance") as mock_si, \
-             patch("wikify.wiki.domains.classify_node_roles") as mock_cr:
+        with patch("wikify.wiki.graph.build.score_importance") as mock_si, \
+             patch("wikify.wiki.graph.domains.classify_node_roles") as mock_cr:
             mock_si.return_value = {n: 0.5 for n in graph.nodes()}
             mock_cr.return_value = {n: "peripheral" for n in graph.nodes()}
             snapshot = mod.compute_topology_metrics(graph, communities, epoch=1, roles=None)
@@ -373,7 +373,7 @@ class TestAssignConceptsToDomains:
 
         session = _make_session_get(records)
 
-        with patch("wikify.wiki.domains.get_session", return_value=session):
+        with patch("wikify.wiki.graph.domains.get_session", return_value=session):
             mod.assign_concepts_to_domains(communities, roles, clusters, graph)
 
         # "a" is core in cluster_0 -> domains = ["cluster_0"]
@@ -386,7 +386,7 @@ class TestAssignConceptsToDomains:
 
         session = _make_session_get(records)
 
-        with patch("wikify.wiki.domains.get_session", return_value=session):
+        with patch("wikify.wiki.graph.domains.get_session", return_value=session):
             mod.assign_concepts_to_domains(communities, roles, clusters, graph)
 
         rec_c = records["c"]
@@ -401,7 +401,7 @@ class TestAssignConceptsToDomains:
         graph, communities, roles, clusters, records = self._build_scenario()
         session = _make_session_get(records)
 
-        with patch("wikify.wiki.domains.get_session", return_value=session):
+        with patch("wikify.wiki.graph.domains.get_session", return_value=session):
             mod.assign_concepts_to_domains(communities, roles, clusters, graph)
 
         session.commit.assert_called_once()
@@ -414,7 +414,7 @@ class TestAssignConceptsToDomains:
 
         session = _make_session_get(records)
 
-        with patch("wikify.wiki.domains.get_session", return_value=session):
+        with patch("wikify.wiki.graph.domains.get_session", return_value=session):
             # Should not raise
             mod.assign_concepts_to_domains(communities, roles, clusters, graph)
 
@@ -592,17 +592,17 @@ class TestDiscoverDomainsLowModularity:
         session.__exit__ = MagicMock(return_value=False)
         session.get.return_value = None  # no ConceptRecord rows
 
-        with patch("wikify.wiki.domains.detect_communities", return_value=communities), \
-             patch("wikify.wiki.concept_graph.score_importance", return_value={n: 0.5 for n in nodes}), \
-             patch("wikify.wiki.domains.classify_node_roles", return_value=roles), \
-             patch("wikify.wiki.domains.compute_topology_metrics",
+        with patch("wikify.wiki.graph.domains.detect_communities", return_value=communities), \
+             patch("wikify.wiki.graph.build.score_importance", return_value={n: 0.5 for n in nodes}), \
+             patch("wikify.wiki.graph.domains.classify_node_roles", return_value=roles), \
+             patch("wikify.wiki.graph.domains.compute_topology_metrics",
                    return_value=low_q_snapshot), \
-             patch("wikify.wiki.domains.complete_json") as mock_llm, \
-             patch("wikify.wiki.domains.get_or_create_persona", return_value="persona"), \
-             patch("wikify.wiki.domains.get_session", return_value=session), \
-             patch("wikify.wiki.domains._persist_clusters"), \
-             patch("wikify.wiki.domains._persist_topology"), \
-             patch("wikify.wiki.domains.assign_concepts_to_domains"):
+             patch("wikify.wiki.graph.domains.complete_json") as mock_llm, \
+             patch("wikify.wiki.graph.domains.get_or_create_persona", return_value="persona"), \
+             patch("wikify.wiki.graph.domains.get_session", return_value=session), \
+             patch("wikify.wiki.graph.domains._persist_clusters"), \
+             patch("wikify.wiki.graph.domains._persist_topology"), \
+             patch("wikify.wiki.graph.domains.assign_concepts_to_domains"):
             clusters = mod.discover_domains(graph, epoch=1, model="test-model")
 
         # One catch-all cluster only
