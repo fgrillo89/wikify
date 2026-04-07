@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Concept Extraction Result",
+  "description": "Schema for one chunk's structured extraction output. Used by the recipe layer's identify_concepts step.",
+  "type": "object",
+  "required": ["concepts", "parameters", "mechanisms", "relationships", "gaps"],
+  "additionalProperties": false,
+  "properties": {
+    "concepts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string"},
+          "type": {
+            "type": "string",
+            "enum": ["technique", "material", "phenomenon", "method", "theory", "dataset", "synthesis", ""]
+          },
+          "aliases": {"type": "array", "items": {"type": "string"}},
+          "definition": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["concept_name", "parameter_name", "value"],
+        "properties": {
+          "concept_name": {"type": "string"},
+          "parameter_name": {"type": "string"},
+          "value": {"type": "string"},
+          "unit": {"type": "string"},
+          "conditions": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "mechanisms": {"type": "array", "items": {"type": "object"}},
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_concept", "target_concept"],
+        "properties": {
+          "source_concept": {"type": "string"},
+          "target_concept": {"type": "string"},
+          "relation_type": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "description": {"type": "string"},
+          "suggested_type": {"type": "string"}
+        }
+      }
+    }
+  }
+}

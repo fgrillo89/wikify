@@ -106,37 +106,36 @@ def save_template(wiki_dir: Path, content: str, epoch: int) -> None:
     logger.info("save_template: wrote template for epoch %d (%d chars)", epoch, len(content))
 
 
+_PROMPT_FILE = Path(__file__).parent / "prompts" / "concept_extraction.md"
+
+
 def build_extraction_prompt(
     template: str,
     chunk_content: str,
     prior_concepts: list[str],
+    *,
+    prompt_path: Path | None = None,
 ) -> list[dict]:
-    """Build LLM messages for extraction using the template.
+    """Build LLM messages for extraction by interpolating into the prompt file.
 
-    Args:
-        template: The extraction template content.
-        chunk_content: Text content of the chunk to extract from.
-        prior_concepts: Concept names already seen in earlier chunks of
-            the same source (avoids redundant re-extraction).
+    The prompt scaffolding lives in
+    ``src/wikify/wiki/prompts/concept_extraction.md`` (or whatever file
+    the recipe layer specifies via ``prompt_path``). It uses three
+    template placeholders:
 
-    Returns:
-        List of message dicts suitable for complete_json().
+    - ``{{TEMPLATE}}`` -- the active extraction template content
+    - ``{{PRIOR_CONCEPTS}}`` -- comma-separated names from earlier chunks
+    - ``{{CHUNK_CONTENT}}`` -- the text body to interrogate
     """
+
+    path = prompt_path or _PROMPT_FILE
+    prompt_template = path.read_text(encoding="utf-8")
     prior_str = ", ".join(prior_concepts) if prior_concepts else "none"
-
     user_msg = (
-        f"{template}\n\n"
-        f"Previously extracted concepts from earlier sections of this source: {prior_str}. "
-        "Do not re-extract these unless this section adds new information about them.\n\n"
-        "Include only concepts that are clearly named and domain-specific. "
-        "Skip generic terms like 'experiment', 'data', 'result'.\n\n"
-        "Return ONLY valid JSON with keys: concepts, parameters, mechanisms, "
-        "relationships, gaps. No prose before or after the JSON.\n\n"
-        "--- TEXT ---\n"
-        f"{chunk_content}\n"
-        "--- END TEXT ---"
+        prompt_template.replace("{{TEMPLATE}}", template)
+        .replace("{{PRIOR_CONCEPTS}}", prior_str)
+        .replace("{{CHUNK_CONTENT}}", chunk_content)
     )
-
     return [{"role": "user", "content": user_msg}]
 
 

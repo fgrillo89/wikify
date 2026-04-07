@@ -41,6 +41,10 @@ steps:
     model: fast
     prompt: src/wikify/wiki/prompts/concept_extraction.md
     schema: src/wikify/wiki/schemas/concept_extraction.json
+    # NOTE: this is the first prompt that has actually been extracted
+    # to a standalone file. The others (people, figure, cross_link,
+    # article_writer, maintenance, consolidate) still live in Python
+    # and will be migrated in a follow-up slice.
     units: [chunk, synopsis]
     multimodal: false
 
