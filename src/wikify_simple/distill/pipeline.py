@@ -244,7 +244,7 @@ def run(
     # directly from doc metadata + parsed citations. Built before the
     # evidence filter so they survive (each carries one Evidence per
     # linked doc).
-    author_pages = build_author_pages(docs)
+    author_pages = build_author_pages(docs, existing_page_dir=bundle.people_dir)
     pages.extend(author_pages)
 
     # ---- crosslink + write to disk -------------------------------------

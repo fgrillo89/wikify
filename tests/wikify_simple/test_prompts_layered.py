@@ -62,7 +62,7 @@ def test_load_artifact_template_wiki_concept() -> None:
 def test_load_artifact_template_wiki_person() -> None:
     text = load_artifact_template("wiki_person")
     assert "Person" in text or "person" in text
-    assert "Papers in this corpus" in text
+    assert "Publications in this corpus" in text
 
 
 def test_load_artifact_template_unknown_raises() -> None:

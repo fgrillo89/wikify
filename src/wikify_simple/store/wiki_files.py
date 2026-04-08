@@ -31,6 +31,8 @@ def _render_page(page: WikiPage) -> str:
     lines.append(f"title: {page.title}")
     lines.append(f"aliases: [{', '.join(page.aliases)}]")
     lines.append(f"links: [{', '.join(page.links)}]")
+    if page.kind == "person":
+        lines.append("tags: [author]")
     if page.provenance:
         lines.append("provenance:")
         for k, v in page.provenance.items():
