@@ -173,6 +173,22 @@ def query(
     typer.echo(f"answer written to {out_path}")
 
 
+@app.command("html")
+def html(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    out_dir: Path | None = typer.Option(None, "--out"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+) -> None:
+    """Render a wiki bundle to a static HTML site via mkdocs-material."""
+    from .render.mkdocs import build_site
+
+    bundle = BundlePaths(root=bundle_dir)
+    target = out_dir if out_dir is not None else (bundle_dir / "_html")
+    corpus_root = Path(corpus_dir) if corpus_dir is not None else None
+    result = build_site(bundle, target, corpus_root=corpus_root)
+    typer.echo(f"site written to {result}")
+
+
 @app.command("eval")
 def eval_bundle(
     bundle_dir: Path = typer.Option(..., "--bundle"),
