@@ -7,7 +7,7 @@ input_schema:
   canonical_titles: list[str]
 output_schema:
   chunk_id: str
-  concepts: "list[{title: str, aliases: list[str], kind: concept|person, quote: str, evidence_figures: list[str]}]"
+  concepts: "list[{title: str, aliases: list[str], kind: concept|person, quote: str, evidence_figures: list[str], confidence: extracted|inferred|ambiguous, score: float}]"
   tokens_in: int
   tokens_out: int
 sampler_hint: haiku
@@ -27,6 +27,11 @@ prompt_template: |
     same idea, the chunk references "Figure N", etc.), include the
     fully-qualified figure ids (e.g. ``"<doc_id>/Figure_01"``). Leave the
     list empty when no figure is clearly relevant.
+  - Tag each concept with a ``confidence`` label and a ``score`` in [0, 1]:
+      * ``extracted``: the concept is explicitly named in the chunk (score 0.9-1.0)
+      * ``inferred``: the concept is implied by the chunk but not named (score 0.5-0.8)
+      * ``ambiguous``: the concept is uncertain or could be one of several (score < 0.5)
+    Default to ``extracted`` / ``1.0`` when the concept is named verbatim.
   - Respond as strict JSON matching the output schema. No commentary.
 
   chunk_id: {chunk_id}

@@ -94,6 +94,9 @@ class ExtractRequest(BaseModel):
     images_for_doc: list[ImageRef] = Field(default_factory=list)
 
 
+ConfidenceLabel = Literal["extracted", "inferred", "ambiguous"]
+
+
 ConceptCategory = Literal[
     "phenomenon",
     "method",
@@ -128,6 +131,15 @@ class ExtractedConcept(BaseModel):
     quote: str
     category: ConceptCategory | None = None
     evidence_figures: list[str] = Field(default_factory=list)
+    confidence: ConfidenceLabel = "extracted"
+    score: float = 1.0
+
+    @field_validator("score")
+    @classmethod
+    def _score_in_unit_interval(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"ExtractedConcept.score must be in [0, 1], got {v}")
+        return v
 
     @field_validator("title")
     @classmethod

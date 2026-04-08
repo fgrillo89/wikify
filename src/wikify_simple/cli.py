@@ -279,6 +279,10 @@ def eval_bundle(
     ]
     _atomic_write_text(report_path, "\n".join(md_lines))
     _atomic_write_text(json_path, json.dumps(_jsonable(payload), indent=2))
+
+    from .eval.audit import write_audit
+
+    write_audit(bundle, payload, out_path=bundle_dir / "_audit.md")
     typer.echo(
         f"M1={m1:.3f} M3_evid_Q={m3_evidence['modularity']:.3f} "
         f"M5={m5} G1={g.g1_anchoring:.3f} -> {report_path}"

@@ -220,11 +220,11 @@ def run(
     pages = [p for p in pages if p.evidence]  # drop unsupported skeletons
     pages = crosslink(pages)
     for page in pages:
-        page.provenance = {
-            "run_id": meter._run_id,  # noqa: SLF001 — operational only
-            "model": strategy.model_id,
-            "strategy": strategy.name,
-        }
+        prov = dict(page.provenance or {})
+        prov["run_id"] = meter._run_id  # noqa: SLF001 — operational only
+        prov["model"] = strategy.model_id
+        prov["strategy"] = strategy.name
+        page.provenance = prov
         write_page_file(bundle, page)
 
     # write the bundle index so canonicalize/crosslink/eval don't have to

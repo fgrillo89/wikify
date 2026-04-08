@@ -199,7 +199,17 @@ def _build_g_evidence(bundle: Bundle, top_k: int = 10) -> tuple[list[Page], np.n
     return pages, W
 
 
-def spectral_gap_modularity(bundle: Bundle, top_k: int = 10) -> dict[str, float]:
+def _page_mean_confidence(page: Page) -> float:
+    prov = getattr(page, "provenance", None) or {}
+    mean = prov.get("confidence_mean")
+    if isinstance(mean, (int, float)):
+        return float(mean)
+    return 1.0
+
+
+def spectral_gap_modularity(
+    bundle: Bundle, top_k: int = 10, *, use_confidence: bool = False
+) -> dict[str, float]:
     """M3. Returns {'modularity': Q, 'spectral_gap': Δλ, 'n_nodes': n,
     'n_edges': e}.
 
@@ -213,6 +223,12 @@ def spectral_gap_modularity(bundle: Bundle, top_k: int = 10) -> dict[str, float]
     n = W.shape[0]
     if n < 2 or W.sum() == 0:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
+
+    if use_confidence and n > 0:
+        conf = np.array([_page_mean_confidence(p) for p in pages], dtype=float)
+        # Symmetric edge weight multiplier: w_ij *= (c_i + c_j) / 2.
+        mult = 0.5 * (conf[:, None] + conf[None, :])
+        W = W * mult
 
     comms = louvain_communities(W)
     Q = _nx_modularity(W, comms)

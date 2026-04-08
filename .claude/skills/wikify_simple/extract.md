@@ -18,7 +18,7 @@ Steps:
    wiki page. Respond as strict JSON matching the schema." Pass the
    `chunk_text`, `canonical_titles`, and the JSON schema from
    `src/wikify_simple/agents/schema.py::ExtractResponse`:
-   `chunk_id, concepts[{title, aliases, kind, quote, category?, evidence_figures?}], tokens_in, tokens_out`.
+   `chunk_id, concepts[{title, aliases, kind, quote, category?, evidence_figures?, confidence?, score?}], tokens_in, tokens_out`.
 
    Rules the subagent must follow (slice 6+):
    - `kind` is EXACTLY `"concept"` or `"person"` — it routes the page to
@@ -33,6 +33,10 @@ Steps:
    - `quote` 5..400 chars AFTER stripping and MUST be a verbatim
      substring of `chunk_text` (copy-paste, do not paraphrase). Verify
      by literal substring search before emitting.
+   - `confidence` is one of `extracted` (concept named verbatim, default),
+     `inferred` (concept implied but not named), or `ambiguous` (could be
+     one of several / uncertain). `score` is in [0, 1]; default `1.0` for
+     `extracted`, ~0.5-0.8 for `inferred`, < 0.5 for `ambiguous`.
 3. Receive the subagent's JSON response.
 4. Write it to the response file path next to the request file
    (rename suffix `.request.json` -> `.response.json`).

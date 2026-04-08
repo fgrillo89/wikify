@@ -61,6 +61,7 @@ class Page:
     # any "## References" / "## Boilerplate" stripped
     evidence: list[Evidence]
     path: Path  # source file
+    provenance: dict = field(default_factory=dict)  # from sidecar JSON
 
 
 @dataclass
@@ -311,6 +312,14 @@ def _parse_page(path: Path) -> Page:
             return [str(x) for x in v]
         return [str(v)]
 
+    sidecar = path.with_suffix(".provenance.json")
+    provenance: dict = {}
+    if sidecar.exists():
+        try:
+            provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            provenance = {}
+
     return Page(
         id=str(fm.get("id", path.stem)),
         kind=str(fm.get("kind", "concept")),
@@ -320,6 +329,7 @@ def _parse_page(path: Path) -> Page:
         body_clean=body_clean,
         evidence=evidence,
         path=path,
+        provenance=provenance,
     )
 
 

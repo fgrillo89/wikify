@@ -232,6 +232,8 @@ class ClaudeCodeExtractor(Extractor):
                             "kind": c.kind,
                             "quote": c.quote,
                             "category": c.category,
+                            "confidence": c.confidence,
+                            "score": c.score,
                         }
                         for c in response.concepts
                     ],
@@ -265,6 +267,8 @@ class ClaudeCodeExtractor(Extractor):
                 "kind": c["kind"],
                 "quote": c["quote"],
                 "category": c.get("category"),
+                "confidence": c.get("confidence", "extracted"),
+                "score": c.get("score", 1.0),
             }
 
         return ExtractResponse(
