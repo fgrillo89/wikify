@@ -1,5 +1,88 @@
 # Slice 6 — first real run on mvp20 (20 PDFs)
 
+## 3x real-binding run (commit f13f91f + pipeline-skip follow-up)
+
+Full mvp20_v3 distill at `--budget 3x` (150k heq) under `--binding
+claude_code`. Subagent drove the dispatcher loop. Cache from prior
+real-binding runs served 30 hits; 74 new extracts + 2 writes burned
+the budget (~184k heq, 23% over).
+
+| metric | fake (0dd7e00) | 0.1x real (smoke) | **3x real (this)** | hoped |
+|---|---|---|---|---|
+| pages (concept + person) | 156 + 52 (noise) | 18 + 2 | **215 + 21** | — |
+| M1 coverage_residual | 0.5591 | 0.5504 | **0.4603** | <0.30 |
+| M3 g_links Q | NaN | 0.56 | **0.7377** | >0.20 |
+| M3 g_links n_edges | 0 | 60 | **2601** | >50 |
+| M3 g_evidence Q | 0 | 0 | 0 | >0.30 |
+| figure refs in writes | 0 | 0 | **2/2 (100%)** | >30% |
+| M5 hit_rate | 0 | 0 | 0 | >0.40 |
+
+### What worked
+
+1. **Concept quality.** 215 substantive concepts: ALD, HfO2/HfOx
+   Bilayer Memristor, STDP, VMM, 1T1R Crossbar, Conductive Filament,
+   Oxygen Vacancy, Pavlov Conditioning, Resistive Switching, RRAM,
+   Phase-Change Memory, Diffusive Memristor, Memristor Crossbar
+   Engine, Si-CMOS, Von Neumann Architecture, etc. **21 real
+   researchers**: Leon Chua, R. Stanley Williams, Carver Mead,
+   Dmitri Strukov, Donghun Lee, Chul-Ho Lee, etc.
+2. **Crosslinking is structurally healthy.** Q=0.7377 with 2601 edges
+   on 236 nodes. The link graph self-organizes without any global
+   plan: ALD ↔ HfO2 ↔ Memristor ↔ Crossbar ↔ STDP form a tight
+   cluster, separate from the device-physics cluster (Conductive
+   Filament, Oxygen Vacancy, Pavlov Conditioning).
+3. **Figure wiring landed.** Both write calls embedded inline
+   `![Figure 1](images/...)` markdown referencing the corpus image
+   index. **The primary purpose of the run — verifying figure refs
+   reach page bodies — passed.**
+4. **Per-call rejection skip works.** 6 of 80 extract calls were
+   rejected (5 quote-substring violations + 1 schema violation) and
+   the pipeline silently skipped them and continued. Without the
+   `try/except (ValidationError, QuoteNotInChunkError)` fix in
+   `distill/pipeline.py`, the run would have died at 4% completion.
+
+### What's still broken
+
+1. **M3 g_evidence is still 0.** Only 2 pages were *written* (have a
+   prose body); the other 213 are skeletons. `crosslink` then filters
+   out all evidence-less pages before building the doc-evidence
+   graph, so n_edges=0. The writer is starved by the cost model.
+2. **Writer cost is the gating constraint, not extractor.** Writer
+   tier L = 27.5k heq per call (with figures: ~50k+ each). At 3x
+   budget = 150k heq, that's at most 5 writes. Need 30x or 100x
+   budget for a real wiki, OR shift the strategy schedule to put
+   far more weight on writes, OR drop the writer to tier M.
+3. **Quote validator catches drain agent shortcuts.** 5/6 rejections
+   were the drain agent silently normalizing whitespace / unicode
+   dashes / pymupdf bracket-wrap citation tokens (`H][2][plasma]`,
+   `which was a   memristor`). Working as intended, but the right
+   structural fix is **tolerant substring match** in the binding
+   wrapper: NFKC-normalize + collapse whitespace + strip `[NN]`
+   citation markers on BOTH sides before comparing. The verbatim
+   form is still stored.
+4. **Better long-term: clean pymupdf bracket artifacts at parse
+   time.** The chunks themselves should be free of `[1]` citation
+   markers and `[token][bracket][wrap]` noise. Affects embedder,
+   model, and validator simultaneously.
+5. **M5 hit_rate = 0** because only 2 pages have evidence chunks to
+   intersect with `chunks_read`. Same root cause as #1 — writer
+   starvation.
+6. **M6 grounding** parsed 4 sentences with 2 markers; g1=0.5
+   (only half of sentences had markers), g2=0 (the markers don't
+   resolve to a chunk in the bundle's `_chunks` index — likely a
+   path normalization issue between the writer's `<chunk_id>` form
+   and the bundle's stored form). Only 2 pages contributed —
+   small sample.
+
+### Next slice
+
+Three fixes, in priority order:
+1. **Tolerant quote-substring match** in `bindings/{fake,claude_code}.py::_assert_quotes_in_chunk`. NFKC + whitespace collapse + `[NN]` strip. Quotes still stored verbatim. Eliminates the entire class of drain-agent rejections.
+2. **Strip pymupdf bracket-wrap artifacts at parse time** in `ingest/parsers/pdf.py`. Chunks should never contain `H][2][plasma]`.
+3. **Writer cost re-tier** (or schedule re-balance) so a 1x budget yields 20+ writes instead of 5. Right now writer is 100x extractor.
+
+After those, re-run at 1x with `--feed` to add more written pages on top of this bundle and watch g_evidence break zero for the first time.
+
 ## First real-binding smoke run (commit 22e2da3 + follow-up)
 
 Tiny budget (0.1x = 5000 heq) end-to-end with `--binding claude_code`.

@@ -23,10 +23,13 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+
 from ..agents.protocols import Extractor, Writer
 from ..agents.schema import (
     ExtractRequest,
     ImageRef,
+    QuoteNotInChunkError,
     WriteEvidenceRef,
     WriteRequest,
 )
@@ -117,7 +120,13 @@ def run(
                     tier=strategy.tier_explore,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
                 )
-                resp = extractor.extract(req)
+                # Per-chunk rejections (validator failure, hallucinated quote)
+                # must NOT crash the run. Log via the .error.json artifact
+                # the binding already wrote, skip the chunk, keep going.
+                try:
+                    resp = extractor.extract(req)
+                except (ValidationError, QuoteNotInChunkError):
+                    continue
                 for concept in resp.concepts:
                     candidates.append(
                         Candidate(
@@ -176,7 +185,12 @@ def run(
                 tier=strategy.tier_exploit,
                 figures=page_figures,
             )
-            resp = writer.write(req)
+            try:
+                resp = writer.write(req)
+            except ValidationError:
+                # Writer body validator rejected (empty prose / no markers /
+                # missing evidence block). Skip this page; leave the skeleton.
+                continue
             page.body_markdown = resp.body_markdown
     except BudgetExceeded:
         pass
