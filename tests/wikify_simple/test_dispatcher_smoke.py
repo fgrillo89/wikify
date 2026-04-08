@@ -100,8 +100,13 @@ def _responder(role: str, payload: dict) -> dict:
     if role == "write":
         return {
             "page_id": payload["page_id"],
-            "body_markdown": "ALD is a self-limiting surface reaction process.[^ev1]",
-            "used_markers": ["ev1"],
+            "body_markdown": (
+                "ALD is a self-limiting surface reaction process[^e1].\n\n"
+                "It produces conformal films one half-cycle at a time[^e1].\n\n"
+                "## Evidence\n\n"
+                "[^e1]: self-limiting (d1)\n"
+            ),
+            "used_markers": ["e1"],
             "tokens_in": 400,
             "tokens_out": 250,
         }
@@ -194,7 +199,7 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
     response = writer.write(req)
     assert isinstance(response, WriteResponse)
     assert response.page_id == "p1"
-    assert "ev1" in response.used_markers
+    assert "e1" in response.used_markers
     assert response.tokens_in == 400
     assert response.tokens_out == 250
     assert meter.spent_haiku_eq > before

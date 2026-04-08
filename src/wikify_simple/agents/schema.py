@@ -7,9 +7,14 @@ or extra field aborts the call after one retry.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_EVIDENCE_HEADING = "## Evidence"
+_MARKER_RE = re.compile(r"\[\^e\d+\]")
+_EVIDENCE_DEF_RE = re.compile(r"^\[\^e\d+\]:")
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
 
@@ -100,6 +105,39 @@ class WriteResponse(BaseModel):
     used_markers: list[str]
     tokens_in: int
     tokens_out: int
+
+    @field_validator("body_markdown")
+    @classmethod
+    def _body_has_prose_and_evidence(cls, v: str) -> str:
+        """Reject empty / marker-less / evidence-less writer output.
+
+        Structural minimum:
+          - the body must contain a ``## Evidence`` heading
+          - the prose half (before that heading) must have >=2 non-blank
+            lines of actual text
+          - those prose lines must contain at least one ``[^eN]`` marker
+          - the evidence half must contain at least one ``[^eN]: ...``
+            footnote definition
+        """
+        if _EVIDENCE_HEADING not in v:
+            raise ValueError("WriteResponse.body_markdown missing `## Evidence` heading")
+        prose_part, _, evidence_part = v.partition(_EVIDENCE_HEADING)
+        prose_lines = [ln.strip() for ln in prose_part.splitlines() if ln.strip()]
+        # strip a leading `# Title` heading from the prose count so writers
+        # that emit a title still need >=2 body lines underneath it.
+        body_lines = [ln for ln in prose_lines if not ln.startswith("#")]
+        if len(body_lines) < 2:
+            raise ValueError(
+                "WriteResponse.body_markdown needs >=2 non-blank prose lines before `## Evidence`"
+            )
+        if not any(_MARKER_RE.search(ln) for ln in body_lines):
+            raise ValueError("WriteResponse.body_markdown prose has no `[^eN]` evidence markers")
+        ev_lines = [ln.strip() for ln in evidence_part.splitlines() if ln.strip()]
+        if not any(_EVIDENCE_DEF_RE.match(ln) for ln in ev_lines):
+            raise ValueError(
+                "WriteResponse.body_markdown `## Evidence` block has no `[^eN]:` definitions"
+            )
+        return v
 
 
 # --- orchestrator --------------------------------------------------------
