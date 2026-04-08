@@ -26,6 +26,8 @@ import time
 import uuid
 from pathlib import Path
 
+from pydantic import BaseModel, ValidationError
+
 from ..agents.protocols import Extractor, Orchestrator, Querier, Writer
 from ..agents.schema import (
     ExtractRequest,
@@ -34,6 +36,7 @@ from ..agents.schema import (
     OrchState,
     QueryRequest,
     QueryResponse,
+    QuoteNotInChunkError,
     WriteRequest,
     WriteResponse,
 )
@@ -87,11 +90,72 @@ def _cleanup(*paths: Path) -> None:
             p.unlink()
 
 
-def _retry_validate(model_cls, raw: dict):
+def _write_error_artifact(req_path: Path, model_cls: type, raw, exc: Exception) -> Path:
+    """Persist a debuggable rejection record next to the request file.
+
+    On validation (or post-validation binding-check) failure we want the
+    operator to inspect what the dispatcher produced, so we write a
+    sibling ``<rid>.error.json`` with the error message, the raw dict,
+    and the schema name. The request file is intentionally kept; only
+    the response file is cleaned up by the caller's ``finally`` block.
+    """
+    err_path = req_path.with_name(req_path.name.replace(".request.", ".error."))
+    try:
+        payload = {
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "schema": model_cls.__name__,
+            "raw": raw,
+        }
+        err_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    except OSError:
+        pass
+    return err_path
+
+
+def _assert_quotes_in_chunk(
+    response: ExtractResponse,
+    chunk_text: str,
+    req_path: Path,
+    raw,
+) -> None:
+    """Structural barrier against hallucinated paraphrased quotes.
+
+    Schemas don't see ``chunk_text``, so the substring rule lives in the
+    binding. If any extracted quote is not a verbatim (whitespace-
+    tolerant) substring of the source chunk we raise
+    ``QuoteNotInChunkError`` and drop a ``.error.json`` artifact so the
+    operator can see which concept the dispatcher hallucinated.
+    """
+    for concept in response.concepts:
+        q = concept.quote.strip()
+        if not q or q not in chunk_text:
+            exc = QuoteNotInChunkError(
+                title=concept.title,
+                quote_prefix=q[:60],
+            )
+            _write_error_artifact(req_path, ExtractResponse, raw, exc)
+            raise exc
+
+
+def _validate_or_record(
+    model_cls: type[BaseModel],
+    raw,
+    req_path: Path,
+):
+    """Validate ``raw`` against ``model_cls``; on failure write .error.json and re-raise.
+
+    There is no retry: re-validating the same dict against the same
+    schema cannot succeed. The dead ``_retry_validate`` helper that used
+    to live here was removed intentionally — if the model returns bad
+    JSON, the right response is to fail loudly with an artifact on disk,
+    not to burn another validation pass.
+    """
     try:
         return model_cls.model_validate(raw)
-    except Exception:
-        return model_cls.model_validate(raw)  # one retry, then propagate
+    except ValidationError as exc:
+        _write_error_artifact(req_path, model_cls, raw, exc)
+        raise
 
 
 # --- extractor -----------------------------------------------------------
@@ -144,14 +208,28 @@ class ClaudeCodeExtractor(Extractor):
             )
             try:
                 raw = _await_response(res_path)
-                response = _retry_validate(ExtractResponse, raw)
+                response = _validate_or_record(ExtractResponse, raw, req_path)
+                _assert_quotes_in_chunk(response, request.chunk_text, req_path, raw)
             finally:
-                _cleanup(req_path, res_path)
+                _cleanup(res_path)
+                # On success there is no error artifact and we also
+                # drop the request file. On validation or quote-check
+                # failure _write_error_artifact has already run and
+                # we intentionally keep the request file for the
+                # operator to inspect.
+                if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
+                    _cleanup(req_path)
             return CachedExtract(
                 payload={
                     "chunk_id": response.chunk_id,
                     "concepts": [
-                        {"title": c.title, "aliases": c.aliases, "kind": c.kind, "quote": c.quote}
+                        {
+                            "title": c.title,
+                            "aliases": list(c.aliases),
+                            "kind": c.kind,
+                            "quote": c.quote,
+                            "category": c.category,
+                        }
                         for c in response.concepts
                     ],
                 },
@@ -175,9 +253,20 @@ class ClaudeCodeExtractor(Extractor):
         payload = entry.payload
         from ..agents.schema import ExtractedConcept
 
+        def _concept_kwargs(c: dict) -> dict:
+            # category was added in slice 6; older cached payloads may
+            # omit it. Default to None rather than failing the lookup.
+            return {
+                "title": c["title"],
+                "aliases": c["aliases"],
+                "kind": c["kind"],
+                "quote": c["quote"],
+                "category": c.get("category"),
+            }
+
         return ExtractResponse(
             chunk_id=payload["chunk_id"],
-            concepts=[ExtractedConcept(**c) for c in payload["concepts"]],
+            concepts=[ExtractedConcept(**_concept_kwargs(c)) for c in payload["concepts"]],
             tokens_in=entry.tokens_in,
             tokens_out=entry.tokens_out,
         )
@@ -229,9 +318,11 @@ class ClaudeCodeWriter(Writer):
         t0 = time.monotonic()
         try:
             raw = _await_response(res_path)
-            response = _retry_validate(WriteResponse, raw)
+            response = _validate_or_record(WriteResponse, raw, req_path)
         finally:
-            _cleanup(req_path, res_path)
+            _cleanup(res_path)
+            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
+                _cleanup(req_path)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,
@@ -267,9 +358,11 @@ class ClaudeCodeOrchestrator(Orchestrator):
         t0 = time.monotonic()
         try:
             raw = _await_response(res_path)
-            action = _retry_validate(OrchAction, raw)
+            action = _validate_or_record(OrchAction, raw, req_path)
         finally:
-            _cleanup(req_path, res_path)
+            _cleanup(res_path)
+            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
+                _cleanup(req_path)
         self._meter.record(
             role=Role.ORCHESTRATOR,
             tier="L",
@@ -316,11 +409,13 @@ class ClaudeCodeQuerier(Querier):
         t0 = time.monotonic()
         try:
             raw = _await_response(res_path)
-            response = _retry_validate(QueryResponse, raw)
+            response = _validate_or_record(QueryResponse, raw, req_path)
             tokens_in = int(raw.get("tokens_in", 0))
             tokens_out = int(raw.get("tokens_out", 0))
         finally:
-            _cleanup(req_path, res_path)
+            _cleanup(res_path)
+            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
+                _cleanup(req_path)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,

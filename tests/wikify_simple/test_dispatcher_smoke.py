@@ -83,6 +83,15 @@ class _FakeDispatcher:
 def _responder(role: str, payload: dict) -> dict:
     """Deterministic valid responses for each role."""
     if role == "extract":
+        # Quote MUST be a verbatim substring of the request's
+        # chunk_text or the binding's _assert_quotes_in_chunk check
+        # raises QuoteNotInChunkError.
+        chunk_text = payload["chunk_text"]
+        # Pick a quote guaranteed to be a substring: the first 5..80
+        # characters of chunk_text (schema requires len in [5, 400]).
+        quote = chunk_text[: max(5, min(80, len(chunk_text)))]
+        if len(quote) < 5:
+            quote = (chunk_text + "xxxxx")[:5]
         return {
             "chunk_id": payload["chunk_id"],
             "concepts": [
@@ -90,7 +99,8 @@ def _responder(role: str, payload: dict) -> dict:
                     "title": "Atomic Layer Deposition",
                     "aliases": ["ALD"],
                     "kind": "concept",
-                    "quote": "Atomic layer deposition is a thin-film technique.",
+                    "quote": quote,
+                    "category": "method",
                     "evidence_figures": [],
                 }
             ],

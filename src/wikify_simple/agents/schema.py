@@ -10,13 +10,54 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _EVIDENCE_HEADING = "## Evidence"
 _MARKER_RE = re.compile(r"\[\^e\d+\]")
 _EVIDENCE_DEF_RE = re.compile(r"^\[\^e\d+\]:")
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
+
+
+# --- exceptions ----------------------------------------------------------
+
+
+class QuoteNotInChunkError(ValueError):
+    """Raised by a binding when an extracted quote is not a verbatim
+    substring of the ``ExtractRequest.chunk_text`` it came from.
+
+    This is a *binding-level* check, not a schema-level check, because
+    ``ExtractedConcept`` never sees the source chunk. Bindings run it
+    after ``ExtractResponse.model_validate`` as a structural barrier
+    against hallucinated paraphrases.
+    """
+
+    def __init__(self, *, title: str, quote_prefix: str) -> None:
+        self.title = title
+        self.quote_prefix = quote_prefix
+        super().__init__(
+            f"extracted quote for concept {title!r} is not a substring of chunk_text "
+            f"(quote starts with: {quote_prefix!r})"
+        )
+
+
+_TITLE_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "and",
+        "or",
+        "to",
+        "is",
+        "this",
+        "that",
+        "these",
+        "those",
+    }
+)
+_TITLE_PUNCT = ".,;:!?\"'()[]{}<>-_/\\"
 
 # --- extractor -----------------------------------------------------------
 
@@ -50,14 +91,91 @@ class ExtractRequest(BaseModel):
     images_for_doc: list[ImageRef] = Field(default_factory=list)
 
 
+ConceptCategory = Literal[
+    "phenomenon",
+    "method",
+    "material",
+    "device",
+    "theory",
+    "metric",
+    "organization",
+    "other",
+]
+
+
 class ExtractedConcept(BaseModel):
+    """One concept (or person) surfaced from a single chunk.
+
+    ``kind`` is the **page-type discriminator**: it drives directory
+    routing (``concepts/<id>.md`` vs ``people/<id>.md``) and the wiki
+    index. The wiki has two page kinds, period. Do not widen this.
+
+    ``category`` is a **facet tag**, not a type. Downstream tools
+    (graphify audit, M3 modularity colouring) can slice the wiki by
+    category, but category never changes page routing. ``category`` is
+    always ``None`` for ``kind="person"`` and optional for
+    ``kind="concept"`` -- ``None`` simply means "not classified".
+    """
+
     model_config = _STRICT
 
     title: str
     aliases: list[str]
     kind: Literal["concept", "person"]
     quote: str
+    category: ConceptCategory | None = None
     evidence_figures: list[str] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def _title_hygiene(cls, v: str) -> str:
+        t = v.strip()
+        if not (2 <= len(t) <= 120):
+            raise ValueError(f"ExtractedConcept.title length {len(t)} outside [2, 120]: {t!r}")
+        if t.lower() in _TITLE_STOPWORDS:
+            raise ValueError(f"ExtractedConcept.title is a stopword: {t!r}")
+        if t[0] in _TITLE_PUNCT or t[-1] in _TITLE_PUNCT:
+            raise ValueError(f"ExtractedConcept.title has leading/trailing punctuation: {t!r}")
+        return t
+
+    @field_validator("quote")
+    @classmethod
+    def _quote_hygiene(cls, v: str) -> str:
+        q = v.strip()
+        if not (5 <= len(q) <= 400):
+            raise ValueError(f"ExtractedConcept.quote length {len(q)} outside [5, 400]")
+        return q
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases_and_check_person_category(cls, data):
+        if not isinstance(data, dict):
+            return data
+        title = data.get("title", "")
+        title_norm = title.strip().lower() if isinstance(title, str) else ""
+        raw_aliases = data.get("aliases") or []
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in raw_aliases:
+            if not isinstance(raw, str):
+                raise ValueError("ExtractedConcept.aliases entries must be str")
+            a = raw.strip()
+            if not a:
+                continue
+            key = a.lower()
+            if key == title_norm or key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+            if len(out) >= 8:
+                break
+        data["aliases"] = out
+        if data.get("kind") == "person" and data.get("category") is not None:
+            raise ValueError(
+                f"ExtractedConcept with kind='person' must not set category "
+                f"(got {data.get('category')!r})"
+            )
+        return data
 
 
 class ExtractResponse(BaseModel):

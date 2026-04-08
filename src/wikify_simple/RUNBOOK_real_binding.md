@@ -50,6 +50,67 @@ The outer Claude Code session needs all three skill files reachable:
 
 - `/wikify_simple/extract` — reads `data/dispatch/extract/*.request.json`,
   emits an `ExtractResponse`-shaped JSON to the matching `.response.json`.
+
+  **Extract schema (slice 6+)**
+
+  Every concept in the response MUST satisfy:
+
+  - `kind` is the page-type discriminator and is exactly `"concept"` or
+    `"person"`. It drives directory routing
+    (`concepts/<id>.md` vs `people/<id>.md`). Do not invent other values.
+  - `category` is a facet tag, NOT a type. Allowed values are
+    `"phenomenon" | "method" | "material" | "device" | "theory" |
+    "metric" | "organization" | "other"` or `null` / omitted. It is
+    always `null` for `kind="person"` (people do not get a category).
+    For `kind="concept"` it is optional — `null` means "not classified".
+  - `title` is 2..120 characters, not a stopword
+    (`the a an of and or to is this that these those`), and has no
+    leading/trailing punctuation.
+  - `aliases` is a list of distinct strings, deduped case-insensitively,
+    with any entry equal to the title (case-insensitively) removed.
+    Capped at 8 entries by the binding.
+  - `quote` is 5..400 characters AFTER stripping and MUST be a verbatim
+    substring of the request's `chunk_text`. The binding enforces this
+    after schema validation; a paraphrased quote triggers
+    `QuoteNotInChunkError` and writes a `<rid>.error.json` artifact.
+  - Pick a short distinctive 5..15 word phrase for the quote; verify
+    by literal substring search against `chunk_text` BEFORE writing the
+    response.
+
+  **Rejection artifacts.** On any validation failure (schema or the
+  binding's quote-substring check) the binding writes
+  `<rid>.error.json` next to the request and KEEPS the request file for
+  operator inspection. Only the response file is cleaned up. There is
+  no silent retry: re-validating the same dict against the same schema
+  cannot succeed.
+
+  **Example response JSON** (method-typed concept + person):
+
+  ```json
+  {
+    "chunk_id": "doc-a#chunk-003",
+    "concepts": [
+      {
+        "title": "Atomic Layer Deposition",
+        "aliases": ["ALD"],
+        "kind": "concept",
+        "category": "method",
+        "quote": "atomic layer deposition is a self-limiting",
+        "evidence_figures": []
+      },
+      {
+        "title": "Chua",
+        "aliases": ["Leon Chua"],
+        "kind": "person",
+        "category": null,
+        "quote": "Chua introduced the memristor concept in",
+        "evidence_figures": []
+      }
+    ],
+    "tokens_in": 240,
+    "tokens_out": 110
+  }
+  ```
 - `/wikify_simple/write` — same shape for `WriteResponse`. Must include
   `used_markers: list[str]` (the list of `eN` identifiers referenced in
   the prose) and a `body_markdown` that passes the structural validator

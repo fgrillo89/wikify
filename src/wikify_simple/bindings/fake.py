@@ -80,6 +80,7 @@ class FakeExtractor(Extractor):
                 aliases=c["aliases"],
                 kind=c["kind"],
                 quote=c["quote"],
+                category=c.get("category"),
             )
             for c in payload["concepts"]
         ]
@@ -106,7 +107,7 @@ def _fake_extract_payload(request: ExtractRequest) -> dict:
         if len(seen) >= 2:
             break
     concepts: list[dict] = []
-    for tok in seen:
+    for idx, tok in enumerate(seen):
         # quote: first sentence containing the token, else first 80 chars
         quote = _first_sentence_with(text, tok) or text[:80]
         concepts.append(
@@ -115,6 +116,10 @@ def _fake_extract_payload(request: ExtractRequest) -> dict:
                 "aliases": [],
                 "kind": "concept",
                 "quote": quote,
+                # Tag the first fake concept with a facet so tests can
+                # exercise the ``category`` round-trip without forcing
+                # every caller to provide one.
+                "category": "method" if idx == 0 else None,
             }
         )
     person = _detect_person(text)
