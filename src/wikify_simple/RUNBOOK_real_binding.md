@@ -33,16 +33,22 @@ accounting + per-tier overhead (`infra/cost_meter.py`):
 |---|---|---|---|
 | extract (no images) | S | 250 / 120 | ~420 |
 | extract (+10 images) | S | 650 / 120 | ~820 |
-| write (no figures) | L | 300 / 120 | ~27_500 |
-| write (+14 figures) | L | 1000 / 120 | ~69_500 |
+| write (no figures) | M | 300 / 120 | ~5_600 |
+| write (+14 figures) | M | 1000 / 120 | ~14_000 |
 
 `per-call heq = input_tokens * input_per_m + output_tokens * output_per_m + fixed_overhead`
 with S = (1.0, 1.0, 50), M = (12.0, 15.0, 200), L = (60.0, 75.0, 500).
 
-For mvp20: ~700 extracts × ~600 heq + ~150 writes × ~50_000 heq ≈
-420k + 7.5M heq. Budget for a full pass is ~8M heq at strategy M
-(mostly write-bound). Start with `--budget 300000` only for a
-low-coverage smoke; the real run needs 8-10 M heq.
+Writer was re-tiered from L to M in the mixed/exploit strategies:
+writer prompts are skeleton + evidence + figures + neighbors, which
+easily fit in the M-tier context. The previous L tiering was ~5x more
+expensive with no meaningful quality headroom.
+
+For mvp20: ~700 extracts × ~600 heq + ~150 writes × ~10_000 heq ≈
+420k + 1.5M heq. Budget for a full pass is ~2M heq at strategy M
+(mostly write-bound). `--budget 300000` now buys ~25-30 full writes on
+top of the extract loop instead of < 1 — useful for a smoke, but the
+real run still wants ~2M heq for full coverage.
 
 ### 3. Skills available in the outer session
 

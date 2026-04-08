@@ -60,6 +60,32 @@ def test_tier_overhead_nonzero(tmp_path):
     assert tier.haiku_eq(100, 50) == 100 + 50 + 50
 
 
+def test_writer_tier_m_is_cheaper_than_l(tmp_path):
+    """Writer was re-tiered from L to M so a typical write call drops
+    from ~69.5k heq to ~14k heq on the 14-figure case. Pin the ratio so
+    a future accidental bump back to L is caught.
+    """
+    lg = TierPrice(name="L", input_per_m=60.0, output_per_m=75.0, fixed_overhead=500.0)
+    m_ = TierPrice(name="M", input_per_m=12.0, output_per_m=15.0, fixed_overhead=200.0)
+    # 14-figure write: 300 + 14*50 = 1000 tokens in, 120 out
+    cost_l = lg.haiku_eq(1000, 120)
+    cost_m = m_.haiku_eq(1000, 120)
+    assert abs(cost_l - 69_500.0) < 1.0
+    assert abs(cost_m - 14_000.0) < 1.0
+    # at least 4.5x cheaper
+    assert cost_l / cost_m >= 4.5
+
+
+def test_mixed_strategy_uses_tier_m_for_writer():
+    """The headline mixed strategy must use tier M for the writer
+    (``tier_exploit``). Guards against a silent bump back to L.
+    """
+    from wikify_simple.distill.strategies.mixed import build
+
+    cfg = build()
+    assert cfg.tier_exploit == "M"
+
+
 def test_tier_ordering(tmp_path):
     s = TierPrice(name="S", input_per_m=1.0, output_per_m=1.0, fixed_overhead=50.0)
     m_ = TierPrice(name="M", input_per_m=12.0, output_per_m=15.0, fixed_overhead=200.0)

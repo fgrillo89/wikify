@@ -1,4 +1,7 @@
-"""Cell M — Lévy + Bayesian-opt headline: (similarity_walk, coverage_gap, 0.1) / (0.4, adaptive) / (S, L)."""
+"""Cell M — Lévy + Bayesian-opt headline.
+
+(similarity_walk, coverage_gap, 0.1) / (0.4, adaptive) / (S, M).
+"""
 
 from __future__ import annotations
 
@@ -17,6 +20,6 @@ def build(seed: int = 0) -> StrategyConfig:
         ),
         schedule=AdaptiveSchedule(exploit_fraction_initial=0.4),
         tier_explore="S",
-        tier_exploit="L",
+        tier_exploit="M",
         seed=seed,
     )
