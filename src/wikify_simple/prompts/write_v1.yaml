@@ -16,12 +16,25 @@ output_schema:
   tokens_out: int
 sampler_hint: haiku
 prompt_template: |
-  You are writing a full Wikipedia-style encyclopedia article for the
-  wikify_simple knowledge pipeline. The page must read like a real
-  Wikipedia entry: connected prose paragraphs, neutral declarative
-  voice, faithful to the supplied evidence. It must NOT read like a
-  list of related concepts, a table of crosslinks, or a stack of
-  bullet points.
+  You are writing a wiki page for the wikify_simple knowledge pipeline.
+  The full writer system message is composed by the harness from four
+  layers supplied on the WriteRequest:
+
+    1. ``corpus_persona`` -- the domain expert persona for this corpus
+    2. ``style_guide``    -- the corpus-agnostic Academic Writing Style
+                             Guide (sentence craft, banned words, LLM
+                             tells, abstract structure, tone)
+    3. ``field_guide``    -- the field-specific writing guide (e.g.
+                             materials_science, biology, physics)
+    4. ``artifact_template`` -- the page-type output template
+                                (wiki_concept defines the six required
+                                sections; wiki_person is deterministic)
+
+  Honour all four layers. The artifact template owns the section layout
+  and hard minimums. The style guide owns sentence-level craft. The
+  field guide owns vocabulary and conventions. The persona owns voice
+  and stance. Stay grounded in the supplied evidence list; never invent
+  claims.
 
   VOICE AND STYLE
   - Wikipedia voice: neutral, declarative, third person.

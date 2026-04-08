@@ -37,7 +37,12 @@ from ..infra.cost_meter import BudgetExceeded, CostMeter
 from ..models import Chunk, Document, WikiPage
 from ..models import Evidence as PageEvidence
 from ..paths import BundlePaths, CorpusPaths
-from ..prompts import load_prompt
+from ..prompts import (
+    load_artifact_template,
+    load_field_guide,
+    load_prompt,
+    load_style_guide,
+)
 from ..store.corpus import (
     all_chunks,
     list_documents,
@@ -66,6 +71,8 @@ class StrategyConfig:
     tier_exploit: str
     model_id: str = "haiku"
     seed: int = 0
+    field_name: str = "generic"
+    artifact_name: str = "wiki_concept"
 
 
 def run(
@@ -91,6 +98,17 @@ def run(
     vectors = read_vector_store(corpus)
     graph = read_graph(corpus)
     images_index = ImageIndex.load(corpus)
+
+    # Load the four layered writer-prompt strings ONCE per run. They are
+    # round-tripped on every WriteRequest so the binding has the full
+    # context the writer subagent needs to honour the style guide,
+    # field-specific conventions, output template, and corpus persona.
+    style_text = load_style_guide()
+    field_text = load_field_guide(strategy.field_name)
+    artifact_text = load_artifact_template(strategy.artifact_name)
+    persona_text = ""
+    if corpus.persona_path.exists():
+        persona_text = corpus.persona_path.read_text(encoding="utf-8").strip()
 
     state = _build_sampler_state(rng, docs, chunks, graph, vectors)
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
@@ -206,6 +224,10 @@ def run(
                 model_id=strategy.model_id,
                 tier=strategy.tier_exploit,
                 figures=page_figures,
+                style_guide=style_text,
+                field_guide=field_text,
+                artifact_template=artifact_text,
+                corpus_persona=persona_text,
             )
             try:
                 resp = writer.write(req)

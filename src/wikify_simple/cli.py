@@ -46,10 +46,28 @@ def distill(
         "--feed",
         help="Incremental mode: reuse --out as an existing bundle and merge",
     ),
+    field: str = typer.Option(
+        "generic",
+        "--field",
+        help="Field guide to layer into the writer prompt (e.g. materials_science)",
+    ),
+    artifact: str = typer.Option(
+        "wiki_concept",
+        "--artifact",
+        help="Artifact template to layer into the writer prompt",
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
+    from .prompts import available_artifact_templates, available_field_guides
+
     if strategy not in STRATEGIES:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
+    if field not in available_field_guides():
+        raise typer.BadParameter(f"unknown field {field!r}; available: {available_field_guides()}")
+    if artifact not in available_artifact_templates():
+        raise typer.BadParameter(
+            f"unknown artifact {artifact!r}; available: {available_artifact_templates()}"
+        )
     if binding == "claude_code" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
         raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
     if budget in _BUDGET_TABLE:
@@ -78,6 +96,8 @@ def distill(
     extractor, writer = _wire_binding(binding, cache, meter)
 
     cfg = STRATEGIES[strategy](seed=seed)
+    cfg.field_name = field
+    cfg.artifact_name = artifact
     pipeline_run(
         corpus=CorpusPaths(root=corpus_dir),
         bundle=bundle,
@@ -110,6 +130,36 @@ def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
 
         return ClaudeCodeExtractor(cache, meter), ClaudeCodeWriter(meter)
     raise typer.BadParameter(f"unknown binding: {name}")
+
+
+@app.command("persona-generate")
+def persona_generate(
+    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
+    field: str = typer.Option("generic", "--field"),
+    binding: str = typer.Option("fake", "--binding", help="fake | claude_code"),
+) -> None:
+    """Generate and persist the corpus persona at <corpus>/persona.txt."""
+    from .distill.persona import generate_corpus_persona
+    from .store.corpus import list_documents
+
+    corpus = CorpusPaths(root=corpus_dir)
+    docs = list_documents(corpus)
+    complete = None
+    if binding == "claude_code":
+        if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+            raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+        from .bindings.claude_code import make_persona_complete
+
+        complete = make_persona_complete()
+    elif binding != "fake":
+        raise typer.BadParameter(f"unknown binding: {binding}")
+    text = generate_corpus_persona(
+        corpus=corpus,
+        sample_docs=docs,
+        complete=complete,
+        field=field,
+    )
+    typer.echo(f"persona written to {corpus.persona_path} ({len(text)} chars)")
 
 
 @app.command()

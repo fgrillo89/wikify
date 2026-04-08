@@ -407,6 +407,16 @@ class WriteRequest(BaseModel):
     model_id: str
     tier: str
     figures: list[ImageRef] = Field(default_factory=list)
+    # Layered writer-prompt context. These are loaded once per run by
+    # ``distill.pipeline.run`` and round-tripped through every dispatch.
+    # They are large strings (style guide ~5k chars, field guide ~1.5k,
+    # artifact template ~2k, persona ~1.5k) but the pipeline reuses the
+    # same instances across all WriteRequests in a run, so the cost is
+    # paid in bytes-on-the-wire, not in repeated loads.
+    style_guide: str = ""
+    field_guide: str = ""
+    artifact_template: str = ""
+    corpus_persona: str = ""
 
 
 class WriteResponse(BaseModel):

@@ -24,6 +24,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
@@ -320,6 +321,10 @@ class ClaudeCodeWriter(Writer):
                     }
                     for f in request.figures
                 ],
+                "style_guide": request.style_guide,
+                "field_guide": request.field_guide,
+                "artifact_template": request.artifact_template,
+                "corpus_persona": request.corpus_persona,
             },
         )
         t0 = time.monotonic()
@@ -381,6 +386,38 @@ class ClaudeCodeOrchestrator(Orchestrator):
             prompt_hash="orchestrator",
         )
         return action
+
+
+# --- persona generator ---------------------------------------------------
+
+
+def make_persona_complete(
+    *,
+    dispatch_dir: Path | str | None = None,
+) -> Callable[[str], str]:
+    """Return a ``complete(prompt) -> str`` callable backed by the dispatcher.
+
+    The callable writes one ``persona/{rid}.request.json`` payload, blocks
+    on the matching response file, and returns the ``text`` field. This
+    is the only persona-specific dispatch path; ``distill.persona`` stays
+    binding-agnostic.
+    """
+    root = resolve_dispatch_dir(dispatch_dir)
+
+    def _complete(prompt: str) -> str:
+        req_path, res_path = _write_request(root, "persona", {"prompt": prompt})
+        try:
+            raw = _await_response(res_path)
+        finally:
+            _cleanup(res_path, req_path)
+        if not isinstance(raw, dict):
+            raise ValueError(f"persona dispatch returned non-dict: {raw!r}")
+        text = raw.get("text", "")
+        if not isinstance(text, str):
+            raise ValueError("persona dispatch response missing 'text' field")
+        return text
+
+    return _complete
 
 
 # --- querier -------------------------------------------------------------

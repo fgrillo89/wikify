@@ -42,6 +42,17 @@ class CorpusPaths:
     def images_index_path(self) -> Path:
         return self.root / "images.json"
 
+    @property
+    def persona_path(self) -> Path:
+        """Path to the optional cached corpus persona text.
+
+        The persona is generated once via ``wikify-simple persona-generate``
+        and read by ``distill.pipeline.run`` if present. If the file does
+        not exist, the writer falls back to a generic domain-expert persona
+        baked into ``prompts.registry.compose_writer_prompt``.
+        """
+        return self.root / "persona.txt"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)
