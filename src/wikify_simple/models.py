@@ -80,6 +80,7 @@ class Document:
     tldr: str = ""  # one-paragraph small-model summary, optional
     n_chunks: int = 0
     n_tokens: int = 0
+    citations: list[dict] = field(default_factory=list)
 
 
 @dataclass

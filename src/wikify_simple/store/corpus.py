@@ -122,6 +122,7 @@ def _doc_to_dict(doc: Document) -> dict:
         "tldr": doc.tldr,
         "n_chunks": doc.n_chunks,
         "n_tokens": doc.n_tokens,
+        "citations": list(doc.citations or []),
     }
 
 
@@ -166,4 +167,5 @@ def _doc_from_dict(d: dict) -> Document:
         tldr=d.get("tldr", ""),
         n_chunks=d.get("n_chunks", 0),
         n_tokens=d.get("n_tokens", 0),
+        citations=list(d.get("citations") or []),
     )

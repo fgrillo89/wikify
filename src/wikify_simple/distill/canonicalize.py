@@ -52,6 +52,13 @@ def canonicalize(
         ]
 
     for cand in candidates:
+        # Person pages are now produced deterministically from
+        # Document.metadata['authors'] + parsed citations (see
+        # distill/author_pages.py). Drop any person candidates the
+        # extractor returned so the deterministic path is the single
+        # source of truth for people.
+        if cand.concept.kind == "person":
+            continue
         norm = _normalize(cand.concept.title)
         if not norm:
             continue

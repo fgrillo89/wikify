@@ -47,6 +47,7 @@ from ..store.corpus import (
 from ..store.images_index import ImageIndex, ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
+from .author_pages import build_author_pages
 from .canonicalize import Candidate, canonicalize
 from .crosslink import crosslink
 from .sampler import Sampler, SamplerState
@@ -215,6 +216,14 @@ def run(
             page.body_markdown = resp.body_markdown
     except BudgetExceeded:
         pass
+
+    # ---- deterministic author pages ------------------------------------
+    # Person pages are no longer produced by the writer model; they come
+    # directly from doc metadata + parsed citations. Built before the
+    # evidence filter so they survive (each carries one Evidence per
+    # linked doc).
+    author_pages = build_author_pages(docs)
+    pages.extend(author_pages)
 
     # ---- crosslink + write to disk -------------------------------------
     pages = [p for p in pages if p.evidence]  # drop unsupported skeletons

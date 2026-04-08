@@ -23,7 +23,9 @@ from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from ..store.vectors_meta import VectorsMeta
 from ..store.vectors_meta import write_meta as write_vectors_meta
+from .bibtex import write_corpus_bibtex
 from .chunker import chunk_document
+from .citations import extract_citations
 from .corpus_graph import build_corpus_graph
 from .embedder import embed_texts
 from .images import caption_chunks_for, save_doc_images
@@ -77,6 +79,7 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
             images=list(parsed.images),
             n_chunks=len(chunks),
             n_tokens=sum(len(c.text) // 4 for c in chunks),
+            citations=extract_citations(parsed.markdown, doc_id),
         )
         write_document(paths, doc, parsed.markdown, chunks)
         docs.append(doc)
@@ -116,6 +119,9 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
     # projection the wiki/distill side reads to look up figures by
     # caption label or doc.
     build_images_index(paths, doc_ids=[d.id for d in docs])
+
+    # Corpus-wide BibTeX library (one entry per Document).
+    write_corpus_bibtex(paths, docs)
 
     return paths
 
