@@ -23,6 +23,7 @@ from ..metadata import (
     parse_authors,
     parse_filename,
 )
+from ._clean import clean_markdown_text
 from ._sections import section_spans
 from .registry import ParseResult
 
@@ -51,6 +52,7 @@ def parse(path: Path) -> ParseResult:
             md_text = _fitz_fallback_markdown(doc)
 
         md_text = _strip_pdf_artifacts(md_text)
+        md_text = clean_markdown_text(md_text)
         metadata = _extract_metadata(doc, md_text, path.name)
         images_raw = extract_pdf_media(doc, md_text)
     finally:

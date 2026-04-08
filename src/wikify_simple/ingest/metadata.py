@@ -303,6 +303,9 @@ def _parse_author_line(line: str) -> list[str]:
 
 
 def _is_noise_paragraph(text: str) -> bool:
+    """Return True if a paragraph is bibliographic / boilerplate metadata,
+    not real content. Mirrors the legacy ``wikify`` noise list verbatim.
+    """
     lower = text.lower()
     noise_markers = (
         "authorized licensed use",
@@ -310,18 +313,36 @@ def _is_noise_paragraph(text: str) -> bool:
         "©",
         "copyright",
         "all rights reserved",
+        "using government drawings",
+        "this report is the result of",
         "ieee transactions",
         "proceedings of",
         "permission to make digital",
         "this article has been accepted",
         "personal use of this material",
+        "redistribution",
+        "university of",
+        "department of",
         "manuscript received",
         "doi:",
         "published by",
         "accepted for publication",
+        "public release; distribution",
+        "fundamental research",
+        "approved for public",
+        "report number",
+        "technical report",
+        "contract no",
+        "scientific and technical information",
+        "in the interest of",
         "==> picture",
+        "intentionally omitted",
     )
     return any(m in lower for m in noise_markers)
+
+
+# Public alias so other modules don't reach into a private name.
+is_noise_paragraph = _is_noise_paragraph
 
 
 @dataclass
