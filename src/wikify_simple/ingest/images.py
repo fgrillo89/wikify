@@ -3,8 +3,15 @@
 Parsers emit *raw* image dicts via ``ParseResult.metadata['_raw_images']``
 and ``refresh.py`` calls ``save_doc_images`` to persist each image as:
 
-    corpus/images/{doc_id}/fig_{nnn}.{ext}        # binary
-    corpus/images/{doc_id}/fig_{nnn}.{ext}.json   # sidecar
+    corpus/images/{paper_slug}/{label}.{ext}      # binary
+    corpus/images/{paper_slug}/{label}.{ext}.json # sidecar
+
+Where ``label`` is a caption-resolved name (``Fig_1``, ``Table_2``,
+``Scheme_1a``) when the figure extractor matched a caption, falling back
+to ``p{N}_img{i}`` when no caption could be resolved. This mirrors the
+legacy ``wikify.ingest.extract.media`` convention. The folder slug is a
+clean truncation of the source filename (no hash suffix) so paths stay
+under the Windows MAX_PATH limit.
 
 Sidecars carry ``{id, caption, alt_text, page, near_chunk_ids,
 source_bbox, ...}`` so they can be grepped or loaded back via
@@ -20,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -49,21 +57,22 @@ def save_doc_images(
     """
     out: list[DocImage] = []
     image_dir.mkdir(parents=True, exist_ok=True)
+    used_names: set[str] = set()
     for i, rec in enumerate(raw_images or []):
         blob = rec.get("bytes")
         page = rec.get("page")
         caption = rec.get("caption", "") or ""
         alt_text = rec.get("alt_text", "") or ""
         bbox = rec.get("bbox")
-        img_id = f"{doc_id}/fig_{i:03d}"
+        label = rec.get("label")
         if blob:
             ext = (rec.get("ext") or "png").lstrip(".")
-            bin_path = image_dir / f"fig_{i:03d}.{ext}"
-            try:
-                bin_path.write_bytes(blob)
-            except OSError:
-                logger.debug("failed to write image %s", bin_path)
-                continue
+            stem = _figure_stem(label, i)
+            stem = _disambiguate(stem, used_names)
+            used_names.add(stem)
+            img_id = f"{doc_id}/{stem}"
+            bin_path = image_dir / f"{stem}.{ext}"
+            bin_path.write_bytes(blob)
             rel_path = str(bin_path)
             _write_sidecar(
                 bin_path,
@@ -96,7 +105,11 @@ def save_doc_images(
             url = rec.get("url") or rec.get("src") or ""
             if not url:
                 continue
-            side = image_dir / f"fig_{i:03d}.url.json"
+            stem = _figure_stem(label, i)
+            stem = _disambiguate(stem, used_names)
+            used_names.add(stem)
+            img_id = f"{doc_id}/{stem}"
+            side = image_dir / f"{stem}.url.json"
             payload = {
                 "id": img_id,
                 "path": url,
@@ -109,10 +122,7 @@ def save_doc_images(
                 "media_type": "figure",
                 "source_url": url,
             }
-            try:
-                side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            except OSError:
-                continue
+            side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             out.append(
                 DocImage(
                     id=img_id,
@@ -127,10 +137,30 @@ def save_doc_images(
 
 def _write_sidecar(bin_path: Path, payload: dict) -> None:
     side = bin_path.with_suffix(bin_path.suffix + ".json")
-    try:
-        side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError:
-        logger.debug("failed to write sidecar %s", side)
+    side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _figure_stem(label: str | None, index: int) -> str:
+    """Build a human-readable filename stem from a caption label.
+
+    Mirrors ``wikify.ingest.extract.media._make_figure_filename``.
+    """
+    if label:
+        safe = re.sub(r"[^\w.-]", "_", label)
+        safe = re.sub(r"_+", "_", safe).strip("_")
+        if safe:
+            return safe
+    return f"fig_{index:03d}"
+
+
+def _disambiguate(stem: str, used: set[str]) -> str:
+    """Append a numeric suffix when two images would collide on stem."""
+    if stem not in used:
+        return stem
+    i = 2
+    while f"{stem}_{i}" in used:
+        i += 1
+    return f"{stem}_{i}"
 
 
 def load_sidecars(image_dir: Path) -> list[DocImage]:

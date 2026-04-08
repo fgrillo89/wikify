@@ -9,9 +9,10 @@ modulo file content (file hash → doc id).
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
-from ..models import Document
+from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
 from ..store.corpus import (
     write_document,
@@ -43,12 +44,20 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
         chunks += caption_chunks_for(doc_id, parsed.images, ord_offset=len(chunks))
 
         markdown_path = str(paths.markdown_dir / f"{doc_id}.md")
-        image_dir = str(paths.images_dir / doc_id)
+        # Image folder uses the legacy clean-slug convention (no hash
+        # suffix, capped at 80 chars) so on-disk paths stay well under
+        # the Windows MAX_PATH limit. doc_id (with hash) is still the
+        # corpus index key; image_dir is just a human-friendly bucket.
+        image_slug = _image_slug(src)
+        image_dir_path = paths.images_dir / image_slug
+        image_dir = str(image_dir_path)
 
         raw_images = parsed.metadata.pop("_raw_images", None)
         if raw_images:
-            saved = save_doc_images(doc_id, paths.images_dir / doc_id, raw_images)
+            saved = save_doc_images(doc_id, image_dir_path, raw_images)
             parsed.images.extend(saved)
+
+        sections = _sections_from_chunks(chunks)
 
         doc = Document(
             id=doc_id,
@@ -58,7 +67,7 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
             metadata=dict(parsed.metadata),
             markdown_path=markdown_path,
             image_dir=image_dir,
-            sections=[],
+            sections=sections,
             images=list(parsed.images),
             n_chunks=len(chunks),
             n_tokens=sum(len(c.text) // 4 for c in chunks),
@@ -97,3 +106,46 @@ def _iter_sources(root: Path):
 def _doc_id_for(path: Path) -> str:
     h = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
     return f"{path.stem}_{h}"
+
+
+def _image_slug(path: Path) -> str:
+    """Filesystem-safe folder name from a paper filename (legacy convention).
+
+    Mirrors ``wikify.ingest.extract.media._make_paper_slug``: drop
+    bracket/punctuation noise, collapse whitespace to underscores, cap
+    at 80 chars. Folder collisions across two papers with identical
+    80-char prefixes are vanishingly rare in practice; if they ever
+    occur the sidecar JSONs (which carry the original ``id`` keyed by
+    full doc_id) still disambiguate them.
+    """
+    stem = path.stem
+    slug = re.sub(r"[^\w\s-]", "", stem)
+    slug = re.sub(r"\s+", "_", slug).strip("_")
+    return slug[:80] or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+
+
+def _sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
+    """Group chunks by their section_path into DocSection records.
+
+    The chunker already carries section_path on every Chunk; this just
+    folds them into the per-section index the rest of the pipeline reads
+    from ``Document.sections``. Order is preserved (first appearance
+    wins). Image-caption chunks (section_path starts with "__image__")
+    are excluded.
+    """
+    out: list[DocSection] = []
+    by_key: dict[tuple[str, ...], DocSection] = {}
+    for c in chunks:
+        path = list(c.section_path or [])
+        if path and path[0] == "__image__":
+            continue
+        if not path:
+            path = ["body"]
+        key = tuple(path)
+        sec = by_key.get(key)
+        if sec is None:
+            sec = DocSection(path=path, chunk_ids=[])
+            by_key[key] = sec
+            out.append(sec)
+        sec.chunk_ids.append(c.id)
+    return out

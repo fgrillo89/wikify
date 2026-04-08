@@ -267,8 +267,12 @@ def _parse_author_line(line: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\[[^\]]*\]", "", cleaned)
-    cleaned = re.sub(r"[†‡§]+", "", cleaned)
-    cleaned = re.sub(r"\*+", "", cleaned)
+    cleaned = re.sub(r"[†‡§✉✱*]+", "", cleaned)
+    # Treat ampersand as an author separator ("A, B & C").
+    cleaned = cleaned.replace("&", ",")
+    # Strip trailing per-author affiliation superscripts like "H. Kim 1,2"
+    # -> "H. Kim" and "M. R. Mahmoodi 1" -> "M. R. Mahmoodi".
+    cleaned = re.sub(r"(?<=[A-Za-z])\s+\d+(?:\s*,\s*\d+)*\b", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return []

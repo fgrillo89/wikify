@@ -109,16 +109,29 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
         title = heading or fn_title or Path(filename).stem
     title = clean_markdown(title)
 
-    authors: list[str] = []
+    # Authors: in-document extraction (markdown body) wins over PDF metadata
+    # when it yields a richer list. PDF metadata often carries only the
+    # corresponding author (e.g. "H. Kim") even when the paper has 12 real
+    # authors. Filename parse is the last-resort fallback.
+    md_authors = extract_authors_from_markdown(md_text)
     raw_author = (meta.get("author") or "").strip()
-    if raw_author:
-        authors = parse_authors(raw_author)
-    if not authors:
-        authors = extract_authors_from_markdown(md_text)
-    if not authors and fn_author:
+    meta_authors = parse_authors(raw_author) if raw_author else []
+    if len(md_authors) >= 2:
+        authors = md_authors
+    elif meta_authors:
+        authors = meta_authors
+    elif md_authors:
+        authors = md_authors
+    elif fn_author:
         authors = [fn_author]
+    else:
+        authors = []
 
-    year = extract_year_from_pdf_meta(meta) or fn_year
+    # Year: filename year wins over PDF creation/mod date because the
+    # latter reflects when the file was last touched, not the publication
+    # year (Chua 1971 → 1999, Matveyev 2015 → 2026 etc). On a miss, year
+    # is None — never the current year.
+    year = fn_year or extract_year_from_pdf_meta(meta)
     doi = extract_doi(md_text[:3000])
     summary = extract_summary(md_text)
 

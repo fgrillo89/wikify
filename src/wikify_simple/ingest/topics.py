@@ -110,21 +110,32 @@ def write_topics(path: Path, vocab: TopicVocabulary) -> None:
 _KEYWORD_BAD_STARTERS = frozenset(
     {
         "a",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
         "an",
         "and",
         "are",
         "as",
         "at",
         "based",
+        "before",
         "being",
+        "below",
+        "between",
+        "beyond",
         "both",
         "but",
         "by",
         "can",
         "closely",
+        "compared",
         "demonstrating",
         "developing",
         "due",
+        "during",
         "each",
         "exhibiting",
         "for",
@@ -134,6 +145,7 @@ _KEYWORD_BAD_STARTERS = frozenset(
         "in",
         "including",
         "inspired",
+        "into",
         "it",
         "its",
         "notably",
@@ -143,16 +155,23 @@ _KEYWORD_BAD_STARTERS = frozenset(
         "or",
         "originally",
         "our",
+        "over",
         "providing",
         "showing",
         "such",
+        "than",
+        "that",
         "the",
+        "their",
         "these",
         "this",
+        "those",
         "through",
         "to",
         "toward",
         "thus",
+        "under",
+        "until",
         "using",
         "via",
         "we",
@@ -160,6 +179,7 @@ _KEYWORD_BAD_STARTERS = frozenset(
         "which",
         "while",
         "with",
+        "without",
     }
 )
 _KEYWORD_SINGLE_STOP = frozenset(
@@ -289,6 +309,16 @@ def _is_valid_keyword(kw: str) -> bool:
     if any(marker in kw_padded for marker in _FRAGMENT_MARKERS):
         return False
     if set(kw.lower().split()) & _METADATA_WORDS:
+        return False
+    # Reject digit-suffixed fragments like "technology.6" or "device.3"
+    if re.search(r"\.\d", kw):
+        return False
+    # Reject truncated-word starts like "ibility with cmos technology"
+    # (PDF column-break artifact: "compatibility" got cut off mid-word).
+    # Heuristic: a first word that begins with a vowel-vowel-consonant or
+    # has no recognizable English prefix and is < 4 chars in suffix form.
+    first = words[0].lower()
+    if re.match(r"^(?:ibility|ility|tion|sion|ment|ness|ance|ence|ous|ive)$", first):
         return False
     return True
 
