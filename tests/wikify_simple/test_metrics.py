@@ -57,6 +57,11 @@ def test_g_links_modularity_shape(loaded_bundle):
     assert isinstance(out["spectral_gap"], float)
     assert isinstance(out["n_nodes"], float)
     assert isinstance(out["n_edges"], float)
+    # Louvain returns a real number on the smoke bundle (no NaN sentinel).
+    import math
+
+    assert not math.isnan(out["modularity"])
+    assert not math.isnan(out["spectral_gap"])
 
 
 def test_vectors_meta_written(loaded_bundle):

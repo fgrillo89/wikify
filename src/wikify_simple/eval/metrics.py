@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .bundle import Bundle, Page
+from .community import louvain_communities
+from .community import modularity as _nx_modularity
 
 
 class EmbedderMismatch(RuntimeError):  # noqa: N818
@@ -197,75 +199,11 @@ def _build_g_evidence(bundle: Bundle, top_k: int = 10) -> tuple[list[Page], np.n
     return pages, W
 
 
-def _modularity(W: np.ndarray, communities: list[list[int]]) -> float:
-    m = W.sum() / 2.0
-    if m == 0:
-        return 0.0
-    deg = W.sum(axis=1)
-    Q = 0.0
-    for comm in communities:
-        idx = np.asarray(comm, dtype=int)
-        if idx.size == 0:
-            continue
-        sub = W[np.ix_(idx, idx)]
-        deg_sum = deg[idx].sum()
-        Q += sub.sum() / (2.0 * m) - (deg_sum / (2.0 * m)) ** 2
-    return float(Q)
-
-
-def _greedy_communities(W: np.ndarray) -> list[list[int]]:
-    """Tiny deterministic greedy modularity-merge community detector.
-
-    Adequate for the small wiki graphs we deal with (10^2 - 10^3 nodes).
-    For larger graphs, swap in networkx / igraph.
-    """
-    n = W.shape[0]
-    if n == 0:
-        return []
-    communities: list[set[int]] = [{i} for i in range(n) if W[i].sum() > 0 or n == 1]
-    if not communities:
-        return [[i] for i in range(n)]
-    changed = True
-    while changed and len(communities) > 1:
-        changed = False
-        best_gain = 0.0
-        best_pair: tuple[int, int] | None = None
-        base = _modularity(W, [sorted(c) for c in communities])
-        for i in range(len(communities)):
-            for j in range(i + 1, len(communities)):
-                merged = (
-                    communities[:i]
-                    + communities[i + 1 : j]
-                    + communities[j + 1 :]
-                    + [communities[i] | communities[j]]
-                )
-                q = _modularity(W, [sorted(c) for c in merged])
-                gain = q - base
-                if gain > best_gain:
-                    best_gain = gain
-                    best_pair = (i, j)
-        if best_pair is not None:
-            i, j = best_pair
-            communities = (
-                communities[:i]
-                + communities[i + 1 : j]
-                + communities[j + 1 :]
-                + [communities[i] | communities[j]]
-            )
-            changed = True
-    # add isolated nodes back as singletons
-    covered = set().union(*communities) if communities else set()
-    for k in range(n):
-        if k not in covered:
-            communities.append({k})
-    return [sorted(c) for c in communities]
-
-
 def spectral_gap_modularity(bundle: Bundle, top_k: int = 10) -> dict[str, float]:
     """M3. Returns {'modularity': Q, 'spectral_gap': Δλ, 'n_nodes': n,
     'n_edges': e}.
 
-    Modularity is computed on the greedy partition of G_evidence; spectral
+    Modularity is computed on the Louvain partition of G_evidence; spectral
     gap is the difference between the third- and second-smallest
     eigenvalues of the normalised Laplacian (so it is the gap *above* the
     first non-trivial eigenvalue, the standard "how cleanly does the graph
@@ -275,16 +213,9 @@ def spectral_gap_modularity(bundle: Bundle, top_k: int = 10) -> dict[str, float]
     n = W.shape[0]
     if n < 2 or W.sum() == 0:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
-    if n > 150:
-        return {
-            "modularity": float("nan"),
-            "spectral_gap": float("nan"),
-            "n_nodes": float(n),
-            "n_edges": float(int((W > 0).sum() // 2)),
-        }
 
-    comms = _greedy_communities(W)
-    Q = _modularity(W, comms)
+    comms = louvain_communities(W)
+    Q = _nx_modularity(W, comms)
 
     # normalised Laplacian: L = I - D^{-1/2} W D^{-1/2}
     deg = W.sum(axis=1)
@@ -322,16 +253,6 @@ def g_links_modularity(bundle: Bundle) -> dict:
     n = len(pages)
     if n < 2:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
-    # Greedy modularity is O(n^4); skip on large graphs and report a sentinel
-    # so callers (and the eval CLI) don't hang. Use a real community
-    # detector (networkx/igraph) when this becomes a bottleneck.
-    if n > 150:
-        return {
-            "modularity": float("nan"),
-            "spectral_gap": float("nan"),
-            "n_nodes": float(n),
-            "n_edges": 0.0,
-        }
     id_to_idx = {p.id: i for i, p in enumerate(pages)}
     W = np.zeros((n, n), dtype=float)
     for i, p in enumerate(pages):
@@ -343,8 +264,8 @@ def g_links_modularity(bundle: Bundle) -> dict:
             W[j, i] = 1.0
     if W.sum() == 0:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
-    comms = _greedy_communities(W)
-    Q = _modularity(W, comms)
+    comms = louvain_communities(W)
+    Q = _nx_modularity(W, comms)
     deg = W.sum(axis=1)
     safe = np.where(deg > 0, deg, 1.0)
     d_inv_sqrt = 1.0 / np.sqrt(safe)

@@ -71,6 +71,8 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E501"]
+# metrics.py uses math-style uppercase variables (W, M, L, Q) intentionally.
+"src/wikify_simple/eval/metrics.py" = ["N803", "N806"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
