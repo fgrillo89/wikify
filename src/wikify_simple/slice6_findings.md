@@ -1,5 +1,67 @@
 # Slice 6 — first real run on mvp20 (20 PDFs)
 
+## First real-binding smoke run (commit 22e2da3 + follow-up)
+
+Tiny budget (0.1x = 5000 heq) end-to-end with `--binding claude_code`.
+Subagent drove the dispatcher loop manually as the model. 8 extract
+calls + 1 write call before the budget tripped.
+
+**Pages written:** 18 concept + 2 person — **all substantive**, no
+FakeExtractor noise. Concept titles include `Memristor`,
+`Atomic Layer Deposition`, `Diffusive Memristor`, `Spike-Timing
+Dependent Plasticity`, `Vector Matrix Multiplication`, `Von Neumann
+Bottleneck`, `In-Memory Computing`, `1T1M Crossbar`, etc. People are
+real authors (`Donghun Lee`, `Chul-Ho Lee`) instead of fake-binding's
+`person-graduate`, `person-public-release`.
+
+**Metrics (`wikify-simple eval`)**
+```
+M1 coverage_residual = 0.5504  (was 0.5591 — barely moved, only 1 page has body)
+M3 g_evidence        = {Q: 0.0, gap: 0.0, n_nodes: 20, n_edges: 0}
+M3 g_links           = {Q: 0.56, gap: ~0, n_nodes: 20, n_edges: 60}  ← FIRST NON-ZERO
+M5 hit_rate          = 0.0   (only 1 page has evidence)
+M6 grounding         = passes (g1=1.0, g2=1.0, n_sent=0, n_mark=0)
+```
+
+**Findings**
+
+1. **Concept quality is real.** Crosslink graph has Q=0.56 — links
+   formed naturally between ALD ↔ Memristor ↔ Crossbar ↔ STDP ↔
+   Vector Matrix Multiplication. First evidence the wiki has structure.
+2. **Writer cost is wildly under-estimated.** Single write call burned
+   46_500 heq vs extractor's ~470/call (100x). Likely the writer tier's
+   cost model in `infra/cost_meter.py` doesn't account for the
+   `figures` payload that landed in c4e1244 (`WriteRequest.figures`).
+   Either re-tier writes or shift the schedule's extract/write split.
+   At current cost shape, 1x budget = ~12 extracts + 1 write; need
+   3x or higher for any meaningful real run.
+3. **The 1 written page (Atomic Layer Deposition) has an empty body.**
+   The drain subagent emitted only the title + Evidence block, no
+   prose. The write skill prompt should push for ≥3 sentences; or the
+   schema validator should reject `body_markdown` shorter than N
+   sentences. Today the schema only requires `body_markdown: str`.
+4. **Cache poisoning risk surfaced.** First attempted run was an
+   instant no-op because `data/cache/extract/` carried the prior
+   fake-binding results — same `prompt_hash` (`wikify_simple/extract/v1`)
+   so cache lookups hit. Either cache should key on binding-name too,
+   or fake/real should use distinct prompt template ids. Cleared
+   manually; needs a structural fix before any larger run.
+5. **No figure references in the written page.** The Atomic Layer
+   Deposition page got a `figures` list but the body has no
+   `![Figure N](path)` markdown. Either the writer prompt didn't
+   surface them or the drain subagent omitted them. Inspect on the
+   next run when more pages exist.
+6. **Dispatcher protocol works.** Zero schema-validation failures
+   across 9 dispatches. `WriteResponse` requires a `used_markers` field
+   that the runbook draft missed (the drain agent caught it by reading
+   the schema). Update the runbook.
+
+**Next-run prerequisites** (before going to 1x or 3x):
+- Fix writer cost accounting (issue 2).
+- Cache-key per binding (issue 4).
+- Writer prompt enforcement of N-sentence minimum (issue 3).
+- Add `used_markers` to the runbook's WriteResponse example.
+
 ## Re-run after structural fixes (commit 2ca6423 + follow-up)
 
 Re-ran the full pipeline against `data/papers/mvp20/` with the structural
