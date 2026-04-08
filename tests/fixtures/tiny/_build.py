@@ -11,6 +11,41 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def _tiny_png_bytes(width: int = 320, height: int = 320) -> bytes:
+    """Build a small RGB PNG with enough entropy to stay above the 2 KB
+    floor after pymupdf re-encodes it into the output PDF."""
+    import random
+    import struct
+    import zlib
+
+    rng = random.Random(1234)
+    rows: list[bytes] = []
+    for y in range(height):
+        row = bytearray([0])
+        for x in range(width):
+            # Deterministic pseudo-random RGB so each pixel differs; this
+            # keeps zlib/flate from collapsing the payload to near nothing.
+            r = rng.randrange(256)
+            g = rng.randrange(256)
+            b = rng.randrange(256)
+            row += bytes([r, g, b])
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+    compressed = zlib.compress(raw, 9)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return sig + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", compressed) + _chunk(b"IEND", b"")
+
+
 def build_pdf() -> None:
     import fitz
 
@@ -22,22 +57,36 @@ def build_pdf() -> None:
         "Photocatalysis drives water splitting on TiO2 surfaces.",
         fontsize=11,
     )
+    png = _tiny_png_bytes()
+    rect = fitz.Rect(72, 200, 272, 400)
+    page.insert_image(rect, stream=png)
+    page.insert_text(
+        (72, 420),
+        "Figure 1. Checker pattern used as a synthetic fixture image.",
+        fontsize=10,
+    )
     doc.save(str(HERE / "sample.pdf"))
     doc.close()
 
 
 def build_docx() -> None:
+    import io
+
     from docx import Document
+    from docx.shared import Inches
 
     d = Document()
     d.add_heading("Sample DOCX", level=1)
     d.add_paragraph("Keywords: atomic layer deposition, thin films")
     d.add_heading("Introduction", level=2)
     d.add_paragraph("Atomic layer deposition grows thin films one monolayer at a time.")
+    d.add_picture(io.BytesIO(_tiny_png_bytes()), width=Inches(2.0))
     d.save(str(HERE / "sample.docx"))
 
 
 def build_pptx() -> None:
+    import io
+
     from pptx import Presentation
     from pptx.util import Inches
 
@@ -47,6 +96,9 @@ def build_pptx() -> None:
     s1.shapes.title.text = "Sample PPTX"
     tx = s1.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(2))
     tx.text_frame.text = "Photocatalysis converts sunlight into chemical fuel."
+    s1.shapes.add_picture(
+        io.BytesIO(_tiny_png_bytes()), Inches(4), Inches(4), width=Inches(2), height=Inches(2)
+    )
     s2 = prs.slides.add_slide(blank)
     s2.shapes.title.text = "Conclusions"
     tx2 = s2.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(2))

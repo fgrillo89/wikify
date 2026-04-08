@@ -1,21 +1,39 @@
-"""Image-as-first-class-unit helpers.
+"""Image persistence for wikify_simple.
 
-In wikify_simple, every DocImage carries caption + alt text + near_chunk_ids.
-Captions are embedded by ingest/embedder.py alongside text chunks so the
-sampler can treat them uniformly (see strategies.md "Images as first-class
-units"). The markdown parser does not yet emit images; the pdf/docx/pptx
-ports will populate this.
+Parsers emit *raw* image dicts via ``ParseResult.metadata['_raw_images']``
+and ``refresh.py`` calls ``save_doc_images`` to persist each image as:
 
-This module currently exposes one helper: ``caption_chunks_for`` builds
-synthetic Chunk-like records that the embedder consumes for image captions.
+    corpus/images/{doc_id}/fig_{nnn}.{ext}        # binary
+    corpus/images/{doc_id}/fig_{nnn}.{ext}.json   # sidecar
+
+Sidecars carry ``{id, caption, alt_text, page, near_chunk_ids,
+source_bbox, ...}`` so they can be grepped or loaded back via
+``read_doc_images``. The sidecar is the on-disk source of truth for the
+post-ingest image inventory.
+
+The PDF-specific extraction (fitz-based caption matching, dedup, scan
+detection) lives in ``ingest/figures.py`` and is re-exported here as
+``extract_pdf_media`` for call sites that already use it.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Iterable
 from pathlib import Path
 
 from ..models import Chunk, DocImage
+from .figures import extract_pdf_media  # re-export
+
+__all__ = [
+    "extract_pdf_media",
+    "save_doc_images",
+    "load_sidecars",
+    "caption_chunks_for",
+]
+
+logger = logging.getLogger(__name__)
 
 
 def save_doc_images(
@@ -23,40 +41,77 @@ def save_doc_images(
     image_dir: Path,
     raw_images: list[dict],
 ) -> list[DocImage]:
-    """Persist raw parser image blobs to ``image_dir`` and return DocImage records.
+    """Persist raw parser image blobs + sidecar JSON; return DocImage records.
 
-    Each record in ``raw_images`` is a dict ``{bytes, ext, page, caption, alt_text?}``
-    as emitted by the pdf/docx/pptx parsers. URL-only records (no bytes) are
-    passed through as DocImage with ``path`` set to the URL.
+    Record shapes accepted:
+      - ``{bytes, ext, page, caption, alt_text?, label?, bbox?, ...}`` (binary)
+      - ``{url, caption?, alt_text?, page?}`` (url-only; html remote refs)
     """
     out: list[DocImage] = []
     image_dir.mkdir(parents=True, exist_ok=True)
     for i, rec in enumerate(raw_images or []):
         blob = rec.get("bytes")
-        ext = (rec.get("ext") or "png").lstrip(".")
         page = rec.get("page")
         caption = rec.get("caption", "") or ""
         alt_text = rec.get("alt_text", "") or ""
+        bbox = rec.get("bbox")
         img_id = f"{doc_id}/fig_{i:03d}"
         if blob:
-            path = image_dir / f"fig_{i:03d}.{ext}"
+            ext = (rec.get("ext") or "png").lstrip(".")
+            bin_path = image_dir / f"fig_{i:03d}.{ext}"
             try:
-                path.write_bytes(blob)
-            except Exception:
+                bin_path.write_bytes(blob)
+            except OSError:
+                logger.debug("failed to write image %s", bin_path)
                 continue
+            rel_path = str(bin_path)
+            _write_sidecar(
+                bin_path,
+                {
+                    "id": img_id,
+                    "path": rel_path,
+                    "caption": caption,
+                    "alt_text": alt_text,
+                    "page": page,
+                    "near_chunk_ids": [],
+                    "source_bbox": bbox,
+                    "label": rec.get("label"),
+                    "media_type": rec.get("media_type"),
+                    "width": rec.get("width"),
+                    "height": rec.get("height"),
+                    "content_hash": rec.get("content_hash"),
+                    "source_url": None,
+                },
+            )
             out.append(
                 DocImage(
                     id=img_id,
-                    path=str(path),
+                    path=rel_path,
                     caption=caption,
                     alt_text=alt_text,
                     page=page,
                 )
             )
         else:
-            # URL-only (html); just record the URL
             url = rec.get("url") or rec.get("src") or ""
             if not url:
+                continue
+            side = image_dir / f"fig_{i:03d}.url.json"
+            payload = {
+                "id": img_id,
+                "path": url,
+                "caption": caption,
+                "alt_text": alt_text,
+                "page": page,
+                "near_chunk_ids": [],
+                "source_bbox": None,
+                "label": None,
+                "media_type": "figure",
+                "source_url": url,
+            }
+            try:
+                side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            except OSError:
                 continue
             out.append(
                 DocImage(
@@ -70,12 +125,44 @@ def save_doc_images(
     return out
 
 
-def caption_chunks_for(doc_id: str, images: Iterable[DocImage], ord_offset: int) -> list[Chunk]:
-    """Wrap image captions as Chunks so the embedder/graph can index them.
+def _write_sidecar(bin_path: Path, payload: dict) -> None:
+    side = bin_path.with_suffix(bin_path.suffix + ".json")
+    try:
+        side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError:
+        logger.debug("failed to write sidecar %s", side)
 
-    The chunk id is ``{image.id}:caption`` so the sampler can detect image
-    chunks by suffix without a separate code path.
+
+def load_sidecars(image_dir: Path) -> list[DocImage]:
+    """Load DocImage records from sidecar JSONs in ``image_dir``.
+
+    The on-disk sidecar is authoritative: ``store/corpus.read_doc_images``
+    uses this to round-trip images without going through the Document
+    JSON index.
     """
+    out: list[DocImage] = []
+    if not image_dir.exists():
+        return out
+    for p in sorted(image_dir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append(
+            DocImage(
+                id=data.get("id", p.stem),
+                path=data.get("path", ""),
+                caption=data.get("caption", "") or "",
+                alt_text=data.get("alt_text", "") or "",
+                page=data.get("page"),
+                near_chunk_ids=data.get("near_chunk_ids", []) or [],
+            )
+        )
+    return out
+
+
+def caption_chunks_for(doc_id: str, images: Iterable[DocImage], ord_offset: int) -> list[Chunk]:
+    """Wrap image captions as Chunks so the embedder/graph can index them."""
     out: list[Chunk] = []
     ord_ = ord_offset
     for im in images:

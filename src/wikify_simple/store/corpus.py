@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ..models import Chunk, CorpusGraph, DocImage, Document
 from ..paths import CorpusPaths
@@ -65,6 +66,18 @@ def write_vector_store(paths: CorpusPaths, store: VectorStore) -> None:
 
 def read_vector_store(paths: CorpusPaths) -> VectorStore:
     return load_vectors(paths.vectors_path)
+
+
+def read_doc_images(doc: Document) -> list[DocImage]:
+    """Return DocImage records for ``doc`` by loading sidecars from disk.
+
+    The on-disk sidecars in ``doc.image_dir`` are the source of truth,
+    so this function ignores ``doc.images`` and rebuilds the list from
+    the JSON sidecars written by ``save_doc_images``.
+    """
+    from ..ingest.images import load_sidecars
+
+    return load_sidecars(Path(doc.image_dir))
 
 
 # --- serialisation helpers -----------------------------------------------

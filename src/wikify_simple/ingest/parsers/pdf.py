@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ..images import extract_pdf_media
 from ..metadata import (
     clean_markdown,
     extract_authors_from_markdown,
@@ -50,7 +51,7 @@ def parse(path: Path) -> ParseResult:
             md_text = _fitz_fallback_markdown(doc)
 
         metadata = _extract_metadata(doc, md_text, path.name)
-        images_raw = _extract_images(doc)
+        images_raw = extract_pdf_media(doc, md_text)
     finally:
         doc.close()
 
@@ -130,34 +131,4 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
     }
 
 
-# --- images -------------------------------------------------------------
-
-
-def _extract_images(doc) -> list[dict]:
-    """Return raw image records: {'bytes', 'ext', 'page', 'caption'}."""
-    raw: list[dict] = []
-    try:
-        n_pages = doc.page_count
-    except Exception:
-        return raw
-    for page_idx in range(n_pages):
-        try:
-            page = doc[page_idx]
-            images = page.get_images(full=True)
-        except Exception:
-            continue
-        for info in images:
-            xref = info[0]
-            try:
-                img = doc.extract_image(xref)
-            except Exception:
-                continue
-            raw.append(
-                {
-                    "bytes": img.get("image"),
-                    "ext": img.get("ext", "png"),
-                    "page": page_idx + 1,
-                    "caption": "",
-                }
-            )
-    return raw
+# Image extraction now lives in ``ingest/images.py::extract_pdf_media``.

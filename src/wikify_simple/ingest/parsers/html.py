@@ -11,7 +11,6 @@ import datetime
 import re
 from pathlib import Path
 
-from ...models import DocImage
 from ._sections import section_spans
 from .registry import ParseResult
 
@@ -26,37 +25,86 @@ def parse(path: Path) -> ParseResult:
         html, name="description"
     )
 
-    # images: parse <img> tags from the raw HTML
-    images: list[DocImage] = []
-    for i, m in enumerate(re.finditer(r"<img\b([^>]*)>", html, re.IGNORECASE)):
-        attrs = m.group(1)
-        src_m = re.search(r'src=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
-        alt_m = re.search(r'alt=["\']([^"\']*)["\']', attrs, re.IGNORECASE)
-        if not src_m:
-            continue
-        images.append(
-            DocImage(
-                id=f"img_{i:03d}",
-                path=src_m.group(1),
-                caption="",
-                alt_text=alt_m.group(1) if alt_m else "",
-            )
-        )
-
+    raw_images = _extract_html_images(html, path)
     metadata = {
         "title": title,
         "authors": authors,
         "summary": description or None,
         "year": year,
         "doi": None,
+        "_raw_images": raw_images,
     }
     return ParseResult(
         markdown=body,
         sections=section_spans(body),
-        images=images,
+        images=[],
         metadata=metadata,
         title=title,
     )
+
+
+def _extract_html_images(html: str, source_path: Path) -> list[dict]:
+    """Return raw image records parsed from <img> tags.
+
+    Local src refs (relative or file://) are resolved against the HTML
+    file's directory and copied into the corpus as real bytes. Remote
+    refs are recorded as URL-only records that ``save_doc_images`` will
+    persist as a sidecar JSON pointing at the URL.
+    """
+    out: list[dict] = []
+    base = source_path.resolve().parent
+    for m in re.finditer(r"<img\b([^>]*)>", html, re.IGNORECASE):
+        attrs = m.group(1)
+        src_m = re.search(r'src=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        if not src_m:
+            continue
+        src = src_m.group(1).strip()
+        alt_m = re.search(r'alt=["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+        alt = alt_m.group(1) if alt_m else ""
+        is_remote = bool(re.match(r"^(https?:|data:|//)", src, re.IGNORECASE))
+        if is_remote:
+            out.append(
+                {
+                    "url": src,
+                    "caption": "",
+                    "alt_text": alt,
+                    "page": None,
+                }
+            )
+            continue
+        # Local: try to resolve against the HTML file dir.
+        local = (base / src.lstrip("/")).resolve()
+        if not local.exists():
+            # Also try as a straight relative path.
+            alt_local = (base / src).resolve()
+            if alt_local.exists():
+                local = alt_local
+            else:
+                # Record as URL-only so the reference is not lost.
+                out.append(
+                    {
+                        "url": src,
+                        "caption": "",
+                        "alt_text": alt,
+                        "page": None,
+                    }
+                )
+                continue
+        try:
+            blob = local.read_bytes()
+        except OSError:
+            continue
+        ext = local.suffix.lstrip(".").lower() or "png"
+        out.append(
+            {
+                "bytes": blob,
+                "ext": ext,
+                "page": None,
+                "caption": "",
+                "alt_text": alt,
+            }
+        )
+    return out
 
 
 def _extract_with_trafilatura(html: str) -> str:
