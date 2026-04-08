@@ -26,15 +26,23 @@ export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch        # default
 | `--strategy` | `mixed` | exploit/explore split, the default for first runs |
 | `--budget` | `300000` haiku-eq | enough for ~700 extract calls + ~150 write calls + headroom |
 
-Token estimate (mvp20, 689 chunks, ≤208 pages):
+Token estimate (mvp20, 689 chunks, ≤208 pages), with token-based cost
+accounting + per-tier overhead (`infra/cost_meter.py`):
 
-- extractor: ~700 chunks × (~250 in / ~120 out) ≈ 175k in / 84k out
-- writer: ~150 pages × (~700 in / ~500 out) ≈ 105k in / 75k out
-- query (after the run): one call, ~1k in / 200 out
+| call | tier | tokens in / out | per-call heq |
+|---|---|---|---|
+| extract (no images) | S | 250 / 120 | ~420 |
+| extract (+10 images) | S | 650 / 120 | ~820 |
+| write (no figures) | L | 300 / 120 | ~27_500 |
+| write (+14 figures) | L | 1000 / 120 | ~69_500 |
 
-So ~280k input tokens + ~160k output tokens at haiku rates ≈ <$0.50.
-Set `--budget` 30 % above the estimate so a few cache misses don't
-abort the run.
+`per-call heq = input_tokens * input_per_m + output_tokens * output_per_m + fixed_overhead`
+with S = (1.0, 1.0, 50), M = (12.0, 15.0, 200), L = (60.0, 75.0, 500).
+
+For mvp20: ~700 extracts × ~600 heq + ~150 writes × ~50_000 heq ≈
+420k + 7.5M heq. Budget for a full pass is ~8M heq at strategy M
+(mostly write-bound). Start with `--budget 300000` only for a
+low-coverage smoke; the real run needs 8-10 M heq.
 
 ### 3. Skills available in the outer session
 
@@ -42,7 +50,22 @@ The outer Claude Code session needs all three skill files reachable:
 
 - `/wikify_simple/extract` — reads `data/dispatch/extract/*.request.json`,
   emits an `ExtractResponse`-shaped JSON to the matching `.response.json`.
-- `/wikify_simple/write` — same shape for `WriteResponse`.
+- `/wikify_simple/write` — same shape for `WriteResponse`. Must include
+  `used_markers: list[str]` (the list of `eN` identifiers referenced in
+  the prose) and a `body_markdown` that passes the structural validator
+  (>=2 non-blank prose lines before `## Evidence`, >=1 `[^eN]` marker in
+  the prose, >=1 `[^eN]:` footnote definition in the evidence block).
+  Example response body:
+
+  ```json
+  {
+    "page_id": "concept-atomic-layer-deposition",
+    "body_markdown": "ALD is a self-limiting surface reaction[^e1].\n\nIt produces conformal films one half-cycle at a time[^e2].\n\n## Evidence\n\n[^e1]: self-limiting half-reaction (doc-a)\n[^e2]: conformal over trenches (doc-b)\n",
+    "used_markers": ["e1", "e2"],
+    "tokens_in": 300,
+    "tokens_out": 120
+  }
+  ```
 - `/wikify_simple/query` — same shape for `QueryResponse`.
 
 The skill files live at `.claude/skills/wikify_simple/`. Confirm they
@@ -137,6 +160,14 @@ rm -f data/dispatch/write/*.request.json data/dispatch/write/*.response.json
 The cache (`data/cache/extract/`) survives. Re-running picks up where
 the budget left off. Pass `--feed` to merge against an existing bundle
 instead of overwriting it.
+
+Cache entries are now namespaced by binding under
+`data/cache/extract/<binding_name>/<model_id>/<prompt_hash>/<chunk_hash>.json`
+so fake-binding artifacts can never be served to a claude_code lookup.
+Any cache files from before this change live at
+`data/cache/extract/<model_id>/...` and are orphaned — they are not
+deleted automatically; delete them manually if you want to reclaim the
+disk space.
 
 ## Post-run
 
