@@ -16,33 +16,93 @@ output_schema:
   tokens_out: int
 sampler_hint: haiku
 prompt_template: |
-  You are a writer for the wikify_simple knowledge pipeline. Write a
-  short, faithful wiki page body for the given title, grounded only in
-  the supplied evidence quotes.
+  You are writing a Wikipedia-style article for the wikify_simple
+  knowledge pipeline. The article must be faithful to the supplied
+  evidence and structured into the six sections below in this exact
+  order.
 
-  Rules:
-  - Every factual sentence must cite evidence via a ``[^eN]`` marker
-    where ``N`` matches the 1-based index of the evidence entry used.
-  - Never introduce claims that are not supported by at least one quote.
-  - Prefer short sentences. One concept per sentence. No abstract citations.
-  - Do not emit em-dashes as parenthetical separators.
-  - If the skeleton is non-empty, refine it; otherwise draft fresh prose.
-  - When the request includes ``figures``, mention each figure you use
-    by its label in the prose ("as shown in Figure 3", "see Figure 1",
-    etc.). On the line IMMEDIATELY AFTER the sentence that references
-    it, embed the figure as ``![Figure N](<figure.path>)`` markdown
-    using the ``path`` field. Do not group multiple figures at the top
-    of the page. Do not embed figures the prose does not reference. You
-    may skip figures that do not fit the prose.
+  VOICE AND STYLE
+  - Wikipedia voice: neutral, declarative, third person.
+  - One concept per sentence. Never stack two unfamiliar terms.
+  - Short sentences. No em-dashes as parenthetical separators.
+  - No meta-commentary ("this article covers...", "in summary...").
+  - Do not invent claims that are not supported by at least one quote.
+  - On first mention of a related concept, wrap it in ``[[wikilinks]]``;
+    a separate cross-link pass will resolve them.
+  - Every factual sentence in Mechanism, Key Facts, and In This Corpus
+    must cite evidence via a ``[^eN]`` marker where ``N`` is the 1-based
+    index of the evidence entry used. The Definition, Relationships,
+    and Open Questions sections do not carry citations.
   - Respond as strict JSON matching the output schema. No commentary.
 
+  FIGURE PLACEMENT
+  - When ``figures`` is supplied, mention each figure you use by its
+    label in the prose ("as shown in Figure 3", "see Figure 1") inside
+    the Mechanism or Key Facts section. On the line IMMEDIATELY after
+    the sentence that references it, embed the figure as
+    ``![Figure N](<figure.path>)`` using the ``path`` field. Never
+    group figures at the top of the page. You may skip figures that
+    do not fit the prose.
+
+  REQUIRED SECTIONS (use these exact headings, in this order)
+
+  ## Definition
+  One or two sentences. State what {title} IS. No citations. No
+  ``[^eN]`` markers in this section.
+
+  ## Mechanism / Process
+  How it works, how it is applied, or how it manifests. Minimum three
+  sentences. Every sentence must end with at least one ``[^eN]``
+  marker. Embed figures here when they illustrate the mechanism.
+
+  ## Key Facts
+  Bulleted list of established, corpus-supported facts. Minimum three
+  bullets. Each bullet is one fact followed by exactly one ``[^eN]``
+  marker. Use ``- `` for each bullet.
+
+  ## In This Corpus
+  What the user's specific corpus emphasises about {title}. Which
+  sources discuss it most. Minimum two sentences. Cite evidence with
+  ``[^eN]`` markers.
+
+  ## Relationships
+  A markdown table of related concepts drawn from ``neighbor_titles``.
+  One row per relationship. No citations. Use this header:
+
+      | Related Concept | Relation |
+      |-----------------|----------|
+      | [[Other Title]] | related  |
+
+  If ``neighbor_titles`` is empty, emit only the header rows above.
+
+  ## Open Questions
+  What remains unresolved or unanswered in the corpus. Minimum one
+  paragraph. No citations; this section documents the absence of
+  evidence.
+
+  ## Evidence
+  The evidence footnote block. One ``[^eN]: <chunk_id> (<doc_id>) >
+  "<quote>"`` line per evidence entry the prose actually cited. This
+  section must be last.
+
+  HARD MINIMUMS (the validator will reject the response otherwise)
+  - Total body length >= 800 characters.
+  - All seven required headings present in order.
+  - Mechanism: >= 3 sentences and >= 1 ``[^eN]`` marker.
+  - Key Facts: >= 3 bullet lines.
+  - In This Corpus: >= 1 non-empty prose paragraph.
+  - Open Questions: >= 1 non-empty prose paragraph.
+  - Evidence: >= 1 ``[^eN]:`` definition; every ``[^eN]`` marker in
+    the prose has a matching definition.
+
+  REQUEST
   page_id: {page_id}
   title: {title}
   aliases: {aliases}
   neighbor_titles: {neighbor_titles}
   figures: {figures}
 
-  skeleton:
+  skeleton (refine if non-empty, else draft fresh):
   ---
   {skeleton}
   ---

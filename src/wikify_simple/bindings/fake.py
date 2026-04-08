@@ -170,27 +170,66 @@ class FakeWriter(Writer):
                 "canonicalize is expected to filter unsupported pages."
             )
         used: list[str] = [f"e{i}" for i in range(1, len(request.evidence) + 1)]
-        # Minimal valid body: >=2 non-blank prose lines each carrying an
-        # evidence marker, followed by an `## Evidence` block the
-        # WriteResponse validator accepts.
-        prose_lines = [
-            f"{request.title} appears in the ingested corpus with supporting quotes[^{used[0]}].",
-            f"The concept is grounded in the cited chunks below[^{used[-1]}].",
+        title = request.title
+        m1 = used[0]
+        m_last = used[-1]
+        # Mechanism: >=3 sentences, all with markers. Optionally include
+        # an inline figure embed with adjacent textual mention.
+        mech_lines: list[str] = [
+            f"{title} operates through a sequence of well-defined steps grounded "
+            f"in the supplied evidence[^{m1}].",
+            f"Each step is documented in the cited corpus chunks listed below[^{m_last}].",
+            f"The mechanism is reproducible across the sources reviewed for this article[^{m1}].",
         ]
-        prose = "\n\n".join(prose_lines)
         if request.figures:
             fig_path = request.figures[0].path or "images/fig1.png"
-            prose = (
-                f"{prose}\n\n"
-                f"As shown in Figure 1, the supporting evidence is visible[^{used[0]}].\n"
-                f"![Figure 1]({fig_path})"
+            mech_lines.append(
+                f"As shown in Figure 1, the mechanism is visible in the corpus evidence[^{m1}]."
             )
+            mech_lines.append(f"![Figure 1]({fig_path})")
+        mechanism = "\n\n".join(mech_lines)
+        # Key Facts: >=3 bullets with markers.
+        facts = "\n".join(
+            [
+                f"- {title} is documented in the supplied corpus chunks[^{m1}].",
+                f"- Each citation in this section traces to a verbatim quote[^{m_last}].",
+                f"- The fake writer produces a structurally valid stub for tests[^{m1}].",
+            ]
+        )
+        # Relationships: header + one row per neighbor (or empty if none).
+        rel_rows = [
+            "| Related Concept | Relation |",
+            "|-----------------|----------|",
+        ]
+        for nbr in request.neighbor_titles[:3]:
+            rel_rows.append(f"| [[{nbr}]] | related |")
+        relationships = "\n".join(rel_rows)
         evidence_block_lines = [
             f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
             for marker, ev in zip(used, request.evidence, strict=False)
         ]
         evidence_block = "\n".join(evidence_block_lines)
-        body = f"{prose}\n\n## Evidence\n\n{evidence_block}\n"
+        body = (
+            f"# {title}\n\n"
+            f"## Definition\n\n"
+            f"{title} is a placeholder concept rendered by the fake writer "
+            f"for structural validation. It is not real prose.\n\n"
+            f"## Mechanism / Process\n\n"
+            f"{mechanism}\n\n"
+            f"## Key Facts\n\n"
+            f"{facts}\n\n"
+            f"## In This Corpus\n\n"
+            f"The corpus references {title} across the cited chunks listed in the "
+            f"evidence section[^{m1}]. The fake writer surfaces these citations "
+            f"directly from the supplied evidence list[^{m_last}].\n\n"
+            f"## Relationships\n\n"
+            f"{relationships}\n\n"
+            f"## Open Questions\n\n"
+            f"The fake writer does not assess open questions; this stub exists "
+            f"only to satisfy the structural validator.\n\n"
+            f"## Evidence\n\n"
+            f"{evidence_block}\n"
+        )
         wall = time.monotonic() - t0
         # Writer tokens scale with figures payload: each figure adds ~50
         # tokens of caption + id + path to the prompt.

@@ -18,6 +18,18 @@ _EVIDENCE_DEF_RE = re.compile(r"^\[\^e\d+\]:")
 _FIGURE_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _FIGURE_NUM_IN_ALT_RE = re.compile(r"[Ff]igure\s+(\d+)")
 _FIGURE_MENTION_TEMPLATE = r"(?:figure|fig\.?)\s*{n}\b"
+_SENTENCE_END_RE = re.compile(r"[.!?](?:\s|$)")
+_BULLET_RE = re.compile(r"^\s*[-*]\s+\S")
+_REQUIRED_SECTIONS: tuple[str, ...] = (
+    "## Definition",
+    "## Mechanism",  # accept "## Mechanism" or "## Mechanism / Process"
+    "## Key Facts",
+    "## In This Corpus",
+    "## Relationships",
+    "## Open Questions",
+    "## Evidence",
+)
+_MIN_BODY_CHARS = 800
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
 
@@ -242,6 +254,99 @@ def _check_figure_mentions(body: str) -> None:
                 )
 
 
+def _split_sections(body: str) -> dict[str, str]:
+    """Return ``{normalized_heading: section_body}`` for every ``## Heading``.
+
+    The normalized key is the lowercase heading text. Section body is
+    the text between this heading and the next ``## ``-level heading
+    (or end of file). Anything before the first ``## `` heading is
+    keyed under ``""``.
+    """
+    out: dict[str, str] = {}
+    current_key = ""
+    current_buf: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            out[current_key] = "\n".join(current_buf).strip()
+            current_key = line[3:].strip().lower()
+            current_buf = []
+        else:
+            current_buf.append(line)
+    out[current_key] = "\n".join(current_buf).strip()
+    return out
+
+
+def _count_sentences(text: str) -> int:
+    return len([m for m in _SENTENCE_END_RE.finditer(text) if text[: m.end()].strip()])
+
+
+def _has_section(sections: dict[str, str], prefix: str) -> tuple[str, str] | None:
+    """Find a section whose lowercase heading starts with ``prefix.lower()``.
+
+    Returns ``(matched_key, section_text)`` or ``None``. This is how we
+    accept both ``## Mechanism`` and ``## Mechanism / Process``.
+    """
+    needle = prefix.lower()
+    for key, value in sections.items():
+        if key.startswith(needle):
+            return key, value
+    return None
+
+
+def _check_wikipedia_structure(body: str) -> None:
+    """Enforce the six-section Wikipedia layout from prompts/write_v1.yaml.
+
+    Each failure raises ``ValueError`` with a message naming exactly
+    which section or minimum tripped.
+    """
+    if len(body) < _MIN_BODY_CHARS:
+        raise ValueError(
+            f"WriteResponse.body_markdown is {len(body)} chars; "
+            f"minimum is {_MIN_BODY_CHARS} (writer produced a stub)"
+        )
+    sections = _split_sections(body)
+    for required in _REQUIRED_SECTIONS:
+        prefix = required[3:]  # strip "## "
+        if _has_section(sections, prefix) is None:
+            raise ValueError(f"WriteResponse.body_markdown missing required section `{required}`")
+
+    # Definition: at least one non-blank prose line.
+    _, definition = _has_section(sections, "Definition")  # type: ignore[misc]
+    if not [ln for ln in definition.splitlines() if ln.strip()]:
+        raise ValueError("WriteResponse.body_markdown `## Definition` section is empty")
+
+    # Mechanism: >=3 sentences AND >=1 [^eN] marker.
+    _, mech = _has_section(sections, "Mechanism")  # type: ignore[misc]
+    if _count_sentences(mech) < 3:
+        raise ValueError(
+            "WriteResponse.body_markdown `## Mechanism / Process` section needs >=3 sentences"
+        )
+    if not _MARKER_RE.search(mech):
+        raise ValueError(
+            "WriteResponse.body_markdown `## Mechanism / Process` section "
+            "needs >=1 `[^eN]` evidence marker"
+        )
+
+    # Key Facts: >=3 bullet lines.
+    _, facts = _has_section(sections, "Key Facts")  # type: ignore[misc]
+    bullets = [ln for ln in facts.splitlines() if _BULLET_RE.match(ln)]
+    if len(bullets) < 3:
+        raise ValueError(
+            f"WriteResponse.body_markdown `## Key Facts` section needs >=3 "
+            f"bullet lines (got {len(bullets)})"
+        )
+
+    # In This Corpus: >=1 non-blank prose line.
+    _, corpus = _has_section(sections, "In This Corpus")  # type: ignore[misc]
+    if not [ln for ln in corpus.splitlines() if ln.strip()]:
+        raise ValueError("WriteResponse.body_markdown `## In This Corpus` section is empty")
+
+    # Open Questions: >=1 non-blank prose line.
+    _, oq = _has_section(sections, "Open Questions")  # type: ignore[misc]
+    if not [ln for ln in oq.splitlines() if ln.strip()]:
+        raise ValueError("WriteResponse.body_markdown `## Open Questions` section is empty")
+
+
 class WriteEvidenceRef(BaseModel):
     model_config = _STRICT
 
@@ -279,34 +384,35 @@ class WriteResponse(BaseModel):
     @field_validator("body_markdown")
     @classmethod
     def _body_has_prose_and_evidence(cls, v: str) -> str:
-        """Reject empty / marker-less / evidence-less writer output.
+        """Reject empty / stub / structurally-invalid writer output.
 
-        Structural minimum:
-          - the body must contain a ``## Evidence`` heading
-          - the prose half (before that heading) must have >=2 non-blank
-            lines of actual text
-          - those prose lines must contain at least one ``[^eN]`` marker
-          - the evidence half must contain at least one ``[^eN]: ...``
-            footnote definition
+        Enforces both the original prose-and-evidence floor (the
+        ``## Evidence`` block must be present and well-formed, every
+        ``[^eN]`` marker in the prose must have a matching definition,
+        and the figure-mention rule still fires) AND the full
+        Wikipedia-style six-section layout produced by
+        prompts/write_v1.yaml.
         """
         if _EVIDENCE_HEADING not in v:
             raise ValueError("WriteResponse.body_markdown missing `## Evidence` heading")
         prose_part, _, evidence_part = v.partition(_EVIDENCE_HEADING)
-        prose_lines = [ln.strip() for ln in prose_part.splitlines() if ln.strip()]
-        # strip a leading `# Title` heading from the prose count so writers
-        # that emit a title still need >=2 body lines underneath it.
-        body_lines = [ln for ln in prose_lines if not ln.startswith("#")]
-        if len(body_lines) < 2:
-            raise ValueError(
-                "WriteResponse.body_markdown needs >=2 non-blank prose lines before `## Evidence`"
-            )
-        if not any(_MARKER_RE.search(ln) for ln in body_lines):
+        prose_markers = set(_MARKER_RE.findall(prose_part))
+        if not prose_markers:
             raise ValueError("WriteResponse.body_markdown prose has no `[^eN]` evidence markers")
         ev_lines = [ln.strip() for ln in evidence_part.splitlines() if ln.strip()]
-        if not any(_EVIDENCE_DEF_RE.match(ln) for ln in ev_lines):
+        ev_defs = [ln for ln in ev_lines if _EVIDENCE_DEF_RE.match(ln)]
+        if not ev_defs:
             raise ValueError(
                 "WriteResponse.body_markdown `## Evidence` block has no `[^eN]:` definitions"
             )
+        defined = {ln.split("]:", 1)[0] + "]" for ln in ev_defs}
+        unmatched = sorted(prose_markers - defined)
+        if unmatched:
+            raise ValueError(
+                f"WriteResponse.body_markdown has prose markers with no matching "
+                f"`[^eN]:` definitions: {unmatched}"
+            )
+        _check_wikipedia_structure(v)
         _check_figure_mentions(v)
         return v
 
