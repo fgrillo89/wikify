@@ -1,11 +1,12 @@
 """Structural validator on WriteResponse.body_markdown.
 
-The validator enforces the full Wikipedia-style six-section layout
-produced by ``prompts/write_v1.yaml``: every required heading must be
-present in order, with per-section minimums (sentence/bullet counts),
-a 1200-char body floor, the figure-mention rule, no `[[wikilinks]]`
-in prose, and matched ``[^eN]`` markers between prose and the
-references block.
+The validator enforces a soft shape: at least one ``## H2`` heading,
+>=3 prose paragraphs with at least one ``[^eN]`` marker, a final
+``## References`` section with ``[^eN]:`` definitions, a 1200-char
+body floor, the figure-mention rule, no ``[[wikilinks]]`` in prose,
+and matched markers between prose and the references block. Specific
+section names (Definition / Background / ...) are recommended, not
+required.
 """
 
 from __future__ import annotations
@@ -142,37 +143,7 @@ def test_body_under_1200_chars_rejected() -> None:
         _mk(short)
 
 
-# ---- missing sections ----------------------------------------------------
-
-
-def test_missing_definition_rejected() -> None:
-    body = _wiki_body().replace("## Definition\n\n", "## Foo\n\n", 1)
-    with pytest.raises(ValidationError, match="Definition"):
-        _mk(body)
-
-
-def test_missing_background_rejected() -> None:
-    body = _wiki_body().replace("## Background", "## Bg")
-    with pytest.raises(ValidationError, match="Background"):
-        _mk(body)
-
-
-def test_missing_mechanism_rejected() -> None:
-    body = _wiki_body().replace("## Mechanism / Process", "## Mech")
-    with pytest.raises(ValidationError, match="Mechanism"):
-        _mk(body)
-
-
-def test_missing_applications_rejected() -> None:
-    body = _wiki_body().replace("## Applications", "## Uses")
-    with pytest.raises(ValidationError, match="Applications"):
-        _mk(body)
-
-
-def test_missing_open_questions_rejected() -> None:
-    body = _wiki_body().replace("## Open Questions", "## Other Stuff")
-    with pytest.raises(ValidationError, match="Open Questions"):
-        _mk(body)
+# ---- missing required shape ---------------------------------------------
 
 
 def test_missing_references_rejected() -> None:
@@ -181,56 +152,60 @@ def test_missing_references_rejected() -> None:
         _mk(body)
 
 
-# ---- per-section minimums ------------------------------------------------
-
-
-def test_background_with_one_sentence_rejected() -> None:
-    body = _wiki_body(background="ALD is old[^e1].")
-    with pytest.raises(ValidationError, match="Background.*3 prose sentences"):
-        _mk(body)
-
-
-def test_background_with_bullets_rejected() -> None:
-    body = _wiki_body(
-        background=(
-            "- ALD started in the 1970s[^e1].\n"
-            "- It went industrial later[^e2].\n"
-            "- It is widespread now[^e1]."
-        )
+def test_body_with_no_h2_rejected() -> None:
+    body = (
+        "# Atomic Layer Deposition\n\n"
+        + ("ALD is a thin-film growth technique used widely in semiconductors[^e1]. " * 40)
+        + "\n\n"
+        + ("It is self-limiting and deposits one atomic layer per cycle[^e2]. " * 20)
     )
-    with pytest.raises(ValidationError, match="Background.*no bullet"):
+    with pytest.raises(ValidationError):
         _mk(body)
 
 
-def test_mechanism_with_three_sentences_rejected() -> None:
-    body = _wiki_body(
-        mechanism_sentences=[
-            "ALD is self-limiting[^e1].",
-            "It saturates the surface[^e2].",
-            "It repeats[^e1].",
-        ]
+# ---- custom sections accepted (no strict naming) ------------------------
+
+
+def test_custom_section_names_accepted() -> None:
+    """A body with non-canonical H2 names (e.g. Specifications,
+    Crystal Structure) is accepted as long as the soft shape holds."""
+    filler1 = (
+        "This piece of equipment is used for atomic layer deposition and "
+        "supports a range of precursor chemistries across many processes "
+        "throughout the corpus of published work and industrial reports[^e1]. "
+        "It is widely adopted in modern semiconductor manufacturing lines[^e2]. "
+        "Reports describe its modular reactor geometry and vacuum hardware[^e1]. "
+        "Several commercial vendors supply systems for research and production "
+        "with a range of chamber sizes and precursor delivery options[^e2]. "
+        "The corpus includes multiple primary sources characterising these "
+        "systems across decades of process engineering practice[^e1]."
     )
-    with pytest.raises(ValidationError, match="Mechanism.*4 prose sentences"):
-        _mk(body)
-
-
-def test_mechanism_with_bullets_rejected() -> None:
-    body = _wiki_body(
-        mechanism_sentences=[
-            "- ALD is self-limiting[^e1].",
-            "- It saturates the surface[^e2].",
-            "- It repeats[^e1].",
-            "- It grows monolayers[^e2].",
-        ]
+    filler2 = (
+        "The chamber is held at controlled temperature and pressure[^e1]. "
+        "Precursor delivery is pulsed and separated by inert purge steps[^e2]. "
+        "Cycle times are tuned to surface saturation limits[^e1]."
     )
-    with pytest.raises(ValidationError, match="Mechanism.*no bullet"):
-        _mk(body)
-
-
-def test_applications_too_short_rejected() -> None:
-    body = _wiki_body(applications="ALD is used somewhere[^e1].")
-    with pytest.raises(ValidationError, match="Applications.*3 sentences"):
-        _mk(body)
+    filler3 = (
+        "Materials engineers characterise the resulting films using "
+        "ellipsometry and X-ray reflectivity methods[^e1]. Additional "
+        "crystallographic analysis is reported in several primary sources[^e2]. "
+        "Crystal structures vary between amorphous and polycrystalline phases "
+        "depending on deposition temperature and post-annealing conditions[^e1]."
+    )
+    body = (
+        "# Example Equipment\n\n"
+        "## Overview\n\n"
+        f"{filler1}\n\n"
+        "## Specifications\n\n"
+        f"{filler2}\n\n"
+        "## Crystal Structure\n\n"
+        f"{filler3}\n\n"
+        "## References\n\n"
+        '[^e1]: chunk_a (doc1) > "ALD reactor"\n'
+        '[^e2]: chunk_b (doc2) > "process details"\n'
+    )
+    resp = _mk(body)
+    assert "## Specifications" in resp.body_markdown
 
 
 # ---- wikilinks rejection -------------------------------------------------

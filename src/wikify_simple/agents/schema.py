@@ -19,16 +19,6 @@ _WIKILINK_RE = re.compile(r"\[\[[^\]]+\]\]")
 _FIGURE_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _FIGURE_NUM_IN_ALT_RE = re.compile(r"[Ff]igure\s+(\d+)")
 _FIGURE_MENTION_TEMPLATE = r"(?:figure|fig\.?)\s*{n}\b"
-_SENTENCE_END_RE = re.compile(r"[.!?](?:\s|$)")
-_BULLET_RE = re.compile(r"^\s*[-*]\s+\S")
-_REQUIRED_SECTIONS: tuple[str, ...] = (
-    "## Definition",
-    "## Background",
-    "## Mechanism",  # accept "## Mechanism" or "## Mechanism / Process"
-    "## Applications",
-    "## Open Questions",
-    "## References",
-)
 _MIN_BODY_CHARS = 1200
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
@@ -276,15 +266,10 @@ def _split_sections(body: str) -> dict[str, str]:
     return out
 
 
-def _count_sentences(text: str) -> int:
-    return len([m for m in _SENTENCE_END_RE.finditer(text) if text[: m.end()].strip()])
-
-
 def _has_section(sections: dict[str, str], prefix: str) -> tuple[str, str] | None:
     """Find a section whose lowercase heading starts with ``prefix.lower()``.
 
-    Returns ``(matched_key, section_text)`` or ``None``. This is how we
-    accept both ``## Mechanism`` and ``## Mechanism / Process``.
+    Returns ``(matched_key, section_text)`` or ``None``.
     """
     needle = prefix.lower()
     for key, value in sections.items():
@@ -293,21 +278,19 @@ def _has_section(sections: dict[str, str], prefix: str) -> tuple[str, str] | Non
     return None
 
 
-def _count_prose_sentences(text: str) -> int:
-    """Count sentences in non-bullet, non-blank lines only."""
-    prose = "\n".join(ln for ln in text.splitlines() if ln.strip() and not _BULLET_RE.match(ln))
-    return _count_sentences(prose)
-
-
-def _has_bullets(text: str) -> bool:
-    return any(_BULLET_RE.match(ln) for ln in text.splitlines())
-
-
 def _check_wikipedia_structure(body: str) -> None:
-    """Enforce the six-section Wikipedia layout from prompts/write_v1.yaml.
+    """Soft shape validator: sections are guidance, not strict requirements.
 
-    Each failure raises ``ValueError`` with a message naming exactly
-    which section or minimum tripped.
+    Required shape:
+      - >= 1200 chars
+      - no `[[wikilinks]]` in prose
+      - at least one H2 heading
+      - at least 3 paragraphs of prose and at least one `[^eN]` marker
+        somewhere in the body
+      - a final `## References` (or equivalently named) section with at
+        least one `[^eN]:` evidence definition
+      - every `[^eN]` marker resolves to a definition
+      - figure-mention rule (enforced separately via _check_figure_mentions)
     """
     if len(body) < _MIN_BODY_CHARS:
         raise ValueError(
@@ -320,68 +303,39 @@ def _check_wikipedia_structure(body: str) -> None:
             "the body must stay clean (crosslinks live in frontmatter)"
         )
     sections = _split_sections(body)
-    for required in _REQUIRED_SECTIONS:
-        prefix = required[3:]  # strip "## "
-        if _has_section(sections, prefix) is None:
-            raise ValueError(f"WriteResponse.body_markdown missing required section `{required}`")
+    h2_keys = [k for k in sections if k]
+    if not h2_keys:
+        raise ValueError("WriteResponse.body_markdown needs at least one `## H2` heading")
 
-    # Definition: at least one non-blank prose line.
-    _, definition = _has_section(sections, "Definition")  # type: ignore[misc]
-    if not [ln for ln in definition.splitlines() if ln.strip()]:
-        raise ValueError("WriteResponse.body_markdown `## Definition` section is empty")
-
-    # Background: >=3 prose sentences, no bullets, >=1 marker.
-    _, background = _has_section(sections, "Background")  # type: ignore[misc]
-    if _has_bullets(background):
+    # Locate the References section (or a case-insensitive variant).
+    refs_entry = _has_section(sections, "References")
+    if refs_entry is None:
         raise ValueError(
-            "WriteResponse.body_markdown `## Background` section must have "
-            "no bullet lists (encyclopedic prose only)"
+            "WriteResponse.body_markdown must end with a `## References` section "
+            "containing the `[^eN]:` evidence definitions"
         )
-    if _count_prose_sentences(background) < 3:
+    _, refs_body = refs_entry
+    if not any(_EVIDENCE_DEF_RE.match(ln.strip()) for ln in refs_body.splitlines()):
         raise ValueError(
-            "WriteResponse.body_markdown `## Background` section needs >=3 prose sentences"
-        )
-    if not _MARKER_RE.search(background):
-        raise ValueError(
-            "WriteResponse.body_markdown `## Background` section needs >=1 `[^eN]` evidence marker"
+            "WriteResponse.body_markdown `## References` section must contain "
+            "at least one `[^eN]:` evidence definition"
         )
 
-    # Mechanism: >=4 prose sentences, no bullets, >=1 marker.
-    _, mech = _has_section(sections, "Mechanism")  # type: ignore[misc]
-    if _has_bullets(mech):
+    # Prose-body content (everything except References) needs substance:
+    # >=3 non-blank paragraphs and >=1 `[^eN]` marker.
+    prose_body = "\n\n".join(
+        text for key, text in sections.items() if key != refs_entry[0] and text
+    )
+    paragraphs = [p for p in re.split(r"\n\s*\n", prose_body) if p.strip()]
+    if len(paragraphs) < 3:
         raise ValueError(
-            "WriteResponse.body_markdown `## Mechanism / Process` section must have "
-            "no bullet lists (encyclopedic prose only)"
+            "WriteResponse.body_markdown needs at least 3 paragraphs of prose "
+            "outside the References section"
         )
-    if _count_prose_sentences(mech) < 4:
+    if not _MARKER_RE.search(prose_body):
         raise ValueError(
-            "WriteResponse.body_markdown `## Mechanism / Process` section needs >=4 prose sentences"
+            "WriteResponse.body_markdown needs at least one `[^eN]` evidence marker in the prose"
         )
-    if not _MARKER_RE.search(mech):
-        raise ValueError(
-            "WriteResponse.body_markdown `## Mechanism / Process` section "
-            "needs >=1 `[^eN]` evidence marker"
-        )
-
-    # Applications: >=3 sentences (bullets count), >=1 marker.
-    _, apps = _has_section(sections, "Applications")  # type: ignore[misc]
-    if (
-        _count_sentences(apps) < 3
-        and len([ln for ln in apps.splitlines() if _BULLET_RE.match(ln)]) < 3
-    ):
-        raise ValueError(
-            "WriteResponse.body_markdown `## Applications` section needs >=3 sentences"
-        )
-    if not _MARKER_RE.search(apps):
-        raise ValueError(
-            "WriteResponse.body_markdown `## Applications` section "
-            "needs >=1 `[^eN]` evidence marker"
-        )
-
-    # Open Questions: >=1 sentence.
-    _, oq = _has_section(sections, "Open Questions")  # type: ignore[misc]
-    if not [ln for ln in oq.splitlines() if ln.strip()]:
-        raise ValueError("WriteResponse.body_markdown `## Open Questions` section is empty")
 
 
 class WriteEvidenceRef(BaseModel):

@@ -38,43 +38,39 @@ neutral Wikipedia voice and grounded entirely in the supplied evidence list.
 - Never group figures at the top of the page. You may skip figures that do
   not fit the prose.
 
-## Required Sections (use these exact headings, in this order)
+## Sections (guidance, not strict requirements)
 
-### `## Definition`
-One or two sentences stating what the title IS. No citations. No `[^eN]`
-markers.
+Different concepts need different shapes. A page about a piece of equipment
+might have `## Specifications`. A page about a phenomenon might have
+`## Characterization`. A person page might have `## Biography`. Pick the
+sections that fit the concept.
 
-### `## Background`
-Historical context, prior art, and motivation. At least three sentences as
-connected prose paragraphs. No bullet lists. At least one `[^eN]` marker.
+### Recommended sections for a typical concept page
 
-### `## Mechanism / Process`
-How the concept works, how it is applied, and how it manifests. At least
-four sentences as connected prose paragraphs. No bullet lists. At least one
-`[^eN]` marker. Embed figures here when they illustrate the mechanism.
+- `## Definition` — one or two sentences stating what the title IS.
+- `## Background` — historical context, prior art, and motivation.
+- `## Mechanism / Process` — how the concept works and manifests. A natural
+  place to embed figures when they illustrate the mechanism.
+- `## Applications` — concrete use cases tied to the corpus. Bullet lists
+  are allowed when distinct use cases are listed.
+- `## Open Questions` — what remains unresolved or unanswered.
 
-### `## Applications`
-Concrete use cases tied to the corpus. At least three sentences. Bullet
-lists ARE allowed in this section when distinct use cases are listed. At
-least one `[^eN]` marker.
+Equipment pages typically drop Mechanism in favour of Specifications and
+Operation. Phenomenon pages may drop Applications entirely. Use your
+judgement.
 
-### `## Open Questions`
-What remains unresolved or unanswered. At least one sentence. No citations
-required.
+### `## References` (required, must be last)
 
-### `## References`
 The visible numbered citation list. One `[^eN]: <chunk_id> (<doc_id>) >
-"<quote>"` line per cited evidence entry. At least one definition. This
-section must be last.
+"<quote>"` line per cited evidence entry. At least one definition.
 
 ## Hard Minimums (the validator will reject the response otherwise)
 
 - Total body length >= 1200 characters.
-- All six required headings present in this exact order.
+- At least one `## H2` heading in the body.
+- At least three paragraphs of prose outside the References section.
+- At least one `[^eN]` marker in the prose.
 - No `[[wikilinks]]` anywhere in the body.
-- Background: >= 3 prose sentences, >= 1 `[^eN]` marker, no bullets.
-- Mechanism / Process: >= 4 prose sentences, >= 1 `[^eN]` marker, no bullets.
-- Applications: >= 3 sentences, >= 1 `[^eN]` marker.
-- Open Questions: >= 1 sentence.
-- References: >= 1 `[^eN]:` definition. Every `[^eN]` marker in the prose
-  has a matching definition in this block.
+- Final `## References` section with at least one `[^eN]:` definition.
+- Every `[^eN]` marker in the prose has a matching definition in
+  References.
