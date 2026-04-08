@@ -50,6 +50,7 @@ def parse(path: Path) -> ParseResult:
         elif action == "fitz_fallback":
             md_text = _fitz_fallback_markdown(doc)
 
+        md_text = _strip_pdf_artifacts(md_text)
         metadata = _extract_metadata(doc, md_text, path.name)
         images_raw = extract_pdf_media(doc, md_text)
     finally:
@@ -145,3 +146,39 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
 
 
 # Image extraction now lives in ``ingest/images.py::extract_pdf_media``.
+
+
+# --- pymupdf artifact scrubbing ------------------------------------------
+
+# [12] or [12-15] inline citation markers. We deliberately do NOT match
+# single-letter subfigure refs like [a] / [b].
+_CITE_RE = re.compile(r"\[\d+(?:-\d+)?\]")
+
+# [token] bracket-wrapping artifact from pymupdf4llm column
+# reconstruction. ASCII alnum, length 2-20. ``[Figure 1]`` style refs
+# contain a space and do not match.
+_BRACKET_WRAP_RE = re.compile(r"\[([A-Za-z0-9]{2,20})\]")
+
+# Unicode dash variants -> ASCII '-'
+_DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+_DASH_RE = re.compile(f"[{re.escape(_DASHES)}]")
+
+# Runs of spaces/tabs (NOT newlines) collapse to a single space.
+_HSPACE_RE = re.compile(r"[ \t]{2,}")
+
+
+def _strip_pdf_artifacts(md: str) -> str:
+    """Scrub common pymupdf4llm / column-reconstruction artifacts.
+
+    Applied once after the parser emits markdown and before TOC merge,
+    section detection, image extraction, or chunking. This cleans the
+    text for the embedder, the model, the validator, and search at the
+    same time.
+    """
+    if not md:
+        return md
+    md = _CITE_RE.sub("", md)
+    md = _BRACKET_WRAP_RE.sub(r"\1", md)
+    md = _DASH_RE.sub("-", md)
+    md = _HSPACE_RE.sub(" ", md)
+    return md
