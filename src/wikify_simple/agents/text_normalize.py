@@ -34,6 +34,11 @@ _BRACKET_WRAP_RE = re.compile(r"\[([a-z0-9]{2,})\]")
 
 _WS_RE = re.compile(r"\s+")
 
+# Markdown emphasis markers (`**bold**`, `*italic*`, `_italic_`,
+# `__bold__`). The model strips these when emitting a clean quote;
+# the raw chunk keeps them. Strip on both sides for comparison.
+_MD_EMPHASIS_RE = re.compile(r"[*_]+")
+
 # After dash normalization, collapse whitespace around '-' so
 # ``chua - a`` and ``chua-a`` compare equal. This matters because the
 # model often respaces an em-dash to `` - `` when cleaning, while the
@@ -59,9 +64,11 @@ def normalize_for_substring(s: str) -> str:
     s = _CITE_RE.sub("", s)
     # 5. Unwrap [token] bracket-wrap artifacts (lowercase word/digits, >=2)
     s = _BRACKET_WRAP_RE.sub(r"\1", s)
-    # 6. Collapse whitespace
+    # 6. Strip markdown emphasis markers (**bold**, _italic_, etc.)
+    s = _MD_EMPHASIS_RE.sub("", s)
+    # 7. Collapse whitespace
     s = _WS_RE.sub(" ", s).strip()
-    # 7. Collapse whitespace around hyphens
+    # 8. Collapse whitespace around hyphens
     s = _DASH_WS_RE.sub("-", s)
-    # 8. Lowercase
+    # 9. Lowercase
     return s.lower()

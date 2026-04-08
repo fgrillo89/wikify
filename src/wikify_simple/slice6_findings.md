@@ -1,5 +1,68 @@
 # Slice 6 — first real run on mvp20 (20 PDFs)
 
+## 1x run on clean corpus mvp20_v4 — all 3 structural fixes (a3ef62b et al.)
+
+Fresh ingest into `mvp20_v4` (parse-time artifact stripping), fresh
+1x distill into `mvp20_v4_REAL`. Tests three structural fixes:
+- `2e4e579` tolerant quote substring
+- `9131791` parse-time `[NN]` + bracket-wrap strip
+- `a3ef62b` writer tier L → M
+
+| metric | mvp20_v3 (3x) | **mvp20_v4 (1x)** |
+|---|---|---|
+| budget | 150k heq | 50k heq |
+| pages | 215c+21p | 83c+8p |
+| extracts | 74 new + 30 cached | 30 new + 10 cached |
+| writes | 2 | **2** |
+| write cost (each) | 27-69k | **~10-14k** ✓ |
+| M1 | 0.4603 | 0.4918 |
+| M3 g_links Q | 0.7377 | **0.7596** ✓ |
+| g_links edges | 2601 | 419 |
+| figure refs in writes | 2/2 | **2/2 (100%)** ✓ |
+| extract rejections | 5 | 2 |
+
+### What the fixes proved
+
+1. **Parse-time artifact stripping works.** mvp20_v4 chunks have **0**
+   `[NN]` markers and **0** `[token][bracket][wrap]` artifacts (verified
+   by regex scan). The 5/6 quote-substring rejections from the 3x run
+   class are gone.
+2. **Writer tier M works.** Per-write cost dropped from 27-69k → ~10-14k.
+   First write spent 10.4k heq, second 14.3k. ~5x cheaper, exactly as
+   modelled.
+3. **Tolerant quote matcher works** for the bracket/dash/citation/whitespace
+   class. Two NEW residual patterns surfaced (markdown emphasis):
+   - `**Chul-Ho Lee**` (bold author name)
+   - `_in situ_` (italics)
+   Fixed in commit `<this>` by adding `*` and `_` stripping to
+   `text_normalize`.
+
+### What's still broken
+
+**Only 2 writes again.** The tier-M fix is necessary but not sufficient.
+Root cause: the `mixed` strategy schedule allocates only `1 - 0.4 - 0.05 = 55%`
+of budget to extract and 40% to write (5% curate). At 50k total, that's
+20k for writes — at 10-14k each, only 2 writes fit.
+
+Combined with this commit:
+- **Schedule rebalance**: bump `exploit_fraction_initial` from 0.4 →
+  0.65. New share: 30% extract, 65% write, 5% curate. At 50k that's
+  ~32k for writes → ~3 writes per 1x budget. Still not enough — the
+  next slice should re-run at 3x to actually break g_evidence past zero.
+
+**M3 g_evidence still 0** for the same root cause: only 2-3 written
+pages → crosslink filter drops the rest → no doc-evidence edges.
+
+### Next slice
+
+1. Re-run mvp20_v4 distill at **3x budget** with the new schedule
+   (0.65 exploit fraction). Expected: ~10-15 written pages, M3
+   g_evidence breaks zero for the first time.
+2. Implement adaptive reallocation in `distill/pipeline.run` (the
+   schedule's `reallocate` method exists but is never called).
+3. M6 g2_evidence_ok = 0 — investigate why footnote markers don't
+   resolve back to bundle chunks.
+
 ## 3x real-binding run (commit f13f91f + pipeline-skip follow-up)
 
 Full mvp20_v3 distill at `--budget 3x` (150k heq) under `--binding
