@@ -140,14 +140,31 @@ def _write_sidecar(bin_path: Path, payload: dict) -> None:
     side.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _figure_stem(label: str | None, index: int) -> str:
-    """Build a human-readable filename stem from a caption label.
+_LABEL_RE = re.compile(
+    r"^\s*(?P<kind>fig(?:ure)?|table|scheme)\.?\s*(?P<num>\d+)\s*(?P<sub>[a-z])?",
+    re.IGNORECASE,
+)
 
-    Mirrors ``wikify.ingest.extract.media._make_figure_filename``.
+
+def _figure_stem(label: str | None, index: int) -> str:
+    """Build a clean human-readable filename stem from a caption label.
+
+    Normalises ``"Fig. 1"`` / ``"figure 1a"`` / ``"Table 2"`` to
+    ``Figure_01``, ``Figure_01a``, ``Table_02``. Falls back to
+    ``fig_{index:03d}`` when no label is present and to a sanitised
+    version of the raw label when the regex does not match (e.g. an
+    unusual caption convention).
     """
     if label:
+        m = _LABEL_RE.match(label)
+        if m:
+            kind = m.group("kind").lower()
+            kind = "Figure" if kind.startswith("fig") else kind.capitalize()
+            num = int(m.group("num"))
+            sub = (m.group("sub") or "").lower()
+            return f"{kind}_{num:02d}{sub}"
         safe = re.sub(r"[^\w.-]", "_", label)
-        safe = re.sub(r"_+", "_", safe).strip("_")
+        safe = re.sub(r"_+", "_", safe).strip("_.")
         if safe:
             return safe
     return f"fig_{index:03d}"

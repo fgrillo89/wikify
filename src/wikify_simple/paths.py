@@ -38,6 +38,10 @@ class CorpusPaths:
     def topics_path(self) -> Path:
         return self.root / "topics.json"
 
+    @property
+    def images_index_path(self) -> Path:
+        return self.root / "images.json"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)

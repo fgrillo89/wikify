@@ -19,6 +19,7 @@ from ..store.corpus import (
     write_graph,
     write_vector_store,
 )
+from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from .chunker import chunk_document
 from .corpus_graph import build_corpus_graph
@@ -44,12 +45,15 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
         chunks += caption_chunks_for(doc_id, parsed.images, ord_offset=len(chunks))
 
         markdown_path = str(paths.markdown_dir / f"{doc_id}.md")
-        # Image folder uses the legacy clean-slug convention (no hash
-        # suffix, capped at 80 chars) so on-disk paths stay well under
-        # the Windows MAX_PATH limit. doc_id (with hash) is still the
-        # corpus index key; image_dir is just a human-friendly bucket.
+        # Image folder uses a clean human-readable slug (word-bounded,
+        # no hash, ≤80 chars) so on-disk paths stay well under Windows
+        # MAX_PATH and are easy to inspect. doc_id (with hash) remains
+        # the corpus index key; image_dir is the bucket on disk.
         image_slug = _image_slug(src)
         image_dir_path = paths.images_dir / image_slug
+        # Store as absolute path so read_doc_images works regardless of
+        # the caller's cwd. Corpora are not relocatable today; if that
+        # changes, swap to a path relative to corpus root.
         image_dir = str(image_dir_path)
 
         raw_images = parsed.metadata.pop("_raw_images", None)
@@ -93,6 +97,12 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
     vocab = extract_topics(docs_chunks_pairs, declared_per_doc=declared)
     write_topics(paths.topics_path, vocab)
 
+    # Build the per-corpus image index from the sidecars just written.
+    # Source-of-truth remains the sidecars; this is a single-file
+    # projection the wiki/distill side reads to look up figures by
+    # caption label or doc.
+    build_images_index(paths, doc_ids=[d.id for d in docs])
+
     return paths
 
 
@@ -109,19 +119,21 @@ def _doc_id_for(path: Path) -> str:
 
 
 def _image_slug(path: Path) -> str:
-    """Filesystem-safe folder name from a paper filename (legacy convention).
+    """Filesystem-safe folder name from a paper filename.
 
-    Mirrors ``wikify.ingest.extract.media._make_paper_slug``: drop
-    bracket/punctuation noise, collapse whitespace to underscores, cap
-    at 80 chars. Folder collisions across two papers with identical
-    80-char prefixes are vanishingly rare in practice; if they ever
-    occur the sidecar JSONs (which carry the original ``id`` keyed by
-    full doc_id) still disambiguate them.
+    Drops bracket/punctuation noise, collapses whitespace to underscores,
+    and truncates at a word boundary so the folder never ends mid-word
+    (``..._Computing_Applicat``). Capped at 80 chars to stay well under
+    Windows MAX_PATH. The doc_id (with content hash) remains the corpus
+    index key; this is the human-friendly bucket on disk.
     """
     stem = path.stem
     slug = re.sub(r"[^\w\s-]", "", stem)
     slug = re.sub(r"\s+", "_", slug).strip("_")
-    return slug[:80] or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+    if len(slug) <= 80:
+        return slug or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+    cut = slug[:80].rsplit("_", 1)[0]
+    return cut or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
 
 
 def _sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
