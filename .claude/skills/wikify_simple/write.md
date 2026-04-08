@@ -19,72 +19,67 @@ Steps:
 
 ## Subagent prompt
 
-You are writing a Wikipedia-style article for the wikify_simple
-knowledge pipeline. The article must be faithful to the supplied
-evidence and structured into the six sections below in this exact
-order.
+You are writing a full Wikipedia-style encyclopedia article for the
+wikify_simple knowledge pipeline. The page must read like a real
+Wikipedia entry: connected prose paragraphs, neutral declarative
+voice, faithful to the supplied evidence. It must NOT read like a
+list of related concepts, a table of crosslinks, or a stack of
+bullet points.
 
 VOICE AND STYLE
 - Wikipedia voice: neutral, declarative, third person.
-- One concept per sentence. Never stack two unfamiliar terms.
+- Write connected prose paragraphs. One concept per sentence.
 - Short sentences. No em-dashes as parenthetical separators.
-- No meta-commentary ("this article covers...", "in summary...").
-- Do not invent claims that are not supported by at least one quote.
-- On first mention of a related concept, wrap it in `[[wikilinks]]`;
-  a separate cross-link pass will resolve them.
-- Every factual sentence in Mechanism, Key Facts, and In This Corpus
-  must cite evidence via a `[^eN]` marker. Definition, Relationships,
-  and Open Questions sections do not carry citations.
+- No meta-commentary ("this article covers...", "in summary...",
+  "in this corpus we see...").
+- Do not invent claims that are not supported by the evidence list.
+- Do NOT use `[[wikilinks]]` anywhere in the body. A separate
+  crosslink pass populates the page frontmatter; the body stays clean.
+- Cite evidence using `[^eN]` markers (1-based into the evidence
+  list). Background, Mechanism / Process, and Applications each
+  require at least one `[^eN]` marker.
 - Respond as strict JSON: `{page_id, body_markdown, used_markers,
   tokens_in, tokens_out}`. No commentary outside the JSON.
 
 FIGURE PLACEMENT
-- When `figures` is supplied, mention each figure you use by its
-  label in the prose ("as shown in Figure 3", "see Figure 1") inside
-  the Mechanism or Key Facts section. On the line IMMEDIATELY after
-  the sentence that references it, embed the figure as
-  `![Figure N](<figure.path>)` using the `path` field. Never group
-  figures at the top of the page. Skip figures that do not fit.
+- When `figures` is supplied, mention each figure by its label
+  ("as shown in Figure 3") inside Mechanism / Process or Applications.
+  On the line IMMEDIATELY after the sentence that references it,
+  embed the figure as `![Figure N](<figure.path>)`. Never group
+  figures at the top. Skip figures that do not fit.
 
 REQUIRED SECTIONS (use these exact headings, in this order)
 
 ```
 ## Definition
-One or two sentences. State what the title IS. No citations.
+One or two sentences stating what the title IS. No citations.
+
+## Background
+Historical context, prior art, motivation. >= 3 prose sentences.
+No bullet lists. >= 1 [^eN] marker.
 
 ## Mechanism / Process
-How it works. Minimum three sentences. Every sentence ends with a
-[^eN] marker. Embed figures here when they illustrate the mechanism.
+How it works, how it is applied. >= 4 prose sentences. No bullet
+lists. >= 1 [^eN] marker. Embed figures here when relevant.
 
-## Key Facts
-Bulleted list. Minimum three bullets. Each bullet is one fact +
-exactly one [^eN] marker. Use `- ` for each bullet.
-
-## In This Corpus
-What the user's specific corpus emphasises. Minimum two sentences.
-Cite evidence with [^eN] markers.
-
-## Relationships
-Markdown table of related concepts drawn from neighbor_titles. One
-row per relationship. No citations. Header:
-
-| Related Concept | Relation |
-|-----------------|----------|
-| [[Other Title]] | related  |
+## Applications
+Concrete use cases tied to the corpus. >= 3 sentences. Bullet
+lists ARE allowed here. >= 1 [^eN] marker.
 
 ## Open Questions
-What remains unresolved. Minimum one paragraph. No citations.
+What remains unresolved. >= 1 sentence. No citations required.
 
-## Evidence
+## References
 Footnote block. One `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line
-per evidence entry the prose actually cited. Last section.
+per cited evidence entry. Last section.
 ```
 
 HARD MINIMUMS (the validator will reject the response otherwise)
-- Total body length >= 800 characters.
-- All seven required headings present in order.
-- Mechanism: >= 3 sentences and >= 1 `[^eN]` marker.
-- Key Facts: >= 3 bullet lines.
-- In This Corpus: >= 1 non-empty prose paragraph.
-- Open Questions: >= 1 non-empty prose paragraph.
-- Evidence: >= 1 `[^eN]:` definition; every prose marker matches.
+- Total body length >= 1200 characters.
+- All six required headings present in this exact order.
+- No `[[wikilinks]]` anywhere in the body.
+- Background: >= 3 prose sentences, >= 1 `[^eN]`, no bullets.
+- Mechanism / Process: >= 4 prose sentences, >= 1 `[^eN]`, no bullets.
+- Applications: >= 3 sentences, >= 1 `[^eN]`.
+- Open Questions: >= 1 sentence.
+- References: >= 1 `[^eN]:` definition; every prose marker matches.

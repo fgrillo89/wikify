@@ -173,13 +173,22 @@ class FakeWriter(Writer):
         title = request.title
         m1 = used[0]
         m_last = used[-1]
-        # Mechanism: >=3 sentences, all with markers. Optionally include
-        # an inline figure embed with adjacent textual mention.
+        # Background: >=3 prose sentences, no bullets, >=1 marker.
+        background = (
+            f"{title} has been studied across the supplied corpus over multiple "
+            f"sources[^{m1}]. Early reports framed it as a topic of interest for "
+            f"the broader community covered by the cited evidence[^{m_last}]. "
+            f"Subsequent work expanded the scope to additional contexts that the "
+            f"fake writer does not interpret in detail[^{m1}]. The motivation "
+            f"behind the topic is captured by the supplied evidence list."
+        )
+        # Mechanism: >=4 prose sentences, no bullets, >=1 marker.
         mech_lines: list[str] = [
             f"{title} operates through a sequence of well-defined steps grounded "
             f"in the supplied evidence[^{m1}].",
             f"Each step is documented in the cited corpus chunks listed below[^{m_last}].",
             f"The mechanism is reproducible across the sources reviewed for this article[^{m1}].",
+            f"The fake writer renders these sentences without invoking a model[^{m_last}].",
         ]
         if request.figures:
             fig_path = request.figures[0].path or "images/fig1.png"
@@ -188,22 +197,14 @@ class FakeWriter(Writer):
             )
             mech_lines.append(f"![Figure 1]({fig_path})")
         mechanism = "\n\n".join(mech_lines)
-        # Key Facts: >=3 bullets with markers.
-        facts = "\n".join(
-            [
-                f"- {title} is documented in the supplied corpus chunks[^{m1}].",
-                f"- Each citation in this section traces to a verbatim quote[^{m_last}].",
-                f"- The fake writer produces a structurally valid stub for tests[^{m1}].",
-            ]
+        # Applications: >=3 sentences, >=1 marker. Bullets allowed here.
+        applications = (
+            f"{title} is applied across the cases described in the cited "
+            f"chunks[^{m1}]. Practitioners reference it in the contexts "
+            f"surfaced by the supplied evidence list[^{m_last}]. The fake "
+            f"writer does not enumerate specific deployments beyond the "
+            f"structural placeholder text."
         )
-        # Relationships: header + one row per neighbor (or empty if none).
-        rel_rows = [
-            "| Related Concept | Relation |",
-            "|-----------------|----------|",
-        ]
-        for nbr in request.neighbor_titles[:3]:
-            rel_rows.append(f"| [[{nbr}]] | related |")
-        relationships = "\n".join(rel_rows)
         evidence_block_lines = [
             f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
             for marker, ev in zip(used, request.evidence, strict=False)
@@ -214,20 +215,16 @@ class FakeWriter(Writer):
             f"## Definition\n\n"
             f"{title} is a placeholder concept rendered by the fake writer "
             f"for structural validation. It is not real prose.\n\n"
+            f"## Background\n\n"
+            f"{background}\n\n"
             f"## Mechanism / Process\n\n"
             f"{mechanism}\n\n"
-            f"## Key Facts\n\n"
-            f"{facts}\n\n"
-            f"## In This Corpus\n\n"
-            f"The corpus references {title} across the cited chunks listed in the "
-            f"evidence section[^{m1}]. The fake writer surfaces these citations "
-            f"directly from the supplied evidence list[^{m_last}].\n\n"
-            f"## Relationships\n\n"
-            f"{relationships}\n\n"
+            f"## Applications\n\n"
+            f"{applications}\n\n"
             f"## Open Questions\n\n"
             f"The fake writer does not assess open questions; this stub exists "
             f"only to satisfy the structural validator.\n\n"
-            f"## Evidence\n\n"
+            f"## References\n\n"
             f"{evidence_block}\n"
         )
         wall = time.monotonic() - t0

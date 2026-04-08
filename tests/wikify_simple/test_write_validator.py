@@ -3,8 +3,9 @@
 The validator enforces the full Wikipedia-style six-section layout
 produced by ``prompts/write_v1.yaml``: every required heading must be
 present in order, with per-section minimums (sentence/bullet counts),
-an 800-char body floor, the original figure-mention rule, and matched
-``[^eN]`` markers between prose and the evidence block.
+a 1200-char body floor, the figure-mention rule, no `[[wikilinks]]`
+in prose, and matched ``[^eN]`` markers between prose and the
+references block.
 """
 
 from __future__ import annotations
@@ -37,43 +38,54 @@ def _wiki_body(
         "Atomic layer deposition is a vapor-phase thin-film growth "
         "technique used to build conformal coatings."
     ),
+    background: str | None = None,
     mechanism_sentences: list[str] | None = None,
-    facts: list[str] | None = None,
-    in_corpus: str | None = None,
-    relationships: str | None = None,
+    applications: str | None = None,
     open_questions: str | None = None,
-    evidence_lines: list[str] | None = None,
+    references_lines: list[str] | None = None,
 ) -> str:
+    if background is None:
+        background = (
+            "Atomic layer deposition emerged from work on molecular layer "
+            "epitaxy in the 1970s and was refined for industrial use over "
+            "subsequent decades[^e1]. Early reports framed it as a route "
+            "to conformal coatings on complex geometries[^e2]. The "
+            "technique gained traction across semiconductor manufacturing "
+            "and catalysis research over the following years[^e1]. "
+            "Researchers refined precursor chemistry and reactor designs "
+            "in parallel, expanding the available process window across "
+            "many materials systems and substrate geometries[^e2]. "
+            "The technique now anchors a broad area of thin-film "
+            "engineering activity reflected throughout the corpus[^e1]. "
+            "Reviews of the field cover precursor inventories, reactor "
+            "designs, and growth-rate measurements across decades of "
+            "published process work that this article summarises[^e2]."
+        )
     if mechanism_sentences is None:
         mechanism_sentences = [
             "ALD proceeds through self-limiting half-reactions[^e1].",
             "Each half-reaction saturates the surface before the next pulse[^e2].",
             "The cycle is repeated to grow films one atomic layer at a time[^e1].",
+            "Growth rates therefore depend on cycle count rather than exposure time[^e2].",
         ]
-    if facts is None:
-        facts = [
-            "- ALD produces conformal films on high-aspect-ratio structures[^e1].",
-            "- Growth rates are typically below one Angstrom per cycle[^e2].",
-            "- Process temperatures span roughly 50 to 400 C[^e1].",
-        ]
-    if in_corpus is None:
-        in_corpus = (
-            "The corpus emphasises ALD as a route to ultrathin films "
-            "for memristor and neuromorphic devices[^e1]. "
-            "Multiple sources discuss the cycle saturation criterion[^e2]."
-        )
-    if relationships is None:
-        relationships = (
-            "| Related Concept | Relation |\n"
-            "|-----------------|----------|\n"
-            "| [[Memristor]]   | related  |\n"
+    if applications is None:
+        applications = (
+            "ALD is used to coat high-aspect-ratio structures in memory "
+            "and logic devices[^e1]. It also enables conformal catalyst "
+            "layers in heterogeneous catalysis[^e2]. Recent corpus "
+            "sources discuss its role in neuromorphic memristor "
+            "fabrication[^e1]. Industrial deployments span semiconductor "
+            "fabs, photovoltaics, and protective barrier coatings on polymer "
+            "substrates across multiple decades of process engineering "
+            "work[^e2]. The technique continues to spread into new materials "
+            "systems as new precursor chemistries are reported[^e1]."
         )
     if open_questions is None:
         open_questions = (
             "The corpus does not address how ALD scales to wafer-level memristor manufacturing."
         )
-    if evidence_lines is None:
-        evidence_lines = [
+    if references_lines is None:
+        references_lines = [
             '[^e1]: chunk_a (doc1) > "ALD self-limiting reaction"',
             '[^e2]: chunk_b (doc2) > "saturation criterion"',
         ]
@@ -81,18 +93,16 @@ def _wiki_body(
         "# Atomic Layer Deposition\n\n"
         "## Definition\n\n"
         f"{definition}\n\n"
+        "## Background\n\n"
+        f"{background}\n\n"
         "## Mechanism / Process\n\n"
         + "\n\n".join(mechanism_sentences)
-        + "\n\n## Key Facts\n\n"
-        + "\n".join(facts)
-        + "\n\n## In This Corpus\n\n"
-        + in_corpus
-        + "\n\n## Relationships\n\n"
-        + relationships
+        + "\n\n## Applications\n\n"
+        + applications
         + "\n\n## Open Questions\n\n"
         + open_questions
-        + "\n\n## Evidence\n\n"
-        + "\n".join(evidence_lines)
+        + "\n\n## References\n\n"
+        + "\n".join(references_lines)
         + "\n"
     )
 
@@ -113,20 +123,22 @@ def _mk(body: str) -> WriteResponse:
 def test_valid_full_wiki_body_accepted() -> None:
     resp = _mk(_wiki_body())
     assert "## Definition" in resp.body_markdown
-    assert "## Open Questions" in resp.body_markdown
+    assert "## Background" in resp.body_markdown
+    assert "## Applications" in resp.body_markdown
+    assert "## References" in resp.body_markdown
 
 
 # ---- length floor --------------------------------------------------------
 
 
-def test_body_under_800_chars_rejected() -> None:
+def test_body_under_1200_chars_rejected() -> None:
     short = (
-        "## Definition\n\nx\n\n## Mechanism\n\na[^e1]. b[^e1]. c[^e1].\n\n"
-        "## Key Facts\n\n- a[^e1]\n- b[^e1]\n- c[^e1]\n\n"
-        "## In This Corpus\n\nx[^e1]\n\n## Relationships\n\n| a | b |\n\n"
-        "## Open Questions\n\nx\n\n## Evidence\n\n[^e1]: q (d)\n"
+        "## Definition\n\nx\n\n## Background\n\na[^e1]. b[^e1]. c[^e1].\n\n"
+        "## Mechanism\n\na[^e1]. b[^e1]. c[^e1]. d[^e1].\n\n"
+        "## Applications\n\na[^e1]. b[^e1]. c[^e1].\n\n"
+        "## Open Questions\n\nx\n\n## References\n\n[^e1]: q (d)\n"
     )
-    with pytest.raises(ValidationError, match="800"):
+    with pytest.raises(ValidationError, match="1200"):
         _mk(short)
 
 
@@ -139,35 +151,94 @@ def test_missing_definition_rejected() -> None:
         _mk(body)
 
 
+def test_missing_background_rejected() -> None:
+    body = _wiki_body().replace("## Background", "## Bg")
+    with pytest.raises(ValidationError, match="Background"):
+        _mk(body)
+
+
+def test_missing_mechanism_rejected() -> None:
+    body = _wiki_body().replace("## Mechanism / Process", "## Mech")
+    with pytest.raises(ValidationError, match="Mechanism"):
+        _mk(body)
+
+
+def test_missing_applications_rejected() -> None:
+    body = _wiki_body().replace("## Applications", "## Uses")
+    with pytest.raises(ValidationError, match="Applications"):
+        _mk(body)
+
+
 def test_missing_open_questions_rejected() -> None:
     body = _wiki_body().replace("## Open Questions", "## Other Stuff")
     with pytest.raises(ValidationError, match="Open Questions"):
         _mk(body)
 
 
-def test_missing_evidence_heading_rejected() -> None:
-    body = _wiki_body().replace("## Evidence", "## NotEvidence")
-    with pytest.raises(ValidationError, match="Evidence"):
+def test_missing_references_rejected() -> None:
+    body = _wiki_body().replace("## References", "## NotReferences")
+    with pytest.raises(ValidationError, match="References"):
         _mk(body)
 
 
 # ---- per-section minimums ------------------------------------------------
 
 
-def test_mechanism_with_one_sentence_rejected() -> None:
-    body = _wiki_body(mechanism_sentences=["ALD is a deposition technique[^e1]."])
-    with pytest.raises(ValidationError, match="Mechanism.*3 sentences"):
+def test_background_with_one_sentence_rejected() -> None:
+    body = _wiki_body(background="ALD is old[^e1].")
+    with pytest.raises(ValidationError, match="Background.*3 prose sentences"):
         _mk(body)
 
 
-def test_key_facts_with_two_bullets_rejected() -> None:
+def test_background_with_bullets_rejected() -> None:
     body = _wiki_body(
-        facts=[
-            "- ALD is conformal[^e1].",
-            "- ALD has slow growth rates[^e2].",
+        background=(
+            "- ALD started in the 1970s[^e1].\n"
+            "- It went industrial later[^e2].\n"
+            "- It is widespread now[^e1]."
+        )
+    )
+    with pytest.raises(ValidationError, match="Background.*no bullet"):
+        _mk(body)
+
+
+def test_mechanism_with_three_sentences_rejected() -> None:
+    body = _wiki_body(
+        mechanism_sentences=[
+            "ALD is self-limiting[^e1].",
+            "It saturates the surface[^e2].",
+            "It repeats[^e1].",
         ]
     )
-    with pytest.raises(ValidationError, match="Key Facts.*3"):
+    with pytest.raises(ValidationError, match="Mechanism.*4 prose sentences"):
+        _mk(body)
+
+
+def test_mechanism_with_bullets_rejected() -> None:
+    body = _wiki_body(
+        mechanism_sentences=[
+            "- ALD is self-limiting[^e1].",
+            "- It saturates the surface[^e2].",
+            "- It repeats[^e1].",
+            "- It grows monolayers[^e2].",
+        ]
+    )
+    with pytest.raises(ValidationError, match="Mechanism.*no bullet"):
+        _mk(body)
+
+
+def test_applications_too_short_rejected() -> None:
+    body = _wiki_body(applications="ALD is used somewhere[^e1].")
+    with pytest.raises(ValidationError, match="Applications.*3 sentences"):
+        _mk(body)
+
+
+# ---- wikilinks rejection -------------------------------------------------
+
+
+def test_body_with_wikilink_rejected() -> None:
+    body = _wiki_body().replace("ALD", "[[ALD]]", 1)
+    with pytest.raises(ValidationError, match="wikilink"):
         _mk(body)
 
 
@@ -180,6 +251,7 @@ def test_unmatched_prose_marker_rejected() -> None:
             "ALD proceeds through self-limiting half-reactions[^e1].",
             "Each half-reaction saturates the surface[^e2].",
             "The cycle repeats forever[^e9].",
+            "Growth scales with cycle count[^e1].",
         ]
     )
     with pytest.raises(ValidationError, match="e9"):
@@ -193,6 +265,7 @@ def test_figure_with_adjacent_mention_accepted() -> None:
     mech = [
         "ALD proceeds through self-limiting half-reactions[^e1].",
         "Each half-reaction saturates the surface[^e2].",
+        "Growth scales with cycle count[^e1].",
         (
             "As shown in Figure 3, the cycle is reproducible[^e1].\n"
             "![Figure 3](images/doc1/fig3.png)"
@@ -206,6 +279,7 @@ def test_figure_without_adjacent_mention_rejected() -> None:
     mech = [
         "ALD proceeds through self-limiting half-reactions[^e1].",
         "Each half-reaction saturates the surface[^e2].",
+        "Growth scales with cycle count[^e1].",
         "The cycle is reproducible[^e1].\n![Figure 3](images/doc1/fig3.png)",
     ]
     with pytest.raises(ValidationError, match="Figure 3"):
@@ -249,7 +323,6 @@ def test_fake_writer_minimal_evidence_passes_validator(tmp_path: Path) -> None:
     meter = _meter(tmp_path)
     fw = FakeWriter(meter)
     resp = fw.write(_request(n_evidence=1))
-    # round-trip through the validator
     WriteResponse.model_validate(resp.model_dump())
 
 
@@ -264,9 +337,9 @@ def test_fake_writer_with_figures_passes_validator(tmp_path: Path) -> None:
     assert "![Figure 1]" in resp.body_markdown
 
 
-def test_fake_writer_with_neighbors_passes_validator(tmp_path: Path) -> None:
+def test_fake_writer_output_has_no_wikilinks(tmp_path: Path) -> None:
     meter = _meter(tmp_path)
     fw = FakeWriter(meter)
     resp = fw.write(_request(n_evidence=2, neighbors=["A", "B", "C"]))
     WriteResponse.model_validate(resp.model_dump())
-    assert "[[A]]" in resp.body_markdown
+    assert "[[" not in resp.body_markdown
