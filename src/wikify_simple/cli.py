@@ -173,5 +173,117 @@ def query(
     typer.echo(f"answer written to {out_path}")
 
 
+@app.command("eval")
+def eval_bundle(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    corpus_dir: Path = typer.Option(..., "--corpus"),
+    report: Path | None = typer.Option(None, "--report"),
+) -> None:
+    """Compute M1/M3/M5/M6 metrics for a bundle and write a report."""
+    from .eval import metrics
+    from .eval.bundle import load_bundle
+    from .infra.embedding import embedder_for
+    from .store.corpus import all_chunks
+    from .store.vectors import load_vectors
+    from .store.vectors_meta import read_meta
+
+    corpus = CorpusPaths(root=corpus_dir)
+    bundle = load_bundle(bundle_dir)
+
+    vs = load_vectors(corpus.vectors_path)
+    meta = read_meta(corpus.vectors_path)
+    if meta is None:
+        raise typer.BadParameter(
+            f"no vectors.meta.json next to {corpus.vectors_path}; reingest the corpus"
+        )
+    embed = embedder_for(meta.backend, meta.model)
+
+    chunks = all_chunks(corpus)
+    chunks_by_id = {c.id: c for c in chunks}
+
+    m1 = metrics.coverage_residual(bundle, vs.matrix, embed)
+    m3_evidence = metrics.spectral_gap_modularity(bundle)
+    m3_links = metrics.g_links_modularity(bundle)
+    m5 = metrics.hit_rate(bundle)
+    g = metrics.grounding(
+        bundle, lambda cid: chunks_by_id[cid].text if cid in chunks_by_id else None
+    )
+
+    report_path = report or (bundle_dir / "_metrics.md")
+    json_path = report_path.with_suffix(".json")
+
+    payload = {
+        "bundle": str(bundle_dir),
+        "corpus": str(corpus_dir),
+        "embedder": {"backend": meta.backend, "dim": meta.dim, "model": meta.model},
+        "M1_coverage_residual": m1,
+        "M3_g_evidence": m3_evidence,
+        "M3_g_links": m3_links,
+        "M5_hit_rate": m5,
+        "M6_grounding": {
+            "g1_anchoring": g.g1_anchoring,
+            "g2_evidence_ok": g.g2_evidence_ok,
+            "n_sentences": g.n_sentences,
+            "n_markers": g.n_markers,
+            "passes": g.passes,
+        },
+    }
+
+    md_lines = [
+        f"# Metrics — {bundle_dir.name}",
+        "",
+        f"corpus: `{corpus_dir}`  ",
+        f"embedder: `{meta.backend}` (dim={meta.dim}, model={meta.model})",
+        "",
+        "## M1 — coverage residual",
+        f"value: **{m1:.4f}** (lower is better)",
+        "",
+        "## M3 — g_evidence (modularity / spectral gap)",
+        f"- modularity: {m3_evidence['modularity']:.4f}",
+        f"- spectral_gap: {m3_evidence['spectral_gap']:.4f}",
+        f"- n_nodes: {int(m3_evidence['n_nodes'])}",
+        f"- n_edges: {int(m3_evidence['n_edges'])}",
+        "",
+        "## M3 — g_links (link-graph modularity)",
+        f"- modularity: {m3_links['modularity']:.4f}",
+        f"- spectral_gap: {m3_links['spectral_gap']:.4f}",
+        f"- n_nodes: {int(m3_links['n_nodes'])}",
+        f"- n_edges: {int(m3_links['n_edges'])}",
+        "",
+        "## M5 — hit rate",
+        f"value: **{m5}**",
+        "",
+        "## M6 — grounding",
+        f"- g1_anchoring: {g.g1_anchoring:.4f}",
+        f"- g2_evidence_ok: {g.g2_evidence_ok:.4f}",
+        f"- n_sentences: {g.n_sentences}",
+        f"- n_markers: {g.n_markers}",
+        f"- passes: {g.passes}",
+        "",
+    ]
+    _atomic_write_text(report_path, "\n".join(md_lines))
+    _atomic_write_text(json_path, json.dumps(payload, indent=2))
+    typer.echo(
+        f"M1={m1:.3f} M3_evid_Q={m3_evidence['modularity']:.3f} "
+        f"M5={m5} G1={g.g1_anchoring:.3f} -> {report_path}"
+    )
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".eval-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 if __name__ == "__main__":
     app()
