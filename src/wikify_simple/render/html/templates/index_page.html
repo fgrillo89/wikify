@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="wiki-article">
+  <h1>Welcome to {{ wiki_name }}</h1>
+  <div class="main-page-banner">
+    <p>A wiki bundle with <strong>{{ stats.total_articles }}</strong> articles
+    ({{ stats.total_concepts }} concepts, {{ stats.total_people }} people).</p>
+  </div>
+  {% if concepts %}
+  <div class="main-page-section">
+    <h2>Concepts</h2>
+    <ul class="article-list">
+      {% for c in concepts %}
+      <li><a href="{{ root }}{{ c.url }}">{{ c.title }}</a>
+        {% if c.n_evidence %}<span class="count-badge">({{ c.n_evidence }} ev)</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if people %}
+  <div class="main-page-section">
+    <h2>People</h2>
+    <ul class="article-list">
+      {% for p in people %}
+      <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</article>
+{% endblock %}

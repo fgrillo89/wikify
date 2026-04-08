@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en" data-root="{{ root }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} - {{ wiki_name }}</title>
+  <link rel="stylesheet" href="{{ root }}static/wiki.css">
+</head>
+<body>
+  <div class="wiki-header">
+    <button class="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
+    <a href="{{ root }}index.html" class="wiki-logo">{{ wiki_name }}</a>
+    <div class="wiki-search">
+      <input type="text" id="search-input" placeholder="Search wiki..." autocomplete="off">
+      <div id="search-results" class="search-results"></div>
+    </div>
+  </div>
+  <div class="wiki-container">
+    <nav class="wiki-sidebar" id="wiki-sidebar">
+      {% include "sidebar.html" %}
+    </nav>
+    <main class="wiki-content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ root }}static/search.js"></script>
+  <script>
+    var tgl = document.querySelector('.sidebar-toggle');
+    if (tgl) tgl.addEventListener('click', function() {
+      document.getElementById('wiki-sidebar').classList.toggle('sidebar-open');
+    });
+  </script>
+</body>
+</html>

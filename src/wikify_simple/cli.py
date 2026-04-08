@@ -179,8 +179,8 @@ def html(
     out_dir: Path | None = typer.Option(None, "--out"),
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
 ) -> None:
-    """Render a wiki bundle to a static HTML site via mkdocs-material."""
-    from .render.mkdocs import build_site
+    """Render a wiki bundle to a static HTML site (legacy renderer port)."""
+    from .render.html import build_site
 
     bundle = BundlePaths(root=bundle_dir)
     target = out_dir if out_dir is not None else (bundle_dir / "_html")

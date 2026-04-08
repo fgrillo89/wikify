@@ -80,7 +80,5 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.7.6",
     "ruff>=0.15.8",
 ]

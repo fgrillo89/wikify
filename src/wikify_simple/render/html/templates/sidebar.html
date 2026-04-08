@@ -1,0 +1,24 @@
+<div class="sidebar-section">
+  <h3>Navigation</h3>
+  <ul>
+    <li><a href="{{ root }}index.html">Main page</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <h3>Statistics</h3>
+  <ul>
+    <li>{{ stats.total_articles }} articles</li>
+    <li>{{ stats.total_concepts }} concepts</li>
+    <li>{{ stats.total_people }} people</li>
+  </ul>
+</div>
+{% if concepts %}
+<div class="sidebar-section">
+  <h3>Concepts</h3>
+  <ul>
+    {% for c in concepts[:30] %}
+    <li><a href="{{ root }}{{ c.url }}">{{ c.title }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
