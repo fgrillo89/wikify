@@ -50,7 +50,7 @@ from ..store.wiki_index import build_index
 from .canonicalize import Candidate, canonicalize
 from .crosslink import crosslink
 from .sampler import Sampler, SamplerState
-from .schedule import Schedule
+from .schedule import BudgetSplit, Schedule
 
 EXTRACT_PROMPT = load_prompt("wikify_simple/extract/v1").name
 WRITE_PROMPT = load_prompt("wikify_simple/write/v1").name
@@ -99,6 +99,8 @@ def run(
 
     candidates: list[Candidate] = []
     chunks_read: list[str] = []
+    extract_completed_normally = False
+    split_initial = split
 
     # ---- extract loop ---------------------------------------------------
     try:
@@ -139,8 +141,27 @@ def run(
                 # valid local-walk seed for similarity_walk samplers.
                 if resp.concepts:
                     state.pages_concept_evidence_chunks.append(cid)
+        extract_completed_normally = True
     except BudgetExceeded:
         pass
+
+    # ---- adaptive reallocation -----------------------------------------
+    # Static schedules return the same split (no-op); adaptive may shift
+    # the remaining budget toward write when novelty drops below the
+    # configured threshold.
+    novelty_rate: float = 0.0
+    if extract_completed_normally and chunks_read:
+        unique_titles = {_normalize_title(c.concept.title) for c in candidates}
+        novelty_rate = len(unique_titles) / len(chunks_read)
+        remaining = max(budget_haiku_eq - meter.spent_haiku_eq, 0.0)
+        new_split = strategy.schedule.reallocate(remaining=remaining, novelty_rate=novelty_rate)
+        # Rebase: keep already-spent extract budget pinned, add the
+        # reallocated extract/write/curate slices on top.
+        split = BudgetSplit(
+            extract_haiku_eq=meter.spent_haiku_eq + new_split.extract_haiku_eq,
+            write_haiku_eq=new_split.write_haiku_eq,
+            curate_haiku_eq=new_split.curate_haiku_eq,
+        )
 
     # ---- canonicalize ---------------------------------------------------
     pages: list[WikiPage] = canonicalize(candidates, existing=existing_pages)
@@ -222,7 +243,22 @@ def run(
     snapshot["n_cached_skipped"] = hits_delta
     snapshot["n_new_extracted"] = misses_delta
     snapshot["feed"] = bool(feed)
+    snapshot["split_initial"] = {
+        "extract_haiku_eq": split_initial.extract_haiku_eq,
+        "write_haiku_eq": split_initial.write_haiku_eq,
+        "curate_haiku_eq": split_initial.curate_haiku_eq,
+    }
+    snapshot["split_reallocated"] = {
+        "extract_haiku_eq": split.extract_haiku_eq,
+        "write_haiku_eq": split.write_haiku_eq,
+        "curate_haiku_eq": split.curate_haiku_eq,
+    }
+    snapshot["novelty_rate_at_reallocation"] = novelty_rate
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+
+
+def _normalize_title(t: str) -> str:
+    return " ".join(t.lower().split())
 
 
 # --- sampler state -------------------------------------------------------
