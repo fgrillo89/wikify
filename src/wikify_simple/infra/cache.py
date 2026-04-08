@@ -37,7 +37,11 @@ class ExtractCacheKey:
     chunk_id: str
 
     def relpath(self) -> Path:
-        return Path(self.model_id) / self.prompt_hash / f"{self.chunk_id}.json"
+        # Hash the chunk_id so path length stays bounded on Windows (MAX_PATH
+        # = 260). Chunk ids can include long doc filenames + offsets and blow
+        # past that otherwise.
+        chunk_key = hashlib.sha256(self.chunk_id.encode("utf-8")).hexdigest()[:24]
+        return Path(self.model_id) / self.prompt_hash / f"{chunk_key}.json"
 
 
 @dataclass(frozen=True)
