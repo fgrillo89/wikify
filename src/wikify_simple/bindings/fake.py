@@ -49,9 +49,14 @@ class FakeExtractor(Extractor):
         )
         t0 = time.monotonic()
 
+        # Figures/images add meaningful prompt bulk: account for that
+        # here so cache cost and meter cost both reflect payload size.
+        image_tokens = 40 * len(request.images_for_doc)
+        tokens_in_est = 200 + image_tokens
+
         def compute() -> CachedExtract:
             payload = _fake_extract_payload(request)
-            return CachedExtract(payload=payload, tokens_in=200, tokens_out=80)
+            return CachedExtract(payload=payload, tokens_in=tokens_in_est, tokens_out=80)
 
         entry, was_hit = self._cache.get_or_extract(key, compute)
         wall = time.monotonic() - t0
@@ -151,21 +156,37 @@ class FakeWriter(Writer):
 
     def write(self, request: WriteRequest) -> WriteResponse:
         t0 = time.monotonic()
-        used: list[str] = []
-        sentences: list[str] = []
-        for i, ev in enumerate(request.evidence, start=1):
-            marker = f"e{i}"
-            used.append(marker)
-            sentences.append(f"{request.title} is described in the source corpus[^{marker}].")
-        body = (
-            " ".join(sentences) if sentences else (f"{request.title} is documented in this corpus.")
-        )
+        if not request.evidence:
+            raise ValueError(
+                f"FakeWriter.write: {request.page_id} has no evidence; "
+                "canonicalize is expected to filter unsupported pages."
+            )
+        used: list[str] = [f"e{i}" for i in range(1, len(request.evidence) + 1)]
+        # Minimal valid body: >=2 non-blank prose lines each carrying an
+        # evidence marker, followed by an `## Evidence` block the
+        # WriteResponse validator accepts.
+        prose_lines = [
+            f"{request.title} appears in the ingested corpus with supporting quotes[^{used[0]}].",
+            f"The concept is grounded in the cited chunks below[^{used[-1]}].",
+        ]
+        prose = "\n\n".join(prose_lines)
+        evidence_block_lines = [
+            f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
+            for marker, ev in zip(used, request.evidence, strict=False)
+        ]
+        evidence_block = "\n".join(evidence_block_lines)
+        body = f"{prose}\n\n## Evidence\n\n{evidence_block}\n"
         wall = time.monotonic() - t0
+        # Writer tokens scale with figures payload: each figure adds ~50
+        # tokens of caption + id + path to the prompt.
+        figures_tokens = 50 * len(request.figures)
+        tokens_in = 300 + figures_tokens
+        tokens_out = 120
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,
-            input_tokens=300,
-            output_tokens=120,
+            input_tokens=tokens_in,
+            output_tokens=tokens_out,
             context_cap=total_context() - response_reserve(),
             wall_seconds=wall,
             cache_hit=False,
@@ -175,8 +196,8 @@ class FakeWriter(Writer):
             page_id=request.page_id,
             body_markdown=body,
             used_markers=used,
-            tokens_in=300,
-            tokens_out=120,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
         )
 
 

@@ -25,33 +25,49 @@ from pathlib import Path
 from .role import Role
 
 # --- pricing model -------------------------------------------------------
+#
+# Cost is token-based. Haiku is normalised to (input=1.0, output=1.0) per
+# token in haiku-equivalent units. Larger tiers multiply those rates. Each
+# tier also pays a fixed per-call overhead that captures skill-dispatch
+# latency (prompt boilerplate, subagent spin-up, tool round-trips) that
+# does not vanish just because a prompt is short.
+#
+# Constants (haiku-equivalent):
+#   - per-token rates:
+#       S:  input=1.0   output=1.0     (baseline haiku-like)
+#       M:  input=12.0  output=15.0    (sonnet-like)
+#       L:  input=60.0  output=75.0    (opus-like)
+#   - per-call overhead:
+#       S:   50 heq
+#       M:  200 heq
+#       L:  500 heq
+#
+# These numbers are deliberate ballparks: they preserve the pre-existing
+# rankings (L >> M >> S) while ensuring that payload size -- including
+# writer figures and extractor images -- drives the cost a call accrues.
 
 
 @dataclass(frozen=True)
 class TierPrice:
-    """Per-million-token price in haiku-equivalent units.
-
-    Haiku is normalised to (input=1.0, output=1.0). Sonnet, opus and any
-    other tier are expressed as multipliers. Edit one config file when
-    real prices change; the study reports cost in haiku-equivalent so
-    rankings remain stable across pricing changes.
-    """
+    """Per-token price + per-call overhead in haiku-equivalent units."""
 
     name: str
     input_per_m: float
     output_per_m: float
+    fixed_overhead: float = 0.0
 
     def haiku_eq(self, tokens_in: int, tokens_out: int) -> float:
-        return (
+        token_cost = (
             tokens_in * self.input_per_m / 1_000_000.0
             + tokens_out * self.output_per_m / 1_000_000.0
         ) * 1_000_000.0  # back to "haiku-equivalent tokens"
+        return token_cost + self.fixed_overhead
 
 
 _DEFAULT_TIERS: dict[str, TierPrice] = {
-    "S": TierPrice(name="S", input_per_m=1.0, output_per_m=1.0),
-    "M": TierPrice(name="M", input_per_m=12.0, output_per_m=15.0),
-    "L": TierPrice(name="L", input_per_m=60.0, output_per_m=75.0),
+    "S": TierPrice(name="S", input_per_m=1.0, output_per_m=1.0, fixed_overhead=50.0),
+    "M": TierPrice(name="M", input_per_m=12.0, output_per_m=15.0, fixed_overhead=200.0),
+    "L": TierPrice(name="L", input_per_m=60.0, output_per_m=75.0, fixed_overhead=500.0),
 }
 
 
