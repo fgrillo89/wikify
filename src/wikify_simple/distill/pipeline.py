@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from ..agents.protocols import Extractor, Writer
 from ..agents.schema import (
     ExtractRequest,
+    ImageRef,
     WriteEvidenceRef,
     WriteRequest,
 )
@@ -40,6 +41,7 @@ from ..store.corpus import (
     read_graph,
     read_vector_store,
 )
+from ..store.images_index import ImageIndex, ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from .canonicalize import Candidate, canonicalize
@@ -84,6 +86,7 @@ def run(
     chunks = all_chunks(corpus)
     vectors = read_vector_store(corpus)
     graph = read_graph(corpus)
+    images_index = ImageIndex.load(corpus)
 
     state = _build_sampler_state(rng, docs, chunks, graph, vectors)
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
@@ -112,6 +115,7 @@ def run(
                     prompt_template=EXTRACT_PROMPT,
                     model_id=strategy.model_id,
                     tier=strategy.tier_explore,
+                    images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
                 )
                 resp = extractor.extract(req)
                 for concept in resp.concepts:
@@ -142,6 +146,15 @@ def run(
         for page in pages[:max_concepts]:
             if meter.spent_haiku_eq >= write_target:
                 break
+            page_doc_ids = {ev.doc_id for ev in page.evidence}
+            page_figures: list[ImageRef] = []
+            seen_fig_ids: set[str] = set()
+            for did in sorted(page_doc_ids):
+                for rec in images_index.for_doc(did):
+                    if rec.id in seen_fig_ids:
+                        continue
+                    seen_fig_ids.add(rec.id)
+                    page_figures.append(_to_imageref(rec))
             req = WriteRequest(
                 page_id=page.id,
                 page_kind=page.kind,
@@ -161,6 +174,7 @@ def run(
                 prompt_template=WRITE_PROMPT,
                 model_id=strategy.model_id,
                 tier=strategy.tier_exploit,
+                figures=page_figures,
             )
             resp = writer.write(req)
             page.body_markdown = resp.body_markdown
@@ -264,6 +278,16 @@ def _load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
                 )
             )
     return pages
+
+
+def _to_imageref(rec: ImageRecord) -> ImageRef:
+    return ImageRef(
+        id=rec.id,
+        label=rec.label,
+        caption=rec.caption,
+        page=rec.page,
+        path=rec.path,
+    )
 
 
 def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:

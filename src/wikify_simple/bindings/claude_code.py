@@ -101,6 +101,16 @@ class ClaudeCodeExtractor(Extractor):
                     "prompt_template": request.prompt_template,
                     "tier": request.tier,
                     "model_id": request.model_id,
+                    "images_for_doc": [
+                        {
+                            "id": im.id,
+                            "label": im.label,
+                            "caption": im.caption,
+                            "page": im.page,
+                            "path": im.path,
+                        }
+                        for im in request.images_for_doc
+                    ],
                 },
             )
             raw = _await_response(res_path)
@@ -170,6 +180,16 @@ class ClaudeCodeWriter(Writer):
                 "prompt_template": request.prompt_template,
                 "tier": request.tier,
                 "model_id": request.model_id,
+                "figures": [
+                    {
+                        "id": f.id,
+                        "label": f.label,
+                        "caption": f.caption,
+                        "page": f.page,
+                        "path": f.path,
+                    }
+                    for f in request.figures
+                ],
             },
         )
         t0 = time.monotonic()

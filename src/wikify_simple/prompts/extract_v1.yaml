@@ -7,7 +7,7 @@ input_schema:
   canonical_titles: list[str]
 output_schema:
   chunk_id: str
-  concepts: "list[{title: str, aliases: list[str], kind: concept|person, quote: str}]"
+  concepts: "list[{title: str, aliases: list[str], kind: concept|person, quote: str, evidence_figures: list[str]}]"
   tokens_in: int
   tokens_out: int
 sampler_hint: haiku
@@ -22,10 +22,16 @@ prompt_template: |
   - If a proposed title is already in ``canonical_titles``, reuse it.
   - ``kind`` must be ``concept`` or ``person``.
   - ``quote`` must be a verbatim span from ``chunk_text``.
+  - ``evidence_figures`` is optional. If a concept is visibly tied to one
+    of the figures listed in ``images_for_doc`` (caption mentions the
+    same idea, the chunk references "Figure N", etc.), include the
+    fully-qualified figure ids (e.g. ``"<doc_id>/Figure_01"``). Leave the
+    list empty when no figure is clearly relevant.
   - Respond as strict JSON matching the output schema. No commentary.
 
   chunk_id: {chunk_id}
   canonical_titles: {canonical_titles}
+  images_for_doc: {images_for_doc}
 
   chunk_text:
   ---

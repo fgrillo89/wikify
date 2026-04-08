@@ -16,6 +16,23 @@ _STRICT = ConfigDict(frozen=True, extra="forbid")
 # --- extractor -----------------------------------------------------------
 
 
+class ImageRef(BaseModel):
+    """Lightweight image reference passed to extractors and writers.
+
+    A flat projection of ``store.images_index.ImageRecord`` so the agents
+    layer doesn't take a store dependency. The fully-qualified ``id`` is
+    ``"<doc_id>/<stem>"`` and is the canonical handle for citation.
+    """
+
+    model_config = _STRICT
+
+    id: str
+    label: str | None = None
+    caption: str = ""
+    page: int | None = None
+    path: str = ""
+
+
 class ExtractRequest(BaseModel):
     model_config = _STRICT
 
@@ -25,6 +42,7 @@ class ExtractRequest(BaseModel):
     prompt_template: str  # used by the cache key
     model_id: str
     tier: str  # "S" | "M" | "L"
+    images_for_doc: list[ImageRef] = Field(default_factory=list)
 
 
 class ExtractedConcept(BaseModel):
@@ -34,6 +52,7 @@ class ExtractedConcept(BaseModel):
     aliases: list[str]
     kind: Literal["concept", "person"]
     quote: str
+    evidence_figures: list[str] = Field(default_factory=list)
 
 
 class ExtractResponse(BaseModel):
@@ -70,6 +89,7 @@ class WriteRequest(BaseModel):
     prompt_template: str
     model_id: str
     tier: str
+    figures: list[ImageRef] = Field(default_factory=list)
 
 
 class WriteResponse(BaseModel):
