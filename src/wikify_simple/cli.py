@@ -41,6 +41,11 @@ def distill(
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_dir: Path = typer.Option(Path("data/wikis"), "--out"),
     cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
+    feed: bool = typer.Option(
+        False,
+        "--feed",
+        help="Incremental mode: reuse --out as an existing bundle and merge",
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
     if strategy not in STRATEGIES:
@@ -52,10 +57,15 @@ def distill(
     else:
         budget_haiku_eq = float(budget)
 
-    run_id = (
-        f"{strategy}_{budget}_seed{seed}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-    )
-    bundle = BundlePaths(root=out_dir / run_id)
+    if feed:
+        # Reuse the supplied out_dir *as* the bundle dir. No timestamp suffix.
+        run_id = f"{strategy}_{budget}_seed{seed}_feed"
+        bundle = BundlePaths(root=out_dir)
+    else:
+        run_id = (
+            f"{strategy}_{budget}_seed{seed}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        )
+        bundle = BundlePaths(root=out_dir / run_id)
     bundle.ensure()
 
     cache = ExtractCache(root=cache_dir)
@@ -76,8 +86,18 @@ def distill(
         writer=writer,
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
+        feed=feed,
     )
-    typer.echo(f"bundle written to {bundle.root}")
+    snap_path = bundle.run_path
+    if snap_path.exists():
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+        typer.echo(
+            f"bundle written to {bundle.root} "
+            f"(n_cached_skipped={snap.get('n_cached_skipped', 0)}, "
+            f"n_new_extracted={snap.get('n_new_extracted', 0)}, feed={feed})"
+        )
+    else:
+        typer.echo(f"bundle written to {bundle.root}")
 
 
 def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):

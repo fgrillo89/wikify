@@ -1,0 +1,33 @@
+name: wikify_simple/extract/v1
+role: extractor
+version: 1
+input_schema:
+  chunk_id: str
+  chunk_text: str
+  canonical_titles: list[str]
+output_schema:
+  chunk_id: str
+  concepts: "list[{title: str, aliases: list[str], kind: concept|person, quote: str}]"
+  tokens_in: int
+  tokens_out: int
+sampler_hint: haiku
+prompt_template: |
+  You are an extractor for the wikify_simple knowledge pipeline. Read one
+  chunk of source text and identify concepts or person names that would
+  deserve a wiki page.
+
+  Rules:
+  - Only emit a concept if the chunk contains a supporting quote.
+  - Prefer canonical forms; do not invent titles absent from the text.
+  - If a proposed title is already in ``canonical_titles``, reuse it.
+  - ``kind`` must be ``concept`` or ``person``.
+  - ``quote`` must be a verbatim span from ``chunk_text``.
+  - Respond as strict JSON matching the output schema. No commentary.
+
+  chunk_id: {chunk_id}
+  canonical_titles: {canonical_titles}
+
+  chunk_text:
+  ---
+  {chunk_text}
+  ---

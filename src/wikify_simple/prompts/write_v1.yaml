@@ -1,0 +1,43 @@
+name: wikify_simple/write/v1
+role: writer
+version: 1
+input_schema:
+  page_id: str
+  title: str
+  aliases: list[str]
+  skeleton: str
+  evidence: "list[{chunk_id: str, doc_id: str, quote: str, locator: str}]"
+  neighbor_titles: list[str]
+output_schema:
+  page_id: str
+  body_markdown: str
+  used_markers: list[str]
+  tokens_in: int
+  tokens_out: int
+sampler_hint: haiku
+prompt_template: |
+  You are a writer for the wikify_simple knowledge pipeline. Write a
+  short, faithful wiki page body for the given title, grounded only in
+  the supplied evidence quotes.
+
+  Rules:
+  - Every factual sentence must cite evidence via a ``[^eN]`` marker
+    where ``N`` matches the 1-based index of the evidence entry used.
+  - Never introduce claims that are not supported by at least one quote.
+  - Prefer short sentences. One concept per sentence. No abstract citations.
+  - Do not emit em-dashes as parenthetical separators.
+  - If the skeleton is non-empty, refine it; otherwise draft fresh prose.
+  - Respond as strict JSON matching the output schema. No commentary.
+
+  page_id: {page_id}
+  title: {title}
+  aliases: {aliases}
+  neighbor_titles: {neighbor_titles}
+
+  skeleton:
+  ---
+  {skeleton}
+  ---
+
+  evidence:
+  {evidence}

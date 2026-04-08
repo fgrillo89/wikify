@@ -31,7 +31,9 @@ from ..agents.schema import (
 )
 from ..infra.cost_meter import BudgetExceeded, CostMeter
 from ..models import Chunk, Document, WikiPage
+from ..models import Evidence as PageEvidence
 from ..paths import BundlePaths, CorpusPaths
+from ..prompts import load_prompt
 from ..store.corpus import (
     all_chunks,
     list_documents,
@@ -45,8 +47,8 @@ from .crosslink import crosslink
 from .sampler import Sampler, SamplerState
 from .schedule import Schedule
 
-EXTRACT_PROMPT = "wikify_simple/extract/v1"
-WRITE_PROMPT = "wikify_simple/write/v1"
+EXTRACT_PROMPT = load_prompt("wikify_simple/extract/v1").name
+WRITE_PROMPT = load_prompt("wikify_simple/write/v1").name
 
 
 @dataclass
@@ -71,8 +73,12 @@ def run(
     budget_haiku_eq: float,
     extract_batch_size: int = 4,
     max_concepts: int = 60,
+    feed: bool = False,
 ) -> None:
     bundle.ensure()
+    existing_pages: list[WikiPage] = _load_existing_pages(bundle) if feed else []
+    cache_hits_start = getattr(getattr(extractor, "_cache", None), "hits", 0)
+    cache_misses_start = getattr(getattr(extractor, "_cache", None), "misses", 0)
     rng = random.Random(strategy.seed)
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
@@ -124,7 +130,7 @@ def run(
         pass
 
     # ---- canonicalize ---------------------------------------------------
-    pages: list[WikiPage] = canonicalize(candidates, existing=[])
+    pages: list[WikiPage] = canonicalize(candidates, existing=existing_pages)
     # update sampler state with the chunks now in the wiki
     for p in pages:
         for ev in p.evidence:
@@ -182,6 +188,12 @@ def run(
     snapshot["strategy"] = strategy.name
     snapshot["seed"] = strategy.seed
     snapshot["budget_target_haiku_eq"] = budget_haiku_eq
+    cache = getattr(extractor, "_cache", None)
+    hits_delta = (cache.hits - cache_hits_start) if cache is not None else 0
+    misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
+    snapshot["n_cached_skipped"] = hits_delta
+    snapshot["n_new_extracted"] = misses_delta
+    snapshot["feed"] = bool(feed)
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
 
 
@@ -210,6 +222,48 @@ def _build_sampler_state(
         abstract_chunk_by_doc=abstract_by_doc,
         pagerank_doc=pagerank,
     )
+
+
+def _load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
+    """Load prior wiki pages from a bundle dir as ``WikiPage`` objects.
+
+    Used by ``--feed`` so canonicalize can merge new candidates into the
+    existing alias map instead of starting from scratch.
+    """
+    from ..eval.bundle import _parse_page
+
+    pages: list[WikiPage] = []
+    for sub in ("concepts", "people"):
+        d = bundle.root / sub
+        if not d.exists():
+            continue
+        for f in sorted(d.glob("*.md")):
+            try:
+                parsed = _parse_page(f)
+            except Exception:
+                continue
+            evidence = [
+                PageEvidence(
+                    marker=ev.marker,
+                    chunk_id=ev.chunk_id,
+                    doc_id=ev.doc_id,
+                    quote=ev.quote,
+                    locator=ev.locator,
+                )
+                for ev in parsed.evidence
+            ]
+            pages.append(
+                WikiPage(
+                    id=parsed.id,
+                    kind=parsed.kind,
+                    title=parsed.title,
+                    aliases=list(parsed.aliases),
+                    body_markdown=parsed.body_clean,
+                    evidence=evidence,
+                    links=list(parsed.links),
+                )
+            )
+    return pages
 
 
 def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:

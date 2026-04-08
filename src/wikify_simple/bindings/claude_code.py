@@ -30,10 +30,6 @@ from ..agents.schema import (
     QueryResponse,
     WriteRequest,
     WriteResponse,
-    validate_extract_response,
-    validate_orch_action,
-    validate_query_response,
-    validate_write_response,
 )
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from ..infra.cost_meter import CostMeter
@@ -73,11 +69,11 @@ def _await_response(res: Path) -> dict:
     raise TimeoutError(f"no response at {res}")
 
 
-def _retry_validate(parser, raw: dict):
+def _retry_validate(model_cls, raw: dict):
     try:
-        return parser(raw)
+        return model_cls.model_validate(raw)
     except Exception:
-        return parser(raw)  # one retry, then propagate
+        return model_cls.model_validate(raw)  # one retry, then propagate
 
 
 # --- extractor -----------------------------------------------------------
@@ -108,7 +104,7 @@ class ClaudeCodeExtractor(Extractor):
                 },
             )
             raw = _await_response(res_path)
-            response = _retry_validate(validate_extract_response, raw)
+            response = _retry_validate(ExtractResponse, raw)
             return CachedExtract(
                 payload={
                     "chunk_id": response.chunk_id,
@@ -178,7 +174,7 @@ class ClaudeCodeWriter(Writer):
         )
         t0 = time.monotonic()
         raw = _await_response(res_path)
-        response = _retry_validate(validate_write_response, raw)
+        response = _retry_validate(WriteResponse, raw)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,
@@ -211,7 +207,7 @@ class ClaudeCodeOrchestrator(Orchestrator):
         )
         t0 = time.monotonic()
         raw = _await_response(res_path)
-        action = _retry_validate(validate_orch_action, raw)
+        action = _retry_validate(OrchAction, raw)
         self._meter.record(
             role=Role.ORCHESTRATOR,
             tier="L",
@@ -255,7 +251,7 @@ class ClaudeCodeQuerier(Querier):
         )
         t0 = time.monotonic()
         raw = _await_response(res_path)
-        response = _retry_validate(validate_query_response, raw)
+        response = _retry_validate(QueryResponse, raw)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,

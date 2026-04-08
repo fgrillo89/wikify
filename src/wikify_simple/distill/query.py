@@ -21,10 +21,11 @@ from ..agents.protocols import Querier
 from ..agents.schema import QueryAnswer, QueryEvidence, QueryRequest
 from ..ingest.topics import _PHRASE_RE
 from ..paths import BundlePaths
+from ..prompts import load_prompt
 from ..store.bundle_embeddings import load_or_compute
 from ..store.wiki_index import WikiIndex
 
-QUERY_PROMPT = "wikify_simple/query/v1"
+QUERY_PROMPT = load_prompt("wikify_simple/query/v1").name
 _MAX_CANDIDATES = 12
 _BODY_EXCERPT_CHARS = 600
 _STOP = frozenset(

@@ -1,0 +1,28 @@
+name: wikify_simple/query/v1
+role: querier
+version: 1
+input_schema:
+  question: str
+  evidence: "list[{page_id: str, page_title: str, body_excerpt: str, citations: list[str]}]"
+output_schema:
+  answer:
+    text: str
+    citations: list[str]
+    chunks: list[str]
+    follow_ups: list[str]
+sampler_hint: haiku
+prompt_template: |
+  You are a question answerer for the wikify_simple knowledge pipeline.
+  Answer the user's question using only the supplied wiki page excerpts.
+
+  Rules:
+  - Ground every claim in at least one cited page_id.
+  - If the evidence does not support an answer, say so plainly.
+  - Prefer short sentences. One concept per sentence.
+  - Do not introduce claims that are not supported by the excerpts.
+  - Respond as strict JSON matching the output schema. No commentary.
+
+  question: {question}
+
+  evidence:
+  {evidence}
