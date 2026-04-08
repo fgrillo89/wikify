@@ -121,15 +121,92 @@ def _parse_frontmatter(fm: str) -> dict:
 
 # --- evidence + body extraction ------------------------------------------
 
-_EVIDENCE_LINE_RE = re.compile(
-    r"""
-    ^\[\^(?P<marker>[^\]]+)\]:\s*       # [^e1]:
-    (?P<chunk>\S+)\s*                   # chunk_abc12
-    \((?P<doc>[^,)]+)(?:,\s*(?P<loc>[^)]+))?\)\s*   # (doc_xyz, p.3)
-    >\s*"(?P<quote>.*)"\s*$             # > "quote"
-    """,
-    re.VERBOSE,
-)
+# Evidence lines are structurally:
+#
+#     [^MARKER]: <chunk_id> (<doc_id>[, <locator>]) > "<quote>"
+#
+# chunk_id and doc_id can contain spaces, brackets, and punctuation
+# (real corpora use human-readable stems like "[2018 Yang] Paper_hash__c0069").
+# So we anchor on the stable parts:
+#   - "[^...]: " at the start (marker),
+#   - ' > "' as the separator before the quote,
+#   - a trailing quote that closes the evidence value.
+# Between marker and ' > "' lives "<chunk_id> (<doc_id>[, locator])". We take
+# the LAST " (" before the final ") " as the chunk/doc boundary, and the LAST
+# ")" before ' > "' closes the doc parens. Quotes may be straight or curly.
+_MARKER_PREFIX_RE = re.compile(r"^\[\^(?P<marker>[^\]]+)\]:\s*(?P<rest>.*)$", re.DOTALL)
+_QUOTE_CHARS = "\"\u201c\u201d\u2018\u2019'"
+
+
+def _normalize_quotes(s: str) -> str:
+    return (
+        s.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+
+
+def _parse_evidence_value(rest: str) -> tuple[str, str, str, str] | None:
+    """Parse the post-marker text into (chunk_id, doc_id, locator, quote).
+
+    ``rest`` is everything after ``[^e1]: `` on the evidence line (possibly
+    continued across following lines if the quote spans multiple lines).
+    """
+    rest = _normalize_quotes(rest).strip()
+    # Find the ' > "' separator (tolerant of whitespace around '>').
+    sep_match = re.search(r'\s>\s*"', rest)
+    if not sep_match:
+        return None
+    head = rest[: sep_match.start()].strip()
+    tail = rest[sep_match.end() :]
+    # Quote is everything up to the final '"' in tail; collapse internal
+    # whitespace/newlines to single spaces so multi-line quotes become one.
+    close = tail.rfind('"')
+    if close == -1:
+        quote = tail
+    else:
+        quote = tail[:close]
+    quote = " ".join(quote.split())
+
+    # head = "<chunk_id> (<doc_id>[, locator])". Find the last ") " / ")" end
+    # then the matching " (" opener at the same nesting level.
+    if not head.endswith(")"):
+        return None
+    # Find matching "(" for the final ")". chunk_id may itself contain
+    # parens in rare cases, so scan right-to-left with a depth counter.
+    depth = 0
+    open_idx = -1
+    for i in range(len(head) - 1, -1, -1):
+        c = head[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                open_idx = i
+                break
+    if open_idx <= 0:
+        return None
+    chunk_id = head[:open_idx].strip()
+    inner = head[open_idx + 1 : -1].strip()
+    if not chunk_id or not inner:
+        return None
+    # Split locator off the END of inner if it looks like " p.3", " slide 4",
+    # " fig. 2", etc. We only split on the LAST comma and only if the right
+    # side matches a short locator pattern; doc titles can contain commas.
+    locator = ""
+    doc_id = inner
+    last_comma = inner.rfind(",")
+    if last_comma != -1:
+        candidate = inner[last_comma + 1 :].strip()
+        if re.match(
+            r"^(p\.?\s*\d|pp\.?\s*\d|slide\s*\d|fig\.?\s*\d|sec\.?\s*\d)", candidate, re.IGNORECASE
+        ):
+            doc_id = inner[:last_comma].strip()
+            locator = candidate
+    return chunk_id, doc_id, locator, quote
+
 
 _H2_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
@@ -150,20 +227,54 @@ def _split_h2_sections(body: str) -> list[tuple[str, str]]:
 
 
 def _extract_evidence(body: str) -> list[Evidence]:
+    """Parse ``[^eN]: <chunk> (<doc>[, loc]) > "<quote>"`` lines.
+
+    Tolerates: chunk_ids/doc_ids containing spaces, brackets, and commas;
+    curly quotes; extra whitespace; and quotes that span multiple lines.
+    """
     out: list[Evidence] = []
-    for line in body.splitlines():
-        m = _EVIDENCE_LINE_RE.match(line.strip())
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _MARKER_PREFIX_RE.match(line.strip())
         if not m:
+            i += 1
             continue
-        out.append(
-            Evidence(
-                marker=m.group("marker"),
-                chunk_id=m.group("chunk"),
-                doc_id=m.group("doc").strip(),
-                quote=m.group("quote"),
-                locator=(m.group("loc") or "").strip(),
+        marker = m.group("marker")
+        rest = m.group("rest")
+        # If the quote is not closed on this line, accumulate until we see
+        # another evidence marker, a blank line, or a closing quote.
+        normalized = _normalize_quotes(rest)
+
+        # Quote is "closed" if there is a ' > "' AND a following '"'.
+        def _closed(s: str) -> bool:
+            sep = re.search(r'\s>\s*"', s)
+            if not sep:
+                return False
+            return s.rfind('"') > sep.end() - 1
+
+        j = i
+        while not _closed(normalized) and j + 1 < len(lines):
+            nxt = lines[j + 1]
+            # Stop if the next line starts another evidence marker.
+            if _MARKER_PREFIX_RE.match(nxt.strip()):
+                break
+            normalized += "\n" + _normalize_quotes(nxt)
+            j += 1
+        parsed = _parse_evidence_value(normalized)
+        if parsed is not None:
+            chunk_id, doc_id, locator, quote = parsed
+            out.append(
+                Evidence(
+                    marker=marker,
+                    chunk_id=chunk_id,
+                    doc_id=doc_id,
+                    quote=quote,
+                    locator=locator,
+                )
             )
-        )
+        i = j + 1
     return out
 
 
