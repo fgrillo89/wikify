@@ -257,3 +257,47 @@ def test_quote_not_in_chunk_rejected_by_binding(tmp_path):
     assert requests, "request file must be preserved on rejection"
     responses = list((dispatch_root / "extract").glob("*.response.json"))
     assert responses == [], "response file must be cleaned up even on failure"
+
+
+def test_noisy_quote_accepted_by_binding(tmp_path):
+    """A quote the model legitimately cleaned (stripped [12] citation
+    marker, normalised em-dash, collapsed double spaces) must still be
+    accepted by ``_assert_quotes_in_chunk`` via the tolerant normalizer.
+    """
+    dispatch_root = tmp_path / "dispatch"
+    dispatch_root.mkdir()
+    good_response = {
+        "concepts": [
+            {
+                "title": "Memristor",
+                "aliases": [],
+                "kind": "concept",
+                # citation stripped, em-dash -> hyphen, double space collapsed
+                "quote": "the memristor was first described by chua - a theoretical device",
+                "category": "device",
+                "evidence_figures": [],
+            }
+        ],
+        "tokens_in": 10,
+        "tokens_out": 10,
+    }
+    responder = _SingleResponder(dispatch_root, good_response)
+    responder.start()
+    try:
+        extractor = _make_extractor(tmp_path, dispatch_root)
+        req = ExtractRequest(
+            chunk_id="chunk-noisy",
+            # raw chunk has the [12] marker, em-dash, and a double space
+            chunk_text=(
+                "The memristor [12] was first described  by Chua\u2014a theoretical device."
+            ),
+            canonical_titles=[],
+            prompt_template="wikify_simple/extract/v1",
+            model_id="claude-haiku",
+            tier="S",
+        )
+        # Must NOT raise QuoteNotInChunkError.
+        resp = extractor.extract(req)
+        assert resp.concepts[0].title.lower() == "memristor"
+    finally:
+        responder.stop()

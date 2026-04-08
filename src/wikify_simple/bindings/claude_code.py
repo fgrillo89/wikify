@@ -40,6 +40,7 @@ from ..agents.schema import (
     WriteRequest,
     WriteResponse,
 )
+from ..agents.text_normalize import normalize_for_substring
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from ..infra.cost_meter import CostMeter
 from ..infra.role import Role, response_reserve, total_context
@@ -127,9 +128,11 @@ def _assert_quotes_in_chunk(
     ``QuoteNotInChunkError`` and drop a ``.error.json`` artifact so the
     operator can see which concept the dispatcher hallucinated.
     """
+    normalized_chunk = normalize_for_substring(chunk_text)
     for concept in response.concepts:
         q = concept.quote.strip()
-        if not q or q not in chunk_text:
+        normalized_q = normalize_for_substring(q)
+        if not normalized_q or normalized_q not in normalized_chunk:
             exc = QuoteNotInChunkError(
                 title=concept.title,
                 quote_prefix=q[:60],
