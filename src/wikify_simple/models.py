@@ -81,6 +81,11 @@ class Document:
     n_chunks: int = 0
     n_tokens: int = 0
     citations: list[dict] = field(default_factory=list)
+    # Doc-level edges computed post-embed for the Obsidian-friendly
+    # per-doc markdown export (see store/doc_markdown.py).
+    similar_to: list[str] = field(default_factory=list)
+    cites: list[str] = field(default_factory=list)
+    cites_same: list[str] = field(default_factory=list)
 
 
 @dataclass

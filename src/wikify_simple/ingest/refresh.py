@@ -19,6 +19,7 @@ from ..store.corpus import (
     write_graph,
     write_vector_store,
 )
+from ..store.doc_markdown import write_doc_markdown
 from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from ..store.vectors_meta import VectorsMeta
@@ -27,6 +28,7 @@ from .bibtex import write_corpus_bibtex
 from .chunker import chunk_document
 from .citations import extract_citations
 from .corpus_graph import build_corpus_graph
+from .coupling import compute_coupling
 from .embedder import embed_texts
 from .images import caption_chunks_for, save_doc_images
 from .parsers.registry import parse_file
@@ -41,6 +43,7 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
     all_chunks_list = []
     docs_chunks_pairs = []
     declared: dict[str, list[str]] = {}
+    raw_markdown_by_id: dict[str, str] = {}
 
     for src in sorted(_iter_sources(input_dir)):
         kind, parsed = parse_file(src)
@@ -82,6 +85,7 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
             citations=extract_citations(parsed.markdown, doc_id),
         )
         write_document(paths, doc, parsed.markdown, chunks)
+        raw_markdown_by_id[doc_id] = parsed.markdown
         docs.append(doc)
         all_chunks_list.extend(chunks)
         docs_chunks_pairs.append((doc_id, chunks))
@@ -123,7 +127,102 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
     # Corpus-wide BibTeX library (one entry per Document).
     write_corpus_bibtex(paths, docs)
 
+    # --- doc-level edges: similar_to, cites, cites_same --------------
+    _populate_doc_edges(docs, docs_chunks_pairs, store)
+
+    # Persist updated Document JSON (now with edges) and overwrite the
+    # per-doc markdown with the Obsidian-friendly enriched rendering.
+    import json as _json
+
+    from ..store.corpus import _doc_to_dict  # internal helper reuse
+
+    for doc in docs:
+        (paths.docs_dir / f"{doc.id}.json").write_text(
+            _json.dumps(_doc_to_dict(doc)), encoding="utf-8"
+        )
+        body = raw_markdown_by_id.get(doc.id, "")
+        write_doc_markdown(paths, doc, body)
+
     return paths
+
+
+def _populate_doc_edges(
+    docs: list[Document],
+    docs_chunks_pairs: list[tuple[str, list[Chunk]]],
+    store: VectorStore,
+) -> None:
+    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc."""
+    import numpy as np
+
+    # 1. similar_to: mean-pooled chunk cosine, top-K above 0.7.
+    chunk_by_id = {cid: i for i, cid in enumerate(store.ids)}
+    matrix = store.matrix
+    doc_vecs: dict[str, np.ndarray] = {}
+    for doc_id, chunks in docs_chunks_pairs:
+        rows = [chunk_by_id[c.id] for c in chunks if c.id in chunk_by_id]
+        if not rows or matrix.size == 0:
+            continue
+        mean = matrix[rows].mean(axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm > 0:
+            mean = mean / norm
+        doc_vecs[doc_id] = mean
+
+    doc_ids = list(doc_vecs.keys())
+    if doc_ids:
+        stacked = np.stack([doc_vecs[d] for d in doc_ids], axis=0)
+        sims = stacked @ stacked.T
+        for i, d_id in enumerate(doc_ids):
+            ranked = [
+                (float(sims[i, j]), doc_ids[j])
+                for j in range(len(doc_ids))
+                if j != i and float(sims[i, j]) >= 0.7
+            ]
+            ranked.sort(key=lambda x: (-x[0], x[1]))
+            top = [other for _, other in ranked[:5]]
+            for doc in docs:
+                if doc.id == d_id:
+                    doc.similar_to = top
+                    break
+
+    # 2. cites: resolve each citation to a corpus doc by fuzzy
+    #    (title/authors/year) match.
+    title_to_id: dict[str, str] = {}
+    for doc in docs:
+        key = _normalize_title(doc.title)
+        if key:
+            title_to_id[key] = doc.id
+
+    for doc in docs:
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for cit in doc.citations or []:
+            title = cit.get("title") or ""
+            key = _normalize_title(str(title))
+            if key and key in title_to_id:
+                target = title_to_id[key]
+                if target != doc.id and target not in seen:
+                    seen.add(target)
+                    resolved.append(target)
+        doc.cites = resolved
+
+    # 3. cites_same: bibliographic coupling on shared references.
+    coupling = compute_coupling(docs, min_strength=3, top_k=5)
+    for doc in docs:
+        doc.cites_same = coupling.get(doc.id, [])
+
+
+def _normalize_title(title: str) -> str:
+    """Lowercase alnum-only title fingerprint for fuzzy matching."""
+    s = (title or "").lower()
+    out: list[str] = []
+    for ch in s:
+        if ch.isalnum() or ch == " ":
+            out.append(ch)
+        else:
+            out.append(" ")
+    collapsed = " ".join("".join(out).split())
+    return collapsed
 
 
 def _iter_sources(root: Path):

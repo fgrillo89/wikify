@@ -123,6 +123,9 @@ def _doc_to_dict(doc: Document) -> dict:
         "n_chunks": doc.n_chunks,
         "n_tokens": doc.n_tokens,
         "citations": list(doc.citations or []),
+        "similar_to": list(doc.similar_to or []),
+        "cites": list(doc.cites or []),
+        "cites_same": list(doc.cites_same or []),
     }
 
 
@@ -168,4 +171,7 @@ def _doc_from_dict(d: dict) -> Document:
         n_chunks=d.get("n_chunks", 0),
         n_tokens=d.get("n_tokens", 0),
         citations=list(d.get("citations") or []),
+        similar_to=list(d.get("similar_to") or []),
+        cites=list(d.get("cites") or []),
+        cites_same=list(d.get("cites_same") or []),
     )
