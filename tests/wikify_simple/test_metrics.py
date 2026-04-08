@@ -105,3 +105,31 @@ def test_coverage_residual_requires_embed_or_corpus(loaded_bundle):
     _corpus, bundle = loaded_bundle
     with pytest.raises(EmbedderMismatch):
         coverage_residual(bundle, np.zeros((1, 4), dtype=np.float32))
+
+
+def test_coverage_residual_clamped_on_identical_embeddings(loaded_bundle, monkeypatch):
+    """Regression: residual must not return -1e-8 from float underflow."""
+    import numpy as np
+
+    from wikify_simple.eval import metrics as metrics_mod
+
+    _corpus, bundle = loaded_bundle
+    n_pages = len(bundle.pages)
+    assert n_pages > 0
+    dim = 8
+    vec = np.ones((1, dim), dtype=np.float32)
+    vec /= np.linalg.norm(vec, axis=1, keepdims=True)
+    page_embeds = np.repeat(vec, n_pages, axis=0)
+    ids = [p.id for p in bundle.pages]
+
+    def fake_load_or_compute(_bundle, _pages, _embed):
+        return ids, page_embeds
+
+    monkeypatch.setattr(
+        "wikify_simple.store.bundle_embeddings.load_or_compute",
+        fake_load_or_compute,
+    )
+
+    chunk_embeds = np.repeat(vec, 3, axis=0)  # identical to pages
+    val = metrics_mod.coverage_residual(bundle, chunk_embeds, embed=lambda xs: vec)
+    assert val >= 0.0

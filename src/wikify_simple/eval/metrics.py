@@ -94,7 +94,10 @@ def coverage_residual(
     # cos similarity = X @ Y.T because both are unit-norm
     sims = chunk_embeddings @ page_embeds.T  # (n_chunks, n_pages)
     nearest = sims.max(axis=1)  # (n_chunks,)
-    return float((1.0 - nearest).mean())
+    # Clamp to [0, inf); residual is mathematically >= 0 but float
+    # underflow can produce tiny negatives (e.g. -1e-8) on degenerate
+    # inputs where chunk and page embeddings are bit-identical.
+    return max(float((1.0 - nearest).mean()), 0.0)
 
 
 # =========================================================================
