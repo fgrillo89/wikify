@@ -46,10 +46,13 @@ def distill(
         "--feed",
         help="Incremental mode: reuse --out as an existing bundle and merge",
     ),
-    field: str = typer.Option(
-        "generic",
+    field: str | None = typer.Option(
+        None,
         "--field",
-        help="Field guide to layer into the writer prompt (e.g. materials_science)",
+        help=(
+            "Field guide to layer into the writer prompt. If omitted, "
+            "auto-detected from the corpus topics."
+        ),
     ),
     artifact: str = typer.Option(
         "wiki_concept",
@@ -62,6 +65,11 @@ def distill(
 
     if strategy not in STRATEGIES:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
+    if field is None:
+        from .distill.field_detect import detect_field
+
+        field = detect_field(CorpusPaths(root=corpus_dir))
+        typer.echo(f"auto-detected field: {field}")
     if field not in available_field_guides():
         raise typer.BadParameter(f"unknown field {field!r}; available: {available_field_guides()}")
     if artifact not in available_artifact_templates():
@@ -221,6 +229,22 @@ def query(
     ]
     out_path.write_text("\n".join(fm_lines), encoding="utf-8")
     typer.echo(f"answer written to {out_path}")
+
+
+@app.command("field-detect")
+def field_detect_cmd(
+    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
+) -> None:
+    """Auto-detect the most likely field for a corpus and print the top scores."""
+    from .distill.field_detect import detect_field, detect_field_scores
+
+    corpus = CorpusPaths(root=corpus_dir)
+    chosen = detect_field(corpus)
+    scores = detect_field_scores(corpus)
+    typer.echo(f"field: {chosen}")
+    typer.echo("top scores:")
+    for name, score in scores[:5]:
+        typer.echo(f"  {name}: {score}")
 
 
 @app.command("html")
