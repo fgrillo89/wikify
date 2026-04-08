@@ -13,7 +13,11 @@ never sees a "cache hit" sentinel, the deterministic strategies just
 notice that some chunks are free.
 
 Storage layout:
-    {root}/{model_id}/{prompt_hash}/{chunk_id}.json
+    {root}/{binding_name}/{model_id}/{prompt_hash}/{chunk_id}.json
+
+The ``binding_name`` prefix guarantees that entries produced by one
+binding (for example ``fake``) can never be served to another (for
+example ``claude_code``), even when the other fields collide.
 
 The on-disk format is the JSON-serialised result the compute callable
 returned, plus a small wrapper recording the first-time token cost so
@@ -32,6 +36,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ExtractCacheKey:
+    binding_name: str
     model_id: str
     prompt_hash: str
     chunk_id: str
@@ -39,9 +44,10 @@ class ExtractCacheKey:
     def relpath(self) -> Path:
         # Hash the chunk_id so path length stays bounded on Windows (MAX_PATH
         # = 260). Chunk ids can include long doc filenames + offsets and blow
-        # past that otherwise.
+        # past that otherwise. The ``binding_name`` is the top-level
+        # namespace so cross-binding collisions are impossible.
         chunk_key = hashlib.sha256(self.chunk_id.encode("utf-8")).hexdigest()[:24]
-        return Path(self.model_id) / self.prompt_hash / f"{chunk_key}.json"
+        return Path(self.binding_name) / self.model_id / self.prompt_hash / f"{chunk_key}.json"
 
 
 @dataclass(frozen=True)

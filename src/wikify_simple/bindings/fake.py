@@ -37,12 +37,15 @@ _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]+")
 
 
 class FakeExtractor(Extractor):
+    BINDING_NAME = "fake"
+
     def __init__(self, cache: ExtractCache, meter: CostMeter) -> None:
         self._cache = cache
         self._meter = meter
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
         key = ExtractCacheKey(
+            binding_name=self.BINDING_NAME,
             model_id=request.model_id,
             prompt_hash=prompt_hash(request.prompt_template),
             chunk_id=request.chunk_id,

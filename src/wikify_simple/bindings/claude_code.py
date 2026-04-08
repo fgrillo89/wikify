@@ -98,6 +98,8 @@ def _retry_validate(model_cls, raw: dict):
 
 
 class ClaudeCodeExtractor(Extractor):
+    BINDING_NAME = "claude_code"
+
     def __init__(
         self,
         cache: ExtractCache,
@@ -111,6 +113,7 @@ class ClaudeCodeExtractor(Extractor):
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
         key = ExtractCacheKey(
+            binding_name=self.BINDING_NAME,
             model_id=request.model_id,
             prompt_hash=prompt_hash(request.prompt_template),
             chunk_id=request.chunk_id,
