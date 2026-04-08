@@ -1,0 +1,185 @@
+"""The eight data structures that define wikify_simple.
+
+Everything in the package operates on these. If a piece of code needs a new
+shape, add it here first and justify it in the README.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Literal
+
+DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
+PageKind = Literal["concept", "person"]
+
+
+# --- Corpus side ---------------------------------------------------------
+
+
+@dataclass
+class DocImage:
+    """One image extracted from a document.
+
+    The image file lives at `path`; caption/alt text come from the parser
+    when the source format provides them (figure captions in pdf, alt text
+    in html, slide text near the image in pptx).
+    """
+
+    id: str  # e.g. "{doc_id}/fig_03"
+    path: str  # corpus/images/{doc_id}/fig_03.png
+    caption: str = ""
+    alt_text: str = ""
+    page: int | None = None  # or slide number
+    near_chunk_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DocSection:
+    """A logical section of a document.
+
+    Built from the markdown heading tree at ingest time. `summary` is
+    optional and, when present, is a cheap small-model summary produced
+    once during ingest so that distillation strategies can cheaply peek
+    at sections without re-reading their chunks.
+    """
+
+    path: list[str]  # ["3. Results", "3.2 Photoactivity"]
+    chunk_ids: list[str]
+    summary: str = ""  # optional, pre-computed once
+
+
+@dataclass
+class Document:
+    """A parsed source document.
+
+    A Document is the file-level handle. Its canonical content lives on
+    disk (`markdown_path`, `image_dir`); the fields here are the small
+    structural index built once at ingest and cached in
+    `corpus/docs/{id}.json`.
+
+    Helpers on top of this (see store/files.py) provide:
+        read_markdown(doc) -> str
+        read_chunks(doc)   -> list[Chunk]
+        get_section(doc, path) -> DocSection
+        get_intro(doc)     -> DocSection | None
+        get_abstract(doc)  -> str | None
+        get_images(doc)    -> list[DocImage]
+    """
+
+    id: str
+    source_path: str
+    kind: DocKind
+    title: str
+    metadata: dict  # authors, year, venue, doi, citations, ...
+    markdown_path: str  # corpus/markdown/{id}.md
+    image_dir: str  # corpus/images/{id}/
+    sections: list[DocSection] = field(default_factory=list)
+    images: list[DocImage] = field(default_factory=list)
+    abstract: str = ""  # parsed or summarised, optional
+    tldr: str = ""  # one-paragraph small-model summary, optional
+    n_chunks: int = 0
+    n_tokens: int = 0
+
+
+@dataclass
+class Chunk:
+    id: str
+    doc_id: str
+    ord: int
+    text: str
+    char_span: tuple[int, int]
+    section_path: list[str]
+    # embedding lives in the vector store, keyed by id
+
+
+@dataclass
+class CorpusGraph:
+    """Typed multi-edge graph over Documents and Chunks.
+
+    Edge kinds materialised at ingest time:
+      - "contains"       : doc   -> chunk
+      - "similar_knn"    : chunk <-> chunk (kNN over embeddings, k=10)
+      - "similar_strong" : chunk <-> chunk (cosine >= 0.75; sparse, "real"
+                            similarity, used by walk strategies)
+      - "co_section"     : chunk <-> chunk (same section in same doc)
+      - "cites"          : doc   -> doc (only if citations were parsed)
+      - "doc_similar"    : doc   <-> doc (mean-pooled embedding cosine
+                            >= threshold; the paper-level analogue of
+                            similar_strong, used for cross-document hops)
+
+    The graph is rebuildable from the vector store + chunk metadata, so it
+    is a convenience index, not an independent source of truth.
+    """
+
+    nodes: dict[str, dict]  # id -> {kind: "doc"|"chunk", ...}
+    edges: dict[str, list[tuple[str, str]]]  # edge_kind -> [(src, dst)]
+
+
+# --- Wiki side -----------------------------------------------------------
+
+
+@dataclass
+class Evidence:
+    """Bridge from a claim in a wiki page to a specific corpus chunk.
+
+    Serialised in the page file as a footnote:
+        [^{marker}]: {chunk_id} ({doc_id}, {locator}) > "{quote}"
+    Every factual sentence in WikiPage.body_markdown should reference a
+    marker; every marker must resolve to one Evidence entry.
+    """
+
+    marker: str  # e.g. "e1", matches [^e1] in the body
+    chunk_id: str
+    doc_id: str
+    quote: str
+    locator: str = ""  # optional: "p.3", "slide 4", "sec 2.1"
+
+
+@dataclass
+class WikiPage:
+    """In-memory view of a wiki markdown file.
+
+    The canonical form is the file at wiki/{kind}s/{slug}.md. This dataclass
+    is the parsed view used during distillation; it is never the source of
+    truth on its own.
+    """
+
+    id: str
+    kind: PageKind
+    title: str
+    aliases: list[str]
+    body_markdown: str
+    evidence: list[Evidence]
+    links: list[str] = field(default_factory=list)  # other WikiPage ids
+    provenance: dict = field(default_factory=dict)  # run_id, model, sampled
+
+
+@dataclass
+class WikiGraph:
+    nodes: dict[str, dict]  # page_id -> {kind, title}
+    edges: dict[str, list[tuple[str, str]]]  # links_to / co_evidence / ...
+
+
+# --- Run side ------------------------------------------------------------
+
+
+@dataclass
+class Stage:
+    name: str
+    t_start: datetime
+    t_end: datetime | None = None
+    counters: dict[str, int] = field(default_factory=dict)
+    cost: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class Run:
+    id: str
+    started_at: datetime
+    finished_at: datetime | None
+    config_hash: str
+    stages: list[Stage] = field(default_factory=list)
+    sampled_chunks: list[str] = field(default_factory=list)
+    page_ids: list[str] = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)

@@ -3,6 +3,9 @@
 Runtime-specific guidance for using this repo through Claude Code.
 This file is not the architecture source of truth.
 
+## Communication Style
+Be concise and to the point. Make it simple but not simpler.
+
 ## Read First
 1. `docs/project-status.md` -- current state and priorities
 2. `docs/architecture.md` -- architectural boundaries and system model
