@@ -275,6 +275,13 @@ def spectral_gap_modularity(bundle: Bundle, top_k: int = 10) -> dict[str, float]
     n = W.shape[0]
     if n < 2 or W.sum() == 0:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
+    if n > 150:
+        return {
+            "modularity": float("nan"),
+            "spectral_gap": float("nan"),
+            "n_nodes": float(n),
+            "n_edges": float(int((W > 0).sum() // 2)),
+        }
 
     comms = _greedy_communities(W)
     Q = _modularity(W, comms)
@@ -315,6 +322,16 @@ def g_links_modularity(bundle: Bundle) -> dict:
     n = len(pages)
     if n < 2:
         return {"modularity": 0.0, "spectral_gap": 0.0, "n_nodes": float(n), "n_edges": 0.0}
+    # Greedy modularity is O(n^4); skip on large graphs and report a sentinel
+    # so callers (and the eval CLI) don't hang. Use a real community
+    # detector (networkx/igraph) when this becomes a bottleneck.
+    if n > 150:
+        return {
+            "modularity": float("nan"),
+            "spectral_gap": float("nan"),
+            "n_nodes": float(n),
+            "n_edges": 0.0,
+        }
     id_to_idx = {p.id: i for i, p in enumerate(pages)}
     W = np.zeros((n, n), dtype=float)
     for i, p in enumerate(pages):

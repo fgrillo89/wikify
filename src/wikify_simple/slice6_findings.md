@@ -1,5 +1,109 @@
 # Slice 6 — first real run on mvp20 (20 PDFs)
 
+## Re-run after structural fixes (commit 2ca6423 + follow-up)
+
+Re-ran the full pipeline against `data/papers/mvp20/` with the structural
+fixes from steps 1–3:
+
+- `vectors.meta.json` next to `vectors.npz` (sentence_transformers, 384-d)
+- `wikify-simple eval` first-class CLI verb
+- `ImageIndex` wired into distill (extractor + writer see figures)
+
+### Ingest health (mvp20_v3)
+
+| metric | value |
+|---|---|
+| n_docs | 20 |
+| n_chunks | 689 |
+| vectors_shape | (689, 384) |
+| backend | sentence_transformers (all-MiniLM-L6-v2) |
+| docs_with_empty_sections | 0 |
+| docs_with_none_year | 0 |
+| n_images_total | 164 |
+| n_docs_with_images | 19 of 20 |
+
+Random alias resolution (5 papers): 4 of 5 resolve `Figure 1` to a
+`Figure_01_*` record; 1 paper (1971 Chua, the original memristor paper)
+has no extracted figures, which is expected for that scan.
+
+### Distill (fake binding, 100k haiku_eq)
+
+| | value |
+|---|---|
+| concept pages | 156 |
+| person pages | 52 |
+| total pages | 208 |
+| extractor calls | 92 (25_760 heq) |
+| writer calls | 3 (81_000 heq) |
+| budget used | 106_760 / 100_000 (writer overran by 6.7%) |
+
+### Eval metrics
+
+```
+M1 coverage_residual = 0.5591   (lower is better)
+M3 g_evidence        = {modularity: 0.0, spectral_gap: 0.0,
+                        n_nodes: 208, n_edges: 0}
+M3 g_links           = SKIPPED (n=208 > 150 cap)
+M5 hit_rate          = 0.0
+M6 grounding         = g1=1.0 g2=0.0 n_sent=4 n_mark=4 PASS=False
+```
+
+### Query result
+
+`wikify-simple query "what is a memristor?" --binding fake`:
+
+```
+[fake] question='what is a memristor?' supported by 12 pages
+citations: concept-memristor, concept-analog, concept-computing,
+           person-analog-computing, concept-existing,
+           concept-technologies, person-massachusetts-amherst,
+           concept-built, person-public-release, concept-traditional,
+           concept-computer, person-von-neumann
+```
+
+Output written to `data/queries/M_100000_seed0_20260408T131724/...md`,
+no bundle mutation.
+
+### What the new run resolved
+
+- Issue #2 (embedder dim mismatch): GONE. `vectors.meta.json` records
+  `(sentence_transformers, 384, all-MiniLM-L6-v2)`, and `coverage_residual`
+  reconstructs the matching embedder via `embedder_for(meta.backend,
+  meta.model)`. Dim mismatch now raises `EmbedderMismatch`.
+- Issue #5 (M3_g_links / M5 / M6 not captured): GONE. `wikify-simple
+  eval` is now a first-class verb that writes `_metrics.md` +
+  `_metrics.json` and prints a one-line summary.
+
+### What's still pending (real-binding work)
+
+- Issue #3 (g_evidence empty / writer-budget starvation): UNCHANGED
+  under fake binding. Writer made only 3 calls before the cost meter
+  flagged the budget; 0 pages have evidence after `crosslink` filter.
+  This is the same fake-binding artifact as before — the next run with
+  `--binding claude_code` against a real budget is the first one where
+  M3/M5/M6 will mean anything.
+- Issue #4 (junk concept titles from FakeExtractor): UNCHANGED. Still
+  `concept-thoroughly`, `concept-categorizes`, etc. Real-binding only.
+- New issue: greedy modularity is O(n^4); 208 nodes hung the eval
+  verb. Hot-fixed by skipping `g_links_modularity` and
+  `spectral_gap_modularity` when `n > 150` and reporting NaN. The
+  eval CLI's JSON sidecar now coerces NaN to null. Proper fix:
+  swap in networkx Louvain or igraph when this becomes a real
+  bottleneck (i.e. once a real-binding run produces graphs we
+  actually want to measure on).
+- M6 g2_evidence_ok = 0.0 because `bundle.pages[*].evidence` parses to 0
+  even though the writer wrote markers in body text. Bundle parser
+  finds the markers (M6 sees 4 sentences with markers) but the Evidence
+  block parsing in `eval/bundle._extract_evidence` does not match
+  what the FakeWriter emits — fake writer never appends an `## Evidence`
+  block, so there are no `[^eN]: chunk_id (doc_id) > "..."` lines to
+  resolve against. Real bindings will write evidence blocks; this is
+  another fake-binding-only artifact, not a metric bug.
+
+---
+
+# Original slice 6 — first real run on mvp20 (20 PDFs)
+
 First end-to-end run of `wikify_simple` against a real corpus:
 `data/papers/mvp20/` — 20 memristor/ALD/neuromorphic PDFs.
 
