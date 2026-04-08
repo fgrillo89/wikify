@@ -15,6 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _EVIDENCE_HEADING = "## Evidence"
 _MARKER_RE = re.compile(r"\[\^e\d+\]")
 _EVIDENCE_DEF_RE = re.compile(r"^\[\^e\d+\]:")
+_FIGURE_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+_FIGURE_NUM_IN_ALT_RE = re.compile(r"[Ff]igure\s+(\d+)")
+_FIGURE_MENTION_TEMPLATE = r"(?:figure|fig\.?)\s*{n}\b"
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
 
@@ -190,6 +193,43 @@ class ExtractResponse(BaseModel):
 # --- writer --------------------------------------------------------------
 
 
+def _check_figure_mentions(body: str) -> None:
+    """Enforce: every embedded ``![Figure N](path)`` must be textually
+    referenced on the previous non-blank line.
+
+    The writer is allowed to skip embedding figures, but if it embeds
+    one, the preceding prose must mention ``Figure N`` / ``Fig N`` /
+    ``fig. N`` (case-insensitive). The check looks at the nearest
+    non-blank line above the embed on the same or prior line.
+    """
+    lines = body.splitlines()
+    for idx, line in enumerate(lines):
+        for m in _FIGURE_EMBED_RE.finditer(line):
+            alt = line[m.start() : m.end()]
+            num_match = _FIGURE_NUM_IN_ALT_RE.search(alt)
+            if not num_match:
+                # Not a "Figure N"-style embed; skip (e.g. generic image).
+                continue
+            n = num_match.group(1)
+            mention_re = re.compile(_FIGURE_MENTION_TEMPLATE.format(n=n), re.IGNORECASE)
+            # Candidate mention lines: the portion of the current line
+            # BEFORE the embed, plus the previous non-blank line.
+            before_on_line = line[: m.start()].strip()
+            candidates: list[str] = []
+            if before_on_line:
+                candidates.append(before_on_line)
+            for prev in range(idx - 1, -1, -1):
+                if lines[prev].strip():
+                    candidates.append(lines[prev])
+                    break
+            if not any(mention_re.search(c) for c in candidates):
+                raise ValueError(
+                    f"WriteResponse.body_markdown embeds Figure {n} without a "
+                    f"textual 'Figure {n}' / 'Fig. {n}' mention on the "
+                    f"preceding non-blank line"
+                )
+
+
 class WriteEvidenceRef(BaseModel):
     model_config = _STRICT
 
@@ -255,6 +295,7 @@ class WriteResponse(BaseModel):
             raise ValueError(
                 "WriteResponse.body_markdown `## Evidence` block has no `[^eN]:` definitions"
             )
+        _check_figure_mentions(v)
         return v
 
 

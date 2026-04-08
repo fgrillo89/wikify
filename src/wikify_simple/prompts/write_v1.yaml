@@ -27,9 +27,13 @@ prompt_template: |
   - Prefer short sentences. One concept per sentence. No abstract citations.
   - Do not emit em-dashes as parenthetical separators.
   - If the skeleton is non-empty, refine it; otherwise draft fresh prose.
-  - When the page concerns figures listed in ``figures``, you may embed
-    them as ``![Figure N](path)`` markdown using the ``path`` field. Only
-    reference figures that genuinely support the prose around them.
+  - When the request includes ``figures``, mention each figure you use
+    by its label in the prose ("as shown in Figure 3", "see Figure 1",
+    etc.). On the line IMMEDIATELY AFTER the sentence that references
+    it, embed the figure as ``![Figure N](<figure.path>)`` markdown
+    using the ``path`` field. Do not group multiple figures at the top
+    of the page. Do not embed figures the prose does not reference. You
+    may skip figures that do not fit the prose.
   - Respond as strict JSON matching the output schema. No commentary.
 
   page_id: {page_id}

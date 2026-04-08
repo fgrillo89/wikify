@@ -178,6 +178,13 @@ class FakeWriter(Writer):
             f"The concept is grounded in the cited chunks below[^{used[-1]}].",
         ]
         prose = "\n\n".join(prose_lines)
+        if request.figures:
+            fig_path = request.figures[0].path or "images/fig1.png"
+            prose = (
+                f"{prose}\n\n"
+                f"As shown in Figure 1, the supporting evidence is visible[^{used[0]}].\n"
+                f"![Figure 1]({fig_path})"
+            )
         evidence_block_lines = [
             f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
             for marker, ev in zip(used, request.evidence, strict=False)

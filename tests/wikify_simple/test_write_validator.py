@@ -59,6 +59,51 @@ def test_too_few_prose_lines_rejected():
         _mk(body)
 
 
+_VALID_WITH_FIGURE = (
+    "Atomic layer deposition builds films one half-cycle at a time[^e1].\n\n"
+    "As shown in Figure 3, the growth is self-limiting[^e2].\n"
+    "![Figure 3](images/doc1/fig3.png)\n\n"
+    "## Evidence\n\n"
+    "[^e1]: a quote\n"
+    "[^e2]: another quote\n"
+)
+
+
+def test_figure_with_adjacent_mention_accepted():
+    resp = _mk(_VALID_WITH_FIGURE)
+    assert "Figure 3" in resp.body_markdown
+
+
+def test_figure_without_adjacent_mention_rejected():
+    body = (
+        "Atomic layer deposition builds films[^e1].\n\n"
+        "The concept is grounded in the cited chunks[^e2].\n\n"
+        "![Figure 2](images/doc1/fig2.png)\n\n"
+        "## Evidence\n\n"
+        "[^e1]: q1\n[^e2]: q2\n"
+    )
+    with pytest.raises(ValidationError):
+        _mk(body)
+
+
+def test_no_figure_embed_accepted():
+    # figures present in request but writer chose not to embed any
+    resp = _mk(_VALID_BODY)
+    assert "![" not in resp.body_markdown
+
+
+def test_case_insensitive_figure_mention_accepted():
+    body = (
+        "Atomic layer deposition builds films[^e1].\n\n"
+        "see fig 3 for the growth curve[^e2].\n"
+        "![Figure 3](images/doc1/fig3.png)\n\n"
+        "## Evidence\n\n"
+        "[^e1]: q1\n[^e2]: q2\n"
+    )
+    resp = _mk(body)
+    assert "fig 3" in resp.body_markdown
+
+
 def test_evidence_block_without_definitions_rejected():
     body = (
         "Line one with marker[^e1].\n\n"
