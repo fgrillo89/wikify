@@ -179,3 +179,5 @@ class QueryResponse(BaseModel):
     model_config = _STRICT
 
     answer: QueryAnswer
+    tokens_in: int = 0
+    tokens_out: int = 0

@@ -10,10 +10,16 @@ zero-token and never spawn a subagent.
 Architecturally this file is the *only* place vendor-specific dispatch
 lives. ``scripts/check_no_vendor_imports.py`` enforces that no other file
 references the dispatcher or imports the anthropic SDK.
+
+Dispatch directory resolution:
+  1. explicit ``dispatch_dir`` passed to the binding constructor
+  2. the ``WIKIFY_SIMPLE_DISPATCH_DIR`` environment variable
+  3. ``data/dispatch`` under CWD
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -40,12 +46,18 @@ _POLL_INTERVAL = 0.25
 _REQ_DIR_ENV = "WIKIFY_SIMPLE_DISPATCH_DIR"
 
 
-def _dispatch_dir() -> Path:
+def resolve_dispatch_dir(explicit: Path | str | None = None) -> Path:
+    """Return the dispatch root directory.
+
+    Order: explicit arg > ``WIKIFY_SIMPLE_DISPATCH_DIR`` env var > ``data/dispatch``.
+    """
+    if explicit is not None:
+        return Path(explicit)
     return Path(os.environ.get(_REQ_DIR_ENV, "data/dispatch"))
 
 
-def _write_request(role: str, payload: dict) -> tuple[Path, Path]:
-    base = _dispatch_dir() / role
+def _write_request(dispatch_dir: Path, role: str, payload: dict) -> tuple[Path, Path]:
+    base = dispatch_dir / role
     base.mkdir(parents=True, exist_ok=True)
     rid = uuid.uuid4().hex[:12]
     req = base / f"{rid}.request.json"
@@ -54,8 +66,8 @@ def _write_request(role: str, payload: dict) -> tuple[Path, Path]:
     return req, res
 
 
-def _await_response(res: Path) -> dict:
-    deadline = time.monotonic() + _DISPATCH_TIMEOUT
+def _await_response(res: Path, *, timeout: float = _DISPATCH_TIMEOUT) -> dict:
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if res.exists():
             data = res.read_text(encoding="utf-8")
@@ -69,6 +81,12 @@ def _await_response(res: Path) -> dict:
     raise TimeoutError(f"no response at {res}")
 
 
+def _cleanup(*paths: Path) -> None:
+    for p in paths:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            p.unlink()
+
+
 def _retry_validate(model_cls, raw: dict):
     try:
         return model_cls.model_validate(raw)
@@ -80,9 +98,16 @@ def _retry_validate(model_cls, raw: dict):
 
 
 class ClaudeCodeExtractor(Extractor):
-    def __init__(self, cache: ExtractCache, meter: CostMeter) -> None:
+    def __init__(
+        self,
+        cache: ExtractCache,
+        meter: CostMeter,
+        *,
+        dispatch_dir: Path | str | None = None,
+    ) -> None:
         self._cache = cache
         self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
         key = ExtractCacheKey(
@@ -93,6 +118,7 @@ class ClaudeCodeExtractor(Extractor):
 
         def compute() -> CachedExtract:
             req_path, res_path = _write_request(
+                self._dispatch_dir,
                 "extract",
                 {
                     "chunk_id": request.chunk_id,
@@ -113,8 +139,11 @@ class ClaudeCodeExtractor(Extractor):
                     ],
                 },
             )
-            raw = _await_response(res_path)
-            response = _retry_validate(ExtractResponse, raw)
+            try:
+                raw = _await_response(res_path)
+                response = _retry_validate(ExtractResponse, raw)
+            finally:
+                _cleanup(req_path, res_path)
             return CachedExtract(
                 payload={
                     "chunk_id": response.chunk_id,
@@ -155,11 +184,13 @@ class ClaudeCodeExtractor(Extractor):
 
 
 class ClaudeCodeWriter(Writer):
-    def __init__(self, meter: CostMeter) -> None:
+    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def write(self, request: WriteRequest) -> WriteResponse:
         req_path, res_path = _write_request(
+            self._dispatch_dir,
             "write",
             {
                 "page_id": request.page_id,
@@ -193,8 +224,11 @@ class ClaudeCodeWriter(Writer):
             },
         )
         t0 = time.monotonic()
-        raw = _await_response(res_path)
-        response = _retry_validate(WriteResponse, raw)
+        try:
+            raw = _await_response(res_path)
+            response = _retry_validate(WriteResponse, raw)
+        finally:
+            _cleanup(req_path, res_path)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,
@@ -212,11 +246,13 @@ class ClaudeCodeWriter(Writer):
 
 
 class ClaudeCodeOrchestrator(Orchestrator):
-    def __init__(self, meter: CostMeter) -> None:
+    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def step(self, state: OrchState) -> OrchAction:
         req_path, res_path = _write_request(
+            self._dispatch_dir,
             "orchestrate",
             {
                 "run_id": state.run_id,
@@ -226,8 +262,11 @@ class ClaudeCodeOrchestrator(Orchestrator):
             },
         )
         t0 = time.monotonic()
-        raw = _await_response(res_path)
-        action = _retry_validate(OrchAction, raw)
+        try:
+            raw = _await_response(res_path)
+            action = _retry_validate(OrchAction, raw)
+        finally:
+            _cleanup(req_path, res_path)
         self._meter.record(
             role=Role.ORCHESTRATOR,
             tier="L",
@@ -247,11 +286,13 @@ QUERY_PROMPT = "wikify_simple/query/v1"
 
 
 class ClaudeCodeQuerier(Querier):
-    def __init__(self, meter: CostMeter) -> None:
+    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def answer(self, request: QueryRequest) -> QueryResponse:
         req_path, res_path = _write_request(
+            self._dispatch_dir,
             "query",
             {
                 "question": request.question,
@@ -270,13 +311,18 @@ class ClaudeCodeQuerier(Querier):
             },
         )
         t0 = time.monotonic()
-        raw = _await_response(res_path)
-        response = _retry_validate(QueryResponse, raw)
+        try:
+            raw = _await_response(res_path)
+            response = _retry_validate(QueryResponse, raw)
+            tokens_in = int(raw.get("tokens_in", 0))
+            tokens_out = int(raw.get("tokens_out", 0))
+        finally:
+            _cleanup(req_path, res_path)
         self._meter.record(
             role=Role.WRITER,
             tier=request.tier,
-            input_tokens=int(raw.get("tokens_in", 0)),
-            output_tokens=int(raw.get("tokens_out", 0)),
+            input_tokens=tokens_in,
+            output_tokens=tokens_out,
             context_cap=total_context() - response_reserve(),
             wall_seconds=time.monotonic() - t0,
             cache_hit=False,
