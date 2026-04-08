@@ -21,6 +21,11 @@ import numpy as np
 
 from .bundle import Bundle, Page
 
+
+class EmbedderMismatch(RuntimeError):  # noqa: N818
+    """Raised when an eval embedder cannot match the corpus's vectors."""
+
+
 # A callable that turns a list of strings into an (n, d) numpy array of
 # unit-norm embeddings. The harness does not own embedding; the caller
 # (typically wired to the same model used by the vector store) provides it.
@@ -35,19 +40,55 @@ Embedder = Callable[[Sequence[str]], np.ndarray]
 def coverage_residual(
     bundle: Bundle,
     chunk_embeddings: np.ndarray,  # (n_chunks, d), unit-norm
-    embed: Embedder,
+    embed: Embedder | None = None,
+    *,
+    corpus=None,  # CorpusPaths | None
 ) -> float:
     """M1. Mean residual distance from each corpus chunk to its nearest
     wiki page body.
 
     Lower is better. Range [0, 2]; in practice ~[0.3, 0.9] on real data.
     Returns 1.0 (max meaningful distance) if the bundle has no pages.
+
+    Either ``embed`` or ``corpus`` must be supplied. When ``embed`` is None,
+    the embedder is constructed from ``corpus/vectors.meta.json`` so the
+    page-body embeddings live in the same space as ``chunk_embeddings``.
+    Raises ``EmbedderMismatch`` if the dims don't line up — never silently
+    falls back to a different backend.
     """
     if not bundle.pages:
         return 1.0
+    if embed is None:
+        if corpus is None:
+            raise EmbedderMismatch(
+                "coverage_residual: must supply either an explicit embed callable "
+                "or a CorpusPaths handle so the embedder can be reconstructed"
+            )
+        from ..infra.embedding import embedder_for
+        from ..store.vectors_meta import read_meta
+
+        meta = read_meta(corpus.vectors_path)
+        if meta is None:
+            raise EmbedderMismatch(
+                f"coverage_residual: no vectors.meta.json next to {corpus.vectors_path}; "
+                "cannot determine which embedder built the corpus vectors"
+            )
+        if meta.dim != int(chunk_embeddings.shape[1]):
+            raise EmbedderMismatch(
+                f"coverage_residual: corpus vectors are {chunk_embeddings.shape[1]}-d "
+                f"but vectors.meta.json reports {meta.dim}-d ({meta.backend})"
+            )
+        embed = embedder_for(meta.backend, meta.model)
+
     from ..store.bundle_embeddings import load_or_compute
 
     _ids, page_embeds = load_or_compute(bundle, bundle.pages, embed)
+    if page_embeds.shape[1] != chunk_embeddings.shape[1]:
+        raise EmbedderMismatch(
+            f"coverage_residual: page embeddings are {page_embeds.shape[1]}-d "
+            f"but chunk embeddings are {chunk_embeddings.shape[1]}-d — caller passed "
+            "the wrong embedder for this corpus"
+        )
     # cos similarity = X @ Y.T because both are unit-norm
     sims = chunk_embeddings @ page_embeds.T  # (n_chunks, n_pages)
     nearest = sims.max(axis=1)  # (n_chunks,)

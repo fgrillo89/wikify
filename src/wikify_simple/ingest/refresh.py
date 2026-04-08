@@ -21,6 +21,8 @@ from ..store.corpus import (
 )
 from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
+from ..store.vectors_meta import VectorsMeta
+from ..store.vectors_meta import write_meta as write_vectors_meta
 from .chunker import chunk_document
 from .corpus_graph import build_corpus_graph
 from .embedder import embed_texts
@@ -90,6 +92,18 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
     else:
         store = VectorStore(ids=[], matrix=embed_texts([]))
     write_vector_store(paths, store)
+
+    # Persist embedder backend metadata so eval/query can reconstruct the
+    # exact same embedder later. Dim is the matrix's actual width.
+    from ..infra.embedding import current_backend
+
+    backend = current_backend()
+    meta = VectorsMeta(
+        backend=str(backend["backend"]),
+        dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend["dim"] or 0),
+        model=backend["model"],  # type: ignore[arg-type]
+    )
+    write_vectors_meta(paths.vectors_path, meta)
 
     graph = build_corpus_graph(docs, all_chunks_list, store)
     write_graph(paths, graph)

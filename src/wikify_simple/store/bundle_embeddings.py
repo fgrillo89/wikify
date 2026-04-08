@@ -30,6 +30,10 @@ def load_or_compute(
     ``pages`` is an iterable of objects with ``.id`` and ``.body_clean``
     (or ``.body_markdown``; we also pass through ``_clean_body`` if the
     caller hands us unclean bodies).
+
+    The caller must pass the corpus's own embedder (the one whose backend
+    matches ``vectors.meta.json``) — not a generic ``embed_texts``. Eval
+    code should construct it via ``infra.embedding.embedder_for(...)``.
     """
     root = _bundle_root(bundle)
     cache_path = root / _CACHE_NAME
