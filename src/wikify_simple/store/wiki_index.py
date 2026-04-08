@@ -25,6 +25,7 @@ from pathlib import Path
 
 from ..models import WikiPage
 from ..paths import BundlePaths
+from .page_naming import page_filename, page_id_from_title
 
 _INDEX_FILENAME = "_index.json"
 _INDEX_MD_FILENAME = "_index.md"
@@ -177,6 +178,13 @@ class WikiIndex:
 
     @classmethod
     def load(cls, bundle: BundlePaths) -> WikiIndex:
+        import os as _os
+
+        if _os.environ.get("WIKIFY_SKIP_LEGACY_MIGRATION") != "1":
+            try:
+                migrate_legacy_page_ids(bundle)
+            except Exception:  # pragma: no cover - migration is best-effort
+                pass
         path = bundle.root / _INDEX_FILENAME
         if not path.exists():
             return rebuild_index(bundle)
@@ -215,7 +223,7 @@ def entry_from_page(page: WikiPage, bundle: BundlePaths) -> IndexEntry:
         kind=page.kind,
         title=page.title,
         aliases=tuple(page.aliases),
-        path=f"{sub}/{page.id}.md",
+        path=f"{sub}/{page_filename(page.id)}",
         n_evidence=len(page.evidence),
         doc_ids=tuple(sorted({ev.doc_id for ev in page.evidence})),
         links=tuple(page.links),
@@ -248,7 +256,7 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
                 kind=page.kind,
                 title=page.title,
                 aliases=tuple(page.aliases),
-                path=f"{sub}/{page.id}.md",
+                path=f"{sub}/{page_filename(page.id)}",
                 n_evidence=len(page.evidence),
                 doc_ids=tuple(sorted({ev.doc_id for ev in page.evidence})),
                 links=tuple(page.links),
@@ -256,6 +264,91 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     idx = WikiIndex(bundle_root=bundle.root, entries=entries)
     idx.save()
     return idx
+
+
+def migrate_legacy_page_ids(bundle: BundlePaths) -> int:
+    """Rename any legacy ``concept-*.md`` / ``person-*.md`` files in-place
+    to their new natural-title filename. Returns the number of renames.
+
+    Reads the old frontmatter ``title:`` field to pick the new filename.
+    Rewrites ``_index.json`` if it exists and contained legacy entries.
+    """
+    if not bundle.root.exists():
+        return 0
+    renamed = 0
+    for sub in ("concepts", "people"):
+        d = bundle.root / sub
+        if not d.exists():
+            continue
+        for f in list(d.glob("*.md")):
+            stem = f.stem
+            if not (stem.startswith("concept-") or stem.startswith("person-")):
+                continue
+            # Parse frontmatter title.
+            try:
+                raw = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            title = _extract_title_from_frontmatter(raw) or stem.split("-", 1)[1].replace("-", " ")
+            new_id = page_id_from_title(title)
+            if not new_id or new_id == stem:
+                continue
+            new_path = d / page_filename(new_id)
+            if new_path.exists():
+                continue
+            # Rewrite frontmatter id/title to new values.
+            new_raw = _rewrite_frontmatter_id(raw, new_id, title)
+            new_path.write_text(new_raw, encoding="utf-8")
+            sidecar = f.with_suffix(".provenance.json")
+            if sidecar.exists():
+                sidecar.rename(new_path.with_suffix(".provenance.json"))
+            f.unlink()
+            renamed += 1
+    if renamed:
+        idx_path = bundle.root / _INDEX_FILENAME
+        if idx_path.exists():
+            try:
+                idx_path.unlink()
+            except OSError:
+                pass
+    return renamed
+
+
+_FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def _extract_title_from_frontmatter(raw: str) -> str | None:
+    m = _FM_RE.match(raw)
+    if not m:
+        return None
+    for line in m.group(1).splitlines():
+        if line.strip().startswith("title:"):
+            return line.split(":", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _rewrite_frontmatter_id(raw: str, new_id: str, new_title: str) -> str:
+    m = _FM_RE.match(raw)
+    if not m:
+        return raw
+    fm = m.group(1)
+    new_lines = []
+    saw_id = False
+    saw_title = False
+    for line in fm.splitlines():
+        if line.strip().startswith("id:"):
+            new_lines.append(f"id: {new_id}")
+            saw_id = True
+        elif line.strip().startswith("title:"):
+            new_lines.append(f"title: {new_title}")
+            saw_title = True
+        else:
+            new_lines.append(line)
+    if not saw_id:
+        new_lines.insert(0, f"id: {new_id}")
+    if not saw_title:
+        new_lines.insert(1, f"title: {new_title}")
+    return "---\n" + "\n".join(new_lines) + "\n---\n" + raw[m.end() :]
 
 
 def _atomic_write(path: Path, content: str) -> Path:

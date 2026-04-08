@@ -23,7 +23,7 @@ _PNG_BYTES = (
 
 _PHOTOCAT_BODY = """\
 ---
-id: concept-photocatalysis
+id: Photocatalysis
 kind: concept
 title: Photocatalysis
 aliases: [photo-catalysis]
@@ -75,7 +75,7 @@ The corpus does not address industrial-scale deployment.
 
 _ALD_BODY = """\
 ---
-id: concept-atomic-layer-deposition
+id: Atomic Layer Deposition
 kind: concept
 title: Atomic Layer Deposition
 aliases: [ALD]
@@ -121,7 +121,7 @@ The corpus does not address scale-up.
 
 _PERSON_BODY = """\
 ---
-id: person-honda
+id: Akira Honda
 kind: person
 title: Akira Honda
 aliases: []
@@ -175,11 +175,9 @@ def _make_corpus_with_image(root: Path) -> Path:
 def _make_bundle(root: Path) -> BundlePaths:
     bundle = BundlePaths(root=root)
     bundle.ensure()
-    (bundle.concepts_dir / "concept-photocatalysis.md").write_text(_PHOTOCAT_BODY, encoding="utf-8")
-    (bundle.concepts_dir / "concept-atomic-layer-deposition.md").write_text(
-        _ALD_BODY, encoding="utf-8"
-    )
-    (bundle.people_dir / "person-honda.md").write_text(_PERSON_BODY, encoding="utf-8")
+    (bundle.concepts_dir / "Photocatalysis.md").write_text(_PHOTOCAT_BODY, encoding="utf-8")
+    (bundle.concepts_dir / "Atomic Layer Deposition.md").write_text(_ALD_BODY, encoding="utf-8")
+    (bundle.people_dir / "Akira Honda.md").write_text(_PERSON_BODY, encoding="utf-8")
     return bundle
 
 
@@ -196,7 +194,7 @@ def test_build_site_renders_index_and_pages(tmp_path: Path) -> None:
     assert "Atomic Layer Deposition" in index_html
     assert "Akira Honda" in index_html
 
-    page = out / "concepts" / "concept-photocatalysis.html"
+    page = out / "concepts" / "Photocatalysis.html"
     assert page.exists()
     rendered = page.read_text(encoding="utf-8")
     assert "<h1>Photocatalysis</h1>" in rendered
@@ -212,7 +210,7 @@ def test_build_site_stages_inline_figure(tmp_path: Path) -> None:
     out = tmp_path / "_html"
     build_site(bundle, out, corpus_root=corpus)
 
-    page = out / "concepts" / "concept-photocatalysis.html"
+    page = out / "concepts" / "Photocatalysis.html"
     rendered = page.read_text(encoding="utf-8")
     assert "<img" in rendered
     assert "fig1.png" in rendered
@@ -227,11 +225,11 @@ def test_build_site_resolves_wikilinks(tmp_path: Path) -> None:
     out = tmp_path / "_html"
     build_site(bundle, out, corpus_root=corpus)
 
-    page = out / "concepts" / "concept-photocatalysis.html"
+    page = out / "concepts" / "Photocatalysis.html"
     rendered = page.read_text(encoding="utf-8")
     # The [[Atomic Layer Deposition]] wikilink should resolve to a real
     # <a href> pointing at the ALD page.
-    assert 'href="../concepts/concept-atomic-layer-deposition.html"' in rendered
+    assert 'href="../concepts/Atomic_Layer_Deposition.html"' in rendered
     # No literal [[...]] should remain in the rendered HTML.
     assert "[[Atomic Layer Deposition]]" not in rendered
 
@@ -242,7 +240,7 @@ def test_build_site_renders_evidence_footnotes(tmp_path: Path) -> None:
     out = tmp_path / "_html"
     build_site(bundle, out, corpus_root=corpus)
 
-    page = out / "concepts" / "concept-photocatalysis.html"
+    page = out / "concepts" / "Photocatalysis.html"
     rendered = page.read_text(encoding="utf-8")
     # python-markdown's footnotes extension emits a <div class="footnote">
     # block plus footnote-ref anchors in the prose.
@@ -258,6 +256,6 @@ def test_build_site_copies_css(tmp_path: Path) -> None:
 
     css = out / "static" / "wiki.css"
     assert css.exists()
-    page = out / "concepts" / "concept-photocatalysis.html"
+    page = out / "concepts" / "Photocatalysis.html"
     rendered = page.read_text(encoding="utf-8")
     assert "static/wiki.css" in rendered

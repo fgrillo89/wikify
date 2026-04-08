@@ -30,6 +30,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ...eval.bundle import Bundle, Page, load_bundle
 from ...paths import BundlePaths
+from ...store.page_naming import url_slug
 from ...store.wiki_index import WikiIndex, _normalize
 
 WIKI_NAME = "Wikify Simple"
@@ -181,7 +182,7 @@ class _PageView:
             kind=page.kind,
             title=page.title,
             aliases=list(page.aliases),
-            url=f"{sub}/{page.id}.html",
+            url=f"{sub}/{url_slug(page.id)}.html",
             n_evidence=len(page.evidence),
             excerpt=excerpt,
         )

@@ -22,6 +22,7 @@ import unicodedata
 
 from ..ingest.metadata import _is_valid_author
 from ..models import Document, Evidence, WikiPage
+from ..store.page_naming import page_id_from_title
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -89,10 +90,11 @@ def build_author_pages(
     pages: list[WikiPage] = []
     for key, info in sorted(bucket.items()):
         display = info["display"]
-        slug = _slug(display)
-        if not slug:
+        if not _slug(display):
             continue
-        page_id = f"person-{slug}"
+        page_id = page_id_from_title(display)
+        if not page_id:
+            continue
         body = _render_body(display, info["primary"], info["cited"])
         evidence = _build_evidence(info["primary"], info["cited"])
         if not evidence:

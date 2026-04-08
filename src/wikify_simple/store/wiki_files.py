@@ -7,12 +7,13 @@ from pathlib import Path
 
 from ..models import Evidence, WikiPage
 from ..paths import BundlePaths
+from .page_naming import page_filename
 
 
 def write_page(bundle: BundlePaths, page: WikiPage) -> Path:
     bundle.ensure()
     target_dir = bundle.concepts_dir if page.kind == "concept" else bundle.people_dir
-    path = target_dir / f"{page.id}.md"
+    path = target_dir / page_filename(page.id)
     path.write_text(_render_page(page), encoding="utf-8")
     # Sidecar provenance JSON: the YAML frontmatter writer can only
     # serialise scalars cleanly, so we mirror the full provenance dict

@@ -33,7 +33,7 @@ def test_unique_author_per_doc():
     assert "Carol Cole" in titles
     alice = next(p for p in pages if p.title == "Alice Adams")
     assert alice.provenance["primary_count"] == 2
-    assert "person-alice-adams" == alice.id
+    assert "Alice Adams" == alice.id
 
 
 def test_citation_mined_authors_get_pages():

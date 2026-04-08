@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from ..agents.schema import ExtractedConcept
 from ..models import Evidence, WikiPage
+from ..store.page_naming import page_id_from_title
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -64,7 +65,9 @@ def canonicalize(
             continue
         page_id = alias_index.get(norm)
         if page_id is None:
-            page_id = f"{cand.concept.kind}-{norm}"
+            page_id = page_id_from_title(cand.concept.title)
+            if not page_id:
+                continue
             page = WikiPage(
                 id=page_id,
                 kind=cand.concept.kind,
