@@ -56,10 +56,11 @@ from ..store.wiki_index import build_index
 from .author_pages import build_author_pages
 from .canonicalize import Candidate, canonicalize
 from .crosslink import crosslink
+from .dossier import Dossier, DossierEntry, DossierStore
 from .sampler import Sampler, SamplerState
 from .schedule import BudgetSplit, Schedule
 
-EXTRACT_PROMPT = load_prompt("wikify_simple/extract/v1").name
+EXTRACT_PROMPT = load_prompt("wikify_simple/extract/v2").name
 WRITE_PROMPT = load_prompt("wikify_simple/write/v1").name
 
 
@@ -194,94 +195,93 @@ def run(
         for ev in p.evidence:
             state.pages_concept_evidence_chunks.append(ev.chunk_id)
 
-    # ---- accumulate dossier entries per page ----------------------------
-    # Group the rich extraction data (definitions, summaries, parameters,
-    # mechanisms, relationships) by page title for the editor.
-    dossier_by_page: dict[str, list[dict]] = defaultdict(list)
+    # ---- build dossiers ---------------------------------------------------
+    # Populate structured dossiers from extraction candidates. Dossiers
+    # persist to disk so incremental runs (--feed) accumulate material.
+    dossier_store = DossierStore(bundle.root)
+    alias_to_page: dict[str, WikiPage] = {}
+    for p in pages:
+        alias_to_page[_normalize_title(p.title)] = p
+        for a in (p.aliases if hasattr(p, "aliases") else []):
+            alias_to_page[_normalize_title(a)] = p
+
     for cand in candidates:
         c = cand.concept
-        page_id = _normalize_title(c.title)
-        # Find matching page
-        for p in pages:
-            if _normalize_title(p.title) == page_id:
-                entry = {
-                    "chunk_id": cand.chunk_id,
-                    "doc_id": cand.doc_id,
-                    "title": c.title,
-                    "quote": c.quote,
-                    "definition": c.definition,
-                    "summary": c.summary,
-                    "parameters": [
-                        p.model_dump() for p in c.parameters
-                    ] if c.parameters else [],
-                    "mechanisms": list(c.mechanisms) if c.mechanisms else [],
-                    "relationships": [
-                        r.model_dump() for r in c.relationships
-                    ] if c.relationships else [],
-                    "section_type": (
-                        chunks_by_id[cand.chunk_id].section_type
-                        if cand.chunk_id in chunks_by_id else ""
-                    ),
-                }
-                dossier_by_page[p.id].append(entry)
-                break
-
-    # ---- dossier compaction (optional) -----------------------------------
-    # When a compactor is injected, concepts with more than compact_threshold
-    # raw entries get consolidated into a single deduplicated dossier via a
-    # cheap model call. This keeps the editor prompt manageable.
-    if compactor is not None:
-        for page_id, entries in dossier_by_page.items():
-            if len(entries) <= compact_threshold:
-                continue
-            page_title = page_id
-            for p in pages:
-                if p.id == page_id:
-                    page_title = p.title
+        # Match by title or alias (same logic as canonicalize)
+        matched = alias_to_page.get(_normalize_title(c.title))
+        if matched is None:
+            for alias in c.aliases:
+                matched = alias_to_page.get(_normalize_title(alias))
+                if matched:
                     break
+        if matched is None:
+            continue
+        dossier = dossier_store.load(matched.id) or Dossier(
+            page_id=matched.id, title=matched.title,
+            aliases=list(getattr(matched, "aliases", [])),
+            kind=matched.kind, category=getattr(c, "category", None),
+        )
+        chunk = chunks_by_id.get(cand.chunk_id)
+        dossier.add_entry(DossierEntry(
+            chunk_id=cand.chunk_id,
+            doc_id=cand.doc_id,
+            quote=c.quote,
+            definition=c.definition,
+            summary=c.summary,
+            parameters=[
+                p.model_dump() for p in c.parameters
+            ] if c.parameters else [],
+            mechanisms=list(c.mechanisms) if c.mechanisms else [],
+            relationships=[
+                r.model_dump() for r in c.relationships
+            ] if c.relationships else [],
+            section_type=chunk.section_type if chunk else "",
+            figure_ids=list(c.evidence_figures),
+        ))
+        dossier_store.save(dossier)
+
+    # ---- compact dossiers ------------------------------------------------
+    # Concepts with many raw entries get consolidated via a cheap model call.
+    if compactor is not None:
+        for dossier in dossier_store.load_all():
+            if dossier.n_entries <= compact_threshold:
+                continue
             try:
                 compacted = compactor.compact(
-                    page_id=page_id,
-                    title=page_title,
-                    entries=entries,
+                    page_id=dossier.page_id,
+                    title=dossier.title,
+                    entries=[e.to_dict() for e in dossier.entries],
                 )
-                # Replace raw entries with compacted top_evidence,
-                # enriched with the consolidated metadata.
-                top = compacted.get("top_evidence", entries[:8])
-                for t in top:
-                    t.setdefault("definition", compacted.get("definition", ""))
-                    t.setdefault("summary", compacted.get("summary", ""))
-                    t.setdefault("parameters", compacted.get("parameters", []))
-                    t.setdefault("mechanisms", compacted.get("mechanisms", []))
-                    t.setdefault("relationships", compacted.get("relationships", []))
-                dossier_by_page[page_id] = top
+                dossier.apply_compaction(compacted)
+                dossier_store.save(dossier)
             except (ValidationError, BudgetExceeded):
-                # Fall back to truncation
-                dossier_by_page[page_id] = entries[:compact_threshold]
+                pass  # keep raw entries as-is
 
-    # ---- editor pass (optional) -----------------------------------------
-    # If an editor is injected, it reads compacted dossier material for each
-    # page and produces a structured brief. The writer then follows the brief.
+    # ---- editor pass: decide write-readiness + produce briefs -----------
+    # The editor reads each dossier + the wiki index to decide which
+    # concepts have enough substance for a page. It produces a brief
+    # for each page it greenlights.
     briefs: dict[str, object] = {}
     if editor is not None:
-        written_summaries: list[dict] = []
-        for page in pages[:max_concepts]:
-            if page.kind == "person":
+        existing_titles = [
+            {"title": p.title, "id": p.id}
+            for p in pages if p.body_markdown.strip()
+        ]
+        for dossier in dossier_store.load_all():
+            if dossier.kind == "person":
                 continue
-            dossier = dossier_by_page.get(page.id, [])
-            if not dossier:
+            if not dossier.has_substance:
                 continue
             try:
                 brief = editor.edit(
-                    page_id=page.id,
-                    title=page.title,
-                    dossier=dossier,
-                    neighbors=written_summaries[-8:],
+                    page_id=dossier.page_id,
+                    title=dossier.title,
+                    dossier=[dossier.for_editor()],
+                    neighbors=existing_titles[-8:],
                 )
-                briefs[page.id] = brief
+                briefs[dossier.page_id] = brief
             except (ValidationError, BudgetExceeded):
                 continue
-            written_summaries.append({"title": page.title, "id": page.id})
 
     # ---- write loop -----------------------------------------------------
     # All canonicalized concepts get written. The budget gates extraction
@@ -308,25 +308,27 @@ def run(
             # Use person artifact template for person pages.
             page_artifact = person_artifact_text if page.kind == "person" else artifact_text
 
-            # Build v2 evidence refs with full chunk context when available.
+            # Build v2 evidence refs with full chunk context from dossier.
             evidence_v2 = []
-            dossier = dossier_by_page.get(page.id, [])
-            dossier_by_chunk = {d["chunk_id"]: d for d in dossier}
+            dossier = dossier_store.load(page.id)
+            dossier_entries_by_chunk = {}
+            if dossier:
+                dossier_entries_by_chunk = {
+                    e.chunk_id: e for e in dossier.entries
+                }
             for ev in page.evidence:
-                d = dossier_by_chunk.get(ev.chunk_id, {})
+                de = dossier_entries_by_chunk.get(ev.chunk_id)
+                chunk = chunks_by_id.get(ev.chunk_id)
                 evidence_v2.append(
                     WriteEvidenceRefV2(
                         chunk_id=ev.chunk_id,
                         doc_id=ev.doc_id,
                         quote=ev.quote,
                         locator=ev.locator,
-                        chunk_text=(
-                            chunks_by_id[ev.chunk_id].text
-                            if ev.chunk_id in chunks_by_id else ""
-                        ),
-                        section_type=d.get("section_type", ""),
-                        definition=d.get("definition", ""),
-                        summary=d.get("summary", ""),
+                        chunk_text=chunk.text if chunk else "",
+                        section_type=de.section_type if de else "",
+                        definition=de.definition if de else "",
+                        summary=de.summary if de else "",
                     )
                 )
 
