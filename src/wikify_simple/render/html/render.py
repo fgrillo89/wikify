@@ -135,6 +135,7 @@ def build_site(
             out_dir=out_dir,
             corpus_root=corpus_root,
             shared_ctx=shared_ctx,
+            page_by_id=page_by_id,
             root="../",
         )
         html_path.write_text(html_str, encoding="utf-8")
@@ -239,6 +240,7 @@ def _render_article(
     out_dir: Path,
     corpus_root: Path | None,
     shared_ctx: dict[str, Any],
+    page_by_id: dict[str, Page],
     root: str,
 ) -> str:
     # Reconstruct the full body (frontmatter-stripped) including the
@@ -279,17 +281,33 @@ def _render_article(
     toc = _build_toc(body_html)
     categories = [pv.kind]
 
-    # Build "See also" from crosslinks (frontmatter links that exist as pages).
+    # Build "See also" from crosslinks that exist as rendered pages.
     see_also = []
+    seen_ids: set[str] = set()
+    # First: explicit crosslinks from the page's links field.
     for link_id in page.links:
-        if link_id in slug_to_url and link_id != pv.id:
-            link_title = link_id  # fallback
-            # Find the actual title from the shared page list
+        if link_id in slug_to_url and link_id != pv.id and link_id not in seen_ids:
+            seen_ids.add(link_id)
+            link_title = link_id
             for candidate in shared_ctx.get("concepts", []) + shared_ctx.get("people", []):
                 if candidate.id == link_id:
                     link_title = candidate.title
                     break
             see_also.append({"title": link_title, "url": slug_to_url[link_id]})
+    # Second: if few explicit links resolved, add other rendered concepts
+    # that share evidence docs (co-occurrence heuristic).
+    if len(see_also) < 5:
+        page_docs = {ev.doc_id for ev in page.evidence}
+        for candidate in shared_ctx.get("concepts", []):
+            if candidate.id == pv.id or candidate.id in seen_ids:
+                continue
+            if len(see_also) >= 10:
+                break
+            # Check if this candidate shares evidence docs
+            cand_page = page_by_id.get(candidate.id)
+            if cand_page and any(ev.doc_id in page_docs for ev in cand_page.evidence):
+                seen_ids.add(candidate.id)
+                see_also.append({"title": candidate.title, "url": candidate.url})
 
     # Build infobox for concept pages.
     infobox = {}

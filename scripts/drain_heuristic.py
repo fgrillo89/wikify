@@ -183,54 +183,62 @@ def build_write_body(req: dict) -> str:
                 lines.append(f'[^{marker}]: {doc} > "{quote}"')
         return "\n".join(lines)
 
-    # Concept pages: build from evidence quotes
-    # Lead paragraph
-    quotes = [ev.get("quote", "") for ev in evidence if ev.get("quote")]
-    doc_ids = [ev.get("doc_id", "") for ev in evidence]
+    # Concept pages: synthesize from evidence quotes into real prose
+    ev_by_doc: dict[str, list[tuple[int, str]]] = {}
+    for i, ev in enumerate(evidence):
+        doc = ev.get("doc_id", "")
+        quote = ev.get("quote", "")
+        if quote:
+            ev_by_doc.setdefault(doc, []).append((i + 1, quote))
 
-    lines.append(f"**{title}** is a concept studied in the scientific literature.")
-    if quotes:
-        lines.append(f"Research has shown that {quotes[0].lower().rstrip('.')} [^e1].")
+    all_markers: list[str] = []
+
+    # Lead paragraph: synthesize from first few quotes
+    first_quotes = [(i, q) for vals in ev_by_doc.values() for i, q in vals][:3]
+    lead_parts = []
+    for idx, q in first_quotes:
+        marker = f"e{idx}"
+        all_markers.append(marker)
+        # Clean the quote into a sentence
+        q_clean = q.strip().rstrip(".")
+        if q_clean and q_clean[0].islower():
+            q_clean = q_clean[0].upper() + q_clean[1:]
+        lead_parts.append(f"{q_clean} [^{marker}].")
+
+    lines.append(f"**{title}** is a topic in the scientific literature. " + " ".join(lead_parts[:2]))
     lines.append("")
 
-    # Overview section
-    lines.append("## Overview")
-    lines.append("")
-    used_markers = ["e1"] if quotes else []
-    for i, (q, doc) in enumerate(zip(quotes[1:4], doc_ids[1:4]), start=2):
-        marker = f"e{i}"
-        used_markers.append(marker)
-        lines.append(f"{q.rstrip('.')} [^{marker}].")
+    # Group remaining evidence by source document
+    doc_sections = list(ev_by_doc.items())
+    if len(doc_sections) > 0:
+        lines.append("## Research findings")
         lines.append("")
-
-    # Mechanism/Applications section
-    if len(quotes) > 4:
-        lines.append("## Applications and Significance")
-        lines.append("")
-        for i, (q, doc) in enumerate(zip(quotes[4:7], doc_ids[4:7]), start=len(used_markers) + 1):
-            marker = f"e{i}"
-            used_markers.append(marker)
-            lines.append(f"{q.rstrip('.')} [^{marker}].")
+        for doc_id, doc_evs in doc_sections[:4]:
+            # Clean doc name for display
+            doc_display = doc_id.split("]")[-1].strip().lstrip(" _").replace("_", " ")
+            if doc_display:
+                doc_display = doc_display[:80].rsplit(" ", 1)[0]
+            para_parts = []
+            for idx, q in doc_evs[:3]:
+                marker = f"e{idx}"
+                if marker not in all_markers:
+                    all_markers.append(marker)
+                q_clean = q.strip().rstrip(".")
+                if q_clean and q_clean[0].islower():
+                    q_clean = q_clean[0].upper() + q_clean[1:]
+                para_parts.append(f"{q_clean} [^{marker}].")
+            lines.append(" ".join(para_parts))
             lines.append("")
 
-    # See also
-    if neighbors:
-        lines.append("## See also")
-        lines.append("")
-        for n in neighbors[:5]:
-            lines.append(f"- {n}")
-        lines.append("")
-
-    # References
+    # References section (only the markers actually used)
     lines.append("## References")
     lines.append("")
     for i, ev in enumerate(evidence):
         marker = f"e{i + 1}"
-        doc = ev.get("doc_id", "")
-        quote = ev.get("quote", "").replace('"', "'")
-        loc = ev.get("locator", "")
-        loc_str = f", {loc}" if loc else ""
-        lines.append(f'[^{marker}]: {doc}{loc_str} > "{quote}"')
+        if marker in all_markers:
+            doc = ev.get("doc_id", "")
+            quote = ev.get("quote", "").replace('"', "'")
+            lines.append(f'[^{marker}]: {doc} > "{quote}"')
 
     return "\n".join(lines)
 
