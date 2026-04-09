@@ -33,6 +33,8 @@ def response_reserve() -> int:
 
 class Role(str, Enum):
     EXTRACTOR = "extractor"
+    COMPACTOR = "compactor"
+    EDITOR = "editor"
     WRITER = "writer"
     ORCHESTRATOR = "orchestrator"
 
@@ -55,6 +57,17 @@ _WRITER_SPEC: list[SlotSpec] = [
     Pool(name="neighbor_titles", floor_tokens=0, ceiling_tokens=8_000),
 ]
 
+_COMPACTOR_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=500),
+    Pool(name="dossier_entries", floor_tokens=2_000, ceiling_tokens=20_000),
+]
+
+_EDITOR_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=1_000),
+    Pool(name="dossier", floor_tokens=2_000, ceiling_tokens=30_000),
+    Pool(name="wiki_index", floor_tokens=1_000, ceiling_tokens=10_000),
+]
+
 _ORCHESTRATOR_SPEC: list[SlotSpec] = [
     Required(name="state_header", fixed_tokens=2_000),
     Required(name="action_menu", fixed_tokens=2_000),
@@ -66,6 +79,8 @@ _ORCHESTRATOR_SPEC: list[SlotSpec] = [
 
 _SPECS: dict[Role, list[SlotSpec]] = {
     Role.EXTRACTOR: _EXTRACTOR_SPEC,
+    Role.COMPACTOR: _COMPACTOR_SPEC,
+    Role.EDITOR: _EDITOR_SPEC,
     Role.WRITER: _WRITER_SPEC,
     Role.ORCHESTRATOR: _ORCHESTRATOR_SPEC,
 }

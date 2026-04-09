@@ -29,8 +29,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from ..agents.protocols import Extractor, Orchestrator, Querier, Writer
+from ..agents.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
 from ..agents.schema import (
+    EditorBrief,
     ExtractRequest,
     ExtractResponse,
     OrchAction,
@@ -235,6 +236,12 @@ class ClaudeCodeExtractor(Extractor):
                             "category": c.category,
                             "confidence": c.confidence,
                             "score": c.score,
+                            "definition": c.definition,
+                            "summary": c.summary,
+                            "parameters": [p.model_dump() for p in c.parameters],
+                            "mechanisms": list(c.mechanisms),
+                            "relationships": [r.model_dump() for r in c.relationships],
+                            "equations": [eq.model_dump() for eq in c.equations],
                         }
                         for c in response.concepts
                     ],
@@ -257,12 +264,11 @@ class ClaudeCodeExtractor(Extractor):
             prompt_hash=key.prompt_hash,
         )
         payload = entry.payload
-        from ..agents.schema import ExtractedConcept
+        from ..agents.schema import Equation, ExtractedConcept, Parameter, Relationship
 
         def _concept_kwargs(c: dict) -> dict:
-            # category was added in slice 6; older cached payloads may
-            # omit it. Default to None rather than failing the lookup.
-            return {
+            # Backwards-compatible: older cached payloads may omit v2 fields.
+            kwargs = {
                 "title": c["title"],
                 "aliases": c["aliases"],
                 "kind": c["kind"],
@@ -270,7 +276,18 @@ class ClaudeCodeExtractor(Extractor):
                 "category": c.get("category"),
                 "confidence": c.get("confidence", "extracted"),
                 "score": c.get("score", 1.0),
+                "definition": c.get("definition", ""),
+                "summary": c.get("summary", ""),
             }
+            if c.get("parameters"):
+                kwargs["parameters"] = [Parameter(**p) for p in c["parameters"]]
+            if c.get("mechanisms"):
+                kwargs["mechanisms"] = c["mechanisms"]
+            if c.get("relationships"):
+                kwargs["relationships"] = [Relationship(**r) for r in c["relationships"]]
+            if c.get("equations"):
+                kwargs["equations"] = [Equation(**eq) for eq in c["equations"]]
+            return kwargs
 
         return ExtractResponse(
             chunk_id=payload["chunk_id"],
@@ -346,6 +363,86 @@ class ClaudeCodeWriter(Writer):
             prompt_hash=prompt_hash(request.prompt_template),
         )
         return response
+
+
+# --- compactor -----------------------------------------------------------
+
+
+class ClaudeCodeCompactor(Compactor):
+    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
+        self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+
+    def compact(self, page_id: str, title: str, entries: list[dict]) -> dict:
+        req_path, res_path = _write_request(
+            self._dispatch_dir,
+            "compact",
+            {"page_id": page_id, "title": title, "entries": entries},
+        )
+        t0 = time.monotonic()
+        try:
+            raw = _await_response(res_path)
+        finally:
+            _cleanup(res_path)
+            if not req_path.with_name(
+                req_path.name.replace(".request.", ".error.")
+            ).exists():
+                _cleanup(req_path)
+        self._meter.record(
+            role=Role.COMPACTOR,
+            tier="S",
+            input_tokens=int(raw.get("tokens_in", 500)),
+            output_tokens=int(raw.get("tokens_out", 200)),
+            context_cap=total_context() - response_reserve(),
+            wall_seconds=time.monotonic() - t0,
+            cache_hit=False,
+            prompt_hash="compact_v1",
+        )
+        return raw
+
+
+# --- editor --------------------------------------------------------------
+
+
+class ClaudeCodeEditor(Editor):
+    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
+        self._meter = meter
+        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+
+    def edit(
+        self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]
+    ) -> EditorBrief:
+        req_path, res_path = _write_request(
+            self._dispatch_dir,
+            "edit",
+            {
+                "page_id": page_id,
+                "title": title,
+                "dossier": dossier,
+                "neighbors": neighbors,
+            },
+        )
+        t0 = time.monotonic()
+        try:
+            raw = _await_response(res_path)
+            brief = _validate_or_record(EditorBrief, raw, req_path)
+        finally:
+            _cleanup(res_path)
+            if not req_path.with_name(
+                req_path.name.replace(".request.", ".error.")
+            ).exists():
+                _cleanup(req_path)
+        self._meter.record(
+            role=Role.EDITOR,
+            tier="M",
+            input_tokens=int(raw.get("tokens_in", 500)),
+            output_tokens=int(raw.get("tokens_out", 300)),
+            context_cap=total_context() - response_reserve(),
+            wall_seconds=time.monotonic() - t0,
+            cache_hit=False,
+            prompt_hash="edit_v1",
+        )
+        return brief
 
 
 # --- orchestrator --------------------------------------------------------

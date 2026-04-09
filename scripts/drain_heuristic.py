@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 
 EXTRACT_DIR = Path("data/dispatch/extract")
+COMPACT_DIR = Path("data/dispatch/compact")
+EDIT_DIR = Path("data/dispatch/edit")
 WRITE_DIR = Path("data/dispatch/write")
 
 # Technical term patterns commonly found in academic papers
@@ -164,7 +166,6 @@ def build_write_body(req: dict) -> str:
     skeleton = req.get("skeleton", "")
     evidence = req.get("evidence", [])
     page_kind = req.get("page_kind", "concept")
-    neighbors = req.get("neighbor_titles", [])
 
     lines: list[str] = []
 
@@ -276,6 +277,176 @@ def process_write(request_path: Path) -> bool:
     return True
 
 
+def process_compact(request_path: Path) -> bool:
+    """Process one compact request (deterministic dedup)."""
+    rid = request_path.stem.replace(".request", "")
+    response_path = request_path.parent / f"{rid}.response.json"
+    if response_path.exists():
+        return True
+
+    try:
+        req = json.loads(request_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  ERROR reading compact {rid}: {e}")
+        return False
+
+    entries = req.get("entries", [])
+    title = req.get("title", "")
+
+    # Deterministic compaction (same as FakeCompactor)
+    definitions = [e.get("definition", "") for e in entries if e.get("definition")]
+    best_def = max(definitions, key=len) if definitions else f"{title} is a concept."
+
+    summaries = [e.get("summary", "") for e in entries if e.get("summary")]
+    best_summary = max(summaries, key=len) if summaries else ""
+
+    seen_params: dict[str, dict] = {}
+    for e in entries:
+        for p in e.get("parameters", []):
+            key = p.get("name", "")
+            if key and key not in seen_params:
+                seen_params[key] = p
+
+    mechs = list(dict.fromkeys(
+        m for e in entries for m in e.get("mechanisms", [])
+    ))[:6]
+
+    seen_rels: dict[str, dict] = {}
+    for e in entries:
+        for r in e.get("relationships", []):
+            key = r.get("target", "")
+            if key and key not in seen_rels:
+                seen_rels[key] = r
+
+    eqs = []
+    seen_eq: set[str] = set()
+    for e in entries:
+        for eq in e.get("equations", []):
+            latex = eq.get("latex", "")
+            if latex and latex not in seen_eq:
+                seen_eq.add(latex)
+                eqs.append(eq)
+
+    seen_docs: set[str] = set()
+    top: list[dict] = []
+    for e in entries:
+        doc = e.get("doc_id", "")
+        if doc not in seen_docs:
+            seen_docs.add(doc)
+            top.append(e)
+        if len(top) >= 8:
+            break
+
+    response = {
+        "page_id": req.get("page_id", ""),
+        "definition": best_def,
+        "summary": best_summary,
+        "parameters": list(seen_params.values())[:10],
+        "mechanisms": mechs,
+        "relationships": list(seen_rels.values())[:8],
+        "equations": eqs[:8],
+        "top_evidence": top,
+        "tokens_in": 0,
+        "tokens_out": 0,
+    }
+    response_path.write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
+    print(f"  OK compact {rid}: {len(top)} entries kept")
+    return True
+
+
+def process_edit(request_path: Path) -> bool:
+    """Process one edit request (rule-based brief)."""
+    rid = request_path.stem.replace(".request", "")
+    response_path = request_path.parent / f"{rid}.response.json"
+    if response_path.exists():
+        return True
+
+    try:
+        req = json.loads(request_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  ERROR reading edit {rid}: {e}")
+        return False
+
+    title = req.get("title", "")
+    page_id = req.get("page_id", "")
+    dossier = req.get("dossier", [{}])
+    d = dossier[0] if dossier else {}
+    evidence = d.get("evidence", [])
+
+    sections = [
+        {
+            "heading": "## Definition",
+            "instruction": f"Define {title} in one or two sentences.",
+            "evidence_markers": [],
+            "zone": "established",
+            "parameters_to_include": [],
+        },
+        {
+            "heading": "## Background",
+            "instruction": "Provide historical context and motivation.",
+            "evidence_markers": [],
+            "zone": "established",
+            "parameters_to_include": [],
+        },
+        {
+            "heading": "## Mechanism",
+            "instruction": "Explain how it works, citing evidence.",
+            "evidence_markers": [
+                f"e{i}" for i in range(1, min(len(evidence), 5) + 1)
+            ],
+            "zone": "established",
+            "parameters_to_include": [
+                p.get("name", "") for p in d.get("parameters", [])[:3]
+            ],
+        },
+        {
+            "heading": "## Applications",
+            "instruction": "Describe practical applications.",
+            "evidence_markers": [],
+            "zone": "established",
+            "parameters_to_include": [],
+        },
+        {
+            "heading": "## Open Questions",
+            "instruction": "Note unresolved issues.",
+            "evidence_markers": [],
+            "zone": "frontier",
+            "parameters_to_include": [],
+        },
+    ]
+
+    response = {
+        "page_id": page_id,
+        "title": title,
+        "article_register": "academic",
+        "tone_guidance": "Neutral encyclopedic tone.",
+        "lead_paragraph_instruction": d.get("definition", f"Define {title}."),
+        "sections": sections,
+        "comparative_notes": "",
+        "figures_to_embed": [],
+        "max_length_chars": 4000,
+        "tokens_in": 0,
+        "tokens_out": 0,
+    }
+    response_path.write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
+    print(f"  OK edit {rid}: {len(sections)} sections")
+    return True
+
+
+def _process_dir(dispatch_dir: Path, handler, label: str) -> tuple[bool, int]:
+    """Process all pending requests in a dispatch directory."""
+    found = False
+    count = 0
+    for f in sorted(dispatch_dir.glob("*.request.json")):
+        rid = f.stem.replace(".request", "")
+        resp = dispatch_dir / f"{rid}.response.json"
+        if not resp.exists():
+            if handler(f):
+                count += 1
+            found = True
+    return found, count
+
+
 def main():
     import argparse
 
@@ -284,47 +455,42 @@ def main():
     parser.add_argument("--max-iterations", type=int, default=1000)
     args = parser.parse_args()
 
-    EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
-    WRITE_DIR.mkdir(parents=True, exist_ok=True)
+    for d in (EXTRACT_DIR, COMPACT_DIR, EDIT_DIR, WRITE_DIR):
+        d.mkdir(parents=True, exist_ok=True)
 
     print(f"Heuristic drain: poll={args.poll_seconds}s, max={args.max_iterations}")
     empty_count = 0
-    total_extract = 0
-    total_write = 0
+    totals = {"extract": 0, "compact": 0, "edit": 0, "write": 0}
+
+    handlers = [
+        (EXTRACT_DIR, process_extract, "extract"),
+        (COMPACT_DIR, process_compact, "compact"),
+        (EDIT_DIR, process_edit, "edit"),
+        (WRITE_DIR, process_write, "write"),
+    ]
 
     for i in range(args.max_iterations):
         found = False
-
-        for f in sorted(EXTRACT_DIR.glob("*.request.json")):
-            rid = f.stem.replace(".request", "")
-            resp = EXTRACT_DIR / f"{rid}.response.json"
-            if not resp.exists():
-                if process_extract(f):
-                    total_extract += 1
+        for dispatch_dir, handler, label in handlers:
+            dir_found, count = _process_dir(dispatch_dir, handler, label)
+            if dir_found:
                 found = True
-
-        for f in sorted(WRITE_DIR.glob("*.request.json")):
-            rid = f.stem.replace(".request", "")
-            resp = WRITE_DIR / f"{rid}.response.json"
-            if not resp.exists():
-                if process_write(f):
-                    total_write += 1
-                found = True
+            totals[label] += count
 
         if found:
             empty_count = 0
         else:
             empty_count += 1
-            if empty_count > 90:  # 3 minutes idle
+            if empty_count > 90:
                 print(f"Idle for {empty_count * args.poll_seconds}s, exiting")
                 break
 
         time.sleep(args.poll_seconds)
 
         if i % 50 == 0 and i > 0:
-            print(f"[{i}] extract={total_extract} write={total_write}")
+            print(f"[{i}] {totals}")
 
-    print(f"\nDone: {total_extract} extracts, {total_write} writes")
+    print(f"\nDone: {totals}")
 
 
 if __name__ == "__main__":

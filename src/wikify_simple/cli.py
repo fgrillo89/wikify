@@ -136,18 +136,18 @@ def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
 
         return FakeExtractor(cache, meter), FakeWriter(meter), FakeEditor(), FakeCompactor()
     if name == "claude_code":
-        from .bindings.claude_code import ClaudeCodeExtractor, ClaudeCodeWriter
-
-        # Editor + compactor use the same dispatcher pattern as extractor/writer.
-        # For now, fall back to fake editor/compactor until claude_code bindings
-        # are implemented for these roles.
-        from .bindings.fake import FakeCompactor, FakeEditor
+        from .bindings.claude_code import (
+            ClaudeCodeCompactor,
+            ClaudeCodeEditor,
+            ClaudeCodeExtractor,
+            ClaudeCodeWriter,
+        )
 
         return (
             ClaudeCodeExtractor(cache, meter),
             ClaudeCodeWriter(meter),
-            FakeEditor(),
-            FakeCompactor(),
+            ClaudeCodeEditor(meter),
+            ClaudeCodeCompactor(meter),
         )
     raise typer.BadParameter(f"unknown binding: {name}")
 
