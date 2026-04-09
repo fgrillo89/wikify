@@ -16,8 +16,10 @@ from __future__ import annotations
 import re
 import time
 
-from ..agents.protocols import Extractor, Orchestrator, Querier, Writer
+from ..agents.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
 from ..agents.schema import (
+    BriefSection,
+    EditorBrief,
     ExtractedConcept,
     ExtractRequest,
     ExtractResponse,
@@ -344,6 +346,125 @@ def _extract_skeleton_sections(skeleton: str) -> str:
         if in_section:
             keep.append(_WIKILINK_RE.sub(r"\1", line))
     return "\n".join(keep).strip()
+
+
+# --- compactor -----------------------------------------------------------
+
+
+class FakeCompactor(Compactor):
+    """Deterministic compaction: pick best definition, dedup, truncate."""
+
+    def compact(self, page_id: str, title: str, entries: list[dict]) -> dict:
+        # Pick the longest definition
+        definitions = [e.get("definition", "") for e in entries if e.get("definition")]
+        best_def = max(definitions, key=len) if definitions else f"{title} is a concept."
+
+        # Pick the longest summary
+        summaries = [e.get("summary", "") for e in entries if e.get("summary")]
+        best_summary = max(summaries, key=len) if summaries else ""
+
+        # Merge parameters (dedup by name)
+        seen_params: dict[str, dict] = {}
+        for e in entries:
+            for p in e.get("parameters", []):
+                key = p.get("name", "")
+                if key and key not in seen_params:
+                    seen_params[key] = p
+        params = list(seen_params.values())[:10]
+
+        # Merge mechanisms (dedup)
+        mechs = list(dict.fromkeys(
+            m for e in entries for m in e.get("mechanisms", [])
+        ))[:6]
+
+        # Merge relationships (dedup by target)
+        seen_rels: dict[str, dict] = {}
+        for e in entries:
+            for r in e.get("relationships", []):
+                key = r.get("target", "")
+                if key and key not in seen_rels:
+                    seen_rels[key] = r
+        rels = list(seen_rels.values())[:8]
+
+        # Top evidence: one per unique doc_id, up to 8
+        seen_docs: set[str] = set()
+        top: list[dict] = []
+        for e in entries:
+            doc = e.get("doc_id", "")
+            if doc not in seen_docs:
+                seen_docs.add(doc)
+                top.append(e)
+            if len(top) >= 8:
+                break
+
+        return {
+            "page_id": page_id,
+            "definition": best_def,
+            "summary": best_summary,
+            "parameters": params,
+            "mechanisms": mechs,
+            "relationships": rels,
+            "top_evidence": top,
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
+
+# --- editor --------------------------------------------------------------
+
+
+class FakeEditor(Editor):
+    """Rule-based editor: greenlight all concepts with substance."""
+
+    def edit(
+        self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]
+    ) -> EditorBrief:
+        # Build sections from available material
+        d = dossier[0] if dossier else {}
+        sections = [
+            BriefSection(
+                heading="## Definition",
+                instruction=f"Define {title} in one or two sentences.",
+                zone="established",
+            ),
+            BriefSection(
+                heading="## Background",
+                instruction="Provide historical context and motivation.",
+                zone="established",
+            ),
+            BriefSection(
+                heading="## Mechanism",
+                instruction="Explain how it works, citing evidence.",
+                evidence_markers=[
+                    f"e{i}" for i in range(1, min(len(d.get("evidence", [])), 5) + 1)
+                ],
+                zone="established",
+                parameters_to_include=[
+                    p.get("name", "") for p in d.get("parameters", [])[:3]
+                ],
+            ),
+            BriefSection(
+                heading="## Applications",
+                instruction="Describe practical applications and significance.",
+                zone="established",
+            ),
+            BriefSection(
+                heading="## Open Questions",
+                instruction="Note unresolved issues.",
+                zone="frontier",
+            ),
+        ]
+
+        return EditorBrief(
+            page_id=page_id,
+            title=title,
+            article_register="academic",
+            tone_guidance="Neutral encyclopedic tone.",
+            lead_paragraph_instruction=d.get("definition", f"Define {title}."),
+            sections=sections,
+            comparative_notes="",
+            max_length_chars=4000,
+        )
 
 
 # --- orchestrator --------------------------------------------------------

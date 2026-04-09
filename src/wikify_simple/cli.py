@@ -101,7 +101,7 @@ def distill(
         events_path=bundle.calls_path,
     )
 
-    extractor, writer = _wire_binding(binding, cache, meter)
+    extractor, writer, editor, compactor = _wire_binding(binding, cache, meter)
 
     cfg = STRATEGIES[strategy](seed=seed)
     cfg.field_name = field
@@ -115,6 +115,8 @@ def distill(
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
         feed=feed,
+        editor=editor,
+        compactor=compactor,
     )
     snap_path = bundle.run_path
     if snap_path.exists():
@@ -130,13 +132,23 @@ def distill(
 
 def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
     if name == "fake":
-        from .bindings.fake import FakeExtractor, FakeWriter
+        from .bindings.fake import FakeCompactor, FakeEditor, FakeExtractor, FakeWriter
 
-        return FakeExtractor(cache, meter), FakeWriter(meter)
+        return FakeExtractor(cache, meter), FakeWriter(meter), FakeEditor(), FakeCompactor()
     if name == "claude_code":
         from .bindings.claude_code import ClaudeCodeExtractor, ClaudeCodeWriter
 
-        return ClaudeCodeExtractor(cache, meter), ClaudeCodeWriter(meter)
+        # Editor + compactor use the same dispatcher pattern as extractor/writer.
+        # For now, fall back to fake editor/compactor until claude_code bindings
+        # are implemented for these roles.
+        from .bindings.fake import FakeCompactor, FakeEditor
+
+        return (
+            ClaudeCodeExtractor(cache, meter),
+            ClaudeCodeWriter(meter),
+            FakeEditor(),
+            FakeCompactor(),
+        )
     raise typer.BadParameter(f"unknown binding: {name}")
 
 
