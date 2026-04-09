@@ -25,12 +25,13 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from ..agents.protocols import Extractor, Writer
+from ..agents.protocols import Editor, Extractor, Writer
 from ..agents.schema import (
     ExtractRequest,
     ImageRef,
     QuoteNotInChunkError,
     WriteEvidenceRef,
+    WriteEvidenceRefV2,
     WriteRequest,
 )
 from ..infra.cost_meter import BudgetExceeded, CostMeter
@@ -87,6 +88,7 @@ def run(
     extract_batch_size: int = 4,
     max_concepts: int = 60,
     feed: bool = False,
+    editor: Editor | None = None,
 ) -> None:
     bundle.ensure()
     existing_pages: list[WikiPage] = _load_existing_pages(bundle) if feed else []
@@ -190,6 +192,62 @@ def run(
         for ev in p.evidence:
             state.pages_concept_evidence_chunks.append(ev.chunk_id)
 
+    # ---- accumulate dossier entries per page ----------------------------
+    # Group the rich extraction data (definitions, summaries, parameters,
+    # mechanisms, relationships) by page title for the editor.
+    dossier_by_page: dict[str, list[dict]] = defaultdict(list)
+    for cand in candidates:
+        c = cand.concept
+        page_id = _normalize_title(c.title)
+        # Find matching page
+        for p in pages:
+            if _normalize_title(p.title) == page_id:
+                entry = {
+                    "chunk_id": cand.chunk_id,
+                    "doc_id": cand.doc_id,
+                    "title": c.title,
+                    "quote": c.quote,
+                    "definition": c.definition,
+                    "summary": c.summary,
+                    "parameters": [
+                        p.model_dump() for p in c.parameters
+                    ] if c.parameters else [],
+                    "mechanisms": list(c.mechanisms) if c.mechanisms else [],
+                    "relationships": [
+                        r.model_dump() for r in c.relationships
+                    ] if c.relationships else [],
+                    "section_type": (
+                        chunks_by_id[cand.chunk_id].section_type
+                        if cand.chunk_id in chunks_by_id else ""
+                    ),
+                }
+                dossier_by_page[p.id].append(entry)
+                break
+
+    # ---- editor pass (optional) -----------------------------------------
+    # If an editor is injected, it reads all dossier material for each page
+    # and produces a structured brief. The writer then follows the brief.
+    briefs: dict[str, object] = {}
+    if editor is not None:
+        written_summaries: list[dict] = []
+        for page in pages[:max_concepts]:
+            if page.kind == "person":
+                continue
+            dossier = dossier_by_page.get(page.id, [])
+            if not dossier:
+                continue
+            try:
+                brief = editor.edit(
+                    page_id=page.id,
+                    title=page.title,
+                    dossier=dossier,
+                    neighbors=written_summaries[-8:],
+                )
+                briefs[page.id] = brief
+            except (ValidationError, BudgetExceeded):
+                continue
+            written_summaries.append({"title": page.title, "id": page.id})
+
     # ---- write loop -----------------------------------------------------
     # All canonicalized concepts get written. The budget gates extraction
     # scope (how much of the corpus to read), not write coverage. This
@@ -214,6 +272,39 @@ def run(
                     page_figures.append(_to_imageref(rec))
             # Use person artifact template for person pages.
             page_artifact = person_artifact_text if page.kind == "person" else artifact_text
+
+            # Build v2 evidence refs with full chunk context when available.
+            evidence_v2 = []
+            dossier = dossier_by_page.get(page.id, [])
+            dossier_by_chunk = {d["chunk_id"]: d for d in dossier}
+            for ev in page.evidence:
+                d = dossier_by_chunk.get(ev.chunk_id, {})
+                evidence_v2.append(
+                    WriteEvidenceRefV2(
+                        chunk_id=ev.chunk_id,
+                        doc_id=ev.doc_id,
+                        quote=ev.quote,
+                        locator=ev.locator,
+                        chunk_text=(
+                            chunks_by_id[ev.chunk_id].text
+                            if ev.chunk_id in chunks_by_id else ""
+                        ),
+                        section_type=d.get("section_type", ""),
+                        definition=d.get("definition", ""),
+                        summary=d.get("summary", ""),
+                    )
+                )
+
+            # Build neighbor summaries (lead paragraphs of written pages).
+            neighbor_summaries = []
+            for other in pages:
+                if other.id == page.id or not other.body_markdown:
+                    continue
+                lead = other.body_markdown.strip().split("\n\n")[0][:300]
+                neighbor_summaries.append({"title": other.title, "lead": lead})
+                if len(neighbor_summaries) >= 8:
+                    break
+
             req = WriteRequest(
                 page_id=page.id,
                 page_kind=page.kind,
@@ -238,6 +329,9 @@ def run(
                 field_guide=field_text,
                 artifact_template=page_artifact,
                 corpus_persona=persona_text,
+                brief=briefs.get(page.id),
+                evidence_v2=evidence_v2,
+                neighbor_summaries=neighbor_summaries,
             )
             try:
                 resp = writer.write(req)

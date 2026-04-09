@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from .schema import (
+    EditorBrief,
     ExtractRequest,
     ExtractResponse,
     OrchAction,
@@ -23,6 +24,14 @@ from .schema import (
 
 class Extractor(Protocol):
     def extract(self, request: ExtractRequest) -> ExtractResponse: ...
+
+
+class Editor(Protocol):
+    """Reads accumulated dossier material for a page and produces a brief."""
+
+    def edit(
+        self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]
+    ) -> EditorBrief: ...
 
 
 class Writer(Protocol):
