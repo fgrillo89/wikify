@@ -245,11 +245,19 @@ def _render_article(
 
 
 def _strip_frontmatter(text: str) -> str:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
+    body = text
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
         if end != -1:
-            return text[end + 4 :].lstrip("\n")
-    return text
+            body = body[end + 4 :].lstrip("\n")
+    # Strip the leading `# Title` heading if present — the article
+    # template already renders the title as <h1>, so keeping it in
+    # the body produces a duplicate.
+    if body.startswith("# "):
+        first_nl = body.find("\n")
+        if first_nl != -1:
+            body = body[first_nl:].lstrip("\n")
+    return body
 
 
 def _resolve_wikilinks(

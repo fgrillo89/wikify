@@ -40,11 +40,22 @@ def _render_page(page: WikiPage) -> str:
                 lines.append(f"  {k}: {v}")
     lines.append("---")
     lines.append("")
-    lines.append(f"# {page.title}")
+
+    body = page.body_markdown.strip()
+
+    # Don't prepend a title heading if the body already starts with one.
+    if not body.startswith(f"# {page.title}"):
+        lines.append(f"# {page.title}")
+        lines.append("")
+
+    lines.append(body)
     lines.append("")
-    lines.append(page.body_markdown.strip())
-    lines.append("")
-    if page.evidence:
+
+    # Don't append an Evidence block if the body already has a References
+    # section (the writer emits evidence as ## References; appending a
+    # second block under ## Evidence produces duplicates).
+    has_references = "## References" in body
+    if page.evidence and not has_references:
         lines.append("## Evidence")
         lines.append("")
         for ev in page.evidence:
