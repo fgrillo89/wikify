@@ -26,8 +26,14 @@ class Extractor(Protocol):
     def extract(self, request: ExtractRequest) -> ExtractResponse: ...
 
 
+class Compactor(Protocol):
+    """Consolidates raw dossier entries into a deduplicated summary."""
+
+    def compact(self, page_id: str, title: str, entries: list[dict]) -> dict: ...
+
+
 class Editor(Protocol):
-    """Reads accumulated dossier material for a page and produces a brief."""
+    """Reads compacted dossier material for a page and produces a brief."""
 
     def edit(
         self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]

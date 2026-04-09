@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from ..agents.protocols import Editor, Extractor, Writer
+from ..agents.protocols import Compactor, Editor, Extractor, Writer
 from ..agents.schema import (
     ExtractRequest,
     ImageRef,
@@ -89,6 +89,8 @@ def run(
     max_concepts: int = 60,
     feed: bool = False,
     editor: Editor | None = None,
+    compactor: Compactor | None = None,
+    compact_threshold: int = 10,
 ) -> None:
     bundle.ensure()
     existing_pages: list[WikiPage] = _load_existing_pages(bundle) if feed else []
@@ -224,9 +226,42 @@ def run(
                 dossier_by_page[p.id].append(entry)
                 break
 
+    # ---- dossier compaction (optional) -----------------------------------
+    # When a compactor is injected, concepts with more than compact_threshold
+    # raw entries get consolidated into a single deduplicated dossier via a
+    # cheap model call. This keeps the editor prompt manageable.
+    if compactor is not None:
+        for page_id, entries in dossier_by_page.items():
+            if len(entries) <= compact_threshold:
+                continue
+            page_title = page_id
+            for p in pages:
+                if p.id == page_id:
+                    page_title = p.title
+                    break
+            try:
+                compacted = compactor.compact(
+                    page_id=page_id,
+                    title=page_title,
+                    entries=entries,
+                )
+                # Replace raw entries with compacted top_evidence,
+                # enriched with the consolidated metadata.
+                top = compacted.get("top_evidence", entries[:8])
+                for t in top:
+                    t.setdefault("definition", compacted.get("definition", ""))
+                    t.setdefault("summary", compacted.get("summary", ""))
+                    t.setdefault("parameters", compacted.get("parameters", []))
+                    t.setdefault("mechanisms", compacted.get("mechanisms", []))
+                    t.setdefault("relationships", compacted.get("relationships", []))
+                dossier_by_page[page_id] = top
+            except (ValidationError, BudgetExceeded):
+                # Fall back to truncation
+                dossier_by_page[page_id] = entries[:compact_threshold]
+
     # ---- editor pass (optional) -----------------------------------------
-    # If an editor is injected, it reads all dossier material for each page
-    # and produces a structured brief. The writer then follows the brief.
+    # If an editor is injected, it reads compacted dossier material for each
+    # page and produces a structured brief. The writer then follows the brief.
     briefs: dict[str, object] = {}
     if editor is not None:
         written_summaries: list[dict] = []
