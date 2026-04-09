@@ -1,22 +1,32 @@
-"""Corpus profiling: graph metrics, importance scores, community detection.
+"""Corpus profiling: graph metrics, importance, community detection.
 
-Computes the analytics an orchestrator needs to make smart decisions about
-what to extract and write. All metrics are derived from the CorpusGraph
-materialized at ingest time -- no additional model calls needed.
+Computes the analytics an orchestrator needs to make smart decisions
+about what to extract and write. All metrics derive from the CorpusGraph
+materialized at ingest time -- no model calls needed.
+
+Design principles:
+  - **Document-type agnostic**: importance comes from PageRank on the
+    unified document graph (cites + doc_similar + coupling), not from
+    citations alone. Works for papers, blog posts, manuals, reports.
+  - **Minimal arbitrariness**: one importance score (PageRank), one
+    community algorithm (Louvain), one bridge metric (betweenness).
+    No blended weights to tune.
+  - **Cheap**: runs in milliseconds on hundreds of documents.
 
 Usage:
     profile = build_corpus_profile(corpus)
-    profile.doc_pagerank["[2020 Liu] ..."]  # -> 0.087
-    profile.doc_roles["[2020 Liu] ..."]     # -> "core"
-    profile.communities                      # -> {0: ["doc1", "doc2"], 1: [...]}
-    profile.hub_concepts[:10]               # -> top 10 concept chunks by centrality
+    profile.doc_importance["[2020 Liu] ..."]  # -> 0.087
+    profile.doc_roles["[2020 Liu] ..."]       # -> "core"
+    profile.communities                        # -> {0: ["doc1", ...], ...}
 """
 
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
+
+import networkx as nx
 
 from ..paths import CorpusPaths
 from ..store.corpus import all_chunks, list_documents, read_graph
@@ -30,45 +40,51 @@ class CorpusProfile:
     n_chunks: int = 0
     topics: list[str] = field(default_factory=list)
 
-    # Document-level metrics
-    doc_pagerank: dict[str, float] = field(default_factory=dict)
-    doc_degree: dict[str, int] = field(default_factory=dict)
-    doc_in_degree: dict[str, int] = field(default_factory=dict)  # citation authority
-    doc_roles: dict[str, str] = field(default_factory=dict)  # core | bridge | peripheral
-    doc_importance: dict[str, float] = field(default_factory=dict)  # blended score
+    # Document-level metrics (all from unified graph PageRank)
+    doc_importance: dict[str, float] = field(default_factory=dict)
+    doc_betweenness: dict[str, float] = field(default_factory=dict)
+    doc_roles: dict[str, str] = field(default_factory=dict)
 
-    # Community structure
-    communities: dict[int, list[str]] = field(default_factory=dict)  # community_id -> doc_ids
-    doc_community: dict[str, int] = field(default_factory=dict)  # doc_id -> community_id
+    # Community structure (Louvain)
+    communities: dict[int, list[str]] = field(default_factory=dict)
+    doc_community: dict[str, int] = field(default_factory=dict)
+    modularity: float = 0.0
 
-    # Chunk-level metrics (sparse, only for high-value chunks)
-    hub_chunks: list[str] = field(default_factory=list)  # chunk_ids sorted by centrality
+    # Chunk-level: most central chunks by similarity-graph degree
+    hub_chunks: list[str] = field(default_factory=list)
 
     def top_docs(self, n: int = 10) -> list[tuple[str, float]]:
-        """Top-n documents by importance score."""
+        """Top-n documents by importance."""
         return sorted(self.doc_importance.items(), key=lambda x: -x[1])[:n]
 
     def docs_in_community(self, community_id: int) -> list[str]:
-        """Document IDs in a given community."""
         return self.communities.get(community_id, [])
 
     def summary(self) -> dict:
-        """Compact summary for the orchestrator prompt."""
+        """Compact summary for orchestrator prompts."""
         return {
             "n_docs": self.n_docs,
             "n_chunks": self.n_chunks,
             "n_communities": len(self.communities),
+            "modularity": round(self.modularity, 3),
             "topics": self.topics[:20],
             "top_docs": [
-                {"id": did, "importance": round(imp, 3), "role": self.doc_roles.get(did, "?")}
+                {
+                    "id": did,
+                    "importance": round(imp, 3),
+                    "role": self.doc_roles.get(did, "?"),
+                    "community": self.doc_community.get(did, -1),
+                }
                 for did, imp in self.top_docs(10)
             ],
-            "community_sizes": {k: len(v) for k, v in sorted(self.communities.items())},
+            "community_sizes": {
+                k: len(v) for k, v in sorted(self.communities.items())
+            },
         }
 
 
 def build_corpus_profile(corpus: CorpusPaths) -> CorpusProfile:
-    """Build a full corpus profile from the materialized graph and metadata."""
+    """Build a corpus profile from the materialized graph."""
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
     graph = read_graph(corpus)
@@ -84,243 +100,136 @@ def build_corpus_profile(corpus: CorpusPaths) -> CorpusProfile:
     if not doc_ids:
         return profile
 
-    # Build adjacency from graph edges
-    cites_edges = graph.edges.get("cites", []) if graph else []
-    similar_edges = graph.edges.get("doc_similar", []) if graph else []
-    chunk_sim_edges = graph.edges.get("similar_strong", []) if graph else []
+    # Build unified document graph from ALL edge types.
+    # This makes importance document-type agnostic: papers get credit
+    # from citations, blog posts from semantic similarity, etc.
+    g = _build_unified_doc_graph(doc_ids, graph)
 
-    # PageRank on citation graph
-    profile.doc_pagerank = _pagerank(doc_ids, cites_edges)
+    if g.number_of_nodes() == 0:
+        return profile
 
-    # Degree centrality (undirected: cites + doc_similar)
-    all_doc_edges = cites_edges + similar_edges
-    profile.doc_degree = _degree(doc_ids, all_doc_edges)
+    # PageRank on the unified graph = the single importance score.
+    profile.doc_importance = dict(nx.pagerank(g, weight="weight"))
 
-    # In-degree (citation authority)
-    profile.doc_in_degree = _in_degree(doc_ids, cites_edges)
+    # Betweenness centrality for bridge detection.
+    profile.doc_betweenness = dict(nx.betweenness_centrality(g, weight="weight"))
 
-    # Source diversity: how many distinct docs cite each doc
-    source_div = _source_diversity(doc_ids, cites_edges)
-
-    # Blended importance: 0.5*PR + 0.3*degree_norm + 0.2*source_div_norm
-    profile.doc_importance = _blended_importance(
-        doc_ids, profile.doc_pagerank, profile.doc_degree, source_div
-    )
-
-    # Node roles: core / bridge / peripheral
+    # Node roles from importance + betweenness.
     profile.doc_roles = _classify_roles(
-        doc_ids, profile.doc_importance, profile.doc_degree, cites_edges
+        doc_ids, profile.doc_importance, profile.doc_betweenness
     )
 
-    # Community detection on doc similarity graph
-    profile.communities, profile.doc_community = _detect_communities(
-        doc_ids, all_doc_edges
+    # Louvain community detection.
+    profile.communities, profile.doc_community, profile.modularity = (
+        _louvain_communities(g, doc_ids)
     )
 
-    # Hub chunks: top chunks by kNN degree
+    # Hub chunks by similarity-graph degree.
+    chunk_sim_edges = graph.edges.get("similar_strong", []) if graph else []
     profile.hub_chunks = _hub_chunks(chunks, chunk_sim_edges)
 
     return profile
 
 
-def _pagerank(
-    node_ids: list[str],
-    edges: list[tuple[str, str]],
-    damping: float = 0.85,
-    max_iter: int = 100,
-    tol: float = 1e-6,
-) -> dict[str, float]:
-    """Power-iteration PageRank. No networkx dependency."""
-    n = len(node_ids)
-    if n == 0:
-        return {}
+def _build_unified_doc_graph(
+    doc_ids: list[str], graph
+) -> nx.Graph:
+    """Build an undirected weighted graph from all document-level edges.
 
-    idx = {nid: i for i, nid in enumerate(node_ids)}
-    adj: dict[int, list[int]] = defaultdict(list)
-    out_degree: dict[int, int] = Counter()
+    Edge types used (all contribute equally):
+      - cites: doc -> doc (from parsed references)
+      - doc_similar: doc <-> doc (embedding cosine >= threshold)
 
-    for src, dst in edges:
-        si, di = idx.get(src), idx.get(dst)
-        if si is not None and di is not None:
-            adj[si].append(di)
-            out_degree[si] += 1
+    Each edge type adds weight 1.0. If a pair has both a citation and
+    a similarity edge, the combined weight is 2.0. This naturally
+    boosts documents that are both semantically similar and citation-linked.
+    """
+    g = nx.Graph()
+    g.add_nodes_from(doc_ids)
 
-    rank = [1.0 / n] * n
-    teleport = (1.0 - damping) / n
+    if graph is None:
+        return g
 
-    for _ in range(max_iter):
-        new_rank = [teleport] * n
-        dangling_mass = sum(rank[i] for i in range(n) if out_degree[i] == 0)
-        dangling_contrib = damping * dangling_mass / n
+    node_set = set(doc_ids)
+    edge_types = ["cites", "doc_similar"]
 
-        for i in range(n):
-            if out_degree[i] == 0:
+    for etype in edge_types:
+        for src, dst in graph.edges.get(etype, []):
+            if src not in node_set or dst not in node_set:
                 continue
-            share = damping * rank[i] / out_degree[i]
-            for j in adj[i]:
-                new_rank[j] += share
+            if src == dst:
+                continue
+            if g.has_edge(src, dst):
+                g[src][dst]["weight"] += 1.0
+            else:
+                g.add_edge(src, dst, weight=1.0)
 
-        for i in range(n):
-            new_rank[i] += dangling_contrib
-
-        # Check convergence
-        diff = sum(abs(new_rank[i] - rank[i]) for i in range(n))
-        rank = new_rank
-        if diff < tol:
-            break
-
-    return {node_ids[i]: rank[i] for i in range(n)}
-
-
-def _degree(node_ids: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
-    """Undirected degree count."""
-    deg: dict[str, int] = {nid: 0 for nid in node_ids}
-    node_set = set(node_ids)
-    for src, dst in edges:
-        if src in node_set:
-            deg[src] = deg.get(src, 0) + 1
-        if dst in node_set:
-            deg[dst] = deg.get(dst, 0) + 1
-    return deg
-
-
-def _in_degree(node_ids: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
-    """Directed in-degree (citation authority)."""
-    ind: dict[str, int] = {nid: 0 for nid in node_ids}
-    node_set = set(node_ids)
-    for _, dst in edges:
-        if dst in node_set:
-            ind[dst] = ind.get(dst, 0) + 1
-    return ind
-
-
-def _source_diversity(
-    node_ids: list[str], cites_edges: list[tuple[str, str]]
-) -> dict[str, float]:
-    """Fraction of corpus docs that cite each node."""
-    n = len(node_ids)
-    if n <= 1:
-        return {nid: 0.0 for nid in node_ids}
-    node_set = set(node_ids)
-    citers: dict[str, set[str]] = {nid: set() for nid in node_ids}
-    for src, dst in cites_edges:
-        if dst in node_set and src in node_set:
-            citers[dst].add(src)
-    return {nid: len(citers[nid]) / (n - 1) for nid in node_ids}
-
-
-def _blended_importance(
-    node_ids: list[str],
-    pagerank: dict[str, float],
-    degree: dict[str, int],
-    source_div: dict[str, float],
-) -> dict[str, float]:
-    """0.5*PR_norm + 0.3*degree_norm + 0.2*source_diversity."""
-    if not node_ids:
-        return {}
-    max_pr = max(pagerank.values()) or 1.0
-    max_deg = max(degree.values()) or 1
-    return {
-        nid: (
-            0.5 * (pagerank.get(nid, 0) / max_pr)
-            + 0.3 * (degree.get(nid, 0) / max_deg)
-            + 0.2 * source_div.get(nid, 0)
-        )
-        for nid in node_ids
-    }
+    return g
 
 
 def _classify_roles(
-    node_ids: list[str],
+    doc_ids: list[str],
     importance: dict[str, float],
-    degree: dict[str, int],
-    cites_edges: list[tuple[str, str]],
+    betweenness: dict[str, float],
 ) -> dict[str, str]:
-    """Classify nodes as core / bridge / peripheral."""
-    if not node_ids:
+    """Classify documents as core / bridge / peripheral.
+
+    - core: top quartile by importance
+    - bridge: top quartile by betweenness (but not core)
+    - peripheral: everything else
+    """
+    if not doc_ids:
         return {}
 
-    # Betweenness heuristic: nodes that connect different clusters
-    # (simplified: nodes cited by AND citing other nodes)
-    node_set = set(node_ids)
-    cites_out: dict[str, set[str]] = defaultdict(set)
-    cites_in: dict[str, set[str]] = defaultdict(set)
-    for src, dst in cites_edges:
-        if src in node_set and dst in node_set:
-            cites_out[src].add(dst)
-            cites_in[dst].add(src)
+    n = len(doc_ids)
+    imp_sorted = sorted(doc_ids, key=lambda d: importance.get(d, 0), reverse=True)
+    bet_sorted = sorted(doc_ids, key=lambda d: betweenness.get(d, 0), reverse=True)
 
-    median_deg = sorted(degree.values())[len(degree) // 2] if degree else 0
+    q1 = max(n // 4, 1)
+    core_set = set(imp_sorted[:q1])
+    bridge_set = set(bet_sorted[:q1]) - core_set
+
     roles: dict[str, str] = {}
-
-    for nid in node_ids:
-        imp = importance.get(nid, 0)
-        deg = degree.get(nid, 0)
-        # Bridge: cites AND is cited by different nodes (connector)
-        is_bridge = len(cites_out.get(nid, set())) >= 1 and len(cites_in.get(nid, set())) >= 1
-        if imp > 0.5 and deg > median_deg:
-            roles[nid] = "core"
-        elif is_bridge and imp > 0.2:
-            roles[nid] = "bridge"
+    for did in doc_ids:
+        if did in core_set:
+            roles[did] = "core"
+        elif did in bridge_set:
+            roles[did] = "bridge"
         else:
-            roles[nid] = "peripheral"
-
+            roles[did] = "peripheral"
     return roles
 
 
-def _detect_communities(
-    node_ids: list[str], edges: list[tuple[str, str]]
-) -> tuple[dict[int, list[str]], dict[str, int]]:
-    """Simple community detection via connected components + greedy modularity.
+def _louvain_communities(
+    g: nx.Graph, doc_ids: list[str]
+) -> tuple[dict[int, list[str]], dict[str, int], float]:
+    """Louvain community detection on the unified doc graph."""
+    if g.number_of_edges() == 0:
+        # No edges: each doc is its own community
+        communities = {i: [did] for i, did in enumerate(doc_ids)}
+        doc_community = {did: i for i, did in enumerate(doc_ids)}
+        return communities, doc_community, 0.0
 
-    Falls back to connected components if the graph is too sparse for
-    meaningful community structure.
-    """
-    if not node_ids:
-        return {}, {}
-
-    # Build adjacency
-    node_set = set(node_ids)
-    adj: dict[str, set[str]] = {nid: set() for nid in node_ids}
-    for src, dst in edges:
-        if src in node_set and dst in node_set:
-            adj[src].add(dst)
-            adj[dst].add(src)
-
-    # Connected components via BFS
-    visited: set[str] = set()
-    components: list[list[str]] = []
-    for nid in node_ids:
-        if nid in visited:
-            continue
-        component: list[str] = []
-        queue = [nid]
-        while queue:
-            node = queue.pop(0)
-            if node in visited:
-                continue
-            visited.add(node)
-            component.append(node)
-            for neighbor in adj[node]:
-                if neighbor not in visited:
-                    queue.append(neighbor)
-        components.append(component)
-
-    # Sort communities by size (largest first)
-    components.sort(key=len, reverse=True)
+    parts = list(nx.community.louvain_communities(g, weight="weight", seed=0))
+    # Sort by size, largest first
+    parts.sort(key=len, reverse=True)
 
     communities: dict[int, list[str]] = {}
     doc_community: dict[str, int] = {}
-    for i, comp in enumerate(components):
-        communities[i] = comp
-        for nid in comp:
-            doc_community[nid] = i
+    for i, part in enumerate(parts):
+        members = sorted(part)
+        communities[i] = members
+        for did in members:
+            doc_community[did] = i
 
-    return communities, doc_community
+    modularity = float(
+        nx.community.modularity(g, parts, weight="weight")
+    )
+    return communities, doc_community, modularity
 
 
 def _hub_chunks(chunks, sim_edges: list[tuple[str, str]]) -> list[str]:
-    """Top chunks by similarity-graph degree (most connected = most central)."""
+    """Top chunks by similarity-graph degree."""
     chunk_ids = {c.id for c in chunks}
     deg: Counter[str] = Counter()
     for src, dst in sim_edges:
@@ -332,7 +241,6 @@ def _hub_chunks(chunks, sim_edges: list[tuple[str, str]]) -> list[str]:
 
 
 def _load_topics(corpus: CorpusPaths) -> list[str]:
-    """Load corpus-wide topics."""
     topics_path = corpus.topics_path
     if not topics_path.exists():
         return []
