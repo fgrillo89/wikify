@@ -502,6 +502,148 @@ Examples:
 
 Architecture should remain valid even if any one adapter changes or disappears.
 
+## wikify_simple -- successor pipeline
+
+`wikify_simple` (`src/wikify_simple/`) is a standalone wikification pipeline
+designed to replace the legacy `wikify.wiki` surface. It is simpler and
+file-based, with no SQLite or ChromaDB dependency.
+
+### Package layout
+
+```text
+src/wikify_simple/
+|-- cli.py                  # ingest, distill, eval, html, query, field-detect
+|-- models.py               # shared domain types
+|-- paths.py                # on-disk path conventions (CorpusPaths, BundlePaths)
+|
+|-- ingest/                 # parse -> chunk -> embed -> graph -> citations
+|   |-- parsers/            #   pdf.py, markdown.py, docx/pptx/html stubs
+|   |-- embedder.py         #   switchable backend (sentence_transformers / hash)
+|   |-- graph_builder.py    #   corpus concept graph
+|   |-- citations.py        #   BibTeX generation
+|   |-- topics.py           #   topic extraction and deduplication
+|   |-- metadata.py         #   title, authors, year, DOI extraction
+|   `-- doc_markdown.py     #   per-doc Obsidian markdown
+|
+|-- distill/                # extract -> canonicalize -> write -> crosslink
+|   |-- pipeline.py         #   main distill loop
+|   |-- canonicalize.py     #   alias-merge candidates into pages
+|   |-- author_pages.py     #   deterministic + model-enriched person pages
+|   |-- crosslink.py        #   inter-page link discovery
+|   |-- field_detect.py     #   auto-detect corpus field from topics
+|   `-- strategies/         #   mixed.py (exploit/explore schedule)
+|
+|-- eval/                   # metrics -> audit -> bundle analysis
+|   |-- metrics.py          #   M1-M6, GT-P, GT-C, g_links, g_evidence
+|   |-- audit.py            #   per-bundle _audit.md
+|   `-- bundle.py           #   bundle loader and page parser
+|
+|-- store/                  # all on-disk state management
+|   |-- corpus.py           #   corpus directory operations
+|   |-- vectors.py          #   numpy .npz vector store
+|   |-- wiki_files.py       #   page file I/O
+|   |-- wiki_index.py       #   WikiIndex (_index.json + _index.md)
+|   |-- images_index.py     #   ImageIndex (per-doc figure lookup)
+|   |-- page_naming.py      #   natural Wikipedia-style filenames
+|   `-- bundle_embeddings.py #  per-bundle page embeddings
+|
+|-- render/html/            # static site generation
+|   |-- builder.py          #   Jinja2 renderer
+|   |-- templates/          #   HTML templates
+|   `-- static/             #   CSS + JS
+|
+|-- infra/                  # shared infrastructure
+|   |-- cache.py            #   SHA256-keyed extract cache
+|   |-- cost_meter.py       #   token-based cost accounting (S/M/L tiers)
+|   |-- context_envelope.py #   request/response envelope
+|   |-- embedding.py        #   embedder factory
+|   |-- tokens.py           #   token counting
+|   `-- role.py             #   extractor/writer/querier roles
+|
+|-- agents/                 # model interaction contracts
+|   |-- schema.py           #   Pydantic v2 request/response schemas
+|   |-- protocols.py        #   Extractor/Writer/Querier protocols
+|   `-- text_normalize.py   #   NFKC + dash + bracket + emphasis normalization
+|
+|-- bindings/               # model binding implementations
+|   |-- fake.py             #   deterministic stub for CI
+|   `-- claude_code.py      #   file-based dispatcher for Claude Code
+|
+`-- prompts/                # layered prompt system
+    |-- registry.py         #   prompt loader
+    |-- style_guide.md      #   global writing rules
+    |-- fields/             #   per-field guides (materials_science.yaml, etc)
+    |-- artifact_types/     #   wiki_article.yaml, person_page.yaml
+    |-- extract.yaml        #   extractor prompt template
+    |-- write.yaml          #   writer prompt template
+    `-- query.yaml          #   query answerer prompt template
+```
+
+### Data flow
+
+```text
+Input PDFs / DOCX / MD
+        |
+        v
+    ingest/
+    parse -> chunk -> embed -> graph -> citations -> images -> topics
+        |
+        v
+    corpus directory (data/wikify_simple/corpora/{name}/)
+    markdown/ chunks/ docs/ vectors.npz graph.json topics.json images/
+        |
+        v
+    distill/
+    extract (per-chunk) -> canonicalize -> author_pages -> write -> crosslink
+        |
+        v
+    bundle directory (data/wikify_simple/wikis/{name}/{strategy}_{budget}_{seed}_{ts}/)
+    concepts/*.md  people/*.md  _index.json  _run.json  _audit.md  _metrics.json
+        |
+        v
+    render/html/
+    Jinja2 templates + CSS -> static HTML site (data/wikify_simple/html/{name}/)
+```
+
+### Key design decisions
+
+- **Files on disk, no database.** All state is inspectable files: JSON, JSONL,
+  markdown, numpy .npz. No SQLite, no ChromaDB. The vector store is a single
+  numpy matrix (adequate for <= 10^4 chunks). This makes the entire pipeline
+  greppable and debuggable without special tooling.
+
+- **Dispatcher-based binding.** Python never calls an LLM directly. The binding
+  writes a `.request.json` file and polls for a `.response.json`. The fake
+  binding responds deterministically (for CI). The claude_code binding lets the
+  outer Claude Code session drive the model. This keeps the LLM loop outside
+  Python and makes the pipeline binding-agnostic.
+
+- **Layered prompts.** The writer prompt is assembled from four layers: a global
+  style guide, a field-specific guide (auto-detected from corpus topics), an
+  artifact type template, and a corpus persona. Each layer is a separate file
+  under `prompts/`. This allows domain-appropriate writing without code changes.
+
+- **Deterministic author pages.** Person pages for corpus authors are generated
+  without model calls: lead sentence, publication list, collaborators, related
+  concepts. Pages are enriched with model-extracted context only when evidence
+  accumulates. Non-author people mentioned in text also get pages.
+
+- **Natural page names.** Page files use Wikipedia-style titles
+  (`Atomic Layer Deposition.md`, not `concept-atomic-layer-deposition.md`). The
+  `kind` field in frontmatter distinguishes page types.
+
+- **Tolerant quote validation.** Evidence quotes are validated as verbatim
+  substrings of chunk text, but both sides are NFKC-normalized with dash,
+  bracket, and emphasis stripping before comparison. Quotes are stored verbatim.
+
+### Relationship to legacy wikify
+
+`wikify_simple` is the successor to the legacy `wikify.wiki` surface. It was
+designed to be simpler and file-based. Legacy code is ported function-by-function
+where needed (PDF parser, image extraction, markdown cleanup, HTML renderer).
+The two packages coexist in the repo; `wikify_simple` does not import from
+`wikify` at runtime.
+
 ## Migration State
 The repo is in transition from an organically grown mixed layout toward the
 boundary-driven shape above. The active implementation sequence lives in

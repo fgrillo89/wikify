@@ -150,3 +150,8 @@ Format:
 - **Package name**: The Python package is `wikify`; the project root directory still happens to be `C:\dev\scholarforge`.
 - **Skill files are adapters**: Claude-specific skill files are useful operating surfaces, but they are not the architecture source of truth.
 - **Extraction template evolves**: The extraction template can evolve across epochs, but it must not drift into corpus-specific overfitting.
+- **wikify_simple page names**: Use natural Wikipedia-style titles ("Atomic Layer Deposition", not "concept-atomic-layer-deposition"). The kind field distinguishes page types; the id IS the title.
+- **wikify_simple writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible [[wikilinks]] in prose.
+- **wikify_simple person pages**: Author pages are deterministic (no model call) but get enriched when evidence accumulates. Non-author people mentioned in text also get pages.
+- **Quote substring validation**: Uses tolerant normalization (NFKC + dash + brackets + emphasis). Picks verbatim phrases from clean chunks; don't normalize chunk text when selecting quotes.
+- **Pipeline error handling**: Per-call ValidationError and QuoteNotInChunkError are caught and skipped. The run continues; .error.json artifacts are left for postmortem.
