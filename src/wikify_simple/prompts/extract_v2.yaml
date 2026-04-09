@@ -7,7 +7,7 @@ input_schema:
   canonical_titles: list[str]
 output_schema:
   chunk_id: str
-  concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, evidence_figures, confidence, score}]"
+  concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, equations, evidence_figures, confidence, score}]"
   tokens_in: int
   tokens_out: int
 sampler_hint: haiku
@@ -41,9 +41,17 @@ prompt_template: |
       Relation types: enables, part-of, used-in, contrasts-with, produces, requires,
       improves, degrades, contains, measures.
       Example: {target: "Conductive Filament", relation: "enables", evidence: "filament formation drives switching"}
-  11. **evidence_figures**: figure IDs from images_for_doc if the chunk discusses them
-  12. **confidence**: extracted (named in text) | inferred (implied) | ambiguous
-  13. **score**: 0.0-1.0
+  11. **equations**: mathematical equations and chemical formulas mentioned in the chunk
+      for this concept. Each: {latex, label, kind, context}. Examples:
+      - {latex: "v(t) = M(q) \\cdot i(t)", label: "Eq. 1", kind: "mathematical", context: "memristor constitutive relation"}
+      - {latex: "HfO_2", label: "", kind: "chemical", context: "hafnium oxide switching layer"}
+      - {latex: "R_{ON}/R_{OFF} > 10^6", label: "", kind: "mathematical", context: "resistance ratio requirement"}
+      - {latex: "TiO_{2-x}", label: "", kind: "chemical", context: "oxygen-deficient titanium oxide"}
+      Include LaTeX notation. For chemical formulas use subscripts (H_2O, HfO_2).
+      For equations include the label if one is given in the text (Eq. 1, (3), etc).
+  12. **evidence_figures**: figure IDs from images_for_doc if the chunk discusses them
+  13. **confidence**: extracted (named in text) | inferred (implied) | ambiguous
+  14. **score**: 0.0-1.0
 
   Rules:
   - If a title is in canonical_titles, reuse that exact title.

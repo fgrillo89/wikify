@@ -235,6 +235,9 @@ def run(
             relationships=[
                 r.model_dump() for r in c.relationships
             ] if c.relationships else [],
+            equations=[
+                eq.model_dump() for eq in c.equations
+            ] if c.equations else [],
             section_type=chunk.section_type if chunk else "",
             figure_ids=list(c.evidence_figures),
         ))

@@ -122,6 +122,17 @@ class Parameter(BaseModel):
     conditions: str = ""  # e.g. "at 200C", "H2 plasma 20s"
 
 
+class Equation(BaseModel):
+    """An equation or chemical formula extracted from the corpus."""
+
+    model_config = _STRICT
+
+    latex: str  # e.g. "R = V/I", "HfO_2", "TiO_{2-x}"
+    label: str = ""  # e.g. "(1)", "Eq. 2", "Fick's second law"
+    kind: Literal["mathematical", "chemical"] = "mathematical"
+    context: str = ""  # one-sentence description of what it represents
+
+
 class Relationship(BaseModel):
     """A directed relationship between two concepts."""
 
@@ -162,6 +173,7 @@ class ExtractedConcept(BaseModel):
     parameters: list[Parameter] = Field(default_factory=list)
     mechanisms: list[str] = Field(default_factory=list)  # how it works
     relationships: list[Relationship] = Field(default_factory=list)
+    equations: list[Equation] = Field(default_factory=list)
 
     @field_validator("score")
     @classmethod

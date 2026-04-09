@@ -36,6 +36,7 @@ class DossierEntry:
     parameters: list[dict] = field(default_factory=list)
     mechanisms: list[str] = field(default_factory=list)
     relationships: list[dict] = field(default_factory=list)
+    equations: list[dict] = field(default_factory=list)
     section_type: str = ""
     figure_ids: list[str] = field(default_factory=list)
 
@@ -49,6 +50,7 @@ class DossierEntry:
             "parameters": self.parameters,
             "mechanisms": self.mechanisms,
             "relationships": self.relationships,
+            "equations": self.equations,
             "section_type": self.section_type,
             "figure_ids": self.figure_ids,
         }
@@ -64,6 +66,7 @@ class DossierEntry:
             parameters=d.get("parameters", []),
             mechanisms=d.get("mechanisms", []),
             relationships=d.get("relationships", []),
+            equations=d.get("equations", []),
             section_type=d.get("section_type", ""),
             figure_ids=d.get("figure_ids", []),
         )
@@ -92,6 +95,7 @@ class Dossier:
     merged_parameters: list[dict] = field(default_factory=list)
     merged_mechanisms: list[str] = field(default_factory=list)
     merged_relationships: list[dict] = field(default_factory=list)
+    merged_equations: list[dict] = field(default_factory=list)
 
     # Metadata
     n_source_docs: int = 0
@@ -131,6 +135,7 @@ class Dossier:
         self.merged_parameters = compacted.get("parameters", self.merged_parameters)
         self.merged_mechanisms = compacted.get("mechanisms", self.merged_mechanisms)
         self.merged_relationships = compacted.get("relationships", self.merged_relationships)
+        self.merged_equations = compacted.get("equations", self.merged_equations)
 
         # Replace entries with the top evidence selected by the compactor.
         top = compacted.get("top_evidence", [])
@@ -151,6 +156,7 @@ class Dossier:
             "merged_parameters": self.merged_parameters,
             "merged_mechanisms": self.merged_mechanisms,
             "merged_relationships": self.merged_relationships,
+            "merged_equations": self.merged_equations,
             "n_source_docs": self.n_source_docs,
             "n_compactions": self.n_compactions,
         }
@@ -170,6 +176,7 @@ class Dossier:
         dossier.merged_parameters = d.get("merged_parameters", [])
         dossier.merged_mechanisms = d.get("merged_mechanisms", [])
         dossier.merged_relationships = d.get("merged_relationships", [])
+        dossier.merged_equations = d.get("merged_equations", [])
         dossier.n_source_docs = d.get("n_source_docs", len(dossier.source_doc_ids))
         dossier.n_compactions = d.get("n_compactions", 0)
         return dossier
@@ -196,6 +203,9 @@ class Dossier:
             ))[:8],
             "relationships": self.merged_relationships or [
                 r for e in self.entries for r in e.relationships
+            ][:10],
+            "equations": self.merged_equations or [
+                eq for e in self.entries for eq in e.equations
             ][:10],
             "evidence": [
                 {"chunk_id": e.chunk_id, "doc_id": e.doc_id, "quote": e.quote,
