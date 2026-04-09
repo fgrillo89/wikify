@@ -218,7 +218,14 @@ def _render_body(
             seen_pairs.add(key)
             year_str = str(cit_year) if cit_year else "n.d."
             citing = doc.title or doc.id
-            lines.append(f"- {year_str}. *{cit_title}* (cited in: [[{citing}]])")
+            # Skip citation titles that are clearly garbage (volume/page
+            # fragments, very short, or mostly digits).
+            title_clean = (cit_title or "").strip()
+            digit_heavy = sum(c.isdigit() for c in title_clean) > len(title_clean) // 2
+            if len(title_clean) < 10 or digit_heavy:
+                lines.append(f"- {year_str}. Cited in *{citing}*")
+            else:
+                lines.append(f"- {year_str}. *{title_clean}* (cited in *{citing}*)")
         lines.append("")
 
     if collaborators:

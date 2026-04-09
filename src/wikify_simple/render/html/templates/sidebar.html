@@ -22,3 +22,13 @@
   </ul>
 </div>
 {% endif %}
+{% if people %}
+<div class="sidebar-section">
+  <h3>People</h3>
+  <ul>
+    {% for p in people[:20] %}
+    <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}

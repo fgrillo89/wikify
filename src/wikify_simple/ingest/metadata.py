@@ -253,7 +253,204 @@ def _is_valid_author(name: str) -> bool:
         return False
     if all(w.lower() in _AUTHOR_NOISE for w in words):
         return False
+    # Reject journal / venue names that slip through citation parsing.
+    if _looks_like_journal(name):
+        return False
+    # Reject "et al." fragments that leak from citation parsing.
+    if "et al" in name.lower():
+        return False
+    # Reject names containing ampersand (citation parsing artifact like
+    # "B. & Alibart" from broken "Alibart, F. & Strukov, D. B." splits).
+    if "&" in name:
+        return False
+    # Reject well-known place names that leak from affiliations.
+    if _normalize_lower(name) in _PLACE_NAMES:
+        return False
+    # Reject names containing common non-name words (title/topic fragments).
+    if _has_non_name_words(name):
+        return False
     return True
+
+
+# Words that never appear in a person's name. When any of these appear
+# (case-insensitive) in a candidate "author" string, it's a citation
+# parsing artifact (e.g. "J. Vector-matrix multiply" or "Information
+# Technology").
+_NON_NAME_WORDS = {
+    "multiply",
+    "learning",
+    "training",
+    "network",
+    "circuit",
+    "device",
+    "memory",
+    "synapse",
+    "computing",
+    "technology",
+    "information",
+    "system",
+    "systems",
+    "analysis",
+    "design",
+    "control",
+    "model",
+    "models",
+    "method",
+    "theory",
+    "simulation",
+    "process",
+    "energy",
+    "performance",
+    "structure",
+    "material",
+    "materials",
+    "effect",
+    "effects",
+    "properties",
+    "application",
+    "applications",
+    "based",
+    "using",
+    "toward",
+    "towards",
+    "novel",
+    "high",
+    "low",
+    "ultra",
+    "nano",
+    "micro",
+    "oxide",
+    "metal",
+    "thin",
+    "film",
+    "layer",
+    "switching",
+    "resistive",
+    "neuromorphic",
+    "memristor",
+    "memristive",
+    "crossbar",
+    "array",
+    "integrated",
+    "operation",
+    "architecture",
+    "reconfigurable",
+    "analog",
+    "digital",
+    "vector",
+    "matrix",
+    "wiley",
+    "springer",
+    "elsevier",
+    "taylor",
+    "francis",
+    "usa",
+    "ieee",
+    "acm",
+}
+
+
+_PLACE_NAMES = {
+    "san francisco",
+    "new york",
+    "los angeles",
+    "san jose",
+    "san diego",
+    "washington",
+    "boston",
+    "chicago",
+    "seattle",
+    "london",
+    "berlin",
+    "tokyo",
+    "beijing",
+    "shanghai",
+    "usa wiley",
+    "usa_ wiley",
+}
+
+
+def _normalize_lower(s: str) -> str:
+    return re.sub(r"[_\s]+", " ", s.lower()).strip()
+
+
+def _has_non_name_words(name: str) -> bool:
+    """Return True if name contains words that indicate a title fragment, not a person."""
+    words_lower = {w.lower().rstrip(".,;:-") for w in name.split()}
+    return bool(words_lower & _NON_NAME_WORDS)
+
+
+# Abbreviated journal tokens. A name containing 2+ of these is almost
+# certainly a publication venue, not a person.
+_JOURNAL_ABBREV_TOKENS = {
+    "adv",
+    "appl",
+    "chem",
+    "commun",
+    "electron",
+    "eng",
+    "funct",
+    "lett",
+    "mater",
+    "nanotechnol",
+    "phys",
+    "rev",
+    "sci",
+    "technol",
+    "trans",
+    "proc",
+    "int",
+    "conf",
+    "symp",
+}
+_JOURNAL_FULL_WORDS = {
+    "journal",
+    "proceedings",
+    "transactions",
+    "letters",
+    "review",
+    "reviews",
+    "annals",
+    "bulletin",
+    "reports",
+    "communications",
+    "magazine",
+    "quarterly",
+    "archives",
+    "nano",
+    "nature",
+    "science",
+    "cell",
+}
+
+
+def _looks_like_journal(name: str) -> bool:
+    """Return True if ``name`` looks like an abbreviated or full journal title."""
+    # Split into normalized tokens (strip trailing dots, commas, etc.)
+    tokens = [w.lower().rstrip(".,;:") for w in name.split()]
+    # Count abbreviated journal tokens (e.g. "Adv", "Funct", "Mater")
+    abbrev_hits = sum(1 for t in tokens if t in _JOURNAL_ABBREV_TOKENS)
+    # If 2+ abbreviated tokens match, it's a journal
+    if abbrev_hits >= 2:
+        return True
+    # Full journal-word match
+    token_set = set(tokens)
+    journal_hits = token_set & _JOURNAL_FULL_WORDS
+    if journal_hits:
+        non_journal = token_set - _JOURNAL_FULL_WORDS - _JOURNAL_ABBREV_TOKENS
+        # All words are journal-ish
+        if not non_journal:
+            return True
+        # 2-word name where one is a journal word ("ACS Nano", "RSC Adv")
+        if len(tokens) <= 2:
+            return True
+    # Single abbreviated token + short name (e.g. "RSC Adv." = 2 words)
+    if abbrev_hits >= 1 and len(tokens) <= 2:
+        # Check if the other token looks like an abbreviation too (all caps or short)
+        non_abbrev = [t for t in tokens if t not in _JOURNAL_ABBREV_TOKENS]
+        if all(len(t) <= 4 or t.upper() == t for t in non_abbrev):
+            return True
+    return False
 
 
 def _parse_author_line(line: str) -> list[str]:

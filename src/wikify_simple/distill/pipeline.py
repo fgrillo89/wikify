@@ -191,11 +191,12 @@ def run(
             state.pages_concept_evidence_chunks.append(ev.chunk_id)
 
     # ---- write loop -----------------------------------------------------
-    write_target = split.extract_haiku_eq + split.write_haiku_eq
+    # All canonicalized concepts get written. The budget gates extraction
+    # scope (how much of the corpus to read), not write coverage. This
+    # mirrors the legacy map-reduce approach: map everything, then reduce
+    # everything.
     try:
         for page in pages[:max_concepts]:
-            if meter.spent_haiku_eq >= write_target:
-                break
             # Person pages are only enriched by the writer when they have
             # enough extracted evidence (>=2 entries from chunk extraction).
             # Author pages with only deterministic evidence keep their

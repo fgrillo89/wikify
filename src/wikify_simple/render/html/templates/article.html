@@ -5,6 +5,18 @@
   {% if aliases %}
   <p class="aliases"><em>Also known as: {{ aliases|join(", ") }}</em></p>
   {% endif %}
+
+  {% if infobox %}
+  <div class="wiki-infobox">
+    <div class="infobox-title">{{ title }}</div>
+    <table>
+      {% for key, val in infobox.items() %}
+      <tr><th>{{ key }}</th><td>{{ val }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
   {% if toc|length > 2 %}
   <div class="wiki-toc">
     <div class="toc-title">Contents</div>
@@ -15,9 +27,22 @@
     </ol>
   </div>
   {% endif %}
+
   <div class="article-body">
     {{ content|safe }}
   </div>
+
+  {% if see_also %}
+  <div class="wiki-see-also">
+    <h2>See also</h2>
+    <ul>
+      {% for link in see_also %}
+      <li><a href="{{ root }}{{ link.url }}">{{ link.title }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if categories %}
   <div class="wiki-categories">
     Categories: {% for cat in categories %}<span>{{ cat }}</span>{% if not loop.last %} | {% endif %}{% endfor %}

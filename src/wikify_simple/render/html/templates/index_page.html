@@ -3,25 +3,28 @@
 <article class="wiki-article">
   <h1>Welcome to {{ wiki_name }}</h1>
   <div class="main-page-banner">
-    <p>A wiki bundle with <strong>{{ stats.total_articles }}</strong> articles
+    <p>A knowledge wiki with <strong>{{ stats.total_articles }}</strong> articles
     ({{ stats.total_concepts }} concepts, {{ stats.total_people }} people).</p>
   </div>
   {% if concepts %}
   <div class="main-page-section">
     <h2>Concepts</h2>
-    <ul class="article-list">
+    <div class="article-grid">
       {% for c in concepts %}
-      <li><a href="{{ root }}{{ c.url }}">{{ c.title }}</a>
-        {% if c.n_evidence %}<span class="count-badge">({{ c.n_evidence }} ev)</span>{% endif %}
-      </li>
+      <div class="article-card">
+        <a href="{{ root }}{{ c.url }}" class="article-card-title">{{ c.title }}</a>
+        {% if c.excerpt %}
+        <p class="article-card-excerpt">{{ c.excerpt }}</p>
+        {% endif %}
+      </div>
       {% endfor %}
-    </ul>
+    </div>
   </div>
   {% endif %}
   {% if people %}
   <div class="main-page-section">
     <h2>People</h2>
-    <ul class="article-list">
+    <ul class="article-list people-list">
       {% for p in people %}
       <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
       {% endfor %}

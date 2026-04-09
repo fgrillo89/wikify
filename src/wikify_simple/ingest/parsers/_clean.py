@@ -35,6 +35,33 @@ _LINE_NOISE_SUBSTRINGS = (
     "authorized licensed use limited to",
     "downloaded on",
     "restrictions apply",
+    "all rights reserved",
+    "this article has been accepted",
+    "personal use of this material",
+    "permission to make digital",
+    "published by",
+    "accepted for publication",
+    "manuscript received",
+    "redistribution",
+    "free of charge via the internet",
+    "supporting information",
+    "available free of charge",
+)
+
+# Single-line patterns matched by regex (copyright, DOI, volume/issue, URLs)
+_LINE_NOISE_RE = re.compile(
+    r"(?i)^(?:"
+    r"(?:copyright\s*)?(?:\(c\)|©)\s*\d{4}"  # © 2010 ...
+    r"|doi:\s*10\.\d{4,}"  # DOI: 10.1021/...
+    r"|https?://(?:dx\.)?doi\.org/"  # https://doi.org/...
+    r"|https?://pubs\.\w+\.org/"  # https://pubs.acs.org/...
+    r"|vol\.?\s*\d+\s*[,|]\s*(?:no\.?\s*\d+|issue)"  # Vol 453 | No. 1
+    r"|pp?\.?\s*\d+\s*[-–]\s*\d+"  # pp. 100-105
+    r"|e?-?mail:"  # email: / E-mail:
+    r"|received\s+\d{1,2}\s+\w+\s+\d{4}"  # Received 3 January 2010
+    r"|revised\s+\d{1,2}\s+\w+\s+\d{4}"  # Revised 15 March 2010
+    r"|published\s+(?:online\s+)?\d{1,2}\s+\w+\s+\d{4}"  # Published online ...
+    r")",
 )
 
 
@@ -66,11 +93,14 @@ def _strip_repeated_headers(md: str) -> str:
 
 
 def _strip_line_noise(md: str) -> str:
-    """Drop individual lines that match licensing-notice substrings."""
+    """Drop individual lines that match licensing-notice substrings or regex patterns."""
     out: list[str] = []
     for ln in md.split("\n"):
         low = ln.lower()
         if any(s in low for s in _LINE_NOISE_SUBSTRINGS):
+            continue
+        stripped = ln.strip()
+        if stripped and _LINE_NOISE_RE.match(stripped):
             continue
         out.append(ln)
     return "\n".join(out)

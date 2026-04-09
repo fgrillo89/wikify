@@ -361,6 +361,33 @@ a.wiki-redlink:visited {
   color: #0645ad;
 }
 
+/* ── See also ─────────────────────────────────────────────────── */
+.wiki-see-also {
+  margin-top: 20px;
+  border-top: 1px solid #a2a9b1;
+  padding-top: 10px;
+}
+
+.wiki-see-also h2 {
+  font-size: 1.2em;
+  border-bottom: none;
+}
+
+.wiki-see-also ul {
+  column-count: 2;
+  column-gap: 20px;
+  list-style: disc;
+  padding-left: 1.5em;
+}
+
+.wiki-see-also li {
+  margin-bottom: 4px;
+}
+
+.wiki-see-also a {
+  color: #0645ad;
+}
+
 /* ── Categories bar ───────────────────────────────────────────── */
 .wiki-categories {
   border-top: 1px solid #a2a9b1;
@@ -395,6 +422,37 @@ a.wiki-redlink:visited {
   font-size: 1.1em;
   border: 1px solid #a2a9b1;
   margin-bottom: 10px;
+}
+
+.article-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.article-card {
+  background: #f8f9fa;
+  border: 1px solid #c8ccd1;
+  padding: 10px 14px;
+  border-radius: 2px;
+}
+
+.article-card-title {
+  font-weight: bold;
+  color: #0645ad;
+  font-size: 1.05em;
+}
+
+.article-card-excerpt {
+  font-size: 0.88em;
+  color: #54595d;
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+.people-list {
+  column-count: 3;
+  column-gap: 20px;
 }
 
 /* ── Badges ───────────────────────────────────────────────────── */

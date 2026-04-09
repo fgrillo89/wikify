@@ -91,6 +91,7 @@ def _chunk_to_dict(c: Chunk) -> dict:
         "text": c.text,
         "char_span": list(c.char_span),
         "section_path": c.section_path,
+        "section_type": c.section_type,
     }
 
 
@@ -102,6 +103,7 @@ def _chunk_from_dict(d: dict) -> Chunk:
         text=d["text"],
         char_span=tuple(d["char_span"]),
         section_path=d["section_path"],
+        section_type=d.get("section_type", "body"),
     )
 
 

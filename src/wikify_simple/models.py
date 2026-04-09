@@ -96,6 +96,7 @@ class Chunk:
     text: str
     char_span: tuple[int, int]
     section_path: list[str]
+    section_type: str = "body"  # canonical type from section_classifier
     # embedding lives in the vector store, keyed by id
 
 

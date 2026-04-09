@@ -29,6 +29,7 @@ import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ...eval.bundle import Bundle, Page, load_bundle
+from ...ingest.metadata import _is_valid_author
 from ...paths import BundlePaths
 from ...store.page_naming import url_slug
 from ...store.wiki_index import WikiIndex, _normalize
@@ -84,7 +85,15 @@ def build_site(
         autoescape=select_autoescape(["html"]),
     )
 
-    page_views = [_PageView.from_page(p) for p in loaded.pages]
+    all_page_views = [_PageView.from_page(p) for p in loaded.pages]
+    # Only include pages with real prose in navigation and listing.
+    # Skeleton pages (evidence-only) are omitted from the rendered site.
+    # Also filter out person pages whose title looks like a journal name.
+    page_views = [
+        pv
+        for pv in all_page_views
+        if pv.has_prose and not (pv.kind == "person" and not _is_valid_author(pv.title))
+    ]
     concepts = sorted(
         [pv for pv in page_views if pv.kind == "concept"],
         key=lambda v: v.title.lower(),
@@ -108,7 +117,13 @@ def build_site(
     slug_to_url = {pv.id: pv.url for pv in page_views}
     alias_to_id = {_normalize(name): pv.id for pv in page_views for name in (pv.title, *pv.aliases)}
 
-    for pv, page in zip(page_views, loaded.pages, strict=False):
+    # Build a lookup from page_view id to the source Page object.
+    page_by_id = {p.id: p for p in loaded.pages}
+
+    for pv in page_views:
+        page = page_by_id.get(pv.id)
+        if page is None:
+            continue
         html_path = out_dir / pv.url
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html_str = _render_article(
@@ -167,6 +182,7 @@ class _PageView:
     url: str  # site-relative
     n_evidence: int
     excerpt: str
+    has_prose: bool  # True if body has real content beyond just evidence
 
     @classmethod
     def from_page(cls, page: Page) -> _PageView:
@@ -177,6 +193,9 @@ class _PageView:
             if stripped and not stripped.startswith("#") and not stripped.startswith("|"):
                 excerpt = stripped[:200]
                 break
+        # A page "has prose" if body_clean contains at least one real
+        # paragraph (not just headings, tables, or links).
+        has_prose = _page_has_prose(page.body_clean)
         return cls(
             id=page.id,
             kind=page.kind,
@@ -185,7 +204,29 @@ class _PageView:
             url=f"{sub}/{url_slug(page.id)}.html",
             n_evidence=len(page.evidence),
             excerpt=excerpt,
+            has_prose=has_prose,
         )
+
+
+def _page_has_prose(body: str) -> bool:
+    """Return True if the body has real prose content (not just headings/links/evidence)."""
+    prose_chars = 0
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip headings, tables, list items that are just links, evidence markers
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("|"):
+            continue
+        if stripped.startswith("[^"):
+            continue
+        if stripped.startswith("- [[") or stripped.startswith("- n.d."):
+            continue
+        # Count actual prose characters
+        prose_chars += len(stripped)
+    return prose_chars >= 200
 
 
 def _render_article(
@@ -217,6 +258,12 @@ def _render_article(
         page_url_depth=1,
     )
 
+    # Clean up evidence footnote lines: format as bibliographic references.
+    body_md = _clean_evidence_lines(body_md)
+
+    # Normalize the section heading: "Evidence" -> "References"
+    body_md = body_md.replace("## Evidence\n", "## References\n")
+
     # Resolve [[wikilinks]] BEFORE markdown conversion so they emit
     # plain <a> tags rather than literal "[[...]]" text.
     body_md = _resolve_wikilinks(
@@ -232,6 +279,32 @@ def _render_article(
     toc = _build_toc(body_html)
     categories = [pv.kind]
 
+    # Build "See also" from crosslinks (frontmatter links that exist as pages).
+    see_also = []
+    for link_id in page.links:
+        if link_id in slug_to_url and link_id != pv.id:
+            link_title = link_id  # fallback
+            # Find the actual title from the shared page list
+            for candidate in shared_ctx.get("concepts", []) + shared_ctx.get("people", []):
+                if candidate.id == link_id:
+                    link_title = candidate.title
+                    break
+            see_also.append({"title": link_title, "url": slug_to_url[link_id]})
+
+    # Build infobox for concept pages.
+    infobox = {}
+    if pv.kind == "concept":
+        infobox["Type"] = "Concept"
+        if pv.n_evidence:
+            infobox["Sources"] = str(pv.n_evidence)
+    elif pv.kind == "person":
+        infobox["Type"] = "Person"
+        prov = page.provenance or {}
+        if prov.get("primary_count"):
+            infobox["Papers"] = str(prov["primary_count"])
+        if prov.get("collaborator_count"):
+            infobox["Collaborators"] = str(prov["collaborator_count"])
+
     template = env.get_template("article.html")
     return template.render(
         title=pv.title,
@@ -239,6 +312,8 @@ def _render_article(
         content=body_html,
         toc=toc,
         categories=categories,
+        see_also=see_also[:10],  # cap at 10 links
+        infobox=infobox if infobox else None,
         root=root,
         **shared_ctx,
     )
@@ -274,9 +349,93 @@ def _resolve_wikilinks(
             page_id = slug_to_url and (text if text in slug_to_url else None)
         if page_id is not None and page_id in slug_to_url:
             return f'<a href="{root}{slug_to_url[page_id]}">{text}</a>'
-        return f'<a href="#" class="wiki-redlink" title="Article not found">{text}</a>'
+        # Unresolved wikilinks render as plain text (no dead links).
+        return text
 
     return _WIKILINK_RE.sub(_replace, body)
+
+
+# Matches the internal chunk hash suffix in evidence lines, e.g.
+# "__c0000__fec9f3fb" at the end of a chunk_id.
+_CHUNK_HASH_RE = re.compile(r"__c\d{4}__[0-9a-f]{6,}")
+
+# Extracts [Year Author] prefix from doc_id, e.g. "[2020 Liu]"
+_DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
+
+
+def _clean_evidence_lines(body: str) -> str:
+    """Reformat evidence footnote definitions as bibliographic references.
+
+    Transforms raw evidence like:
+        ``[^e1]: chunk_hash (doc_id) > "quote"``
+    into clean references like:
+        ``[^e1]: Author (Year). *Paper Title.* "quote"``
+    """
+    lines = body.split("\n")
+    out: list[str] = []
+    for line in lines:
+        if line.startswith("[^") and "]:" in line:
+            line = _CHUNK_HASH_RE.sub("", line)
+            line = _format_evidence_as_reference(line)
+        out.append(line)
+    return "\n".join(out)
+
+
+def _format_evidence_as_reference(line: str) -> str:
+    """Format a single evidence footnote line as a bibliographic reference."""
+    # Extract marker prefix
+    marker_end = line.index("]:") + 2
+    marker = line[:marker_end]
+    rest = line[marker_end:].strip()
+
+    # Parse the evidence value: look for ' > "quote"'
+    sep = rest.find(' > "')
+    if sep == -1:
+        # No quote separator -- just clean up what we have
+        return f"{marker} {_format_doc_id(rest)}"
+
+    head = rest[:sep].strip()
+    quote = rest[sep + 4 :].rstrip('"').strip()
+
+    # Head may be "chunk_id (doc_id)" or just "doc_id"
+    doc_id = head
+    paren_open = head.rfind("(")
+    paren_close = head.rfind(")")
+    if paren_open > 0 and paren_close > paren_open:
+        doc_id = head[paren_open + 1 : paren_close].strip()
+
+    formatted = _format_doc_id(doc_id)
+    if quote:
+        return f'{marker} {formatted} -- "{quote}"'
+    return f"{marker} {formatted}"
+
+
+# Trailing content hash: _hexstring at end of doc_id (5+ hex chars)
+_TRAILING_HASH_RE = re.compile(r"_[0-9a-f]{5,}$")
+
+
+def _format_doc_id(doc_id: str) -> str:
+    """Turn a doc_id like '[2020 Liu] Paper Title_hash' into 'Liu (2020). *Paper Title*.'"""
+    # Strip chunk and content hash suffixes
+    doc_id = _CHUNK_HASH_RE.sub("", doc_id).strip().rstrip("_")
+    doc_id = _TRAILING_HASH_RE.sub("", doc_id).strip().rstrip("_")
+
+    # Try to extract [Year Author] prefix
+    m = _DOC_YEAR_RE.match(doc_id)
+    if m:
+        year = m.group(1)
+        author = m.group(2).strip()
+        title = doc_id[m.end() :].strip().lstrip("_ ").replace("_", " ")
+        # Strip trailing hashes from title too
+        title = _TRAILING_HASH_RE.sub("", title).strip().rstrip("_")
+        title = title.replace("_", " ").strip()
+        if title:
+            return f"{author} ({year}). *{title}.*"
+        return f"{author} ({year})."
+
+    # Fallback: just clean underscores and present as-is
+    clean = doc_id.replace("_", " ").strip()
+    return f"*{clean}.*" if clean else doc_id
 
 
 def _stage_and_rewrite_figures(

@@ -51,12 +51,12 @@ def _render_page(page: WikiPage) -> str:
     lines.append(body)
     lines.append("")
 
-    # Don't append an Evidence block if the body already has a References
-    # section (the writer emits evidence as ## References; appending a
-    # second block under ## Evidence produces duplicates).
+    # Don't append a References block if the body already has one (the writer
+    # emits evidence as ## References; appending a second block produces
+    # duplicates).
     has_references = "## References" in body
     if page.evidence and not has_references:
-        lines.append("## Evidence")
+        lines.append("## References")
         lines.append("")
         for ev in page.evidence:
             lines.append(_render_evidence(ev))
@@ -66,4 +66,6 @@ def _render_page(page: WikiPage) -> str:
 def _render_evidence(ev: Evidence) -> str:
     loc = f", {ev.locator}" if ev.locator else ""
     quote = ev.quote.replace('"', "'")
-    return f'[^{ev.marker}]: {ev.chunk_id} ({ev.doc_id}{loc}) > "{quote}"'
+    # Use the human-readable doc_id as the display label, hiding the
+    # internal chunk_id hash from the rendered output.
+    return f'[^{ev.marker}]: {ev.doc_id}{loc} > "{quote}"'

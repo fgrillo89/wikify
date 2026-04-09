@@ -151,6 +151,10 @@ def _normalize_quotes(s: str) -> str:
 def _parse_evidence_value(rest: str) -> tuple[str, str, str, str] | None:
     """Parse the post-marker text into (chunk_id, doc_id, locator, quote).
 
+    Supports two formats:
+      Legacy:  ``<chunk_id> (<doc_id>[, locator]) > "quote"``
+      Current: ``<doc_id>[, locator] > "quote"``
+
     ``rest`` is everything after ``[^e1]: `` on the evidence line (possibly
     continued across following lines if the quote spans multiple lines).
     """
@@ -170,43 +174,55 @@ def _parse_evidence_value(rest: str) -> tuple[str, str, str, str] | None:
         quote = tail[:close]
     quote = " ".join(quote.split())
 
-    # head = "<chunk_id> (<doc_id>[, locator])". Find the last ") " / ")" end
-    # then the matching " (" opener at the same nesting level.
-    if not head.endswith(")"):
-        return None
-    # Find matching "(" for the final ")". chunk_id may itself contain
-    # parens in rare cases, so scan right-to-left with a depth counter.
-    depth = 0
-    open_idx = -1
-    for i in range(len(head) - 1, -1, -1):
-        c = head[i]
-        if c == ")":
-            depth += 1
-        elif c == "(":
-            depth -= 1
-            if depth == 0:
-                open_idx = i
-                break
-    if open_idx <= 0:
-        return None
-    chunk_id = head[:open_idx].strip()
-    inner = head[open_idx + 1 : -1].strip()
-    if not chunk_id or not inner:
-        return None
-    # Split locator off the END of inner if it looks like " p.3", " slide 4",
-    # " fig. 2", etc. We only split on the LAST comma and only if the right
-    # side matches a short locator pattern; doc titles can contain commas.
+    # Try legacy format: head ends with ")" meaning "<chunk_id> (<doc_id>[, loc])"
+    if head.endswith(")"):
+        depth = 0
+        open_idx = -1
+        for i in range(len(head) - 1, -1, -1):
+            c = head[i]
+            if c == ")":
+                depth += 1
+            elif c == "(":
+                depth -= 1
+                if depth == 0:
+                    open_idx = i
+                    break
+        if open_idx > 0:
+            chunk_id = head[:open_idx].strip()
+            inner = head[open_idx + 1 : -1].strip()
+            if chunk_id and inner:
+                locator = ""
+                doc_id = inner
+                last_comma = inner.rfind(",")
+                if last_comma != -1:
+                    candidate = inner[last_comma + 1 :].strip()
+                    if re.match(
+                        r"^(p\.?\s*\d|pp\.?\s*\d|slide\s*\d|fig\.?\s*\d|sec\.?\s*\d)",
+                        candidate,
+                        re.IGNORECASE,
+                    ):
+                        doc_id = inner[:last_comma].strip()
+                        locator = candidate
+                return chunk_id, doc_id, locator, quote
+
+    # Current format: head is just "<doc_id>[, locator]" (no chunk_id).
+    # Use doc_id as chunk_id placeholder.
     locator = ""
-    doc_id = inner
-    last_comma = inner.rfind(",")
+    doc_id = head
+    last_comma = head.rfind(",")
     if last_comma != -1:
-        candidate = inner[last_comma + 1 :].strip()
+        candidate = head[last_comma + 1 :].strip()
         if re.match(
-            r"^(p\.?\s*\d|pp\.?\s*\d|slide\s*\d|fig\.?\s*\d|sec\.?\s*\d)", candidate, re.IGNORECASE
+            r"^(p\.?\s*\d|pp\.?\s*\d|slide\s*\d|fig\.?\s*\d|sec\.?\s*\d)",
+            candidate,
+            re.IGNORECASE,
         ):
-            doc_id = inner[:last_comma].strip()
+            doc_id = head[:last_comma].strip()
             locator = candidate
-    return chunk_id, doc_id, locator, quote
+    if doc_id:
+        return doc_id, doc_id, locator, quote
+
+    return None
 
 
 _H2_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
