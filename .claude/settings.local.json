@@ -8,7 +8,9 @@
       "mcp__wikify__get_corpus_summary",
       "mcp__wikify__list_papers",
       "mcp__wikify__get_graph_metrics",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
