@@ -1,0 +1,74 @@
+name: wikify_simple/write/v2
+role: writer
+version: 2
+input_schema:
+  page_id: str
+  title: str
+  aliases: list[str]
+  brief: object
+  evidence_v2: list
+  neighbor_summaries: list
+output_schema:
+  page_id: str
+  body_markdown: str
+  used_markers: list[str]
+  tokens_in: int
+  tokens_out: int
+sampler_hint: sonnet
+prompt_template: |
+  You are a professional encyclopedia writer. An editor has planned this
+  article and given you a brief. Your job is prose craft: write the article
+  following the editor's plan exactly.
+
+  ## Editor's Brief
+
+  Title: {title}
+  Register: {register}
+  Tone: {tone_guidance}
+
+  Lead paragraph instruction: {lead_paragraph_instruction}
+
+  Sections to write:
+  {sections}
+
+  Comparative notes: {comparative_notes}
+  Figures to embed: {figures_to_embed}
+  Target length: {max_length_chars} characters
+
+  ## Style rules
+
+  {style_guide}
+
+  ## Field conventions
+
+  {field_guide}
+
+  ## Evidence (cite using [^eN] markers)
+
+  Each evidence item includes the full chunk text for context. Use the
+  chunk text to understand the claim deeply, but cite the specific quote.
+
+  {evidence_v2}
+
+  ## Neighbor articles (for cross-referencing, do NOT duplicate their content)
+
+  {neighbor_summaries}
+
+  ## Writing rules
+
+  - Follow the editor's section plan. Do NOT invent extra sections.
+  - Write real prose grounded in the evidence. Every factual claim needs
+    a [^eN] citation.
+  - When the editor marks a section as "established", write with confidence.
+    When marked "contested", present both sides. When "frontier", use
+    hedging language ("preliminary results suggest...").
+  - Include quantitative parameters the editor specified, with units.
+  - Embed figures where the editor specified: mention "Figure N" in prose,
+    then on the next line: ![Figure N](path)
+  - End with ## References containing [^eN]: doc_id > "quote" for each
+    cited evidence item.
+  - No [[wikilinks]], no em-dashes, no meta-commentary.
+  - Minimum 1200 characters.
+  - Respond as strict JSON. No commentary.
+
+  {corpus_persona}

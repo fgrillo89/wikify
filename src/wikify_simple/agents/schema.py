@@ -111,6 +111,27 @@ ConceptCategory = Literal[
 ]
 
 
+class Parameter(BaseModel):
+    """A quantitative value extracted from the corpus."""
+
+    model_config = _STRICT
+
+    name: str  # e.g. "growth rate", "switching speed"
+    value: str  # e.g. "0.1", "<100 ns", "12.1%"
+    unit: str = ""  # e.g. "A/cycle", "ns", "%"
+    conditions: str = ""  # e.g. "at 200C", "H2 plasma 20s"
+
+
+class Relationship(BaseModel):
+    """A directed relationship between two concepts."""
+
+    model_config = _STRICT
+
+    target: str  # target concept title
+    relation: str  # e.g. "enables", "part-of", "contrasts-with", "used-in"
+    evidence: str = ""  # brief supporting statement
+
+
 class ExtractedConcept(BaseModel):
     """One concept (or person) surfaced from a single chunk.
 
@@ -135,6 +156,12 @@ class ExtractedConcept(BaseModel):
     evidence_figures: list[str] = Field(default_factory=list)
     confidence: ConfidenceLabel = "extracted"
     score: float = 1.0
+    # Rich dossier fields (v2): optional for backwards compatibility
+    definition: str = ""  # one-line definition of the concept
+    summary: str = ""  # 2-3 sentence summary of what this chunk says about it
+    parameters: list[Parameter] = Field(default_factory=list)
+    mechanisms: list[str] = Field(default_factory=list)  # how it works
+    relationships: list[Relationship] = Field(default_factory=list)
 
     @field_validator("score")
     @classmethod
@@ -347,6 +374,21 @@ class WriteEvidenceRef(BaseModel):
     locator: str = ""
 
 
+class WriteEvidenceRefV2(BaseModel):
+    """Extended evidence reference carrying full chunk context."""
+
+    model_config = _STRICT
+
+    chunk_id: str
+    doc_id: str
+    quote: str
+    locator: str = ""
+    chunk_text: str = ""  # full chunk text for synthesis context
+    section_type: str = ""  # abstract/methods/results/conclusion
+    definition: str = ""  # concept definition from dossier
+    summary: str = ""  # dossier summary of this chunk's contribution
+
+
 class WriteRequest(BaseModel):
     model_config = _STRICT
 
@@ -371,6 +413,10 @@ class WriteRequest(BaseModel):
     field_guide: str = ""
     artifact_template: str = ""
     corpus_persona: str = ""
+    # Editor-writer v2 fields (optional for backwards compatibility)
+    brief: EditorBrief | None = None
+    evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
+    neighbor_summaries: list[dict] = Field(default_factory=list)
 
 
 class WriteResponse(BaseModel):
@@ -415,6 +461,45 @@ class WriteResponse(BaseModel):
         _check_wikipedia_structure(v)
         _check_figure_mentions(v)
         return v
+
+
+# --- editor (brief) ------------------------------------------------------
+
+
+class BriefSection(BaseModel):
+    """One section in the editor's brief to the writer."""
+
+    model_config = _STRICT
+
+    heading: str  # e.g. "## Mechanism" or "## Device Performance"
+    instruction: str  # what to write, what to compare
+    evidence_markers: list[str] = Field(default_factory=list)  # e.g. ["e1", "e3"]
+    zone: Literal["established", "contested", "frontier", ""] = ""
+    parameters_to_include: list[str] = Field(default_factory=list)
+
+
+class EditorBrief(BaseModel):
+    """The editor's structured instructions for the writer.
+
+    The editor reads all accumulated dossier material for a concept
+    and produces a brief that tells the writer exactly what to write,
+    what tone to use, which evidence to cite where, and which figures
+    to embed.
+    """
+
+    model_config = _STRICT
+
+    page_id: str
+    title: str
+    article_register: Literal["academic", "applied", "tutorial", "general"] = "academic"
+    tone_guidance: str = ""  # specific tone instructions
+    lead_paragraph_instruction: str = ""  # what the opening should say
+    sections: list[BriefSection] = Field(default_factory=list)
+    comparative_notes: str = ""  # how this differs from related concepts
+    figures_to_embed: list[str] = Field(default_factory=list)  # figure IDs
+    max_length_chars: int = 5000
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 # --- orchestrator --------------------------------------------------------

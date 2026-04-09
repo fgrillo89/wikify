@@ -1,0 +1,63 @@
+name: wikify_simple/extract/v2
+role: extractor
+version: 2
+input_schema:
+  chunk_id: str
+  chunk_text: str
+  canonical_titles: list[str]
+output_schema:
+  chunk_id: str
+  concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, evidence_figures, confidence, score}]"
+  tokens_in: int
+  tokens_out: int
+sampler_hint: haiku
+prompt_template: |
+  You are a research analyst building a knowledge dossier from academic text.
+  Read the chunk and produce a RICH extraction for each concept worth a wiki
+  page. Your output feeds an editor who will use it to plan full encyclopedic
+  articles, so thoroughness matters more than brevity.
+
+  For each concept, extract:
+
+  1. **title**: canonical concept name (2-120 chars)
+  2. **aliases**: alternative names or abbreviations
+  3. **kind**: "concept" or "person"
+  4. **category**: phenomenon | method | material | device | theory | metric | organization | other (null for person)
+  5. **quote**: verbatim span from chunk_text (5-400 chars) -- evidence anchor
+  6. **definition**: one-sentence definition of this concept (in your own words)
+  7. **summary**: 2-3 sentences summarizing what THIS chunk says about the concept.
+     What claim does the chunk make? What result does it report? What role does
+     the concept play in this context?
+  8. **parameters**: quantitative values mentioned in the chunk for this concept.
+     Each: {name, value, unit, conditions}. Examples:
+     - {name: "switching speed", value: "<100", unit: "ns", conditions: "set operation"}
+     - {name: "vacancy concentration", value: "12.1", unit: "%", conditions: "HfOx layer"}
+     Extract ALL numbers with units that characterize this concept.
+  9. **mechanisms**: how the concept works or is applied, as described in this chunk.
+     Short phrases, not full sentences. Examples:
+     - "oxygen vacancy migration forms conductive filament"
+     - "self-limiting surface reaction enables atomic-scale thickness control"
+  10. **relationships**: connections to other concepts. Each: {target, relation, evidence}.
+      Relation types: enables, part-of, used-in, contrasts-with, produces, requires,
+      improves, degrades, contains, measures.
+      Example: {target: "Conductive Filament", relation: "enables", evidence: "filament formation drives switching"}
+  11. **evidence_figures**: figure IDs from images_for_doc if the chunk discusses them
+  12. **confidence**: extracted (named in text) | inferred (implied) | ambiguous
+  13. **score**: 0.0-1.0
+
+  Rules:
+  - If a title is in canonical_titles, reuse that exact title.
+  - quote MUST be a verbatim substring of chunk_text.
+  - For person entries: category is null, skip parameters/mechanisms.
+  - For bibliography/reference-only chunks: return fewer concepts but still
+    extract any that are substantively discussed.
+  - Respond as strict JSON. No commentary outside the JSON.
+
+  chunk_id: {chunk_id}
+  canonical_titles: {canonical_titles}
+  images_for_doc: {images_for_doc}
+
+  chunk_text:
+  ---
+  {chunk_text}
+  ---
