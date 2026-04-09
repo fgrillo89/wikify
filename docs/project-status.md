@@ -10,36 +10,37 @@ Python out of the LLM loop.
 ### Current state (2026-04-09)
 
 - **Corpus processed:** 20-paper mvp20 corpus (memristor / ALD / neuromorphic).
-  689 chunks, 312 images, 384-d sentence-transformer embeddings.
-- **Wiki output:** 215 concept pages + 21 person pages (real binding), 1268
-  deterministic author pages, full HTML rendering via mkdocs-material theme.
+  601 chunks, 20 BibTeX entries, 384-d sentence-transformer embeddings.
+  Section types classified (methods/results/conclusion/etc).
+- **Wiki output (v2):** 60 concept pages + 431 person pages, sonnet-quality
+  prose, full HTML rendering with Wikipedia-style layout (infobox, TOC,
+  See Also, article cards, formatted bibliographic references).
 - **Test count:** 190 tests passing.
-- **Key metrics (mvp20, 3x real-binding run):**
-
-| metric | value |
-|---|---|
-| M1 coverage_residual | 0.4603 |
-| M3 g_links Q | 0.7377 |
-| M3 g_links n_edges | 2601 |
-| M3 g_evidence Q | 0.0 (only 2 written pages) |
-| M6 g1_anchoring | 0.125 (14/112 sentences) |
-| figure refs in writes | 2/2 (100%) |
+- **Architecture:** Four-role editor-writer pipeline:
+  Extractor (rich dossiers) → Compactor (dedup) → Editor (briefs) → Writer (prose).
+  Persistent dossiers at `<bundle>/_dossiers/`. Corpus profiling with PageRank,
+  Louvain communities, betweenness centrality.
 
 - **Design decisions:** files-on-disk storage, dispatcher-based binding
   (fake for CI, claude_code for real runs), layered prompts (style guide +
   field guide + artifact template + persona), deterministic author pages,
-  natural Wikipedia-style page names, tolerant quote validation.
+  natural Wikipedia-style page names, tolerant quote validation,
+  extract_v2 with definitions/summaries/parameters/mechanisms/relationships/equations.
 
 ### What's next
 
-1. Fix M6 anchoring (writer not citing enough -- 12.5% of sentences).
-2. Implement `--feed` iteration semantics (create/refine/merge contract).
-3. Filter skeleton pages from rendered output.
-4. Unicode normalization for remaining extract rejections.
-5. Image consolidation in refine mode.
-6. Port remaining parsers (DOCX, PPTX, HTML).
+1. **Speed**: Dispatcher pattern is too slow (~45s/call). Need direct API
+   calls via litellm (set ANTHROPIC_API_KEY, use scripts/drain_extract.py).
+2. **Model-based extraction**: Currently falls back to heuristic extraction.
+   Need real model calls with extract_v2 prompt for rich dossiers.
+3. **Editor with model**: FakeEditor produces rule-based briefs. Real
+   editorial judgment needs model calls.
+4. **Implement `--feed` iteration** with dossier accumulation across runs.
+5. **Port remaining parsers** (DOCX, PPTX, HTML).
+6. **Figure embedding** in articles (infrastructure exists, writer needs
+   to actually reference figures).
 
-See `src/wikify_simple/SESSION_LOG.md` for the comprehensive handoff.
+See `src/wikify_simple/HANDOFF.md` for the restart guide.
 
 ---
 
