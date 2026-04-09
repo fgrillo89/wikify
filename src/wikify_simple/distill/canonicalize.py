@@ -4,6 +4,11 @@ Deterministic. No LLM. Inputs are extracted candidates from the extractor;
 outputs are WikiPage skeletons each marked as new / update / merge against
 the wiki dir already on disk. Match rule: normalised title equality OR
 alias intersection. The pipeline writes the resulting pages.
+
+Person candidates (``kind="person"``) are merged into existing author pages
+when an alias match exists. When no match is found, a new person page is
+created with ``provenance.source = "extraction"``. This allows the model
+to enrich person pages when enough evidence accumulates.
 """
 
 from __future__ import annotations
@@ -53,16 +58,57 @@ def canonicalize(
         ]
 
     for cand in candidates:
-        # Person pages are now produced deterministically from
-        # Document.metadata['authors'] + parsed citations (see
-        # distill/author_pages.py). Drop any person candidates the
-        # extractor returned so the deterministic path is the single
-        # source of truth for people.
-        if cand.concept.kind == "person":
-            continue
         norm = _normalize(cand.concept.title)
         if not norm:
             continue
+
+        # Person candidates: merge into existing author page by alias,
+        # or create a new extracted-person page if no match.
+        if cand.concept.kind == "person":
+            page_id = alias_index.get(norm)
+            if page_id is not None:
+                # Merge evidence into existing page (author or prior person).
+                page = by_id[page_id]
+                page.evidence.append(
+                    Evidence(
+                        marker=f"e{len(page.evidence) + 1}",
+                        chunk_id=cand.chunk_id,
+                        doc_id=cand.doc_id,
+                        quote=cand.concept.quote,
+                    )
+                )
+                conf_by_page.setdefault(page_id, []).append(
+                    (cand.concept.confidence, float(cand.concept.score))
+                )
+            else:
+                # New person page from extraction (not a corpus author).
+                page_id = page_id_from_title(cand.concept.title)
+                if not page_id:
+                    continue
+                page = WikiPage(
+                    id=page_id,
+                    kind="person",
+                    title=cand.concept.title,
+                    aliases=list(cand.concept.aliases),
+                    body_markdown="",
+                    evidence=[
+                        Evidence(
+                            marker="e1",
+                            chunk_id=cand.chunk_id,
+                            doc_id=cand.doc_id,
+                            quote=cand.concept.quote,
+                        )
+                    ],
+                    provenance={"source": "extraction"},
+                )
+                by_id[page_id] = page
+                alias_index[norm] = page_id
+                conf_by_page[page_id] = [(cand.concept.confidence, float(cand.concept.score))]
+                for a in cand.concept.aliases:
+                    alias_index[_normalize(a)] = page_id
+            continue
+
+        # Concept candidates: same logic as before.
         page_id = alias_index.get(norm)
         if page_id is None:
             page_id = page_id_from_title(cand.concept.title)

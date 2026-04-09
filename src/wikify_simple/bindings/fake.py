@@ -171,62 +171,11 @@ class FakeWriter(Writer):
             )
         used: list[str] = [f"e{i}" for i in range(1, len(request.evidence) + 1)]
         title = request.title
-        m1 = used[0]
-        m_last = used[-1]
-        # Background: >=3 prose sentences, no bullets, >=1 marker.
-        background = (
-            f"{title} has been studied across the supplied corpus over multiple "
-            f"sources[^{m1}]. Early reports framed it as a topic of interest for "
-            f"the broader community covered by the cited evidence[^{m_last}]. "
-            f"Subsequent work expanded the scope to additional contexts that the "
-            f"fake writer does not interpret in detail[^{m1}]. The motivation "
-            f"behind the topic is captured by the supplied evidence list."
-        )
-        # Mechanism: >=4 prose sentences, no bullets, >=1 marker.
-        mech_lines: list[str] = [
-            f"{title} operates through a sequence of well-defined steps grounded "
-            f"in the supplied evidence[^{m1}].",
-            f"Each step is documented in the cited corpus chunks listed below[^{m_last}].",
-            f"The mechanism is reproducible across the sources reviewed for this article[^{m1}].",
-            f"The fake writer renders these sentences without invoking a model[^{m_last}].",
-        ]
-        if request.figures:
-            fig_path = request.figures[0].path or "images/fig1.png"
-            mech_lines.append(
-                f"As shown in Figure 1, the mechanism is visible in the corpus evidence[^{m1}]."
-            )
-            mech_lines.append(f"![Figure 1]({fig_path})")
-        mechanism = "\n\n".join(mech_lines)
-        # Applications: >=3 sentences, >=1 marker. Bullets allowed here.
-        applications = (
-            f"{title} is applied across the cases described in the cited "
-            f"chunks[^{m1}]. Practitioners reference it in the contexts "
-            f"surfaced by the supplied evidence list[^{m_last}]. The fake "
-            f"writer does not enumerate specific deployments beyond the "
-            f"structural placeholder text."
-        )
-        evidence_block_lines = [
-            f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
-            for marker, ev in zip(used, request.evidence, strict=False)
-        ]
-        evidence_block = "\n".join(evidence_block_lines)
-        body = (
-            f"# {title}\n\n"
-            f"## Definition\n\n"
-            f"{title} is a placeholder concept rendered by the fake writer "
-            f"for structural validation. It is not real prose.\n\n"
-            f"## Background\n\n"
-            f"{background}\n\n"
-            f"## Mechanism / Process\n\n"
-            f"{mechanism}\n\n"
-            f"## Applications\n\n"
-            f"{applications}\n\n"
-            f"## Open Questions\n\n"
-            f"The fake writer does not assess open questions; this stub exists "
-            f"only to satisfy the structural validator.\n\n"
-            f"## References\n\n"
-            f"{evidence_block}\n"
-        )
+
+        if request.page_kind == "person" and request.skeleton:
+            body = _fake_person_body(title, used, request.skeleton, request.evidence)
+        else:
+            body = _fake_concept_body(title, used, request.evidence, request.figures)
         wall = time.monotonic() - t0
         # Writer tokens scale with figures payload: each figure adds ~50
         # tokens of caption + id + path to the prompt.
@@ -250,6 +199,151 @@ class FakeWriter(Writer):
             tokens_in=tokens_in,
             tokens_out=tokens_out,
         )
+
+
+def _fake_concept_body(
+    title: str,
+    used: list[str],
+    evidence: list,
+    figures: list,
+) -> str:
+    m1 = used[0]
+    m_last = used[-1]
+    background = (
+        f"{title} has been studied across the supplied corpus over multiple "
+        f"sources[^{m1}]. Early reports framed it as a topic of interest for "
+        f"the broader community covered by the cited evidence[^{m_last}]. "
+        f"Subsequent work expanded the scope to additional contexts that the "
+        f"fake writer does not interpret in detail[^{m1}]. The motivation "
+        f"behind the topic is captured by the supplied evidence list."
+    )
+    mech_lines: list[str] = [
+        f"{title} operates through a sequence of well-defined steps grounded "
+        f"in the supplied evidence[^{m1}].",
+        f"Each step is documented in the cited corpus chunks listed below[^{m_last}].",
+        f"The mechanism is reproducible across the sources reviewed for this article[^{m1}].",
+        f"The fake writer renders these sentences without invoking a model[^{m_last}].",
+    ]
+    if figures:
+        fig_path = figures[0].path or "images/fig1.png"
+        mech_lines.append(
+            f"As shown in Figure 1, the mechanism is visible in the corpus evidence[^{m1}]."
+        )
+        mech_lines.append(f"![Figure 1]({fig_path})")
+    mechanism = "\n\n".join(mech_lines)
+    applications = (
+        f"{title} is applied across the cases described in the cited "
+        f"chunks[^{m1}]. Practitioners reference it in the contexts "
+        f"surfaced by the supplied evidence list[^{m_last}]. The fake "
+        f"writer does not enumerate specific deployments beyond the "
+        f"structural placeholder text."
+    )
+    evidence_block_lines = [
+        f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
+        for marker, ev in zip(used, evidence, strict=False)
+    ]
+    evidence_block = "\n".join(evidence_block_lines)
+    return (
+        f"# {title}\n\n"
+        f"## Definition\n\n"
+        f"{title} is a placeholder concept rendered by the fake writer "
+        f"for structural validation. It is not real prose.\n\n"
+        f"## Background\n\n"
+        f"{background}\n\n"
+        f"## Mechanism / Process\n\n"
+        f"{mechanism}\n\n"
+        f"## Applications\n\n"
+        f"{applications}\n\n"
+        f"## Open Questions\n\n"
+        f"The fake writer does not assess open questions; this stub exists "
+        f"only to satisfy the structural validator.\n\n"
+        f"## References\n\n"
+        f"{evidence_block}\n"
+    )
+
+
+def _fake_person_body(
+    title: str,
+    used: list[str],
+    skeleton: str,
+    evidence: list,
+) -> str:
+    """Two-tier person page: model-enriched lead + skeleton Tier 1 + refs."""
+    m1, m_last = used[0], used[-1]
+    lead = (
+        f"**{title}** is a notable figure discussed across multiple sources "
+        f"in this corpus[^{m1}]. The supplied evidence describes their "
+        f"contributions and role within the domain covered by the corpus "
+        f"documents[^{m_last}]. Their work is referenced in the context of "
+        f"broader developments documented across the cited sources and "
+        f"related materials in the corpus collection[^{m1}]."
+    )
+    research_focus = (
+        f"{title} is primarily associated with research and practice "
+        f"described in the supplied evidence[^{m1}]. The corpus documents "
+        f"their involvement across multiple topics and contexts that span "
+        f"the breadth of the collection[^{m_last}]. Their contributions "
+        f"cover the areas represented by the cited corpus chunks and "
+        f"related source materials[^{m1}]. The scope of their work as "
+        f"documented in the evidence is broad and covers several "
+        f"interconnected themes[^{m_last}]."
+    )
+    significance = (
+        f"{title} is notable in this corpus for the breadth of references "
+        f"to their work across the collected sources[^{m1}]. Multiple "
+        f"documents cite or discuss their contributions in substantive "
+        f"detail that spans the major themes of the corpus[^{m_last}]. "
+        f"The fake writer does not interpret the evidence further but "
+        f"notes that the coverage is consistent across sources[^{m1}]."
+    )
+    tier1 = _extract_skeleton_sections(skeleton)
+    ev_block = "\n".join(
+        f"[^{marker}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
+        for marker, ev in zip(used, evidence, strict=False)
+    )
+    parts = [
+        f"# {title}\n",
+        lead,
+        "",
+        "## Research focus\n",
+        research_focus,
+        "",
+        "## Significance\n",
+        significance,
+    ]
+    if tier1:
+        parts += ["", tier1]
+    parts += ["", f"## References\n\n{ev_block}\n"]
+    return "\n".join(parts)
+
+
+_SKELETON_KEEP = (
+    "## Notable contributions",
+    "## Publications in this corpus",
+    "## Cited works in this corpus",
+    "## Collaborators",
+)
+
+
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def _extract_skeleton_sections(skeleton: str) -> str:
+    """Pull Tier 1 sections from the skeleton, stripping wikilinks.
+
+    The writer body must stay free of ``[[wikilinks]]`` (the crosslink
+    pass adds them via frontmatter). We convert ``[[Title]]`` to plain
+    ``Title`` so the validator accepts the output.
+    """
+    lines = skeleton.splitlines()
+    keep: list[str] = []
+    in_section = False
+    for line in lines:
+        if line.startswith("## "):
+            in_section = any(line.startswith(h) for h in _SKELETON_KEEP)
+        if in_section:
+            keep.append(_WIKILINK_RE.sub(r"\1", line))
+    return "\n".join(keep).strip()
 
 
 # --- orchestrator --------------------------------------------------------

@@ -21,6 +21,12 @@ prompt_template: |
   - Prefer canonical forms; do not invent titles absent from the text.
   - If a proposed title is already in ``canonical_titles``, reuse it.
   - ``kind`` must be ``concept`` or ``person``.
+  - If the chunk attributes work to a named person -- a researcher,
+    inventor, executive, theorist, practitioner, historical figure --
+    who is discussed or credited in the prose (not just listed in a
+    reference list or bibliography), extract a ``kind="person"`` entry
+    with the person's full name as the title. The person does NOT need
+    to be an author of the current document.
   - ``quote`` must be a verbatim span from ``chunk_text``.
   - ``evidence_figures`` is optional. If a concept is visibly tied to one
     of the figures listed in ``images_for_doc`` (caption mentions the

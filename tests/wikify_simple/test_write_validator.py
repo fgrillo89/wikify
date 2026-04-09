@@ -318,3 +318,51 @@ def test_fake_writer_output_has_no_wikilinks(tmp_path: Path) -> None:
     resp = fw.write(_request(n_evidence=2, neighbors=["A", "B", "C"]))
     WriteResponse.model_validate(resp.model_dump())
     assert "[[" not in resp.body_markdown
+
+
+# ---- person page FakeWriter ---------------------------------------------
+
+
+def _person_request(*, n_evidence: int = 3) -> WriteRequest:
+    skeleton = (
+        "**Alice Adams** is associated with testing in this corpus.\n\n"
+        "## Notable contributions\n\n"
+        "- [[Paper One]] — first contribution\n\n"
+        "## Publications in this corpus\n\n"
+        "- 2020. [[Paper One]]\n\n"
+        "## Collaborators\n\n"
+        "- [[Bob Brown]]\n"
+    )
+    return WriteRequest(
+        page_id="Alice Adams",
+        page_kind="person",
+        title="Alice Adams",
+        aliases=[],
+        skeleton=skeleton,
+        evidence=[_ev(i) for i in range(1, n_evidence + 1)],
+        neighbor_titles=[],
+        prompt_template="t",
+        model_id="fake",
+        tier="M",
+    )
+
+
+def test_fake_writer_person_page_passes_validator(tmp_path: Path) -> None:
+    meter = _meter(tmp_path)
+    fw = FakeWriter(meter)
+    resp = fw.write(_person_request())
+    WriteResponse.model_validate(resp.model_dump())
+    body = resp.body_markdown
+    # Tier 2 sections present.
+    assert "## Research focus" in body
+    assert "## Significance" in body
+    # Tier 1 skeleton sections preserved (wikilinks stripped for validator).
+    assert "## Publications in this corpus" in body
+    assert "## Collaborators" in body
+    assert "Paper One" in body
+    assert "Bob Brown" in body
+    # Wikilinks stripped from body (crosslink pass adds them via frontmatter).
+    assert "[[" not in body
+    # References present.
+    assert "## References" in body
+    assert "[^e1]:" in body

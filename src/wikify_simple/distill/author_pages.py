@@ -1,45 +1,6 @@
-"""Deterministic author/person pages built from primary metadata + citations.
+"""Deterministic author/person pages from metadata + citations.
 
-The wiki concept extractor used to spend model budget on person pages.
-That path is now disabled (see ``canonicalize.py``); instead this module
-builds person pages directly from two cheap, deterministic sources:
-
-1. ``Document.metadata['authors']`` -- the primary author list of every
-   ingested doc. These drive the "Publications in this corpus" and
-   "Notable contributions" sections.
-2. ``Document.citations`` -- the structured bibliography entries parsed
-   at ingest time. Authors that appear there but not as primary authors
-   still get a page, populated under "Cited works in this corpus".
-
-Each author becomes one ``WikiPage`` with a deterministic Wikipedia-style
-body and one ``Evidence`` entry per linked doc, so M3 g_evidence on
-author pages stays non-zero. No model call.
-
-The body shape follows ``prompts/artifact_types/wiki_person.md``:
-
-    **Name** is associated with <field hint> in this corpus, contributing
-    N papers from YYYY-YYYY, notably *Anchor Paper*.
-
-    ## Notable contributions
-    - [[Title]] — one-line summary
-    ...
-
-    ## Publications in this corpus
-    - YYYY. [[Title]]
-    ...
-
-    ## Cited works in this corpus
-    - YYYY. *title* (cited in: [[Citing Title]])
-    ...
-
-    ## Collaborators
-    - [[Other Author]]
-    ...
-
-When called with an ``existing_page_dir``, prior ``[[Title]]`` links
-under "Publications in this corpus" are merged into the new page so
-re-runs across corpus ingests are append-only (port of the legacy
-``wikify.ingest.vault.writer.write_author_note`` dedupe pattern).
+Enriched by the writer when chunk-extracted evidence accumulates.
 """
 
 from __future__ import annotations
@@ -56,7 +17,6 @@ from ..store.page_naming import page_filename, page_id_from_title
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
 # Stopwords for the deterministic "field hint" title-phrase extractor.
-# Conservative list: common English function words + paper-title filler.
 _STOP = {
     "a",
     "an",
@@ -126,12 +86,7 @@ def build_author_pages(
     existing_index=None,  # noqa: ARG001 — reserved for future merge
     existing_page_dir: Path | None = None,
 ) -> list[WikiPage]:
-    """Return one WikiPage per unique valid author across ``docs``.
-
-    If ``existing_page_dir`` is given, prior author pages in that directory
-    are parsed for their ``[[Title]]`` publication links and merged into
-    the new page so re-runs are append-only across ingests.
-    """
+    """Return one WikiPage per unique valid author across ``docs``."""
     bucket: dict[str, dict] = {}
 
     for doc in docs:
@@ -213,9 +168,6 @@ def build_author_pages(
             )
         )
     return pages
-
-
-# --- body rendering ------------------------------------------------------
 
 
 def _render_body(
@@ -315,11 +267,7 @@ def _lead_paragraph(
 
 
 def _field_hint(titles: list[str]) -> str:
-    """Most-common content word across the author's paper titles.
-
-    Deterministic, no model. Strips stopwords and short tokens; returns
-    an empty string if nothing rises above noise.
-    """
+    """Most-common content word across the author's paper titles."""
     counts: Counter[str] = Counter()
     for t in titles:
         for w in _WORD_RE.findall(t.lower()):
@@ -346,9 +294,7 @@ def _anchor_title(primary: list[tuple[Document, int | None]]) -> str:
     return sorted_primary[0][0].title or ""
 
 
-def _notable_contributions(
-    primary: list[tuple[Document, int | None]],
-) -> list[str]:
+def _notable_contributions(primary: list[tuple[Document, int | None]]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for doc, _ in primary:
@@ -356,23 +302,12 @@ def _notable_contributions(
             continue
         seen.add(doc.id)
         title = doc.title or doc.id
-        summary = _short_summary(doc)
-        if summary:
-            out.append(f"- [[{title}]] — {summary}")
-        else:
-            out.append(f"- [[{title}]]")
+        text = (doc.tldr or "").strip() or (doc.abstract or "").strip()
+        summary = ""
+        if text:
+            summary = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()[:200]
+        out.append(f"- [[{title}]] — {summary}" if summary else f"- [[{title}]]")
     return out
-
-
-def _short_summary(doc: Document) -> str:
-    text = (doc.tldr or "").strip() or (doc.abstract or "").strip()
-    if not text:
-        return ""
-    # First sentence, bounded.
-    first = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-    if len(first) > 200:
-        first = first[:197].rstrip() + "..."
-    return first
 
 
 def _publications_section(
@@ -381,33 +316,23 @@ def _publications_section(
     seen: set[str] = set()
     titles: set[str] = set()
     lines: list[str] = []
-    ordered = sorted(
-        primary,
-        key=lambda t: (t[1] if isinstance(t[1], int) else 9999, t[0].id),
-    )
-    for doc, year in ordered:
+    for doc, year in sorted(
+        primary, key=lambda t: (t[1] if isinstance(t[1], int) else 9999, t[0].id)
+    ):
         if doc.id in seen:
             continue
         seen.add(doc.id)
         title = doc.title or doc.id
         titles.add(title)
-        year_str = str(year) if year else "n.d."
-        lines.append(f"- {year_str}. [[{title}]]")
+        lines.append(f"- {str(year) if year else 'n.d.'}. [[{title}]]")
     return lines, titles
 
-
-# --- incremental merge (legacy port) -------------------------------------
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
 def _existing_paper_links(page_path: Path) -> list[str]:
-    """Parse an existing author page for its Publications wikilinks.
-
-    Returns the titles in the order they appeared under the
-    "Publications in this corpus" section. Missing file -> empty list.
-    Port of ``wikify.ingest.vault.writer.write_author_note`` dedupe.
-    """
+    """Parse an existing author page for Publications wikilinks."""
     try:
         content = page_path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
@@ -428,9 +353,6 @@ def _existing_paper_links(page_path: Path) -> list[str]:
     return out
 
 
-# --- evidence -------------------------------------------------------------
-
-
 def _build_evidence(
     primary: list[tuple[Document, int | None]],
     cited: list[tuple[Document, int | None, str]],
@@ -438,28 +360,37 @@ def _build_evidence(
     """One Evidence entry per unique linked doc."""
     seen: set[str] = set()
     out: list[Evidence] = []
-    n = 0
-
-    def add(doc: Document) -> None:
-        nonlocal n
+    for doc in [d for d, *_ in [*primary, *cited]]:
         if doc.id in seen:
-            return
+            continue
         seen.add(doc.id)
-        n += 1
         out.append(
             Evidence(
-                marker=f"e{n}",
+                marker=f"e{len(out) + 1}",
                 chunk_id=_first_chunk_id(doc),
                 doc_id=doc.id,
                 quote=doc.title or doc.id,
             )
         )
-
-    for doc, _ in primary:
-        add(doc)
-    for doc, _, _ in cited:
-        add(doc)
     return out
+
+
+def merge_extracted_evidence(page: WikiPage, extracted_evidence: list[Evidence]) -> None:
+    """Append extracted evidence; preserve skeleton. Skip duplicate chunk_ids."""
+    existing_chunks = {ev.chunk_id for ev in page.evidence}
+    for ev in extracted_evidence:
+        if ev.chunk_id in existing_chunks:
+            continue
+        existing_chunks.add(ev.chunk_id)
+        page.evidence.append(
+            Evidence(
+                marker=f"e{len(page.evidence) + 1}",
+                chunk_id=ev.chunk_id,
+                doc_id=ev.doc_id,
+                quote=ev.quote,
+                locator=ev.locator,
+            )
+        )
 
 
 def _first_chunk_id(doc: Document) -> str:

@@ -23,6 +23,12 @@ Steps:
    Rules the subagent must follow (slice 6+):
    - `kind` is EXACTLY `"concept"` or `"person"` — it routes the page to
      `concepts/` or `people/`.
+   - If the chunk attributes work to a named person — a researcher,
+     inventor, executive, theorist, practitioner, historical figure —
+     who is discussed or credited in the prose (not just listed in a
+     reference list or bibliography), extract a `kind="person"` entry
+     with the person's full name as the title. The person does NOT need
+     to be an author of the current document.
    - `category` is a facet tag, not a type. Allowed values:
      `phenomenon | method | material | device | theory | metric |
      organization | other`, or `null`/omitted. MUST be `null` for

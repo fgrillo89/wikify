@@ -106,6 +106,7 @@ def run(
     style_text = load_style_guide()
     field_text = load_field_guide(strategy.field_name)
     artifact_text = load_artifact_template(strategy.artifact_name)
+    person_artifact_text = load_artifact_template("wiki_person")
     persona_text = ""
     if corpus.persona_path.exists():
         persona_text = corpus.persona_path.read_text(encoding="utf-8").strip()
@@ -195,6 +196,12 @@ def run(
         for page in pages[:max_concepts]:
             if meter.spent_haiku_eq >= write_target:
                 break
+            # Person pages are only enriched by the writer when they have
+            # enough extracted evidence (>=2 entries from chunk extraction).
+            # Author pages with only deterministic evidence keep their
+            # skeleton as-is.
+            if page.kind == "person" and len(page.evidence) < 2:
+                continue
             page_doc_ids = {ev.doc_id for ev in page.evidence}
             page_figures: list[ImageRef] = []
             seen_fig_ids: set[str] = set()
@@ -204,6 +211,8 @@ def run(
                         continue
                     seen_fig_ids.add(rec.id)
                     page_figures.append(_to_imageref(rec))
+            # Use person artifact template for person pages.
+            page_artifact = person_artifact_text if page.kind == "person" else artifact_text
             req = WriteRequest(
                 page_id=page.id,
                 page_kind=page.kind,
@@ -226,7 +235,7 @@ def run(
                 figures=page_figures,
                 style_guide=style_text,
                 field_guide=field_text,
-                artifact_template=artifact_text,
+                artifact_template=page_artifact,
                 corpus_persona=persona_text,
             )
             try:

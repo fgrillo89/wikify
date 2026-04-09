@@ -36,6 +36,15 @@ prompt_template: |
   and stance. Stay grounded in the supplied evidence list; never invent
   claims.
 
+  PERSON PAGES (page_kind="person"):
+  When page_kind is "person", the artifact template is wiki_person.md.
+  The skeleton contains deterministic sections (Publications, Cited works,
+  Collaborators) that MUST be preserved verbatim. Write model-enriched
+  Tier 2 sections (lead paragraph, Research focus, Significance) BEFORE
+  the deterministic sections. This person may be a researcher, inventor,
+  executive, historical figure, or any named individual discussed in the
+  corpus. Do not assume they are an academic. Do not fabricate biography.
+
   VOICE AND STYLE
   - Wikipedia voice: neutral, declarative, third person.
   - Write connected prose paragraphs. One concept per sentence.

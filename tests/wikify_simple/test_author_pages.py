@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wikify_simple.distill.author_pages import build_author_pages
+from wikify_simple.distill.author_pages import build_author_pages, merge_extracted_evidence
 from wikify_simple.ingest.metadata import _is_valid_author
-from wikify_simple.models import Document
+from wikify_simple.models import Document, Evidence
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.wiki_files import write_page
 
@@ -153,3 +153,37 @@ def test_incremental_merge_existing_links(tmp_path: Path):
     assert "[[Paper One]]" in body
     assert "[[Paper Two]]" in body
     assert "[[Legacy Paper]]" in body
+
+
+def test_merge_extracted_evidence_appends():
+    docs = [_doc("d1", "Paper One", ["Alice Adams"], 2020)]
+    pages = build_author_pages(docs)
+    alice = next(p for p in pages if p.title == "Alice Adams")
+    original_count = len(alice.evidence)
+    original_body = alice.body_markdown
+
+    new_evidence = [
+        Evidence(marker="ex1", chunk_id="c99", doc_id="d99", quote="new quote"),
+        Evidence(marker="ex2", chunk_id="c100", doc_id="d100", quote="another quote"),
+    ]
+    merge_extracted_evidence(alice, new_evidence)
+    assert len(alice.evidence) == original_count + 2
+    # Skeleton preserved.
+    assert alice.body_markdown == original_body
+
+
+def test_merge_extracted_evidence_deduplicates():
+    docs = [_doc("d1", "Paper One", ["Alice Adams"], 2020)]
+    pages = build_author_pages(docs)
+    alice = next(p for p in pages if p.title == "Alice Adams")
+    existing_chunk = alice.evidence[0].chunk_id
+
+    # Try to merge evidence with an already-existing chunk_id.
+    new_evidence = [
+        Evidence(marker="ex1", chunk_id=existing_chunk, doc_id="d1", quote="dup"),
+        Evidence(marker="ex2", chunk_id="c_new", doc_id="d_new", quote="fresh"),
+    ]
+    before = len(alice.evidence)
+    merge_extracted_evidence(alice, new_evidence)
+    # Only the non-duplicate should be added.
+    assert len(alice.evidence) == before + 1
