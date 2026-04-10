@@ -112,20 +112,95 @@ The three presets:
 | M | similarity_walk | coverage_gap | 0.1 | adaptive 65% write | S/M |
 | X | similarity_walk | uniform | 0.0 | static 60% write | M/M |
 
-## Open challenges
+## Scaling plan: 200-1000 papers
 
-### 1. Model-backed extraction
+Target: 200-1000 papers, 12k-60k chunks, 200-500 concept pages.
 
-The heuristic binding uses regex patterns for extraction. This produces
-pages with the right structure but no definitions, summaries, or
-parameters. Rich dossiers need model-based extraction via extract_v2.yaml.
+### Step 1: Adjacency index for sampler (BLOCKER)
 
-**Next step:** use the staged pipeline for extraction too. Phase out of
-extract → subagents process ExtractRequests with haiku → phase into build.
-Requires adding ExtractRequest serialization to the extract phase (same
-pattern as WriteRequest serialization).
+`_local_similarity_walk` (sampler.py:108) scans ALL edges linearly on
+every walk step. At 60k chunks with ~300k edges and ~1000 walks per
+iteration, this is 300M comparisons.
 
-### 2. Strategy grid sweep
+Fix: build `adjacency: dict[str, list[str]]` and `degree: dict[str, int]`
+once in `_build_sampler_state()`. Rewrite walk/degree lookups. O(E) per
+step becomes O(degree). Also fix `_doc_chunks_or_empty` (recomputes
+degree from scratch) and `_global_coverage_gap` (sorts full dict).
+
+Files: `distill/sampler.py`, `distill/pipeline.py`
+
+Verify: 1017 tests pass. Run heuristic on mvp20_v2 -- same pages, faster.
+
+### Step 2: God-node filtering in metrics
+
+Hub concepts (degree > sqrt(n)) dominate PageRank and modularity at
+scale. Detect them and compute metrics both with and without.
+
+Files: `eval/metrics.py`
+
+Verify: `_metrics.json` contains both `modularity` and `modularity_filtered`.
+
+### Step 3: Richer audit report
+
+Add god-node section, top-3 members per community, summary stats
+(page count by kind, mean evidence count).
+
+Files: `eval/audit.py`
+
+Verify: `_audit.md` has "## God Nodes" section.
+
+### Step 4: Advisor-pattern escalation
+
+Each agent (haiku/sonnet) is instructed it can escalate to the editor
+(opus) when uncertain. The editor is always top-tier. Escalation lives
+in the prompt, not in Python wrappers.
+
+**Extractor (haiku) escalates when:**
+- Ambiguous terminology (could be concept or generic word)
+- Conflicting evidence (chunk contradicts canonical_titles)
+- Complex relationships (3+ concepts interacting)
+- Novel concepts (important term not in canonical_titles)
+
+**Writer (sonnet) escalates when:**
+- Contradictory evidence across refs
+- Cross-domain synthesis needed
+- Insufficient evidence (<3 refs for 1200+ chars)
+- Scope overlap with neighbor articles
+
+**Neither escalates for:**
+- Standard extraction/writing with clear evidence
+- Person pages, bibliography, formatting
+- Single-source evidence pages
+
+Implementation: update prompt templates and skill files. The "escalation"
+is the subagent spawning a nested opus subagent via the Agent tool. No
+Python code changes needed.
+
+Files: `prompts/extract_v2.yaml`, `prompts/write_v2.yaml`,
+`.claude/skills/wikify_simple/extract.md`, `.claude/skills/wikify_simple/write.md`
+
+### Step 5: Documentation
+
+Add scaling section to this file with memory/time expectations:
+- Memory: ~10MB per 1000 chunks (vectors) + ~1MB per 1000 chunks (text)
+- Sampler: fast after adjacency index (step 1)
+- Metrics: M1 takes 10-30s at 60k chunks (once per run, acceptable)
+- HTML rendering: I/O bound, 2-8 min for 500 pages
+- Advisor escalation rate: expect ~20% of requests to escalate
+
+### What does NOT need changing
+
+- Vector store (numpy, fast at 60k)
+- Corpus profiling (NetworkX, fast at 1000 docs)
+- HTML renderer (I/O bound, acceptable)
+- Crosslinking (fast string matching)
+- Chunker (cheap per-chunk)
+- PDF parser (already complete)
+- Cache (60k JSON files, fine on local SSDs)
+
+## Open issues
+
+### 1. Strategy grid sweep
 
 The meaningful grid is `jump_rate x global_op` with local_op fixed at
 similarity_walk:
@@ -135,41 +210,25 @@ jump_rate:  [0.0, 0.1, 0.3, 0.5, 1.0]
 global_op:  [uniform, pagerank, coverage_gap]
 ```
 
-13 unique configs (jump_rate=0.0 makes global_op irrelevant). Each takes
-~3s with heuristic binding. Needs a sweep harness that runs all configs
-and produces a comparison table of M1/M3/M5/G1 metrics.
+13 unique configs. Each takes ~3s with heuristic binding. Needs a sweep
+harness that produces a comparison table of M1/M3/M5/G1 metrics.
 
-### 3. Adaptive schedule tuning
+### 2. Adaptive schedule tuning
 
-AdaptiveSchedule shifts budget from extract to write when novelty drops
-below a threshold (Heaps slope). The threshold (0.05) and the shift
-target (0.7) are untested. The strategy grid should include schedule
-variants.
+The novelty threshold (0.05) and shift target (0.7) in AdaptiveSchedule
+are untested. The strategy grid should include schedule variants.
 
-### 4. Corpus size scaling
-
-The 20-paper mvp20 corpus doesn't differentiate strategies well (all
-produce 29-31 concepts). PageRank, communities, and coverage_gap need
-50+ documents to show meaningful differences. Need a larger corpus.
-
-### 5. Heuristic extraction is domain-specific
+### 3. Heuristic extraction is domain-specific
 
 The regex patterns in `bindings/heuristic.py` cover memristor/ALD terms
-plus generic academic methods. Other corpora need their patterns or
-model-based extraction.
+plus generic academic methods. Other corpora need model-based extraction.
 
-### 6. Dossier substance check
+### 4. Dossier substance check
 
 `has_substance` requires a definition or summary, which only model-based
-extraction provides. Heuristic extraction always fails this check,
-so the editor pass is a no-op with heuristic binding.
+extraction provides. Heuristic extraction always fails this check.
 
-### 7. Port remaining parsers
-
-`ingest/parsers/{pdf,docx,pptx,html}.py` are stubs. Only markdown
-works. Real corpora need at least the PDF parser.
-
-### 8. Figure embedding
+### 5. Figure embedding
 
 Infrastructure exists (ImageIndex, ImageRef in WriteRequest, figure
 fields in prompts) but no binding actually embeds figures in articles.
