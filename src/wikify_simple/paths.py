@@ -82,6 +82,10 @@ class BundlePaths:
     def calls_path(self) -> Path:
         return self.root / "_calls.jsonl"
 
+    @property
+    def write_requests_dir(self) -> Path:
+        return self.root / "_write_requests"
+
     def ensure(self) -> None:
         self.concepts_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)

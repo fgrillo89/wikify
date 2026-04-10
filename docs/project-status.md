@@ -7,38 +7,35 @@ separate from legacy `wikify`. It is the successor design: simpler, file-based
 (no SQLite, no ChromaDB), with a dispatcher-based model binding that keeps
 Python out of the LLM loop.
 
-### Current state (2026-04-09)
+### Current state (2026-04-10)
 
 - **Corpus processed:** 20-paper mvp20 corpus (memristor / ALD / neuromorphic).
   601 chunks, 20 BibTeX entries, 384-d sentence-transformer embeddings.
   Section types classified (methods/results/conclusion/etc).
-- **Wiki output (v2):** 60 concept pages + 431 person pages, sonnet-quality
-  prose, full HTML rendering with Wikipedia-style layout (infobox, TOC,
-  See Also, article cards, formatted bibliographic references).
-- **Test count:** 190 tests passing.
-- **Architecture:** Four-role editor-writer pipeline:
-  Extractor (rich dossiers) → Compactor (dedup) → Editor (briefs) → Writer (prose).
-  Persistent dossiers at `<bundle>/_dossiers/`. Corpus profiling with PageRank,
-  Louvain communities, betweenness centrality.
+- **Wiki output (v3):** 30 concept pages (28 model-written by haiku subagents)
+  + 720 person pages. Full HTML rendering with Wikipedia-style layout.
+- **Test count:** 1017 tests passing.
+- **Architecture:** Four-role editor-writer pipeline with staged execution:
+  Extractor → Compactor → Editor → Writer.
+  Three bindings (fake, heuristic, claude_code).
+  `--phase extract|write|all` splits pipeline for subagent processing.
 
-- **Design decisions:** files-on-disk storage, dispatcher-based binding
-  (fake for CI, claude_code for real runs), layered prompts (style guide +
-  field guide + artifact template + persona), deterministic author pages,
-  natural Wikipedia-style page names, tolerant quote validation,
-  extract_v2 with definitions/summaries/parameters/mechanisms/relationships/equations.
+- **Speed fix (landed):** Diagnosed double-polling bottleneck in file dispatch
+  (250ms pipeline poll + 2-3s drain poll = 3-4s/call). Created inline
+  heuristic binding (2-3s total vs 6-10min). Added staged pipeline so
+  subagents write articles between phases (~5min for 28 pages).
+
+- **Strategy testing:** All three strategies (E/M/X) run in ~15s total with
+  heuristic binding. Eval produces M1/M3/M5/G1 comparison table.
+  Sampler parameter space identified: jump_rate x global_op grid (13 cells).
 
 ### What's next
 
-1. **Speed**: Dispatcher pattern is too slow (~45s/call). Need direct API
-   calls via litellm (set ANTHROPIC_API_KEY, use scripts/drain_extract.py).
-2. **Model-based extraction**: Currently falls back to heuristic extraction.
-   Need real model calls with extract_v2 prompt for rich dossiers.
-3. **Editor with model**: FakeEditor produces rule-based briefs. Real
-   editorial judgment needs model calls.
-4. **Implement `--feed` iteration** with dossier accumulation across runs.
-5. **Port remaining parsers** (DOCX, PPTX, HTML).
-6. **Figure embedding** in articles (infrastructure exists, writer needs
-   to actually reference figures).
+1. **Strategy grid sweep**: Run the 13-cell sampler grid, compare metrics.
+2. **Model-backed extraction**: Staged extraction with haiku subagents
+   for rich dossiers (definitions, summaries, parameters).
+3. **Larger corpus**: 50+ documents to differentiate strategies.
+4. **Port remaining parsers** (PDF, DOCX, PPTX, HTML).
 
 See `src/wikify_simple/HANDOFF.md` for the restart guide.
 

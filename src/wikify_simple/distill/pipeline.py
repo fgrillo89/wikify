@@ -2,14 +2,21 @@
 
 All state is passed in explicitly. No strategy-specific branches inside
 the pipeline; strategy variation comes entirely from the injected sampler,
-schedule, and tiering. The pipeline:
+schedule, and tiering.
 
-  1. profile the corpus
-  2. extract candidates from sampled chunks (loop until extract budget spent)
-  3. canonicalize candidates -> WikiPage skeletons
-  4. write each page (loop until write budget spent)
-  5. crosslink the pages
-  6. write the pages to disk + emit the run snapshot
+Supports staged execution via the ``phase`` parameter:
+
+  ``extract`` — sample chunks, extract concepts, canonicalize, build
+      dossiers, compact, run editor, save WriteRequest JSONs to the
+      bundle's ``_write_requests/`` directory, then stop.
+
+  ``write`` — load WriteRequest JSONs + pages manifest from the
+      bundle, call the writer, crosslink, write pages to disk.
+
+  ``all`` (default) — run both phases in one shot (legacy behaviour).
+
+The staged split lets an orchestrator (e.g. Claude Code) process
+write requests with model-backed subagents between phases.
 
 The cost meter enforces the budget gate; the pipeline checks
 ``meter.spent_haiku_eq`` between iterations and stops cleanly when
@@ -18,10 +25,12 @@ budgets are exhausted.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -77,6 +86,9 @@ class StrategyConfig:
     artifact_name: str = "wiki_concept"
 
 
+Phase = Literal["all", "extract", "write"]
+
+
 def run(
     *,
     corpus: CorpusPaths,
@@ -92,22 +104,36 @@ def run(
     editor: Editor | None = None,
     compactor: Compactor | None = None,
     compact_threshold: int = 10,
+    phase: Phase = "all",
 ) -> None:
     bundle.ensure()
+    docs = list_documents(corpus)
+    chunks = all_chunks(corpus)
+    chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
+    images_index = ImageIndex.load(corpus)
+
+    # ---- write-only phase: skip extraction entirely ---------------------
+    if phase == "write":
+        pages = _load_pages_manifest(bundle)
+        _run_write_phase(
+            bundle,
+            pages,
+            max_concepts,
+            writer,
+            meter,
+            strategy,
+            docs,
+        )
+        return
+
+    # ---- extract + all: full setup needed --------------------------------
     existing_pages: list[WikiPage] = _load_existing_pages(bundle) if feed else []
     cache_hits_start = getattr(getattr(extractor, "_cache", None), "hits", 0)
     cache_misses_start = getattr(getattr(extractor, "_cache", None), "misses", 0)
     rng = random.Random(strategy.seed)
-    docs = list_documents(corpus)
-    chunks = all_chunks(corpus)
     vectors = read_vector_store(corpus)
     graph = read_graph(corpus)
-    images_index = ImageIndex.load(corpus)
 
-    # Load the four layered writer-prompt strings ONCE per run. They are
-    # round-tripped on every WriteRequest so the binding has the full
-    # context the writer subagent needs to honour the style guide,
-    # field-specific conventions, output template, and corpus persona.
     style_text = load_style_guide()
     field_text = load_field_guide(strategy.field_name)
     artifact_text = load_artifact_template(strategy.artifact_name)
@@ -117,8 +143,6 @@ def run(
         persona_text = corpus.persona_path.read_text(encoding="utf-8").strip()
 
     state = _build_sampler_state(rng, docs, chunks, graph, vectors)
-    chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
-    docs_by_id: dict[str, Document] = {d.id: d for d in docs}
 
     split = strategy.schedule.initial_split(budget_haiku_eq)
 
@@ -202,7 +226,7 @@ def run(
     alias_to_page: dict[str, WikiPage] = {}
     for p in pages:
         alias_to_page[_normalize_title(p.title)] = p
-        for a in (p.aliases if hasattr(p, "aliases") else []):
+        for a in p.aliases if hasattr(p, "aliases") else []:
             alias_to_page[_normalize_title(a)] = p
 
     for cand in candidates:
@@ -217,30 +241,28 @@ def run(
         if matched is None:
             continue
         dossier = dossier_store.load(matched.id) or Dossier(
-            page_id=matched.id, title=matched.title,
+            page_id=matched.id,
+            title=matched.title,
             aliases=list(getattr(matched, "aliases", [])),
-            kind=matched.kind, category=getattr(c, "category", None),
+            kind=matched.kind,
+            category=getattr(c, "category", None),
         )
         chunk = chunks_by_id.get(cand.chunk_id)
-        dossier.add_entry(DossierEntry(
-            chunk_id=cand.chunk_id,
-            doc_id=cand.doc_id,
-            quote=c.quote,
-            definition=c.definition,
-            summary=c.summary,
-            parameters=[
-                p.model_dump() for p in c.parameters
-            ] if c.parameters else [],
-            mechanisms=list(c.mechanisms) if c.mechanisms else [],
-            relationships=[
-                r.model_dump() for r in c.relationships
-            ] if c.relationships else [],
-            equations=[
-                eq.model_dump() for eq in c.equations
-            ] if c.equations else [],
-            section_type=chunk.section_type if chunk else "",
-            figure_ids=list(c.evidence_figures),
-        ))
+        dossier.add_entry(
+            DossierEntry(
+                chunk_id=cand.chunk_id,
+                doc_id=cand.doc_id,
+                quote=c.quote,
+                definition=c.definition,
+                summary=c.summary,
+                parameters=[p.model_dump() for p in c.parameters] if c.parameters else [],
+                mechanisms=list(c.mechanisms) if c.mechanisms else [],
+                relationships=[r.model_dump() for r in c.relationships] if c.relationships else [],
+                equations=[eq.model_dump() for eq in c.equations] if c.equations else [],
+                section_type=chunk.section_type if chunk else "",
+                figure_ids=list(c.evidence_figures),
+            )
+        )
         dossier_store.save(dossier)
 
     # ---- compact dossiers ------------------------------------------------
@@ -266,10 +288,7 @@ def run(
     # for each page it greenlights.
     briefs: dict[str, object] = {}
     if editor is not None:
-        existing_titles = [
-            {"title": p.title, "id": p.id}
-            for p in pages if p.body_markdown.strip()
-        ]
+        existing_titles = [{"title": p.title, "id": p.id} for p in pages if p.body_markdown.strip()]
         for dossier in dossier_store.load_all():
             if dossier.kind == "person":
                 continue
@@ -286,98 +305,61 @@ def run(
             except (ValidationError, BudgetExceeded):
                 continue
 
-    # ---- write loop -----------------------------------------------------
-    # All canonicalized concepts get written. The budget gates extraction
-    # scope (how much of the corpus to read), not write coverage. This
-    # mirrors the legacy map-reduce approach: map everything, then reduce
-    # everything.
+    # ---- phase gate: save write requests or stop -------------------------
+    _save_write_requests(
+        bundle,
+        pages[:max_concepts],
+        briefs,
+        dossier_store,
+        chunks_by_id,
+        images_index,
+        strategy,
+        style_text,
+        field_text,
+        artifact_text,
+        person_artifact_text,
+        persona_text,
+    )
+    if phase == "extract":
+        _save_pages_manifest(bundle, pages)
+        _write_extract_snapshot(
+            bundle,
+            meter,
+            strategy,
+            budget_haiku_eq,
+            chunks_read,
+            extractor,
+            cache_hits_start,
+            cache_misses_start,
+            split_initial,
+            split,
+            novelty_rate,
+            feed,
+        )
+        return
+
+    # ---- write loop (phase=all) -----------------------------------------
     try:
         for page in pages[:max_concepts]:
-            # Person pages are only enriched by the writer when they have
-            # enough extracted evidence (>=2 entries from chunk extraction).
-            # Author pages with only deterministic evidence keep their
-            # skeleton as-is.
             if page.kind == "person" and len(page.evidence) < 2:
                 continue
-            page_doc_ids = {ev.doc_id for ev in page.evidence}
-            page_figures: list[ImageRef] = []
-            seen_fig_ids: set[str] = set()
-            for did in sorted(page_doc_ids):
-                for rec in images_index.for_doc(did):
-                    if rec.id in seen_fig_ids:
-                        continue
-                    seen_fig_ids.add(rec.id)
-                    page_figures.append(_to_imageref(rec))
-            # Use person artifact template for person pages.
-            page_artifact = person_artifact_text if page.kind == "person" else artifact_text
-
-            # Build v2 evidence refs with full chunk context from dossier.
-            evidence_v2 = []
-            dossier = dossier_store.load(page.id)
-            dossier_entries_by_chunk = {}
-            if dossier:
-                dossier_entries_by_chunk = {
-                    e.chunk_id: e for e in dossier.entries
-                }
-            for ev in page.evidence:
-                de = dossier_entries_by_chunk.get(ev.chunk_id)
-                chunk = chunks_by_id.get(ev.chunk_id)
-                evidence_v2.append(
-                    WriteEvidenceRefV2(
-                        chunk_id=ev.chunk_id,
-                        doc_id=ev.doc_id,
-                        quote=ev.quote,
-                        locator=ev.locator,
-                        chunk_text=chunk.text if chunk else "",
-                        section_type=de.section_type if de else "",
-                        definition=de.definition if de else "",
-                        summary=de.summary if de else "",
-                    )
-                )
-
-            # Build neighbor summaries (lead paragraphs of written pages).
-            neighbor_summaries = []
-            for other in pages:
-                if other.id == page.id or not other.body_markdown:
-                    continue
-                lead = other.body_markdown.strip().split("\n\n")[0][:300]
-                neighbor_summaries.append({"title": other.title, "lead": lead})
-                if len(neighbor_summaries) >= 8:
-                    break
-
-            req = WriteRequest(
-                page_id=page.id,
-                page_kind=page.kind,
-                title=page.title,
-                aliases=page.aliases,
-                skeleton=page.body_markdown,
-                evidence=[
-                    WriteEvidenceRef(
-                        chunk_id=ev.chunk_id,
-                        doc_id=ev.doc_id,
-                        quote=ev.quote,
-                        locator=ev.locator,
-                    )
-                    for ev in page.evidence
-                ],
-                neighbor_titles=[p.title for p in pages if p.id != page.id][:8],
-                prompt_template=WRITE_PROMPT,
-                model_id=strategy.model_id,
-                tier=strategy.tier_exploit,
-                figures=page_figures,
-                style_guide=style_text,
-                field_guide=field_text,
-                artifact_template=page_artifact,
-                corpus_persona=persona_text,
-                brief=briefs.get(page.id),
-                evidence_v2=evidence_v2,
-                neighbor_summaries=neighbor_summaries,
+            req = _build_write_request(
+                page,
+                pages,
+                briefs,
+                dossier_store,
+                chunks_by_id,
+                images_index,
+                strategy,
+                style_text,
+                field_text,
+                artifact_text,
+                person_artifact_text,
+                persona_text,
             )
             try:
                 resp = writer.write(req)
             except ValidationError:
-                # Writer body validator rejected (empty prose / no markers /
-                # missing evidence block). Skip this page; leave the skeleton.
                 continue
             page.body_markdown = resp.body_markdown
     except BudgetExceeded:
@@ -520,3 +502,264 @@ def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:
         return {}
     w = 1.0 / len(doc_ids)
     return {d: w for d in doc_ids}
+
+
+def _run_write_phase(
+    bundle: BundlePaths,
+    pages: list[WikiPage],
+    max_concepts: int,
+    writer: Writer,
+    meter: CostMeter,
+    strategy: StrategyConfig,
+    docs: list[Document],
+) -> None:
+    """Execute the write phase: load requests/responses, call writer, crosslink."""
+    write_dir = bundle.write_requests_dir
+
+    try:
+        for page in pages[:max_concepts]:
+            if page.kind == "person" and len(page.evidence) < 2:
+                continue
+            # Check for pre-computed response (from subagent processing)
+            resp_path = write_dir / f"{page.id}.response.json"
+            if resp_path.exists():
+                raw = json.loads(resp_path.read_text(encoding="utf-8"))
+                page.body_markdown = raw["body_markdown"]
+                continue
+            # Load saved request and call writer binding
+            req_path = write_dir / f"{page.id}.request.json"
+            if not req_path.exists():
+                continue
+            req = WriteRequest.model_validate_json(req_path.read_text(encoding="utf-8"))
+            try:
+                resp = writer.write(req)
+            except ValidationError:
+                continue
+            page.body_markdown = resp.body_markdown
+    except BudgetExceeded:
+        pass
+
+    # Deterministic author pages
+    author_pages = build_author_pages(docs, existing_page_dir=bundle.people_dir)
+    pages.extend(author_pages)
+
+    # Crosslink + write to disk
+    pages = [p for p in pages if p.evidence]
+    pages = crosslink(pages)
+    for page in pages:
+        prov = dict(page.provenance or {})
+        prov["run_id"] = meter._run_id  # noqa: SLF001
+        prov["model"] = strategy.model_id
+        prov["strategy"] = strategy.name
+        page.provenance = prov
+        write_page_file(bundle, page)
+
+    build_index(bundle, pages).save()
+    meter.write_snapshot(bundle.run_path)
+
+
+# --- staged pipeline helpers -----------------------------------------------
+
+
+def _build_write_request(
+    page: WikiPage,
+    all_pages: list[WikiPage],
+    briefs: dict[str, object],
+    dossier_store: DossierStore,
+    chunks_by_id: dict[str, Chunk],
+    images_index: ImageIndex,
+    strategy: StrategyConfig,
+    style_text: str,
+    field_text: str,
+    artifact_text: str,
+    person_artifact_text: str,
+    persona_text: str,
+) -> WriteRequest:
+    """Build a WriteRequest for a single page."""
+    page_doc_ids = {ev.doc_id for ev in page.evidence}
+    page_figures: list[ImageRef] = []
+    seen_fig_ids: set[str] = set()
+    for did in sorted(page_doc_ids):
+        for rec in images_index.for_doc(did):
+            if rec.id in seen_fig_ids:
+                continue
+            seen_fig_ids.add(rec.id)
+            page_figures.append(_to_imageref(rec))
+    page_artifact = person_artifact_text if page.kind == "person" else artifact_text
+
+    evidence_v2 = []
+    dossier = dossier_store.load(page.id)
+    dossier_entries_by_chunk: dict[str, DossierEntry] = {}
+    if dossier:
+        dossier_entries_by_chunk = {e.chunk_id: e for e in dossier.entries}
+    for ev in page.evidence:
+        de = dossier_entries_by_chunk.get(ev.chunk_id)
+        chunk = chunks_by_id.get(ev.chunk_id)
+        evidence_v2.append(
+            WriteEvidenceRefV2(
+                chunk_id=ev.chunk_id,
+                doc_id=ev.doc_id,
+                quote=ev.quote,
+                locator=ev.locator,
+                chunk_text=chunk.text if chunk else "",
+                section_type=de.section_type if de else "",
+                definition=de.definition if de else "",
+                summary=de.summary if de else "",
+            )
+        )
+
+    neighbor_summaries = []
+    for other in all_pages:
+        if other.id == page.id or not other.body_markdown:
+            continue
+        lead = other.body_markdown.strip().split("\n\n")[0][:300]
+        neighbor_summaries.append({"title": other.title, "lead": lead})
+        if len(neighbor_summaries) >= 8:
+            break
+
+    return WriteRequest(
+        page_id=page.id,
+        page_kind=page.kind,
+        title=page.title,
+        aliases=page.aliases,
+        skeleton=page.body_markdown,
+        evidence=[
+            WriteEvidenceRef(
+                chunk_id=ev.chunk_id,
+                doc_id=ev.doc_id,
+                quote=ev.quote,
+                locator=ev.locator,
+            )
+            for ev in page.evidence
+        ],
+        neighbor_titles=[p.title for p in all_pages if p.id != page.id][:8],
+        prompt_template=WRITE_PROMPT,
+        model_id=strategy.model_id,
+        tier=strategy.tier_exploit,
+        figures=page_figures,
+        style_guide=style_text,
+        field_guide=field_text,
+        artifact_template=page_artifact,
+        corpus_persona=persona_text,
+        brief=briefs.get(page.id),
+        evidence_v2=evidence_v2,
+        neighbor_summaries=neighbor_summaries,
+    )
+
+
+def _save_write_requests(
+    bundle: BundlePaths,
+    pages: list[WikiPage],
+    briefs: dict[str, object],
+    dossier_store: DossierStore,
+    chunks_by_id: dict[str, Chunk],
+    images_index: ImageIndex,
+    strategy: StrategyConfig,
+    style_text: str,
+    field_text: str,
+    artifact_text: str,
+    person_artifact_text: str,
+    persona_text: str,
+) -> None:
+    """Serialize WriteRequest JSONs to ``_write_requests/``."""
+    out = bundle.write_requests_dir
+    out.mkdir(parents=True, exist_ok=True)
+    for page in pages:
+        if page.kind == "person" and len(page.evidence) < 2:
+            continue
+        req = _build_write_request(
+            page,
+            pages,
+            briefs,
+            dossier_store,
+            chunks_by_id,
+            images_index,
+            strategy,
+            style_text,
+            field_text,
+            artifact_text,
+            person_artifact_text,
+            persona_text,
+        )
+        path = out / f"{page.id}.request.json"
+        path.write_text(req.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _save_pages_manifest(bundle: BundlePaths, pages: list[WikiPage]) -> None:
+    """Save page list so the write phase can reload it."""
+    out = bundle.write_requests_dir
+    out.mkdir(parents=True, exist_ok=True)
+    data = [dataclasses.asdict(p) for p in pages]
+    (out / "_pages.json").write_text(
+        json.dumps(data, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def _load_pages_manifest(bundle: BundlePaths) -> list[WikiPage]:
+    """Reload pages from the manifest saved by the extract phase."""
+    manifest = bundle.write_requests_dir / "_pages.json"
+    if not manifest.exists():
+        raise FileNotFoundError(f"no pages manifest at {manifest}; run --phase extract first")
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    from ..models import Evidence as Ev
+
+    return [
+        WikiPage(
+            id=d["id"],
+            kind=d["kind"],
+            title=d["title"],
+            aliases=d.get("aliases", []),
+            body_markdown=d.get("body_markdown", ""),
+            evidence=[Ev(**e) for e in d.get("evidence", [])],
+            links=d.get("links", []),
+            provenance=d.get("provenance", {}),
+        )
+        for d in raw
+    ]
+
+
+def _write_extract_snapshot(
+    bundle: BundlePaths,
+    meter: CostMeter,
+    strategy: StrategyConfig,
+    budget_haiku_eq: float,
+    chunks_read: list[str],
+    extractor: Extractor,
+    cache_hits_start: int,
+    cache_misses_start: int,
+    split_initial,
+    split,
+    novelty_rate: float,
+    feed: bool,
+) -> None:
+    """Write a partial run snapshot after the extract phase."""
+    meter.write_snapshot(bundle.run_path)
+    snapshot = json.loads(bundle.run_path.read_text(encoding="utf-8"))
+    snapshot["phase"] = "extract"
+    snapshot["chunks_read"] = chunks_read
+    snapshot["strategy"] = strategy.name
+    snapshot["seed"] = strategy.seed
+    snapshot["budget_target_haiku_eq"] = budget_haiku_eq
+    cache = getattr(extractor, "_cache", None)
+    hits_delta = (cache.hits - cache_hits_start) if cache is not None else 0
+    misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
+    snapshot["n_cached_skipped"] = hits_delta
+    snapshot["n_new_extracted"] = misses_delta
+    snapshot["feed"] = bool(feed)
+    snapshot["split_initial"] = {
+        "extract_haiku_eq": split_initial.extract_haiku_eq,
+        "write_haiku_eq": split_initial.write_haiku_eq,
+        "curate_haiku_eq": split_initial.curate_haiku_eq,
+    }
+    snapshot["split_reallocated"] = {
+        "extract_haiku_eq": split.extract_haiku_eq,
+        "write_haiku_eq": split.write_haiku_eq,
+        "curate_haiku_eq": split.curate_haiku_eq,
+    }
+    snapshot["novelty_rate_at_reallocation"] = novelty_rate
+    # Count saved write requests
+    wr_dir = bundle.write_requests_dir
+    n_reqs = len(list(wr_dir.glob("*.request.json"))) if wr_dir.exists() else 0
+    snapshot["n_write_requests"] = n_reqs
+    bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")

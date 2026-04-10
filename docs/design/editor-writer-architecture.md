@@ -102,19 +102,29 @@ In O mode, the editor IS the orchestrator agent with full corpus profile.
 
 ## Pipeline Flow
 
+Supports staged execution via `--phase extract|write|all`:
+
 ```
-1. LOAD corpus (docs, chunks, vectors, graph, images)
-2. SAMPLE chunks (sampler picks by strategy)
-3. EXTRACT per chunk → DossierEntry → DossierStore.save()
-   - Periodic compaction when entries > threshold
-4. CANONICALIZE candidates → WikiPage skeletons
-5. EDITOR reads dossiers + wiki index
-   - Decides which concepts are ready for writing
-   - Produces EditorBrief per greenlit concept
-6. WRITE per page (follows brief)
-7. CROSSLINK + write pages to disk
-8. BUILD wiki index
+--phase extract (fast, no model calls needed):
+  1. LOAD corpus (docs, chunks, vectors, graph, images)
+  2. SAMPLE chunks (sampler picks by strategy)
+  3. EXTRACT per chunk → DossierEntry → DossierStore.save()
+     - Periodic compaction when entries > threshold
+  4. CANONICALIZE candidates → WikiPage skeletons
+  5. EDITOR reads dossiers + wiki index → EditorBriefs
+  6. SAVE WriteRequest JSONs to <bundle>/_write_requests/
+  7. SAVE pages manifest
+
+-- orchestrator processes write requests with subagents --
+-- each .request.json → subagent → .response.json --
+
+--phase write (assembles model output):
+  8. LOAD pages manifest + .response.json files
+  9. CROSSLINK + write pages to disk
+  10. BUILD wiki index
 ```
+
+With `--phase all`, steps 1-10 run in one shot using the writer binding.
 
 ## Corpus Profile (orchestrator input)
 

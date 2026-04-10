@@ -35,7 +35,7 @@ def ingest(
 @app.command()
 def distill(
     strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
-    binding: str = typer.Option("fake", "--binding", help="fake | claude_code"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
     budget: str = typer.Option("1x", "--budget"),
     seed: int = typer.Option(0, "--seed"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
@@ -59,10 +59,17 @@ def distill(
         "--artifact",
         help="Artifact template to layer into the writer prompt",
     ),
+    phase: str = typer.Option(
+        "all",
+        "--phase",
+        help="extract (stop after saving write requests) | write (resume) | all",
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
     from .prompts import available_artifact_templates, available_field_guides
 
+    if phase not in ("all", "extract", "write"):
+        raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
     if strategy not in STRATEGIES:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if field is None:
@@ -83,9 +90,9 @@ def distill(
     else:
         budget_haiku_eq = float(budget)
 
-    if feed:
+    if feed or phase == "write":
         # Reuse the supplied out_dir *as* the bundle dir. No timestamp suffix.
-        run_id = f"{strategy}_{budget}_seed{seed}_feed"
+        run_id = f"{strategy}_{budget}_seed{seed}_{'write' if phase == 'write' else 'feed'}"
         bundle = BundlePaths(root=out_dir)
     else:
         run_id = (
@@ -117,6 +124,7 @@ def distill(
         feed=feed,
         editor=editor,
         compactor=compactor,
+        phase=phase,
     )
     snap_path = bundle.run_path
     if snap_path.exists():
@@ -135,6 +143,20 @@ def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
         from .bindings.fake import FakeCompactor, FakeEditor, FakeExtractor, FakeWriter
 
         return FakeExtractor(cache, meter), FakeWriter(meter), FakeEditor(), FakeCompactor()
+    if name == "heuristic":
+        from .bindings.heuristic import (
+            HeuristicCompactor,
+            HeuristicEditor,
+            HeuristicExtractor,
+            HeuristicWriter,
+        )
+
+        return (
+            HeuristicExtractor(cache, meter),
+            HeuristicWriter(meter),
+            HeuristicEditor(),
+            HeuristicCompactor(),
+        )
     if name == "claude_code":
         from .bindings.claude_code import (
             ClaudeCodeCompactor,
@@ -156,7 +178,7 @@ def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
 def persona_generate(
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     field: str = typer.Option("generic", "--field"),
-    binding: str = typer.Option("fake", "--binding", help="fake | claude_code"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
 ) -> None:
     """Generate and persist the corpus persona at <corpus>/persona.txt."""
     from .distill.persona import generate_corpus_persona
@@ -186,7 +208,7 @@ def persona_generate(
 def query(
     question: str = typer.Argument(...),
     bundle_dir: Path = typer.Option(..., "--bundle"),
-    binding: str = typer.Option("fake", "--binding", help="fake | claude_code"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
     model: str = typer.Option("haiku", "--model"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_root: Path = typer.Option(Path("data/queries"), "--out"),
