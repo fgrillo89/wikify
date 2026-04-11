@@ -5,7 +5,7 @@ description: Run an LLM-policy distillation campaign where the orchestrator (opu
 
 # run-campaign
 
-User-facing workflow for the LLM-driven scenario. The user sets budget and iterations; the orchestrator decides everything else via its action menu.
+User-facing workflow for the LLM-driven scenario. The user sets budget and iterations; the orchestrator decides everything else via its action menu. The corpus is loaded once for all iterations.
 
 ## Required setup
 - `--binding file_dispatch` (the only binding that exposes an orchestrator).
@@ -17,9 +17,9 @@ User-facing workflow for the LLM-driven scenario. The user sets budget and itera
 | Parameter | Default | Description |
 |---|---|---|
 | `corpus` | `data/corpus` | Ingested corpus. |
-| `out` | `data/wikis/<run_id>` | Bundle output directory. |
+| `bundle` | `data/wikis/<run_id>` | Bundle output directory. |
 | `strategy` | `M` | E/M/X — controls the SAMPLER (not the policy). The orchestrator overrides schedule and tiers mid-run. |
-| `iterations` | `1` | How many distill calls. First is `create`, rest are `refine`. |
+| `iterations` | `1` | How many iterations to run. First is `create`, rest are `refine`. |
 | `budget_per_iteration` | `50000` | Haiku-equivalent tokens per iteration. |
 | `seed` | `0` | RNG seed (increments per iteration). |
 | `field` | auto-detect | Writer field guide. |
@@ -57,22 +57,19 @@ Each extract iteration, the orchestrator picks ONE action:
 1. Verify the corpus exists and `WIKIFY_SIMPLE_ALLOW_NETWORK=1` is set.
 2. Pick an explicit bundle path: `BUNDLE=data/wikis/campaign_<strategy>_<timestamp>`.
 3. Verify a serve-dispatch session is running (or instruct the user to start one in parallel).
-4. For `i` in `1..iterations`:
-   a. `iteration_op = "create" if i == 1 else "refine"`.
-   b. Run:
-      ```
-      uv run python -m wikify_simple.cli distill \
-        --strategy {strategy} --policy llm_policy --binding file_dispatch \
-        --budget {budget_per_iteration} --seed {seed+i-1} \
-        --iteration {iteration_op} \
-        --corpus {corpus} --bundle $BUNDLE \
-        [--field {field}] --artifact {artifact}
-      ```
-      `--bundle` forces every iteration to write to the SAME path.
-   c. Wait for the Python process to exit. If it hangs, check that serve-dispatch is still running in the other session.
-5. If `render_html`, run `uv run python -m wikify_simple.cli html --bundle $BUNDLE`.
-6. If `run_eval`, run `uv run python -m wikify_simple.cli eval --bundle $BUNDLE --corpus {corpus}`.
-7. Report the final bundle path, HTML output path, metrics summary, and the orchestrator action trajectory from `_calls.jsonl` + `policy_actions` in `_run.json`.
+4. Run the campaign in one process:
+   ```
+   uv run python -m wikify_simple.cli campaign \
+     --strategy {strategy} --policy llm_policy --binding file_dispatch \
+     --budget {budget_per_iteration} --iterations {iterations} --seed {seed} \
+     --corpus {corpus} --bundle $BUNDLE \
+     [--field {field}] --artifact {artifact}
+   ```
+   `--bundle` is required; all iterations write to the same path. The corpus is loaded once.
+5. Wait for the Python process to exit. If it hangs, check that serve-dispatch is still running in the other session.
+6. If `render_html`, run `uv run python -m wikify_simple.cli html --bundle $BUNDLE`.
+7. If `run_eval`, run `uv run python -m wikify_simple.cli eval --bundle $BUNDLE --corpus {corpus}`.
+8. Report the final bundle path, HTML output path, metrics summary, and the orchestrator action trajectory from `_calls.jsonl` + `policy_actions` in `_run.json`.
 
 ## Cost note
 The orchestrator runs at tier L (opus, locked) and a single decision costs ~30k haiku-equivalent tokens. The LLM policy caches each active sampling action for up to 8 consecutive extract batches before re-querying — without this cache, a full iteration's orchestration overhead would exceed the extract+write budget. Control actions (`set_tier`, `set_allocation`) and `done` are never cached: they trigger an immediate re-query on the next batch.
@@ -87,3 +84,4 @@ Same as run-scripted: bundle, HTML, metrics. Additionally:
 - serve-dispatch not running → harness times out after 600s per request.
 - Orchestrator returns `done` too early → bundle has few pages; re-run with more iterations.
 - Budget exhausted before the orchestrator picks `done` → the cost meter aborts cleanly; whatever pages were written are on disk.
+- Process dies mid-campaign → coverage memory is saved after each iteration; the bundle is coherent through the last completed iteration.

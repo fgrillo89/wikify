@@ -52,13 +52,7 @@ from ..prompts import (
     load_prompt,
     load_style_guide,
 )
-from ..store.corpus import (
-    all_chunks,
-    list_documents,
-    read_graph,
-    read_vector_store,
-)
-from ..store.images_index import ImageIndex, ImageRecord
+from ..store.images_index import ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from .extract.canonicalize import Candidate, canonicalize
@@ -72,6 +66,7 @@ from .iteration import (
     updated_page_provenance,
 )
 from .policy import PolicyContext, PolicyName, PolicyRuntime, build_policy
+from .preload import PreloadedCorpus, preload_corpus
 from .sampler import (
     Sampler,
     SamplerState,
@@ -148,6 +143,51 @@ def run(
     compact_threshold: int = 10,
     phase: Phase = "all",
 ) -> None:
+    """Thin wrapper: load corpus once then delegate to run_with_preloaded."""
+    preloaded = preload_corpus(corpus)
+    run_with_preloaded(
+        preloaded=preloaded,
+        bundle=bundle,
+        strategy=strategy,
+        extractor=extractor,
+        writer=writer,
+        meter=meter,
+        budget_haiku_eq=budget_haiku_eq,
+        extract_batch_size=extract_batch_size,
+        max_concepts=max_concepts,
+        feed=feed,
+        iteration=iteration,
+        merge_from_bundle=merge_from_bundle,
+        editor=editor,
+        compactor=compactor,
+        orchestrator=orchestrator,
+        policy_name=policy_name,
+        compact_threshold=compact_threshold,
+        phase=phase,
+    )
+
+
+def run_with_preloaded(
+    *,
+    preloaded: PreloadedCorpus,
+    bundle: BundlePaths,
+    strategy: StrategyConfig,
+    extractor: Extractor,
+    writer: Writer,
+    meter: CostMeter,
+    budget_haiku_eq: float,
+    extract_batch_size: int = 4,
+    max_concepts: int = 60,
+    feed: bool = False,
+    iteration: Iteration = "create",
+    merge_from_bundle: BundlePaths | None = None,
+    editor: Editor | None = None,
+    compactor: Compactor | None = None,
+    orchestrator: Orchestrator | None = None,
+    policy_name: str | None = None,
+    compact_threshold: int = 10,
+    phase: Phase = "all",
+) -> None:
     if feed and iteration == "create":
         iteration = "refine"
     bundle.ensure()
@@ -161,10 +201,10 @@ def run(
         )
         return
 
-    docs = list_documents(corpus)
-    chunks = all_chunks(corpus)
-    chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
-    images_index = ImageIndex.load(corpus)
+    docs = preloaded.docs
+    chunks = preloaded.chunks
+    chunks_by_id = preloaded.chunks_by_id
+    images_index = preloaded.images_index
 
     # ---- write-only phase: skip extraction entirely ---------------------
     if phase == "write":
@@ -186,16 +226,14 @@ def run(
     cache_hits_start = getattr(getattr(extractor, "_cache", None), "hits", 0)
     cache_misses_start = getattr(getattr(extractor, "_cache", None), "misses", 0)
     rng = random.Random(strategy.seed)
-    vectors = read_vector_store(corpus)
-    graph = read_graph(corpus)
+    vectors = preloaded.vectors
+    graph = preloaded.graph
 
     style_text = load_style_guide()
     field_text = load_field_guide(strategy.field_name)
     artifact_text = load_artifact_template(strategy.artifact_name)
     person_artifact_text = load_artifact_template("wiki_person")
-    persona_text = ""
-    if corpus.persona_path.exists():
-        persona_text = corpus.persona_path.read_text(encoding="utf-8").strip()
+    persona_text = preloaded.persona_text
     write_req_cfg = WriteRequestConfig(
         model_id=strategy.model_id,
         writer_tier=strategy.write_tier,
