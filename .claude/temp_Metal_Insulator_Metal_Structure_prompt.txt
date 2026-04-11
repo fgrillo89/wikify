@@ -1,0 +1,33 @@
+Write a full Wikipedia-style encyclopedia article about: Metal-Insulator-Metal Structure
+
+Page kind: concept
+Neighbor articles (do not duplicate): Neural Network, Scanning Electron Microscopy, Transmission Electron Microscopy, Memristor, Resistive Switching, Resistive Random Access Memory
+
+## Evidence (cite using [^eN] markers in prose)
+
+[^e1]: [2019 Chandrasekaran] Improving linearity by introducing Al in HfO2 as a memristor synapse_517c627e1393 > "curious about wanting to mimic the data processing scheme of a human brain due to its high efficiency for complex"
+  Full context: Ever since the invention of the first computer, humankind has been curious about wanting to mimic the data processing scheme of a human brain due to its high efficiency for complex computing . Recently, electronic device-imitated brain-like computing (neuromorphic) technology has received huge interest in the application of a next-generation neuromorphic computer, as well as application in artific
+[^e2]: [2019 Chandrasekaran] Improving linearity by introducing Al in HfO2 as a memristor synapse_517c627e1393 > "memristor device is able to mimic synaptic behavior by modulating the electrical pulse input. Compared to other"
+  Full context: and plasticity . The memristor device is able to mimic synaptic behavior by modulating the electrical pulse input. Compared to other emerging devices, the memristor device is considered as the first choice for the implementation of the artificial synapse, not only because of its good synaptic plasticity, but due to the lower power consumption and dynamic scalability [6, 7]. The synaptic plasticity
+[^e3]: [2015 Matveyev] Resistive switching and synaptic properties of fully atomic layer deposition grown TiNHfO2_3ce604c2ba54 > "systems effectively mimic such properties as long term potentiation and depression,[,] pair-pulse fluctuation,"
+  Full context: Meanwhile, over the last decade, broad set of reversible electrical resistance-switching phenomena in thin-film devices has attracted renewed attention as a functional basis for the alternative nonvolatile memory technologies. Among different approaches, a particularly promising concept is a memristor (memory þ resistor)-a simple nanoscale two terminal thin-film device exhibiting multi-level resis
+[^e4]: [2019 Chandrasekaran] Improving linearity by introducing Al in HfO2 as a memristor synapse_517c627e1393 > "processing scheme to mimic the learning capability of the brain."
+  Full context: In this work, we have incorporated Al dopant to improve the synaptic linearity of the HfO2-based memristor devices. In order to evaluate its synaptic characteristics for potential use in a neuromorphic application, the typical synaptic response was simulated for an image processing scheme to mimic the learning capability of the brain.
+[^e5]: [2014 Ghoneim] Foldable neuromorphic memristive electronics_92deac2b1c7b > "characteristics of MIMCAPs on flexible silicon (100) fabric with release-first process,” _Phys. Status"
+  Full context: L. Li _et al._ “A flexible polymermemory device,” _Org. Elect._ Vol. 8, pp. 401- 406, Aug. 2007. 
+
+ K. H. Lee, G. Lee, K. Lee, M. S. Oh, and S. Im, “Flexible low voltage nonvolatile memory transistors with pentacene channel and ferroelectric polymer,” _Appl. Phys. Lett._ , Vol. 94, pp. 093304-1-3, Mar. 2009. 
+
+ N. Gergel-Hackett, _et al._ “A Flexible Solution-Processed Memristor,” _IEEE Elect. Dev
+
+## Instructions
+
+1. Write a proper encyclopedia article with multiple ## sections
+2. Every factual claim must have a [^eN] citation marker
+3. End with ## References containing [^eN]: definitions  
+4. Minimum 1200 characters of real prose
+5. No [[wikilinks]], no em-dashes
+6. Write as an expert for an educated audience
+
+Respond with ONLY valid JSON:
+{"page_id": "Metal-Insulator-Metal Structure", "body_markdown": "...", "used_markers": ["e1", ...], "tokens_in": 0, "tokens_out": 0}

@@ -10,7 +10,7 @@ This module also exposes the **layered writer prompt** loaders:
 - ``load_style_guide()`` -- the corpus-agnostic Academic Writing Style Guide
 - ``load_field_guide(field_name)`` -- one of the field-specific guides
 - ``load_artifact_template(artifact_name)`` -- one of the wiki-shaped
-  artifact templates (``wiki_concept`` or ``wiki_person``)
+  artifact templates (``wiki_article`` or ``wiki_person``)
 - ``compose_writer_prompt(...)`` -- assembles all four layers (style +
   field + artifact + persona) into one writer system message string
 
@@ -116,7 +116,7 @@ def load_artifact_template(artifact_name: str) -> str:
     """Return the artifact template text for the given artifact name.
 
     Raises ``KeyError`` if no matching file exists. wikify_simple ships
-    two templates: ``wiki_concept`` and ``wiki_person``.
+    two templates: ``wiki_article`` and ``wiki_person``.
     """
     path = _ARTIFACTS_DIR / f"{artifact_name}.md"
     if not path.exists():

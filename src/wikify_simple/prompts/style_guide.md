@@ -98,3 +98,22 @@ Write as a confident expert to peers. First person ("we") is appropriate. No gra
 ---
 
 *Sources: Williams (characters-as-subjects); Strunk & White; Orwell (six rules); Schimel; Sword (zombie nouns); Graff & Birkenstein (They Say/I Say); McEnerney; Nature/ACS/IEEE guidelines; Stanford/MIT writing courses.*
+
+---
+
+## Banned Phrases (project-wide, all page kinds)
+
+The following phrases are forbidden in any generated wiki page body. They
+are corpus meta-commentary -- they describe the evidence source rather than
+the subject, and they expose the generation process to the reader.
+
+- "in this corpus"
+- "appears in this corpus"
+- "mentioned in this corpus only through citations"
+- "this corpus contains"
+- "in this article"
+- "as discussed above"
+
+First-person references to the work are also banned: "we examine",
+"we show", "our analysis", and any equivalent phrasing that implies the
+writer is a participant rather than an encyclopedic narrator.

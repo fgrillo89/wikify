@@ -1,0 +1,33 @@
+Write a full Wikipedia-style encyclopedia article about: Neuromorphic Computation
+
+Page kind: person
+Neighbor articles (do not duplicate): Neural Network, Scanning Electron Microscopy, Transmission Electron Microscopy, Memristor, Resistive Switching, Resistive Random Access Memory
+
+## Evidence (cite using [^eN] markers in prose)
+
+[^e1]: [2017 Kim] Analog Synaptic Behavior of a Silicon Nitride Memristor_5bb893697246 > "Switching Memory for Neuromorphic Computation. IEEE Trans. Electron Devices 2011, 58, 2729-2737. 
+
+(15) Woo, J.; Moon, K.; Song,"
+  Full context: (14) Yu, S.; Wu, Y.; Jeyasingh, R.; Kuzum, D.; Wong, H.-S. P. An Electronic Synapse Device Based on Metal Oxide Resistive Switching Memory for Neuromorphic Computation. IEEE Trans. Electron Devices 2011, 58, 2729-2737. 
+
+(15) Woo, J.; Moon, K.; Song, J.; Lee, S.; Kwak, M.; Park, J.; Hwang, H. Improved Synaptic Behavior under Identical Pulses Using AlOx/ HfOx Bilayer RRAM Array for Neuromorphic Sys
+[^e2]: [2014 Gao] Ultra-Low-Energy Three-Dimensional Oxide-Based Electronic Synapses for Implementation of Robust High-Accuracy Neuromorphic Computation Systems_b7b24f6cbafa > "Switching Memory for Neuromorphic Computation. IEEE Trans. Electron Devices 2011, 58, 2729-2737. 
+
+23. Chang, T.; Jo, S. H.; Lu,"
+  Full context: 22. Yu, S.; Wu, Y.; Jeyasingh, R.; Kuzum, D.; Wong, H.-S. P. An Electronic Synapse Device Based on Metal Oxide Resistive Switching Memory for Neuromorphic Computation. IEEE Trans. Electron Devices 2011, 58, 2729-2737. 
+
+23. Chang, T.; Jo, S. H.; Lu, W. Short-Term Memory to LongTerm Memory Transition in a Nanoscale Memristor. ACS Nano 2011, 5, 7669-7676. 
+
+24. Jo, S. H.; Chang, T.; Ebong, I.; Bhadv
+
+## Instructions
+
+1. Write a proper encyclopedia article with multiple ## sections
+2. Every factual claim must have a [^eN] citation marker
+3. End with ## References containing [^eN]: definitions  
+4. Minimum 1200 characters of real prose
+5. No [[wikilinks]], no em-dashes
+6. Write as an expert for an educated audience
+
+Respond with ONLY valid JSON:
+{"page_id": "Neuromorphic Computation", "body_markdown": "...", "used_markers": ["e1", ...], "tokens_in": 0, "tokens_out": 0}

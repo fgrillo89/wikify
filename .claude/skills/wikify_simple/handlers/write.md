@@ -74,23 +74,78 @@ Reference: `src/wikify_simple/contracts/schema.py::WriteResponse`
 7. If validation passes, write `<rid>.response.json` next to the request.
 8. Stop. Do not loop or interpret results.
 
-## Floor constraints (apply even if layer strings are empty)
-The page must read like a real Wikipedia entry: connected prose paragraphs, neutral declarative voice, faithful to the supplied evidence. It must NOT read like a list of related concepts, a table of crosslinks, or a stack of bullet points.
+## Wikipedia MoS references (authoritative source)
 
-Voice and style:
+- Layout: https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Layout
+- Biography: https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Biography
+
+## Floor constraints (apply even if layer strings are empty)
+
+The page must read like a real Wikipedia entry: connected prose paragraphs,
+neutral declarative voice, faithful to the supplied evidence. It must NOT
+read like a list of related concepts, a table of crosslinks, or a stack of
+bullet points.
+
+### Article pages (`kind="article"`)
+
+Structure per Wikipedia MoS/Layout:
+
+1. **Lead** (no heading): bold title in first sentence, one-sentence IS
+   definition, then context. No bullets.
+2. **Body** (at least 2 topical `## H2` sections before the appendix group).
+   Common labels: `## Background`, `## Mechanism`, `## Process`, `## Theory`,
+   `## Applications`, `## Uses`, `## Specifications`, `## Characterization`.
+   Topic-specific substitutions are allowed; the requirement is at least 2.
+3. **Appendix group** in this order: `## See also` (optional) then
+   `## References` (required last).
+
+### Person pages (`kind="person"`)
+
+Structure per Wikipedia MoS/Biography:
+
+1. **Lead** (no heading): `**Full Name** (year-range) is a [field] [role]
+   known for [contribution].` For mentioned-only persons (no `author_context`):
+   `**Name** is credited with [specific contribution].[^e1]`
+2. **Body** (at least 2 `## H2` sections before References). Required:
+   `## Research` or `## Contributions`. Include `## Publications` only when
+   `author_context.primary_publications` is non-empty; format as a real
+   blank-line-separated Markdown list.
+3. Optional sections when evidence supports: `## Education`, `## Career`,
+   `## Collaborations`, `## Legacy`.
+4. `## References` required last.
+
+### Voice and style (all page kinds)
+
 - Wikipedia voice: neutral, declarative, third person.
 - Connected prose paragraphs. One concept per sentence.
 - Short sentences. No em-dashes as parenthetical separators.
-- No meta-commentary ("this article covers...", "in summary...", "in this corpus we see...").
 - Do not invent claims that are not supported by the evidence list.
-- Do NOT use `[[wikilinks]]` anywhere in the body. A separate crosslink pass populates the page frontmatter; the body stays clean.
+- Do NOT use `[[wikilinks]]` anywhere in the body. A separate crosslink pass
+  populates the page frontmatter; the body stays clean.
 - Cite evidence using `[^eN]` markers (1-based into the evidence list).
 
 Figure placement:
 - When `figures` is supplied, mention each figure by its label ("as shown in Figure 3") inside the relevant section. On the line IMMEDIATELY after the sentence that references it, embed the figure as `![Figure N](<figure.path>)`. Never group figures at the top. Skip figures that do not fit.
 - Prefer figures whose ID appears in `evidence_v2[i].evidence_figures` — these were flagged by the extractor as directly relevant to the concept being described.
 
-Sections are GUIDANCE, not strict. Drop or reorder sections to fit the actual evidence; add extras (`## Performance`, `## Variants`, `## Alternative Explanations`, ...) when the material calls for them.
+### Banned phrases (project-wide, enforced here)
+
+Never write:
+
+- "in this corpus"
+- "appears in this corpus"
+- "mentioned in this corpus only through citations"
+- "this corpus contains"
+- "in this article"
+- "as discussed above"
+- first-person references to the work ("we examine", "we show", "our analysis")
+
+### Figure placement
+
+When `figures` is supplied, mention each figure by its label ("as shown in
+Figure 3") inside the relevant section. On the line IMMEDIATELY after the
+sentence that references it, embed the figure as `![Figure N](<figure.path>)`.
+Never group figures at the top. Skip figures that do not fit.
 
 **Article pages (kind=concept or kind=article) minimum structure**: At least two `## H2` sections must precede `## References`. Recommended labels include `## Definition`, `## Background`, `## Mechanism`, `## Applications`, `## Open Questions`, `## Significance` — but these are suggestions, not required names. Choose headings that fit the actual evidence. The rule is "at least 2 topical H2 sections before the appendix group", not "these specific labels".
 
@@ -160,4 +215,5 @@ The escalation happens INSIDE the skill invocation. It does NOT write a separate
 - Do NOT read other bundle files (use only what's in the request).
 - Do NOT make multiple dispatches (one request -> one response).
 - Do NOT interpret errors further than the retry logic above.
-- Do NOT introduce a fixed required-sections table: sections are guidance only.
+- Do NOT introduce new artifact types or page kinds not in the request.
+- Do NOT omit the lead paragraph or start with a `## H2` heading as the first line.
