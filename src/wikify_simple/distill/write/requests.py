@@ -15,7 +15,7 @@ from wikify_simple.models import Chunk, WikiPage
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.images_index import ImageIndex, ImageRecord
 
-from ..extract.dossier import DossierEntry, DossierStore
+from ..extract.dossier import DossierEntry, DossierStore, dossier_to_yaml
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,7 @@ def build_write_request(
 
     evidence_v2 = []
     dossier = dossier_store.load(page.id)
+    dossier_context = dossier_to_yaml(dossier.for_editor()) if dossier else ""
     dossier_entries_by_chunk: dict[str, DossierEntry] = {}
     if dossier:
         dossier_entries_by_chunk = {e.chunk_id: e for e in dossier.entries}
@@ -116,6 +117,7 @@ def build_write_request(
         brief=briefs.get(page.id),
         evidence_v2=evidence_v2,
         neighbor_summaries=neighbor_summaries,
+        dossier_context_yaml=dossier_context,
     )
 
 

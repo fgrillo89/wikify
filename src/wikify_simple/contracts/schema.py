@@ -427,6 +427,10 @@ class WriteRequest(BaseModel):
     brief: "EditorBrief | None" = None
     evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
     neighbor_summaries: list[dict] = Field(default_factory=list)
+    # YAML-serialised dossier context for the writer. Compact alternative to
+    # repeating the same definition/summary across each evidence_v2 entry.
+    # Empty string when no dossier exists for this page.
+    dossier_context_yaml: str = ""
 
 
 class WriteResponse(BaseModel):

@@ -49,6 +49,7 @@ dependencies = [
     "fastapi>=0.135.3",
     "uvicorn>=0.42.0",
     "pymdown-extensions>=10.21.2",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -74,8 +75,10 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.3",
     "ruff>=0.15.8",
 ]

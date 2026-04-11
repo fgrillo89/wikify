@@ -275,7 +275,82 @@ Write a review that enumerates:
 
 ---
 
-## Part 7 — What the previous run missed
+## Part 7 — Diagnostic test run: full input/output tracking
+
+This section is REQUIRED when investigating quality regressions or validating pipeline changes that touch the extract or write paths. Its purpose is to trace every produced wiki page back through the full I/O lineage that generated it.
+
+### 7.1 Lineage files location
+
+After every distill run, the pipeline writes per-run lineage under:
+
+```
+<bundle>/_meta/io_lineage/<run_id>/
+  chunks_read.json          # every chunk the sampler sent to the extractor
+  extract_candidates.json   # every concept the extractor emitted
+  dossier_entries.json      # every dossier entry with substantive flag
+```
+
+The run summary at `<bundle>/_run.json` also carries a `dossier_summary` object:
+
+```json
+{
+  "dossier_summary": {
+    "n_total": 180,
+    "n_substantive": 142,
+    "n_empty": 38,
+    "n_dossiers": 47
+  }
+}
+```
+
+A stderr warning is emitted automatically when `n_empty / n_total > 0.2` (20% threshold).
+
+### 7.2 Dossier health check (required before HTML review)
+
+```bash
+cat $BUNDLE/_run.json | python -m json.tool | grep -A6 dossier_summary
+```
+
+- `n_empty / n_total` should be < 0.2 after the references-section filter and prompt tightening.
+- If the ratio is high, check `io_lineage/<run_id>/chunks_read.json` for `section_type == "references"` entries — these should be absent after the fix.
+- If references chunks are absent but `n_empty` is still high, check `extract_candidates.json`: look at `definition_words` and `summary_words`. If most are 0, the extractor subagent is not following the content rules — re-read and re-run the extract handler prompt.
+
+### 7.3 Per-page lineage trace (sample 5 random pages)
+
+For each of 5 randomly selected wiki pages:
+
+1. **Identify the page_id** from `<bundle>/concepts/<page_id>.md` or `<bundle>/people/<page_id>.md`.
+2. **Find its dossier** at `<bundle>/_dossiers/<slug>.json`. Confirm it has at least one substantive entry (non-empty `definition` or `summary`).
+3. **Find its write request** at `<bundle>/_write_requests/<page_id>.request.json`. Check `dossier_context_yaml` — it should be non-empty YAML with at least `definition` or `summary` populated.
+4. **Trace back to lineage**: open `io_lineage/<run_id>/dossier_entries.json` and filter by `page_id`. Confirm `is_substantive: true` for at least one entry.
+5. **Trace back to chunks**: filter `chunks_read.json` by the `chunk_id`s from step 4. Confirm `section_type` is NOT `references/acknowledgments/appendix`.
+6. **Open the rendered HTML** for the page. Confirm the body is encyclopedic and references the dossier material (not a stub or skeleton).
+
+If ANY step in the chain breaks — missing dossier, empty YAML, all entries `is_substantive: false`, references-section chunk_ids, stub HTML — record it as a failure and investigate before declaring the run good.
+
+### 7.4 Write request YAML check
+
+```bash
+python - <<'EOF'
+import json, pathlib, sys
+bundle = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("data/wikify_simple/test_runs/scripted")
+wr_dir = bundle / "_write_requests"
+empty = []
+for f in sorted(wr_dir.glob("*.request.json")):
+    req = json.loads(f.read_text())
+    if not req.get("dossier_context_yaml", "").strip():
+        empty.append(f.name)
+print(f"Write requests with empty dossier_context_yaml: {len(empty)}/{len(list(wr_dir.glob('*.request.json')))}")
+for name in empty[:10]:
+    print(" ", name)
+EOF
+```
+
+Expect 0 or near-0 write requests with empty `dossier_context_yaml`. A high count means the dossier store is not populated before `build_write_request` runs — investigate the ordering in `pipeline.py`.
+
+---
+
+## Part 8 — What the previous run missed
 
 For calibration: this playbook was written after a review that declared the scripted run "high quality" based solely on the markdown of one well-written page. The actual rendered output had five concrete failures that a 10-minute HTML walkthrough would have caught:
 

@@ -26,6 +26,7 @@ budgets are exhausted.
 import dataclasses
 import json
 import random
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -62,7 +63,7 @@ from ..store.images_index import ImageIndex, ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from .extract.canonicalize import Candidate, canonicalize
-from .extract.dossier import Dossier, DossierEntry, DossierStore
+from .extract.dossier import SKIP_SECTION_TYPES, Dossier, DossierEntry, DossierStore
 from .iteration import (
     append_run_history,
     load_coverage_memory,
@@ -480,7 +481,14 @@ def run(
             policy_name or strategy.policy_name,
             policy_events,
         )
+        # Patch dossier_summary into the already-written snapshot.
+        snap = json.loads(bundle.run_path.read_text(encoding="utf-8"))
+        snap["dossier_summary"] = _dossier_summary(dossier_store, meter._run_id)  # noqa: SLF001
+        bundle.run_path.write_text(json.dumps(snap, indent=2), encoding="utf-8")
         save_coverage_memory(bundle, state, run_id=meter._run_id)  # noqa: SLF001
+        _write_io_lineage(  # noqa: SLF001
+            bundle, meter._run_id, chunks_read, chunks_by_id, candidates, dossier_store
+        )
         return
 
     # ---- write loop (phase=all) -----------------------------------------
@@ -542,10 +550,12 @@ def run(
     }
     snapshot["novelty_rate_at_reallocation"] = novelty_rate
     snapshot["write_rejections"] = write_rejections
+    snapshot["dossier_summary"] = _dossier_summary(dossier_store, meter._run_id)  # noqa: SLF001
     snapshot["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     append_run_history(bundle, snapshot)
     save_coverage_memory(bundle, state, run_id=meter._run_id)  # noqa: SLF001
+    _write_io_lineage(bundle, meter._run_id, chunks_read, chunks_by_id, candidates, dossier_store)  # noqa: SLF001
 
 
 def _normalize_title(t: str) -> str:
@@ -567,6 +577,10 @@ def _build_sampler_state(
     chunk_to_doc: dict[str, str] = {}
     all_chunk_ids: list[str] = []
     for c in chunks:
+        # Skip references/acknowledgments/appendix sections — they contain
+        # citation lists and boilerplate, not extractable knowledge.
+        if c.section_type in SKIP_SECTION_TYPES:
+            continue
         chunks_by_doc[c.doc_id].append(c.id)
         chunk_to_doc[c.id] = c.doc_id
         all_chunk_ids.append(c.id)
@@ -787,3 +801,89 @@ def _write_staged_response_error(resp_path: Path, raw: dict, exc: Exception) -> 
         "raw": raw,
     }
     err_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _dossier_summary(dossier_store: DossierStore, run_id: str) -> dict:
+    """Count substantive vs empty dossier entries; warn on stderr if ratio is high."""
+    dossiers = dossier_store.load_all()
+    n_total = sum(d.n_entries for d in dossiers)
+    n_substantive = sum(
+        1 for d in dossiers for e in d.entries if e.is_substantive
+    )
+    n_empty = n_total - n_substantive
+    if n_total > 0 and n_empty / n_total > 0.2:
+        sys.stderr.write(
+            f"[{run_id}] WARNING: {n_empty}/{n_total} dossier entries are empty"
+            f" ({100 * n_empty // n_total}% > 20% threshold)."
+            f" Check sampler section filtering and extract prompt quality.\n"
+        )
+    return {
+        "n_total": n_total,
+        "n_substantive": n_substantive,
+        "n_empty": n_empty,
+        "n_dossiers": len(dossiers),
+    }
+
+
+def _write_io_lineage(
+    bundle: BundlePaths,
+    run_id: str,
+    chunks_read: list[str],
+    chunks_by_id: dict[str, Chunk],
+    candidates: list,
+    dossier_store: DossierStore,
+) -> None:
+    """Write per-run I/O lineage files to <bundle>/_meta/io_lineage/<run_id>/."""
+    lineage_dir = bundle.meta_dir / "io_lineage" / run_id
+    lineage_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. chunks_read: metadata for every chunk the sampler sent to the extractor
+    chunks_log = []
+    for cid in chunks_read:
+        ck = chunks_by_id.get(cid)
+        chunks_log.append(
+            {
+                "chunk_id": cid,
+                "section_type": ck.section_type if ck else "",
+                "length": len(ck.text) if ck else 0,
+            }
+        )
+    (lineage_dir / "chunks_read.json").write_text(
+        json.dumps(chunks_log, indent=2), encoding="utf-8"
+    )
+
+    # 2. extract_candidates: every concept the extractor emitted
+    cands_log = [
+        {
+            "chunk_id": c.chunk_id,
+            "doc_id": c.doc_id,
+            "title": c.concept.title,
+            "kind": c.concept.kind,
+            "has_definition": bool(c.concept.definition),
+            "has_summary": bool(c.concept.summary),
+            "definition_words": len(c.concept.definition.split()) if c.concept.definition else 0,
+            "summary_words": len(c.concept.summary.split()) if c.concept.summary else 0,
+        }
+        for c in candidates
+    ]
+    (lineage_dir / "extract_candidates.json").write_text(
+        json.dumps(cands_log, indent=2), encoding="utf-8"
+    )
+
+    # 3. dossier_entries: every entry with substantive flag
+    dossier_log = []
+    for d in dossier_store.load_all():
+        for e in d.entries:
+            dossier_log.append(
+                {
+                    "page_id": d.page_id,
+                    "chunk_id": e.chunk_id,
+                    "section_type": e.section_type,
+                    "is_substantive": e.is_substantive,
+                    "definition_words": len(e.definition.split()) if e.definition else 0,
+                    "summary_words": len(e.summary.split()) if e.summary else 0,
+                }
+            )
+    (lineage_dir / "dossier_entries.json").write_text(
+        json.dumps(dossier_log, indent=2), encoding="utf-8"
+    )
