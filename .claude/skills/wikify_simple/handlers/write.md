@@ -91,10 +91,15 @@ Figure placement:
 
 Sections are GUIDANCE, not strict. Drop or reorder sections to fit the actual evidence; add extras (`## Performance`, `## Variants`, `## Alternative Explanations`, ...) when the material calls for them.
 
+**Article pages (kind=concept or kind=article) minimum structure**: At least two `## H2` sections must precede `## References`. Recommended labels include `## Definition`, `## Background`, `## Mechanism`, `## Applications`, `## Open Questions`, `## Significance` — but these are suggestions, not required names. Choose headings that fit the actual evidence. The rule is "at least 2 topical H2 sections before the appendix group", not "these specific labels".
+
+Appendix order: `## See also` (optional) -> `## References` (required last).
+
 ## Validator (matches `contracts/schema.py::_check_wikipedia_structure`)
 - Total body length >= 1200 characters.
 - No `[[wikilinks]]` anywhere in the body.
 - At least one `## H2` heading.
+- **For article/concept pages**: at least 2 non-appendix `## H2` headings before `## References`. Appendix headings that do NOT count toward this minimum: `References`, `Notes and References`, `See also`, `Further reading`, `External links` (case-insensitive).
 - At least 3 non-blank paragraphs of prose outside the References section.
 - At least one `[^eN]` marker somewhere in the prose.
 - A final `## References` section containing at least one `[^eN]:` definition.
@@ -129,6 +134,7 @@ Then the reference line is:
 5. No `[[wikilinks]]` anywhere.
 6. At least 3 paragraphs of prose outside References.
 7. Every `![Figure N](path)` has a preceding line mentioning "Figure N".
+8. For article/concept pages: at least 2 topical `## H2` sections before `## References`. "Topical" means NOT one of: References, Notes and References, See also, Further reading, External links.
 
 ## Escalation
 Supported. The writer should escalate when:

@@ -493,12 +493,18 @@ class FileDispatchWriter(Writer):
 
     def write(self, request: WriteRequest) -> WriteResponse:
         t0 = time.monotonic()
-        response = _dispatch_model(
+        response, raw = _dispatch_model_with_raw(
             self._dispatch_dir,
             "write",
             request.model_dump(mode="json"),
             WriteResponse,
         )
+        # Re-validate with page_kind from the originating request so the
+        # article-structure check (_check_wikipedia_structure) has the kind.
+        if not response.page_kind:
+            response = WriteResponse.model_validate(
+                {**raw, "page_kind": request.page_kind}
+            )
         _record_call(
             self._meter,
             role=Role.WRITER,

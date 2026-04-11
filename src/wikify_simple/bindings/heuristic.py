@@ -418,6 +418,7 @@ class HeuristicWriter(Writer):
         )
         return WriteResponse(
             page_id=request.page_id,
+            page_kind=request.page_kind,
             body_markdown=body,
             used_markers=used,
             tokens_in=0,
