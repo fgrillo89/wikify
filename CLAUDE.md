@@ -39,6 +39,27 @@ When editing existing code:
 - Do not remove pre-existing dead code unless asked.
 - Every changed line should trace directly to the user's request.
 
+### Blast Radius Discipline
+Before shipping ANY non-trivial change (new function, renamed symbol,
+rewritten handler, schema field, CLI flag, removed module):
+1. **Enumerate every caller and every consumer** of the thing you're
+   changing. Use Grep aggressively. Do not guess — verify.
+2. **Amend every caller in the same commit.** A PR that updates a
+   function signature but leaves callers broken is a bug. A skill that
+   references a deleted helper is a bug.
+3. **Delete orphaned code.** If your change makes a helper, a branch, a
+   test fixture, or an entire module unused, DELETE it in the same
+   commit. Dangling references to removed features are worse than the
+   features themselves — they mislead future readers.
+4. **Delete superseded files, don't leave them as "fallback."** See the
+   no-dead-versioning rule. A file left "just in case" becomes a second
+   source of truth that silently diverges.
+5. **When in doubt, grep for the symbol name across `src/`, `tests/`,
+   `.claude/skills/`, and `docs/`.** All four.
+6. **Name the blast radius in your commit body.** One sentence:
+   "Touches X, Y, Z; no other callers." This forces you to actually
+   look. If you can't name the radius, you don't know what you changed.
+
 ### Goal-Driven Execution
 Transform tasks into verifiable goals:
 - "Add validation" -> "Write tests for invalid inputs, then make them pass"
