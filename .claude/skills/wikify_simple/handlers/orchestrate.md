@@ -61,6 +61,28 @@ Reference: `src/wikify_simple/contracts/schema.py::OrchAction`
 
 Anything outside this table falls through to a deterministic fallback batch.
 
+## Related-page inspection tool
+
+Before picking a sampling action, you may call `inspect_related_pages(page_id, k=5)` to retrieve pages related to a given concept by token-overlap + evidence doc Jaccard. This is the same function used by the write handler; it is a local Python call (NOT a subagent) and returns:
+
+```json
+[
+  {
+    "id": "Hafnium Oxide",
+    "title": "Hafnium Oxide",
+    "topic_overlap": 0.72,
+    "body_excerpt": "Hafnium oxide (HfO2) is a high-k dielectric ...",
+    "see_also": ["Memristor", "Resistive Switching"],
+    "evidence_doc_ids": ["doc_07", "doc_12"]
+  }
+]
+```
+
+Use `inspect_related_pages` when deciding whether to `pick_chunks` for a particular concept:
+- If `topic_overlap >= 0.80` for an existing page, the concept is likely already covered. Prefer `walk_local` from that page's evidence instead of spawning fresh extraction.
+- If no related page has `topic_overlap >= 0.40`, the concept is genuinely novel. Prefer `jump_gap` or `jump_uniform` to bring in new evidence.
+- The `see_also` list lets you trace concept clusters without re-reading page bodies.
+
 ## Steps
 1. Read the request file.
 2. Spawn one Task subagent at tier L (opus) with:

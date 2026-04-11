@@ -77,22 +77,30 @@ Reference: `src/wikify_simple/contracts/schema.py::WriteResponse`
   "body_markdown": "Atomic layer deposition (ALD) is a self-limiting vapor-phase technique ... [^e1] ...\n\n## Mechanism\n\n...\n\n## References\n\n[^e1]: chunk_004 (doc_17) > \"Atomic layer deposition (ALD) is a thin-film growth technique\"\n",
   "used_markers": ["e1", "e3"],
   "tokens_in": 3200,
-  "tokens_out": 2100
+  "tokens_out": 2100,
+  "extends_page_id": null
 }
 ```
 
+`extends_page_id`: set to the page id of an existing article if you extended it (see step 2d), or `null` for a new article. This field is how the pipeline detects extend-vs-create decisions.
+
 ## Steps
 1. Read the request file.
-2. Resolve each prompt layer: for each layer, if a hash field is present, look up the session-scoped cache (see "Prompt-layer caching" above). If not cached, read from `_meta/prompt_layers/<hash>.md`. Fall back to the inline string if the file is missing or hash is null.
-3. Spawn one Task subagent at tier M (or whatever the request's `tier` field says) with:
+2. **Related-wiki check (MANDATORY before writing):**
+   a. Inspect `request.related_pages` (list of up to 5 related pages, each with `{id, title, topic_overlap, body_excerpt, see_also, evidence_doc_ids}`).
+   b. If any entry has `topic_overlap >= 0.80`, the existing page already covers this topic substantially. Prefer extending it over creating a new page. Call `read_wiki_page(page_id)` to retrieve its full markdown before deciding (this is a local Python call — NOT a subagent).
+   c. If a related page is distinct but relevant (lower overlap), you may cite it in prose and list it under `## See also`. You are authorized to follow one level of `## See also` or evidence links on a related page to pull additional context when the current evidence is ambiguous. One level only — do not recurse.
+   d. Decide: are you (i) creating a new article, or (ii) extending an existing one? Record this decision. The `WriteResponse` must carry `extends_page_id` — set it to the extended page's id if you chose (ii), or leave it null for a new article.
+3. Resolve each prompt layer: for each layer, if a hash field is present, look up the session-scoped cache (see "Prompt-layer caching" above). If not cached, read from `_meta/prompt_layers/<hash>.md`. Fall back to the inline string if the file is missing or hash is null.
+4. Spawn one Task subagent at tier M (or whatever the request's `tier` field says) with:
    - System prompt: concatenate the resolved prompt layers in this order — `corpus_persona`, `style_guide`, `field_guide`, `artifact_template` — then append the floor constraints and validator rules below. If the request supplies an editor `brief`, treat it as the authoritative section plan and append it after the layer stack.
-   - User prompt: the request-specific content (title, evidence_v2, figures, page_id, any remaining fields) and the WriteResponse schema.
-4. Receive the subagent's JSON output.
-5. Validate the output against the response schema AND the Wikipedia-structure checks below (client-side, BEFORE writing the file).
-6. If validation fails, retry ONCE with a stricter prompt that repeats the schema and the specific constraint that failed.
-7. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
-8. If validation passes, write `<rid>.response.json` next to the request.
-9. Stop. Do not loop or interpret results.
+   - User prompt: the request-specific content (title, evidence_v2, figures, page_id, any remaining fields), the `related_pages` context, the related-wiki decision from step 2, and the WriteResponse schema.
+5. Receive the subagent's JSON output.
+6. Validate the output against the response schema AND the Wikipedia-structure checks below (client-side, BEFORE writing the file).
+7. If validation fails, retry ONCE with a stricter prompt that repeats the schema and the specific constraint that failed.
+8. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
+9. If validation passes, write `<rid>.response.json` next to the request.
+10. Stop. Do not loop or interpret results.
 
 ## Wikipedia MoS references (authoritative source)
 

@@ -71,6 +71,7 @@ def test_query_returns_answer_without_mutation(ready_bundle, tmp_path, question)
         querier=FakeQuerier(),
         embed=embed_texts,
         cache_root=tmp_path / "qcache",
+        save_log=False,
     )
     elapsed = time.monotonic() - t0
     assert elapsed < 3.0

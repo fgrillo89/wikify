@@ -472,6 +472,47 @@ def persona_generate(
     typer.echo(f"persona written to {corpus.persona_path} ({len(text)} chars)")
 
 
+@app.command("field-detect")
+def field_detect_cmd(
+    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
+) -> None:
+    """Auto-detect the most likely field for a corpus and print the top scores."""
+    from .distill.extract.field_detect import detect_field, detect_field_scores
+
+    corpus = CorpusPaths(root=corpus_dir)
+    chosen = detect_field(corpus)
+    scores = detect_field_scores(corpus)
+    typer.echo(f"field: {chosen}")
+    typer.echo("top scores:")
+    for name, score in scores[:5]:
+        typer.echo(f"  {name}: {score}")
+
+
+@app.command()
+def maintenance(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Scan and report without deleting logs."),
+) -> None:
+    """Scan the query log and emit wiki improvement actions."""
+    from .distill.maintenance import run_maintenance
+
+    bundle = BundlePaths(root=bundle_dir)
+    corpus = CorpusPaths(root=corpus_dir)
+    report = run_maintenance(bundle, corpus, binding=binding, dry_run=dry_run)
+    typer.echo(
+        f"maintenance: scanned={report.queries_scanned} "
+        f"dispatched={report.actions_dispatched} "
+        f"applied={report.actions_applied} "
+        f"deleted={report.query_logs_deleted}"
+    )
+    for action in report.actions:
+        typer.echo(
+            f"  [{action.action}] {action.target_page!r}: {action.brief}"
+        )
+
+
 @app.command()
 def query(
     question: str = typer.Argument(...),
@@ -480,6 +521,7 @@ def query(
     model: str = typer.Option("haiku", "--model"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_root: Path = typer.Option(Path("data/queries"), "--out"),
+    save_log: bool = typer.Option(True, "--save-log/--no-save-log"),
 ) -> None:
     """Ask a question against a wiki bundle; write the answer to data/queries/."""
     from .distill.query import run as query_run
@@ -513,6 +555,7 @@ def query(
         querier=querier,
         embed=embed_texts,
         model_id=model,
+        save_log=save_log,
     )
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     out_dir = out_root / bundle_dir.name
@@ -532,22 +575,6 @@ def query(
     ]
     out_path.write_text("\n".join(fm_lines), encoding="utf-8")
     typer.echo(f"answer written to {out_path}")
-
-
-@app.command("field-detect")
-def field_detect_cmd(
-    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
-) -> None:
-    """Auto-detect the most likely field for a corpus and print the top scores."""
-    from .distill.extract.field_detect import detect_field, detect_field_scores
-
-    corpus = CorpusPaths(root=corpus_dir)
-    chosen = detect_field(corpus)
-    scores = detect_field_scores(corpus)
-    typer.echo(f"field: {chosen}")
-    typer.echo("top scores:")
-    for name, score in scores[:5]:
-        typer.echo(f"  {name}: {score}")
 
 
 @app.command("html")

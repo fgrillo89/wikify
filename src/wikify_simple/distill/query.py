@@ -3,23 +3,35 @@
 Pure Python retrieval (no model calls). Uses ``WikiIndex`` as the primary
 read surface; falls back to page-body embeddings for phrases the alias
 map misses. Bundle is never mutated by a query call.
+
+Helpers ``read_wiki_page`` and ``read_corpus_chunks`` are pure Python
+functions usable by the query handler skill without a model call.
+Query results are optionally persisted to ``<bundle>/_meta/query_log/``.
 """
 
 import hashlib
 import json
 import os
 import tempfile
+import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
 from ..contracts.protocols import Querier
-from ..contracts.schema import QueryAnswer, QueryEvidence, QueryRequest
+from ..contracts.schema import (
+    EscalationEvent,
+    QueryAnswer,
+    QueryEvidence,
+    QueryLogEntry,
+    QueryRequest,
+)
 from ..ingest.topics import _PHRASE_RE
-from ..paths import BundlePaths
+from ..paths import BundlePaths, CorpusPaths
 from ..prompts import load_prompt
 from ..store.bundle_embeddings import load_or_compute
 from ..store.wiki_index import WikiIndex
@@ -67,6 +79,91 @@ _STOP = frozenset(
 )
 
 
+def read_wiki_page(bundle: BundlePaths, page_id: str) -> str | None:
+    """Return the full markdown body of *page_id* from the bundle, or None.
+
+    Pure Python. No model calls. The bundle is never mutated.
+    """
+    index = WikiIndex.load(bundle)
+    entry = index.get(page_id)
+    if entry is None:
+        return None
+    page_path = bundle.root / entry.path
+    if not page_path.exists():
+        return None
+    return page_path.read_text(encoding="utf-8")
+
+
+def read_corpus_chunks(corpus: CorpusPaths, chunk_ids: list[str]) -> list[dict]:
+    """Return chunk dicts for *chunk_ids* from the corpus chunks directory.
+
+    Each result is ``{id, doc_id, text}``. Missing chunk ids are silently
+    skipped. Pure Python. No model calls. Capped at 5 chunks per call to
+    keep token spend predictable.
+    """
+    results: list[dict] = []
+    for cid in chunk_ids[:5]:
+        chunk_path = corpus.chunks_dir / f"{cid}.json"
+        if not chunk_path.exists():
+            continue
+        try:
+            data = json.loads(chunk_path.read_text(encoding="utf-8"))
+            results.append(
+                {
+                    "id": data.get("id", cid),
+                    "doc_id": data.get("doc_id", ""),
+                    "text": data.get("text", ""),
+                }
+            )
+        except Exception:
+            continue
+    return results
+
+
+def persist_query_log(
+    bundle: BundlePaths,
+    *,
+    question: str,
+    answer: QueryAnswer,
+    pages_touched: list[str],
+    links_followed: list[str] | None = None,
+    escalation_events: list[EscalationEvent] | None = None,
+    model_id: str = "",
+    tier: str = "",
+) -> str:
+    """Write one QueryLogEntry to ``<bundle>/_meta/query_log/<id>.json``.
+
+    Returns the entry id. Uses atomic rename so a partial write is never
+    visible. The log directory is created on demand.
+    """
+    entry_id = uuid.uuid4().hex
+    asked_at = datetime.now(timezone.utc).isoformat()
+    entry = QueryLogEntry(
+        id=entry_id,
+        question=question,
+        asked_at=asked_at,
+        answer_text=answer.text,
+        pages_touched=pages_touched,
+        links_followed=links_followed or [],
+        escalation_events=escalation_events or [],
+        model_id=model_id,
+        tier=tier,
+    )
+    log_dir = bundle.query_log_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    target = log_dir / f"{entry_id}.json"
+    fd, tmp = tempfile.mkstemp(prefix=".ql-", dir=str(log_dir))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(entry.model_dump_json(indent=2))
+        os.replace(tmp, target)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return entry_id
+
+
 def run(
     *,
     bundle: BundlePaths,
@@ -77,6 +174,7 @@ def run(
     model_id: str = "haiku",
     tier: str = "exploit",
     cache_root: Path | None = None,
+    save_log: bool = True,
 ) -> QueryAnswer:
     index = WikiIndex.load(bundle)
 
@@ -253,6 +351,19 @@ def run(
         os.replace(tmp, cache_file)
     except Exception:
         pass
+
+    if save_log:
+        try:
+            persist_query_log(
+                bundle,
+                question=question,
+                answer=answer,
+                pages_touched=list(candidates),
+                model_id=model_id,
+                tier=tier,
+            )
+        except Exception:
+            pass  # log persistence must never break the answer path
 
     return answer
 

@@ -17,6 +17,7 @@ from wikify_simple.store.images_index import ImageIndex, ImageRecord
 
 from ..extract.dossier import DossierEntry, DossierStore, dossier_to_yaml
 from .author_context import AuthorContext, _author_key
+from .related import compute_related_pages
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,8 @@ def build_write_request(
         if len(neighbor_summaries) >= 8:
             break
 
+    related_pages = compute_related_pages(page, all_pages, k=5)
+
     is_person = page.kind == "person"
     artifact_text = cfg.person_artifact_text if is_person else cfg.artifact_text
     artifact_hash = cfg.person_artifact_hash if is_person else cfg.artifact_template_hash
@@ -154,6 +157,7 @@ def build_write_request(
         neighbor_summaries=neighbor_summaries,
         author_context=page_author_context,
         dossier_context_yaml=dossier_context,
+        related_pages=related_pages,
     )
 
 

@@ -466,6 +466,10 @@ class WriteRequest(BaseModel):
     # repeating the same definition/summary across each evidence_v2 entry.
     # Empty string when no dossier exists for this page.
     dossier_context_yaml: str = ""
+    # Related wiki pages (top-5 by token overlap + Jaccard over evidence doc
+    # ids). Each entry: {id, title, topic_overlap, body_excerpt, see_also,
+    # evidence_doc_ids}. Capped at 500 chars per excerpt.
+    related_pages: list[dict] = Field(default_factory=list)
 
 
 class WriteResponse(BaseModel):
@@ -477,6 +481,9 @@ class WriteResponse(BaseModel):
     used_markers: list[str]
     tokens_in: int
     tokens_out: int
+    # Non-null when the writer extended an existing article rather than
+    # creating a fresh one. The value is the page_id that was extended.
+    extends_page_id: str | None = None
 
     @model_validator(mode="after")
     def _body_has_prose_and_evidence(self) -> "WriteResponse":
@@ -635,3 +642,54 @@ class QueryResponse(BaseModel):
     answer: QueryAnswer
     tokens_in: int = 0
     tokens_out: int = 0
+
+
+# --- query log -----------------------------------------------------------
+
+
+class EscalationEvent(BaseModel):
+    model_config = _STRICT
+
+    reason: str
+    chunk_ids: list[str] = Field(default_factory=list)
+
+
+class QueryLogEntry(BaseModel):
+    model_config = _STRICT
+
+    id: str
+    question: str
+    asked_at: str  # ISO-8601 timestamp
+    answer_text: str
+    pages_touched: list[str] = Field(default_factory=list)
+    links_followed: list[str] = Field(default_factory=list)
+    escalation_events: list[EscalationEvent] = Field(default_factory=list)
+    model_id: str = ""
+    tier: str = ""
+
+
+# --- maintenance ---------------------------------------------------------
+
+MaintenanceActionKind = Literal["extend_page", "create_page", "add_evidence", "merge_pages"]
+
+
+class MaintenanceAction(BaseModel):
+    model_config = _STRICT
+
+    action: MaintenanceActionKind
+    target_page: str
+    brief: str
+    evidence_additions: list[str] = Field(default_factory=list)
+    rationale: str
+    source_query_id: str = ""
+
+
+class MaintenanceReport(BaseModel):
+    model_config = _STRICT
+
+    run_at: str  # ISO-8601
+    queries_scanned: int
+    actions_dispatched: int
+    actions_applied: int
+    query_logs_deleted: int
+    actions: list[MaintenanceAction] = Field(default_factory=list)

@@ -56,27 +56,52 @@ Reference: `src/wikify_simple/contracts/schema.py::QueryResponse`
 }
 ```
 
+## Traversal helpers
+
+The query handler is authorized to use these **local Python helpers** (NOT subagents) to gather additional context before composing the answer:
+
+### `read_wiki_page(bundle, page_id) -> str | None`
+Returns the full markdown of a page from the bundle. Use to read a page in full when the excerpt in the request evidence is insufficient.
+
+### `read_corpus_chunks(corpus, chunk_ids) -> list[dict]`
+Returns raw corpus chunk dicts `{id, doc_id, text}` for the given chunk ids. Use ONLY when the wiki pages do not answer the question. Each result is `{id, doc_id, text}`. Capped at 5 chunk ids per call.
+
+### Traversal budget (per query)
+- Up to **3 additional page reads** via `read_wiki_page`. Each call counts as one of the 3.
+- You may follow links listed in a page's `## See also` section, ONE level at a time. One level means: read the linked page, do not then follow links from that page.
+- Up to **5 corpus chunks** via `read_corpus_chunks`. Only escalate to corpus chunks when wiki pages are insufficient. Log each escalation in `escalation_events`.
+
+### Escalation logging
+Every `read_corpus_chunks` call is an escalation event. Record it:
+```json
+{"reason": "wiki pages did not cover the mechanism", "chunk_ids": ["c1", "c2"]}
+```
+These events are stored in the query log and consumed by the maintenance verb.
+
 ## Steps
 1. Read the request file.
-2. Spawn one Task subagent at tier M with:
-   - System prompt: "You are the wikify_simple query responder. Answer the question using ONLY the supplied evidence packet. Cite pages by their `page_id`. Respond as strict JSON matching the QueryResponse schema. No commentary outside the JSON."
-   - User prompt: the serialized request payload and the answer rules below.
-3. Receive the subagent's JSON output.
-4. Validate the output against the response schema (client-side check BEFORE writing the file).
-5. If validation fails, retry ONCE with a stricter prompt that repeats the schema.
-6. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
-7. If validation passes, write `<rid>.response.json` next to the request.
-8. Stop. Do not loop or interpret results.
+2. Inspect the supplied evidence packet. If the evidence is thin or clearly incomplete:
+   a. Call `read_wiki_page` for pages cited in `evidence[i].citations` (follow-ups), up to the 3-read cap.
+   b. If still insufficient, call `read_corpus_chunks` with relevant chunk ids, recording the escalation.
+3. Spawn one Task subagent at tier M with:
+   - System prompt: "You are the wikify_simple query responder. Answer the question using the supplied evidence. Cite pages by their `page_id`. Respond as strict JSON matching the QueryResponse schema. No commentary outside the JSON."
+   - User prompt: the serialized request payload, any additional page content from step 2, and the answer rules below.
+4. Receive the subagent's JSON output.
+5. Validate the output against the response schema (client-side check BEFORE writing the file).
+6. If validation fails, retry ONCE with a stricter prompt that repeats the schema.
+7. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
+8. If validation passes, write `<rid>.response.json` next to the request.
+9. Stop. Do not loop or interpret results.
 
 ## Answer rules
-- Use ONLY the supplied evidence — do not read other files or invent citations.
 - Cite pages by their `page_id`.
 - Keep the answer to 3-6 sentences. One concept per sentence.
 - Zero em-dashes (per the project style guide).
-- If the evidence is insufficient to answer, say so explicitly and list the most relevant `page_id`s as `follow_ups`.
+- If the evidence is insufficient to answer after traversal, say so explicitly and list the most relevant `page_id`s as `follow_ups`.
+- Do NOT invent citations for pages or chunks you have not actually read.
 
 ## Escalation
-Not supported. The query responder runs at a fixed tier and does not escalate.
+The query handler escalates to corpus chunks (not to a higher model tier). Every corpus-chunk read must be logged in `escalation_events`. The query responder does NOT escalate model tier.
 
 ## Errors
 - **Schema validation failure**: one retry with stricter prompt, then `<rid>.error.json`.
@@ -84,6 +109,8 @@ Not supported. The query responder runs at a fixed tier and does not escalate.
 - **Timeout**: the Python harness has a 600s timeout on polling. You have roughly that window.
 
 ## What not to do
-- Do NOT read other bundle files (use only what's in the request).
+- Do NOT read more than 3 extra pages per query.
+- Do NOT read more than 5 corpus chunks per query.
+- Do NOT follow links more than one level deep.
 - Do NOT make multiple dispatches (one request -> one response).
 - Do NOT interpret errors further than the retry logic above.

@@ -108,6 +108,10 @@ class BundlePaths:
     def prompt_layers_dir(self) -> Path:
         return self.meta_dir / "prompt_layers"
 
+    @property
+    def query_log_dir(self) -> Path:
+        return self.meta_dir / "query_log"
+
     def ensure(self) -> None:
         self.articles_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)
