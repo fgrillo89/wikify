@@ -20,6 +20,21 @@ write runs at tier M. This maps to:
 
 (The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
 
+## Prompt-layer caching (vendor-neutral)
+
+The request carries two representations of each stable prompt layer:
+
+- **Inline strings** (`style_guide`, `field_guide`, `artifact_template`, `corpus_persona`): always present; used directly by fake/heuristic bindings.
+- **Hash fields** (`style_guide_hash`, `field_guide_hash`, `artifact_template_hash`, `corpus_persona_hash`): sha256[:16] hex, present when the pipeline wrote layer files to disk.
+
+**In a serve-dispatch session** (file_dispatch binding), maintain a session-scoped `{hash: text}` dict in memory. On each write dispatch:
+1. For each non-null hash field in the request, check whether the hash is already in the session cache.
+2. If not cached, read `<bundle_root>/_meta/prompt_layers/<hash>.md` and store in cache.
+3. Compose the system prompt from cached (or inline) layer text in the order: `corpus_persona`, `style_guide`, `field_guide`, `artifact_template`.
+4. The inline strings are used as fallback if hashes are absent or the layer file is missing.
+
+**VENDOR NEUTRAL**: Do NOT use Anthropic prompt-caching primitives (`cache_control`) or OpenAI system-message caching APIs. The cache lives in Python/Claude Code session memory only. This design is compatible with adding vendor caching later (the hashes are stable `cache_control` candidates) but does not depend on it.
+
 ## Request schema
 Reference: `src/wikify_simple/contracts/schema.py::WriteRequest`
 
@@ -28,9 +43,13 @@ Reference: `src/wikify_simple/contracts/schema.py::WriteRequest`
   "page_id": "Atomic Layer Deposition",
   "title": "Atomic Layer Deposition",
   "corpus_persona": "You are writing for a corpus centered on thin-film memory devices ...",
+  "corpus_persona_hash": "a1b2c3d4e5f60718",
   "style_guide": "Neutral declarative voice. Short sentences. No em-dashes ...",
+  "style_guide_hash": "9f8e7d6c5b4a3210",
   "field_guide": "Use SI units. Prefer 'thin film' over 'thin-film' as a noun ...",
+  "field_guide_hash": "0102030405060708",
   "artifact_template": "Wikipedia concept article with optional sections ...",
+  "artifact_template_hash": "deadbeef12345678",
   "brief": {
     "article_register": "academic",
     "lead_paragraph_instruction": "Define ALD as ...",
@@ -64,15 +83,16 @@ Reference: `src/wikify_simple/contracts/schema.py::WriteResponse`
 
 ## Steps
 1. Read the request file.
-2. Spawn one Task subagent at tier M (or whatever the request's `tier` field says) with:
-   - System prompt: concatenate the supplied prompt layers in this order — `corpus_persona`, `style_guide`, `field_guide`, `artifact_template` — then append the floor constraints and validator rules below. If the request supplies an editor `brief`, treat it as the authoritative section plan and append it after the layer stack.
+2. Resolve each prompt layer: for each layer, if a hash field is present, look up the session-scoped cache (see "Prompt-layer caching" above). If not cached, read from `_meta/prompt_layers/<hash>.md`. Fall back to the inline string if the file is missing or hash is null.
+3. Spawn one Task subagent at tier M (or whatever the request's `tier` field says) with:
+   - System prompt: concatenate the resolved prompt layers in this order — `corpus_persona`, `style_guide`, `field_guide`, `artifact_template` — then append the floor constraints and validator rules below. If the request supplies an editor `brief`, treat it as the authoritative section plan and append it after the layer stack.
    - User prompt: the request-specific content (title, evidence_v2, figures, page_id, any remaining fields) and the WriteResponse schema.
-3. Receive the subagent's JSON output.
-4. Validate the output against the response schema AND the Wikipedia-structure checks below (client-side, BEFORE writing the file).
-5. If validation fails, retry ONCE with a stricter prompt that repeats the schema and the specific constraint that failed.
-6. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
-7. If validation passes, write `<rid>.response.json` next to the request.
-8. Stop. Do not loop or interpret results.
+4. Receive the subagent's JSON output.
+5. Validate the output against the response schema AND the Wikipedia-structure checks below (client-side, BEFORE writing the file).
+6. If validation fails, retry ONCE with a stricter prompt that repeats the schema and the specific constraint that failed.
+7. If validation still fails, write `<rid>.error.json` next to the request with `{error: "...", last_output: "..."}` and stop.
+8. If validation passes, write `<rid>.response.json` next to the request.
+9. Stop. Do not loop or interpret results.
 
 ## Wikipedia MoS references (authoritative source)
 

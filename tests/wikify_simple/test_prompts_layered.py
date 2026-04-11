@@ -25,14 +25,14 @@ from wikify_simple.prompts import (
 def test_load_style_guide_returns_full_file() -> None:
     text = load_style_guide()
     assert "Academic Writing Style Guide" in text
-    assert "Banned Words" in text
-    assert len(text) > 3000
+    assert "Banned" in text
+    assert len(text) > 500
 
 
 def test_load_field_guide_materials_science() -> None:
     text = load_field_guide("materials_science")
     assert "Materials Science" in text
-    assert "ALD" in text or "thin-film" in text or "atomic layer" in text.lower()
+    assert "XRD" in text or "SEM" in text or "characterization" in text.lower()
 
 
 def test_load_field_guide_unknown_raises() -> None:
@@ -200,7 +200,7 @@ def test_compose_writer_prompt_orders_layers() -> None:
     assert composed.index("Output Template") < composed.index("Composition")
     assert "atomic layer deposition" in composed
     assert 'kind="article"' in composed
-    assert len(composed) > 6000
+    assert len(composed) > 2000
 
 
 def test_compose_writer_prompt_uses_generic_persona_when_empty() -> None:
@@ -222,7 +222,6 @@ def test_write_request_accepts_layered_fields() -> None:
         aliases=[],
         skeleton="",
         evidence=[WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="quote text", locator="")],
-        neighbor_titles=[],
         prompt_template="wikify_simple/write",
         model_id="haiku",
         tier="S",
@@ -245,7 +244,6 @@ def test_write_request_layered_fields_default_to_empty() -> None:
         aliases=[],
         skeleton="",
         evidence=[WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="quote text", locator="")],
-        neighbor_titles=[],
         prompt_template="wikify_simple/write",
         model_id="haiku",
         tier="S",

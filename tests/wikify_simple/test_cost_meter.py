@@ -23,7 +23,6 @@ def _write_req(n_figures: int) -> WriteRequest:
         evidence=[
             WriteEvidenceRef(chunk_id="d/0", doc_id="d", quote="q", locator=""),
         ],
-        neighbor_titles=[],
         prompt_template="wikify_simple/write",
         model_id="haiku",
         tier="L",

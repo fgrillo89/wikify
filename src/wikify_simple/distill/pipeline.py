@@ -48,11 +48,13 @@ from ..ingest.sampler_index import load_sampler_index
 from ..models import Chunk, Document, WikiPage
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import (
+    compose_writer_prompt_layer_hashes,
     load_artifact_template,
     load_field_guide,
     load_prompt,
     load_style_guide,
 )
+from ..prompts.registry import _content_hash
 from ..store.corpus import (
     all_chunks,
     list_documents,
@@ -197,6 +199,23 @@ def run(
     persona_text = ""
     if corpus.persona_path.exists():
         persona_text = corpus.persona_path.read_text(encoding="utf-8").strip()
+    layer_hashes = compose_writer_prompt_layer_hashes(strategy.field_name, strategy.artifact_name)
+    person_artifact_hash = _content_hash(person_artifact_text)
+    corpus_persona_hash = _content_hash(persona_text) if persona_text else None
+    _write_prompt_layer_files(
+        bundle,
+        {
+            layer_hashes["style_guide"]: style_text,
+            layer_hashes["field_guide"]: field_text,
+            layer_hashes["artifact_template"]: artifact_text,
+            person_artifact_hash: person_artifact_text,
+            **(
+                {corpus_persona_hash: persona_text}
+                if corpus_persona_hash is not None
+                else {}
+            ),
+        },
+    )
     write_req_cfg = WriteRequestConfig(
         model_id=strategy.model_id,
         writer_tier=strategy.write_tier,
@@ -206,6 +225,11 @@ def run(
         artifact_text=artifact_text,
         person_artifact_text=person_artifact_text,
         persona_text=persona_text,
+        style_guide_hash=layer_hashes["style_guide"],
+        field_guide_hash=layer_hashes["field_guide"],
+        artifact_template_hash=layer_hashes["artifact_template"],
+        person_artifact_hash=person_artifact_hash,
+        corpus_persona_hash=corpus_persona_hash,
     )
 
     state = _build_sampler_state(rng, docs, chunks, graph, vectors, corpus=corpus)
@@ -604,6 +628,21 @@ def run(
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     append_run_history(bundle, snapshot)
     save_coverage_memory(bundle, state, run_id=meter._run_id)  # noqa: SLF001
+
+
+def _write_prompt_layer_files(bundle: BundlePaths, layers: dict[str, str]) -> None:
+    """Write each unique prompt layer to ``_meta/prompt_layers/<hash>.md``.
+
+    Idempotent: skips existing files. Called once per run so the serve-dispatch
+    runtime can fetch uncached layers by hash without re-receiving the full text
+    on every write request.
+    """
+    out = bundle.prompt_layers_dir
+    out.mkdir(parents=True, exist_ok=True)
+    for h, text in layers.items():
+        path = out / f"{h}.md"
+        if not path.exists():
+            path.write_text(text, encoding="utf-8")
 
 
 def _normalize_title(t: str) -> str:

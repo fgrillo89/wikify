@@ -52,7 +52,7 @@ _WRITER_SPEC: list[SlotSpec] = [
     Required(name="schema", fixed_tokens=1_000),
     Required(name="page_skeleton", fixed_tokens=None),  # variable
     Pool(name="evidence_chunks", floor_tokens=4_000, ceiling_tokens=80_000),
-    Pool(name="neighbor_titles", floor_tokens=0, ceiling_tokens=8_000),
+    Pool(name="neighbor_summaries", floor_tokens=0, ceiling_tokens=8_000),
 ]
 
 _COMPACTOR_SPEC: list[SlotSpec] = [

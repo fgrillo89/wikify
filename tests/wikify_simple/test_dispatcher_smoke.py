@@ -226,7 +226,6 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
         evidence=[
             WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="self-limiting", locator=""),
         ],
-        neighbor_titles=[],
         prompt_template="wikify_simple/write",
         model_id="claude-haiku",
         tier="M",
