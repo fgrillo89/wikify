@@ -529,6 +529,10 @@ class OrchState(BaseModel):
     docs_total: int = 0
     index_path: str = ""
     last_actions: list[str] = Field(default_factory=list)
+    # Sampler snapshot for Phase 3 LLM-as-sampler.
+    # Contains top_gap_chunks, doc_coverage, page_index, content_stats.
+    # ~2-4 kB of JSON; built in LlmPolicy.next_extract before each orch call.
+    sampler_snapshot: dict = Field(default_factory=dict)
 
 
 class OrchAction(BaseModel):

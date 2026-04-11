@@ -12,7 +12,7 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..models import CorpusGraph
 from ..store.vectors import VectorStore
@@ -276,3 +276,69 @@ _GLOBAL_DISPATCH: dict[GlobalOp, Callable[[SamplerState, int], list[str]]] = {
     GlobalOp.PAGERANK: _global_pagerank,
     GlobalOp.COVERAGE_GAP: _global_coverage_gap,
 }
+
+
+# --- Phase 3: semantic query helper --------------------------------------
+
+
+def semantic_query_chunks(
+    state: SamplerState,
+    query_vec: "Any",
+    k: int,
+    scope: str = "all",
+) -> list[dict]:
+    """Return top-k chunks by cosine similarity against query_vec.
+
+    Args:
+        state: current SamplerState (provides vector store + seen_chunks +
+               chunk_to_doc).
+        query_vec: unit-norm float32 query embedding.
+        k: number of results to return.
+        scope: "all" (no filter), "unseen" (skip seen_chunks), or
+               "page:<id>" (skip chunks NOT belonging to the given doc_id).
+               "page:<id>" is intended for deepening a specific page's
+               evidence; it filters to chunks whose doc_id appears in the
+               page's existing evidence (not implemented here -- the caller
+               must pass a query_vec derived from that page).
+
+    Returns:
+        List of dicts with keys: chunk_id, doc_id, score, is_seen.
+        Sorted descending by score. Length <= k.
+    """
+    import numpy as np  # noqa: PLC0415 -- local to avoid hard dep in module header
+
+    vs = state.vectors
+    if vs is None or not vs.ids:
+        return []
+
+    sims: np.ndarray = vs.cosine_to_all(query_vec)
+
+    candidates: list[tuple[float, str]]
+    if scope == "unseen":
+        candidates = [
+            (float(sims[i]), cid)
+            for i, cid in enumerate(vs.ids)
+            if cid not in state.seen_chunks
+        ]
+    elif scope.startswith("page:"):
+        page_id = scope[len("page:"):]
+        candidates = [
+            (float(sims[i]), cid)
+            for i, cid in enumerate(vs.ids)
+            if state.chunk_to_doc.get(cid) == page_id
+        ]
+    else:
+        candidates = [(float(sims[i]), cid) for i, cid in enumerate(vs.ids)]
+
+    candidates.sort(key=lambda x: -x[0])
+    top = candidates[:k]
+
+    return [
+        {
+            "chunk_id": cid,
+            "doc_id": state.chunk_to_doc.get(cid, ""),
+            "score": score,
+            "is_seen": cid in state.seen_chunks,
+        }
+        for score, cid in top
+    ]
