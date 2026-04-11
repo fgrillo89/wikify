@@ -20,7 +20,12 @@ from wikify_simple.contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
+from wikify_simple.distill.extract.dossier import DossierStore
+from wikify_simple.distill.write.author_context import build_author_context
+from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
 from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.models import Document, Evidence, WikiPage
+from wikify_simple.store.images_index import ImageIndex
 
 
 def _meter(tmp_path: Path) -> CostMeter:
@@ -468,3 +473,186 @@ def test_fake_writer_person_page_passes_validator(tmp_path: Path) -> None:
     # References present.
     assert "## References" in body
     assert "[^e1]:" in body
+
+
+# ---- Phase 6B: author_context on WriteRequest ---------------------------
+
+
+_WRITE_REQ_CFG = WriteRequestConfig(
+    model_id="fake",
+    writer_tier="M",
+    prompt_name="t",
+    style_text="",
+    field_text="",
+    artifact_text="",
+    person_artifact_text="",
+    persona_text="",
+)
+
+
+def _build_req(
+    page: WikiPage, all_pages: list[WikiPage], tmp_path, author_ctx=None
+) -> WriteRequest:
+    return build_write_request(
+        page,
+        all_pages,
+        {},
+        DossierStore(tmp_path),
+        {},
+        ImageIndex(corpus_root=tmp_path),
+        _WRITE_REQ_CFG,
+        author_ctx,
+    )
+
+
+def test_write_request_author_context_populated_for_person_in_corpus(tmp_path) -> None:
+    """WriteRequest.author_context is populated when author is in corpus."""
+    docs = [
+        Document(
+            id="d1",
+            source_path="/tmp/d1.pdf",
+            kind="pdf",
+            title="Paper One",
+            metadata={"authors": ["Alice Adams"], "year": 2020},
+            markdown_path="",
+            image_dir="",
+        )
+    ]
+    author_ctx = build_author_context(docs)
+    page = WikiPage(
+        id="Alice Adams",
+        kind="person",
+        title="Alice Adams",
+        aliases=[],
+        body_markdown="",
+        evidence=[
+            Evidence(marker="e1", chunk_id="c1", doc_id="d1", quote="some quote here"),
+            Evidence(marker="e2", chunk_id="c2", doc_id="d1", quote="another quote here"),
+        ],
+    )
+    req = _build_req(page, [page], tmp_path, author_ctx)
+
+    assert req.author_context is not None
+    assert req.page_kind == "person"
+    pubs = req.author_context["primary_publications"]
+    assert len(pubs) == 1
+    assert pubs[0]["title"] == "Paper One"
+    assert pubs[0]["year"] == 2020
+
+
+def test_write_request_author_context_none_for_article(tmp_path) -> None:
+    """WriteRequest.author_context is None for article pages."""
+    docs = [
+        Document(
+            id="d1",
+            source_path="/tmp/d1.pdf",
+            kind="pdf",
+            title="Paper One",
+            metadata={"authors": ["Alice Adams"], "year": 2020},
+            markdown_path="",
+            image_dir="",
+        )
+    ]
+    author_ctx = build_author_context(docs)
+    page = WikiPage(
+        id="Atomic Layer Deposition",
+        kind="article",
+        title="Atomic Layer Deposition",
+        aliases=[],
+        body_markdown="",
+        evidence=[
+            Evidence(marker="e1", chunk_id="c1", doc_id="d1", quote="some quote here"),
+        ],
+    )
+    req = _build_req(page, [page], tmp_path, author_ctx)
+
+    assert req.author_context is None
+    assert req.page_kind == "article"
+
+
+def test_write_request_author_context_none_for_person_not_in_corpus(tmp_path) -> None:
+    """WriteRequest.author_context is None for a person not in corpus authors."""
+    # Corpus has Alice Adams but NOT Bob Brown.
+    docs = [
+        Document(
+            id="d1",
+            source_path="/tmp/d1.pdf",
+            kind="pdf",
+            title="Paper One",
+            metadata={"authors": ["Alice Adams"], "year": 2020},
+            markdown_path="",
+            image_dir="",
+        )
+    ]
+    author_ctx = build_author_context(docs)
+    page = WikiPage(
+        id="Bob Brown",
+        kind="person",
+        title="Bob Brown",
+        aliases=[],
+        body_markdown="",
+        evidence=[
+            Evidence(marker="e1", chunk_id="c1", doc_id="d1", quote="quote about Bob"),
+            Evidence(marker="e2", chunk_id="c2", doc_id="d1", quote="another Bob quote"),
+        ],
+    )
+    req = _build_req(page, [page], tmp_path, author_ctx)
+
+    assert req.author_context is None
+
+
+# ---- Phase 6B: >=2 H2 validator for person pages ------------------------
+
+
+def _mk_person(body: str) -> WriteResponse:
+    """Like _mk_concept but with page_kind='person' to activate Phase 6B check."""
+    return WriteResponse(
+        page_id="Alice Adams",
+        page_kind="person",
+        body_markdown=body,
+        used_markers=["e1", "e2"],
+        tokens_in=300,
+        tokens_out=120,
+    )
+
+
+def test_person_only_references_h2_rejected() -> None:
+    """A person body whose only H2 is ## References is rejected (Phase 6B)."""
+    lead = (
+        "**Alice Adams** is a researcher known for contributions to thin-film "
+        "deposition science and related disciplines[^e1]. Her work spans "
+        "multiple decades and has been cited across the field widely[^e2]. "
+        "The evidence documents her participation in several major programs "
+        "in the area of semiconductor materials engineering[^e1]. "
+        "Her research output includes primary papers on atomic layer "
+        "deposition and related techniques[^e2]. "
+        "She has co-authored work with a number of leading researchers in "
+        "the thin-film and memristive device communities[^e1]."
+    )
+    body = (
+        "# Alice Adams\n\n"
+        + lead + "\n\n"
+        + lead + "\n\n"
+        + lead + "\n\n"
+        + "## References\n\n"
+        + _REFS_BLOCK
+    )
+    with pytest.raises(ValidationError, match="at least 2"):
+        _mk_person(body)
+
+
+def test_person_two_topical_h2s_accepted() -> None:
+    """A person body with Biography + Contributions before References passes."""
+    body = (
+        "# Alice Adams\n\n"
+        "## Biography\n\n"
+        + _FILLER_PARA + "\n\n"
+        "## Contributions\n\n"
+        + _FILLER_PARA + "\n\n"
+        + _FILLER_PARA + "\n\n"
+        "## References\n\n"
+        + _REFS_BLOCK
+    )
+    resp = _mk_person(body)
+    assert "## Biography" in resp.body_markdown
+    assert "## Contributions" in resp.body_markdown

@@ -16,6 +16,7 @@ from wikify_simple.paths import BundlePaths
 from wikify_simple.store.images_index import ImageIndex, ImageRecord
 
 from ..extract.dossier import DossierEntry, DossierStore
+from .author_context import AuthorContext, _author_key
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ def build_write_request(
     chunks_by_id: dict[str, Chunk],
     images_index: ImageIndex,
     cfg: WriteRequestConfig,
+    author_ctx: dict[str, AuthorContext] | None = None,
 ) -> WriteRequest:
     """Build a WriteRequest for a single page."""
     page_doc_ids = {ev.doc_id for ev in page.evidence}
@@ -89,6 +91,26 @@ def build_write_request(
         if len(neighbor_summaries) >= 8:
             break
 
+    # Look up author context for person pages.
+    page_author_context: dict | None = None
+    if page.kind == "person" and author_ctx:
+        key = _author_key(page.title)
+        ctx = author_ctx.get(key)
+        if ctx is not None:
+            page_author_context = {
+                "primary_publications": [
+                    {"doc_id": p.doc_id, "title": p.title, "year": p.year}
+                    for p in ctx.primary_publications
+                ],
+                "cited_works": [
+                    {"title": c.title, "year": c.year, "citing_doc_id": c.citing_doc_id}
+                    for c in ctx.cited_works
+                ],
+                "collaborators": ctx.collaborators,
+                "year_range": list(ctx.year_range) if ctx.year_range else None,
+                "affiliations": ctx.affiliations,
+            }
+
     return WriteRequest(
         page_id=page.id,
         page_kind=page.kind,
@@ -116,6 +138,7 @@ def build_write_request(
         brief=briefs.get(page.id),
         evidence_v2=evidence_v2,
         neighbor_summaries=neighbor_summaries,
+        author_context=page_author_context,
     )
 
 
@@ -127,6 +150,7 @@ def save_write_requests(
     chunks_by_id: dict[str, Chunk],
     images_index: ImageIndex,
     cfg: WriteRequestConfig,
+    author_ctx: dict[str, AuthorContext] | None = None,
 ) -> None:
     """Serialize WriteRequest JSONs to ``_write_requests/``."""
     out = bundle.write_requests_dir
@@ -142,6 +166,7 @@ def save_write_requests(
             chunks_by_id,
             images_index,
             cfg,
+            author_ctx,
         )
         path = out / f"{page.id}.request.json"
         path.write_text(req.model_dump_json(indent=2), encoding="utf-8")

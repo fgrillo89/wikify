@@ -91,15 +91,46 @@ Figure placement:
 
 Sections are GUIDANCE, not strict. Drop or reorder sections to fit the actual evidence; add extras (`## Performance`, `## Variants`, `## Alternative Explanations`, ...) when the material calls for them.
 
-**Article pages (kind=concept or kind=article) minimum structure**: At least two `## H2` sections must precede `## References`. Recommended labels include `## Definition`, `## Background`, `## Mechanism`, `## Applications`, `## Open Questions`, `## Significance` — but these are suggestions, not required names. Choose headings that fit the actual evidence. The rule is "at least 2 topical H2 sections before the appendix group", not "these specific labels".
+**Article pages (kind=article) minimum structure**: At least two `## H2` sections must precede `## References`. Recommended labels include `## Definition`, `## Background`, `## Mechanism`, `## Applications`, `## Open Questions`, `## Significance` — but these are suggestions, not required names. Choose headings that fit the actual evidence. The rule is "at least 2 topical H2 sections before the appendix group", not "these specific labels".
 
 Appendix order: `## See also` (optional) -> `## References` (required last).
+
+## Writing a person page (`kind=person`)
+
+Person pages are biographical articles in Wikipedia voice, not deterministic author stubs.
+
+**Opening sentence**: Start with the person's full name in **bold**, followed by a factual role/field descriptor drawn from the evidence. Use the `author_context.primary_publications` titles (if present) to infer the research area. Example: `**Alice Adams** is a materials scientist whose work focuses on atomic layer deposition for memristive devices.`
+
+**BANNED phrasing** (never write these — they signal the old deterministic output):
+- "X appears in this corpus..."
+- "X appears in this corpus only through citations..."
+- "mentioned in this corpus"
+- "in this corpus"
+- "this corpus contains"
+
+**Required structure** (at least 2 in-body H2 sections before `## References`):
+- `## Biography` or `## Background` — career context and research timeline
+- `## Contributions` or `## Research` — what the person discovered or developed, grounded in evidence chunks
+- Optionally: `## Collaborations`, `## Notable works`, `## Legacy`
+- `## References` (required last)
+
+**Using `author_context`** (when present in the request):
+- `primary_publications`: titles and years of the person's papers in the corpus. Use as grounded facts about research topics and timeline. Do NOT cite the `author_context` field itself — cite via the `[^eN]` evidence markers that accompany the request.
+- `cited_works`: works this person has been cited for; useful for scoping their broader contributions.
+- `collaborators`: names of co-authors; may be mentioned in prose as "Adams worked closely with [name]".
+- `year_range`: earliest and latest publication years; use to frame the temporal scope of their work.
+
+**When `author_context` is absent** (person mentioned in text but not a corpus author):
+- Write only from the evidence chunks. Do not speculate about unconfirmed affiliations, dates, or fields.
+- The lead may be shorter: `**Name** is credited with [specific contribution grounded in evidence].`
+
+**Publication lists**: if you include a publications section, use real markdown list syntax with a blank line before each `- ` item so the renderer produces a `<ul>`. Do not follow a bullet item immediately with another bullet item without a blank line between them.
 
 ## Validator (matches `contracts/schema.py::_check_wikipedia_structure`)
 - Total body length >= 1200 characters.
 - No `[[wikilinks]]` anywhere in the body.
 - At least one `## H2` heading.
-- **For article/concept pages**: at least 2 non-appendix `## H2` headings before `## References`. Appendix headings that do NOT count toward this minimum: `References`, `Notes and References`, `See also`, `Further reading`, `External links` (case-insensitive).
+- **For article and person pages**: at least 2 non-appendix `## H2` headings before `## References`. Appendix headings that do NOT count toward this minimum: `References`, `Notes and References`, `See also`, `Further reading`, `External links` (case-insensitive).
 - At least 3 non-blank paragraphs of prose outside the References section.
 - At least one `[^eN]` marker somewhere in the prose.
 - A final `## References` section containing at least one `[^eN]:` definition.
@@ -134,7 +165,7 @@ Then the reference line is:
 5. No `[[wikilinks]]` anywhere.
 6. At least 3 paragraphs of prose outside References.
 7. Every `![Figure N](path)` has a preceding line mentioning "Figure N".
-8. For article/concept pages: at least 2 topical `## H2` sections before `## References`. "Topical" means NOT one of: References, Notes and References, See also, Further reading, External links.
+8. For article and person pages: at least 2 topical `## H2` sections before `## References`. "Topical" means NOT one of: References, Notes and References, See also, Further reading, External links.
 
 ## Escalation
 Supported. The writer should escalate when:

@@ -81,7 +81,7 @@ from .sampler import (
     restore_coverage_state,
 )
 from .schedule import BudgetSplit, Schedule
-from .write.author_pages import build_author_pages
+from .write.author_context import build_author_context
 from .write.crosslink import crosslink
 from .write.requests import (
     WriteRequestConfig,
@@ -486,6 +486,7 @@ def run(
     policy_events.extend(policy.drain_events())
 
     # ---- phase gate: save write requests or stop -------------------------
+    author_ctx = build_author_context(docs)
     save_write_requests(
         bundle,
         write_pages,
@@ -494,6 +495,7 @@ def run(
         chunks_by_id,
         images_index,
         write_req_cfg,
+        author_ctx,
     )
     if phase == "extract":
         save_pages_manifest(bundle, pages)
@@ -540,6 +542,7 @@ def run(
                 chunks_by_id,
                 images_index,
                 write_req_cfg,
+                author_ctx,
             )
             try:
                 resp = writer.write(req)
@@ -711,9 +714,11 @@ def _finalize_pages(
     strategy: StrategyConfig,
     iteration: Iteration,
 ) -> None:
-    """Build deterministic pages, crosslink, persist files/index, snapshot meter."""
-    author_pages = build_author_pages(docs, existing_page_dir=bundle.people_dir)
-    pages.extend(author_pages)
+    """Crosslink, persist files/index, snapshot meter.
+
+    Person candidates come from the extractor (kind='person' entries).
+    No deterministic author-page generation; the writer produces all prose.
+    """
     pages = [p for p in pages if p.evidence]
     pages = crosslink(pages)
     for page in pages:
