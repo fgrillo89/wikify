@@ -251,6 +251,9 @@ Then the reference line is:
 7. Every `![Figure N](path)` has a preceding line mentioning "Figure N".
 8. For article and person pages: at least 2 topical `## H2` sections before `## References`. "Topical" means NOT one of: References, Notes and References, See also, Further reading, External links.
 
+## Verbalization (optional)
+When `request.verbalize == true`, include a 1-3 sentence `reasoning` field in your response summarising the editorial choices: which structure you picked, which evidence you foregrounded, and anything you deliberately deferred or skipped (e.g. missing sections, thin evidence, conflicting sources). Keep it tight — the pipeline appends it to `<bundle>/_meta/verbalize.jsonl` for review and it is billed on output tokens. When `verbalize` is false or absent, omit `reasoning` or return an empty string.
+
 ## Escalation
 Supported. The writer should escalate when:
 - the evidence list is internally contradictory,

@@ -146,6 +146,7 @@ def run(
     policy_name: str | None = None,
     compact_threshold: int = 10,
     phase: Phase = "all",
+    verbalize: bool = False,
 ) -> None:
     """Thin wrapper: load corpus once then delegate to run_with_preloaded."""
     preloaded = preload_corpus(corpus)
@@ -168,6 +169,7 @@ def run(
         policy_name=policy_name,
         compact_threshold=compact_threshold,
         phase=phase,
+        verbalize=verbalize,
     )
 
 
@@ -191,6 +193,7 @@ def run_with_preloaded(
     policy_name: str | None = None,
     compact_threshold: int = 10,
     phase: Phase = "all",
+    verbalize: bool = False,
 ) -> None:
     if feed and iteration == "create":
         iteration = "refine"
@@ -269,6 +272,7 @@ def run_with_preloaded(
         artifact_template_hash=layer_hashes["artifact_template"],
         person_artifact_hash=person_artifact_hash,
         corpus_persona_hash=corpus_persona_hash,
+        verbalize=verbalize,
     )
 
     state = _build_sampler_state(
@@ -386,6 +390,7 @@ def run_with_preloaded(
                     model_id=strategy.model_id,
                     tier=runtime.extract_tier,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
+                    verbalize=verbalize,
                 )
                 for cid, ck in batch_chunks
             ]
@@ -410,6 +415,10 @@ def run_with_preloaded(
                     # Gap 5: log needs_vision telemetry for future vision-on-demand.
                     if getattr(resp, "extra", None) and resp.extra.get("needs_vision"):  # type: ignore[union-attr]
                         vision_requests.append({"chunk_id": cid, "doc_id": ck.doc_id})
+                    if verbalize:
+                        _append_verbalize(
+                            bundle, meter._run_id, "extract", cid, resp.reasoning  # noqa: SLF001
+                        )
             else:
                 # Serial fallback for bindings that don't implement extract_many.
                 for (cid, ck), req in zip(batch_chunks, batch_reqs):
@@ -432,6 +441,10 @@ def run_with_preloaded(
                     # Gap 5: log needs_vision telemetry for future vision-on-demand.
                     if getattr(resp, "extra", None) and resp.extra.get("needs_vision"):  # type: ignore[union-attr]
                         vision_requests.append({"chunk_id": cid, "doc_id": ck.doc_id})
+                    if verbalize:
+                        _append_verbalize(
+                            bundle, meter._run_id, "extract", cid, resp.reasoning  # noqa: SLF001
+                        )
         extract_completed_normally = True
     except BudgetExceededError:
         pass
@@ -635,6 +648,10 @@ def run_with_preloaded(
                 write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
                 continue
             page.body_markdown = resp.body_markdown
+            if verbalize:
+                _append_verbalize(
+                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
+                )
             # Update running mean of observed write costs.
             call_cost = meter.spent_haiku_eq - _spent_before_call
             n_writes_completed += 1
@@ -693,6 +710,34 @@ def _write_prompt_layer_files(bundle: BundlePaths, layers: dict[str, str]) -> No
         path = out / f"{h}.md"
         if not path.exists():
             path.write_text(text, encoding="utf-8")
+
+
+def _append_verbalize(
+    bundle: BundlePaths,
+    run_id: str,
+    role: str,
+    rid: str,
+    reasoning: str,
+) -> None:
+    """Append one handler-reasoning line to ``_meta/verbalize.jsonl``.
+
+    Called only when the run was invoked with ``verbalize=True`` and
+    the handler populated a non-empty ``reasoning`` field in its
+    response. Silent no-op for empty reasoning so the log stays tight.
+    """
+    if not reasoning:
+        return
+    path = bundle.verbalize_log_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "run_id": run_id,
+        "when": datetime.now(timezone.utc).isoformat(),
+        "role": role,
+        "rid": rid,
+        "reasoning": reasoning,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def _normalize_title(t: str) -> str:

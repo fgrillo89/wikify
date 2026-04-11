@@ -102,6 +102,9 @@ Use `inspect_related_pages` when deciding whether to `pick_chunks` for a particu
 - **Tier shifts**: `set_tier` to `L` on write for quality when evidence is rich; `set_tier` to `S` on extract for cost when chunk-level extraction is the bottleneck.
 - **Stop**: return `{"name": "done", "args": {}}` when `n_pages` has plateaued across recent iterations.
 
+## Verbalization (optional)
+When `state.verbalize == true`, include a 1-3 sentence `reasoning` field on the `OrchAction` response explaining the policy choice: why this action was picked, what the sampler snapshot told you, and (for `pick_chunks`) why these specific chunks were the right target. The pipeline appends it to `<bundle>/_meta/verbalize.jsonl`. When `verbalize` is false or absent, omit `reasoning`.
+
 ## Escalation
 Not supported. The orchestrator IS the top of the tier hierarchy. It also acts as the advisor for lower-tier handlers that escalate, but those escalations happen as nested Task subagents INSIDE the `extract` / `write` skills — they do NOT dispatch here. These are two different mechanisms.
 

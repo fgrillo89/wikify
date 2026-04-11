@@ -92,6 +92,10 @@ class ExtractRequest(BaseModel):
     model_id: str
     tier: str  # "S" | "M" | "L"
     images_for_doc: list[ImageRef] = Field(default_factory=list)
+    # Verbalization: when true, the handler must include a 1-3 sentence
+    # `reasoning` field in its response explaining what it kept, skipped,
+    # and why. Feeds <bundle>/_meta/verbalize.jsonl for post-hoc review.
+    verbalize: bool = False
 
 
 ConfidenceLabel = Literal["extracted", "inferred", "ambiguous"]
@@ -239,6 +243,8 @@ class ExtractResponse(BaseModel):
     concepts: list[ExtractedConcept]
     tokens_in: int
     tokens_out: int
+    # Populated only when ExtractRequest.verbalize is true. Empty otherwise.
+    reasoning: str = ""
 
 
 # --- writer --------------------------------------------------------------
@@ -470,6 +476,11 @@ class WriteRequest(BaseModel):
     # ids). Each entry: {id, title, topic_overlap, body_excerpt, see_also,
     # evidence_doc_ids}. Capped at 500 chars per excerpt.
     related_pages: list[dict] = Field(default_factory=list)
+    # Verbalization: when true, the handler must include a 1-3 sentence
+    # `reasoning` field in its response explaining its editorial choices
+    # (why this structure, which evidence was foregrounded, what was
+    # deferred). Feeds <bundle>/_meta/verbalize.jsonl.
+    verbalize: bool = False
 
 
 class WriteResponse(BaseModel):
@@ -484,6 +495,8 @@ class WriteResponse(BaseModel):
     # Non-null when the writer extended an existing article rather than
     # creating a fresh one. The value is the page_id that was extended.
     extends_page_id: str | None = None
+    # Populated only when WriteRequest.verbalize is true. Empty otherwise.
+    reasoning: str = ""
 
     @model_validator(mode="after")
     def _body_has_prose_and_evidence(self) -> "WriteResponse":
@@ -580,6 +593,8 @@ class OrchState(BaseModel):
     # Contains top_gap_chunks, doc_coverage, page_index, content_stats.
     # ~2-4 kB of JSON; built in LlmPolicy.next_extract before each orch call.
     sampler_snapshot: dict = Field(default_factory=dict)
+    # Verbalization: see ExtractRequest.verbalize.
+    verbalize: bool = False
 
 
 class OrchAction(BaseModel):
@@ -589,6 +604,8 @@ class OrchAction(BaseModel):
     args: dict = Field(default_factory=dict)
     tokens_in: int = 0
     tokens_out: int = 0
+    # Populated only when OrchState.verbalize is true. Empty otherwise.
+    reasoning: str = ""
 
 
 # --- querier -------------------------------------------------------------

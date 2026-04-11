@@ -112,6 +112,13 @@ class BundlePaths:
     def query_log_dir(self) -> Path:
         return self.meta_dir / "query_log"
 
+    @property
+    def verbalize_log_path(self) -> Path:
+        """Append-only JSONL log of handler reasoning. Populated only when
+        a run is invoked with ``verbalize=True``. Each line:
+        ``{run_id, when, role, rid, page_id|chunk_id, reasoning}``."""
+        return self.meta_dir / "verbalize.jsonl"
+
     def ensure(self) -> None:
         self.articles_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)

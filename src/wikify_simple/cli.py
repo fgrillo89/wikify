@@ -150,6 +150,15 @@ def distill(
         "--phase",
         help="extract (stop after saving write requests) | write (resume) | all",
     ),
+    verbalize: bool = typer.Option(
+        False,
+        "--verbalize/--no-verbalize",
+        help=(
+            "Ask handlers to include a short reasoning line on every response."
+            " The pipeline appends these to <bundle>/_meta/verbalize.jsonl"
+            " for post-hoc review. Adds a small token overhead per call."
+        ),
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
     from .prompts import available_artifact_templates, available_field_guides
@@ -258,6 +267,7 @@ def distill(
         orchestrator=orchestrator,
         policy_name=policy,
         phase=phase,
+        verbalize=verbalize,
     )
     snap_path = bundle.run_path
     if snap_path.exists():
@@ -289,7 +299,12 @@ def campaign(
     bundle_dir: Path = typer.Option(..., "--bundle", help="Bundle path (required for campaign)."),
     cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
     field: str | None = typer.Option(None, "--field"),
-    artifact: str = typer.Option("wiki_concept", "--artifact"),
+    artifact: str = typer.Option("wiki_article", "--artifact"),
+    verbalize: bool = typer.Option(
+        False,
+        "--verbalize/--no-verbalize",
+        help="Per-iteration handler reasoning log at <bundle>/_meta/verbalize.jsonl.",
+    ),
 ) -> None:
     """Run N iterations of distillation in one process, loading the corpus once."""
     from .prompts import available_artifact_templates, available_field_guides
@@ -382,6 +397,7 @@ def campaign(
             compactor=compactor,
             orchestrator=orchestrator,
             policy_name=policy,
+            verbalize=verbalize,
         )
 
         typer.echo(f"iteration {i}/{iterations} done (run_id={run_id})")

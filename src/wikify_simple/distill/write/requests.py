@@ -35,6 +35,7 @@ class WriteRequestConfig:
     artifact_template_hash: str | None = None
     person_artifact_hash: str | None = None
     corpus_persona_hash: str | None = None
+    verbalize: bool = False
 
 
 def is_writable_page(page: WikiPage) -> bool:
@@ -158,6 +159,7 @@ def build_write_request(
         author_context=page_author_context,
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
+        verbalize=cfg.verbalize,
     )
 
 

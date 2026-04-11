@@ -106,6 +106,9 @@ When `images_for_doc` is non-empty, check whether any caption matches the title 
 
 When processing a caption chunk (the chunk text IS the caption of a figure) and vision analysis would be needed to answer correctly, emit `needs_vision: true` in a top-level `extra` field on the response (e.g. `"extra": {"needs_vision": true}`). The pipeline logs this for future vision-on-demand binding. Vision on demand is a documented future capability; no real vision binding exists today.
 
+## Verbalization (optional)
+When `request.verbalize == true`, include a 1-3 sentence `reasoning` field in your response explaining what you kept, what you skipped, and why. Keep it tight — this is appended to `<bundle>/_meta/verbalize.jsonl` for post-hoc review and is billable on output tokens. When `verbalize` is false or absent, omit `reasoning` entirely (or return an empty string).
+
 ## Escalation
 Supported. If the subagent is uncertain about its output, it can emit `{"escalate": true, "reason": "..."}` in a top-level `escalation` field on its response instead of the normal fields.
 
