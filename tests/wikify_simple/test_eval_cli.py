@@ -69,4 +69,4 @@ def test_eval_cli_writes_report(tmp_path):
     assert "M1_coverage_residual" in payload
     assert "M3_g_evidence" in payload
     assert "M6_grounding" in payload
-    assert payload["embedder"]["backend"] in {"hash", "sentence_transformers"}
+    assert payload["embedder"]["backend"] in {"hash", "fastembed", "sentence_transformers"}

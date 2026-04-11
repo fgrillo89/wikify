@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,7 @@ class _ParsedBundle:
     image_dir: str
     equations: list[dict]
     figure_refs: list[dict]
+    parse_seconds: float = 0.0  # wall time spent in this worker (profiling)
 
 
 def _default_workers() -> int:
@@ -88,6 +90,7 @@ def _parse_worker(src_str: str, images_root_str: str) -> _ParsedBundle:
     """
     src = Path(src_str)
     images_root = Path(images_root_str)
+    t_worker = time.monotonic()
     kind, parsed = parse_file(src)
     doc_id = _doc_id_for(src)
 
@@ -134,6 +137,7 @@ def _parse_worker(src_str: str, images_root_str: str) -> _ParsedBundle:
         image_dir=image_dir,
         equations=equations,
         figure_refs=figure_refs,
+        parse_seconds=time.monotonic() - t_worker,
     )
 
 
@@ -176,12 +180,45 @@ def ingest_corpus(
     ``max_workers`` controls the parse/chunk parallelism. ``None`` picks
     60 % of available CPU cores (min 2). Pass ``1`` to force serial
     execution (useful for debugging and single-file runs).
+
+    **Idempotent and deduplicating.** The same source file (same content
+    hash) is never processed twice — neither within a single run (two
+    copies of the same paper under different filenames in ``input_dir``)
+    nor across runs (re-ingesting into a corpus that already has the
+    paper). Dedup is by sha1 of the file bytes, which is the same hash
+    used to build ``doc_id``. Skipped files are reported on stderr but
+    do not error.
     """
+    timings: dict[str, float] = {}
+    t0_run = time.monotonic()
+
     paths = CorpusPaths(root=output_dir)
     paths.ensure()
 
-    sources = sorted(_iter_sources(input_dir))
+    # Stage 1: enumerate, hash, dedupe sources -----------------------
+    t = time.monotonic()
+    raw_sources = sorted(_iter_sources(input_dir))
+    sources, dedup_report = _dedupe_sources(raw_sources, paths)
+    timings["enumerate+dedupe"] = time.monotonic() - t
 
+    if dedup_report["intra_dupes"] or dedup_report["existing"]:
+        print(
+            f"[ingest] dedupe: {dedup_report['intra_dupes']} intra-run "
+            f"duplicates, {dedup_report['existing']} already in corpus, "
+            f"{len(sources)} unique to ingest",
+            file=sys.stderr,
+        )
+    for path in dedup_report["intra_dupe_paths"]:
+        print(f"  [skip-intra] {path.name}", file=sys.stderr)
+    for path in dedup_report["existing_paths"]:
+        print(f"  [skip-existing] {path.name}", file=sys.stderr)
+
+    if not sources:
+        print("[ingest] nothing to do — corpus already contains every source", file=sys.stderr)
+        return paths
+
+    # Stage 2: parse + chunk in parallel -----------------------------
+    t = time.monotonic()
     workers = max_workers if max_workers is not None else _default_workers()
     bundles: list[_ParsedBundle] = []
     if workers > 1 and len(sources) > 1:
@@ -217,7 +254,21 @@ def ingest_corpus(
     # graph, tests) are deterministic regardless of worker completion
     # order.
     bundles.sort(key=lambda b: b.src_path)
+    timings["parse+chunk (parallel)"] = time.monotonic() - t
 
+    # Slowest-paper report: helps identify outliers that drag wall time
+    # in the parallel pool. If one paper takes 60 s and the other 49
+    # finish in 5 s each, the pool waits 60 s on the slow one.
+    slow = sorted(bundles, key=lambda b: -b.parse_seconds)[:5]
+    if slow and slow[0].parse_seconds > 5.0:
+        print("[ingest] slowest papers (parser CPU time):", file=sys.stderr)
+        for b in slow:
+            name = Path(b.src_path).name[:60]
+            print(f"  {b.parse_seconds:6.2f}s  {name}", file=sys.stderr)
+
+    # Stage 3: per-doc persist (write_document, link_chunks_to_images,
+    # extract_citations) ----------------------------------------------
+    t = time.monotonic()
     docs: list[Document] = []
     all_chunks_list: list[Chunk] = []
     docs_chunks_pairs: list[tuple[str, list[Chunk]]] = []
@@ -267,8 +318,10 @@ def ingest_corpus(
         docs_chunks_pairs.append((doc_id, chunks))
         if isinstance(parsed.metadata.get("keywords"), list):
             declared[doc_id] = parsed.metadata["keywords"]
+    timings["per-doc persist"] = time.monotonic() - t
 
-    # embed everything
+    # Stage 4: embed --------------------------------------------------
+    t = time.monotonic()
     if all_chunks_list:
         matrix = embed_texts([c.text for c in all_chunks_list])
         store = VectorStore(ids=[c.id for c in all_chunks_list], matrix=matrix)
@@ -287,40 +340,50 @@ def ingest_corpus(
         model=backend["model"],  # type: ignore[arg-type]
     )
     write_vectors_meta(paths.vectors_path, meta)
+    timings["embed"] = time.monotonic() - t
 
-    # --- doc-level edges: similar_to, cites, cites_same --------------
+    # Stage 5: doc-level edges (similar_to, cites, cites_same) -------
     # Must run BEFORE build_corpus_graph so the graph picks up the
     # resolved cross-paper citation edges. (Pre-fix this ran later and
     # the saved graph.json had silently empty "cites" edges, which
     # cascaded into pagerank and the distill sampler.)
+    t = time.monotonic()
     _populate_doc_edges(docs, docs_chunks_pairs, store)
+    timings["doc edges"] = time.monotonic() - t
 
+    # Stage 6: build corpus graph -----------------------------------
+    t = time.monotonic()
     graph = build_corpus_graph(docs, all_chunks_list, store)
     write_graph(paths, graph)
+    timings["corpus graph"] = time.monotonic() - t
 
-    # Pre-compute the corpus-level sampler index so distill iterations can
-    # load it instead of rebuilding from scratch on every run.
+    # Stage 7: sampler index ----------------------------------------
+    t = time.monotonic()
     sampler_idx = build_sampler_index(docs, all_chunks_list, graph, store)
     save_sampler_index(paths.sampler_index_path, sampler_idx)
+    timings["sampler index"] = time.monotonic() - t
 
-    # Real PageRank on the doc graph (cites + doc_similar edges).
-    # Replaces the uniform fallback used inside _build_sampler_state.
+    # Stage 8: pagerank ---------------------------------------------
+    t = time.monotonic()
     _write_pagerank(paths, docs, graph)
+    timings["pagerank"] = time.monotonic() - t
 
+    # Stage 9: topics, image index, bibtex --------------------------
+    t = time.monotonic()
     vocab = extract_topics(docs_chunks_pairs, declared_per_doc=declared)
     write_topics(paths.topics_path, vocab)
+    timings["topics"] = time.monotonic() - t
 
-    # Build the per-corpus image index from the sidecars just written.
-    # Source-of-truth remains the sidecars; this is a single-file
-    # projection the wiki/distill side reads to look up figures by
-    # caption label or doc.
+    t = time.monotonic()
     build_images_index(paths, doc_ids=[d.id for d in docs])
+    timings["image index"] = time.monotonic() - t
 
-    # Corpus-wide BibTeX library (one entry per Document).
+    t = time.monotonic()
     write_corpus_bibtex(paths, docs)
+    timings["bibtex"] = time.monotonic() - t
 
-    # Persist updated Document JSON (now with edges) and overwrite the
-    # per-doc markdown with the Obsidian-friendly enriched rendering.
+    # Stage 10: re-save docs with populated edges -------------------
+    t = time.monotonic()
     import json as _json
 
     from ..store.corpus import _doc_to_dict  # internal helper reuse
@@ -331,6 +394,15 @@ def ingest_corpus(
         )
         body = raw_markdown_by_id.get(doc.id, "")
         write_doc_markdown(paths, doc, body)
+    timings["doc resave"] = time.monotonic() - t
+
+    # Print the stage timing report.
+    total = time.monotonic() - t0_run
+    print("[ingest] timing report:", file=sys.stderr)
+    for stage, secs in timings.items():
+        pct = 100.0 * secs / total if total > 0 else 0.0
+        print(f"  {stage:30}  {secs:7.2f}s  ({pct:5.1f}%)", file=sys.stderr)
+    print(f"  {'TOTAL':30}  {total:7.2f}s", file=sys.stderr)
 
     return paths
 
@@ -481,6 +553,77 @@ def _iter_sources(root: Path):
 def _doc_id_for(path: Path) -> str:
     h = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
     return f"{path.stem}_{h}"
+
+
+def _content_hash(path: Path) -> str:
+    """Stable 12-char sha1 prefix of a file's bytes — same prefix as in
+    ``_doc_id_for``. Used by the dedup pass to recognize when two source
+    files contain the same paper (different filenames, same content) or
+    when an incremental ingest re-encounters an already-stored doc."""
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+
+
+def _existing_corpus_hashes(paths: CorpusPaths) -> set[str]:
+    """Return the set of content hashes already represented in the
+    target corpus, by reading every ``docs/*.json`` and pulling the
+    12-char suffix off the doc id. Cheap (just a directory walk + the
+    last 12 chars of each filename), no JSON parse needed."""
+    if not paths.docs_dir.exists():
+        return set()
+    out: set[str] = set()
+    for f in paths.docs_dir.glob("*.json"):
+        # filename = "{stem}_{12-char-hash}.json"
+        stem = f.stem
+        if len(stem) >= 13 and stem[-13] == "_":
+            out.add(stem[-12:])
+    return out
+
+
+def _dedupe_sources(
+    raw_sources: list[Path],
+    paths: CorpusPaths,
+) -> tuple[list[Path], dict]:
+    """Filter the source list down to genuinely-new files.
+
+    Returns ``(unique_sources, report)`` where ``report`` carries
+    counts and the actual paths skipped, so the CLI can show them.
+    Two dedup axes:
+
+    1. **Intra-run**: two files in ``raw_sources`` with the same content
+       hash (same paper under different filenames in ``input_dir``).
+       Keep the first sorted occurrence; report the rest.
+    2. **Cross-run / incremental**: a file whose content hash matches a
+       doc id already saved in ``paths.docs_dir``. Skipped silently in
+       the unique list but reported in the count.
+    """
+    seen_hashes: set[str] = set()
+    existing_hashes = _existing_corpus_hashes(paths)
+    unique: list[Path] = []
+    intra_dupe_paths: list[Path] = []
+    existing_paths: list[Path] = []
+    for src in raw_sources:
+        try:
+            h = _content_hash(src)
+        except OSError:
+            # Unreadable file: pass through to the parser; it will
+            # surface its own error.
+            unique.append(src)
+            continue
+        if h in existing_hashes:
+            existing_paths.append(src)
+            continue
+        if h in seen_hashes:
+            intra_dupe_paths.append(src)
+            continue
+        seen_hashes.add(h)
+        unique.append(src)
+    report = {
+        "intra_dupes": len(intra_dupe_paths),
+        "intra_dupe_paths": intra_dupe_paths,
+        "existing": len(existing_paths),
+        "existing_paths": existing_paths,
+    }
+    return unique, report
 
 
 def _image_slug(path: Path) -> str:

@@ -14,7 +14,13 @@ import re
 from collections.abc import Iterable
 
 from ..models import Chunk
-from .config import MIN_CHUNK_CHARS, OVERLAP_CHARS, TARGET_CHUNK_CHARS
+from .config import (
+    MAX_CHUNK_CHARS,
+    MIN_CHUNK_ALNUM,
+    MIN_CHUNK_CHARS,
+    OVERLAP_CHARS,
+    TARGET_CHUNK_CHARS,
+)
 from .section_classifier import SectionType, classify_section_path
 
 # Section types that are never the "concluding body" of a paper.
@@ -47,23 +53,86 @@ def chunk_document(
             text = section_text[sub_start:sub_end].strip()
             if not text:
                 continue
-            absolute = (start + sub_start, start + sub_end)
-            cid = _chunk_id(doc_id, ord_, text)
-            chunks.append(
-                Chunk(
-                    id=cid,
-                    doc_id=doc_id,
-                    ord=ord_,
-                    text=text,
-                    char_span=absolute,
-                    section_path=list(path),
-                    section_type=section_type,
+            # Drop chunks whose stripped text is essentially markdown
+            # noise (e.g. ``"##"`` or ``"**\n\n## _"``). These slip
+            # through when section detection produces an empty span
+            # between two adjacent headings. Counted as alphanumeric
+            # characters because the chunker shouldn't reject short
+            # but valid chunks like equations or single sentences.
+            if _alnum_count(text) < MIN_CHUNK_ALNUM:
+                continue
+            # Hard cap on chunk size: split anything above the embedder's
+            # 512-token window into sentence-bounded pieces. Without this
+            # ~13% of chunks on a typical paper exceed the model max and
+            # silently lose information past token 512.
+            for piece_start, piece_end in _split_oversize(text):
+                piece = text[piece_start:piece_end].strip()
+                if not piece or _alnum_count(piece) < MIN_CHUNK_ALNUM:
+                    continue
+                absolute = (start + sub_start, start + sub_end)
+                cid = _chunk_id(doc_id, ord_, piece)
+                chunks.append(
+                    Chunk(
+                        id=cid,
+                        doc_id=doc_id,
+                        ord=ord_,
+                        text=piece,
+                        char_span=absolute,
+                        section_path=list(path),
+                        section_type=section_type,
+                    )
                 )
-            )
-            ord_ += 1
+                ord_ += 1
 
     _apply_conclusion_fallback(chunks)
     return chunks
+
+
+_ALNUM_RE = re.compile(r"[A-Za-z0-9]")
+
+
+def _alnum_count(text: str) -> int:
+    return len(_ALNUM_RE.findall(text))
+
+
+# Sentence-end pattern: period / question mark / exclamation followed by
+# whitespace and an uppercase / digit start. Catches the common cases
+# without dragging in a heavyweight sentence tokenizer.
+_SENT_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[0-9])")
+
+
+def _split_oversize(text: str) -> list[tuple[int, int]]:
+    """Split a chunk text whose length exceeds ``MAX_CHUNK_CHARS``.
+
+    Returns ``[(0, len(text))]`` for normal-sized chunks (the common
+    path). Oversized chunks are sliced at sentence boundaries; if no
+    sentence boundary is available the slice falls back to the nearest
+    word boundary so we never produce mid-word truncation.
+    """
+    if len(text) <= MAX_CHUNK_CHARS:
+        return [(0, len(text))]
+    out: list[tuple[int, int]] = []
+    cursor = 0
+    n = len(text)
+    while cursor < n:
+        target = min(cursor + MAX_CHUNK_CHARS, n)
+        if target == n:
+            out.append((cursor, n))
+            break
+        # Search backwards from target for the latest sentence boundary
+        # that still gives us a non-trivial first piece.
+        window = text[cursor:target]
+        boundaries = list(_SENT_BOUNDARY_RE.finditer(window))
+        if boundaries and boundaries[-1].end() >= MIN_CHUNK_CHARS:
+            cut = cursor + boundaries[-1].end()
+        else:
+            # No sentence boundary in the window — fall back to the
+            # nearest space so we never split mid-word.
+            space = text.rfind(" ", cursor + MIN_CHUNK_CHARS, target)
+            cut = space + 1 if space > cursor else target
+        out.append((cursor, cut))
+        cursor = cut
+    return out
 
 
 def _apply_conclusion_fallback(chunks: list[Chunk]) -> None:

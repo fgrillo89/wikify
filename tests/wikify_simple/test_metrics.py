@@ -67,7 +67,7 @@ def test_vectors_meta_written(loaded_bundle):
     corpus, _bundle = loaded_bundle
     meta = read_meta(corpus.vectors_path)
     assert meta is not None
-    assert meta.backend in {"hash", "sentence_transformers"}
+    assert meta.backend in {"hash", "fastembed", "sentence_transformers"}
     vs = load_vectors(corpus.vectors_path)
     assert vs.matrix.shape[1] == meta.dim
 

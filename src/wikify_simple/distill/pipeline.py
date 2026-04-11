@@ -29,7 +29,6 @@ import random
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
@@ -75,13 +74,13 @@ from .iteration import (
 from .policy import PolicyContext, PolicyName, PolicyRuntime, build_policy
 from .preload import PreloadedCorpus, preload_corpus
 from .sampler import (
-    Sampler,
     SamplerState,
     apply_coverage_feedback,
     init_coverage_state,
     restore_coverage_state,
 )
-from .schedule import BudgetSplit, Schedule
+from .schedule import BudgetSplit, StaticSchedule
+from .strategies import StrategyConfig
 from .write.author_context import build_author_context
 from .write.crosslink import crosslink
 from .write.requests import (
@@ -94,31 +93,7 @@ from .write.requests import (
 )
 
 
-@dataclass
-class StrategyConfig:
-    name: str
-    sampler: Sampler
-    schedule: Schedule
-    # Per-role tiers. Default tiers implement the spec:
-    #   extract = S (haiku)
-    #   write   = M (sonnet)
-    #   edit    = M (sonnet)
-    #   compact = S (haiku)
     #   orchestrate = L (opus, locked — not user-settable)
-    extract_tier: str = "S"
-    write_tier: str = "M"
-    edit_tier: str = "M"
-    compact_tier: str = "S"
-    orchestrate_tier: str = "L"
-    # Allocation override. When not None, replaces the schedule's
-    # exploit_fraction for the initial split. The LLM policy can still
-    # mutate the allocation mid-run via set_allocation actions.
-    exploit_fraction_override: float | None = None
-    model_id: str = "haiku"
-    seed: int = 0
-    field_name: str = "generic"
-    artifact_name: str = "wiki_article"
-    policy_name: str = "rule_policy"
 
 
 Phase = Literal["all", "extract", "write"]

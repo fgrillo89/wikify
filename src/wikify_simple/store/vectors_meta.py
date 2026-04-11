@@ -8,10 +8,15 @@ Shape::
 
     {
       "version": 1,
-      "backend": "hash" | "sentence_transformers",
+      "backend": "hash" | "fastembed",
       "dim": 384,
-      "model": "all-MiniLM-L6-v2"  # or null for hash
+      "model": "sentence-transformers/all-MiniLM-L6-v2"  # or null for hash
     }
+
+Legacy corpora may carry ``"sentence_transformers"`` as the backend
+string; ``embedder_for`` aliases that to ``"fastembed"`` (same model,
+same dimension, drop-in replacement) so old corpora load without
+re-embedding.
 """
 
 import json
@@ -23,7 +28,7 @@ META_NAME = "vectors.meta.json"
 
 @dataclass(frozen=True)
 class VectorsMeta:
-    backend: str  # "hash" | "sentence_transformers"
+    backend: str  # "hash" | "fastembed"
     dim: int
     model: str | None = None
 

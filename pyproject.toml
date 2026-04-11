@@ -16,7 +16,8 @@ dependencies = [
     # Data layer
     "sqlmodel>=0.0.22",
     "chromadb>=0.5",
-    "sentence-transformers[onnx]>=3.0",
+    # numerical / graph computation
+    "scipy>=1.13",  # used by networkx.pagerank inside ingest/refresh.py
     # LLM interface
     "litellm>=1.40",
     "tiktoken>=0.7",
@@ -41,7 +42,6 @@ dependencies = [
     "playwright>=1.58.0",
     "scrapling[all]>=0.4.2",
     "docx2pdf>=0.1.8",
-    "marker-pdf>=1.10.2",
     "pywin32>=311",
     "trafilatura>=2.0.0",
     "python-frontmatter>=1.1.0",
@@ -50,6 +50,7 @@ dependencies = [
     "uvicorn>=0.42.0",
     "pymdown-extensions>=10.21.2",
     "pyyaml>=6.0.3",
+    "fastembed>=0.7.3",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,12 @@ gdrive = ["google-api-python-client>=2.130", "google-auth-oauthlib>=1.2"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Project name is "wikify" but the actual package on disk is
+# ``src/wikify_simple``. Tell hatchling where to find it so the
+# editable install (and any future wheel) ships the right module.
+packages = ["src/wikify_simple"]
 
 [tool.ruff]
 line-length = 100

@@ -18,7 +18,7 @@ A reproducible procedure for running and reviewing a wikify_simple test campaign
 Use `data/wikify_simple/corpora/mvp20_v7` for fast iteration (20 materials science papers, ~770 chunks, 117 caption-only image binaries, 112 equations, 84 figure_refs, 989 citation entries, 65 resolved cross-paper edges). If it is stale or missing, rebuild it:
 
 ```bash
-WIKIFY_SIMPLE_EMBEDDER=sentence_transformers \
+WIKIFY_SIMPLE_EMBEDDER=fastembed \
 uv run python -m wikify_simple.cli ingest \
   data/papers/mvp20 \
   --out data/wikify_simple/corpora/mvp20_v7
@@ -29,9 +29,9 @@ Ingest is parallelized over 60% of CPU cores by default; pass `--workers N` to o
 After ingest, verify:
 
 ```bash
-ls data/wikify_simple/corpora/mvp20_next/docs/ | wc -l   # expect 20
-cat data/wikify_simple/corpora/mvp20_next/vectors.meta.json
-# expect: {"backend":"sentence_transformers","dim":384,"model":"all-MiniLM-L6-v2"}
+ls data/wikify_simple/corpora/mvp20_v7/docs/ | wc -l   # expect 20
+cat data/wikify_simple/corpora/mvp20_v7/vectors.meta.json
+# expect: {"backend":"fastembed","dim":384,"model":"sentence-transformers/all-MiniLM-L6-v2"}
 ```
 
 ### 1.2 Clean bundle directories
@@ -46,7 +46,7 @@ mkdir -p data/dispatch/{extract,write,compact,edit,orchestrate,query}
 
 ```bash
 export WIKIFY_SIMPLE_ALLOW_NETWORK=1
-export WIKIFY_SIMPLE_EMBEDDER=sentence_transformers
+export WIKIFY_SIMPLE_EMBEDDER=fastembed
 export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch   # default
 ```
 

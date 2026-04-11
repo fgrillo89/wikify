@@ -40,7 +40,7 @@
 ### Fast smoke test (heuristic binding, no models, ~5s per iteration)
 
 ```bash
-WIKIFY_SIMPLE_EMBEDDER=sentence_transformers uv run python -m wikify_simple.cli distill \
+WIKIFY_SIMPLE_EMBEDDER=fastembed uv run python -m wikify_simple.cli distill \
   --strategy M --binding heuristic --budget 50000 --seed 0 --iteration create \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/smoke
@@ -54,7 +54,7 @@ Heuristic is in-process regex; useful for pipeline sanity but produces no real p
 
 ```bash
 export WIKIFY_SIMPLE_ALLOW_NETWORK=1
-export WIKIFY_SIMPLE_EMBEDDER=sentence_transformers
+export WIKIFY_SIMPLE_EMBEDDER=fastembed
 
 # Iteration 1 — create
 uv run python -m wikify_simple.cli distill \
@@ -175,7 +175,7 @@ The three presets:
 ### 1. Environment variables
 
 ```bash
-export WIKIFY_SIMPLE_EMBEDDER=sentence_transformers
+export WIKIFY_SIMPLE_EMBEDDER=fastembed
 export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch        # default
 ```
 
