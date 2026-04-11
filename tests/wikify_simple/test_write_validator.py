@@ -259,6 +259,110 @@ def test_figure_without_adjacent_mention_rejected() -> None:
         _mk(_wiki_body(mechanism_sentences=mech))
 
 
+# ---- Phase 6A: non-appendix H2 count for concept pages -----------------
+
+# Prose block long enough to satisfy length/paragraph/marker constraints.
+_FILLER_PARA = (
+    "Atomic layer deposition deposits conformal thin films via sequential "
+    "self-limiting half-reactions[^e1]. Each pulse saturates the active "
+    "surface sites before the next precursor is introduced[^e2]. The technique "
+    "is widely used in semiconductor manufacturing for high-k dielectric "
+    "layers and barrier coatings[^e1]. Growth uniformity is maintained even "
+    "in high-aspect-ratio structures where chemical vapor deposition fails[^e2]. "
+    "Industrial reactors operate at temperatures between 100 and 400 degrees "
+    "Celsius depending on precursor chemistry and substrate requirements[^e1]."
+)
+_REFS_BLOCK = (
+    '[^e1]: chunk_a (doc1) > "ALD self-limiting reaction"\n'
+    '[^e2]: chunk_b (doc2) > "saturation criterion"\n'
+)
+
+
+def _concept_body_with_h2s(*h2_labels: str) -> str:
+    """Build a body with the given topical H2 labels followed by ## References."""
+    sections = ""
+    for label in h2_labels:
+        sections += f"{label}\n\n{_FILLER_PARA}\n\n"
+    return "# Atomic Layer Deposition\n\n" + sections + "## References\n\n" + _REFS_BLOCK
+
+
+def _mk_concept(body: str) -> WriteResponse:
+    """Like _mk but with page_kind='concept' to activate the Phase 6A check."""
+    return WriteResponse(
+        page_id="Atomic Layer Deposition",
+        page_kind="concept",
+        body_markdown=body,
+        used_markers=["e1", "e2"],
+        tokens_in=300,
+        tokens_out=120,
+    )
+
+
+def test_concept_only_references_h2_rejected() -> None:
+    """A concept body whose only H2 is ## References is rejected (Phase 6A)."""
+    lead = (
+        "Atomic layer deposition (ALD) is a self-limiting thin-film "
+        "growth technique[^e1]. Films are grown one atomic layer at a "
+        "time through alternating surface reactions[^e2]. The process "
+        "achieves angstrom-level thickness control at any temperature "
+        "where the precursor chemistry remains self-limiting[^e1]. "
+        "Commercial adoption spans semiconductor fabs and catalysis "
+        "research facilities worldwide[^e2]. The technique is the "
+        "dominant approach for depositing high-k dielectric layers in "
+        "advanced logic nodes[^e1]."
+    )
+    body = (
+        "# Atomic Layer Deposition\n\n"
+        + lead + "\n\n"
+        + lead + "\n\n"
+        + lead + "\n\n"
+        + "## References\n\n"
+        + _REFS_BLOCK
+    )
+    with pytest.raises(ValidationError, match="at least 2"):
+        _mk_concept(body)
+
+
+def test_concept_two_topical_h2s_accepted() -> None:
+    """A concept body with Background + Mechanism before References passes."""
+    body = _concept_body_with_h2s("## Background", "## Mechanism")
+    resp = _mk_concept(body)
+    assert "## Background" in resp.body_markdown
+    assert "## Mechanism" in resp.body_markdown
+    assert "## References" in resp.body_markdown
+
+
+def test_concept_only_appendix_h2s_rejected() -> None:
+    """Only appendix-class H2s (See also + References) are rejected even though
+    there are two H2 headings total; Phase 6A counts only non-appendix ones."""
+    lead = _FILLER_PARA + "\n\n" + _FILLER_PARA + "\n\n" + _FILLER_PARA
+    body = (
+        "# Atomic Layer Deposition\n\n"
+        + lead + "\n\n"
+        + "## See also\n\n"
+        + "Related topics: atomic layer etching, chemical vapor deposition.\n\n"
+        + "## References\n\n"
+        + _REFS_BLOCK
+    )
+    with pytest.raises(ValidationError, match="at least 2"):
+        _mk_concept(body)
+
+
+def test_concept_two_topical_h2s_missing_references_rejected() -> None:
+    """Two non-appendix H2s but no ## References block is still rejected by
+    the pre-existing References-required check (Phase 6A must not break it)."""
+    body = (
+        "# Atomic Layer Deposition\n\n"
+        "## Background\n\n"
+        + _FILLER_PARA + "\n\n"
+        "## Mechanism\n\n"
+        + _FILLER_PARA + "\n\n"
+        + _FILLER_PARA
+    )
+    with pytest.raises(ValidationError, match="References"):
+        _mk_concept(body)
+
+
 # ---- FakeWriter end-to-end ----------------------------------------------
 
 

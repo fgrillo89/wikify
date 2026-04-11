@@ -315,13 +315,25 @@ def _has_section(sections: dict[str, str], prefix: str) -> tuple[str, str] | Non
     return None
 
 
-def _check_wikipedia_structure(body: str) -> None:
+_APPENDIX_LABELS: frozenset[str] = frozenset(
+    {
+        "references",
+        "notes and references",
+        "see also",
+        "further reading",
+        "external links",
+    }
+)
+
+
+def _check_wikipedia_structure(body: str, page_kind: str = "") -> None:
     """Soft shape validator: sections are guidance, not strict requirements.
 
     Required shape:
       - >= 1200 chars
       - no `[[wikilinks]]` in prose
       - at least one H2 heading
+      - for article/concept pages: at least 2 non-appendix H2 headings
       - at least 3 paragraphs of prose and at least one `[^eN]` marker
         somewhere in the body
       - a final `## References` (or equivalently named) section with at
@@ -343,6 +355,17 @@ def _check_wikipedia_structure(body: str) -> None:
     h2_keys = [k for k in sections if k]
     if not h2_keys:
         raise ValueError("WriteResponse.body_markdown needs at least one `## H2` heading")
+
+    # For article/concept pages: require at least 2 non-appendix H2 headings.
+    if page_kind in ("concept", "article"):
+        non_appendix = [k for k in h2_keys if k.strip() not in _APPENDIX_LABELS]
+        if len(non_appendix) < 2:
+            raise ValueError(
+                "WriteResponse.body_markdown must contain at least 2 `## H2` sections "
+                "before the appendix group (References / See also / etc.); "
+                f"found {len(non_appendix)} non-appendix H2 heading(s). "
+                "Add sections such as `## Background`, `## Mechanism`, `## Applications`."
+            )
 
     # Locate the References section (or a case-insensitive variant).
     refs_entry = _has_section(sections, "References")
@@ -433,14 +456,14 @@ class WriteResponse(BaseModel):
     model_config = _STRICT
 
     page_id: str
+    page_kind: str = ""  # "concept" | "article" | "person" -- empty means unknown
     body_markdown: str
     used_markers: list[str]
     tokens_in: int
     tokens_out: int
 
-    @field_validator("body_markdown")
-    @classmethod
-    def _body_has_prose_and_evidence(cls, v: str) -> str:
+    @model_validator(mode="after")
+    def _body_has_prose_and_evidence(self) -> "WriteResponse":
         """Reject empty / stub / structurally-invalid writer output.
 
         Enforces the prose-and-evidence floor (the ``## References``
@@ -449,6 +472,7 @@ class WriteResponse(BaseModel):
         rule still fires) plus the Wikipedia-style structure produced by
         ``prompts/write.yaml``.
         """
+        v = self.body_markdown
         if _REFERENCES_HEADING not in v:
             raise ValueError("WriteResponse.body_markdown missing `## References` heading")
         prose_part, _, evidence_part = v.partition(_REFERENCES_HEADING)
@@ -468,9 +492,9 @@ class WriteResponse(BaseModel):
                 f"WriteResponse.body_markdown has prose markers with no matching "
                 f"`[^eN]:` definitions: {unmatched}"
             )
-        _check_wikipedia_structure(v)
+        _check_wikipedia_structure(v, self.page_kind)
         _check_figure_mentions(v)
-        return v
+        return self
 
 
 # --- editor (brief) ------------------------------------------------------
