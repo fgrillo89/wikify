@@ -68,7 +68,7 @@ def test_create_refine_append_run_history_and_page_provenance(corpus, tmp_path):
     mem = json.loads(bundle.coverage_memory_path.read_text(encoding="utf-8"))
     assert mem["seen_chunks"], "coverage memory should persist seen chunks"
 
-    sidecars = sorted(bundle.concepts_dir.glob("*.provenance.json"))
+    sidecars = sorted(bundle.articles_dir.glob("*.provenance.json"))
     assert sidecars, "concept page provenance sidecars should exist"
     prov = json.loads(sidecars[0].read_text(encoding="utf-8"))
     history = prov.get("history", [])

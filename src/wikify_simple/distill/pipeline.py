@@ -764,7 +764,7 @@ def _policy_context(
     docs_total: int,
 ) -> PolicyContext:
     page_ids = {p.id for p in pages}
-    n_concepts = sum(1 for p in pages if p.kind == "concept")
+    n_concepts = sum(1 for p in pages if p.kind == "article")
     n_people = sum(1 for p in pages if p.kind == "person")
     docs_covered = len({ev.doc_id for p in pages for ev in p.evidence})
     return PolicyContext(

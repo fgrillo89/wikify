@@ -52,7 +52,7 @@ def test_alias_resolution_case_insensitive(tmp_path):
     b.ensure()
     page = WikiPage(
         id="Atomic Layer Deposition",
-        kind="concept",
+        kind="article",
         title="Atomic Layer Deposition",
         aliases=["ALD"],
         body_markdown="# Atomic Layer Deposition\n\nBody.[^e1]",
@@ -69,7 +69,7 @@ def test_migrate_prefixed_page_ids(tmp_path, monkeypatch):
     monkeypatch.setenv("WIKIFY_SKIP_PAGE_ID_MIGRATION", "1")
     b = BundlePaths(root=tmp_path / "bundle")
     b.ensure()
-    legacy = b.concepts_dir / "concept-atomic-layer-deposition.md"
+    legacy = b.articles_dir / "concept-atomic-layer-deposition.md"
     legacy.write_text(
         "---\n"
         "id: concept-atomic-layer-deposition\n"
@@ -85,4 +85,4 @@ def test_migrate_prefixed_page_ids(tmp_path, monkeypatch):
     n = migrate_prefixed_page_ids(b)
     assert n == 1
     assert not legacy.exists()
-    assert (b.concepts_dir / "Atomic Layer Deposition.md").exists()
+    assert (b.articles_dir / "Atomic Layer Deposition.md").exists()

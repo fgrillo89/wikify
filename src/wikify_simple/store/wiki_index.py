@@ -37,7 +37,7 @@ def _normalize(s: str) -> str:
 @dataclass(frozen=True)
 class IndexEntry:
     id: str
-    kind: str  # "concept" | "person"
+    kind: str  # "article" | "person"
     title: str
     aliases: tuple[str, ...]
     path: str  # bundle-relative
@@ -74,7 +74,7 @@ class WikiIndex:
 
     @property
     def concepts(self) -> list[IndexEntry]:
-        return [e for e in self.entries.values() if e.kind == "concept"]
+        return [e for e in self.entries.values() if e.kind == "article"]
 
     @property
     def people(self) -> list[IndexEntry]:
@@ -140,10 +140,10 @@ class WikiIndex:
 
         Layout:
             # Wiki index
-            *N concepts, M people*
+            *N articles, M people*
 
             ## Concepts
-            - [Title](concepts/id.md) — *N evidence, K docs* — links: [a](...)
+            - [Title](articles/id.md) — *N evidence, K docs* — links: [a](...)
 
             ## People
             - [Name](people/id.md) — *N evidence, K docs*
@@ -151,10 +151,10 @@ class WikiIndex:
         concepts = sorted(self.concepts, key=lambda e: e.title.lower())
         people = sorted(self.people, key=lambda e: e.title.lower())
         lines: list[str] = ["# Wiki index", ""]
-        lines.append(f"*{len(concepts)} concepts, {len(people)} people*")
+        lines.append(f"*{len(concepts)} articles, {len(people)} people*")
         lines.append("")
         if concepts:
-            lines.append("## Concepts")
+            lines.append("## Articles")
             lines.append("")
             for e in concepts:
                 lines.append(self._render_entry_line(e))
@@ -179,6 +179,10 @@ class WikiIndex:
         import os as _os
 
         if _os.environ.get("WIKIFY_SKIP_PAGE_ID_MIGRATION") != "1":
+            try:
+                migrate_concepts_dir(bundle)
+            except Exception:  # pragma: no cover - migration is best-effort
+                pass
             try:
                 migrate_prefixed_page_ids(bundle)
             except Exception:  # pragma: no cover - migration is best-effort
@@ -215,7 +219,7 @@ class WikiIndex:
 
 
 def entry_from_page(page: WikiPage, bundle: BundlePaths) -> IndexEntry:
-    sub = "concepts" if page.kind == "concept" else "people"
+    sub = "articles" if page.kind == "article" else "people"
     return IndexEntry(
         id=page.id,
         kind=page.kind,
@@ -243,7 +247,7 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     from ..eval.bundle import _parse_page  # reuse the existing tiny parser
 
     entries: dict[str, IndexEntry] = {}
-    for sub in ("concepts", "people"):
+    for sub in ("articles", "people"):
         d = bundle.root / sub
         if not d.exists():
             continue
@@ -264,6 +268,40 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     return idx
 
 
+def migrate_concepts_dir(bundle: BundlePaths) -> bool:
+    """Rename the on-disk ``concepts/`` directory to ``articles/`` if needed.
+
+    Idempotent: if ``articles/`` already exists (or ``concepts/`` does not
+    exist), this is a no-op. Returns True if a rename was performed.
+
+    Called lazily by ``WikiIndex.load`` so older bundles keep working after
+    the Phase 6D upgrade without any manual migration step.
+    """
+    if not bundle.root.exists():
+        return False
+    old_dir = bundle.root / "concepts"
+    new_dir = bundle.root / "articles"
+    if not old_dir.exists() or new_dir.exists():
+        return False
+    old_dir.rename(new_dir)
+    # Rewrite kind="concept" -> kind="article" in every frontmatter.
+    for f in sorted(new_dir.glob("*.md")):
+        try:
+            raw = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "kind: concept" in raw:
+            f.write_text(raw.replace("kind: concept", "kind: article", 1), encoding="utf-8")
+    # Drop stale index so rebuild picks up the new paths.
+    idx_path = bundle.root / _INDEX_FILENAME
+    if idx_path.exists():
+        try:
+            idx_path.unlink()
+        except OSError:
+            pass
+    return True
+
+
 def migrate_prefixed_page_ids(bundle: BundlePaths) -> int:
     """Rename any prefixed ``concept-*.md`` / ``person-*.md`` files in-place
     to their natural-title filename. Returns the number of renames.
@@ -274,7 +312,7 @@ def migrate_prefixed_page_ids(bundle: BundlePaths) -> int:
     if not bundle.root.exists():
         return 0
     renamed = 0
-    for sub in ("concepts", "people"):
+    for sub in ("articles", "people"):
         d = bundle.root / sub
         if not d.exists():
             continue

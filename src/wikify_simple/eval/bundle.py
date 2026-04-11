@@ -3,7 +3,7 @@
 A bundle is a directory:
 
     data/wikis/{name}/
-      concepts/*.md
+      articles/*.md
       people/*.md
       _run.json        # optional, used by hit_rate
 
@@ -11,7 +11,7 @@ Each page file is markdown with a YAML frontmatter block:
 
     ---
     id: concept-photocatalysis
-    kind: concept
+    kind: article
     title: Photocatalysis
     aliases: [photo-catalysis]
     links: [concept-tio2, person-fujishima]
@@ -51,7 +51,7 @@ class Evidence:
 @dataclass
 class Page:
     id: str
-    kind: str  # "concept" | "person"
+    kind: str  # "article" | "person"
     title: str
     aliases: list[str]
     links: list[str]
@@ -72,7 +72,7 @@ class Bundle:
     # convenience views
     @property
     def concepts(self) -> list[Page]:
-        return [p for p in self.pages if p.kind == "concept"]
+        return [p for p in self.pages if p.kind == "article"]
 
     @property
     def people(self) -> list[Page]:
@@ -336,7 +336,7 @@ def _parse_page(path: Path) -> Page:
 
     return Page(
         id=str(fm.get("id", path.stem)),
-        kind=str(fm.get("kind", "concept")),
+        kind=str(fm.get("kind", "article")),
         title=str(fm.get("title", path.stem)),
         aliases=_as_list(fm.get("aliases")),
         links=_as_list(fm.get("links")),
@@ -351,7 +351,7 @@ def load_bundle(root: str | Path) -> Bundle:
     """Load all .md files under {root}/concepts and {root}/people."""
     root = Path(root)
     pages: list[Page] = []
-    for sub in ("concepts", "people"):
+    for sub in ("articles", "people"):
         d = root / sub
         if not d.exists():
             continue

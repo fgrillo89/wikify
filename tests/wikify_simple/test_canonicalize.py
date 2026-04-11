@@ -10,7 +10,7 @@ def _concept_candidate(title: str, chunk_id: str, doc_id: str) -> Candidate:
         concept=ExtractedConcept(
             title=title,
             aliases=[],
-            kind="concept",
+            kind="article",
             quote="sample quote for testing purposes here",
             category="method",
         ),
@@ -51,7 +51,7 @@ def test_concept_candidate_creates_new_page():
         existing=[],
     )
     assert len(pages) == 1
-    assert pages[0].kind == "concept"
+    assert pages[0].kind == "article"
     assert pages[0].title == "Atomic Layer Deposition"
 
 
@@ -93,7 +93,7 @@ def test_concept_candidate_unchanged_by_person_logic():
         ],
         existing=[author],
     )
-    concepts = [p for p in pages if p.kind == "concept"]
+    concepts = [p for p in pages if p.kind == "article"]
     people = [p for p in pages if p.kind == "person"]
     assert len(concepts) == 1
     assert concepts[0].title == "Photocatalysis"

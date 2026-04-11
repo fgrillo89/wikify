@@ -82,7 +82,7 @@ class Dossier:
     page_id: str
     title: str
     aliases: list[str] = field(default_factory=list)
-    kind: str = "concept"
+    kind: str = "article"
     category: str | None = None
 
     entries: list[DossierEntry] = field(default_factory=list)
@@ -166,7 +166,7 @@ class Dossier:
             page_id=d["page_id"],
             title=d["title"],
             aliases=d.get("aliases", []),
-            kind=d.get("kind", "concept"),
+            kind=d.get("kind", "article"),
             category=d.get("category"),
         )
         dossier.entries = [DossierEntry.from_dict(e) for e in d.get("entries", [])]
@@ -252,7 +252,7 @@ class DossierStore:
             "ready_for_writing": len(ready),
             "total_entries": sum(d.n_entries for d in dossiers),
             "by_kind": {
-                "concept": len([d for d in dossiers if d.kind == "concept"]),
+                "article": len([d for d in dossiers if d.kind == "article"]),
                 "person": len([d for d in dossiers if d.kind == "person"]),
             },
         }

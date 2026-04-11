@@ -78,13 +78,13 @@ def test_multiple_markers_in_block():
 
 def test_load_bundle_roundtrip(tmp_path):
     """Tiny bundle with overlapping doc ids loads and parses evidence."""
-    concepts = tmp_path / "concepts"
+    concepts = tmp_path / "articles"
     concepts.mkdir(parents=True)
     for i, (pid, doc) in enumerate(
         [("concept-a", "DOC_X"), ("concept-b", "DOC_X"), ("concept-c", "DOC_Y")]
     ):
         (concepts / f"{pid}.md").write_text(
-            f"---\nid: {pid}\nkind: concept\ntitle: {pid}\n---\n\n"
+            f"---\nid: {pid}\nkind: article\ntitle: {pid}\n---\n\n"
             f"# {pid}\n\nBody text here [^e1].\n\n"
             f'## Evidence\n\n[^e1]: chunk_{i} ({doc}) > "some quote"\n',
             encoding="utf-8",

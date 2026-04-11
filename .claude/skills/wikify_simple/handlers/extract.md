@@ -47,7 +47,7 @@ Reference: `src/wikify_simple/contracts/schema.py::ExtractResponse`
     {
       "title": "Atomic Layer Deposition",
       "aliases": ["ALD"],
-      "kind": "concept",
+      "kind": "article",
       "quote": "Atomic layer deposition (ALD) is a thin-film growth technique",
       "category": "method",
       "evidence_figures": ["Figure 3"],
@@ -88,7 +88,7 @@ Reference: `src/wikify_simple/contracts/schema.py::ExtractResponse`
 8. Stop. Do not loop or interpret results.
 
 ## Content rules (the subagent must follow)
-- `kind` is EXACTLY `"concept"` or `"person"` — it routes the page to `concepts/` or `people/`.
+- `kind` is EXACTLY `"article"` or `"person"` — it routes the page to `articles/` or `people/`.
 - `category` is a facet tag, not a type. Allowed values: `phenomenon | method | material | device | theory | metric | organization | other`, or `null`/omitted. MUST be `null` for `kind="person"`.
 - `title` 2..120 chars, not a stopword, no edge punctuation.
 - `aliases` deduped case-insensitively, drop entries equal to title, max 8 entries.

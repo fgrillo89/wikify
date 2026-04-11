@@ -56,7 +56,7 @@ def test_invalid_staged_response_falls_back_to_writer(corpus, tmp_path):
             continue
         if p.get("kind") == "person" and len(evidence) < 2:
             continue
-        if p.get("kind") == "concept":
+        if p.get("kind") == "article":
             target_id = p["id"]
             break
     assert target_id is not None, "expected a writable concept page in _pages.json"
@@ -84,7 +84,7 @@ def test_invalid_staged_response_falls_back_to_writer(corpus, tmp_path):
     err = bad_resp.with_name(bad_resp.name.replace(".response.", ".error."))
     assert err.exists(), "invalid staged response must leave an .error.json artifact"
 
-    concept_pages = sorted((bundle.root / "concepts").glob("*.md"))
+    concept_pages = sorted((bundle.root / "articles").glob("*.md"))
     assert concept_pages, "write fallback should still produce wiki pages"
     body = concept_pages[0].read_text(encoding="utf-8")
     assert "## References" in body

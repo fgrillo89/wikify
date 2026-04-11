@@ -11,14 +11,14 @@ from wikify_simple.eval.metrics import spectral_gap_modularity
 
 def _write_page(d, pid, evidence_lines):
     (d / f"{pid}.md").write_text(
-        f"---\nid: {pid}\nkind: concept\ntitle: {pid}\n---\n\n"
+        f"---\nid: {pid}\nkind: article\ntitle: {pid}\n---\n\n"
         f"# {pid}\n\nBody [^e1].\n\n## Evidence\n\n" + "\n".join(evidence_lines) + "\n",
         encoding="utf-8",
     )
 
 
 def test_g_evidence_edges_with_overlapping_doc_ids(tmp_path):
-    concepts = tmp_path / "concepts"
+    concepts = tmp_path / "articles"
     concepts.mkdir(parents=True)
     # Three pages; A and B share DOC_X, B and C share DOC_Y.
     # Chunk/doc ids deliberately contain spaces and brackets to mimic real

@@ -96,7 +96,7 @@ def _responder(role: str, payload: dict) -> dict:
                 {
                     "title": "Atomic Layer Deposition",
                     "aliases": ["ALD"],
-                    "kind": "concept",
+                    "kind": "article",
                     "quote": quote,
                     "category": "method",
                     "evidence_figures": [],
@@ -219,7 +219,7 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
 
     req = WriteRequest(
         page_id="p1",
-        page_kind="concept",
+        page_kind="article",
         title="Atomic Layer Deposition",
         aliases=["ALD"],
         skeleton="# ALD\n",

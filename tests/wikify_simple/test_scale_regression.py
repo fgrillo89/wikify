@@ -95,7 +95,7 @@ def _pages(n: int) -> list[WikiPage]:
         out.append(
             WikiPage(
                 id=f"p{i}",
-                kind="concept",
+                kind="article",
                 title=f"Concept {i}",
                 aliases=aliases,
                 body_markdown=body,

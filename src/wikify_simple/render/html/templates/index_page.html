@@ -4,11 +4,11 @@
   <h1>Welcome to {{ wiki_name }}</h1>
   <div class="main-page-banner">
     <p>A knowledge wiki with <strong>{{ stats.total_articles }}</strong> articles
-    ({{ stats.total_concepts }} concepts, {{ stats.total_people }} people).</p>
+    ({{ stats.total_concepts }} articles, {{ stats.total_people }} people).</p>
   </div>
   {% if concepts %}
   <div class="main-page-section">
-    <h2>Concepts</h2>
+    <h2>Articles</h2>
     <div class="article-grid">
       {% for c in concepts %}
       <div class="article-card">

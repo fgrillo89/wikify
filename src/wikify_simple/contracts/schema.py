@@ -145,21 +145,21 @@ class ExtractedConcept(BaseModel):
     """One concept (or person) surfaced from a single chunk.
 
     ``kind`` is the **page-type discriminator**: it drives directory
-    routing (``concepts/<id>.md`` vs ``people/<id>.md``) and the wiki
+    routing (``articles/<id>.md`` vs ``people/<id>.md``) and the wiki
     index. The wiki has two page kinds, period. Do not widen this.
 
     ``category`` is a **facet tag**, not a type. Downstream tools
     (graphify audit, M3 modularity colouring) can slice the wiki by
     category, but category never changes page routing. ``category`` is
     always ``None`` for ``kind="person"`` and optional for
-    ``kind="concept"`` -- ``None`` simply means "not classified".
+    ``kind="article"`` -- ``None`` simply means "not classified".
     """
 
     model_config = _STRICT
 
     title: str
     aliases: list[str]
-    kind: Literal["concept", "person"]
+    kind: Literal["article", "person"]
     quote: str
     category: ConceptCategory | None = None
     evidence_figures: list[str] = Field(default_factory=list)
@@ -403,7 +403,7 @@ class WriteRequest(BaseModel):
     model_config = _STRICT
 
     page_id: str
-    page_kind: str  # "concept" | "person"
+    page_kind: str  # "article" | "person"
     title: str
     aliases: list[str]
     skeleton: str
