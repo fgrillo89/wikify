@@ -76,8 +76,10 @@ def _run_once(tmp_path, *, inject_image: bool):
 
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")
+    # Budget must be large enough to accommodate the Phase-5C pre-check
+    # initial avg_write_cost of 30_000 heq plus extract spend.
     meter = CostMeter(
-        budget_haiku_eq=20_000.0,
+        budget_haiku_eq=200_000.0,
         run_id="M_1x_seed0",
         events_path=bundle.calls_path,
     )
@@ -91,7 +93,7 @@ def _run_once(tmp_path, *, inject_image: bool):
         extractor=extractor,
         writer=writer,
         meter=meter,
-        budget_haiku_eq=20_000.0,
+        budget_haiku_eq=200_000.0,
     )
     return extractor, writer
 

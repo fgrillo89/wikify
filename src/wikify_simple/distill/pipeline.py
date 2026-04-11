@@ -250,6 +250,10 @@ def run(
         split = strategy.schedule.initial_split(budget_haiku_eq)
     last_allocation_epoch = runtime.allocation_epoch
 
+    # Reserve 95% of the planned write budget before the extract loop so
+    # the extract phase cannot consume headroom that the write phase needs.
+    expected_write_reserve = split.write_haiku_eq * 0.95
+
     candidates: list[Candidate] = []
     chunks_read: list[str] = []
     extract_completed_normally = False
@@ -259,7 +263,11 @@ def run(
 
     # ---- extract loop ---------------------------------------------------
     try:
-        while meter.spent_haiku_eq < split.extract_haiku_eq and len(candidates) < max_concepts * 4:
+        while (
+            meter.spent_haiku_eq
+            < min(split.extract_haiku_eq, budget_haiku_eq - expected_write_reserve)
+            and len(candidates) < max_concepts * 4
+        ):
             # If the LLM policy changed the allocation, re-split the
             # REMAINING budget on the new exploit_fraction and continue.
             if runtime.allocation_epoch != last_allocation_epoch:
@@ -512,10 +520,18 @@ def run(
     # Rebuild write_req_cfg with the (possibly mutated) runtime write tier
     # so the LLM policy's set_tier actions take effect on writer calls.
     write_req_cfg = dataclasses.replace(write_req_cfg, writer_tier=runtime.write_tier)
+    avg_write_cost = 30_000.0
+    n_writes_completed = 0
     try:
         for page in write_pages:
             if not is_writable_page(page):
                 continue
+            # Pre-check: stop before issuing a write that would push spend
+            # past the 1.05x hard ceiling.
+            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
+                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
+                continue
+            _spent_before_call = meter.spent_haiku_eq
             req = build_write_request(
                 page,
                 pages,
@@ -537,6 +553,12 @@ def run(
                 write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
                 continue
             page.body_markdown = resp.body_markdown
+            # Update running mean of observed write costs.
+            call_cost = meter.spent_haiku_eq - _spent_before_call
+            n_writes_completed += 1
+            avg_write_cost = (
+                avg_write_cost * (n_writes_completed - 1) + call_cost
+            ) / n_writes_completed
     except BudgetExceededError:
         pass
 
