@@ -155,6 +155,8 @@ Structure per Wikipedia MoS/Biography:
 Figure placement:
 - When `figures` is supplied, mention each figure by its label ("as shown in Figure 3") inside the relevant section. On the line IMMEDIATELY after the sentence that references it, embed the figure as `![Figure N](<figure.path>)`. Never group figures at the top. Skip figures that do not fit.
 - Prefer figures whose ID appears in `evidence_v2[i].evidence_figures` — these were flagged by the extractor as directly relevant to the concept being described.
+- The `figures` array is **already ranked by relevance**: the top entries are figures whose `near_chunk_ids` overlap the chunks you're citing in `evidence_v2`. Walk it from the top and stop once you've placed every figure that fits — the lower ranks are decorative or only loosely related, and the array is capped to keep the prompt focused. You do NOT need to scan all figures to find relevant ones; trust the ordering.
+- A figure's `near_chunk_ids` field tells you which body chunks discuss it. When deciding placement, prefer the section whose evidence chunks are in this list — that's where the body originally cited the figure.
 
 ### Banned phrases (project-wide, enforced here)
 

@@ -2,6 +2,8 @@
 
 > **Current state & roadmap**: this document describes the layout and contracts as they stand today. The active structural roadmap — pre-computed sampler index, campaign driver, LLM-as-sampler, image sampling, output-quality fixes, renames — is tracked in [`plans/structural-improvements.md`](plans/structural-improvements.md). Read that file when planning new work. See also [`test-run-playbook.md`](test-run-playbook.md) before running any end-to-end test.
 
+> **Recent additions (post-roadmap, landed)**: equation and figure_ref extractors at ingest time; PDF TOC integration for section detection; populated `near_chunk_ids` (image → body chunks); citation-graph fix (was always silently empty); abstract-proxy fix (was pointing at the LAST chunk per doc instead of the first); caption-only image policy (uncaptioned image binaries are dropped); references-tail cleanup exemption (`doi:` no longer kills citation paragraphs). The extract handler now receives per-chunk `equations` and `figure_captions` arrays; the writer now ranks figures by `near_chunk_ids` overlap with cited evidence chunks. See git log for the full set; this file describes the post-change state.
+
 ## What the system does
 
 1. **Ingest** raw documents (pdf, docx, pptx, html, md) into a normalized
@@ -64,14 +66,42 @@ These are the contracts. Everything else is implementation.
 ### Corpus side
 
 - `Document` -- `id`, `source_path`, `kind`, `title`, `metadata`,
-  `markdown_path`, `image_dir`.
-- `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`.
+  `markdown_path`, `image_dir`. Carries:
+  - `sections`: list of `DocSection(path, chunk_ids, summary)`
+  - `images`: list of `DocImage(id, path, caption, alt_text, page,
+    near_chunk_ids)` — `near_chunk_ids` is the list of body chunks
+    whose prose mentions the image via inline `Fig. N` / `Table N` /
+    `Scheme N` references, populated at ingest time
+  - `citations`: list of structured reference dicts with
+    `{ord, raw_text, authors, year, title, venue, doi}`
+  - `equations`: list of equation records
+    `{id, latex, type, label, context, char_offset}`. Extracted from
+    the cleaned markdown by `ingest/equations.py` (display, inline,
+    chemical, unicode, image-equation placeholders, named equations
+    like "Ohm's law")
+  - `figure_refs`: list of inline figure / table / scheme caption
+    records `{key, kind, num, sub, caption, section_path,
+    char_offset}`. Extracted from body markdown by
+    `ingest/figure_refs.py` — caption-first, complements the binary
+    image extractor
+  - `similar_to`, `cites`, `cites_same`: doc-level edges populated by
+    `_populate_doc_edges` after embedding (see Pipeline order below)
+- `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`,
+  `section_type`, `equation_ids`. The `equation_ids` field lists every
+  equation whose source `char_offset` falls inside the chunk's
+  `char_span`; the chunker binds them after extraction.
   Embedding lives in the vector store, keyed by `chunk.id`.
 - `CorpusGraph` -- nodes are `Document` and `Chunk` ids; edges are typed:
   - `contains`: doc -> chunk
-  - `similar`: chunk <-> chunk (kNN over embeddings)
-  - `cites`: doc -> doc (only if the parser found citations; optional)
-  - `co_section`: chunk <-> chunk (same section in same doc)
+  - `similar_knn` / `similar_strong`: chunk <-> chunk (kNN over
+    embeddings; `similar_strong` is the cosine ≥ `STRONG_COS` filter)
+  - `co_section`: chunk <-> chunk (same doc + same section path)
+  - `cites`: doc -> doc (directed; resolved against the corpus by the
+    year-bucketed fuzzy matcher in `refresh.py::_populate_doc_edges`)
+  - `cites_same`: doc <-> doc (undirected bibliographic coupling, top-k
+    per doc by shared-reference count)
+  - `doc_similar`: doc <-> doc (mean-pooled embedding cosine ≥
+    `DOC_SIM_COS`, currently 0.75 — same threshold as `doc.similar_to`)
 
 ### Wiki side
 
@@ -97,6 +127,37 @@ These are the contracts. Everything else is implementation.
 - `Run` -- `id`, `started_at`, `finished_at`, `config_hash`, `stages`,
   `sampled_chunks`, `pages_touched`, `metrics`.
 - `Stage` -- `name`, `t_start`, `t_end`, `counters`, `cost`.
+
+## Ingest pipeline order
+
+`ingest/refresh.py::ingest_corpus` runs in this order — order matters
+because the corpus graph depends on populated doc-level edges:
+
+1. **Parse + chunk per source in parallel** (`ProcessPoolExecutor`,
+   60 % of CPU cores by default; `--workers` overrides). Each worker
+   produces a `_ParsedBundle` with `parsed`, `chunks`, `equations`,
+   `figure_refs`. Equations are bound to chunks via `char_span` overlap
+   inside the worker.
+2. **Per-doc persist** in the main process: write markdown + chunks +
+   sidecar JSONs, populate `DocImage.near_chunk_ids` from inline
+   figure references found in chunk prose.
+3. **Embed everything** in one batch through the embedder.
+4. **`_populate_doc_edges`** — fills `Document.cites`,
+   `Document.similar_to`, `Document.cites_same`. Must run BEFORE the
+   corpus graph builder, otherwise the saved `graph.json` has empty
+   citation edges (long-standing bug, fixed in this pass).
+5. **`build_corpus_graph`** — reads `Document.cites` and
+   `Document.cites_same` directly to populate the graph's `cites` and
+   `cites_same` edge sets, then writes `graph.json`.
+6. **`build_sampler_index`** — pre-computes the corpus-side sampler
+   state (chunks_by_doc, neighbours, abstract proxy, content vs caption
+   chunks). Skips chunks whose `section_type` is in
+   `{references, acknowledgments, appendix}` so the sampler never
+   dispatches reference entries to the extractor.
+7. **`_write_pagerank`** — real PageRank on the doc graph using
+   `cites + doc_similar + cites_same` as edges (not uniform).
+8. **Topics, image index, library.bib**.
+9. **Re-save documents** with fully-populated edges + figure metadata.
 
 ## People and articles are separate kinds
 
@@ -161,17 +222,35 @@ src/wikify_simple/
   ingest/                   # corpus build
     __init__.py
     parsers/                # one parser per kind
-      pdf.py
+      pdf.py                # uses pymupdf4llm layout engine with
+                            # header=False/footer=False; falls back to
+                            # fitz blocks-mode for scanned PDFs;
+                            # captures TOC via doc.get_toc()
       docx.py
       pptx.py
       html.py
       markdown.py
       registry.py
+      _sections.py          # section_spans (markdown headings) +
+                            # toc_spans (TOC-driven, used when ≥3 entries)
+      _clean.py             # parse-time markdown cleanup; protects
+                            # references-tail from aggressive noise filtering
     chunker.py              # markdown -> [Chunk]
-    images.py               # extract figures + captions + slide images
-    corpus_graph.py         # builds CorpusGraph
+    images.py               # save_doc_images (caption-only),
+                            # link_chunks_to_images (populates
+                            # near_chunk_ids), caption_chunks_for
+    figures.py              # binary figure extraction; drops uncaptioned
+                            # images by default; scanned-page fallback
+                            # dedupes by raw page bytes
+    figure_refs.py          # caption-first body extraction
+    equations.py            # display/inline/chemical/unicode/named/image
+    citations.py            # references section detection + structured parse;
+                            # author-anchored fallback for landing-page papers
+    corpus_graph.py         # builds CorpusGraph (cites + cites_same too)
+    sampler_index.py        # pre-computed sampler state, written by ingest
     topics.py               # topic extraction (used by GT-C in eval)
-    refresh.py              # idempotent corpus refresh entry point
+    refresh.py              # idempotent corpus refresh entry point;
+                            # ProcessPoolExecutor parallel parsing
 
   distill/                  # strategies and their primitives
     __init__.py
@@ -289,9 +368,19 @@ class Orchestrator(Protocol):
 ```
 
 `ExtractRequest` carries the `target_chunk` and the `canonical_titles`
-pool. The Protocol does not expose tokens or models -- it exposes
-*content*. The binding is responsible for turning content into a model
-call. The strategy never sees the SDK.
+pool, plus per-chunk `equations` (filtered from `Document.equations` via
+`Chunk.equation_ids`) and per-chunk `figure_captions` (combining images
+whose `near_chunk_ids` includes this chunk PLUS `Document.figure_refs`
+in the same top-level section). The Protocol does not expose tokens or
+models -- it exposes *content*. The binding is responsible for turning
+content into a model call. The strategy never sees the SDK.
+
+`WriteRequest.figures` is **ranked by relevance**: each candidate image
+gets a score equal to the number of page-evidence chunks present in
+its `near_chunk_ids`, then ties broken by "has any near_chunk_ids"
+(decorative figures sink to the bottom), then by stem for determinism.
+The list is capped at `_PAGE_FIGURES_TOP_K = 8` so the writer prompt
+isn't flooded with figures unrelated to the cited claims.
 
 ```python
 # distill/sampler.py

@@ -47,6 +47,9 @@ def is_writable_page(page: WikiPage) -> bool:
     return True
 
 
+_PAGE_FIGURES_TOP_K = 8
+
+
 def build_write_request(
     page: WikiPage,
     all_pages: list[WikiPage],
@@ -57,16 +60,35 @@ def build_write_request(
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
 ) -> WriteRequest:
-    """Build a WriteRequest for a single page."""
+    """Build a WriteRequest for a single page.
+
+    The figure list passed to the writer is ranked by *relevance*: each
+    candidate image gets a score equal to the number of page-evidence
+    chunks present in its ``near_chunk_ids``. Images that the body
+    discussion explicitly cites in chunks the writer is also citing
+    bubble to the top, while figures from the same doc that aren't
+    discussed near any cited chunk fall to the bottom. The list is
+    capped at ``_PAGE_FIGURES_TOP_K`` so the writer prompt doesn't get
+    flooded with figures that aren't tied to the claims being written.
+    """
     page_doc_ids = {ev.doc_id for ev in page.evidence}
-    page_figures: list[ImageRef] = []
+    page_evidence_chunk_ids = {ev.chunk_id for ev in page.evidence}
+    candidate_recs: list[tuple[int, int, ImageRecord]] = []
     seen_fig_ids: set[str] = set()
     for did in sorted(page_doc_ids):
         for rec in images_index.for_doc(did):
             if rec.id in seen_fig_ids:
                 continue
             seen_fig_ids.add(rec.id)
-            page_figures.append(_to_imageref(rec))
+            overlap = sum(1 for cid in rec.near_chunk_ids if cid in page_evidence_chunk_ids)
+            # Tie-break: images with ANY near_chunk_ids beat images with
+            # zero (decorative figures), then by stem for determinism.
+            has_any_near = 1 if rec.near_chunk_ids else 0
+            candidate_recs.append((-overlap, -has_any_near, rec))
+    candidate_recs.sort(key=lambda t: (t[0], t[1], t[2].id))
+    page_figures: list[ImageRef] = [
+        _to_imageref(rec) for _, _, rec in candidate_recs[:_PAGE_FIGURES_TOP_K]
+    ]
 
     evidence_v2 = []
     dossier = dossier_store.load(page.id)
@@ -231,4 +253,5 @@ def _to_imageref(rec: ImageRecord) -> ImageRef:
         caption=rec.caption,
         page=rec.page,
         path=rec.path,
+        near_chunk_ids=list(rec.near_chunk_ids),
     )

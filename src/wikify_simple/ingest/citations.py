@@ -12,11 +12,37 @@ import re
 
 # --- regex constants ------------------------------------------------------
 
+# Heading patterns seen in the mvp20 corpus we need to match:
+#   ## References          ## **References**          ## _**References**_
+#   ## REFERENCES          ## REFERENCES AND NOTES    ## **REFERENCES AND NOTES**
+#   ## REFERENCE           ## **6.0.REFERENCES**      ## Bibliography
+# A permissive "decoration" class on both sides catches leading/trailing
+# emphasis (``*``/``_``), numbered prefixes, and stray unicode glyphs.
 _REFS_HEADING_RE = re.compile(
-    r"^(#{1,3})\s*(references|bibliography|works cited)\s*$",
+    r"^(#{1,3})[^A-Za-z0-9\n]*(?:\d+[\d.]*\s*)?"
+    r"(?:references?|bibliography|works\s+cited)"
+    r"(?:\s+and\s+notes)?[^A-Za-z0-9\n]*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_NUMBERED_ENTRY_RE = re.compile(r"^\s*(?:\[\d+\]|\d+\.)\s+", re.MULTILINE)
+# Accept many numbered styles as entry delimiters:
+#   "[12]", "12.", "12)", "(12)", "- [12]", "- 12.", "- 12)"
+_NUMBERED_ENTRY_RE = re.compile(
+    r"^\s*(?:-\s*)?(?:\[\d+\]|\(\d+\)|\d+[.)])\s+",
+    re.MULTILINE,
+)
+
+# Fallback: when no explicit heading is found, find a cluster of lines
+# that each contain an "author-initials + surname + year" pattern. This
+# catches the many citation styles that escape the numbered-entry
+# heuristic: inline prose refs (Chua 1971), ``> (34)`` blockquote refs
+# (ACS), ``- 19M. A. Lampert`` bullet-with-stuck-number refs, ``- 23)``
+# closing-paren refs, or un-numbered author-year bullet lists (Wiley).
+# The pattern is strict enough to avoid body prose and permissive enough
+# to cross all of those formats.
+_CITATION_LINE_RE = re.compile(
+    r"^.{0,60}(?:[A-Z]\.\s*){1,4}[A-Z][a-z]+(?:[ \-][A-Z][a-z]+)?.*\b(19[5-9]\d|20[0-3]\d)\b",
+    re.MULTILINE,
+)
 
 _MD_BOLD_RE = re.compile(r"\*{1,2}(.+?)\*{1,2}")
 _MD_ITALIC_RE = re.compile(r"_{1,2}(.+?)_{1,2}")
@@ -42,17 +68,34 @@ def _clean_markdown(text: str) -> str:
 
 def _find_refs_section(md_text: str) -> str | None:
     match = _REFS_HEADING_RE.search(md_text)
-    if match is None:
+    if match is not None:
+        heading_level = len(match.group(1))
+        start = match.end()
+        next_heading_re = re.compile(
+            rf"^#{{1,{heading_level}}}\s+\S",
+            re.MULTILINE,
+        )
+        next_match = next_heading_re.search(md_text, start)
+        end = next_match.start() if next_match else len(md_text)
+        return md_text[start:end]
+    # Fallback: scan the last ~40% of the document for a cluster of
+    # numbered citation lines. This catches short-form papers (Nature
+    # letters, IEEE one-column dense papers) where pymupdf4llm never
+    # produces a ``## References`` heading but the numbered refs are
+    # still in the body.
+    tail_start = int(len(md_text) * 0.6)
+    tail = md_text[tail_start:]
+    matches = list(_CITATION_LINE_RE.finditer(tail))
+    if len(matches) < 3:
         return None
-    heading_level = len(match.group(1))
-    start = match.end()
-    next_heading_re = re.compile(
-        rf"^#{{1,{heading_level}}}\s+\S",
-        re.MULTILINE,
-    )
-    next_match = next_heading_re.search(md_text, start)
-    end = next_match.start() if next_match else len(md_text)
-    return md_text[start:end]
+    # Anchor at the first citation-line hit and take everything through
+    # the end of the document (or the next top-level heading, whichever
+    # comes first).
+    first = matches[0].start()
+    next_heading_re = re.compile(r"^#{1,3}\s+\S", re.MULTILINE)
+    nxt = next_heading_re.search(tail, first)
+    end = nxt.start() if nxt else len(tail)
+    return tail[first:end]
 
 
 def _split_entries(section_text: str) -> list[str]:

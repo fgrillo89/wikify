@@ -53,9 +53,18 @@ def _parse_budget(raw: str) -> float:
 def ingest(
     input_dir: Path = typer.Argument(...),
     output_dir: Path = typer.Option(Path("data/corpus"), "--out"),
+    workers: int = typer.Option(
+        0,
+        "--workers",
+        help="Parse parallelism. 0 = 60%% of CPU cores (default), 1 = serial.",
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
-    paths = ingest_corpus(input_dir, output_dir)
+    paths = ingest_corpus(
+        input_dir,
+        output_dir,
+        max_workers=None if workers == 0 else workers,
+    )
     typer.echo(f"corpus written to {paths.root}")
 
 

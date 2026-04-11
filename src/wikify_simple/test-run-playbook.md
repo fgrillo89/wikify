@@ -15,14 +15,16 @@ A reproducible procedure for running and reviewing a wikify_simple test campaign
 
 ### 1.1 Corpus
 
-Use `data/wikify_simple/corpora/mvp20_v6` for fast iteration (20 materials science papers, ~700 text chunks, ~164 image captions). If it is stale or missing, rebuild it:
+Use `data/wikify_simple/corpora/mvp20_v7` for fast iteration (20 materials science papers, ~770 chunks, 117 caption-only image binaries, 112 equations, 84 figure_refs, 989 citation entries, 65 resolved cross-paper edges). If it is stale or missing, rebuild it:
 
 ```bash
 WIKIFY_SIMPLE_EMBEDDER=sentence_transformers \
 uv run python -m wikify_simple.cli ingest \
-  --source data/papers/mvp20 \
-  --out data/wikify_simple/corpora/mvp20_next
+  data/papers/mvp20 \
+  --out data/wikify_simple/corpora/mvp20_v7
 ```
+
+Ingest is parallelized over 60% of CPU cores by default; pass `--workers N` to override (use `--workers 1` for serial debugging).
 
 After ingest, verify:
 
@@ -63,7 +65,7 @@ uv run python -m wikify_simple.cli distill \
   --strategy M --policy rule_policy --binding file_dispatch \
   --budget 50000 --extract-tier S --write-tier M \
   --exploit-fraction 0.65 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/scripted
 ```
 
@@ -76,7 +78,7 @@ uv run python -m wikify_simple.cli distill \
   --strategy M --policy rule_policy --binding file_dispatch \
   --budget 50000 --extract-tier S --write-tier M \
   --exploit-fraction 0.65 --seed 1 --iteration refine \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/scripted
 # then seed 2 for iteration 3
 ```
@@ -97,7 +99,7 @@ Each distill invocation blocks on `data/dispatch/<role>/<rid>.request.json` file
 uv run python -m wikify_simple.cli distill \
   --strategy M --policy llm_policy --binding file_dispatch \
   --budget 200000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/campaign
 ```
 
@@ -116,10 +118,10 @@ After each run (scripted and campaign), produce the HTML and the metrics:
 ```bash
 BUNDLE=data/wikify_simple/test_runs/scripted  # or campaign
 uv run python -m wikify_simple.cli html  --bundle $BUNDLE
-uv run python -m wikify_simple.cli eval  --bundle $BUNDLE --corpus data/wikify_simple/corpora/mvp20_v6
+uv run python -m wikify_simple.cli eval  --bundle $BUNDLE --corpus data/wikify_simple/corpora/mvp20_v7
 ```
 
-Time both commands. HTML rendering on mvp20_v6 should be ~2 s and eval ~15 s after the Phase-4-of-previous-plan author filter. If either is >30 s, something regressed.
+Time both commands. HTML rendering on mvp20_v7 should be ~2 s and eval ~15 s after the Phase-4-of-previous-plan author filter. If either is >30 s, something regressed.
 
 ---
 
@@ -361,7 +363,7 @@ Distill and campaign accept `--verbalize` (off by default). When set, every extr
 ### 8.1 When to use it
 
 - **Ad-hoc diagnostic runs only.** Verbalization adds ~30-60 tokens per call. Do NOT leave it on for production campaigns.
-- **Before refining a handler skill.** If a handler is producing thin output, run a 1-iteration verbalized scripted run on mvp20_v6 and read the reasoning lines. The model's own explanation of its choices is the fastest signal that the skill prompt is ambiguous, under-specified, or contradicting itself.
+- **Before refining a handler skill.** If a handler is producing thin output, run a 1-iteration verbalized scripted run on mvp20_v7 and read the reasoning lines. The model's own explanation of its choices is the fastest signal that the skill prompt is ambiguous, under-specified, or contradicting itself.
 - **After changing the sampler, policy, or budget allocation.** The orchestrator reasoning lines show whether the policy is picking actions for the reasons you expected.
 
 ### 8.2 How to read the log
@@ -419,7 +421,7 @@ Substantive fraction should rise across iterations. If it stays flat, refine loo
 
 ### 10.1 Reference pages (mandatory reads before review)
 
-For the mvp20_v6 corpus (memristor + ALD + HfOx + neuromorphic), the two reference Wikipedia pages to compare against are:
+For the mvp20_v7 corpus (memristor + ALD + HfOx + neuromorphic), the two reference Wikipedia pages to compare against are:
 
 - **<https://en.wikipedia.org/wiki/Memristor>** — directly overlaps corpus content. Canonical example of an article covering a device concept with history, physics, theoretical debate, and applications, all in neutral voice with inline citations.
 - **<https://en.wikipedia.org/wiki/Atomic_layer_deposition>** — materials-science article covering the process, mechanism, precursor chemistry, and device applications. Canonical example of a process/method article grounded in quantitative detail.
@@ -530,7 +532,7 @@ Inspired by Karpathy's autoresearch: run, evaluate, diff, refine, re-run. Stop w
 
 ### 11.1 Target metrics (decided before the loop starts)
 
-Pick 3 metrics and set explicit target values. Example targets for mvp20_v6 scripted runs:
+Pick 3 metrics and set explicit target values. Example targets for mvp20_v7 scripted runs:
 
 | Metric | Baseline (current) | Target | Hard floor |
 |---|---|---|---|

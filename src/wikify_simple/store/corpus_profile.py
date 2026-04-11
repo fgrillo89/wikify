@@ -131,6 +131,7 @@ def _build_unified_doc_graph(doc_ids: list[str], graph) -> nx.Graph:
     Edge types used (all contribute equally):
       - cites: doc -> doc (from parsed references)
       - doc_similar: doc <-> doc (embedding cosine >= threshold)
+      - cites_same: doc <-> doc (bibliographic coupling — shared refs)
 
     Each edge type adds weight 1.0. If a pair has both a citation and
     a similarity edge, the combined weight is 2.0. This naturally
@@ -143,7 +144,7 @@ def _build_unified_doc_graph(doc_ids: list[str], graph) -> nx.Graph:
         return g
 
     node_set = set(doc_ids)
-    edge_types = ["cites", "doc_similar"]
+    edge_types = ["cites", "doc_similar", "cites_same"]
 
     for etype in edge_types:
         for src, dst in graph.edges.get(etype, []):

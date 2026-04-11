@@ -26,6 +26,7 @@ budgets are exhausted.
 import dataclasses
 import json
 import random
+import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -38,7 +39,9 @@ from pydantic import ValidationError
 from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Writer
 from ..contracts.schema import (
     EditorBrief,
+    EquationRef,
     ExtractRequest,
+    FigureCaption,
     ImageRef,
     QuoteNotInChunkError,
     WriteRequest,
@@ -209,6 +212,7 @@ def run_with_preloaded(
         return
 
     docs = preloaded.docs
+    docs_by_id = preloaded.docs_by_id
     chunks = preloaded.chunks
     chunks_by_id = preloaded.chunks_by_id
     images_index = preloaded.images_index
@@ -390,6 +394,10 @@ def run_with_preloaded(
                     model_id=strategy.model_id,
                     tier=runtime.extract_tier,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
+                    equations=_equations_for_chunk(ck, docs_by_id),
+                    figure_captions=_figure_captions_for_chunk(
+                        ck, docs_by_id, images_index
+                    ),
                     verbalize=verbalize,
                 )
                 for cid, ck in batch_chunks
@@ -791,6 +799,7 @@ def _build_sampler_state(
     abstract_by_doc: dict[str, str] = {}
     chunk_to_doc: dict[str, str] = {}
     all_chunk_ids_fb: list[str] = []
+    caption_ids_fb: set[str] = set()
     for c in chunks:
         # Skip references/acknowledgments/appendix sections — they contain
         # citation lists and boilerplate, not extractable knowledge.
@@ -799,8 +808,16 @@ def _build_sampler_state(
         chunks_by_doc[c.doc_id].append(c.id)
         chunk_to_doc[c.id] = c.doc_id
         all_chunk_ids_fb.append(c.id)
-        if c.id not in abstract_by_doc:
-            abstract_by_doc[c.doc_id] = c.id  # first chunk == abstract proxy
+        sp = list(c.section_path or [])
+        if sp and sp[0] == "__image__":
+            caption_ids_fb.add(c.id)
+        # First chunk per doc is the abstract proxy. The previous version
+        # checked ``c.id not in abstract_by_doc`` (chunk id) but the dict
+        # is keyed by ``doc_id`` — the wrong-key typo meant every chunk
+        # overwrote and the last chunk of each doc was reported as the
+        # abstract. Now matched against the in-ingest sampler_index path.
+        if c.doc_id not in abstract_by_doc:
+            abstract_by_doc[c.doc_id] = c.id
     pagerank = _uniform_pagerank(list(chunks_by_doc.keys()))
     neighbours: dict[str, set[str]] = defaultdict(set)
     for a, b in graph.edges.get("similar_strong", []):
@@ -821,6 +838,7 @@ def _build_sampler_state(
         neighbors_by_chunk=neighbour_map_fb,
         chunk_degree=degree,
         chunk_to_doc=chunk_to_doc,
+        caption_chunk_ids=caption_ids_fb,
     )
     init_coverage_state(state, all_chunk_ids_fb)
     return state
@@ -833,7 +851,154 @@ def _to_imageref(rec: ImageRecord) -> ImageRef:
         caption=rec.caption,
         page=rec.page,
         path=rec.path,
+        near_chunk_ids=list(rec.near_chunk_ids),
     )
+
+
+def _equations_for_chunk(chunk: Chunk, docs_by_id: dict[str, Document]) -> list[EquationRef]:
+    """Build the EquationRef list for one chunk's ExtractRequest.
+
+    Pulls ``Document.equations`` for the chunk's parent doc and filters
+    to those whose ``id`` is in ``chunk.equation_ids`` (the chunker
+    binds equations to chunks at ingest time via char_span overlap).
+    Equation order matches ``chunk.equation_ids`` so the model sees
+    them in source order.
+    """
+    if not chunk.equation_ids:
+        return []
+    doc = docs_by_id.get(chunk.doc_id)
+    if doc is None or not doc.equations:
+        return []
+    by_id: dict[str, dict] = {e["id"]: e for e in doc.equations if e.get("id")}
+    out: list[EquationRef] = []
+    for eq_id in chunk.equation_ids:
+        eq = by_id.get(eq_id)
+        if eq is None:
+            continue
+        try:
+            out.append(
+                EquationRef(
+                    id=eq["id"],
+                    latex=str(eq.get("latex") or ""),
+                    type=eq.get("type", "unicode"),
+                    label=eq.get("label"),
+                    context=str(eq.get("context") or ""),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            # Be permissive: a malformed equation record should never
+            # crash the extract pipeline. Skip it and move on.
+            continue
+    return out
+
+
+def _figure_captions_for_chunk(
+    chunk: Chunk,
+    docs_by_id: dict[str, Document],
+    images_index,
+) -> list[FigureCaption]:
+    """Build per-chunk figure captions for ExtractRequest.
+
+    Combines two sources so the model sees every figure that's
+    semantically near the current chunk:
+
+    1. **Binary images** in ``images_index`` whose ``near_chunk_ids``
+       includes ``chunk.id``. These have an ``image_id`` set so the
+       handler knows it can attach the figure as evidence with a real
+       image binary backing it.
+    2. **Body figure refs** (``Document.figure_refs``) whose
+       ``section_path`` matches the chunk's section_path. Caption-only
+       — used when the figure extractor failed to grab the binary but
+       the prose still has a usable caption.
+
+    Caption chunks (``__image__``) skip this entirely — they ARE the
+    image, no need to also link a caption.
+    """
+    sp = list(chunk.section_path or [])
+    if sp and sp[0] == "__image__":
+        return []
+    out: list[FigureCaption] = []
+    seen_keys: set[tuple[str, int, str]] = set()
+
+    # 1. Binary images near this chunk.
+    for rec in images_index.for_doc(chunk.doc_id):
+        if chunk.id not in (rec.near_chunk_ids or ()):
+            continue
+        # Try to derive (kind, num, sub) from the label or stem.
+        stem = rec.id.rsplit("/", 1)[-1]
+        kind, num, sub = _parse_figure_label(rec.label or stem)
+        if num is None:
+            continue
+        key_triple = (kind, num, sub)
+        if key_triple in seen_keys:
+            continue
+        seen_keys.add(key_triple)
+        out.append(
+            FigureCaption(
+                key=_format_figure_key(kind, num, sub),
+                kind=kind,
+                num=num,
+                sub=sub,
+                caption=(rec.caption or "")[:500],
+                image_id=rec.id,
+            )
+        )
+
+    # 2. Body figure_refs in the same section.
+    doc = docs_by_id.get(chunk.doc_id)
+    if doc is not None and doc.figure_refs:
+        for fr in doc.figure_refs:
+            kind = fr.get("kind") or "figure"
+            num = fr.get("num")
+            sub = (fr.get("sub") or "").lower()
+            if num is None:
+                continue
+            key_triple = (kind, int(num), sub)
+            if key_triple in seen_keys:
+                continue
+            # Only surface a body figure_ref when its section_path matches
+            # the chunk's section — otherwise we'd flood every chunk with
+            # every figure in the doc.
+            ref_section = list(fr.get("section_path") or [])
+            if ref_section and sp and ref_section[0] != sp[0]:
+                # Different top-level section: skip.
+                continue
+            seen_keys.add(key_triple)
+            out.append(
+                FigureCaption(
+                    key=fr.get("key") or _format_figure_key(kind, int(num), sub),
+                    kind=kind,
+                    num=int(num),
+                    sub=sub,
+                    caption=str(fr.get("caption") or "")[:500],
+                    image_id=None,
+                )
+            )
+
+    return out
+
+
+_FIGURE_LABEL_RE = re.compile(
+    r"^(?P<kind>fig(?:ure)?|table|scheme|sch)[._\s]*(?P<num>\d+)\s*(?P<sub>[a-z])?",
+    re.IGNORECASE,
+)
+
+
+def _parse_figure_label(s: str) -> tuple[str, int | None, str]:
+    """Parse a label or stem into ``(kind, num, sub)``."""
+    if not s:
+        return ("figure", None, "")
+    m = _FIGURE_LABEL_RE.match(s.strip().lower())
+    if not m:
+        return ("figure", None, "")
+    kind_raw = m.group("kind")
+    kind = "figure" if kind_raw.startswith("fig") else kind_raw
+    return (kind, int(m.group("num")), (m.group("sub") or "").lower())
+
+
+def _format_figure_key(kind: str, num: int, sub: str) -> str:
+    label = "Fig." if kind == "figure" else kind.capitalize()
+    return f"{label} {num}{sub}"
 
 
 def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:

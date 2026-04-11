@@ -90,15 +90,22 @@ def _strip_repeated_headers(md: str) -> str:
 
 
 def _strip_line_noise(md: str) -> str:
-    """Drop individual lines that match licensing-notice substrings or regex patterns."""
+    """Drop individual lines that match licensing-notice substrings or regex patterns.
+
+    Only drops *short* lines — boilerplate footers are always short, and
+    long lines (full paragraphs that happen to mention a noise substring
+    in passing) must be preserved. Paragraph-level noise is handled
+    separately by ``_strip_noise_paragraphs``.
+    """
     out: list[str] = []
     for ln in md.split("\n"):
-        low = ln.lower()
-        if any(s in low for s in _LINE_NOISE_SUBSTRINGS):
-            continue
         stripped = ln.strip()
-        if stripped and _LINE_NOISE_RE.match(stripped):
-            continue
+        if stripped and len(stripped) <= 250:
+            low = stripped.lower()
+            if any(s in low for s in _LINE_NOISE_SUBSTRINGS):
+                continue
+            if _LINE_NOISE_RE.match(stripped):
+                continue
         out.append(ln)
     return "\n".join(out)
 
@@ -131,6 +138,14 @@ def _strip_noise_paragraphs(md: str) -> str:
     return "\n\n".join(kept)
 
 
+_REFS_SPLIT_RE = re.compile(
+    r"^(#{1,3})[^A-Za-z0-9\n]*(?:\d+[\d.]*\s*)?"
+    r"(?:references?|bibliography|works\s+cited)"
+    r"(?:\s+and\s+notes)?[^A-Za-z0-9\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
 def clean_markdown_text(md: str) -> str:
     """Run the full parse-time cleanup pipeline.
 
@@ -140,13 +155,109 @@ def clean_markdown_text(md: str) -> str:
       2. running-header dedup — needs the licensing junk gone first
       3. leading journal heading
       4. paragraph-level noise (must run last so paragraphs are coherent)
+      5. body normalization — whitespace, hyphen rejoin, replacement
+         char removal, dropcap artifact repair, empty citation markers
+
+    Splits the document at the references heading (when present) and
+    only runs the aggressive paragraph-level noise filter on the body.
+    A real citation line usually contains "doi:" and other tokens that
+    our noise-marker list is designed to strip — without this split the
+    whole references section gets erased.
     """
     if not md:
         return md
-    md = _strip_line_noise(md)
-    md = _strip_repeated_headers(md)
-    md = _strip_leading_journal_heading(md)
-    md = _strip_noise_paragraphs(md)
+    # Split at references heading so we can protect the refs body from
+    # aggressive noise filtering.
+    refs_match = _REFS_SPLIT_RE.search(md)
+    if refs_match:
+        body = md[: refs_match.start()]
+        refs_tail = md[refs_match.start() :]
+    else:
+        body = md
+        refs_tail = ""
+
+    body = _strip_line_noise(body)
+    body = _strip_repeated_headers(body)
+    body = _strip_leading_journal_heading(body)
+    body = _strip_noise_paragraphs(body)
+    body = _normalize_body_text(body)
+
+    if refs_tail:
+        # References get lighter-touch cleanup: line-noise trim + body
+        # normalization (whitespace, hyphen rejoin, Unicode drop) but
+        # NOT paragraph-level noise filtering. Running headers and
+        # licensing footers have already been removed by pymupdf4llm's
+        # layout engine.
+        refs_tail = _strip_line_noise(refs_tail)
+        refs_tail = _normalize_body_text(refs_tail)
+        out = body + "\n" + refs_tail
+    else:
+        out = body
+
     # Collapse the blank-line storms the strippers leave behind.
-    md = re.sub(r"\n{3,}", "\n\n", md)
-    return md.strip() + "\n"
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip() + "\n"
+
+
+# --- body normalization --------------------------------------------------
+
+# pymupdf4llm's column reconstruction sometimes drops a dropcap letter
+# into the middle of a hyphenated word split, e.g. "conven- **D** tional"
+# where the large "D" was actually the dropcap of "DUE" a few tokens
+# earlier. We can't relocate the letter, but we can drop it and rejoin
+# the hyphen so the word is at least readable: "conventional".
+_DROPCAP_ARTIFACT_RE = re.compile(
+    r"([a-z])-\s*\*\*[A-Z]\*\*\s*([a-z])",
+)
+
+# Dangling citation-marker remnants after the earlier _strip_pdf_artifacts
+# pass: "applications , ." or "[a], ., [b]". Not devastating but they
+# waste context and confuse downstream sentence splitters.
+_EMPTY_CITE_CLUSTER_RE = re.compile(r"\s*,\s*(?:,\s*)+")
+_DANGLING_COMMA_PERIOD_RE = re.compile(r"\s+,\s*\.")
+
+# Invisible / replacement / zero-width characters that add zero
+# information and inflate LLM context. Keep normal spaces and line
+# breaks; drop the rest.
+_NOISE_CHARS_RE = re.compile(r"[\ufffd\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+
+
+def _normalize_body_text(md: str) -> str:
+    """Tighten chunk-level whitespace and repair common PDF artifacts.
+
+    This runs after the structural strippers. Changes are purely
+    cosmetic/size: rejoin hyphenated words across line breaks, repair
+    dropcap reconstruction artifacts, drop replacement characters,
+    collapse multi-space runs, and strip trailing whitespace per line.
+    """
+    # 1. Drop replacement / zero-width characters.
+    md = _NOISE_CHARS_RE.sub("", md)
+    # 2. Rejoin hyphenated words split across a newline: "conven-\ntional"
+    #    → "conventional". Only rejoin when a lowercase letter is on both
+    #    sides so we don't glue hyphenated compounds like "3-D CMOL".
+    md = re.sub(r"([a-z])-\n([a-z])", r"\1\2", md)
+    # 3. Dropcap repair: "conven- **D** tional" → "conventional" by
+    #    discarding the misplaced dropcap and gluing the hyphenated halves
+    #    back together. The stray letter is already in the wrong position,
+    #    so dropping it is strictly better than leaving "convendtional".
+    md = _DROPCAP_ARTIFACT_RE.sub(r"\1\2", md)
+    # 4. Dangling citation punctuation left after bracket-marker removal.
+    md = _EMPTY_CITE_CLUSTER_RE.sub(", ", md)
+    md = _DANGLING_COMMA_PERIOD_RE.sub(".", md)
+    # 5. Per-line trailing whitespace: very common in pymupdf4llm output
+    #    and adds tokens for no signal.
+    md = re.sub(r"[ \t]+\n", "\n", md)
+    # 6. Collapse runs of spaces (but never newlines) to a single space.
+    md = re.sub(r"[ \t]{2,}", " ", md)
+    # 7. Normalize the IEEE-style "Index Terms" section label to "Keywords"
+    #    — the two are identical in purpose and we'd rather report one
+    #    canonical name across the corpus (topics.py already accepts both).
+    #    The source can wrap the label in any combination of ``_``/``*``
+    #    emphasis markers (``## _**Index Terms- ...**_``), so we match the
+    #    whole line and strip both the opener and closer in one shot.
+    md = re.sub(
+        r"(?im)^(#+\s*)[_*\s]*index\s+terms[\s\-—:.,_*]*(.+?)[_*\s]*$",
+        r"\1**Keywords:** \2",
+        md,
+    )
+    return md

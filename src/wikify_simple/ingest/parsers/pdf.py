@@ -21,7 +21,7 @@ from ..metadata import (
     parse_filename,
 )
 from ._clean import clean_markdown_text
-from ._sections import section_spans
+from ._sections import section_spans, toc_spans
 from .registry import ParseResult
 
 
@@ -29,9 +29,25 @@ def parse(path: Path) -> ParseResult:
     import fitz  # pymupdf
     import pymupdf4llm
 
+    # Use the layout engine with running-header + running-footer suppression
+    # on. pymupdf4llm >=1.27 routes to ``_layout_to_markdown`` by default and
+    # its ``header``/``footer`` flags tell the layout model to classify and
+    # drop the repeated running boilerplate (page numbers, journal header,
+    # copyright footer) at the page level — much more reliable than the
+    # downstream line/paragraph regex scrubbing we previously leaned on.
+    # ``ignore_code`` also suppresses mono-font runs that are almost always
+    # stray equation/symbol noise in papers.
     md_text: str = ""
     try:
-        md_text = str(pymupdf4llm.to_markdown(str(path), use_ocr=False))
+        md_text = str(
+            pymupdf4llm.to_markdown(
+                str(path),
+                use_ocr=False,
+                header=False,
+                footer=False,
+                ignore_code=True,
+            )
+        )
     except Exception:
         md_text = ""
 
@@ -42,7 +58,13 @@ def parse(path: Path) -> ParseResult:
             try:
                 md_text = str(
                     pymupdf4llm.to_markdown(
-                        str(path), use_ocr=True, force_ocr=True, ocr_language="eng"
+                        str(path),
+                        use_ocr=True,
+                        force_ocr=True,
+                        ocr_language="eng",
+                        header=False,
+                        footer=False,
+                        ignore_code=True,
                     )
                 )
             except Exception:
@@ -54,14 +76,29 @@ def parse(path: Path) -> ParseResult:
         md_text = clean_markdown_text(md_text)
         metadata = _extract_metadata(doc, md_text, path.name)
         images_raw = extract_pdf_media(doc, md_text)
+        # Capture the PDF bookmark TOC. When the document ships a real
+        # outline (>= 3 entries) we use it as the canonical section
+        # source — its titles are typically more reliable than what
+        # pymupdf4llm derives from heading detection alone, especially
+        # for technical reports with deep numbered hierarchies.
+        try:
+            toc_entries = doc.get_toc() or []
+        except Exception:
+            toc_entries = []
     finally:
         doc.close()
+
+    sections = None
+    if toc_entries and len(toc_entries) >= 3:
+        sections = toc_spans(md_text, toc_entries)
+    if sections is None:
+        sections = section_spans(md_text)
 
     title = metadata.get("title") or path.stem
     metadata["_raw_images"] = images_raw
     return ParseResult(
         markdown=md_text,
-        sections=section_spans(md_text),
+        sections=sections,
         images=[],  # populated by refresh.py via save_doc_images
         metadata=metadata,
         title=title,
@@ -88,13 +125,33 @@ def _classify_pdf_text(md_text: str, doc) -> str:
 
 
 def _fitz_fallback_markdown(doc) -> str:
+    """Reconstruct page markdown from fitz block-level extraction.
+
+    ``get_text("blocks")`` yields one block per visually separated text
+    unit (paragraph-like), so we can rebuild a markdown-ish flow with
+    real blank-line paragraph breaks instead of the prior one-line-per-
+    page join that destroyed downstream cleanup heuristics. Hyphenation
+    across line breaks within a block is rejoined; remaining newlines
+    become spaces. Non-text blocks (images) are skipped.
+    """
     pages: list[str] = []
     for i in range(doc.page_count):
-        raw = doc[i].get_text()
-        raw = re.sub(r"-\s*\n\s*", "", raw)
-        raw = re.sub(r"(?<!\n)\n(?!\n)", " ", raw)
-        raw = re.sub(r"\n{3,}", "\n\n", raw)
-        pages.append(raw.strip())
+        blocks = doc[i].get_text("blocks")
+        paras: list[str] = []
+        for b in blocks:
+            # block tuple: (x0, y0, x1, y1, text, block_no, block_type)
+            if len(b) < 7 or b[6] != 0:  # 0 = text block
+                continue
+            text = (b[4] or "").strip()
+            if not text:
+                continue
+            text = re.sub(r"-\s*\n\s*", "", text)  # rejoin hyphenated line breaks
+            text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)  # fragmented lines
+            text = re.sub(r"\s{2,}", " ", text).strip()
+            if text:
+                paras.append(text)
+        if paras:
+            pages.append("\n\n".join(paras))
     return "\n\n".join(pages)
 
 
@@ -114,8 +171,11 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
     # Authors: in-document extraction (markdown body) wins over PDF metadata
     # when it yields a richer list. PDF metadata often carries only the
     # corresponding author (e.g. "H. Kim") even when the paper has 12 real
-    # authors. Filename parse is the last-resort fallback.
-    md_authors = extract_authors_from_markdown(md_text)
+    # authors. Pass the filename-derived surname as an anchor so the
+    # extractor can skip over landing-page recommendation blocks whose
+    # author lists come from unrelated papers. Filename parse is the
+    # last-resort fallback.
+    md_authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     raw_author = (meta.get("author") or "").strip()
     meta_authors = parse_authors(raw_author) if raw_author else []
     if len(md_authors) >= 2:

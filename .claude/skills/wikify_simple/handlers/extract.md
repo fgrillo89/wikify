@@ -32,10 +32,21 @@ Reference: `src/wikify_simple/contracts/schema.py::ExtractRequest`
   "model_id": "claude-haiku-...",
   "tier": "S",
   "images_for_doc": [
-    {"path": "figures/doc_17_fig3.png", "label": "Figure 3", "caption": "ALD reactor schematic"}
+    {"id": "doc_17/Figure_03", "path": "figures/doc_17_fig3.png", "label": "Figure 3", "caption": "ALD reactor schematic", "near_chunk_ids": ["doc_17::chunk_004"]}
+  ],
+  "equations": [
+    {"id": "ab12cd34", "latex": "GPC = 0.9 A/cycle", "type": "unicode", "label": null, "context": "We measured a growth-per-cycle (GPC) of [...] in the trench geometry."}
+  ],
+  "figure_captions": [
+    {"key": "Fig. 3", "kind": "figure", "num": 3, "sub": "", "caption": "ALD reactor schematic showing the TDMAHf and H2O precursor lines.", "image_id": "doc_17/Figure_03"}
   ]
 }
 ```
+
+`equations` and `figure_captions` are pre-filtered for THIS chunk:
+
+* `equations` lists every equation whose source position falls inside this chunk (computed at ingest time via `Document.equations` + `Chunk.equation_ids`). Use them to ground parameter and mechanism extraction — the equation `latex` and `context` are authoritative.
+* `figure_captions` lists figures the body discussion already mentions near this chunk. Each entry's `image_id` is set when a binary image was matched, otherwise `null` (caption-only). Use these to populate `evidence_figures` on concepts the figure clearly supports — see "Image awareness" below.
 
 ## Response schema
 Reference: `src/wikify_simple/contracts/schema.py::ExtractResponse`
@@ -102,9 +113,22 @@ Reference: `src/wikify_simple/contracts/schema.py::ExtractResponse`
 
 ## Image awareness
 
-When `images_for_doc` is non-empty, check whether any caption matches the title or aliases of an emitted concept (token overlap: at least one significant non-stopword token in common, or the caption contains the concept title as a substring). If a match is found, populate `evidence_figures: ["<image_id>"]` on that concept. Image IDs come from `images_for_doc[i].id`.
+Two figure surfaces are now provided per request:
+
+1. **`figure_captions`** — figures the body explicitly discusses near THIS chunk. Each entry is already filtered to be relevant: an image whose `near_chunk_ids` includes this chunk, or a body figure_ref in the same top-level section. **Prefer these when populating `evidence_figures`** because the link is explicit (the chunk text mentioned the figure). Use the entry's `image_id` when present; if `image_id` is `null` the caption is body-only (no binary backing) and you should NOT include it in `evidence_figures` — treat it as additional context for the concept's `definition` / `summary` instead.
+2. **`images_for_doc`** — every image in the doc, the broader catalogue. Use this only as a fallback: when no `figure_captions` entry resolves and a concept clearly matches an image's caption (token overlap or substring match), populate `evidence_figures: ["<image_id>"]` from `images_for_doc[i].id`.
+
+The figure-ingestion decision is yours: a figure is "worth ingesting as evidence" when its caption is on-topic for an emitted concept AND it has a real `image_id` (not a body-only caption). Be selective — attaching every figure to every concept is noise.
 
 When processing a caption chunk (the chunk text IS the caption of a figure) and vision analysis would be needed to answer correctly, emit `needs_vision: true` in a top-level `extra` field on the response (e.g. `"extra": {"needs_vision": true}`). The pipeline logs this for future vision-on-demand binding. Vision on demand is a documented future capability; no real vision binding exists today.
+
+## Equation awareness
+
+When `equations` is non-empty, treat them as first-class chunk content:
+
+* When emitting an `ExtractedConcept` whose definition or mechanism rests on a quantitative relation, populate the concept's `equations` field by copying the relevant equation's `latex` and a one-sentence description into a new `Equation(latex=..., kind=..., context=...)` entry.
+* Use the equation's `context` when writing `parameters` — quantitative values mentioned in the equation context (e.g. "GPC = 0.9 A/cycle in HfO2 at 250 C") are exactly what `Parameter(name, value, unit, conditions)` is designed to capture.
+* Do NOT invent equations not present in the request. The `equations` array is the authoritative list of equations in this chunk; ignore equation-shaped strings in the prose if they aren't there.
 
 ## Verbalization (optional)
 When `request.verbalize == true`, include a 1-3 sentence `reasoning` field in your response explaining what you kept, what you skipped, and why. Keep it tight — this is appended to `<bundle>/_meta/verbalize.jsonl` for post-hoc review and is billable on output tokens. When `verbalize` is false or absent, omit `reasoning` entirely (or return an empty string).

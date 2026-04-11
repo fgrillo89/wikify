@@ -90,6 +90,7 @@ def _chunk_to_dict(c: Chunk) -> dict:
         "char_span": list(c.char_span),
         "section_path": c.section_path,
         "section_type": c.section_type,
+        "equation_ids": list(c.equation_ids or []),
     }
 
 
@@ -102,6 +103,7 @@ def _chunk_from_dict(d: dict) -> Chunk:
         char_span=tuple(d["char_span"]),
         section_path=d["section_path"],
         section_type=d.get("section_type", "body"),
+        equation_ids=list(d.get("equation_ids") or []),
     )
 
 
@@ -123,6 +125,8 @@ def _doc_to_dict(doc: Document) -> dict:
         "n_chunks": doc.n_chunks,
         "n_tokens": doc.n_tokens,
         "citations": list(doc.citations or []),
+        "equations": list(doc.equations or []),
+        "figure_refs": list(doc.figure_refs or []),
         "similar_to": list(doc.similar_to or []),
         "cites": list(doc.cites or []),
         "cites_same": list(doc.cites_same or []),
@@ -171,6 +175,8 @@ def _doc_from_dict(d: dict) -> Document:
         n_chunks=d.get("n_chunks", 0),
         n_tokens=d.get("n_tokens", 0),
         citations=list(d.get("citations") or []),
+        equations=list(d.get("equations") or []),
+        figure_refs=list(d.get("figure_refs") or []),
         similar_to=list(d.get("similar_to") or []),
         cites=list(d.get("cites") or []),
         cites_same=list(d.get("cites_same") or []),

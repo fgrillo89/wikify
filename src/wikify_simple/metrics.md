@@ -1,6 +1,12 @@
 # Wikification metrics
 
 > **Current state & roadmap**: this document defines the core metrics (M1 coverage residual, M2 Heaps, M3 graph crystallinity, M5 hit rate, M6 grounding) plus GT-C and GT-P. Image-specific metrics (`image_coverage_residual`, `figure_reference_rate`, `n_figures_referenced_in_bodies`) are planned in Phase 4 of [`plans/structural-improvements.md`](plans/structural-improvements.md). The cost ratios referenced in this doc (haiku-equivalent normalization) were recalibrated against Claude 4.5/4.6 pricing — see `src/wikify_simple/infra/config.py` for the live values: S=1/5, M=3/15, L=15/75 (input/output per-token, normalized to Haiku).
+>
+> **Inputs landed since the original metrics design**:
+> - **Caption-only images** at ingest. The 29% over-emission of uncaptioned page-graphic binaries (decorative elements, equation glyphs, page rules) is now dropped at the figure extractor. M1 was previously contaminated by chunk-residuals against decorative graphics that no wiki page would ever cover; the cleaned image set is the right baseline.
+> - **Citation graph populated correctly** for the first time. M3's `G_evidence` is unaffected (it uses doc-membership intersections, not the corpus graph), but the `G_links` diagnostic graph and any pagerank-based hit-rate weighting now reflect real cross-paper edges. The pre-fix corpus graph had silently empty `cites` edges due to a build-order bug; communities and importance scoring on the doc graph were running on doc_similar alone.
+> - **Sampler skips references / acknowledgments / appendix chunks**. M5 (hit rate) is now computed against a smaller, more honest denominator: the sampler can no longer dispatch reference entries to the extractor and accidentally count them as "reads." Pre-fix runs over-counted total reads by ~14% on mvp20.
+> - **Per-chunk equations + figure_captions in `ExtractRequest`**. Extract calls now ground parameter/mechanism extraction in equation context and ground figure-evidence selection in `near_chunk_ids` overlap. The grounding gate (M6/G2) is unchanged in definition but the verbatim-quote substring check is now more likely to find a real anchor because the model has explicit equation latex to copy from rather than re-transcribing prose.
 
 ## Framing
 

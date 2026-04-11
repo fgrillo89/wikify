@@ -67,26 +67,42 @@ def _norm(s: str) -> str:
     return _LABEL_NORM_RE.sub("_", s.lower()).strip("_")
 
 
+# Match either "Figure 1" / "figure_01" / "Fig.2a" / "Table_3" — used to
+# parse both caption labels AND filename stems.
+_STEM_PARSE_RE = re.compile(
+    r"^(?P<kind>fig(?:ure)?|table|scheme|sch)[._\s]*(?P<num>\d+)\s*(?P<sub>[a-z])?",
+    re.IGNORECASE,
+)
+
+
 def _label_aliases(label: str | None, stem: str) -> list[str]:
     """Return all the strings that should resolve to this image.
 
-    The stem (e.g. ``Figure_01``) is always one alias. If a caption
-    label was matched, expand it: ``Figure 1``, ``figure 01``, ``fig 1``,
-    ``fig_01``, with optional sub-letter (``Figure_01a``).
+    The stem (e.g. ``Figure_01``) is always one alias. We also try to
+    parse a (kind, num, sub) triple from EITHER the caption label OR the
+    stem itself — many figures don't have a caption-resolved label, but
+    the stem still encodes the figure number, and we want chunks that
+    say ``"Fig. 1"`` to resolve to ``Figure_01``.
     """
     out: set[str] = {_norm(stem)}
-    if not label:
-        return sorted(out)
-    m = _LABEL_PARSE_RE.match(label.strip().lower())
-    if m:
-        kind = "figure" if m.group("kind").startswith("fig") else m.group("kind")
-        num = int(m.group("num"))
-        sub = (m.group("sub") or "").lower()
-        for k in (kind, kind[:3]):  # "figure", "fig"; "table", "tab"; "scheme", "sch"
+    triple: tuple[str, int, str] | None = None
+    if label:
+        m = _STEM_PARSE_RE.match(label.strip().lower())
+        if m:
+            kind = "figure" if m.group("kind").startswith("fig") else m.group("kind")
+            triple = (kind, int(m.group("num")), (m.group("sub") or "").lower())
+        out.add(_norm(label))
+    if triple is None:
+        m = _STEM_PARSE_RE.match(stem.strip().lower())
+        if m:
+            kind = "figure" if m.group("kind").startswith("fig") else m.group("kind")
+            triple = (kind, int(m.group("num")), (m.group("sub") or "").lower())
+    if triple is not None:
+        kind, num, sub = triple
+        for k in (kind, kind[:3]):
             for n in (str(num), f"{num:02d}"):
                 out.add(_norm(f"{k} {n}{sub}"))
                 out.add(_norm(f"{k}_{n}{sub}"))
-    out.add(_norm(label))
     return sorted(out)
 
 
@@ -102,6 +118,10 @@ class ImageRecord:
     media_type: str | None
     width: int | None
     height: int | None
+    # Body chunks that reference this image via inline "Fig. N" / "Table N"
+    # patterns. Populated by ``ingest.images.link_chunks_to_images`` at
+    # refresh time. Empty list when no body discussion mentions the image.
+    near_chunk_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -166,6 +186,7 @@ class ImageIndex:
                     media_type=r.get("media_type"),
                     width=r.get("width"),
                     height=r.get("height"),
+                    near_chunk_ids=tuple(r.get("near_chunk_ids") or ()),
                 )
                 for r in recs
             ]
@@ -222,6 +243,7 @@ def save_images_index(corpus: CorpusPaths, idx: ImageIndex) -> Path:
                     "media_type": r.media_type,
                     "width": r.width,
                     "height": r.height,
+                    "near_chunk_ids": list(r.near_chunk_ids),
                 }
                 for r in recs
             ]
@@ -265,6 +287,7 @@ def _records_for_folder(corpus: CorpusPaths, folder: Path) -> list[tuple[str, Im
             media_type=side.get("media_type"),
             width=side.get("width"),
             height=side.get("height"),
+            near_chunk_ids=tuple(side.get("near_chunk_ids") or ()),
         )
         out.append((doc_id, rec))
     return out

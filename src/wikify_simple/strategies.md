@@ -193,6 +193,55 @@ For the agent cell, the action menu gains `inspect_figure(image_id)`
 which dispatches a one-shot vision call regardless of mode — the agent
 has explicit control. Same hard budget rules.
 
+#### Caption-only image policy at ingest
+
+`figures.py` now drops image binaries that don't get a caption matched
+(default behaviour). Page-graphic noise — decorative elements,
+equation glyphs as raster images, page rules, headers/logos — was
+previously kept under fallback stems like `p3_img1` with empty captions
+and no semantic anchor. On mvp20 this filter dropped 47/164 binaries
+(29 % over-emission rate at the figure extractor) without losing any
+real figure. The remaining captioned images all get `near_chunk_ids`
+populated by `link_chunks_to_images` (100 % link rate).
+
+#### `near_chunk_ids` and chunk → image binding
+
+For every image with a caption, `link_chunks_to_images` scans body
+chunks for inline `Fig. N` / `Figure 2a` / `Table 3` / `Scheme 4`
+references and appends each matching chunk's id to the image's
+`near_chunk_ids`. The alias map is one-to-many: when the figure
+extractor produces duplicate-disambiguated stems (`Figure_01` and
+`Figure_01_2` both with the same caption — typically a multi-pane
+figure split into two binaries), a chunk that says "Fig. 1" links to
+both. The data is round-tripped through the sidecar JSON, the
+`images.json` corpus index, the `ImageRecord` dataclass, and the
+`ImageRef` Pydantic schema, so the extract handler and the writer can
+both consume it.
+
+### Equations and figure refs in the extract context
+
+Two non-chunk-text payloads now land in every `ExtractRequest`:
+
+- **`equations: list[EquationRef]`** — all equations bound to this
+  chunk (display, inline, chemical, unicode plain-text, named like
+  "Ohm's law"). Each entry: `{id, latex, type, label, context}`.
+  The handler is instructed to copy the latex into emitted concepts'
+  `equations` field rather than re-transcribing the prose, and to use
+  the equation `context` line as authoritative input for `parameters`
+  extraction.
+- **`figure_captions: list[FigureCaption]`** — figures the body
+  explicitly mentions near this chunk. Two sources combined:
+  (a) images whose `near_chunk_ids` includes this chunk_id (these
+  have a real `image_id`), and (b) `Document.figure_refs` in the same
+  top-level section (caption-only, `image_id=None`). The handler
+  prefers `figure_captions` over the broader `images_for_doc` when
+  populating `evidence_figures`, and is instructed not to attach
+  body-only captions (no binary backing) to `evidence_figures`.
+
+These additions are all per-chunk filters; total context per extract
+call rises by 1–2 kB on a typical mvp20 chunk and stays well within
+the priority-fill envelope's pool ceilings.
+
 ### Bootstrap (round zero)
 
 When the wiki is empty, `local_op` is undefined. The first round of any

@@ -1,9 +1,17 @@
 """Build the typed CorpusGraph from chunks + the vector store.
 
-Materialises the six edge kinds declared in models.CorpusGraph:
-``contains``, ``similar_knn``, ``similar_strong`` (cos >= 0.75),
-``co_section``, ``cites`` (only if doc metadata carries citation pairs),
-and ``doc_similar`` (mean-pooled per-doc cosine >= 0.75).
+Materialises the seven edge kinds in the saved graph.json:
+``contains`` (doc → chunk), ``similar_knn`` (top-k cosine), ``similar_strong``
+(cos >= STRONG_COS), ``co_section`` (same doc + same heading path),
+``cites`` (directed doc → doc, from the resolved citation graph),
+``doc_similar`` (mean-pooled per-doc cosine >= DOC_SIM_COS), and
+``cites_same`` (undirected bibliographic coupling — pairs of docs that
+share at least ``min_strength`` references).
+
+Order matters: this builder must run AFTER ``_populate_doc_edges`` in
+``refresh.py`` so the doc-side ``cites`` / ``cites_same`` lists are
+populated. Pre-fix it ran earlier and the citation/coupling edges were
+silently empty.
 """
 
 from collections import defaultdict
@@ -72,11 +80,33 @@ def build_corpus_graph(
                 if dsim[i, j] >= DOC_SIM_COS:
                     edges["doc_similar"].append((doc_ids[i], doc_ids[j]))
 
-    # cites (optional, from doc metadata)
+    # cites: directed doc→doc edges from the resolved citation graph.
+    # We read ``Document.cites`` directly (the post-embedding fuzzy
+    # matcher in refresh.py populates it). The previous version of this
+    # block read ``d.metadata["cites"]`` which was never set, so the
+    # citation edges in the corpus graph were silently empty for the
+    # entire history of this module.
     for d in docs:
-        cited = d.metadata.get("cites") or []
+        cited = d.cites or d.metadata.get("cites") or []
         for target in cited:
             if target in nodes:
                 edges["cites"].append((d.id, target))
+
+    # cites_same: undirected bibliographic-coupling edges. Two docs are
+    # coupled when they share references; ``compute_coupling`` produces
+    # the per-doc top-k list and refresh.py stores it on
+    # ``Document.cites_same``. We surface it as a graph edge kind so
+    # corpus_profile, pagerank, and community detection can use it as
+    # a signal alongside cites and doc_similar.
+    coupled_seen: set[tuple[str, str]] = set()
+    for d in docs:
+        for target in d.cites_same or []:
+            if target not in nodes or target == d.id:
+                continue
+            key = tuple(sorted((d.id, target)))
+            if key in coupled_seen:
+                continue
+            coupled_seen.add(key)
+            edges["cites_same"].append(key)
 
     return CorpusGraph(nodes=nodes, edges=dict(edges))

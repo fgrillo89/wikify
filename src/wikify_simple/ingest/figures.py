@@ -154,13 +154,24 @@ def _build_records(
         cap = rec["_cap"]
         if cap is not None and label_winner.get(cap.label) != idx:
             cap = None
-        if cap is not None:
-            if cap in avail:
-                avail.remove(cap)
-            _consume_md_caption(md_captions, cap.label)
-        rec["caption"] = cap.text if cap else ""
-        rec["label"] = cap.label if cap else f"p{page_num + 1}_img{rec['_img_index']}"
-        rec["media_type"] = cap.media_type if cap else "figure"
+        # Caption-only policy: drop images without a matched caption.
+        # Uncaptioned image binaries are almost always page-graphic
+        # noise (decorative elements, equation glyphs as raster images,
+        # rules, headers/logos) that pymupdf reports as image objects
+        # but have no semantic anchor. Without a caption there's no way
+        # for the chunk linker to associate them with body text and the
+        # extract handler can't reason about them. The 47 pN_imgM
+        # binaries we used to keep added 29% noise to mvp20 with zero
+        # downstream value. The previous behavior is restored by
+        # passing ``keep_uncaptioned=True`` for diagnostic ingests.
+        if cap is None:
+            continue
+        if cap in avail:
+            avail.remove(cap)
+        _consume_md_caption(md_captions, cap.label)
+        rec["caption"] = cap.text
+        rec["label"] = cap.label
+        rec["media_type"] = cap.media_type
         rec["alt_text"] = ""
         rec.pop("_cap", None)
         rec.pop("_img_index", None)
@@ -175,6 +186,24 @@ def _scanned_page_raw(
     page_captions: list[_CaptionMatch],
     md_captions: list[_CaptionMatch],
 ) -> list[dict]:
+    """Scanned-page fallback: render the whole page as a PNG.
+
+    When a page is scanned (no extractable image objects) but our
+    caption matcher found one or more figure captions on it, we render
+    the full page raster and use it as the visual backing for the FIRST
+    matched caption only. Previously this loop emitted a separate
+    binary for every caption on the page — but the binary was always
+    the same page rendering, which produced byte-identical duplicates
+    on disk (Chua page 11 had Fig. 7 and Fig. 8 both backed by the same
+    page-bytes blob). The dedup hash discriminated by ``cap.label`` so
+    the in-memory ``seen`` set didn't catch them.
+
+    Now we hash the raw ``page_bytes`` once and emit a single record
+    bound to the first caption. Subsequent captions on the same scanned
+    page surface as ``Document.figure_refs`` (extracted from the body
+    text) — the figure linker will still pick them up via inline
+    ``Fig. N`` references.
+    """
     figure_captions = [c for c in page_captions if c.media_type != "table"]
     if not figure_captions:
         return []
@@ -183,29 +212,27 @@ def _scanned_page_raw(
         page_bytes = pixmap.tobytes("png")
     except Exception:
         return []
-    out: list[dict] = []
-    for cap in figure_captions:
-        h = hashlib.sha256((str(page_num) + cap.label).encode("utf-8") + page_bytes).hexdigest()
-        if h in seen:
-            continue
-        seen.add(h)
-        out.append(
-            {
-                "bytes": page_bytes,
-                "ext": "png",
-                "page": page_num + 1,
-                "width": pixmap.width,
-                "height": pixmap.height,
-                "content_hash": h,
-                "bbox": None,
-                "caption": cap.text,
-                "label": cap.label,
-                "media_type": cap.media_type,
-                "alt_text": "",
-            }
-        )
-        _consume_md_caption(md_captions, cap.label)
-    return out
+    h = hashlib.sha256(page_bytes).hexdigest()
+    if h in seen:
+        return []
+    seen.add(h)
+    cap = figure_captions[0]
+    _consume_md_caption(md_captions, cap.label)
+    return [
+        {
+            "bytes": page_bytes,
+            "ext": "png",
+            "page": page_num + 1,
+            "width": pixmap.width,
+            "height": pixmap.height,
+            "content_hash": h,
+            "bbox": None,
+            "caption": cap.text,
+            "label": cap.label,
+            "media_type": cap.media_type,
+            "alt_text": "",
+        }
+    ]
 
 
 def _extract_captions_from_page(page) -> list[_CaptionMatch]:

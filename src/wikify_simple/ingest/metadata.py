@@ -167,8 +167,44 @@ def is_garbled_title(title: str) -> bool:
     return False
 
 
-def extract_authors_from_markdown(md_text: str) -> list[str]:
-    lines = md_text[:5000].split("\n")
+def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) -> list[str]:
+    """Find the paper's author list in the rendered markdown body.
+
+    Many journal PDFs (AIP, IOP, APL, etc.) prepend a "landing page" with a
+    recommendations block ("You may also like ...") whose own author lists
+    appear *before* the real paper title. The first-heading heuristic is
+    fooled by these. When the caller passes ``fn_author`` (surname parsed
+    from the filename) we anchor on it: scan the first ~12k chars for any
+    reasonable-length line containing that surname as a whole word, and
+    return the first parse whose names include the surname.
+    """
+    window = md_text[:12000]
+    lines = window.split("\n")
+
+    # Strategy 1: filename-surname anchor. Most robust when the PDF has a
+    # landing page that would otherwise fool a first-heading scanner.
+    if fn_author:
+        surname = _extract_surname(fn_author)
+        if surname:
+            surname_re = re.compile(rf"\b{re.escape(surname)}\b", re.IGNORECASE)
+            for line in lines:
+                s = line.strip()
+                if not s or len(s) > 500:
+                    continue
+                if not surname_re.search(s):
+                    continue
+                if re.search(
+                    r"(?i)(university|department|institute|school|laboratory"
+                    r"|\blab\b|@|e-mail|email|nanotechnology|j\. phys\.)",
+                    s,
+                ):
+                    continue
+                names = _parse_author_line(s)
+                if names and any(surname.lower() in n.lower() for n in names):
+                    return names
+
+    # Strategy 2: first-heading heuristic. Used for single-author papers or
+    # when no fn_author hint is available. Unchanged from the original.
     title_idx = -1
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -182,7 +218,7 @@ def extract_authors_from_markdown(md_text: str) -> list[str]:
         line = lines[i].strip()
         if not line:
             continue
-        if re.match(r"(?i)^#*\s*\*?\*?(abstract|introduction|index\s+terms)", line):
+        if re.match(r"(?i)^#*\s*\*?\*?(abstract|introduction|index\s+terms|keywords)", line):
             break
         if re.search(
             r"(?i)(university|department|institute|school|laboratory"
@@ -196,6 +232,17 @@ def extract_authors_from_markdown(md_text: str) -> list[str]:
         if len(names) >= 2:
             return names
     return []
+
+
+def _extract_surname(author_hint: str) -> str:
+    """Get the surname from a filename author tag like 'Strukov' or 'Jie Ma'."""
+    tokens = [t for t in re.split(r"\s+", author_hint.strip()) if t]
+    if not tokens:
+        return ""
+    # Filename author tags are usually "Surname" or "First Last" — the last
+    # token is conventionally the surname in both cases. Strip any trailing
+    # punctuation.
+    return tokens[-1].strip(" .,;:")
 
 
 # --- internal ------------------------------------------------------------
@@ -452,7 +499,9 @@ def _looks_like_journal(name: str) -> bool:
 
 def _parse_author_line(line: str) -> list[str]:
     cleaned = re.sub(r"^#+\s*", "", line)
-    cleaned = re.sub(r"\*+", "", cleaned)
+    # Strip leading bullet markers (-, *, +, •) that pymupdf4llm leaves on
+    # recommendation lists like "- Zhao Jin-Wei, ...".
+    cleaned = re.sub(r"^[\-*+•]\s+", "", cleaned)
     cleaned = re.sub(r"_+", " ", cleaned)
     cleaned = re.sub(
         r",?\s*(?:Life |Senior |Student |Associate )?(?:Fellow|Member),?\s*(?:IEEE)?,?",
@@ -461,6 +510,12 @@ def _parse_author_line(line: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\[[^\]]*\]", "", cleaned)
+    # Footnote/affiliation marker cluster like " *" or " †" or " ✉" right
+    # after a name becomes a hard separator. Convert to comma BEFORE we
+    # strip the markers — this is how we pry apart lines where pymupdf4llm
+    # concatenated a title and an author list through a footnote star,
+    # e.g. "... Memristor * Sungjun Kim, Hyungjin Kim ...".
+    cleaned = re.sub(r"(?<=[A-Za-z\)\]])\s*[†‡§✉✱*]+", ",", cleaned)
     cleaned = re.sub(r"[†‡§✉✱*]+", "", cleaned)
     # Treat ampersand as an author separator ("A, B & C").
     cleaned = cleaned.replace("&", ",")
@@ -470,11 +525,17 @@ def _parse_author_line(line: str) -> list[str]:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return []
-    parts = re.split(r",\s*|\s+and\s+", cleaned)
+    # Split on commas OR semicolons OR " and " — AIP landing pages often
+    # use semicolons ("Yu. Matveyev ; K. Egorov; A. Markeev; A. Zenkevich").
+    parts = re.split(r"[,;]\s*|\s+and\s+", cleaned)
     names: list[str] = []
     for part in parts:
         part = part.strip().rstrip(",. ")
         part = re.sub(r"\s+et\s+al\.?$", "", part, flags=re.IGNORECASE).strip()
+        # Strip a leading "and " that survives when the line uses an Oxford
+        # comma before "and" (", and X") — the comma splitter leaves
+        # "and X" as its own part.
+        part = re.sub(r"^(?:and|&)\s+", "", part, flags=re.IGNORECASE).strip()
         if not part:
             continue
         words = part.split()
@@ -519,6 +580,8 @@ def _is_noise_paragraph(text: str) -> bool:
         "department of",
         "manuscript received",
         "doi:",
+        "digital object identifier",
+        "color versions of",
         "published by",
         "accepted for publication",
         "public release; distribution",
@@ -531,6 +594,8 @@ def _is_noise_paragraph(text: str) -> bool:
         "in the interest of",
         "==> picture",
         "intentionally omitted",
+        "----- start of picture text -----",
+        "----- end of picture text -----",
     )
     return any(m in lower for m in noise_markers)
 

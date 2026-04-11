@@ -71,6 +71,12 @@ class ImageRef(BaseModel):
     A flat projection of ``store.images_index.ImageRecord`` so the agents
     layer doesn't take a store dependency. The fully-qualified ``id`` is
     ``"<doc_id>/<stem>"`` and is the canonical handle for citation.
+
+    ``near_chunk_ids`` lists the body chunks that mention this figure via
+    inline ``Fig. N`` / ``Table N`` / ``Scheme N`` references. Extract
+    handlers use it to figure out which figures the current chunk is
+    discussing; writers use it to prefer figure evidence whose body
+    discussion overlaps the cited evidence chunks.
     """
 
     model_config = _STRICT
@@ -80,6 +86,46 @@ class ImageRef(BaseModel):
     caption: str = ""
     page: int | None = None
     path: str = ""
+    near_chunk_ids: list[str] = Field(default_factory=list)
+
+
+class EquationRef(BaseModel):
+    """Equation occurring inside the chunk currently being extracted.
+
+    A flat projection of one entry from ``Document.equations`` filtered
+    to those whose ``char_offset`` falls inside the chunk's char_span.
+    The handler uses this to (a) cite equations on extracted concepts
+    via the ``equations`` field of ``ExtractedConcept`` and (b) ground
+    quantitative parameter extraction in the equation's ``context``.
+    """
+
+    model_config = _STRICT
+
+    id: str
+    latex: str
+    type: Literal["display", "inline", "chemical", "named", "unicode", "image"]
+    label: str | None = None
+    context: str = ""
+
+
+class FigureCaption(BaseModel):
+    """Figure / table / scheme caption near the chunk currently being extracted.
+
+    Surfaced to the extract handler so the model can decide whether the
+    figure is worth attaching as evidence (``evidence_figures`` on the
+    extracted concept) without dispatching a separate vision call. We
+    include captions of figures whose ``near_chunk_ids`` already point
+    to the current chunk — i.e. the body explicitly mentions the figure.
+    """
+
+    model_config = _STRICT
+
+    key: str  # e.g. "Fig. 1", "Table 2", "Scheme 3a"
+    kind: Literal["figure", "table", "scheme"]
+    num: int
+    sub: str = ""  # "" or "a" / "b" / ...
+    caption: str
+    image_id: str | None = None  # populated if a binary image matched this label
 
 
 class ExtractRequest(BaseModel):
@@ -92,6 +138,16 @@ class ExtractRequest(BaseModel):
     model_id: str
     tier: str  # "S" | "M" | "L"
     images_for_doc: list[ImageRef] = Field(default_factory=list)
+    # Equations whose source offset falls inside this chunk's char_span.
+    # Computed at ingest time via Document.equations + Chunk.equation_ids
+    # and surfaced here so the model has equation context when extracting
+    # parameters and concepts from a chunk.
+    equations: list[EquationRef] = Field(default_factory=list)
+    # Figure / table / scheme captions for figures the body discusses
+    # near this chunk (i.e. the figure's near_chunk_ids contains this
+    # chunk_id). Lets the handler decide which figures to attach as
+    # evidence without a separate vision pass.
+    figure_captions: list[FigureCaption] = Field(default_factory=list)
     # Verbalization: when true, the handler must include a 1-3 sentence
     # `reasoning` field in its response explaining what it kept, skipped,
     # and why. Feeds <bundle>/_meta/verbalize.jsonl for post-hoc review.

@@ -2,6 +2,14 @@
 
 > Before running any test campaign: read [`test-run-playbook.md`](test-run-playbook.md) for the full setup-run-review procedure with an explicit quality-review checklist. This runbook covers the per-command reference.
 
+## CLI reference (ingest)
+
+| Flag | Values | Default | Notes |
+|---|---|---|---|
+| `INPUT_DIR` (positional) | path | required | Directory of source files (pdf/docx/pptx/html/md). |
+| `--out` | path | `data/corpus` | Output corpus directory. |
+| `--workers` | int | `0` | Parse parallelism. `0` = 60% of CPU cores (min 2). `1` forces serial execution (useful for debugging). Each worker parses + chunks one PDF; figure extraction, equation extraction, and figure_ref extraction all run inside the worker. The main process handles embedding + graph build + sampler index sequentially. On a typical mvp20 ingest this gives a 5–9× speedup. |
+
 ## CLI reference (distill)
 
 | Flag | Values | Default | Notes |
@@ -34,10 +42,10 @@
 ```bash
 WIKIFY_SIMPLE_EMBEDDER=sentence_transformers uv run python -m wikify_simple.cli distill \
   --strategy M --binding heuristic --budget 50000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/smoke
 uv run python -m wikify_simple.cli html --bundle data/wikify_simple/test_runs/smoke
-uv run python -m wikify_simple.cli eval --bundle data/wikify_simple/test_runs/smoke --corpus data/wikify_simple/corpora/mvp20_v6
+uv run python -m wikify_simple.cli eval --bundle data/wikify_simple/test_runs/smoke --corpus data/wikify_simple/corpora/mvp20_v7
 ```
 
 Heuristic is in-process regex; useful for pipeline sanity but produces no real prose. For quality runs use `file_dispatch`.
@@ -53,7 +61,7 @@ uv run python -m wikify_simple.cli distill \
   --strategy M --policy rule_policy --binding file_dispatch \
   --budget 50000 --extract-tier S --write-tier M --exploit-fraction 0.65 \
   --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/scripted
 
 # Iteration 2 / 3 — refine (increment seed)
@@ -61,7 +69,7 @@ uv run python -m wikify_simple.cli distill \
   --strategy M --policy rule_policy --binding file_dispatch \
   --budget 50000 --extract-tier S --write-tier M --exploit-fraction 0.65 \
   --seed 1 --iteration refine \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/scripted
 ```
 
@@ -73,7 +81,7 @@ A parallel Claude Code session running `/wikify_simple/runtime/serve-dispatch` h
 uv run python -m wikify_simple.cli distill \
   --strategy M --policy llm_policy --binding file_dispatch \
   --budget 200000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/campaign
 ```
 
@@ -84,9 +92,28 @@ Each orchestrator decision costs ~30 k heq at tier L, so a realistic per-iterati
 ```bash
 uv run python -m wikify_simple.cli distill \
   --strategy M --binding fake --budget 50000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v6 \
+  --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/fake
 ```
+
+## What ingest produces
+
+After `cli ingest` finishes, the corpus directory contains:
+
+| Path | What |
+|------|------|
+| `markdown/{doc_id}.md` | Cleaned markdown body, also wrapped in YAML frontmatter + `## Edges` block for Obsidian. |
+| `chunks/{doc_id}.jsonl` | One chunk per line: `{id, doc_id, ord, text, char_span, section_path, section_type, equation_ids}`. |
+| `docs/{doc_id}.json` | `Document` record: title, metadata, sections, images, citations, equations, figure_refs, similar_to, cites, cites_same. |
+| `images/{doc_slug}/{stem}.{png,jpg,...}` | Binary figures. **Caption-only by default** — uncaptioned page-graphic noise is dropped at the figure extractor. |
+| `images/{doc_slug}/{stem}.{ext}.json` | Image sidecar: caption, label, page, near_chunk_ids, content_hash, ... |
+| `images.json` | Per-corpus image index (model-facing surface for figure lookup). |
+| `vectors.npz` + `vectors.ids.json` + `vectors.meta.json` | Embeddings for every chunk. |
+| `graph.json` | Typed corpus graph: contains, similar_knn/strong, co_section, cites, doc_similar, cites_same. |
+| `sampler_index.json` | Pre-computed sampler state (chunks_by_doc, neighbours, abstract proxies, content vs caption ids). Loaded by distill. |
+| `pagerank.json` | Real PageRank on the doc graph (cites + doc_similar + cites_same). Replaces the prior uniform fallback. |
+| `topics.json` | Topic vocabulary (declared + inferred), used by GT-C in eval. |
+| `library.bib` | One BibTeX entry per Document for citation export. |
 
 ## Key files
 
@@ -100,13 +127,22 @@ uv run python -m wikify_simple.cli distill \
 | `distill/iteration.py` | Create/refine/merge operations |
 | `distill/policy.py` | Rule and LLM policy shared interface |
 | `distill/strategies/` | E, M, X preset configurations |
-| `contracts/schema.py` | All Pydantic schemas |
+| `contracts/schema.py` | All Pydantic schemas (incl. `EquationRef`, `FigureCaption`, `ExtractRequest`) |
 | `contracts/protocols.py` | Extractor, Compactor, Editor, Writer protocols |
 | `contracts/roles.py` | Role enum + per-role spec lists |
 | `contracts/normalize.py` | Text normalization for quote validation |
 | `bindings/heuristic.py` | Inline regex extraction + article assembly |
 | `bindings/fake.py` | Deterministic fakes for testing |
 | `bindings/file_dispatch.py` | File-dispatch bindings (staged, slow) |
+| `ingest/refresh.py` | Parallel parse + per-doc persist + embed + graph + sampler index, in that order |
+| `ingest/equations.py` | Display/inline/chemical/unicode/named equation extractor |
+| `ingest/figure_refs.py` | Caption-first figure / table / scheme extractor from body markdown |
+| `ingest/figures.py` | Binary figure extractor; caption-only filter; scanned-page dedup by raw page bytes |
+| `ingest/images.py` | `link_chunks_to_images` (populates `near_chunk_ids`), sidecar I/O |
+| `ingest/parsers/_sections.py` | `section_spans` (markdown headings) + `toc_spans` (PDF TOC bookmarks) |
+| `ingest/parsers/pdf.py` | pymupdf4llm layout engine + fitz blocks fallback + TOC integration |
+| `ingest/citations.py` | Reference section detection (heading + author-anchored fallback) + structured parse |
+| `ingest/corpus_graph.py` | Builds CorpusGraph after `_populate_doc_edges` (cites + cites_same now real) |
 | `store/corpus_profile.py` | PageRank, Louvain, betweenness |
 | `render/html/render.py` | HTML renderer |
 | `prompts/*.yaml` | Prompt templates (`extract`, `write`, `compact`, `edit`, `query`) |

@@ -19,6 +19,7 @@ class PreloadedCorpus:
 
     corpus_paths: CorpusPaths
     docs: list[Document]
+    docs_by_id: dict[str, Document]
     chunks: list[Chunk]
     chunks_by_id: dict[str, Chunk]
     images_index: ImageIndex
@@ -30,6 +31,7 @@ class PreloadedCorpus:
 def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     """Load the corpus once. Returns a ``PreloadedCorpus`` for repeated use."""
     docs = list_documents(corpus)
+    docs_by_id: dict[str, Document] = {d.id: d for d in docs}
     chunks = all_chunks(corpus)
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
     images_index = ImageIndex.load(corpus)
@@ -41,6 +43,7 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     return PreloadedCorpus(
         corpus_paths=corpus,
         docs=docs,
+        docs_by_id=docs_by_id,
         chunks=chunks,
         chunks_by_id=chunks_by_id,
         images_index=images_index,

@@ -1,10 +1,13 @@
 name: wikify_simple/extract
 role: extractor
-version: 1
+version: 2
 input_schema:
   chunk_id: str
   chunk_text: str
   canonical_titles: list[str]
+  equations: "list[{id, latex, type, label, context}]"
+  figure_captions: "list[{key, kind, num, sub, caption, image_id}]"
+  images_for_doc: "list[{id, label, caption, page, path, near_chunk_ids}]"
 output_schema:
   chunk_id: str
   concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, equations, evidence_figures, confidence, score}]"
@@ -53,6 +56,27 @@ prompt_template: |
   13. **confidence**: extracted (named in text) | inferred (implied) | ambiguous
   14. **score**: 0.0-1.0
 
+  Equation context (from `equations`):
+  - The `equations` array lists every equation whose source position falls
+    INSIDE this chunk (computed at ingest time). Each entry: {id, latex, type,
+    label, context}. When a concept's mechanism or parameter is grounded in
+    one of these equations, COPY the latex into the concept's `equations`
+    field rather than transcribing the prose. The equation context line is
+    authoritative for `parameters` extraction (numbers + units + conditions).
+  - Do NOT invent equations that aren't in the array.
+
+  Figure-caption context (from `figure_captions`):
+  - The `figure_captions` array lists figures the body explicitly mentions
+    near this chunk. Each entry: {key, kind, num, sub, caption, image_id}.
+  - Use these as the PRIMARY source for `evidence_figures`: when a concept's
+    claim is supported by a captioned figure here, populate
+    `evidence_figures: ["<image_id>"]` from the entry's `image_id`.
+  - When `image_id` is null, the caption is body-only (no binary image to
+    cite). Use the caption as additional context for the concept's
+    `definition` / `summary` but do NOT add a null id to `evidence_figures`.
+  - Fall back to scanning `images_for_doc` only when `figure_captions` is
+    empty AND a concept clearly matches an image caption there.
+
   Rules:
   - If a title is in canonical_titles, reuse that exact title.
   - quote MUST be a verbatim substring of chunk_text.
@@ -63,6 +87,8 @@ prompt_template: |
 
   chunk_id: {chunk_id}
   canonical_titles: {canonical_titles}
+  equations: {equations}
+  figure_captions: {figure_captions}
   images_for_doc: {images_for_doc}
 
   chunk_text:

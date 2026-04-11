@@ -79,6 +79,12 @@ class Document:
     n_chunks: int = 0
     n_tokens: int = 0
     citations: list[dict] = field(default_factory=list)
+    equations: list[dict] = field(default_factory=list)
+    # Inline figure / table / scheme references parsed from body prose.
+    # Each entry: ``{key, caption, section_path, char_offset}``. Used by
+    # the extract handler to know which figures the current chunk is
+    # discussing even when the figure binary couldn't be extracted.
+    figure_refs: list[dict] = field(default_factory=list)
     # Doc-level edges computed post-embed for the Obsidian-friendly
     # per-doc markdown export (see store/doc_markdown.py).
     similar_to: list[str] = field(default_factory=list)
@@ -95,6 +101,11 @@ class Chunk:
     char_span: tuple[int, int]
     section_path: list[str]
     section_type: str = "body"  # canonical type from section_classifier
+    # Equation ids whose source offset falls within this chunk's char span.
+    # Populated by the chunker after equations are extracted from the
+    # full document markdown — gives the extract handler equation context
+    # in addition to the chunk text.
+    equation_ids: list[str] = field(default_factory=list)
     # embedding lives in the vector store, keyed by id
 
 
