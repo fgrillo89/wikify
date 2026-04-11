@@ -16,7 +16,7 @@ from wikify_simple.store.wiki_index import (
 def _make_page(pid: str, title: str, aliases: list[str], doc_id: str, links=None):
     return WikiPage(
         id=pid,
-        kind="concept",
+        kind="article",
         title=title,
         aliases=aliases,
         body_markdown=f"# {title}\n\n{title} description.[^e1]",
@@ -97,3 +97,43 @@ def test_index_md_contains_bullets(bundle):
             end = line.find(")", start)
             rel = line[start:end]
             assert (bundle.root / rel).exists(), f"link does not resolve: {rel}"
+
+
+def test_migrate_concepts_dir_roundtrip(tmp_path):
+    """An old bundle with a concepts/ directory is transparently migrated to
+    articles/ on the first WikiIndex.load() call. Idempotent: a second load
+    is a no-op and returns the same pages.
+    """
+    root = tmp_path / "bundle"
+    old_dir = root / "concepts"
+    old_dir.mkdir(parents=True)
+    page_text = (
+        "---\n"
+        "id: Photocatalysis\n"
+        "kind: concept\n"
+        "title: Photocatalysis\n"
+        "aliases: []\n"
+        "links: []\n"
+        "---\n"
+        "\n# Photocatalysis\n\nBody.[^e1]\n\n"
+        "## Evidence\n\n"
+        '[^e1]: c1 (doc1) > "q"\n'
+    )
+    (old_dir / "Photocatalysis.md").write_text(page_text, encoding="utf-8")
+
+    bundle = BundlePaths(root=root)
+    # First load: migration happens.
+    idx = WikiIndex.load(bundle)
+
+    assert not (root / "concepts").exists(), "concepts/ should have been renamed"
+    assert (root / "articles").exists(), "articles/ should now exist"
+    assert "Photocatalysis" in idx
+
+    # Frontmatter kind rewritten to "article".
+    migrated_text = (root / "articles" / "Photocatalysis.md").read_text(encoding="utf-8")
+    assert "kind: article" in migrated_text
+
+    # Second load: idempotent, still finds the page.
+    idx2 = WikiIndex.load(bundle)
+    assert "Photocatalysis" in idx2
+    assert not (root / "concepts").exists()

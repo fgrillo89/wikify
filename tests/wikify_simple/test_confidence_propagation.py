@@ -13,7 +13,7 @@ def _cand(title: str, chunk_id: str, doc_id: str, *, label="extracted", score=1.
         concept=ExtractedConcept(
             title=title,
             aliases=[],
-            kind="concept",
+            kind="article",
             quote=f"{title} appears in this chunk for testing.",
             confidence=label,
             score=score,
@@ -27,7 +27,7 @@ def test_default_confidence_extracted_score_one():
     c = ExtractedConcept(
         title="Memristor",
         aliases=[],
-        kind="concept",
+        kind="article",
         quote="Memristor is a two-terminal device.",
     )
     assert c.confidence == "extracted"
@@ -62,7 +62,7 @@ def _make_bundle_with_confidence(tmp_path, conf_a: float, conf_b: float) -> Bund
     pages = [
         Page(
             id="p-a",
-            kind="concept",
+            kind="article",
             title="A",
             aliases=[],
             links=[],
@@ -76,7 +76,7 @@ def _make_bundle_with_confidence(tmp_path, conf_a: float, conf_b: float) -> Bund
         ),
         Page(
             id="p-b",
-            kind="concept",
+            kind="article",
             title="B",
             aliases=[],
             links=[],
@@ -90,7 +90,7 @@ def _make_bundle_with_confidence(tmp_path, conf_a: float, conf_b: float) -> Bund
         ),
         Page(
             id="p-c",
-            kind="concept",
+            kind="article",
             title="C",
             aliases=[],
             links=[],

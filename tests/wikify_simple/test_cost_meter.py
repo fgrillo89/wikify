@@ -16,7 +16,7 @@ def _meter(tmp_path) -> CostMeter:
 def _write_req(n_figures: int) -> WriteRequest:
     return WriteRequest(
         page_id="concept-x",
-        page_kind="concept",
+        page_kind="article",
         title="X",
         aliases=[],
         skeleton="",

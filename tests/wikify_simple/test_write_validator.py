@@ -279,7 +279,7 @@ def _request(
 ) -> WriteRequest:
     return WriteRequest(
         page_id="concept-x",
-        page_kind="concept",
+        page_kind="article",
         title="Example Concept",
         aliases=[],
         skeleton="",

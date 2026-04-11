@@ -17,7 +17,7 @@ def _page(
 ) -> Page:
     return Page(
         id=pid,
-        kind="concept",
+        kind="article",
         title=title,
         aliases=[],
         links=[],

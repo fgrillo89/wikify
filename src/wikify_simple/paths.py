@@ -69,8 +69,8 @@ class BundlePaths:
     root: Path
 
     @property
-    def concepts_dir(self) -> Path:
-        return self.root / "concepts"
+    def articles_dir(self) -> Path:
+        return self.root / "articles"
 
     @property
     def people_dir(self) -> Path:
@@ -105,6 +105,6 @@ class BundlePaths:
         return self.meta_dir / "coverage_memory.json"
 
     def ensure(self) -> None:
-        self.concepts_dir.mkdir(parents=True, exist_ok=True)
+        self.articles_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)
         self.meta_dir.mkdir(parents=True, exist_ok=True)

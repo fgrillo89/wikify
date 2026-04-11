@@ -114,7 +114,7 @@ def _fake_extract_payload(request: ExtractRequest) -> dict:
             {
                 "title": tok,
                 "aliases": [],
-                "kind": "concept",
+                "kind": "article",
                 "quote": quote,
                 # Tag the first fake concept with a facet so tests can
                 # exercise the ``category`` round-trip without forcing

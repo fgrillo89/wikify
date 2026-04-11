@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Literal
 
 DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
-PageKind = Literal["concept", "person"]
+PageKind = Literal["article", "person"]
 
 
 # --- Corpus side ---------------------------------------------------------

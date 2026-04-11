@@ -18,7 +18,7 @@ def load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
     from ..eval.bundle import _parse_page
 
     pages: list[WikiPage] = []
-    for sub in ("concepts", "people"):
+    for sub in ("articles", "people"):
         page_dir = bundle.root / sub
         if not page_dir.exists():
             continue

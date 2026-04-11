@@ -84,7 +84,7 @@ def test_compose_writer_prompt_orders_layers() -> None:
         field=field,
         artifact=artifact,
         persona=persona,
-        page_kind="concept",
+        page_kind="article",
     )
     # Order: persona -> style -> field -> artifact -> composer footer
     assert composed.index("Author Persona") < composed.index("Academic Writing Style Guide")
@@ -94,7 +94,7 @@ def test_compose_writer_prompt_orders_layers() -> None:
     assert composed.index("Field-Specific Writing Guide") < composed.index("Output Template")
     assert composed.index("Output Template") < composed.index("Composition")
     assert "atomic layer deposition" in composed
-    assert 'kind="concept"' in composed
+    assert 'kind="article"' in composed
     assert len(composed) > 6000
 
 
@@ -104,7 +104,7 @@ def test_compose_writer_prompt_uses_generic_persona_when_empty() -> None:
         field="FIELD",
         artifact="ARTIFACT",
         persona=None,
-        page_kind="concept",
+        page_kind="article",
     )
     assert "senior domain expert" in composed
 
@@ -112,7 +112,7 @@ def test_compose_writer_prompt_uses_generic_persona_when_empty() -> None:
 def test_write_request_accepts_layered_fields() -> None:
     req = WriteRequest(
         page_id="p1",
-        page_kind="concept",
+        page_kind="article",
         title="Atomic Layer Deposition",
         aliases=[],
         skeleton="",
@@ -135,7 +135,7 @@ def test_write_request_accepts_layered_fields() -> None:
 def test_write_request_layered_fields_default_to_empty() -> None:
     req = WriteRequest(
         page_id="p1",
-        page_kind="concept",
+        page_kind="article",
         title="X",
         aliases=[],
         skeleton="",

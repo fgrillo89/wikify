@@ -1,7 +1,7 @@
 """Static HTML site renderer for a wikify_simple bundle.
 
 Walks a
-bundle's ``concepts/`` and ``people/`` directories, parses each page
+bundle's ``articles/`` and ``people/`` directories, parses each page
 through the canonical ``eval.bundle._parse_page`` parser, runs the
 markdown body through ``python-markdown`` (with the ``footnotes``,
 ``tables``, ``attr_list``, ``def_list``, and ``pymdownx.superfences``
@@ -91,7 +91,7 @@ def build_site(
         if pv.has_prose and not (pv.kind == "person" and not _is_valid_author(pv.title))
     ]
     concepts = sorted(
-        [pv for pv in page_views if pv.kind == "concept"],
+        [pv for pv in page_views if pv.kind == "article"],
         key=lambda v: v.title.lower(),
     )
     people = sorted(
@@ -183,7 +183,7 @@ class _PageView:
 
     @classmethod
     def from_page(cls, page: Page) -> Self:
-        sub = "concepts" if page.kind == "concept" else "people"
+        sub = "articles" if page.kind == "article" else "people"
         excerpt = ""
         for line in page.body_clean.splitlines():
             stripped = line.strip()
@@ -305,10 +305,10 @@ def _render_article(
                 seen_ids.add(candidate.id)
                 see_also.append({"title": candidate.title, "url": candidate.url})
 
-    # Build infobox for concept pages.
+    # Build infobox for article pages.
     infobox = {}
-    if pv.kind == "concept":
-        infobox["Type"] = "Concept"
+    if pv.kind == "article":
+        infobox["Type"] = "Article"
         if pv.n_evidence:
             infobox["Sources"] = str(pv.n_evidence)
     elif pv.kind == "person":

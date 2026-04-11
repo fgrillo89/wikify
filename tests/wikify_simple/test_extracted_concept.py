@@ -35,12 +35,12 @@ def test_concept_with_category_accepted():
     c = ExtractedConcept(
         title="Atomic Layer Deposition",
         aliases=["ALD"],
-        kind="concept",
+        kind="article",
         quote="ALD is a self-limiting process.",
         category="method",
     )
     assert c.category == "method"
-    assert c.kind == "concept"
+    assert c.kind == "article"
 
 
 def test_person_without_category_accepted():
@@ -71,7 +71,7 @@ def test_title_too_short_rejected():
         ExtractedConcept(
             title="A",
             aliases=[],
-            kind="concept",
+            kind="article",
             quote="too short title case.",
         )
 
@@ -81,7 +81,7 @@ def test_title_stopword_rejected():
         ExtractedConcept(
             title="the",
             aliases=[],
-            kind="concept",
+            kind="article",
             quote="stopword title should be rejected.",
         )
 
@@ -91,7 +91,7 @@ def test_title_trailing_punctuation_rejected():
         ExtractedConcept(
             title="memristor,",
             aliases=[],
-            kind="concept",
+            kind="article",
             quote="Trailing punctuation should trip the hygiene rule.",
         )
 
@@ -100,7 +100,7 @@ def test_title_whitespace_stripped():
     c = ExtractedConcept(
         title="  memristor  ",
         aliases=[],
-        kind="concept",
+        kind="article",
         quote="Memristor is a two-terminal device.",
     )
     assert c.title == "memristor"
@@ -110,7 +110,7 @@ def test_aliases_dedupe_case_insensitive():
     c = ExtractedConcept(
         title="Atomic Layer Deposition",
         aliases=["ALD", "ald", "ALD ", "A.L.D.", "ald"],
-        kind="concept",
+        kind="article",
         quote="ALD is a self-limiting process.",
     )
     # 'ALD' and 'ald' and 'ALD ' collapse to one; 'A.L.D.' is a distinct key
@@ -123,7 +123,7 @@ def test_aliases_drops_entries_equal_to_title():
     c = ExtractedConcept(
         title="Memristor",
         aliases=["memristor", "MEMRISTOR", "ReRAM"],
-        kind="concept",
+        kind="article",
         quote="Memristor is a two-terminal device.",
     )
     assert [a.lower() for a in c.aliases] == ["reram"]
@@ -133,7 +133,7 @@ def test_aliases_capped_at_eight():
     c = ExtractedConcept(
         title="HfO2",
         aliases=[f"alias{i}" for i in range(20)],
-        kind="concept",
+        kind="article",
         quote="HfO2 is a common high-k dielectric.",
     )
     assert len(c.aliases) == 8
@@ -143,7 +143,7 @@ def test_quote_stripped_and_length_enforced():
     c = ExtractedConcept(
         title="HfO2",
         aliases=[],
-        kind="concept",
+        kind="article",
         quote="   HfO2 layers.   ",
     )
     assert c.quote == "HfO2 layers."
@@ -154,7 +154,7 @@ def test_quote_too_short_rejected():
         ExtractedConcept(
             title="HfO2",
             aliases=[],
-            kind="concept",
+            kind="article",
             quote="   x   ",
         )
 
@@ -220,7 +220,7 @@ def test_quote_not_in_chunk_rejected_by_binding(tmp_path):
             {
                 "title": "Atomic Layer Deposition",
                 "aliases": ["ALD"],
-                "kind": "concept",
+                "kind": "article",
                 "quote": "A paraphrase that never appeared in the source chunk verbatim.",
                 "category": "method",
                 "evidence_figures": [],
@@ -269,7 +269,7 @@ def test_noisy_quote_accepted_by_binding(tmp_path):
             {
                 "title": "Memristor",
                 "aliases": [],
-                "kind": "concept",
+                "kind": "article",
                 # citation stripped, em-dash -> hyphen, double space collapsed
                 "quote": "the memristor was first described by chua - a theoretical device",
                 "category": "device",

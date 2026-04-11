@@ -207,7 +207,7 @@ def _extract_concepts(chunk_text: str, canonical_titles: list[str]) -> list[dict
             {
                 "title": title,
                 "aliases": aliases,
-                "kind": "concept",
+                "kind": "article",
                 "category": category,
                 "quote": quote,
             }
