@@ -65,7 +65,7 @@ class _FakeDispatcher:
                             {
                                 "title": f"Concept-{payload['chunk_id']}",
                                 "aliases": [],
-                                "kind": "concept",
+                                "kind": "article",
                                 "quote": quote,
                                 "evidence_figures": [],
                             }
@@ -153,7 +153,7 @@ def test_extract_many_cache_hit_skips_dispatch(tmp_path: Path) -> None:
                         {
                             "title": f"Cached-{cid}",
                             "aliases": [],
-                            "kind": "concept",
+                            "kind": "article",
                             "quote": f"Text about {cid}",
                             "category": None,
                         }
