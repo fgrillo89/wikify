@@ -185,12 +185,14 @@ class LlmPolicy:
                 docs_covered=ctx.docs_covered,
                 docs_total=ctx.docs_total,
                 last_actions=self._last_actions[-16:],
+                sampler_snapshot=_build_sampler_snapshot(state),
             )
             action = self._orchestrator.step(orch_state)
             action_name = action.name
             action_args = dict(action.args or {})
             # Cache active sampling actions so we don't pay a tier-L call
-            # per batch. Control actions (set_*, done) are never cached.
+            # per batch. Control actions (set_*, done) and pick_chunks are
+            # never cached (pick_chunks is already targeted; no reason to repeat).
             _cacheable = ("walk_local", "jump_uniform", "jump_pagerank", "jump_gap", "jump_figures")
             if action_name in _cacheable:
                 self._cached_action_name = action_name
@@ -203,17 +205,18 @@ class LlmPolicy:
             cached = False
         self._last_actions.append(action_name)
         decision = self._execute_orch_action(state, k, action_name, action_args)
-        self._events.append(
-            {
-                "stage": "extract",
-                "policy": "llm_policy",
-                "action": action_name,
-                "n_chunks": len(decision.batch),
-                "stop": decision.stop,
-                "args": action_args,
-                "cached": cached,
-            }
-        )
+        event: dict = {
+            "stage": "extract",
+            "policy": "llm_policy",
+            "action": action_name,
+            "n_chunks": len(decision.batch),
+            "stop": decision.stop,
+            "args": action_args,
+            "cached": cached,
+        }
+        if action_name == "pick_chunks":
+            event["reason"] = action_args.get("reason", "")
+        self._events.append(event)
         return decision
 
     def order_write_pages(
@@ -247,6 +250,16 @@ class LlmPolicy:
         match name:
             case "done":
                 return ExtractDecision(action=name, batch=(), stop=True)
+            case "pick_chunks":
+                raw_ids = args.get("chunk_ids") or []
+                reason = str(args.get("reason", ""))
+                # Deduplicate against already-seen chunks.
+                novel = [cid for cid in raw_ids if cid not in state.seen_chunks]
+                return ExtractDecision(
+                    action=name,
+                    batch=tuple(novel[:k]),
+                    meta={"reason": reason, "n_requested": len(raw_ids), "n_novel": len(novel)},
+                )
             case "jump_uniform" | "jump_pagerank" | "jump_gap":
                 n_docs = max(1, _int_arg(args, "n_docs", 1))
                 picks: list[str] = []
@@ -298,6 +311,64 @@ class LlmPolicy:
                     batch=tuple(batch),
                     stop=not bool(batch),
                 )
+
+
+def _build_sampler_snapshot(state: SamplerState) -> dict:
+    """Build the compact sampler snapshot for the orchestrator.
+
+    Caps:
+    - top_gap_chunks: top-20 by coverage residual
+    - page_index: top-50 pages by evidence count (derived from seen_chunks count per page)
+    - doc_coverage: all docs with any seen chunks
+    - content_stats: aggregate counts
+
+    Total payload is ~2-4 kB of JSON.
+    """
+    # top_gap_chunks: top-20 unseen chunks by coverage residual descending.
+    residuals = getattr(state, "coverage_residuals", {})
+    seen = getattr(state, "seen_chunks", set())
+    doc_seen_counts = getattr(state, "doc_seen_counts", {})
+    chunk_to_doc = getattr(state, "chunk_to_doc", {})
+    if residuals:
+        top_by_residual = sorted(
+            (
+                (cid, r)
+                for cid, r in residuals.items()
+                if cid not in seen
+            ),
+            key=lambda x: -x[1],
+        )[:20]
+    else:
+        top_by_residual = []
+
+    top_gap_chunks = [
+        {
+            "chunk_id": cid,
+            "doc_id": chunk_to_doc.get(cid, ""),
+            "residual": round(r, 4),
+        }
+        for cid, r in top_by_residual
+    ]
+
+    # doc_coverage: {doc_id: n_chunks_seen} for docs with at least one seen chunk.
+    doc_coverage = {
+        doc_id: count
+        for doc_id, count in doc_seen_counts.items()
+        if count > 0
+    }
+
+    # content_stats: aggregate counts from SamplerState.
+    n_seen = len(seen)
+    content_stats = {
+        "n_chunks": len(chunk_to_doc),
+        "n_seen": n_seen,
+    }
+
+    return {
+        "top_gap_chunks": top_gap_chunks,
+        "doc_coverage": doc_coverage,
+        "content_stats": content_stats,
+    }
 
 
 def build_policy(
