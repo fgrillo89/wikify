@@ -350,7 +350,241 @@ Expect 0 or near-0 write requests with empty `dossier_context_yaml`. A high coun
 
 ---
 
-## Part 8 — What the previous run missed
+## Part 8 — Verbalization-driven refinement (ad-hoc runs)
+
+Distill and campaign accept `--verbalize` (off by default). When set, every extract, write, and orchestrator call includes a 1-3 sentence `reasoning` field on its response and the pipeline appends each to `<bundle>/_meta/verbalize.jsonl`:
+
+```json
+{"run_id": "...", "when": "2026-04-11T15:23:11+00:00", "role": "write", "rid": "Atomic Layer Deposition", "reasoning": "..."}
+```
+
+### 8.1 When to use it
+
+- **Ad-hoc diagnostic runs only.** Verbalization adds ~30-60 tokens per call. Do NOT leave it on for production campaigns.
+- **Before refining a handler skill.** If a handler is producing thin output, run a 1-iteration verbalized scripted run on mvp20_v6 and read the reasoning lines. The model's own explanation of its choices is the fastest signal that the skill prompt is ambiguous, under-specified, or contradicting itself.
+- **After changing the sampler, policy, or budget allocation.** The orchestrator reasoning lines show whether the policy is picking actions for the reasons you expected.
+
+### 8.2 How to read the log
+
+```bash
+BUNDLE=data/wikify_simple/test_runs/scripted
+jq -r '[.role, .rid, (.reasoning | .[:80])] | @tsv' $BUNDLE/_meta/verbalize.jsonl | head -30
+```
+
+Group by `role`. Look for:
+- **Repeated excuses** ("evidence was too thin", "chunk had no structure") — tighten the upstream stage (usually sampler or extract prompt).
+- **Disagreement between writer reasoning and produced body** — the skill prompt is ambiguous; rewrite the relevant section of `handlers/write.md`.
+- **Orchestrator picking actions for unrelated reasons** — the sampler_snapshot isn't giving the orchestrator what it needs; revisit Phase 3.
+
+### 8.3 Feeding findings back into skills
+
+After every verbalized run: write a 5-bullet summary of what the reasoning revealed AND a concrete edit to a handler skill (usually 1-3 lines). Commit the edit with a message referencing the specific verbalize entries that motivated it. This turns the playbook into a closed loop: run → read reasoning → edit skill → re-run.
+
+---
+
+## Part 9 — Editor review of dossiers (prompting / budget refinement)
+
+The dossier layer (`<bundle>/_dossiers/<slug>.json`) is the authoritative staging ground for the writer. If dossiers are thin, the writer cannot produce a Wikipedia-quality article no matter how good the skill prompt is. Budget spent on extract that does not land in a substantive dossier is wasted.
+
+### 9.1 The editor check (read every dossier for one page like an editor)
+
+For each of 3 sampled pages (one large, one medium, one thin-evidence):
+
+1. Open `<bundle>/_dossiers/<slug>.json`.
+2. For EACH entry, answer:
+   - **Does the `definition` explain what the concept IS in 50-200 words?** An empty or single-sentence definition is a failure.
+   - **Does the `summary` explain how THIS chunk's content contributes to the concept in 80-200 words?** Should be specific to the chunk (e.g. "this chunk shows that HfO2 ALD growth rate saturates at 1.1 Å/cycle at 200 °C"), not generic.
+   - **Are parameters, mechanisms, and relationships populated where the chunk supports them?** Empty is OK only if the chunk genuinely has no quantitative or mechanistic content.
+   - **Is the chunk's `section_type` one of `abstract | methods | results | discussion | introduction`?** Anything in `references/acknowledgments/appendix` should not be here — if present, the sampler filter is broken.
+3. Count: entries that pass all four / entries that fail.
+4. If >20% of entries fail, the write budget is being spent on empty context. Two levers:
+   - **Tighten the extract handler prompt** (already requires 50-200 word definitions and 80-200 word summaries — but the model may still ignore). Add 2-3 concrete BAD vs GOOD examples from the actual failing entries.
+   - **Shift budget** from extract to write (reduce `exploit_fraction`) or from write to extract (raise it) depending on which phase is starving.
+
+### 9.2 Dossier evolution across iterations
+
+In a multi-iteration campaign, dossiers should GROW in substantive content, not just in entry count. Compare `_meta/io_lineage/<run_id>/dossier_entries.json` across iterations:
+
+```bash
+for f in $BUNDLE/_meta/io_lineage/*/dossier_entries.json; do
+  python -c "import json,sys; d=json.load(open('$f')); subs=sum(1 for e in d if e.get('is_substantive')); print('$f', len(d), subs)"
+done
+```
+
+Substantive fraction should rise across iterations. If it stays flat, refine loops are repeating the same extract mistakes.
+
+---
+
+## Part 10 — Wikipedia-exemplar quality review
+
+### 10.1 Reference pages (mandatory reads before review)
+
+For the mvp20_v6 corpus (memristor + ALD + HfOx + neuromorphic), the two reference Wikipedia pages to compare against are:
+
+- **<https://en.wikipedia.org/wiki/Memristor>** — directly overlaps corpus content. Canonical example of an article covering a device concept with history, physics, theoretical debate, and applications, all in neutral voice with inline citations.
+- **<https://en.wikipedia.org/wiki/Atomic_layer_deposition>** — materials-science article covering the process, mechanism, precursor chemistry, and device applications. Canonical example of a process/method article grounded in quantitative detail.
+
+Before reviewing ANY generated page, read both reference pages end-to-end. Then when reviewing a generated page, ask: "If a reader landed on this page expecting Wikipedia-quality content, would they feel they got it?"
+
+### 10.2 The wiki reviewer role (prompt template)
+
+When you need an independent quality pass, spawn a reviewer subagent with this role prompt:
+
+```
+You are a scientific encyclopedia editor with expertise in solid-state
+electronics and thin-film materials. Your job: review a generated wiki
+page against the Wikipedia Manual of Style and against two exemplar
+reference pages (Memristor, Atomic layer deposition).
+
+For each page I give you, produce:
+
+1. **Fidelity to evidence**: does every claim in the page have a
+   matching [^eN] marker whose evidence entry actually supports the
+   claim? Sample 3 random claims and verify.
+
+2. **Structure vs exemplar**: does the page's section layout match the
+   information-density pattern of the reference pages (lead,
+   mechanism/process sections, applications, open questions,
+   references)? Flag missing or redundant sections.
+
+3. **Prose quality**: is the prose neutral, declarative, connected?
+   Are there em-dashes as parenthetical separators, meta-commentary
+   about "the corpus", hedged superlatives, or rule-of-three reflexes?
+
+4. **Specificity**: does the page cite specific numbers, techniques,
+   and conditions, or does it generalize vaguely? Wikipedia articles
+   on materials name specific films, temperatures, and precursors.
+
+5. **One concrete structural improvement** I could make by editing
+   the handler skill or the artifact template.
+
+6. **One concrete structural improvement** I could make by changing
+   the extract prompt or the sampler.
+
+Produce your output as a scored rubric (1-5 per dimension) plus the
+two improvement suggestions. Do not hedge.
+```
+
+The reviewer runs at tier L (editor-level). It is NOT part of the distill loop — it is invoked explicitly during playbook review.
+
+### 10.3 Detailed quality checklist (applied per page)
+
+For each sampled page, walk this list and mark each item PASS/FAIL/PARTIAL. The playbook declares the run "good" only when >=90% of items PASS across the sample.
+
+**Lead section**:
+- [ ] First sentence bolds the page title.
+- [ ] First sentence is a single-clause "X is a Y" definition, <=20 words.
+- [ ] Lead paragraph is 3-5 sentences, self-contained, no jargon that isn't defined or resolvable from context.
+- [ ] Lead paragraph cites at least one `[^eN]` marker.
+- [ ] No meta-commentary ("this article appears in the corpus", "we examine").
+
+**Body structure**:
+- [ ] At least 2 non-appendix `## H2` sections before `## References`.
+- [ ] Section labels are meaningful (Background, Mechanism, Applications, etc.), not placeholder.
+- [ ] Sections are in a reader-friendly order: context -> mechanism -> applications -> open questions.
+- [ ] No section has fewer than 2 paragraphs.
+- [ ] No section exceeds 8 paragraphs without sub-headings.
+
+**Prose quality**:
+- [ ] Zero em-dashes as parenthetical separators.
+- [ ] Zero `[[wikilinks]]` leaking into prose.
+- [ ] Active voice in results/discussion, passive in methods.
+- [ ] One concept per sentence; one relative clause max.
+- [ ] Specific numbers, not "several" / "some" / "many".
+- [ ] No rule-of-three reflexes ("A, B, and C" triplets every sentence).
+
+**Evidence and citations**:
+- [ ] Every in-prose `[^eN]` marker has a matching `[^eN]:` definition.
+- [ ] Every `[^eN]:` definition includes a real `chunk_id` (not a placeholder).
+- [ ] Claims are evenly cited (no 10-sentence paragraph with one citation at the end).
+- [ ] Quantitative claims cite the specific evidence that contains the number.
+
+**Figures**:
+- [ ] Every embedded `![Figure N](path)` has a preceding sentence mentioning "Figure N".
+- [ ] Figures are placed next to the relevant section, not grouped at the top.
+- [ ] No broken figure paths.
+
+**Cross-links**:
+- [ ] `## See also` (if present) lists only pages that actually exist in the bundle.
+- [ ] The page is reachable from the index.
+- [ ] The page's own links (from frontmatter) resolve.
+
+**Comparison vs Wikipedia exemplar**:
+- [ ] The page has the same TYPE of sections as the exemplar (process article vs device article vs person article).
+- [ ] Information density is comparable — no paragraphs that are a single sentence with four citations.
+- [ ] The page would NOT embarrass a subject-matter expert if published unedited.
+
+### 10.4 Walkthrough procedure
+
+1. Pick 5 generated pages: 1 large article, 1 small article, 1 people page with `author_context`, 1 people page WITHOUT `author_context`, 1 page in the middle of a cross-link cluster.
+2. Open each in the rendered HTML (`_html/articles/<id>.html` / `_html/people/<id>.html`), NOT the markdown.
+3. Walk the checklist. Mark every item.
+4. For any FAIL, note the file and line range AND a hypothesis about which upstream stage caused it (extract prompt, sampler, writer prompt, artifact template, validator).
+5. Produce a per-page summary and an aggregate pass rate.
+
+---
+
+## Part 11 — Autoresearch-inspired improvement loop
+
+Inspired by Karpathy's autoresearch: run, evaluate, diff, refine, re-run. Stop when a quality target is met or budget is exhausted. The loop is designed to improve BOTH page quality and cost/wall-time.
+
+### 11.1 Target metrics (decided before the loop starts)
+
+Pick 3 metrics and set explicit target values. Example targets for mvp20_v6 scripted runs:
+
+| Metric | Baseline (current) | Target | Hard floor |
+|---|---|---|---|
+| `M1_coverage_residual` | 0.45 | <= 0.35 | 0.50 |
+| Reviewer checklist pass rate | ~60% | >= 85% | 50% |
+| `wall_seconds` per iteration | 280 | <= 180 | 360 |
+| `budget_used_haiku_eq` | 49000 | <= 45000 | 52500 |
+| `dossier_summary.n_empty / n_total` | 0.25 | <= 0.10 | 0.30 |
+
+"Hard floor" means "stop the loop and escalate if a run falls BELOW this." The loop is not allowed to trade one metric for another past the floors.
+
+### 11.2 Loop steps
+
+Each iteration of the autoresearch loop:
+
+1. **Run**: `wikify-simple campaign --strategy M --iterations 3 --budget 50000 --bundle data/wikify_simple/test_runs/loop_<iter> --verbalize --policy rule_policy` (and again with `llm_policy`).
+2. **Render + eval**: `wikify-simple html --bundle <bundle>` and `wikify-simple eval --bundle <bundle> --corpus <corpus>`.
+3. **Playbook review**: walk Parts 5, 7, 8, 9, 10 in order. Produce the reviewer checklist pass rate (Part 10.3).
+4. **Diff**: compare the 5 metrics to the previous iteration's values. Identify the biggest regression and the biggest gap-vs-target.
+5. **Refine**: make ONE targeted edit to the skills/code that addresses the biggest gap. Candidates:
+   - Handler skill prompt (tighten a rule based on verbalize.jsonl findings).
+   - Extract handler BAD/GOOD examples (based on dossier editor review).
+   - Sampler filter or policy action (e.g. add a new `jump_*` op).
+   - Budget split (`--exploit-fraction`).
+   - Artifact template (`wiki_article.md`, `wiki_person.md`).
+6. **Commit** the refine with a message referencing the specific metric and reviewer finding that motivated it.
+7. **Re-run** from step 1.
+
+### 11.3 Termination
+
+The loop stops when:
+- ALL 3 picked metrics hit their targets (success), OR
+- Any metric drops below its hard floor (escalate to the user), OR
+- The same refine step fails to move the metrics twice in a row (local minimum; escalate).
+
+### 11.4 What to track across the loop
+
+Keep a running `autoresearch.md` file at the repo root (not in the bundle — this is the loop's logbook):
+
+```
+## Iteration N (2026-04-11)
+- Run: campaign_M_3i_50k_scripted
+- Metrics: M1=0.42 (-0.03), reviewer=72% (+12), wall=210s (-70)
+- Verbalize findings: writer keeps repeating "extends existing page" without a match
+- Refine: added 2 concrete BAD/GOOD extend examples to handlers/write.md
+- Commit: abc123
+- Hypothesis: extend judgment will improve next iter
+```
+
+This file is NEVER auto-generated. It's written by the human loop driver (or a dedicated autoresearch agent) after each iteration, because the whole point is to force the driver to articulate the hypothesis.
+
+---
+
+## Part 12 — What the previous run missed
 
 For calibration: this playbook was written after a review that declared the scripted run "high quality" based solely on the markdown of one well-written page. The actual rendered output had five concrete failures that a 10-minute HTML walkthrough would have caught:
 
