@@ -1,94 +1,105 @@
 # Wiki Person Page -- Output Template
 
 Use this template for `kind="person"` pages in the wikify_simple wiki.
-Person pages start as deterministic skeletons built from document metadata
-and parsed citations by `distill/author_pages.py`. When enough evidence
-accumulates from chunk extraction (the extractor finds this person discussed
-substantively in the corpus), the writer enriches the page with model-generated
-prose sections.
+Every person page is written entirely by the model from the supplied
+evidence and `author_context`. There is no deterministic skeleton to preserve.
 
-This person may be a researcher, inventor, executive, historical figure, or
-any named individual who is discussed substantively in the corpus. Do not
-assume they are an academic.
+## Lead Section (no heading)
 
-## Voice And Stance
+**Full author lead pattern** (use when `author_context` is present):
 
-- Neutral biographical voice, third person, Wikipedia-style. Past tense for
-  biographical facts; present tense for ongoing affiliation when known.
-- No invented biographical detail. Only facts derivable from the supplied
-  evidence list and the deterministic skeleton.
-- Do NOT use `[[wikilinks]]` in the model-written prose sections. The
-  deterministic sections (Publications, Collaborators) use wikilinks; the
-  model-enriched sections must stay clean for the crosslink pass.
+> `**Full Name** (year-range) is a [field] [role] known for [contribution
+> grounded in evidence].`
 
-## Two-Tier Structure
+The year-range is the span of publication years in `author_context`
+(`first_year`--`last_year`). Omit the range if neither year is available.
+Omit nationality when unknown. Use present tense for active researchers;
+past tense for deceased persons.
 
-### Tier 1 -- Deterministic (always present, never rewritten by the model)
+**Mentioned-person lead pattern** (use when `author_context` is None or
+the person is not a corpus author):
 
-These sections are produced by `distill/author_pages.py` from metadata.
-When the writer receives a person page, these sections appear in the
-`skeleton` field. The writer MUST preserve them verbatim in the output.
+> `**Name** is credited with [specific contribution grounded in evidence].[^e1]`
 
-- **Publications in this corpus**: bullet list of primary-metadata papers
-  formatted as `- {Year}. [[Title]]`
-- **Cited works in this corpus**: bullet list of works by this person found
-  in reference lists of other corpus papers
-- **Collaborators**: bullet list of co-authors as `- [[Name]]`
+Keep the lead short and factual. Never invent biography not derivable from
+the evidence.
 
-### Tier 2 -- Model-enriched (only when evidence exists, written by the model)
+**Example (full author):**
 
-These sections are written by the model based on the supplied evidence.
-They appear BEFORE the Tier 1 sections in the final page.
+> **Bhaswar Chakrabarti** (2015--2019) is a materials scientist known for
+> investigating switching uniformity and endurance in HfO2-based
+> memristors.[^e1]
 
-- **Lead paragraph**: opens with the person's full name in bold. Expands
-  beyond the deterministic stub to describe what the corpus says about
-  this person's contributions, methodology, and role. Grounded in evidence.
-- **Research focus** (or "Professional focus" for non-academics): 2-4
-  sentences on the person's primary area of work as described in the
-  evidence. Do not fabricate biography.
-- **Significance**: what makes this person notable in the context of this
-  corpus. 2-3 sentences grounded in evidence.
+**Example (mentioned person):**
 
-### Final page layout
+> **Leon Chua** is credited with predicting the memristor as the fourth
+> fundamental circuit element in 1971.[^e1]
+
+## Body Sections (required: at least 2 H2 before the appendix group)
+
+### Required sections
+
+- `## Research` or `## Contributions` -- primary area of work, grounded
+  in evidence quotes. 2-5 paragraphs. Required.
+
+- `## Publications` -- list of primary publications from
+  `author_context.primary_publications`. Format each as:
+
+  ```
+  - {Year}. {Title}. {Venue}.
+  ```
+
+  Blank line between entries so Markdown renders a real `<ul>`.
+  Omit this section entirely when `author_context` is None or
+  `author_context.primary_publications` is empty.
+
+### Optional sections (include only when evidence supports)
+
+- `## Education` -- degrees, institutions, advisors
+- `## Career` -- positions, affiliations, timeline
+- `## Collaborations` -- co-authors and collaborative projects
+- `## Legacy` -- influence, citations, recognition
+
+## Appendix Group (fixed order)
+
+1. `## References` -- **required, always last**
+
+## References Format
+
+One `[^eN]:` line per cited evidence entry:
 
 ```
-{Tier 2 lead paragraph}
-
-## Research focus
-{Tier 2 content}
-
-## Significance
-{Tier 2 content}
-
-## Notable contributions
-{from skeleton, if present}
-
-## Publications in this corpus
-{from skeleton, if present}
-
-## Cited works in this corpus
-{from skeleton, if present}
-
-## Collaborators
-{from skeleton, if present}
-
-## References
-[^e1]: ...
+[^eN]: <full_chunk_id> (<doc_id>) > "<exact_quote>"
 ```
 
-## Evidence Markers
+Copy `chunk_id` and `doc_id` verbatim from the supplied evidence list.
 
-Use `[^eN]` markers in Tier 2 prose to cite the supplied evidence list.
-Every factual claim must be grounded. The `## References` section at the
-end contains one `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line per
-evidence entry the prose actually cited.
-
-## Hard Minimums (enforced by the validator)
+## Hard Minimums (the validator will reject the response otherwise)
 
 - Total body length >= 1200 characters.
-- At least one `## H2` heading in the body.
-- At least three paragraphs of prose outside the References section.
-- At least one `[^eN]` marker somewhere in the prose.
-- No `[[wikilinks]]` in model-written prose.
-- Final `## References` section with >= 1 `[^eN]:` definition.
-- Every `[^eN]` marker in the prose has a matching definition.
+- Lead paragraph present (bold name in first sentence, no heading).
+- At least 2 `## H2` headings in the body before `## References`.
+- At least 3 paragraphs of prose outside the References section.
+- At least one `[^eN]` marker in the prose.
+- No `[[wikilinks]]` anywhere in the body.
+- Final `## References` section with at least one `[^eN]:` definition.
+- Every `[^eN]` marker in the prose has a matching definition in References.
+
+## Robustness to Missing Context
+
+When `author_context` is None (a mentioned-but-not-authored person), the
+page degrades gracefully: use the mentioned-person lead pattern, write a
+short biographical sketch from evidence quotes only, and omit Publications.
+The page must still meet the hard minimums above.
+
+## Banned Phrases
+
+Never write any of the following:
+
+- "appears in this corpus"
+- "mentioned in this corpus only through citations"
+- "in this corpus"
+- "this corpus contains"
+- "in this article"
+- "as discussed above"
+- first-person references to the work ("we examine", "we show", "our analysis")

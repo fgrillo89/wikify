@@ -139,7 +139,7 @@ def distill(
         ),
     ),
     artifact: str = typer.Option(
-        "wiki_concept",
+        "wiki_article",
         "--artifact",
         help="Artifact template to layer into the writer prompt",
     ),

@@ -115,7 +115,7 @@ class StrategyConfig:
     model_id: str = "haiku"
     seed: int = 0
     field_name: str = "generic"
-    artifact_name: str = "wiki_concept"
+    artifact_name: str = "wiki_article"
     policy_name: str = "rule_policy"
 
 
