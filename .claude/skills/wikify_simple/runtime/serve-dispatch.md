@@ -21,7 +21,7 @@ The dispatch roles are:
 
 ## Steps
 1. Resolve the dispatch dir (env var `WIKIFY_SIMPLE_DISPATCH_DIR` or default `data/dispatch`).
-2. Poll every 250ms for files matching `*/<rid>.request.json`. Process them in arrival order.
+2. Poll every 50ms for files matching `*/<rid>.request.json`. On each tick, scan the entire dispatch dir and collect ALL pending request files before processing any. Where the hosting Claude Code session supports parallel tool invocations, dispatch all pending handlers concurrently rather than sequentially — this is what allows `extract_many` to achieve batch-parallel speedup.
 3. For each request file:
    a. Identify the role from the parent directory name.
    b. Invoke the corresponding handler skill (`wikify_simple/handlers/<role>`).

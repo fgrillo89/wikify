@@ -292,13 +292,18 @@ def run(
                 if decision.action in ("set_allocation", "set_tier"):
                     continue
                 break
+            # Build requests for all valid chunks in the batch.
+            batch_chunks: list[tuple[str, Chunk]] = []
             for cid in batch:
                 ck = chunks_by_id.get(cid)
                 if ck is None:
                     continue
                 chunks_read.append(cid)
                 apply_coverage_feedback(state, cid, as_evidence=False)
-                req = ExtractRequest(
+                batch_chunks.append((cid, ck))
+
+            batch_reqs = [
+                ExtractRequest(
                     chunk_id=cid,
                     chunk_text=ck.text,
                     canonical_titles=[c.concept.title for c in candidates[-32:]],
@@ -307,26 +312,45 @@ def run(
                     tier=runtime.extract_tier,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
                 )
-                # Per-chunk rejections (validator failure, hallucinated quote)
-                # must NOT crash the run. Log via the .error.json artifact
-                # the binding already wrote, skip the chunk, keep going.
+                for cid, ck in batch_chunks
+            ]
+
+            extract_many = getattr(extractor, "extract_many", None)
+            if extract_many is not None:
+                # Parallel dispatch: fire all requests, collect responses.
+                # Per-chunk rejections must NOT crash the run; collect responses
+                # then process each. extract_many raises on batch-level failure.
                 try:
-                    resp = extractor.extract(req)
+                    batch_resps = extract_many(batch_reqs)
                 except (ValidationError, QuoteNotInChunkError):
-                    continue
-                for concept in resp.concepts:
-                    candidates.append(
-                        Candidate(
-                            concept=concept,
-                            chunk_id=cid,
-                            doc_id=ck.doc_id,
+                    batch_resps = []
+                for (cid, ck), resp in zip(batch_chunks, batch_resps):
+                    for concept in resp.concepts:
+                        candidates.append(
+                            Candidate(concept=concept, chunk_id=cid, doc_id=ck.doc_id)
                         )
-                    )
-                # progressive seeding: any chunk we extracted from is now a
-                # valid local-walk seed for similarity_walk samplers.
-                if resp.concepts:
-                    state.pages_concept_evidence_chunks.append(cid)
-                    apply_coverage_feedback(state, cid, as_evidence=True)
+                    if resp.concepts:
+                        state.pages_concept_evidence_chunks.append(cid)
+                        apply_coverage_feedback(state, cid, as_evidence=True)
+            else:
+                # Serial fallback for bindings that don't implement extract_many.
+                for (cid, ck), req in zip(batch_chunks, batch_reqs):
+                    # Per-chunk rejections (validator failure, hallucinated quote)
+                    # must NOT crash the run. Log via the .error.json artifact
+                    # the binding already wrote, skip the chunk, keep going.
+                    try:
+                        resp = extractor.extract(req)
+                    except (ValidationError, QuoteNotInChunkError):
+                        continue
+                    for concept in resp.concepts:
+                        candidates.append(
+                            Candidate(concept=concept, chunk_id=cid, doc_id=ck.doc_id)
+                        )
+                    # progressive seeding: any chunk we extracted from is now a
+                    # valid local-walk seed for similarity_walk samplers.
+                    if resp.concepts:
+                        state.pages_concept_evidence_chunks.append(cid)
+                        apply_coverage_feedback(state, cid, as_evidence=True)
         extract_completed_normally = True
     except BudgetExceededError:
         pass

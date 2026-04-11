@@ -296,26 +296,51 @@ class FileDispatchExtractor(Extractor):
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
-        key = ExtractCacheKey(
-            binding_name=self.BINDING_NAME,
-            model_id=request.model_id,
-            prompt_hash=prompt_hash(request.prompt_template),
-            chunk_id=request.chunk_id,
-        )
+        return self.extract_many([request])[0]
 
-        def compute() -> CachedExtract:
-            response = _dispatch_model(
-                self._dispatch_dir,
-                "extract",
-                request.model_dump(mode="json"),
-                ExtractResponse,
-                validate=lambda response, raw, req_path: _assert_quotes_in_chunk(
-                    response,
-                    request.chunk_text,
-                    req_path,
-                    raw,
-                ),
+    def extract_many(self, requests: list[ExtractRequest]) -> list[ExtractResponse]:
+        """Fire a whole batch of extract requests and collect responses.
+
+        Cache hits short-circuit immediately. Uncached requests are written
+        up front, then all their response files are polled in a single loop
+        so the dispatcher can handle them concurrently. Cost-meter accounting
+        runs serially after all responses are collected.
+        """
+        from ..contracts.schema import Equation, ExtractedConcept, Parameter, Relationship
+
+        def _concept_kwargs(c: dict) -> dict:
+            # Backwards-compatible: older cached payloads may omit v2 fields.
+            kwargs = {
+                "title": c["title"],
+                "aliases": c["aliases"],
+                "kind": c["kind"],
+                "quote": c["quote"],
+                "category": c.get("category"),
+                "confidence": c.get("confidence", "extracted"),
+                "score": c.get("score", 1.0),
+                "definition": c.get("definition", ""),
+                "summary": c.get("summary", ""),
+            }
+            if c.get("parameters"):
+                kwargs["parameters"] = [Parameter(**p) for p in c["parameters"]]
+            if c.get("mechanisms"):
+                kwargs["mechanisms"] = c["mechanisms"]
+            if c.get("relationships"):
+                kwargs["relationships"] = [Relationship(**r) for r in c["relationships"]]
+            if c.get("equations"):
+                kwargs["equations"] = [Equation(**eq) for eq in c["equations"]]
+            return kwargs
+
+        def _entry_to_response(entry: CachedExtract) -> ExtractResponse:
+            payload = entry.payload
+            return ExtractResponse(
+                chunk_id=payload["chunk_id"],
+                concepts=[ExtractedConcept(**_concept_kwargs(c)) for c in payload["concepts"]],
+                tokens_in=entry.tokens_in,
+                tokens_out=entry.tokens_out,
             )
+
+        def _response_to_entry(response: ExtractResponse) -> CachedExtract:
             return CachedExtract(
                 payload={
                     "chunk_id": response.chunk_id,
@@ -342,51 +367,120 @@ class FileDispatchExtractor(Extractor):
                 tokens_out=response.tokens_out,
             )
 
+        keys = [
+            ExtractCacheKey(
+                binding_name=self.BINDING_NAME,
+                model_id=req.model_id,
+                prompt_hash=prompt_hash(req.prompt_template),
+                chunk_id=req.chunk_id,
+            )
+            for req in requests
+        ]
+
+        # Probe cache on disk to identify which requests need dispatch.
+        # Accessing _root avoids adding a public peek API to ExtractCache.
+        cache_root = self._cache._root  # noqa: SLF001
+        uncached_set: set[int] = {
+            i for i, key in enumerate(keys) if not (cache_root / key.relpath()).exists()
+        }
+
+        # Write all uncached request files up front so the dispatcher can
+        # begin handling them concurrently before we start polling.
+        # dispatch_info is parallel to sorted(uncached_set).
+        uncached_order = sorted(uncached_set)
+        dispatch_info: list[tuple[Path, Path, ExtractRequest]] = []
+        for i in uncached_order:
+            req = requests[i]
+            req_path, res_path = _write_request(
+                self._dispatch_dir, "extract", req.model_dump(mode="json")
+            )
+            dispatch_info.append((req_path, res_path, req))
+
+        # Poll all pending response files in a single shared loop.
+        deadline = time.monotonic() + DISPATCH_TIMEOUT
+        pending: set[int] = set(range(len(dispatch_info)))
+        raw_results: list[dict | None] = [None] * len(dispatch_info)
+        while pending and time.monotonic() < deadline:
+            still_pending: set[int] = set()
+            for j in list(pending):
+                _, res_path, _ = dispatch_info[j]
+                if res_path.exists():
+                    data = res_path.read_text(encoding="utf-8")
+                    try:
+                        raw_results[j] = json.loads(data)
+                    except json.JSONDecodeError:
+                        still_pending.add(j)  # incomplete write; retry next tick
+                else:
+                    still_pending.add(j)
+            pending = still_pending
+            if pending:
+                time.sleep(POLL_INTERVAL)
+
+        if pending:
+            _, res_path, _ = dispatch_info[next(iter(pending))]
+            raise TimeoutError(f"no response at {res_path}")
+
+        # Validate dispatched responses and clean up files.
+        # validated[j] holds the ExtractResponse for dispatch slot j on success.
+        # errors[j] holds the exception if validation failed, for re-raise below.
+        validated: dict[int, ExtractResponse] = {}
+        errors: dict[int, Exception] = {}
+        for j, (req_path, res_path, req) in enumerate(dispatch_info):
+            raw = raw_results[j]
+            try:
+                response = _validate_or_record(ExtractResponse, raw, req_path)
+                _assert_quotes_in_chunk(response, req.chunk_text, req_path, raw)
+                validated[j] = response
+            except (ValidationError, QuoteNotInChunkError) as exc:
+                errors[j] = exc  # .error.json already written by helpers above
+            finally:
+                _cleanup(res_path)
+                if not _error_path(req_path).exists():
+                    _cleanup(req_path)
+
+        # Collect (entry, was_hit) for every request via get_or_extract.
+        # For already-cached items the compute lambda is never invoked.
+        # For newly dispatched items the compute wraps the validated response.
         t0 = time.monotonic()
-        entry, was_hit = self._cache.get_or_extract(key, compute)
+        entries: list[tuple[CachedExtract, bool]] = []
+        dispatch_cursor = 0
+        for i, (req, key) in enumerate(zip(requests, keys)):
+            if i not in uncached_set:
+                # Cache hit — get_or_extract finds the file and never calls compute.
+                def _unreachable() -> CachedExtract:  # noqa: E306
+                    raise AssertionError("cache probe found a miss that disk check said was a hit")
+
+                entry, was_hit = self._cache.get_or_extract(key, _unreachable)
+                entries.append((entry, was_hit))
+            else:
+                j = dispatch_cursor
+                dispatch_cursor += 1
+                if j in errors:
+                    # Re-raise the original exception so the pipeline's
+                    # try/except can skip this chunk exactly as single extract does.
+                    raise errors[j]
+                resp = validated[j]
+                entry, was_hit = self._cache.get_or_extract(
+                    key, lambda r=resp: _response_to_entry(r)
+                )
+                entries.append((entry, was_hit))
+
+        # Record meter costs sequentially and build final responses in input order.
         wall = time.monotonic() - t0
-        _record_call(
-            self._meter,
-            role=Role.EXTRACTOR,
-            tier=request.tier,
-            input_tokens=entry.tokens_in,
-            output_tokens=entry.tokens_out,
-            wall_seconds=wall,
-            cache_hit=was_hit,
-            prompt_hash_value=key.prompt_hash,
-        )
-        payload = entry.payload
-        from ..contracts.schema import Equation, ExtractedConcept, Parameter, Relationship
-
-        def _concept_kwargs(c: dict) -> dict:
-            # Backwards-compatible: older cached payloads may omit v2 fields.
-            kwargs = {
-                "title": c["title"],
-                "aliases": c["aliases"],
-                "kind": c["kind"],
-                "quote": c["quote"],
-                "category": c.get("category"),
-                "confidence": c.get("confidence", "extracted"),
-                "score": c.get("score", 1.0),
-                "definition": c.get("definition", ""),
-                "summary": c.get("summary", ""),
-            }
-            if c.get("parameters"):
-                kwargs["parameters"] = [Parameter(**p) for p in c["parameters"]]
-            if c.get("mechanisms"):
-                kwargs["mechanisms"] = c["mechanisms"]
-            if c.get("relationships"):
-                kwargs["relationships"] = [Relationship(**r) for r in c["relationships"]]
-            if c.get("equations"):
-                kwargs["equations"] = [Equation(**eq) for eq in c["equations"]]
-            return kwargs
-
-        return ExtractResponse(
-            chunk_id=payload["chunk_id"],
-            concepts=[ExtractedConcept(**_concept_kwargs(c)) for c in payload["concepts"]],
-            tokens_in=entry.tokens_in,
-            tokens_out=entry.tokens_out,
-        )
+        results: list[ExtractResponse] = []
+        for req, key, (entry, was_hit) in zip(requests, keys, entries):
+            _record_call(
+                self._meter,
+                role=Role.EXTRACTOR,
+                tier=req.tier,
+                input_tokens=entry.tokens_in,
+                output_tokens=entry.tokens_out,
+                wall_seconds=wall,
+                cache_hit=was_hit,
+                prompt_hash_value=key.prompt_hash,
+            )
+            results.append(_entry_to_response(entry))
+        return results
 
 
 # --- writer --------------------------------------------------------------
