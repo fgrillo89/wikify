@@ -28,6 +28,7 @@ from .page_naming import page_filename, page_id_from_title
 _INDEX_FILENAME = "_index.json"
 _INDEX_MD_FILENAME = "_index.md"
 _NORM_RE = re.compile(r"[^a-z0-9]+")
+_SKELETON_MIN_BODY_LEN = 200
 
 
 def _normalize(s: str) -> str:
@@ -233,8 +234,16 @@ def entry_from_page(page: WikiPage, bundle: BundlePaths) -> IndexEntry:
 
 
 def build_index(bundle: BundlePaths, pages: list[WikiPage]) -> WikiIndex:
-    """Build an index for a freshly-written set of pages."""
-    entries = {p.id: entry_from_page(p, bundle) for p in pages}
+    """Build an index for a freshly-written set of pages.
+
+    Skeleton pages (body_markdown shorter than _SKELETON_MIN_BODY_LEN chars)
+    are excluded so the index only enumerates real, written pages.
+    """
+    entries = {
+        p.id: entry_from_page(p, bundle)
+        for p in pages
+        if len(p.body_markdown) >= _SKELETON_MIN_BODY_LEN
+    }
     return WikiIndex(bundle_root=bundle.root, entries=entries)
 
 

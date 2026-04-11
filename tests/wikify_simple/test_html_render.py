@@ -7,6 +7,8 @@ that the rendered HTML resolves wikilinks, stages inline figures into
 ``[^eN]`` evidence markers as proper footnote anchors.
 """
 
+import io
+import sys
 from pathlib import Path
 
 from wikify_simple.paths import BundlePaths
@@ -257,3 +259,39 @@ def test_build_site_copies_css(tmp_path: Path) -> None:
     page = out / "articles" / "Photocatalysis.html"
     rendered = page.read_text(encoding="utf-8")
     assert "static/wiki.css" in rendered
+
+
+def test_build_site_skips_skeleton_pages(tmp_path: Path) -> None:
+    """build_site must omit skeleton pages and log the count to stderr."""
+    bundle = BundlePaths(root=tmp_path / "bundle")
+    bundle.ensure()
+
+    # Two pages with real bodies (well above 200 chars).
+    (bundle.articles_dir / "Photocatalysis.md").write_text(_PHOTOCAT_BODY, encoding="utf-8")
+    (bundle.articles_dir / "Atomic Layer Deposition.md").write_text(_ALD_BODY, encoding="utf-8")
+
+    # One skeleton page with an empty body.
+    skeleton_body = (
+        "---\nid: Stub Concept\nkind: concept\ntitle: Stub Concept\naliases: []\nlinks: []\n---\n"
+    )
+    (bundle.articles_dir / "Stub Concept.md").write_text(skeleton_body, encoding="utf-8")
+
+    out = tmp_path / "_html"
+    stderr_capture = io.StringIO()
+    old_stderr = sys.stderr
+    sys.stderr = stderr_capture
+    try:
+        build_site(bundle, out)
+    finally:
+        sys.stderr = old_stderr
+
+    # Only the 2 real pages should produce HTML output files.
+    html_files = list((out / "articles").glob("*.html"))
+    assert len(html_files) == 2, f"expected 2 HTML files, got {[f.name for f in html_files]}"
+    page_names = {f.stem for f in html_files}
+    assert "Photocatalysis" in page_names
+    assert "Atomic_Layer_Deposition" in page_names
+
+    # The stderr log must mention skipping 1 skeleton.
+    log = stderr_capture.getvalue()
+    assert "skipped 1 skeleton" in log

@@ -14,12 +14,21 @@ from wikify_simple.store.wiki_index import (
 
 
 def _make_page(pid: str, title: str, aliases: list[str], doc_id: str, links=None):
+    # body_markdown must be >= 200 chars so build_index does not treat it as a skeleton
+    body = (
+        f"# {title}\n\n"
+        f"{title} is a concept studied in materials science. "
+        f"It involves specific chemical and physical processes that have been documented "
+        f"extensively in the scientific literature.[^e1]\n\n"
+        f"## References\n\n"
+        f"[^e1]: {doc_id}_c1 ({doc_id}) > \"{title} description\""
+    )
     return WikiPage(
         id=pid,
         kind="article",
         title=title,
         aliases=aliases,
-        body_markdown=f"# {title}\n\n{title} description.[^e1]",
+        body_markdown=body,
         evidence=[Evidence(marker="e1", chunk_id=f"{doc_id}_c1", doc_id=doc_id, quote="desc")],
         links=list(links or []),
     )
@@ -137,3 +146,56 @@ def test_migrate_concepts_dir_roundtrip(tmp_path):
     idx2 = WikiIndex.load(bundle)
     assert "Photocatalysis" in idx2
     assert not (root / "concepts").exists()
+
+
+def test_build_index_excludes_skeleton_pages(tmp_path):
+    """build_index must not enumerate pages with body_markdown shorter than 200 chars."""
+    b = BundlePaths(root=tmp_path / "bundle")
+    b.ensure()
+    full_body = (
+        "# Real Page\n\n"
+        "Real Page is a well-documented concept in materials science with substantial "
+        "content backed by multiple primary sources in the scientific literature.[^e1]\n\n"
+        "## References\n\n"
+        "[^e1]: doc1_c1 (doc1) > \"real content from the primary literature\""
+    )
+    assert len(full_body) >= 200, "test setup error: full_body must be >= 200 chars"
+    skeleton_body = "# Stub\n\nStub.[^e1]"  # <200 chars
+
+    pages = [
+        WikiPage(
+            id="Real Page",
+            kind="article",
+            title="Real Page",
+            aliases=[],
+            body_markdown=full_body,
+            evidence=[Evidence(marker="e1", chunk_id="doc1_c1", doc_id="doc1", quote="real")],
+            links=[],
+        ),
+        WikiPage(
+            id="Another Page",
+            kind="article",
+            title="Another Page",
+            aliases=[],
+            body_markdown=full_body.replace("Real Page", "Another Page"),
+            evidence=[Evidence(marker="e1", chunk_id="doc2_c1", doc_id="doc2", quote="another")],
+            links=[],
+        ),
+        WikiPage(
+            id="Stub",
+            kind="article",
+            title="Stub",
+            aliases=[],
+            body_markdown=skeleton_body,
+            evidence=[Evidence(marker="e1", chunk_id="doc3_c1", doc_id="doc3", quote="stub")],
+            links=[],
+        ),
+    ]
+    for p in pages:
+        write_page(b, p)
+
+    idx = build_index(b, pages)
+    assert len(idx) == 2, f"expected 2 real pages, got {len(idx)}"
+    assert "Real Page" in idx
+    assert "Another Page" in idx
+    assert "Stub" not in idx

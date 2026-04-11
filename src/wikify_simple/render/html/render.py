@@ -17,6 +17,7 @@ omitted. Categories are derived from ``page_kind`` only.
 import json
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -38,8 +39,11 @@ _MD_EXTENSIONS = [
     "attr_list",
     "def_list",
     "footnotes",
+    "sane_lists",
     "pymdownx.superfences",
 ]
+
+SKELETON_MIN_BODY_LEN = 200
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _FIGURE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -83,13 +87,20 @@ def build_site(
 
     all_page_views = [_PageView.from_page(p) for p in loaded.pages]
     # Only include pages with real prose in navigation and listing.
-    # Skeleton pages (evidence-only) are omitted from the rendered site.
-    # Also filter out person pages whose title looks like a journal name.
+    # Skeleton pages (body_clean < SKELETON_MIN_BODY_LEN chars) are omitted
+    # from the rendered site. Also filter out person pages whose title looks
+    # like a journal name.
     page_views = [
         pv
         for pv in all_page_views
         if pv.has_prose and not (pv.kind == "person" and not _is_valid_author(pv.title))
     ]
+    skipped = len(all_page_views) - len(page_views)
+    if skipped:
+        print(
+            f"[html] skipped {skipped} skeleton page(s) (body < {SKELETON_MIN_BODY_LEN} chars)",
+            file=sys.stderr,
+        )
     concepts = sorted(
         [pv for pv in page_views if pv.kind == "article"],
         key=lambda v: v.title.lower(),
@@ -190,9 +201,8 @@ class _PageView:
             if stripped and not stripped.startswith("#") and not stripped.startswith("|"):
                 excerpt = stripped[:200]
                 break
-        # A page "has prose" if body_clean contains at least one real
-        # paragraph (not just headings, tables, or links).
-        has_prose = _page_has_prose(page.body_clean)
+        # A page "has prose" if body_clean is at least SKELETON_MIN_BODY_LEN chars.
+        has_prose = len(page.body_clean) >= SKELETON_MIN_BODY_LEN
         return cls(
             id=page.id,
             kind=page.kind,
@@ -203,27 +213,6 @@ class _PageView:
             excerpt=excerpt,
             has_prose=has_prose,
         )
-
-
-def _page_has_prose(body: str) -> bool:
-    """Return True if the body has real prose content (not just headings/links/evidence)."""
-    prose_chars = 0
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # Skip headings, tables, list items that are just links, evidence markers
-        if stripped.startswith("#"):
-            continue
-        if stripped.startswith("|"):
-            continue
-        if stripped.startswith("[^"):
-            continue
-        if stripped.startswith("- [[") or stripped.startswith("- n.d."):
-            continue
-        # Count actual prose characters
-        prose_chars += len(stripped)
-    return prose_chars >= 200
 
 
 def _render_article(

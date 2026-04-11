@@ -55,7 +55,12 @@ def test_alias_resolution_case_insensitive(tmp_path):
         kind="article",
         title="Atomic Layer Deposition",
         aliases=["ALD"],
-        body_markdown="# Atomic Layer Deposition\n\nBody.[^e1]",
+        body_markdown=(
+            "# Atomic Layer Deposition\n\n"
+            "Atomic Layer Deposition (ALD) is a vapor-phase thin-film deposition technique "
+            "based on sequential self-limiting surface reactions documented in the "
+            "literature.[^e1]\n\n## References\n\n[^e1]: c1 (d1) > \"q\""
+        ),
         evidence=[Evidence(marker="e1", chunk_id="c1", doc_id="d1", quote="q")],
     )
     write_page(b, page)
