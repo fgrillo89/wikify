@@ -14,7 +14,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
+import yaml
+
 from wikify_simple.store.page_naming import url_slug
+
+# Minimum word count thresholds for a dossier entry to be considered substantive.
+_MIN_DEFINITION_WORDS = 10
+_MIN_SUMMARY_WORDS = 10
+
+# Section types that carry no extractable knowledge.
+SKIP_SECTION_TYPES: frozenset[str] = frozenset(
+    {"references", "acknowledgments", "appendix"}
+)
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -53,6 +64,13 @@ class DossierEntry:
             "section_type": self.section_type,
             "figure_ids": self.figure_ids,
         }
+
+    @property
+    def is_substantive(self) -> bool:
+        """True when the entry carries meaningful extracted knowledge."""
+        def_words = len(self.definition.split()) if self.definition else 0
+        sum_words = len(self.summary.split()) if self.summary else 0
+        return def_words >= _MIN_DEFINITION_WORDS or sum_words >= _MIN_SUMMARY_WORDS
 
     @classmethod
     def from_dict(cls, d: dict) -> Self:
@@ -212,6 +230,48 @@ class Dossier:
             "n_sources": self.n_source_docs,
             "n_entries": self.n_entries,
         }
+
+
+# --- YAML serialisation for LLM payloads ---------------------------------
+
+
+def dossier_to_yaml(dossier_dict: dict) -> str:
+    """Convert a dossier dict (from Dossier.for_editor()) to compact YAML.
+
+    Used when feeding dossier context to the writer so the model sees less
+    syntactic noise than JSON. On disk the dossier is always stored as JSON.
+
+    Only the fields the writer actually needs are emitted; large or empty
+    fields are omitted to save tokens.
+    """
+    out: dict = {
+        "page_id": dossier_dict.get("page_id", ""),
+        "title": dossier_dict.get("title", ""),
+        "kind": dossier_dict.get("kind", "concept"),
+    }
+    if dossier_dict.get("aliases"):
+        out["aliases"] = dossier_dict["aliases"]
+    if dossier_dict.get("category"):
+        out["category"] = dossier_dict["category"]
+    if dossier_dict.get("definition"):
+        out["definition"] = dossier_dict["definition"]
+    if dossier_dict.get("summary"):
+        out["summary"] = dossier_dict["summary"]
+    if dossier_dict.get("parameters"):
+        out["parameters"] = dossier_dict["parameters"]
+    if dossier_dict.get("mechanisms"):
+        out["mechanisms"] = dossier_dict["mechanisms"]
+    if dossier_dict.get("relationships"):
+        out["relationships"] = dossier_dict["relationships"]
+    if dossier_dict.get("equations"):
+        out["equations"] = dossier_dict["equations"]
+    evidence = dossier_dict.get("evidence", [])
+    if evidence:
+        out["evidence"] = [
+            {k: v for k, v in e.items() if k in ("chunk_id", "doc_id", "quote", "section_type")}
+            for e in evidence
+        ]
+    return yaml.dump(out, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
 
 # --- persistence ---------------------------------------------------------
