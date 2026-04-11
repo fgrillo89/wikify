@@ -21,6 +21,7 @@ from .schema import (
 
 
 class Extractor(Protocol):
+    # extract_many is a binding-level optimization, not part of this protocol.
     def extract(self, request: ExtractRequest) -> ExtractResponse: ...
 
 

@@ -32,4 +32,4 @@ TIER_L_OVERHEAD = 300.0
 
 # -- file dispatch -----------------------------------------------------------
 DISPATCH_TIMEOUT = 600.0  # seconds to wait for a response file
-POLL_INTERVAL = 0.25  # seconds between polls for response file
+POLL_INTERVAL = 0.05  # seconds between polls for response file
