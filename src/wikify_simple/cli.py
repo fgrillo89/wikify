@@ -483,6 +483,23 @@ def eval_bundle(
         bundle, lambda cid: chunks_by_id[cid].text if cid in chunks_by_id else None
     )
 
+    # M1_image: image coverage and figure reference rate.
+    import numpy as _np
+
+    from .ingest.sampler_index import load_sampler_index
+
+    sampler_idx = load_sampler_index(corpus.sampler_index_path)
+    caption_ids: list[str] = sampler_idx["caption_chunk_ids"] if sampler_idx else []
+    _empty_cap = _np.empty((0, vs.matrix.shape[1]), dtype="float32")
+    if caption_ids:
+        caption_chunks = [chunks_by_id[cid] for cid in caption_ids if cid in chunks_by_id]
+        caption_texts = [c.text for c in caption_chunks]
+        caption_embeds = embed(caption_texts) if caption_texts else _empty_cap
+    else:
+        caption_embeds = _empty_cap
+    m1_image = metrics.image_coverage_residual(bundle, caption_embeds, embed)
+    fig_counts = metrics.figure_reference_counts(bundle)
+
     report_path = report or (bundle_dir / "_metrics.md")
     json_path = report_path.with_suffix(".json")
 
@@ -491,6 +508,8 @@ def eval_bundle(
         "corpus": str(corpus_dir),
         "embedder": {"backend": meta.backend, "dim": meta.dim, "model": meta.model},
         "M1_coverage_residual": m1,
+        "M1_image_coverage_residual": m1_image,
+        "M1_image_figure_counts": fig_counts,
         "M3_g_evidence": m3_evidence,
         "M3_g_links": m3_links,
         "M5_hit_rate": m5,

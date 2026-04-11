@@ -88,6 +88,7 @@ Voice and style:
 
 Figure placement:
 - When `figures` is supplied, mention each figure by its label ("as shown in Figure 3") inside the relevant section. On the line IMMEDIATELY after the sentence that references it, embed the figure as `![Figure N](<figure.path>)`. Never group figures at the top. Skip figures that do not fit.
+- Prefer figures whose ID appears in `evidence_v2[i].evidence_figures` — these were flagged by the extractor as directly relevant to the concept being described.
 
 Sections are GUIDANCE, not strict. Drop or reorder sections to fit the actual evidence; add extras (`## Performance`, `## Variants`, `## Alternative Explanations`, ...) when the material calls for them.
 

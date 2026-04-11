@@ -420,6 +420,7 @@ class WriteEvidenceRefV2(BaseModel):
     section_type: str = ""  # abstract/methods/results/conclusion
     definition: str = ""  # concept definition from dossier
     summary: str = ""  # dossier summary of this chunk's contribution
+    evidence_figures: list[str] = Field(default_factory=list)  # image IDs flagged by extractor
 
 
 class WriteRequest(BaseModel):

@@ -29,6 +29,7 @@ class GlobalOp(str, Enum):
     UNIFORM = "uniform"
     PAGERANK = "pagerank"
     COVERAGE_GAP = "coverage_gap"
+    FIGURES = "figures"
 
 
 @dataclass
@@ -45,9 +46,12 @@ class SamplerState:
     wiki_chunk_ids: set[str] = field(default_factory=set)  # chunks already in any page
     pages_concept_evidence_chunks: list[str] = field(default_factory=list)
     seen_chunks: set[str] = field(default_factory=set)
+    caption_chunk_ids: set[str] = field(default_factory=set)
     coverage_residuals: dict[str, float] = field(default_factory=dict)
     coverage_versions: dict[str, int] = field(default_factory=dict)
     coverage_heap: list[tuple[float, int, str]] = field(default_factory=list)  # (-residual, v, cid)
+    caption_heap: list[tuple[float, int, str]] = field(default_factory=list)  # (-residual, v, cid)
+    caption_versions: dict[str, int] = field(default_factory=dict)
     doc_seen_counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -108,6 +112,10 @@ def sample_global(
     return _GLOBAL_DISPATCH[op](state, k_per_doc)
 
 
+_CAPTION_DEFAULT_RESIDUAL = 0.8
+_CAPTION_NEAR_FLOOR = 0.4
+
+
 def init_coverage_state(
     state: SamplerState,
     chunk_ids: list[str],
@@ -119,11 +127,26 @@ def init_coverage_state(
     covered by the current wiki evidence set. The residual model is
     graph-local and cheap: unseen chunks start at ``default_residual`` and
     are progressively discounted as nearby chunks are read/anchored.
+
+    Caption chunks (those in ``state.caption_chunk_ids``) are seeded at
+    ``_CAPTION_DEFAULT_RESIDUAL`` (0.8) so text chunks surface first; they
+    also get their own dedicated ``caption_heap`` for ``jump_figures``.
     """
-    state.coverage_residuals = {cid: float(default_residual) for cid in chunk_ids}
+    residuals: dict[str, float] = {}
+    for cid in chunk_ids:
+        if cid in state.caption_chunk_ids:
+            residuals[cid] = _CAPTION_DEFAULT_RESIDUAL
+        else:
+            residuals[cid] = float(default_residual)
+    state.coverage_residuals = residuals
     state.coverage_versions = {cid: 0 for cid in chunk_ids}
-    state.coverage_heap = [(-float(default_residual), 0, cid) for cid in chunk_ids]
+    state.coverage_heap = [(-r, 0, cid) for cid, r in residuals.items()]
     heapq.heapify(state.coverage_heap)
+    # Dedicated caption heap for jump_figures.
+    caption_ids = [cid for cid in chunk_ids if cid in state.caption_chunk_ids]
+    state.caption_versions = {cid: 0 for cid in caption_ids}
+    state.caption_heap = [(-_CAPTION_DEFAULT_RESIDUAL, 0, cid) for cid in caption_ids]
+    heapq.heapify(state.caption_heap)
 
 
 def restore_coverage_state(
@@ -144,6 +167,13 @@ def restore_coverage_state(
     state.coverage_versions = {cid: 0 for cid in state.coverage_residuals}
     state.coverage_heap = [(-float(r), 0, cid) for cid, r in state.coverage_residuals.items()]
     heapq.heapify(state.coverage_heap)
+    # Rebuild caption heap from restored residuals.
+    caption_items = [
+        (cid, r) for cid, r in state.coverage_residuals.items() if cid in state.caption_chunk_ids
+    ]
+    state.caption_versions = {cid: 0 for cid, _ in caption_items}
+    state.caption_heap = [(-float(r), 0, cid) for cid, r in caption_items]
+    heapq.heapify(state.caption_heap)
 
 
 def apply_coverage_feedback(state: SamplerState, chunk_id: str, *, as_evidence: bool) -> None:
@@ -156,11 +186,13 @@ def apply_coverage_feedback(state: SamplerState, chunk_id: str, *, as_evidence: 
     state.seen_chunks.add(chunk_id)
     _set_residual(state, chunk_id, 0.0)
 
-    near_floor = 0.2 if as_evidence else 0.35
+    text_near_floor = 0.2 if as_evidence else 0.35
     for nb in state.neighbors_by_chunk.get(chunk_id, ()):
         cur = state.coverage_residuals.get(nb, 1.0)
-        if cur > near_floor:
-            _set_residual(state, nb, near_floor)
+        # Caption neighbors are discounted less aggressively than text-to-text.
+        floor = _CAPTION_NEAR_FLOOR if nb in state.caption_chunk_ids else text_near_floor
+        if cur > floor:
+            _set_residual(state, nb, floor)
 
     doc_id = state.chunk_to_doc.get(chunk_id)
     if not doc_id:
@@ -186,6 +218,10 @@ def _set_residual(state: SamplerState, chunk_id: str, value: float) -> None:
     v = state.coverage_versions.get(chunk_id, 0) + 1
     state.coverage_versions[chunk_id] = v
     heapq.heappush(state.coverage_heap, (-value, v, chunk_id))
+    if chunk_id in state.caption_chunk_ids:
+        cv = state.caption_versions.get(chunk_id, 0) + 1
+        state.caption_versions[chunk_id] = cv
+        heapq.heappush(state.caption_heap, (-value, cv, chunk_id))
 
 
 # --- local dispatch ------------------------------------------------------
@@ -271,8 +307,22 @@ def _global_coverage_gap(state: SamplerState, _k_per_doc: int) -> list[str]:
     return []
 
 
+def _global_figures(state: SamplerState, _k_per_doc: int) -> list[str]:
+    """Pop the highest-residual unseen caption chunk from the caption heap."""
+    while state.caption_heap:
+        neg, cv, cid = heapq.heappop(state.caption_heap)
+        if state.caption_versions.get(cid, -1) != cv:
+            continue
+        if cid in state.seen_chunks:
+            continue
+        heapq.heappush(state.caption_heap, (neg, cv, cid))
+        return [cid]
+    return []
+
+
 _GLOBAL_DISPATCH: dict[GlobalOp, Callable[[SamplerState, int], list[str]]] = {
     GlobalOp.UNIFORM: _global_uniform,
     GlobalOp.PAGERANK: _global_pagerank,
     GlobalOp.COVERAGE_GAP: _global_coverage_gap,
+    GlobalOp.FIGURES: _global_figures,
 }

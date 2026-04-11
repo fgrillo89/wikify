@@ -97,6 +97,12 @@ Reference: `src/wikify_simple/contracts/schema.py::ExtractResponse`
 - Person extraction rule: if the chunk attributes work to a named researcher / inventor / theorist / practitioner / historical figure in the prose (not merely listed in a reference list or bibliography), emit a `kind="person"` entry with the person's full name as the title. The person need NOT be an author of the current document.
 - The rich dossier fields (`definition`, `summary`, `parameters`, `mechanisms`, `relationships`, `equations`) are optional but strongly preferred — the compactor and editor use them. Emit them when the chunk supports them; omit or leave empty otherwise.
 
+## Image awareness
+
+When `images_for_doc` is non-empty, check whether any caption matches the title or aliases of an emitted concept (token overlap: at least one significant non-stopword token in common, or the caption contains the concept title as a substring). If a match is found, populate `evidence_figures: ["<image_id>"]` on that concept. Image IDs come from `images_for_doc[i].id`.
+
+When processing a caption chunk (the chunk text IS the caption of a figure) and vision analysis would be needed to answer correctly, emit `needs_vision: true` in a top-level `extra` field on the response (e.g. `"extra": {"needs_vision": true}`). The pipeline logs this for future vision-on-demand binding. Vision on demand is a documented future capability; no real vision binding exists today.
+
 ## Escalation
 Supported. If the subagent is uncertain about its output, it can emit `{"escalate": true, "reason": "..."}` in a top-level `escalation` field on its response instead of the normal fields.
 

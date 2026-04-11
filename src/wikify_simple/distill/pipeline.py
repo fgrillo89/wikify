@@ -260,6 +260,7 @@ def run(
     split_initial = split
     policy_events: list[dict] = []
     write_rejections: list[dict] = []
+    vision_requests: list[dict] = []
 
     # ---- extract loop ---------------------------------------------------
     try:
@@ -341,6 +342,9 @@ def run(
                     if resp.concepts:
                         state.pages_concept_evidence_chunks.append(cid)
                         apply_coverage_feedback(state, cid, as_evidence=True)
+                    # Gap 5: log needs_vision telemetry for future vision-on-demand.
+                    if getattr(resp, "extra", None) and resp.extra.get("needs_vision"):  # type: ignore[union-attr]
+                        vision_requests.append({"chunk_id": cid, "doc_id": ck.doc_id})
             else:
                 # Serial fallback for bindings that don't implement extract_many.
                 for (cid, ck), req in zip(batch_chunks, batch_reqs):
@@ -360,6 +364,9 @@ def run(
                     if resp.concepts:
                         state.pages_concept_evidence_chunks.append(cid)
                         apply_coverage_feedback(state, cid, as_evidence=True)
+                    # Gap 5: log needs_vision telemetry for future vision-on-demand.
+                    if getattr(resp, "extra", None) and resp.extra.get("needs_vision"):  # type: ignore[union-attr]
+                        vision_requests.append({"chunk_id": cid, "doc_id": ck.doc_id})
         extract_completed_normally = True
     except BudgetExceededError:
         pass
@@ -589,6 +596,7 @@ def run(
     }
     snapshot["novelty_rate_at_reallocation"] = novelty_rate
     snapshot["write_rejections"] = write_rejections
+    snapshot["vision_requests"] = vision_requests
     snapshot["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     append_run_history(bundle, snapshot)
@@ -622,6 +630,7 @@ def _build_sampler_state(
         if not pagerank:
             pagerank = _uniform_pagerank(idx["doc_ids_sorted"])
         all_chunk_ids = idx["content_chunk_ids"] + idx["caption_chunk_ids"]
+        caption_ids: set[str] = set(idx["caption_chunk_ids"])
         state = SamplerState(
             rng=rng,
             graph=graph,
@@ -632,6 +641,7 @@ def _build_sampler_state(
             neighbors_by_chunk=neighbour_map,
             chunk_degree=idx["chunk_degree"],
             chunk_to_doc=idx["chunk_to_doc"],
+            caption_chunk_ids=caption_ids,
         )
         init_coverage_state(state, all_chunk_ids)
         return state

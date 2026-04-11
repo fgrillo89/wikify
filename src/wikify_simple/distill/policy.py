@@ -191,7 +191,8 @@ class LlmPolicy:
             action_args = dict(action.args or {})
             # Cache active sampling actions so we don't pay a tier-L call
             # per batch. Control actions (set_*, done) are never cached.
-            if action_name in ("walk_local", "jump_uniform", "jump_pagerank", "jump_gap"):
+            _cacheable = ("walk_local", "jump_uniform", "jump_pagerank", "jump_gap", "jump_figures")
+            if action_name in _cacheable:
                 self._cached_action_name = action_name
                 self._cached_action_args = action_args
                 self._batches_remaining = self._persist_batches - 1
@@ -259,6 +260,15 @@ class LlmPolicy:
                     if len(picks) >= k:
                         break
                 return ExtractDecision(action=name, batch=tuple(picks[:k]), meta={"n_docs": n_docs})
+            case "jump_figures":
+                n = max(1, _int_arg(args, "k", k))
+                picks_f: list[str] = []
+                for _ in range(n):
+                    got = sample_global(state, GlobalOp.FIGURES)
+                    picks_f.extend(got)
+                    if len(picks_f) >= k:
+                        break
+                return ExtractDecision(action=name, batch=tuple(picks_f[:k]))
             case "walk_local":
                 n = max(1, _int_arg(args, "k", k))
                 picks = self._fallback_sampler.next_batch(state, min(n, k))

@@ -77,6 +77,7 @@ def build_write_request(
                 section_type=de.section_type if de else "",
                 definition=de.definition if de else "",
                 summary=de.summary if de else "",
+                evidence_figures=list(de.figure_ids) if de else [],
             )
         )
 

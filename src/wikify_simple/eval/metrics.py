@@ -99,6 +99,60 @@ def coverage_residual(
 
 
 # =========================================================================
+# M1_image — image coverage residual
+# =========================================================================
+
+_FIGURE_REF_RE = re.compile(r"!\[Figure\s+\d+\]", re.IGNORECASE)
+
+
+def image_coverage_residual(
+    bundle: Bundle,
+    caption_embeddings: np.ndarray,  # (n_captions, d), unit-norm
+    embed: Embedder,
+) -> float:
+    """M1_image. Mean residual distance from each caption chunk to its nearest
+    wiki page body.
+
+    M1_image = mean_over_captions( 1 - max_over_pages( cos(embed(caption), embed(body)) ) )
+
+    Lower is better. Returns 1.0 if there are no captions or no pages.
+    """
+    if caption_embeddings.shape[0] == 0 or not bundle.pages:
+        return 1.0
+    from ..store.bundle_embeddings import load_or_compute
+
+    _ids, page_embeds = load_or_compute(bundle, bundle.pages, embed)
+    if page_embeds.shape[1] != caption_embeddings.shape[1]:
+        raise EmbedderMismatch(
+            f"image_coverage_residual: page embeddings are {page_embeds.shape[1]}-d "
+            f"but caption embeddings are {caption_embeddings.shape[1]}-d"
+        )
+    sims = caption_embeddings @ page_embeds.T  # (n_captions, n_pages)
+    nearest = sims.max(axis=1)  # (n_captions,)
+    return max(float((1.0 - nearest).mean()), 0.0)
+
+
+def figure_reference_counts(bundle: Bundle) -> dict[str, int | float]:
+    """Count figure references across all page bodies and compute the reference rate.
+
+    Returns:
+        n_figures_referenced_in_bodies: int -- number of ``![Figure N]`` embeds found
+        figure_reference_rate: float -- n_referenced / n_total_captions (or NaN if no captions)
+        n_total_captions: int -- total caption count from run_meta, or 0 if absent
+    """
+    n_referenced = sum(
+        len(_FIGURE_REF_RE.findall(p.body_clean)) for p in bundle.pages
+    )
+    n_total = bundle.run_meta.get("n_caption_chunks", 0)
+    rate = (n_referenced / n_total) if n_total > 0 else float("nan")
+    return {
+        "n_figures_referenced_in_bodies": n_referenced,
+        "n_total_captions": n_total,
+        "figure_reference_rate": rate,
+    }
+
+
+# =========================================================================
 # M2 — Heaps exponent over a series of bundles at increasing cost
 # =========================================================================
 
