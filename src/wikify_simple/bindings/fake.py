@@ -11,13 +11,12 @@ calls go through ``cache.get_or_extract`` so cache semantics are
 exercised.
 """
 
-from __future__ import annotations
-
 import re
 import time
 
-from ..agents.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
-from ..agents.schema import (
+from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
+from ..contracts.roles import Role, response_reserve, total_context
+from ..contracts.schema import (
     BriefSection,
     EditorBrief,
     ExtractedConcept,
@@ -33,7 +32,6 @@ from ..agents.schema import (
 )
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from ..infra.cost_meter import CostMeter
-from ..infra.role import Role, response_reserve, total_context
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]+")
 
@@ -373,9 +371,7 @@ class FakeCompactor(Compactor):
         params = list(seen_params.values())[:10]
 
         # Merge mechanisms (dedup)
-        mechs = list(dict.fromkeys(
-            m for e in entries for m in e.get("mechanisms", [])
-        ))[:6]
+        mechs = list(dict.fromkeys(m for e in entries for m in e.get("mechanisms", [])))[:6]
 
         # Merge relationships (dedup by target)
         seen_rels: dict[str, dict] = {}
@@ -439,9 +435,7 @@ class FakeEditor(Editor):
                     f"e{i}" for i in range(1, min(len(d.get("evidence", [])), 5) + 1)
                 ],
                 zone="established",
-                parameters_to_include=[
-                    p.get("name", "") for p in d.get("parameters", [])[:3]
-                ],
+                parameters_to_include=[p.get("name", "") for p in d.get("parameters", [])[:3]],
             ),
             BriefSection(
                 heading="## Applications",

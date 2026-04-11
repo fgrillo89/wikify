@@ -1,7 +1,5 @@
 """Tests for ingest/bibtex.py."""
 
-from __future__ import annotations
-
 import bibtexparser
 
 from wikify_simple.ingest.bibtex import paper_to_bibtex, write_corpus_bibtex

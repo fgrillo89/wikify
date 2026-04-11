@@ -1,9 +1,7 @@
 """Tests for distill/canonicalize.py -- person candidate handling."""
 
-from __future__ import annotations
-
-from wikify_simple.agents.schema import ExtractedConcept
-from wikify_simple.distill.canonicalize import Candidate, canonicalize
+from wikify_simple.contracts.schema import ExtractedConcept
+from wikify_simple.distill.extract.canonicalize import Candidate, canonicalize
 from wikify_simple.models import Evidence, WikiPage
 
 

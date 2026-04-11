@@ -17,14 +17,12 @@ Storage layout:
 
 The ``binding_name`` prefix guarantees that entries produced by one
 binding (for example ``fake``) can never be served to another (for
-example ``claude_code``), even when the other fields collide.
+example ``file_dispatch``), even when the other fields collide.
 
 The on-disk format is the JSON-serialised result the compute callable
 returned, plus a small wrapper recording the first-time token cost so
 the cost meter can replay it on every subsequent hit.
 """
-
-from __future__ import annotations
 
 import hashlib
 import json

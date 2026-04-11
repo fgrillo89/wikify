@@ -1,7 +1,5 @@
 """End-to-end smoke test: ingest -> distill (E, M, X) -> eval, all under fake binding."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -20,7 +18,7 @@ from wikify_simple.eval.metrics import (
 )
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
-from wikify_simple.ingest.embedder import embed_texts
+from wikify_simple.infra.embedding import embed_texts
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 

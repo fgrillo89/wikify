@@ -1,13 +1,10 @@
 """Classify raw section headings into canonical academic section types.
 
-Ported from the legacy ``wikify.ingest.extract.section_classifier``. Maps
-the wild variety of heading formats (numbered, Roman numerals, bold
+Maps the wild variety of heading formats (numbered, Roman numerals, bold
 markdown, journal artifacts) into a small enum of standard types. This
 enables cross-document queries like "get all conclusions" or "compare
 methods sections."
 """
-
-from __future__ import annotations
 
 import re
 from enum import Enum

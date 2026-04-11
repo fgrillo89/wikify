@@ -1,12 +1,9 @@
 """Bibliographic coupling between documents.
 
-Port of ``wikify.ingest.vault.coupler`` adapted to operate on
-``Document.citations`` in memory (no SQLModel dependency). Two docs
+Operates on ``Document.citations`` in memory. Two docs
 are coupled when they share references. Coupling strength is the
 count of shared references, matched by a normalised fingerprint.
 """
-
-from __future__ import annotations
 
 import re
 from collections import defaultdict

@@ -11,8 +11,6 @@ This helper normalizes *only for comparison*. The verbatim form of the
 quote is still stored on the concept.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 

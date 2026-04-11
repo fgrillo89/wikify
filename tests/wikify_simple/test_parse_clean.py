@@ -1,7 +1,5 @@
 """Tests for ``ingest.parsers._clean.clean_markdown_text``."""
 
-from __future__ import annotations
-
 from wikify_simple.ingest.parsers._clean import clean_markdown_text
 
 

@@ -1,11 +1,9 @@
-"""DOCX parser. Ported from ``wikify.ingest.docx``.
+"""DOCX parser.
 
 Strips SQLModel/Paper/vault coupling; returns a ``ParseResult``. Images
 found under ``word/media/*`` are emitted as raw records in
 ``metadata['_raw_images']`` for ``refresh.py`` to persist.
 """
-
-from __future__ import annotations
 
 import re
 from pathlib import Path

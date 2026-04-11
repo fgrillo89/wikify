@@ -1,11 +1,8 @@
 """Build BibTeX entries from wikify_simple Documents.
 
-Ports ``wikify.ingest.zotero.bibtex_builder`` and ``bibtex_library`` to
-the wikify_simple Document model. No dependency on the legacy ``Paper``
-model. The corpus library is written to ``<corpus>/library.bib``.
+Operates on the wikify_simple Document model.
+The corpus library is written to ``<corpus>/library.bib``.
 """
-
-from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -29,7 +26,7 @@ def paper_to_bibtex(doc: Document, citations: list[dict] | None = None) -> str:
     """Build a minimal ``@article`` BibTeX entry from a Document.
 
     The entry id is the sanitized ``doc.id``. ``citations`` is accepted
-    for symmetry with the legacy signature but is currently unused at
+    for symmetry with the caller signature but is currently unused at
     the entry level (it is the corpus-side relation, not a per-entry
     field).
     """

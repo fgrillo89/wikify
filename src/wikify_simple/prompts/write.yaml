@@ -1,6 +1,6 @@
-name: wikify_simple/write/v2
+name: wikify_simple/write
 role: writer
-version: 2
+version: 1
 input_schema:
   page_id: str
   title: str

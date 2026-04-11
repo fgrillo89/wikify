@@ -20,8 +20,6 @@ Usage:
     profile.communities                        # -> {0: ["doc1", ...], ...}
 """
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from dataclasses import dataclass, field
@@ -77,9 +75,7 @@ class CorpusProfile:
                 }
                 for did, imp in self.top_docs(10)
             ],
-            "community_sizes": {
-                k: len(v) for k, v in sorted(self.communities.items())
-            },
+            "community_sizes": {k: len(v) for k, v in sorted(self.communities.items())},
         }
 
 
@@ -115,13 +111,11 @@ def build_corpus_profile(corpus: CorpusPaths) -> CorpusProfile:
     profile.doc_betweenness = dict(nx.betweenness_centrality(g, weight="weight"))
 
     # Node roles from importance + betweenness.
-    profile.doc_roles = _classify_roles(
-        doc_ids, profile.doc_importance, profile.doc_betweenness
-    )
+    profile.doc_roles = _classify_roles(doc_ids, profile.doc_importance, profile.doc_betweenness)
 
     # Louvain community detection.
-    profile.communities, profile.doc_community, profile.modularity = (
-        _louvain_communities(g, doc_ids)
+    profile.communities, profile.doc_community, profile.modularity = _louvain_communities(
+        g, doc_ids
     )
 
     # Hub chunks by similarity-graph degree.
@@ -131,9 +125,7 @@ def build_corpus_profile(corpus: CorpusPaths) -> CorpusProfile:
     return profile
 
 
-def _build_unified_doc_graph(
-    doc_ids: list[str], graph
-) -> nx.Graph:
+def _build_unified_doc_graph(doc_ids: list[str], graph) -> nx.Graph:
     """Build an undirected weighted graph from all document-level edges.
 
     Edge types used (all contribute equally):
@@ -222,9 +214,7 @@ def _louvain_communities(
         for did in members:
             doc_community[did] = i
 
-    modularity = float(
-        nx.community.modularity(g, parts, weight="weight")
-    )
+    modularity = float(nx.community.modularity(g, parts, weight="weight"))
     return communities, doc_community, modularity
 
 

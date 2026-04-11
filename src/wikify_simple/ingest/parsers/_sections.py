@@ -5,8 +5,6 @@ section-extraction implementation. The chunker consumes these spans
 directly.
 """
 
-from __future__ import annotations
-
 import re
 
 _H_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)

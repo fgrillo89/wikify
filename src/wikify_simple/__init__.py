@@ -1,1 +1,1 @@
-"""wikify_simple — minimal restart. See README.md for the design."""
+"""wikify_simple — minimal restart. See architecture.md for the design."""

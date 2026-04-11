@@ -1,4 +1,4 @@
-"""End-to-end smoke test for ``bindings/claude_code.py``.
+"""End-to-end smoke test for ``bindings/file_dispatch.py``.
 
 Spawns a daemon thread that impersonates the Claude Code subagent
 dispatcher: it watches the request directory for any ``*.request.json``
@@ -9,8 +9,6 @@ schemas. This is the first automated coverage of the binding's request
 and response file protocol.
 """
 
-from __future__ import annotations
-
 import json
 import threading
 import time
@@ -19,7 +17,12 @@ from typing import Callable
 
 import pytest
 
-from wikify_simple.agents.schema import (
+from wikify_simple.bindings.file_dispatch import (
+    FileDispatchExtractor,
+    FileDispatchQuerier,
+    FileDispatchWriter,
+)
+from wikify_simple.contracts.schema import (
     ExtractRequest,
     ExtractResponse,
     QueryEvidence,
@@ -28,11 +31,6 @@ from wikify_simple.agents.schema import (
     WriteEvidenceRef,
     WriteRequest,
     WriteResponse,
-)
-from wikify_simple.bindings.claude_code import (
-    ClaudeCodeExtractor,
-    ClaudeCodeQuerier,
-    ClaudeCodeWriter,
 )
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
@@ -194,13 +192,13 @@ def _no_residual_files(root: Path) -> None:
 def test_extractor_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
     cache = ExtractCache(root=tmp_path / "cache")
-    extractor = ClaudeCodeExtractor(cache, meter, dispatch_dir=dispatcher)
+    extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatcher)
 
     req = ExtractRequest(
         chunk_id="chunk-1",
         chunk_text="Atomic layer deposition is a self-limiting process.",
         canonical_titles=[],
-        prompt_template="wikify_simple/extract/v1",
+        prompt_template="wikify_simple/extract",
         model_id="claude-haiku",
         tier="S",
     )
@@ -217,7 +215,7 @@ def test_extractor_dispatcher_roundtrip(tmp_path, dispatcher):
 
 def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
-    writer = ClaudeCodeWriter(meter, dispatch_dir=dispatcher)
+    writer = FileDispatchWriter(meter, dispatch_dir=dispatcher)
 
     req = WriteRequest(
         page_id="p1",
@@ -229,7 +227,7 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
             WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="self-limiting", locator=""),
         ],
         neighbor_titles=[],
-        prompt_template="wikify_simple/write/v1",
+        prompt_template="wikify_simple/write",
         model_id="claude-haiku",
         tier="M",
     )
@@ -246,7 +244,7 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
 
 def test_querier_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
-    querier = ClaudeCodeQuerier(meter, dispatch_dir=dispatcher)
+    querier = FileDispatchQuerier(meter, dispatch_dir=dispatcher)
 
     req = QueryRequest(
         question="What is ALD?",
@@ -258,7 +256,7 @@ def test_querier_dispatcher_roundtrip(tmp_path, dispatcher):
                 citations=["ev1"],
             )
         ],
-        prompt_template="wikify_simple/query/v1",
+        prompt_template="wikify_simple/query",
         model_id="claude-haiku",
         tier="S",
     )
@@ -276,13 +274,13 @@ def test_extractor_cache_hit_skips_dispatcher(tmp_path, dispatcher):
     dispatcher (so a torn-down dispatcher would still work)."""
     meter = _meter(tmp_path)
     cache = ExtractCache(root=tmp_path / "cache")
-    extractor = ClaudeCodeExtractor(cache, meter, dispatch_dir=dispatcher)
+    extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatcher)
 
     req = ExtractRequest(
         chunk_id="chunk-cached",
         chunk_text="same text",
         canonical_titles=[],
-        prompt_template="wikify_simple/extract/v1",
+        prompt_template="wikify_simple/extract",
         model_id="claude-haiku",
         tier="S",
     )

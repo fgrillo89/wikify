@@ -1,7 +1,6 @@
 """Extract structured bibliography entries from academic markdown.
 
-Ports the legacy ``wikify.ingest.extract.citations`` reference-section
-detector and adds a small heuristic parser that turns each raw entry
+Reference-section detector with a small heuristic parser that turns each raw entry
 into a structured dict (``ord``, ``raw_text``, ``authors``, ``year``,
 ``title``, ``venue``, ``doi``). The structured fields are best-effort:
 academic citation styles vary, so missing fields are simply left empty
@@ -9,11 +8,9 @@ or ``None``. Downstream code (deterministic author pages, library.bib)
 treats all structured fields as optional.
 """
 
-from __future__ import annotations
-
 import re
 
-# --- regex constants (verbatim from legacy) ------------------------------
+# --- regex constants ------------------------------------------------------
 
 _REFS_HEADING_RE = re.compile(
     r"^(#{1,3})\s*(references|bibliography|works cited)\s*$",

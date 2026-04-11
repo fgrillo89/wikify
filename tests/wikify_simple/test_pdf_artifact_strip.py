@@ -1,7 +1,5 @@
 """Tests for `_strip_pdf_artifacts` — the pymupdf4llm output scrubber."""
 
-from __future__ import annotations
-
 from wikify_simple.ingest.parsers.pdf import _strip_pdf_artifacts
 
 

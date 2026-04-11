@@ -1,17 +1,14 @@
 """PDF parser using pymupdf4llm + fitz.
 
-Ported from ``wikify.ingest.pdf`` with all SQLModel/Paper/vault coupling
-stripped. Returns a ``ParseResult``. Image bytes are captured as raw
+Returns a ``ParseResult``. Image bytes are captured as raw
 payloads in ``metadata['_raw_images']`` so the refresh pipeline can
 persist them (see ``ingest/images.py::save_doc_images``).
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 
-from ..images import extract_pdf_media
+from ..figures import extract_pdf_media
 from ..metadata import (
     clean_markdown,
     extract_authors_from_markdown,
@@ -32,9 +29,9 @@ def parse(path: Path) -> ParseResult:
     import fitz  # pymupdf
     import pymupdf4llm
 
-    md_text = ""
+    md_text: str = ""
     try:
-        md_text = pymupdf4llm.to_markdown(str(path), use_ocr=False)
+        md_text = str(pymupdf4llm.to_markdown(str(path), use_ocr=False))
     except Exception:
         md_text = ""
 
@@ -43,8 +40,10 @@ def parse(path: Path) -> ParseResult:
         action = _classify_pdf_text(md_text, doc)
         if action == "ocr":
             try:
-                md_text = pymupdf4llm.to_markdown(
-                    str(path), use_ocr=True, force_ocr=True, ocr_language="eng"
+                md_text = str(
+                    pymupdf4llm.to_markdown(
+                        str(path), use_ocr=True, force_ocr=True, ocr_language="eng"
+                    )
                 )
             except Exception:
                 md_text = _fitz_fallback_markdown(doc)

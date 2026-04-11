@@ -8,8 +8,6 @@ Covers STEP 2 of the slice 6 structural rework:
 - the response file is still cleaned up (no stale garbage)
 """
 
-from __future__ import annotations
-
 import json
 import threading
 import time
@@ -18,8 +16,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.agents.schema import ExtractRequest
-from wikify_simple.bindings.claude_code import ClaudeCodeExtractor
+from wikify_simple.bindings.file_dispatch import FileDispatchExtractor
+from wikify_simple.contracts.schema import ExtractRequest
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 
@@ -70,12 +68,12 @@ def test_invalid_response_writes_error_artifact(tmp_path):
             events_path=tmp_path / "calls.jsonl",
         )
         cache = ExtractCache(root=tmp_path / "cache")
-        extractor = ClaudeCodeExtractor(cache, meter, dispatch_dir=dispatch_root)
+        extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
         req = ExtractRequest(
             chunk_id="chunk-err",
             chunk_text="any text will do here because validation will fail first.",
             canonical_titles=[],
-            prompt_template="wikify_simple/extract/v1",
+            prompt_template="wikify_simple/extract",
             model_id="claude-haiku",
             tier="S",
         )

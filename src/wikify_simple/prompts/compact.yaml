@@ -1,4 +1,4 @@
-name: wikify_simple/compact/v1
+name: wikify_simple/compact
 role: compactor
 version: 1
 input_schema:

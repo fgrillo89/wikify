@@ -1,11 +1,9 @@
-"""HTML parser. Ported from ``wikify.ingest.html``.
+"""HTML parser.
 
 Uses trafilatura for main-text extraction; falls back to a naive tag
 stripper. ``<img>`` tags are parsed from the raw HTML and emitted as
 DocImage records pointing at the src URL (no fetch performed here).
 """
-
-from __future__ import annotations
 
 import datetime
 import re

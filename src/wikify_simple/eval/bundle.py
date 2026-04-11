@@ -31,8 +31,6 @@ strings, scalar lists). If we ever need richer YAML, swap to PyYAML in
 one place.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from dataclasses import dataclass, field
@@ -152,7 +150,7 @@ def _parse_evidence_value(rest: str) -> tuple[str, str, str, str] | None:
     """Parse the post-marker text into (chunk_id, doc_id, locator, quote).
 
     Supports two formats:
-      Legacy:  ``<chunk_id> (<doc_id>[, locator]) > "quote"``
+      Alternate:  ``<chunk_id> (<doc_id>[, locator]) > "quote"``
       Current: ``<doc_id>[, locator] > "quote"``
 
     ``rest`` is everything after ``[^e1]: `` on the evidence line (possibly
@@ -174,7 +172,7 @@ def _parse_evidence_value(rest: str) -> tuple[str, str, str, str] | None:
         quote = tail[:close]
     quote = " ".join(quote.split())
 
-    # Try legacy format: head ends with ")" meaning "<chunk_id> (<doc_id>[, loc])"
+    # Try alternate format: head ends with ")" meaning "<chunk_id> (<doc_id>[, loc])"
     if head.endswith(")"):
         depth = 0
         open_idx = -1

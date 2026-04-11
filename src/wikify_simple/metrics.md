@@ -1,5 +1,7 @@
 # Wikification metrics
 
+> **Current state & roadmap**: this document defines the core metrics (M1 coverage residual, M2 Heaps, M3 graph crystallinity, M5 hit rate, M6 grounding) plus GT-C and GT-P. Image-specific metrics (`image_coverage_residual`, `figure_reference_rate`, `n_figures_referenced_in_bodies`) are planned in Phase 4 of [`plans/structural-improvements.md`](plans/structural-improvements.md). The cost ratios referenced in this doc (haiku-equivalent normalization) were recalibrated against Claude 4.5/4.6 pricing — see `src/wikify_simple/infra/config.py` for the live values: S=1/5, M=3/15, L=15/75 (input/output per-token, normalized to Haiku).
+
 ## Framing
 
 A wikification strategy is a function from budget to wiki. We study it by

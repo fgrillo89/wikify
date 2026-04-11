@@ -14,8 +14,6 @@ Use ``embedder_for(backend, model)`` when you need an *explicit* embedder
 embedder that ingest used, based on ``vectors.meta.json``.
 """
 
-from __future__ import annotations
-
 import hashlib
 import os
 import re
@@ -60,8 +58,9 @@ def _load_st(model: str | None) -> None:
 
 def _st_embed_with(model: str | None, texts: Sequence[str]) -> np.ndarray:
     _load_st(model)
+    assert _st_model is not None, "_load_st must initialise _st_model"
     if not texts:
-        dim = int(_st_model.get_sentence_embedding_dimension())
+        dim = int(_st_model.get_sentence_embedding_dimension() or HASH_DIM)
         return np.zeros((0, dim), dtype=np.float32)
     arr = _st_model.encode(list(texts), normalize_embeddings=True, show_progress_bar=False)
     return np.asarray(arr, dtype=np.float32)

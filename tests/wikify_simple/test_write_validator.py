@@ -9,19 +9,17 @@ section names (Definition / Background / ...) are recommended, not
 required.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.agents.schema import (
+from wikify_simple.bindings.fake import FakeWriter
+from wikify_simple.contracts.schema import (
     WriteEvidenceRef,
     WriteRequest,
     WriteResponse,
 )
-from wikify_simple.bindings.fake import FakeWriter
 from wikify_simple.infra.cost_meter import CostMeter
 
 
@@ -302,7 +300,7 @@ def test_fake_writer_minimal_evidence_passes_validator(tmp_path: Path) -> None:
 
 
 def test_fake_writer_with_figures_passes_validator(tmp_path: Path) -> None:
-    from wikify_simple.agents.schema import ImageRef
+    from wikify_simple.contracts.schema import ImageRef
 
     meter = _meter(tmp_path)
     fw = FakeWriter(meter)

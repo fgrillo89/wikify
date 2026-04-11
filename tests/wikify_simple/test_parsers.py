@@ -1,7 +1,5 @@
 """Parser smoke tests for slice 0b (pdf/docx/pptx/html)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

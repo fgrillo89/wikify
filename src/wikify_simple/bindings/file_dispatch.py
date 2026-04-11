@@ -1,9 +1,9 @@
-"""The only file allowed to talk to the Claude Code subagent dispatcher.
+"""File-dispatch binding: writes request JSON, polls for response JSON.
 
 Strategies never import this module. The CLI wires it into a run when
-``--binding claude_code`` is passed. The binding writes a request file at
+``--binding file_dispatch`` is passed. The binding writes a request file at
 a well-known path, blocks for a matching response file, validates the
-JSON against ``agents/schema.py``, deducts from the cost meter, and
+JSON against ``contracts/schema.py``, deducts from the cost meter, and
 consults the extraction cache for extract calls so cache hits are
 zero-token and never spawn a subagent.
 
@@ -17,8 +17,6 @@ Dispatch directory resolution:
   3. ``data/dispatch`` under CWD
 """
 
-from __future__ import annotations
-
 import contextlib
 import json
 import os
@@ -26,11 +24,14 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ..agents.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
-from ..agents.schema import (
+from ..contracts.normalize import normalize_for_substring
+from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
+from ..contracts.roles import Role, response_reserve, total_context
+from ..contracts.schema import (
     EditorBrief,
     ExtractRequest,
     ExtractResponse,
@@ -42,14 +43,12 @@ from ..agents.schema import (
     WriteRequest,
     WriteResponse,
 )
-from ..agents.text_normalize import normalize_for_substring
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from ..infra.config import DISPATCH_TIMEOUT, POLL_INTERVAL
 from ..infra.cost_meter import CostMeter
-from ..infra.role import Role, response_reserve, total_context
 
-_DISPATCH_TIMEOUT = 600.0
-_POLL_INTERVAL = 0.25
 _REQ_DIR_ENV = "WIKIFY_SIMPLE_DISPATCH_DIR"
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def resolve_dispatch_dir(explicit: Path | str | None = None) -> Path:
@@ -72,7 +71,7 @@ def _write_request(dispatch_dir: Path, role: str, payload: dict) -> tuple[Path, 
     return req, res
 
 
-def _await_response(res: Path, *, timeout: float = _DISPATCH_TIMEOUT) -> dict:
+def _await_response(res: Path, *, timeout: float = DISPATCH_TIMEOUT) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if res.exists():
@@ -81,9 +80,9 @@ def _await_response(res: Path, *, timeout: float = _DISPATCH_TIMEOUT) -> dict:
                 return json.loads(data)
             except json.JSONDecodeError:
                 # incomplete write; brief retry
-                time.sleep(_POLL_INTERVAL)
+                time.sleep(POLL_INTERVAL)
                 continue
-        time.sleep(_POLL_INTERVAL)
+        time.sleep(POLL_INTERVAL)
     raise TimeoutError(f"no response at {res}")
 
 
@@ -91,6 +90,10 @@ def _cleanup(*paths: Path) -> None:
     for p in paths:
         with contextlib.suppress(FileNotFoundError, OSError):
             p.unlink()
+
+
+def _error_path(req_path: Path) -> Path:
+    return req_path.with_name(req_path.name.replace(".request.", ".error."))
 
 
 def _write_error_artifact(req_path: Path, model_cls: type, raw, exc: Exception) -> Path:
@@ -102,7 +105,7 @@ def _write_error_artifact(req_path: Path, model_cls: type, raw, exc: Exception) 
     and the schema name. The request file is intentionally kept; only
     the response file is cleaned up by the caller's ``finally`` block.
     """
-    err_path = req_path.with_name(req_path.name.replace(".request.", ".error."))
+    err_path = _error_path(req_path)
     try:
         payload = {
             "error": str(exc),
@@ -144,30 +147,142 @@ def _assert_quotes_in_chunk(
 
 
 def _validate_or_record(
-    model_cls: type[BaseModel],
+    model_cls: type[ModelT],
     raw,
     req_path: Path,
-):
-    """Validate ``raw`` against ``model_cls``; on failure write .error.json and re-raise.
+) -> ModelT:
+    """Validate ``raw`` against ``model_cls``; on failure try to salvage
+    (for ExtractResponse) or write .error.json and re-raise.
 
-    There is no retry: re-validating the same dict against the same
-    schema cannot succeed. The dead ``_retry_validate`` helper that used
-    to live here was removed intentionally — if the model returns bad
-    JSON, the right response is to fail loudly with an artifact on disk,
-    not to burn another validation pass.
+    For ``ExtractResponse`` specifically, if the failure is in one or
+    more ``concepts[i]`` entries, drop the bad concepts and revalidate
+    with the clean subset. This means a single bad title no longer
+    kills all five concepts in a batch.
     """
     try:
         return model_cls.model_validate(raw)
     except ValidationError as exc:
+        salvaged = _try_salvage_extract_response(model_cls, raw, exc)
+        if salvaged is not None:
+            return salvaged  # type: ignore[return-value]
         _write_error_artifact(req_path, model_cls, raw, exc)
         raise
+
+
+def _try_salvage_extract_response(
+    model_cls: type[ModelT],
+    raw,
+    exc: ValidationError,
+) -> ModelT | None:
+    """Drop bad ``concepts[i]`` entries from an ExtractResponse and retry.
+
+    Returns the revalidated response on success, or None if the raw is
+    not an ExtractResponse, has no concepts list, the errors are not
+    concept-local, or the cleaned response still fails.
+    """
+    if model_cls.__name__ != "ExtractResponse":
+        return None
+    if not isinstance(raw, dict):
+        return None
+    concepts = raw.get("concepts")
+    if not isinstance(concepts, list) or not concepts:
+        return None
+    bad_indices: set[int] = set()
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        if len(loc) >= 2 and loc[0] == "concepts" and isinstance(loc[1], int):
+            bad_indices.add(loc[1])
+    if not bad_indices:
+        # Failure wasn't concept-local (e.g. chunk_id missing); no salvage.
+        return None
+    salvaged_concepts = [c for i, c in enumerate(concepts) if i not in bad_indices]
+    if not salvaged_concepts:
+        return None  # nothing left worth returning
+    salvaged_raw = dict(raw)
+    salvaged_raw["concepts"] = salvaged_concepts
+    try:
+        return model_cls.model_validate(salvaged_raw)
+    except ValidationError:
+        return None
+
+
+def _dispatch_raw(dispatch_dir: Path, role: str, payload: dict):
+    req_path, res_path = _write_request(dispatch_dir, role, payload)
+    try:
+        return _await_response(res_path)
+    finally:
+        _cleanup(res_path)
+        if not _error_path(req_path).exists():
+            _cleanup(req_path)
+
+
+def _dispatch_model(
+    dispatch_dir: Path,
+    role: str,
+    payload: dict,
+    model_cls: type[ModelT],
+    *,
+    validate: Callable[[ModelT, dict, Path], None] | None = None,
+) -> ModelT:
+    response, _ = _dispatch_model_with_raw(
+        dispatch_dir,
+        role,
+        payload,
+        model_cls,
+        validate=validate,
+    )
+    return response
+
+
+def _dispatch_model_with_raw(
+    dispatch_dir: Path,
+    role: str,
+    payload: dict,
+    model_cls: type[ModelT],
+    *,
+    validate: Callable[[ModelT, dict, Path], None] | None = None,
+) -> tuple[ModelT, dict]:
+    req_path, res_path = _write_request(dispatch_dir, role, payload)
+    try:
+        raw = _await_response(res_path)
+        response = _validate_or_record(model_cls, raw, req_path)
+        if validate is not None:
+            validate(response, raw, req_path)
+        return response, raw
+    finally:
+        _cleanup(res_path)
+        if not _error_path(req_path).exists():
+            _cleanup(req_path)
+
+
+def _record_call(
+    meter: CostMeter,
+    *,
+    role: Role,
+    tier: str,
+    input_tokens: int,
+    output_tokens: int,
+    wall_seconds: float,
+    cache_hit: bool = False,
+    prompt_hash_value: str,
+) -> None:
+    meter.record(
+        role=role,
+        tier=tier,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        context_cap=total_context() - response_reserve(),
+        wall_seconds=wall_seconds,
+        cache_hit=cache_hit,
+        prompt_hash=prompt_hash_value,
+    )
 
 
 # --- extractor -----------------------------------------------------------
 
 
-class ClaudeCodeExtractor(Extractor):
-    BINDING_NAME = "claude_code"
+class FileDispatchExtractor(Extractor):
+    BINDING_NAME = "file_dispatch"
 
     def __init__(
         self,
@@ -189,41 +304,18 @@ class ClaudeCodeExtractor(Extractor):
         )
 
         def compute() -> CachedExtract:
-            req_path, res_path = _write_request(
+            response = _dispatch_model(
                 self._dispatch_dir,
                 "extract",
-                {
-                    "chunk_id": request.chunk_id,
-                    "chunk_text": request.chunk_text,
-                    "canonical_titles": request.canonical_titles,
-                    "prompt_template": request.prompt_template,
-                    "tier": request.tier,
-                    "model_id": request.model_id,
-                    "images_for_doc": [
-                        {
-                            "id": im.id,
-                            "label": im.label,
-                            "caption": im.caption,
-                            "page": im.page,
-                            "path": im.path,
-                        }
-                        for im in request.images_for_doc
-                    ],
-                },
+                request.model_dump(mode="json"),
+                ExtractResponse,
+                validate=lambda response, raw, req_path: _assert_quotes_in_chunk(
+                    response,
+                    request.chunk_text,
+                    req_path,
+                    raw,
+                ),
             )
-            try:
-                raw = _await_response(res_path)
-                response = _validate_or_record(ExtractResponse, raw, req_path)
-                _assert_quotes_in_chunk(response, request.chunk_text, req_path, raw)
-            finally:
-                _cleanup(res_path)
-                # On success there is no error artifact and we also
-                # drop the request file. On validation or quote-check
-                # failure _write_error_artifact has already run and
-                # we intentionally keep the request file for the
-                # operator to inspect.
-                if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
-                    _cleanup(req_path)
             return CachedExtract(
                 payload={
                     "chunk_id": response.chunk_id,
@@ -253,18 +345,18 @@ class ClaudeCodeExtractor(Extractor):
         t0 = time.monotonic()
         entry, was_hit = self._cache.get_or_extract(key, compute)
         wall = time.monotonic() - t0
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.EXTRACTOR,
             tier=request.tier,
             input_tokens=entry.tokens_in,
             output_tokens=entry.tokens_out,
-            context_cap=total_context() - response_reserve(),
             wall_seconds=wall,
             cache_hit=was_hit,
-            prompt_hash=key.prompt_hash,
+            prompt_hash_value=key.prompt_hash,
         )
         payload = entry.payload
-        from ..agents.schema import Equation, ExtractedConcept, Parameter, Relationship
+        from ..contracts.schema import Equation, ExtractedConcept, Parameter, Relationship
 
         def _concept_kwargs(c: dict) -> dict:
             # Backwards-compatible: older cached payloads may omit v2 fields.
@@ -300,67 +392,27 @@ class ClaudeCodeExtractor(Extractor):
 # --- writer --------------------------------------------------------------
 
 
-class ClaudeCodeWriter(Writer):
+class FileDispatchWriter(Writer):
     def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def write(self, request: WriteRequest) -> WriteResponse:
-        req_path, res_path = _write_request(
+        t0 = time.monotonic()
+        response = _dispatch_model(
             self._dispatch_dir,
             "write",
-            {
-                "page_id": request.page_id,
-                "page_kind": request.page_kind,
-                "title": request.title,
-                "aliases": request.aliases,
-                "skeleton": request.skeleton,
-                "evidence": [
-                    {
-                        "chunk_id": e.chunk_id,
-                        "doc_id": e.doc_id,
-                        "quote": e.quote,
-                        "locator": e.locator,
-                    }
-                    for e in request.evidence
-                ],
-                "neighbor_titles": request.neighbor_titles,
-                "prompt_template": request.prompt_template,
-                "tier": request.tier,
-                "model_id": request.model_id,
-                "figures": [
-                    {
-                        "id": f.id,
-                        "label": f.label,
-                        "caption": f.caption,
-                        "page": f.page,
-                        "path": f.path,
-                    }
-                    for f in request.figures
-                ],
-                "style_guide": request.style_guide,
-                "field_guide": request.field_guide,
-                "artifact_template": request.artifact_template,
-                "corpus_persona": request.corpus_persona,
-            },
+            request.model_dump(mode="json"),
+            WriteResponse,
         )
-        t0 = time.monotonic()
-        try:
-            raw = _await_response(res_path)
-            response = _validate_or_record(WriteResponse, raw, req_path)
-        finally:
-            _cleanup(res_path)
-            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
-                _cleanup(req_path)
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.WRITER,
             tier=request.tier,
             input_tokens=response.tokens_in,
             output_tokens=response.tokens_out,
-            context_cap=total_context() - response_reserve(),
             wall_seconds=time.monotonic() - t0,
-            cache_hit=False,
-            prompt_hash=prompt_hash(request.prompt_template),
+            prompt_hash_value=prompt_hash(request.prompt_template),
         )
         return response
 
@@ -368,35 +420,26 @@ class ClaudeCodeWriter(Writer):
 # --- compactor -----------------------------------------------------------
 
 
-class ClaudeCodeCompactor(Compactor):
+class FileDispatchCompactor(Compactor):
     def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def compact(self, page_id: str, title: str, entries: list[dict]) -> dict:
-        req_path, res_path = _write_request(
+        t0 = time.monotonic()
+        raw = _dispatch_raw(
             self._dispatch_dir,
             "compact",
             {"page_id": page_id, "title": title, "entries": entries},
         )
-        t0 = time.monotonic()
-        try:
-            raw = _await_response(res_path)
-        finally:
-            _cleanup(res_path)
-            if not req_path.with_name(
-                req_path.name.replace(".request.", ".error.")
-            ).exists():
-                _cleanup(req_path)
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.COMPACTOR,
             tier="S",
             input_tokens=int(raw.get("tokens_in", 500)),
             output_tokens=int(raw.get("tokens_out", 200)),
-            context_cap=total_context() - response_reserve(),
             wall_seconds=time.monotonic() - t0,
-            cache_hit=False,
-            prompt_hash="compact_v1",
+            prompt_hash_value="compact_v1",
         )
         return raw
 
@@ -404,7 +447,7 @@ class ClaudeCodeCompactor(Compactor):
 # --- editor --------------------------------------------------------------
 
 
-class ClaudeCodeEditor(Editor):
+class FileDispatchEditor(Editor):
     def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
@@ -412,7 +455,8 @@ class ClaudeCodeEditor(Editor):
     def edit(
         self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]
     ) -> EditorBrief:
-        req_path, res_path = _write_request(
+        t0 = time.monotonic()
+        brief, raw = _dispatch_model_with_raw(
             self._dispatch_dir,
             "edit",
             {
@@ -421,26 +465,16 @@ class ClaudeCodeEditor(Editor):
                 "dossier": dossier,
                 "neighbors": neighbors,
             },
+            EditorBrief,
         )
-        t0 = time.monotonic()
-        try:
-            raw = _await_response(res_path)
-            brief = _validate_or_record(EditorBrief, raw, req_path)
-        finally:
-            _cleanup(res_path)
-            if not req_path.with_name(
-                req_path.name.replace(".request.", ".error.")
-            ).exists():
-                _cleanup(req_path)
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.EDITOR,
             tier="M",
             input_tokens=int(raw.get("tokens_in", 500)),
             output_tokens=int(raw.get("tokens_out", 300)),
-            context_cap=total_context() - response_reserve(),
             wall_seconds=time.monotonic() - t0,
-            cache_hit=False,
-            prompt_hash="edit_v1",
+            prompt_hash_value="edit_v1",
         )
         return brief
 
@@ -448,13 +482,14 @@ class ClaudeCodeEditor(Editor):
 # --- orchestrator --------------------------------------------------------
 
 
-class ClaudeCodeOrchestrator(Orchestrator):
+class FileDispatchOrchestrator(Orchestrator):
     def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def step(self, state: OrchState) -> OrchAction:
-        req_path, res_path = _write_request(
+        t0 = time.monotonic()
+        action = _dispatch_model(
             self._dispatch_dir,
             "orchestrate",
             {
@@ -463,24 +498,16 @@ class ClaudeCodeOrchestrator(Orchestrator):
                 "n_candidates": state.n_candidates,
                 "last_actions": state.last_actions,
             },
+            OrchAction,
         )
-        t0 = time.monotonic()
-        try:
-            raw = _await_response(res_path)
-            action = _validate_or_record(OrchAction, raw, req_path)
-        finally:
-            _cleanup(res_path)
-            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
-                _cleanup(req_path)
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.ORCHESTRATOR,
             tier="L",
             input_tokens=action.tokens_in,
             output_tokens=action.tokens_out,
-            context_cap=total_context() - response_reserve(),
             wall_seconds=time.monotonic() - t0,
-            cache_hit=False,
-            prompt_hash="orchestrator",
+            prompt_hash_value="orchestrator",
         )
         return action
 
@@ -502,11 +529,7 @@ def make_persona_complete(
     root = resolve_dispatch_dir(dispatch_dir)
 
     def _complete(prompt: str) -> str:
-        req_path, res_path = _write_request(root, "persona", {"prompt": prompt})
-        try:
-            raw = _await_response(res_path)
-        finally:
-            _cleanup(res_path, req_path)
+        raw = _dispatch_raw(root, "persona", {"prompt": prompt})
         if not isinstance(raw, dict):
             raise ValueError(f"persona dispatch returned non-dict: {raw!r}")
         text = raw.get("text", "")
@@ -519,52 +542,29 @@ def make_persona_complete(
 
 # --- querier -------------------------------------------------------------
 
-QUERY_PROMPT = "wikify_simple/query/v1"
+QUERY_PROMPT = "wikify_simple/query"
 
 
-class ClaudeCodeQuerier(Querier):
+class FileDispatchQuerier(Querier):
     def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
         self._meter = meter
         self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
 
     def answer(self, request: QueryRequest) -> QueryResponse:
-        req_path, res_path = _write_request(
+        t0 = time.monotonic()
+        response = _dispatch_model(
             self._dispatch_dir,
             "query",
-            {
-                "question": request.question,
-                "evidence": [
-                    {
-                        "page_id": ev.page_id,
-                        "page_title": ev.page_title,
-                        "body_excerpt": ev.body_excerpt,
-                        "citations": ev.citations,
-                    }
-                    for ev in request.evidence
-                ],
-                "prompt_template": request.prompt_template,
-                "model_id": request.model_id,
-                "tier": request.tier,
-            },
+            request.model_dump(mode="json"),
+            QueryResponse,
         )
-        t0 = time.monotonic()
-        try:
-            raw = _await_response(res_path)
-            response = _validate_or_record(QueryResponse, raw, req_path)
-            tokens_in = int(raw.get("tokens_in", 0))
-            tokens_out = int(raw.get("tokens_out", 0))
-        finally:
-            _cleanup(res_path)
-            if not req_path.with_name(req_path.name.replace(".request.", ".error.")).exists():
-                _cleanup(req_path)
-        self._meter.record(
+        _record_call(
+            self._meter,
             role=Role.WRITER,
             tier=request.tier,
-            input_tokens=tokens_in,
-            output_tokens=tokens_out,
-            context_cap=total_context() - response_reserve(),
+            input_tokens=response.tokens_in,
+            output_tokens=response.tokens_out,
             wall_seconds=time.monotonic() - t0,
-            cache_hit=False,
-            prompt_hash=prompt_hash(request.prompt_template),
+            prompt_hash_value=prompt_hash(request.prompt_template),
         )
         return response

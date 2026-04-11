@@ -15,12 +15,8 @@ This module also exposes the **layered writer prompt** loaders:
   field + artifact + persona) into one writer system message string
 
 The layered loaders read from sibling directories ``fields/`` and
-``artifact_types/``. Each has been ported verbatim from the legacy
-``wikify.papers.prompts`` package; only the artifact templates are
-new (the legacy ones were paper-shaped, not wiki-shaped).
+``artifact_types/``. The artifact templates are wiki-shaped.
 """
-
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path

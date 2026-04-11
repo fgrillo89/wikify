@@ -5,8 +5,6 @@ unit-norm float32 vectors. Adequate for the corpora wikify_simple targets
 (<= 10^4 chunks); swap for lancedb/chroma when it stops being adequate.
 """
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path

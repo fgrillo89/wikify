@@ -4,8 +4,6 @@ The cache is a single ``_page_embeddings.npz`` beside the bundle's
 ``_index.json``. Invalidation is a simple mtime check against the index.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Sequence
 from pathlib import Path
 

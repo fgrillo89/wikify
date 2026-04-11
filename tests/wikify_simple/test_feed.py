@@ -6,8 +6,6 @@ the extract cache (n_new_extracted == 0) and must not explode the page
 count (canonicalize merges by alias).
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

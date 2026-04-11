@@ -1,7 +1,5 @@
 """Tests for ingest.coupling.compute_coupling."""
 
-from __future__ import annotations
-
 from wikify_simple.ingest.coupling import compute_coupling
 from wikify_simple.models import Document
 

@@ -1,13 +1,11 @@
 """Tests for the layered writer prompt: style + field + artifact + persona."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 
-from wikify_simple.agents.schema import WriteEvidenceRef, WriteRequest
-from wikify_simple.distill.persona import (
+from wikify_simple.contracts.schema import WriteEvidenceRef, WriteRequest
+from wikify_simple.distill.write.persona import (
     build_persona_prompt,
     generate_corpus_persona,
     load_corpus_persona,
@@ -120,7 +118,7 @@ def test_write_request_accepts_layered_fields() -> None:
         skeleton="",
         evidence=[WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="quote text", locator="")],
         neighbor_titles=[],
-        prompt_template="wikify_simple/write/v1",
+        prompt_template="wikify_simple/write",
         model_id="haiku",
         tier="S",
         style_guide="STYLE",
@@ -143,7 +141,7 @@ def test_write_request_layered_fields_default_to_empty() -> None:
         skeleton="",
         evidence=[WriteEvidenceRef(chunk_id="c1", doc_id="d1", quote="quote text", locator="")],
         neighbor_titles=[],
-        prompt_template="wikify_simple/write/v1",
+        prompt_template="wikify_simple/write",
         model_id="haiku",
         tier="S",
     )

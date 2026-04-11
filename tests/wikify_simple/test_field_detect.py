@@ -1,11 +1,9 @@
 """Tests for distill.field_detect."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
-from wikify_simple.distill.field_detect import (
+from wikify_simple.distill.extract.field_detect import (
     _field_cache_path,
     detect_field,
     detect_field_scores,

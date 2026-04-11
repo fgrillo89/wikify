@@ -1,7 +1,5 @@
 """Image extraction + sidecar round-trip tests (slice 0c)."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

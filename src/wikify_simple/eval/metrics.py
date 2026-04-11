@@ -10,8 +10,6 @@ NER dependencies; the caller passes the right ones in.
 See ../metrics.md for the formal definitions.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence

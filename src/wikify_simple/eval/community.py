@@ -6,8 +6,6 @@ numpy adjacency matrices; outputs are ``list[set[int]]`` partitions and
 scalar modularity values.
 """
 
-from __future__ import annotations
-
 import networkx as nx
 import numpy as np
 from networkx.algorithms import community as nx_community

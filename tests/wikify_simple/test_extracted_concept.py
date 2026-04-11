@@ -11,8 +11,6 @@ These cover STEP 1 of the slice 6 structural rework:
   schema (schemas don't see ``chunk_text``)
 """
 
-from __future__ import annotations
-
 import json
 import threading
 import time
@@ -21,12 +19,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.agents.schema import (
+from wikify_simple.bindings.file_dispatch import FileDispatchExtractor
+from wikify_simple.contracts.schema import (
     ExtractedConcept,
     ExtractRequest,
     QuoteNotInChunkError,
 )
-from wikify_simple.bindings.claude_code import ClaudeCodeExtractor
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 
@@ -200,14 +198,14 @@ class _SingleResponder:
             time.sleep(0.02)
 
 
-def _make_extractor(tmp_path: Path, dispatch_root: Path) -> ClaudeCodeExtractor:
+def _make_extractor(tmp_path: Path, dispatch_root: Path) -> FileDispatchExtractor:
     meter = CostMeter(
         budget_haiku_eq=1_000_000.0,
         run_id="concept-test",
         events_path=tmp_path / "calls.jsonl",
     )
     cache = ExtractCache(root=tmp_path / "cache")
-    return ClaudeCodeExtractor(cache, meter, dispatch_dir=dispatch_root)
+    return FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
 
 
 def test_quote_not_in_chunk_rejected_by_binding(tmp_path):
@@ -239,7 +237,7 @@ def test_quote_not_in_chunk_rejected_by_binding(tmp_path):
             chunk_id="chunk-halluc",
             chunk_text="Atomic layer deposition is a self-limiting process.",
             canonical_titles=[],
-            prompt_template="wikify_simple/extract/v1",
+            prompt_template="wikify_simple/extract",
             model_id="claude-haiku",
             tier="S",
         )
@@ -292,7 +290,7 @@ def test_noisy_quote_accepted_by_binding(tmp_path):
                 "The memristor [12] was first described  by Chua\u2014a theoretical device."
             ),
             canonical_titles=[],
-            prompt_template="wikify_simple/extract/v1",
+            prompt_template="wikify_simple/extract",
             model_id="claude-haiku",
             tier="S",
         )

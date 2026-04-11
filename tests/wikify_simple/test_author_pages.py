@@ -1,10 +1,8 @@
 """Tests for distill/author_pages.py."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
-from wikify_simple.distill.author_pages import build_author_pages, merge_extracted_evidence
+from wikify_simple.distill.write.author_pages import build_author_pages, merge_extracted_evidence
 from wikify_simple.ingest.metadata import _is_valid_author
 from wikify_simple.models import Document, Evidence
 from wikify_simple.paths import BundlePaths
@@ -60,7 +58,9 @@ def test_citation_mined_authors_get_pages():
             ],
         ),
     ]
-    pages = build_author_pages(docs)
+    # Citation-only authors need min_citation_count=1 to be kept at the
+    # test threshold; production default is 2 to filter the long tail.
+    pages = build_author_pages(docs, min_citation_count=1)
     drake = next((p for p in pages if p.title == "David Drake"), None)
     assert drake is not None
     assert drake.provenance["from_citation_count"] >= 1

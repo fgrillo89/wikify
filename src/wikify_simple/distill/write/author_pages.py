@@ -3,16 +3,14 @@
 Enriched by the writer when chunk-extracted evidence accumulates.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from collections import Counter
 from pathlib import Path
 
-from ..ingest.metadata import _is_valid_author
-from ..models import Document, Evidence, WikiPage
-from ..store.page_naming import page_filename, page_id_from_title
+from wikify_simple.ingest.metadata import _is_valid_author
+from wikify_simple.models import Document, Evidence, WikiPage
+from wikify_simple.store.page_naming import page_filename, page_id_from_title
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -85,8 +83,16 @@ def build_author_pages(
     docs: list[Document],
     existing_index=None,  # noqa: ARG001 — reserved for future merge
     existing_page_dir: Path | None = None,
+    min_citation_count: int = 2,
 ) -> list[WikiPage]:
-    """Return one WikiPage per unique valid author across ``docs``."""
+    """Return one WikiPage per unique valid author across ``docs``.
+
+    An author gets a page if they are a primary author on at least one
+    corpus document, OR they appear as a citation-only author in at
+    least ``min_citation_count`` distinct citations across the corpus.
+    This filters out the long tail of one-shot citation authors that
+    would otherwise bloat the bundle (e.g. 1600+ pages from 20 papers).
+    """
     bucket: dict[str, dict] = {}
 
     for doc in docs:
@@ -139,6 +145,11 @@ def build_author_pages(
             continue
         primary = info["primary"]
         cited = info["cited"]
+        # Drop the long tail of citation-only authors who appear < min_citation_count
+        # times. Primary-author pages are always kept; citation-only authors are
+        # kept only if they reach the threshold.
+        if not primary and len(cited) < min_citation_count:
+            continue
         collaborators = sorted(info["collaborators"])
 
         existing_links: list[str] = []

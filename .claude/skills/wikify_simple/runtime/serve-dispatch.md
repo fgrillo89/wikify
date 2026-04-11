@@ -1,50 +1,44 @@
 ---
-name: wikify_simple/distill
-description: Run the agent strategy by orchestrating extract / write / orchestrate skills against a corpus.
+name: wikify_simple/runtime/serve-dispatch
+description: Long-running loop that services file-dispatch requests from a wikify_simple distill or query harness.
 ---
 
-# distill (agent strategy)
+# serve-dispatch
 
-This is the only strategy that has no Python file. It is realised by
-the outer Claude Code session running this skill, which in turn
-invokes `extract`, `write`, and `orchestrate` skills against the
-wikify_simple harness in agent mode.
+## When to use this skill
+Invoke this skill when a `wikify-simple` CLI process is running with `--binding file_dispatch` and needs a Claude session to handle its dispatch requests. This is the ONLY way to service `file_dispatch` runs; the `fake` and `heuristic` bindings do not dispatch to skills at all.
 
-## The wiki index is load-bearing for the agent loop
+## How it works
+The Python harness (`wikify-simple distill ...` or `wikify-simple query ...`) writes request JSON files to role subdirectories under the dispatch dir (default `data/dispatch/`, overridable via `WIKIFY_SIMPLE_DISPATCH_DIR`).
 
-Every bundle has a `_index.json` file that mirrors the on-disk pages.
-The orchestrator reads it to plan the next action; the writer reads
-it to find neighbour titles for the context envelope; the extractor
-reads it to see what canonical titles already exist (so dedup-after-
-extract is free). **Treat the index as the primary read surface for
-the wiki.** Never walk `concepts/*.md` or `people/*.md` directly when
-planning — that's an O(n) operation the index makes O(1).
-
-The harness rewrites `_index.json` after every batch of pages
-written, so a freshly-read index is always coherent with what's on
-disk.
+The dispatch roles are:
+- `extract/` — chunk extraction (handler: `handlers/extract`)
+- `write/` — page writing (handler: `handlers/write`)
+- `compact/` — dossier compaction (handler: `handlers/compact`)
+- `edit/` — editor brief (handler: `handlers/edit`)
+- `orchestrate/` — LLM-policy action selection (handler: `handlers/orchestrate`)
+- `query/` — query answering (handler: `handlers/query`)
 
 ## Steps
+1. Resolve the dispatch dir (env var `WIKIFY_SIMPLE_DISPATCH_DIR` or default `data/dispatch`).
+2. Poll every 250ms for files matching `*/<rid>.request.json`. Process them in arrival order.
+3. For each request file:
+   a. Identify the role from the parent directory name.
+   b. Invoke the corresponding handler skill (`wikify_simple/handlers/<role>`).
+   c. The handler writes `<rid>.response.json` next to the request.
+4. Continue until ANY of the following exit conditions:
+   - The orchestrator returns a `done` action (watch for `orchestrate/<rid>.response.json` payloads with `{"name": "done"}`).
+   - The harness process exits (you see no new request files for 30 consecutive polls AND all existing request files already have matching `.response.json` or `.error.json`).
+   - You receive an explicit stop signal (the user interrupts).
 
-1. Make sure the corpus has been ingested via `wikify-simple ingest`.
-2. Start the harness in agent mode:
-   `wikify-simple distill --strategy agent --binding claude_code --budget 1x --seed 0`
-   (The harness will block on dispatch files under `data/dispatch/`.
-   It writes the initial `_index.json` for the bundle before yielding.)
-3. Loop: poll `data/dispatch/orchestrate/`, `data/dispatch/extract/`,
-   and `data/dispatch/write/` for new request files. For each:
-     - read the request,
-     - **for orchestrate requests, read `index_path` first** so the
-       Task subagent has the current wiki state in its prompt,
-     - invoke the matching skill (`/wikify_simple/extract`,
-       `/wikify_simple/write`, `/wikify_simple/orchestrate`),
-     - write the response file next to the request.
-4. The harness terminates the loop when the orchestrator returns
-   `{"name": "done"}` or the cost meter aborts.
-5. The bundle is written under `data/wikis/agent_*` with a final
-   `_index.json` reflecting the complete wiki.
+## What the skill does NOT do
+- Does not read bundle files or the corpus directly.
+- Does not make decisions about extract/write content (that's the handlers' job).
+- Does not track budget (the Python cost meter handles that).
+- Does not retry failed requests beyond the handler-local retry (one retry).
 
-There is no judgment in this skill. The orchestrator decides every
-action; the writer/extractor skills are mechanical adapters; the
-harness keeps every budget invariant; the index is the shared
-runtime view of the wiki.
+## Errors
+If a handler writes `<rid>.error.json`, the Python harness will log it, skip the request, and continue. You should do the same: log it to stdout and move to the next request. DO NOT block the loop on errors.
+
+## Important
+Only needed when `--binding file_dispatch`. The `fake` and `heuristic` bindings execute in-process with no file dispatch.

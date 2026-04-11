@@ -1,7 +1,5 @@
 """The only module that knows where things live on disk."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,6 +77,10 @@ class BundlePaths:
         return self.root / "_run.json"
 
     @property
+    def run_history_path(self) -> Path:
+        return self.root / "_run_history.jsonl"
+
+    @property
     def calls_path(self) -> Path:
         return self.root / "_calls.jsonl"
 
@@ -86,6 +88,15 @@ class BundlePaths:
     def write_requests_dir(self) -> Path:
         return self.root / "_write_requests"
 
+    @property
+    def meta_dir(self) -> Path:
+        return self.root / "_meta"
+
+    @property
+    def coverage_memory_path(self) -> Path:
+        return self.meta_dir / "coverage_memory.json"
+
     def ensure(self) -> None:
         self.concepts_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)
+        self.meta_dir.mkdir(parents=True, exist_ok=True)

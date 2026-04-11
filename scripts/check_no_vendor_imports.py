@@ -1,5 +1,5 @@
-"""Fail CI if any wikify_simple module other than bindings/claude_code.py
-references the Claude Code dispatcher or imports the anthropic SDK.
+"""Fail CI if any wikify_simple module other than bindings/file_dispatch.py
+references the file-dispatch binding or imports the anthropic SDK.
 
 Run via: ``uv run python scripts/check_no_vendor_imports.py``.
 """
@@ -10,13 +10,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "wikify_simple"
-ALLOWED_FILES = {ROOT / "bindings" / "claude_code.py"}
+ALLOWED_FILES = {ROOT / "bindings" / "file_dispatch.py"}
 
 FORBIDDEN_PATTERNS = (
     "import anthropic",
     "from anthropic",
     "WIKIFY_SIMPLE_DISPATCH_DIR",
-    "claude_code dispatcher",
+    "file_dispatch binding",
     "subagent_dispatcher",
 )
 

@@ -8,8 +8,6 @@ Covers the regressions audited in ``src/wikify_simple/ingest_audit.md``:
 - topic filter rejects noise phrases from the legacy noise list
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from wikify_simple.ingest.metadata import (

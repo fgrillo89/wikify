@@ -1,5 +1,14 @@
 ﻿# Wikify Architecture
 
+> **Current state (2026-04)**: the active track is `wikify_simple`. The original `wikify` package has been archived under `archive/wikify/` — the text below from "Architectural Principles" onward describes the legacy structure and is kept for historical context. For current work, the authoritative architecture documents are:
+>
+> - [`src/wikify_simple/architecture.md`](../src/wikify_simple/architecture.md) — package layout, dependency direction, coding standards, key types and protocols
+> - [`src/wikify_simple/strategies.md`](../src/wikify_simple/strategies.md) — sampler / schedule / tiering cube + anchor cells
+> - [`src/wikify_simple/metrics.md`](../src/wikify_simple/metrics.md) — M1-M6 + GT-C + GT-P
+> - [`src/wikify_simple/runbook.md`](../src/wikify_simple/runbook.md) — operator runbook and CLI reference
+> - [`src/wikify_simple/test-run-playbook.md`](../src/wikify_simple/test-run-playbook.md) — reproducible test-run procedure
+> - [`src/wikify_simple/plans/structural-improvements.md`](../src/wikify_simple/plans/structural-improvements.md) — active structural roadmap (Phases 1-6)
+
 ## Purpose
 Wikify is a local-first corpus platform with two product surfaces built on the
 same underlying source and structured state:
@@ -11,16 +20,16 @@ The wiki is the primary knowledge product. It must remain domain-neutral and
 work across scientific, technical, historical, legal, policy, and mixed
 document corpora.
 
-## Current Docs
-The current documentation surface is intentionally small.
+## Legacy documentation surface
 
-- `docs/architecture.md`: architectural boundaries and system model
-- `docs/project-status.md`: current state and active priorities
-- `docs/refactor/wiki-deep-refactor-plan.md`: active implementation plan
-- `docs/design/wiki-runtime-refactor-plan.md`: focused design note for visible
-  wiki plus operational state
+The legacy `wikify` package under `archive/wikify/` had these supporting docs. They describe the pre-restructure product boundaries and are kept for historical reference only:
 
-Older design material has been moved to archive.
+- `docs/architecture.md`: architectural boundaries and system model (this file)
+- `docs/project-status.md`: legacy project status
+- `docs/refactor/wiki-deep-refactor-plan.md`: legacy implementation plan
+- `docs/design/wiki-runtime-refactor-plan.md`: legacy design note
+
+Older design material lives under `docs/archive/`. Active refactor / roadmap docs for `wikify_simple` live under `src/wikify_simple/plans/` — NOT under `docs/refactor/`.
 
 ## Architectural Principles
 1. Separate product boundaries clearly: `core`, `ingest`, `wiki`, `papers`.

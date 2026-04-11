@@ -1,11 +1,9 @@
-"""PPTX parser. Ported from ``wikify.ingest.pptx``.
+"""PPTX parser.
 
 Emits one ``## Slide N`` heading per slide so ``section_spans`` yields
 one DocSection per slide. Picture shapes become raw image records in
 ``metadata['_raw_images']``.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 

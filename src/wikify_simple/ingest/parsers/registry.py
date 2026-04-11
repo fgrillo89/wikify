@@ -1,11 +1,9 @@
 """Dispatch a source file to the right parser based on suffix."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...models import DocImage, DocKind
+from wikify_simple.models import DocImage, DocKind
 
 
 @dataclass
@@ -19,24 +17,26 @@ class ParseResult:
 
 def parse_file(path: Path) -> tuple[DocKind, ParseResult]:
     suffix = path.suffix.lower().lstrip(".")
-    if suffix in ("md", "markdown", "txt"):
-        from . import markdown as p
+    match suffix:
+        case "md" | "markdown" | "txt":
+            from . import markdown as p
 
-        return "md", p.parse(path)
-    if suffix == "pdf":
-        from . import pdf as p
+            return "md", p.parse(path)
+        case "pdf":
+            from . import pdf as p
 
-        return "pdf", p.parse(path)
-    if suffix == "docx":
-        from . import docx as p
+            return "pdf", p.parse(path)
+        case "docx":
+            from . import docx as p
 
-        return "docx", p.parse(path)
-    if suffix == "pptx":
-        from . import pptx as p
+            return "docx", p.parse(path)
+        case "pptx":
+            from . import pptx as p
 
-        return "pptx", p.parse(path)
-    if suffix in ("html", "htm"):
-        from . import html as p
+            return "pptx", p.parse(path)
+        case "html" | "htm":
+            from . import html as p
 
-        return "html", p.parse(path)
-    raise ValueError(f"unsupported file type: {path.suffix}")
+            return "html", p.parse(path)
+        case _:
+            raise ValueError(f"unsupported file type: {path.suffix}")

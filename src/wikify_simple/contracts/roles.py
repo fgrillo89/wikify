@@ -8,11 +8,9 @@ global TOTAL_CONTEXT cap.
 These spec lists are the locked v1 constants from strategies.md.
 """
 
-from __future__ import annotations
-
 from enum import Enum
 
-from .context_envelope import Pool, Required, SlotSpec
+from ..infra.context_envelope import Pool, Required, SlotSpec
 
 # --- global caps ---------------------------------------------------------
 

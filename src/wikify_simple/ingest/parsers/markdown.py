@@ -5,8 +5,6 @@ from the heading tree, plus any frontmatter metadata. No images extracted
 (markdown image syntax is rare in our corpora; can be added later).
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 

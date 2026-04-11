@@ -48,8 +48,6 @@ The wikification pipeline reads the index once via
 catalogue.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
@@ -148,7 +146,7 @@ class ImageIndex:
     # ---- persistence -----------------------------------------------------
 
     @classmethod
-    def load(cls, corpus: CorpusPaths) -> ImageIndex:
+    def load(cls, corpus: CorpusPaths) -> "ImageIndex":
         path = corpus.images_index_path
         if not path.exists():
             return rebuild_images_index(corpus)

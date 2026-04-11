@@ -1,6 +1,6 @@
-name: wikify_simple/extract/v2
+name: wikify_simple/extract
 role: extractor
-version: 2
+version: 1
 input_schema:
   chunk_id: str
   chunk_text: str

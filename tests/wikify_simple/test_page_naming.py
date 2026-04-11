@@ -1,7 +1,5 @@
 """Tests for store.page_naming: natural Wikipedia-style page ids."""
 
-from __future__ import annotations
-
 from wikify_simple.models import Evidence, WikiPage
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.page_naming import (
@@ -13,7 +11,7 @@ from wikify_simple.store.wiki_files import write_page
 from wikify_simple.store.wiki_index import (
     WikiIndex,
     build_index,
-    migrate_legacy_page_ids,
+    migrate_prefixed_page_ids,
 )
 
 
@@ -67,8 +65,8 @@ def test_alias_resolution_case_insensitive(tmp_path):
     assert idx.resolve_alias("Atomic Layer Deposition") == "Atomic Layer Deposition"
 
 
-def test_migrate_legacy_page_ids(tmp_path, monkeypatch):
-    monkeypatch.setenv("WIKIFY_SKIP_LEGACY_MIGRATION", "1")
+def test_migrate_prefixed_page_ids(tmp_path, monkeypatch):
+    monkeypatch.setenv("WIKIFY_SKIP_PAGE_ID_MIGRATION", "1")
     b = BundlePaths(root=tmp_path / "bundle")
     b.ensure()
     legacy = b.concepts_dir / "concept-atomic-layer-deposition.md"
@@ -84,7 +82,7 @@ def test_migrate_legacy_page_ids(tmp_path, monkeypatch):
         '[^e1]: c1 (d1) > "q"\n',
         encoding="utf-8",
     )
-    n = migrate_legacy_page_ids(b)
+    n = migrate_prefixed_page_ids(b)
     assert n == 1
     assert not legacy.exists()
     assert (b.concepts_dir / "Atomic Layer Deposition.md").exists()

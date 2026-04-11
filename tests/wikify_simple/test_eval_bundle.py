@@ -1,7 +1,5 @@
 """Tests for the tolerant evidence-block parser in eval.bundle."""
 
-from __future__ import annotations
-
 from wikify_simple.eval.bundle import _extract_evidence, load_bundle
 
 

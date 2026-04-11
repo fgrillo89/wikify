@@ -7,11 +7,8 @@ text and an ``## Edges`` section with Obsidian wikilinks plus
 ``#edge/...`` tags so the vault can visualise citation / similarity /
 coupling graphs.
 
-This is the small wikify_simple analogue of the legacy
-``wikify.ingest.vault.templates.paper_note`` template.
+Generates the paper note template for the corpus vault.
 """
-
-from __future__ import annotations
 
 import json
 from pathlib import Path

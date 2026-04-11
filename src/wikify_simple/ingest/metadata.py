@@ -1,12 +1,9 @@
 """Metadata extraction helpers for parsers (pdf/docx/pptx/html).
 
-Ported verbatim from the legacy ``wikify.ingest.extract.metadata`` with
-the only changes being: stdlib imports only, no dataclasses returned to
-the outside, no Paper coupling. Helpers cover title, authors, summary,
-year, DOI, and a slide-aware summary synthesiser.
+Stdlib imports only, no dataclasses returned to the outside. Helpers
+cover title, authors, summary, year, DOI, and a slide-aware summary
+synthesiser.
 """
-
-from __future__ import annotations
 
 import re
 from dataclasses import dataclass
@@ -501,7 +498,7 @@ def _parse_author_line(line: str) -> list[str]:
 
 def _is_noise_paragraph(text: str) -> bool:
     """Return True if a paragraph is bibliographic / boilerplate metadata,
-    not real content. Mirrors the legacy ``wikify`` noise list verbatim.
+    not real content.
     """
     lower = text.lower()
     noise_markers = (

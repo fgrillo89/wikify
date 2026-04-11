@@ -5,8 +5,6 @@ read surface; falls back to page-body embeddings for phrases the alias
 map misses. Bundle is never mutated by a query call.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os
@@ -14,20 +12,23 @@ import tempfile
 from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from ..agents.protocols import Querier
-from ..agents.schema import QueryAnswer, QueryEvidence, QueryRequest
+from ..contracts.protocols import Querier
+from ..contracts.schema import QueryAnswer, QueryEvidence, QueryRequest
 from ..ingest.topics import _PHRASE_RE
 from ..paths import BundlePaths
 from ..prompts import load_prompt
 from ..store.bundle_embeddings import load_or_compute
 from ..store.wiki_index import WikiIndex
 
-QUERY_PROMPT = load_prompt("wikify_simple/query/v1").name
-_MAX_CANDIDATES = 12
-_BODY_EXCERPT_CHARS = 600
+if TYPE_CHECKING:
+    from ..eval.bundle import Bundle
+from .config import BODY_EXCERPT_CHARS, MAX_CANDIDATES
+
+QUERY_PROMPT = load_prompt("wikify_simple/query").name
 _STOP = frozenset(
     {
         "what",
@@ -152,7 +153,7 @@ def run(
             embed_cache_dir = cache_root / "embeddings" / bundle.root.name
             embed_cache_dir.mkdir(parents=True, exist_ok=True)
             _ids, page_mat = load_or_compute(
-                _FakeBundleForEmbed(embed_cache_dir),
+                cast("Bundle", _FakeBundleForEmbed(embed_cache_dir)),
                 pages_for_embed,
                 embed,
             )
@@ -178,9 +179,9 @@ def run(
         for link in entry.links:
             if link in index and link not in candidates:
                 candidates.append(link)
-        if len(candidates) >= _MAX_CANDIDATES:
+        if len(candidates) >= MAX_CANDIDATES:
             break
-    candidates = candidates[:_MAX_CANDIDATES]
+    candidates = candidates[:MAX_CANDIDATES]
 
     # 5. Build evidence.
     from ..eval.bundle import _parse_page
@@ -201,7 +202,7 @@ def run(
             QueryEvidence(
                 page_id=pid,
                 page_title=entry.title,
-                body_excerpt=(page.body_clean or "")[:_BODY_EXCERPT_CHARS],
+                body_excerpt=(page.body_clean or "")[:BODY_EXCERPT_CHARS],
                 citations=list(entry.links),
             )
         )

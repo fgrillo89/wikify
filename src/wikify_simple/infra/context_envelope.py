@@ -16,10 +16,8 @@ The builder walks a per-role spec list:
      ("23 more elided").
 
 If the Required slots alone exceed the effective cap, the builder raises
-ContextOverflow rather than truncating silently.
+ContextOverflowError rather than truncating silently.
 """
-
-from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -57,11 +55,11 @@ SlotSpec = Union[Required, Pool]
 # --- exceptions ----------------------------------------------------------
 
 
-class ContextOverflow(RuntimeError):
+class ContextOverflowError(RuntimeError):
     """Required slots alone exceed the effective context cap."""
 
 
-class UnknownSlot(KeyError):
+class UnknownSlotError(KeyError):
     """A request supplied content for a slot the spec does not declare."""
 
 
@@ -110,11 +108,11 @@ class ContextEnvelope:
 
         `slots` is a dict keyed by slot name. Required slots must have a
         string value; Pool slots must have a list[PoolItem] value. Slots
-        not declared in the spec raise UnknownSlot.
+        not declared in the spec raise UnknownSlotError.
         """
         for name in slots:
             if name not in self._spec_by_name:
-                raise UnknownSlot(name)
+                raise UnknownSlotError(name)
 
         # Pass 1: account for Required slots.
         required_text: dict[str, str] = {}
@@ -130,7 +128,9 @@ class ContextEnvelope:
             required_tokens += tokens
 
         if required_tokens > self._effective_cap:
-            raise ContextOverflow(f"required slots use {required_tokens} > {self._effective_cap}")
+            raise ContextOverflowError(
+                f"required slots use {required_tokens} > {self._effective_cap}"
+            )
 
         # Pass 2: give every Pool its floor.
         remaining = self._effective_cap - required_tokens

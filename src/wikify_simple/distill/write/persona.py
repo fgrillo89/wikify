@@ -9,19 +9,17 @@ This module is binding-agnostic: it takes a ``complete`` callable that
 maps a single prompt string to a single text response. The CLI is
 responsible for wiring that callable to either a deterministic stub
 (``--binding fake``) or the Claude Code dispatcher (``--binding
-claude_code``). No vendor imports live here.
+file_dispatch``). No vendor imports live here.
 
 The result is written to ``<corpus_root>/persona.txt`` and the same
 string is returned. ``distill.pipeline.run`` reads the file at the start
 of every run.
 """
 
-from __future__ import annotations
-
 from typing import Callable
 
-from ..models import Document
-from ..paths import CorpusPaths
+from wikify_simple.models import Document
+from wikify_simple.paths import CorpusPaths
 
 CompleteFn = Callable[[str], str]
 

@@ -10,8 +10,6 @@ reserved characters sanitized). URL slugs are produced only when we
 emit HTML output.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 

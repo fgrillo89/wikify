@@ -1,7 +1,5 @@
 """Query mode tests: fake binding, non-mutation, citations present."""
 
-from __future__ import annotations
-
 import time
 from pathlib import Path
 
@@ -30,11 +28,12 @@ def _snapshot_mtimes(root: Path) -> dict:
     return out
 
 
-@pytest.fixture
-def ready_bundle(tmp_path) -> tuple[BundlePaths, CorpusPaths]:
-    corpus = ingest_corpus(FIXTURE, tmp_path / "corpus")
-    bundle = BundlePaths(root=tmp_path / "bundle")
-    cache = ExtractCache(root=tmp_path / "cache")
+@pytest.fixture(scope="module")
+def ready_bundle(tmp_path_factory) -> tuple[BundlePaths, CorpusPaths]:
+    root = tmp_path_factory.mktemp("query")
+    corpus = ingest_corpus(FIXTURE, root / "corpus")
+    bundle = BundlePaths(root=root / "bundle")
+    cache = ExtractCache(root=root / "cache")
     meter = CostMeter(
         budget_haiku_eq=20_000.0,
         run_id="Q_1x_seed0",

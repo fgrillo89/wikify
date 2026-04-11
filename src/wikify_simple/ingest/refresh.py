@@ -6,12 +6,11 @@ topic vocabulary, and writes everything under ``output_dir``. Idempotent
 modulo file content (file hash → doc id).
 """
 
-from __future__ import annotations
-
 import hashlib
 import re
 from pathlib import Path
 
+from ..infra.embedding import embed_texts
 from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
 from ..store.corpus import (
@@ -29,7 +28,6 @@ from .chunker import chunk_document
 from .citations import extract_citations
 from .corpus_graph import build_corpus_graph
 from .coupling import compute_coupling
-from .embedder import embed_texts
 from .images import caption_chunks_for, save_doc_images
 from .parsers.registry import parse_file
 from .topics import extract_topics, write_topics

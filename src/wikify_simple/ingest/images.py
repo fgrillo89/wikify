@@ -8,8 +8,7 @@ and ``refresh.py`` calls ``save_doc_images`` to persist each image as:
 
 Where ``label`` is a caption-resolved name (``Fig_1``, ``Table_2``,
 ``Scheme_1a``) when the figure extractor matched a caption, falling back
-to ``p{N}_img{i}`` when no caption could be resolved. This mirrors the
-legacy ``wikify.ingest.extract.media`` convention. The folder slug is a
+to ``p{N}_img{i}`` when no caption could be resolved. The folder slug is a
 clean truncation of the source filename (no hash suffix) so paths stay
 under the Windows MAX_PATH limit.
 
@@ -18,12 +17,7 @@ source_bbox, ...}`` so they can be grepped or loaded back via
 ``read_doc_images``. The sidecar is the on-disk source of truth for the
 post-ingest image inventory.
 
-The PDF-specific extraction (fitz-based caption matching, dedup, scan
-detection) lives in ``ingest/figures.py`` and is re-exported here as
-``extract_pdf_media`` for call sites that already use it.
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -32,10 +26,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..models import Chunk, DocImage
-from .figures import extract_pdf_media  # re-export
 
 __all__ = [
-    "extract_pdf_media",
     "save_doc_images",
     "load_sidecars",
     "caption_chunks_for",

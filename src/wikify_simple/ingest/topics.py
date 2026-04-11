@@ -1,7 +1,6 @@
 """Topic vocabulary extraction (used by GT-C in eval).
 
-Port of the keyword-first extractor from
-``wikify.ingest.vault.linker``. The algorithm:
+Keyword-first topic extractor. The algorithm:
 
 1. Pass 1: scan each doc for a declared "Keywords:" / "Index Terms:"
    section. Collect all declared keywords as the corpus vocabulary,
@@ -12,11 +11,9 @@ Port of the keyword-first extractor from
    substrings and merging plural/stem variants.
 
 The public ``extract_topics`` keeps its ``(docs_chunks, declared_per_doc)``
-signature; the legacy algorithm is invoked internally by building a
+signature; the algorithm is invoked internally by building a
 per-doc text blob from chunk text.
 """
-
-from __future__ import annotations
 
 import json
 import re
@@ -105,7 +102,7 @@ def write_topics(path: Path, vocab: TopicVocabulary) -> None:
     path.write_text(json.dumps(vocab.to_dict(), indent=2), encoding="utf-8")
 
 
-# --- internals (ported from wikify.ingest.vault.linker) -----------------
+# --- internals ------------------------------------------------------------
 
 _KEYWORD_BAD_STARTERS = frozenset(
     {

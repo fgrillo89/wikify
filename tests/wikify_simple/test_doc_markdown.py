@@ -1,7 +1,5 @@
 """Tests for store.doc_markdown.write_doc_markdown."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from wikify_simple.models import Document

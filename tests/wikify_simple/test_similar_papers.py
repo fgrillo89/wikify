@@ -1,7 +1,5 @@
 """End-to-end test for similar_to population during ingest."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from wikify_simple.ingest.refresh import ingest_corpus

@@ -1,11 +1,9 @@
 """The three Protocols that strategies depend on.
 
-A binding (fake or claude_code) implements all three. Strategies receive
+A binding (fake or file_dispatch) implements all three. Strategies receive
 the implementations by injection at the CLI level and never import any
 binding module directly.
 """
-
-from __future__ import annotations
 
 from typing import Protocol
 

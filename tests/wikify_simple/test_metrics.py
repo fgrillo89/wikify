@@ -1,7 +1,5 @@
 """Tests for eval.metrics extras (g_links_modularity)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -26,11 +24,12 @@ from wikify_simple.store.vectors_meta import read_meta
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
 
-@pytest.fixture
-def loaded_bundle(tmp_path):
-    corpus = ingest_corpus(FIXTURE, tmp_path / "corpus")
-    bundle = BundlePaths(root=tmp_path / "bundle")
-    cache = ExtractCache(root=tmp_path / "cache")
+@pytest.fixture(scope="module")
+def loaded_bundle(tmp_path_factory):
+    root = tmp_path_factory.mktemp("metrics")
+    corpus = ingest_corpus(FIXTURE, root / "corpus")
+    bundle = BundlePaths(root=root / "bundle")
+    cache = ExtractCache(root=root / "cache")
     meter = CostMeter(
         budget_haiku_eq=20_000.0,
         run_id="M_1x_seed0",

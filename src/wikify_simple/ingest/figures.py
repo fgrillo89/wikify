@@ -1,22 +1,20 @@
-"""PDF figure/media extraction ported from ``wikify.ingest.extract.media``.
+"""PDF figure/media extraction.
 
-The legacy caption-matching, dedup, scan detection, and bbox logic are
-carried over verbatim where possible. The only structural change is the
-return shape: instead of SQLModel ``Figure`` instances this module
-returns plain dicts that ``ingest/images.py::save_doc_images`` writes to
-disk alongside a JSON sidecar.
+Caption-matching, dedup, scan detection, and bbox logic. Returns plain
+dicts that ``ingest/images.py::save_doc_images`` writes to disk alongside
+a JSON sidecar.
 """
-
-from __future__ import annotations
 
 import hashlib
 import re
 
-_MAX_MEDIA_PER_PAPER = 80
-_MIN_WIDTH = 100
-_MIN_HEIGHT = 100
-_MIN_BYTES = 2000
-_SCAN_THRESHOLD = 15
+from .config import (
+    MAX_MEDIA_PER_PAPER,
+    MIN_IMG_BYTES,
+    MIN_IMG_HEIGHT,
+    MIN_IMG_WIDTH,
+    SCAN_THRESHOLD,
+)
 
 _FIGURE_CAPTION_RE = re.compile(
     r"(?i)(fig(?:ure)?\.?\s*\d+[a-z]?)\s*[.:\s\u2014\-]+(.*)", re.DOTALL
@@ -65,7 +63,7 @@ def extract_pdf_media(doc, md_text: str) -> list[dict]:
         return raw
 
     for page_num in range(n_pages):
-        if len(raw) >= _MAX_MEDIA_PER_PAPER:
+        if len(raw) >= MAX_MEDIA_PER_PAPER:
             break
         try:
             page = doc[page_num]
@@ -75,14 +73,14 @@ def extract_pdf_media(doc, md_text: str) -> list[dict]:
 
         page_captions = _extract_captions_from_page(page)
 
-        if len(image_list) > _SCAN_THRESHOLD:
+        if len(image_list) > SCAN_THRESHOLD:
             raw.extend(_scanned_page_raw(page, page_num, seen, page_captions, md_captions))
             continue
 
         extracted = _extract_images_on_page(doc, page, image_list, seen)
         raw.extend(_build_records(page_num, extracted, page_captions, md_captions))
 
-    return raw[:_MAX_MEDIA_PER_PAPER]
+    return raw[:MAX_MEDIA_PER_PAPER]
 
 
 def _extract_images_on_page(
@@ -99,9 +97,9 @@ def _extract_images_on_page(
         width = base.get("width", 0)
         height = base.get("height", 0)
         ext = base.get("ext", "png")
-        if width < _MIN_WIDTH or height < _MIN_HEIGHT:
+        if width < MIN_IMG_WIDTH or height < MIN_IMG_HEIGHT:
             continue
-        if len(blob) < _MIN_BYTES:
+        if len(blob) < MIN_IMG_BYTES:
             continue
         h = hashlib.sha256(blob).hexdigest()
         if h in seen:

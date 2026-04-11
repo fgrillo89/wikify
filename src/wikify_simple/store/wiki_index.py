@@ -14,8 +14,6 @@ file is missing or stale, ``rebuild_index(bundle)`` reconstructs it
 from the page files alone.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
@@ -177,12 +175,12 @@ class WikiIndex:
         return f"- [{e.title}]({e.path}) — {meta}{aliases}"
 
     @classmethod
-    def load(cls, bundle: BundlePaths) -> WikiIndex:
+    def load(cls, bundle: BundlePaths) -> "WikiIndex":
         import os as _os
 
-        if _os.environ.get("WIKIFY_SKIP_LEGACY_MIGRATION") != "1":
+        if _os.environ.get("WIKIFY_SKIP_PAGE_ID_MIGRATION") != "1":
             try:
-                migrate_legacy_page_ids(bundle)
+                migrate_prefixed_page_ids(bundle)
             except Exception:  # pragma: no cover - migration is best-effort
                 pass
         path = bundle.root / _INDEX_FILENAME
@@ -266,12 +264,12 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     return idx
 
 
-def migrate_legacy_page_ids(bundle: BundlePaths) -> int:
-    """Rename any legacy ``concept-*.md`` / ``person-*.md`` files in-place
-    to their new natural-title filename. Returns the number of renames.
+def migrate_prefixed_page_ids(bundle: BundlePaths) -> int:
+    """Rename any prefixed ``concept-*.md`` / ``person-*.md`` files in-place
+    to their natural-title filename. Returns the number of renames.
 
-    Reads the old frontmatter ``title:`` field to pick the new filename.
-    Rewrites ``_index.json`` if it exists and contained legacy entries.
+    Reads the frontmatter ``title:`` field to pick the new filename.
+    Rewrites ``_index.json`` if it exists and contained prefixed entries.
     """
     if not bundle.root.exists():
         return 0

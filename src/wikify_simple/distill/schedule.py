@@ -5,10 +5,10 @@ the Heaps slope dN/dC: when novelty drops below threshold, the remaining
 budget shifts toward write.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Protocol
+
+from .config import CURATE_FRACTION, NOVELTY_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class StaticSchedule(Schedule):
     exploit_fraction: float
 
     def initial_split(self, total: float) -> BudgetSplit:
-        curate = 0.05 * total
+        curate = CURATE_FRACTION * total
         exploit = self.exploit_fraction * total
         explore = max(total - curate - exploit, 0.0)
         return BudgetSplit(extract_haiku_eq=explore, write_haiku_eq=exploit, curate_haiku_eq=curate)
@@ -40,7 +40,7 @@ class StaticSchedule(Schedule):
 @dataclass(frozen=True)
 class AdaptiveSchedule(Schedule):
     exploit_fraction_initial: float
-    novelty_threshold: float = 0.05  # dN/dC below this -> shift to write
+    novelty_threshold: float = NOVELTY_THRESHOLD
 
     def initial_split(self, total: float) -> BudgetSplit:
         return StaticSchedule(self.exploit_fraction_initial).initial_split(total)

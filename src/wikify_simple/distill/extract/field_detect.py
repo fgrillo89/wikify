@@ -10,17 +10,15 @@ Result is cached in ``<corpus>/field.txt`` so subsequent runs don't
 re-detect.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from functools import lru_cache
 from pathlib import Path
 
-from ..paths import CorpusPaths
-from ..prompts import available_field_guides
+from wikify_simple.paths import CorpusPaths
+from wikify_simple.prompts import available_field_guides
 
-_FIELDS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "fields"
+_FIELDS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "fields"
 _FIELD_CACHE_FILENAME = "field.txt"
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 

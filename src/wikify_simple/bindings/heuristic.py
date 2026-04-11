@@ -10,13 +10,12 @@ structured prose. Good enough for pipeline validation and fast iteration;
 swap to a model-backed binding for publication-quality output.
 """
 
-from __future__ import annotations
-
 import re
 import time
 
-from ..agents.protocols import Compactor, Editor, Extractor, Writer
-from ..agents.schema import (
+from ..contracts.protocols import Compactor, Editor, Extractor, Writer
+from ..contracts.roles import Role, response_reserve, total_context
+from ..contracts.schema import (
     BriefSection,
     EditorBrief,
     ExtractedConcept,
@@ -27,7 +26,6 @@ from ..agents.schema import (
 )
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from ..infra.cost_meter import CostMeter
-from ..infra.role import Role, response_reserve, total_context
 
 # ---------------------------------------------------------------------------
 # Concept extraction patterns

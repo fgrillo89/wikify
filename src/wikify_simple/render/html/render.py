@@ -1,6 +1,6 @@
 """Static HTML site renderer for a wikify_simple bundle.
 
-Trimmed port of ``src/wikify/wiki/presentation/html.py``: walks a
+Walks a
 bundle's ``concepts/`` and ``people/`` directories, parses each page
 through the canonical ``eval.bundle._parse_page`` parser, runs the
 markdown body through ``python-markdown`` (with the ``footnotes``,
@@ -10,29 +10,25 @@ extensions), resolves ``[[wikilinks]]`` against the bundle's
 output's ``assets/`` tree, and emits one HTML file per page plus an
 index landing page.
 
-The legacy renderer also emits people/random/recent/categories/domain
-pages and a metrics dashboard. wikify_simple has no run metrics on the
-bundle and no domain field, so those special pages are intentionally
+Special pages (random/recent/categories/domain/metrics) are intentionally
 omitted. Categories are derived from ``page_kind`` only.
 """
-
-from __future__ import annotations
 
 import json
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from ...eval.bundle import Bundle, Page, load_bundle
-from ...ingest.metadata import _is_valid_author
-from ...paths import BundlePaths
-from ...store.page_naming import url_slug
-from ...store.wiki_index import WikiIndex, _normalize
+from wikify_simple.eval.bundle import Bundle, Page, load_bundle
+from wikify_simple.ingest.metadata import _is_valid_author
+from wikify_simple.paths import BundlePaths
+from wikify_simple.store.page_naming import url_slug
+from wikify_simple.store.wiki_index import WikiIndex, _normalize
 
 WIKI_NAME = "Wikify Simple"
 
@@ -148,7 +144,7 @@ def build_site(
     )
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
 
-    # Static assets: CSS verbatim from the legacy template, search.js stub.
+    # Static assets: CSS + search.js stub.
     shutil.copy2(_TEMPLATES_DIR / "wiki.css", out_dir / "static" / "wiki.css")
     (out_dir / "static" / "search.js").write_text(_SEARCH_JS, encoding="utf-8")
 
@@ -186,7 +182,7 @@ class _PageView:
     has_prose: bool  # True if body has real content beyond just evidence
 
     @classmethod
-    def from_page(cls, page: Page) -> _PageView:
+    def from_page(cls, page: Page) -> Self:
         sub = "concepts" if page.kind == "concept" else "people"
         excerpt = ""
         for line in page.body_clean.splitlines():

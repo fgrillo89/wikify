@@ -1,1 +1,1 @@
-"""Protocol-only definitions for the agent surfaces. No model code lives here."""
+"""Protocol-only definitions for the contract surfaces. No model code lives here."""

@@ -11,15 +11,13 @@ created with ``provenance.source = "extraction"``. This allows the model
 to enrich person pages when enough evidence accumulates.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..agents.schema import ExtractedConcept
-from ..models import Evidence, WikiPage
-from ..store.page_naming import page_id_from_title
+from wikify_simple.contracts.schema import ExtractedConcept
+from wikify_simple.models import Evidence, WikiPage
+from wikify_simple.store.page_naming import page_id_from_title
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 

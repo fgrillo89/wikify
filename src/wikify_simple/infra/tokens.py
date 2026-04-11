@@ -6,9 +6,7 @@ a ceiling, not a precise meter). When/if we need exact counts for cost
 telemetry, swap the implementation here for tiktoken in one place.
 """
 
-from __future__ import annotations
-
-_CHARS_PER_TOKEN = 4
+from .config import CHARS_PER_TOKEN
 
 
 def count_tokens(text: str) -> int:
@@ -19,4 +17,4 @@ def count_tokens(text: str) -> int:
     """
     if not text:
         return 0
-    return max(1, len(text) // _CHARS_PER_TOKEN)
+    return max(1, len(text) // CHARS_PER_TOKEN)

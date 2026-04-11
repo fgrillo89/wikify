@@ -1,10 +1,8 @@
 """Confidence label + score propagation through canonicalize and metrics
 (graphify item 6b)."""
 
-from __future__ import annotations
-
-from wikify_simple.agents.schema import ExtractedConcept
-from wikify_simple.distill.canonicalize import Candidate, canonicalize
+from wikify_simple.contracts.schema import ExtractedConcept
+from wikify_simple.distill.extract.canonicalize import Candidate, canonicalize
 from wikify_simple.eval.bundle import Bundle, Page
 from wikify_simple.eval.bundle import Evidence as BundleEvidence
 from wikify_simple.eval.metrics import spectral_gap_modularity

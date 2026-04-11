@@ -1,7 +1,5 @@
 """Thin Typer CLI. Wires bindings into strategies; contains no business logic."""
 
-from __future__ import annotations
-
 import json
 import os
 from datetime import datetime, timezone
@@ -20,6 +18,33 @@ app = typer.Typer(add_completion=False, help="wikify_simple CLI")
 
 
 _BUDGET_TABLE = {"0.1x": 5_000.0, "1x": 50_000.0, "3x": 150_000.0}
+_VALID_TIERS = ("S", "M", "L")
+
+
+def _parse_budget(raw: str) -> float:
+    """Parse a budget string into haiku-equivalent tokens.
+
+    Accepts:
+      - Legacy shortcuts: ``0.1x`` (5k), ``1x`` (50k), ``3x`` (150k)
+      - Suffixed integers: ``50k``, ``1.5M`` (case-insensitive)
+      - Raw numbers: ``50000``, ``5e4``
+    """
+    if raw in _BUDGET_TABLE:
+        return _BUDGET_TABLE[raw]
+    s = raw.strip().lower()
+    multiplier = 1.0
+    if s.endswith("k"):
+        multiplier = 1_000.0
+        s = s[:-1]
+    elif s.endswith("m"):
+        multiplier = 1_000_000.0
+        s = s[:-1]
+    try:
+        return float(s) * multiplier
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"--budget must be a number, Nk, NM, or one of {sorted(_BUDGET_TABLE)}: got {raw!r}"
+        ) from exc
 
 
 @app.command()
@@ -35,16 +60,75 @@ def ingest(
 @app.command()
 def distill(
     strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
-    budget: str = typer.Option("1x", "--budget"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
+    policy: str = typer.Option(
+        "rule_policy",
+        "--policy",
+        help="rule_policy | llm_policy",
+    ),
+    budget: str = typer.Option(
+        "1x",
+        "--budget",
+        help=(
+            "Haiku-equivalent tokens. Accepts integers (50000), suffixed "
+            "(50k, 1.5M), or shortcuts (0.1x=5k, 1x=50k, 3x=150k)."
+        ),
+    ),
+    extract_tier: str | None = typer.Option(
+        None,
+        "--extract-tier",
+        help="S | M | L. Override the strategy default (typically S=haiku).",
+    ),
+    write_tier: str | None = typer.Option(
+        None,
+        "--write-tier",
+        help="S | M | L. Override the strategy default (typically M=sonnet).",
+    ),
+    edit_tier: str | None = typer.Option(
+        None,
+        "--edit-tier",
+        help="S | M | L. Override the strategy default (typically M=sonnet).",
+    ),
+    compact_tier: str | None = typer.Option(
+        None,
+        "--compact-tier",
+        help="S | M | L. Override the strategy default (typically S=haiku).",
+    ),
+    exploit_fraction: float | None = typer.Option(
+        None,
+        "--exploit-fraction",
+        help=(
+            "Fraction of budget (0..1) allocated to the write phase. "
+            "Overrides the strategy default."
+        ),
+    ),
     seed: int = typer.Option(0, "--seed"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_dir: Path = typer.Option(Path("data/wikis"), "--out"),
+    bundle_dir: Path | None = typer.Option(
+        None,
+        "--bundle",
+        help=(
+            "Explicit bundle path. When set, overrides --out and skips the "
+            "timestamped subdir on --iteration create. Use this to run "
+            "create then refine against the same path across iterations."
+        ),
+    ),
+    merge_from: Path | None = typer.Option(
+        None,
+        "--merge-from",
+        help="Second bundle to merge when --iteration merge",
+    ),
     cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
     feed: bool = typer.Option(
         False,
         "--feed",
-        help="Incremental mode: reuse --out as an existing bundle and merge",
+        help="Deprecated alias for --iteration refine",
+    ),
+    iteration: str = typer.Option(
+        "create",
+        "--iteration",
+        help="create | refine | merge",
     ),
     field: str | None = typer.Option(
         None,
@@ -70,10 +154,20 @@ def distill(
 
     if phase not in ("all", "extract", "write"):
         raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
+    if policy not in ("rule_policy", "llm_policy"):
+        raise typer.BadParameter(f"unknown policy: {policy}")
+    if iteration not in ("create", "refine", "merge"):
+        raise typer.BadParameter(f"unknown iteration: {iteration}")
+    if feed and iteration == "create":
+        iteration = "refine"
+    if iteration == "merge" and merge_from is None:
+        raise typer.BadParameter("--iteration merge requires --merge-from")
+    if iteration == "merge" and phase != "all":
+        raise typer.BadParameter("--iteration merge only supports --phase all")
     if strategy not in STRATEGIES:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if field is None:
-        from .distill.field_detect import detect_field
+        from .distill.extract.field_detect import detect_field
 
         field = detect_field(CorpusPaths(root=corpus_dir))
         typer.echo(f"auto-detected field: {field}")
@@ -83,22 +177,40 @@ def distill(
         raise typer.BadParameter(
             f"unknown artifact {artifact!r}; available: {available_artifact_templates()}"
         )
-    if binding == "claude_code" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+    if binding == "file_dispatch" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
         raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
-    if budget in _BUDGET_TABLE:
-        budget_haiku_eq = _BUDGET_TABLE[budget]
-    else:
-        budget_haiku_eq = float(budget)
+    budget_haiku_eq = _parse_budget(budget)
+    for tier_name, tier_val in (
+        ("extract-tier", extract_tier),
+        ("write-tier", write_tier),
+        ("edit-tier", edit_tier),
+        ("compact-tier", compact_tier),
+    ):
+        if tier_val is not None and tier_val not in _VALID_TIERS:
+            raise typer.BadParameter(
+                f"--{tier_name} must be one of {_VALID_TIERS}; got {tier_val!r}"
+            )
+    if exploit_fraction is not None and not 0.0 <= exploit_fraction <= 1.0:
+        raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
 
-    if feed or phase == "write":
-        # Reuse the supplied out_dir *as* the bundle dir. No timestamp suffix.
-        run_id = f"{strategy}_{budget}_seed{seed}_{'write' if phase == 'write' else 'feed'}"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    run_id = f"{strategy}_{budget}_seed{seed}_{iteration}_{phase}_{ts}"
+    # Bundle path resolution:
+    #   1. If --bundle is set, use it verbatim (workflow mode).
+    #   2. Else refine / merge / phase=write: reuse out_dir as an existing bundle
+    #   3. Else create: if out_dir already looks like a bundle, reuse it;
+    #      otherwise create a timestamped subdir.
+    if bundle_dir is not None:
+        bundle = BundlePaths(root=bundle_dir)
+    elif iteration in ("refine", "merge") or phase == "write":
         bundle = BundlePaths(root=out_dir)
     else:
-        run_id = (
-            f"{strategy}_{budget}_seed{seed}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        out_looks_like_bundle = out_dir.exists() and (
+            (out_dir / "_index.json").exists()
+            or (out_dir / "concepts").exists()
+            or (out_dir / "_run.json").exists()
         )
-        bundle = BundlePaths(root=out_dir / run_id)
+        bundle = BundlePaths(root=out_dir if out_looks_like_bundle else out_dir / run_id)
     bundle.ensure()
 
     cache = ExtractCache(root=cache_dir)
@@ -108,11 +220,26 @@ def distill(
         events_path=bundle.calls_path,
     )
 
-    extractor, writer, editor, compactor = _wire_binding(binding, cache, meter)
+    extractor, writer, editor, compactor, orchestrator = _wire_binding(binding, cache, meter)
+    if policy == "llm_policy" and orchestrator is None:
+        raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
 
     cfg = STRATEGIES[strategy](seed=seed)
     cfg.field_name = field
     cfg.artifact_name = artifact
+    cfg.policy_name = policy
+    # Apply per-role tier overrides if the user supplied them.
+    if extract_tier is not None:
+        cfg.extract_tier = extract_tier
+    if write_tier is not None:
+        cfg.write_tier = write_tier
+    if edit_tier is not None:
+        cfg.edit_tier = edit_tier
+    if compact_tier is not None:
+        cfg.compact_tier = compact_tier
+    # Apply allocation override (goes through PolicyRuntime in pipeline.run).
+    if exploit_fraction is not None:
+        cfg.exploit_fraction_override = exploit_fraction
     pipeline_run(
         corpus=CorpusPaths(root=corpus_dir),
         bundle=bundle,
@@ -122,8 +249,12 @@ def distill(
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
         feed=feed,
+        iteration=iteration,
+        merge_from_bundle=(BundlePaths(root=merge_from) if merge_from is not None else None),
         editor=editor,
         compactor=compactor,
+        orchestrator=orchestrator,
+        policy_name=policy,
         phase=phase,
     )
     snap_path = bundle.run_path
@@ -132,65 +263,83 @@ def distill(
         typer.echo(
             f"bundle written to {bundle.root} "
             f"(n_cached_skipped={snap.get('n_cached_skipped', 0)}, "
-            f"n_new_extracted={snap.get('n_new_extracted', 0)}, feed={feed})"
+            f"n_new_extracted={snap.get('n_new_extracted', 0)}, "
+            f"iteration={snap.get('iteration', iteration)}, policy={snap.get('policy', policy)})"
         )
     else:
         typer.echo(f"bundle written to {bundle.root}")
 
 
 def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
-    if name == "fake":
-        from .bindings.fake import FakeCompactor, FakeEditor, FakeExtractor, FakeWriter
+    match name:
+        case "fake":
+            from .bindings.fake import (
+                FakeCompactor,
+                FakeEditor,
+                FakeExtractor,
+                FakeOrchestrator,
+                FakeWriter,
+            )
 
-        return FakeExtractor(cache, meter), FakeWriter(meter), FakeEditor(), FakeCompactor()
-    if name == "heuristic":
-        from .bindings.heuristic import (
-            HeuristicCompactor,
-            HeuristicEditor,
-            HeuristicExtractor,
-            HeuristicWriter,
-        )
+            return (
+                FakeExtractor(cache, meter),
+                FakeWriter(meter),
+                FakeEditor(),
+                FakeCompactor(),
+                FakeOrchestrator(meter),
+            )
+        case "heuristic":
+            from .bindings.heuristic import (
+                HeuristicCompactor,
+                HeuristicEditor,
+                HeuristicExtractor,
+                HeuristicWriter,
+            )
 
-        return (
-            HeuristicExtractor(cache, meter),
-            HeuristicWriter(meter),
-            HeuristicEditor(),
-            HeuristicCompactor(),
-        )
-    if name == "claude_code":
-        from .bindings.claude_code import (
-            ClaudeCodeCompactor,
-            ClaudeCodeEditor,
-            ClaudeCodeExtractor,
-            ClaudeCodeWriter,
-        )
+            return (
+                HeuristicExtractor(cache, meter),
+                HeuristicWriter(meter),
+                HeuristicEditor(),
+                HeuristicCompactor(),
+                None,
+            )
+        case "file_dispatch":
+            from .bindings.file_dispatch import (
+                FileDispatchCompactor,
+                FileDispatchEditor,
+                FileDispatchExtractor,
+                FileDispatchOrchestrator,
+                FileDispatchWriter,
+            )
 
-        return (
-            ClaudeCodeExtractor(cache, meter),
-            ClaudeCodeWriter(meter),
-            ClaudeCodeEditor(meter),
-            ClaudeCodeCompactor(meter),
-        )
-    raise typer.BadParameter(f"unknown binding: {name}")
+            return (
+                FileDispatchExtractor(cache, meter),
+                FileDispatchWriter(meter),
+                FileDispatchEditor(meter),
+                FileDispatchCompactor(meter),
+                FileDispatchOrchestrator(meter),
+            )
+        case _:
+            raise typer.BadParameter(f"unknown binding: {name}")
 
 
 @app.command("persona-generate")
 def persona_generate(
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     field: str = typer.Option("generic", "--field"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
 ) -> None:
     """Generate and persist the corpus persona at <corpus>/persona.txt."""
-    from .distill.persona import generate_corpus_persona
+    from .distill.write.persona import generate_corpus_persona
     from .store.corpus import list_documents
 
     corpus = CorpusPaths(root=corpus_dir)
     docs = list_documents(corpus)
     complete = None
-    if binding == "claude_code":
+    if binding == "file_dispatch":
         if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
             raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
-        from .bindings.claude_code import make_persona_complete
+        from .bindings.file_dispatch import make_persona_complete
 
         complete = make_persona_complete()
     elif binding != "fake":
@@ -208,7 +357,7 @@ def persona_generate(
 def query(
     question: str = typer.Argument(...),
     bundle_dir: Path = typer.Option(..., "--bundle"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | claude_code"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
     model: str = typer.Option("haiku", "--model"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_root: Path = typer.Option(Path("data/queries"), "--out"),
@@ -219,23 +368,24 @@ def query(
 
     bundle = BundlePaths(root=bundle_dir)
     corpus = CorpusPaths(root=corpus_dir)
-    if binding == "fake":
-        from .bindings.fake import FakeQuerier
+    match binding:
+        case "fake":
+            from .bindings.fake import FakeQuerier
 
-        querier = FakeQuerier()
-    elif binding == "claude_code":
-        if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-            raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
-        from .bindings.claude_code import ClaudeCodeQuerier
+            querier = FakeQuerier()
+        case "file_dispatch":
+            if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+                raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+            from .bindings.file_dispatch import FileDispatchQuerier
 
-        meter = CostMeter(
-            budget_haiku_eq=1e9,
-            run_id="query",
-            events_path=Path("data/queries/_calls.jsonl"),
-        )
-        querier = ClaudeCodeQuerier(meter)
-    else:
-        raise typer.BadParameter(f"unknown binding: {binding}")
+            meter = CostMeter(
+                budget_haiku_eq=1e9,
+                run_id="query",
+                events_path=Path("data/queries/_calls.jsonl"),
+            )
+            querier = FileDispatchQuerier(meter)
+        case _:
+            raise typer.BadParameter(f"unknown binding: {binding}")
 
     answer = query_run(
         bundle=bundle,
@@ -270,7 +420,7 @@ def field_detect_cmd(
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
 ) -> None:
     """Auto-detect the most likely field for a corpus and print the top scores."""
-    from .distill.field_detect import detect_field, detect_field_scores
+    from .distill.extract.field_detect import detect_field, detect_field_scores
 
     corpus = CorpusPaths(root=corpus_dir)
     chosen = detect_field(corpus)
@@ -287,7 +437,7 @@ def html(
     out_dir: Path | None = typer.Option(None, "--out"),
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
 ) -> None:
-    """Render a wiki bundle to a static HTML site (legacy renderer port)."""
+    """Render a wiki bundle to a static HTML site."""
     from .render.html import build_site
 
     bundle = BundlePaths(root=bundle_dir)

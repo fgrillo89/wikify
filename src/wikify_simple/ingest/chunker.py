@@ -1,6 +1,6 @@
 """Markdown -> [Chunk]. Section-aware, target ~400 tokens per chunk.
 
-Ported tricks from the legacy wikify chunker:
+Key behaviours:
   - Never split across section boundaries
   - Section type classification (abstract, methods, results, etc.)
   - Conclusion fallback: if no section is typed "conclusion", promote the
@@ -9,18 +9,13 @@ Ported tricks from the legacy wikify chunker:
   - Token estimate uses the 4-char rule (consistent with infra/tokens.py)
 """
 
-from __future__ import annotations
-
 import hashlib
 import re
 from collections.abc import Iterable
 
 from ..models import Chunk
+from .config import MIN_CHUNK_CHARS, OVERLAP_CHARS, TARGET_CHUNK_CHARS
 from .section_classifier import SectionType, classify_section_path
-
-_TARGET_CHARS = 1600  # ~400 tokens at 4 chars/token
-_MIN_CHARS = 200  # don't emit a chunk smaller than this unless section is small
-_OVERLAP_CHARS = 200  # ~50 tokens of overlap between chunks in same section
 
 # Section types that are never the "concluding body" of a paper.
 _NON_CONCLUSION_TYPES = frozenset(
@@ -115,7 +110,7 @@ def _apply_conclusion_fallback(chunks: list[Chunk]) -> None:
 
 def _split_section(text: str) -> list[tuple[int, int]]:
     """Greedy paragraph-aware split into ~_TARGET_CHARS chunks with overlap."""
-    if len(text) <= _TARGET_CHARS:
+    if len(text) <= TARGET_CHUNK_CHARS:
         return [(0, len(text))]
     out: list[tuple[int, int]] = []
     paragraphs = list(_paragraph_spans(text))
@@ -125,11 +120,11 @@ def _split_section(text: str) -> list[tuple[int, int]]:
 
     for ps, pe in paragraphs:
         plen = pe - ps
-        if cur_len + plen > _TARGET_CHARS and cur_len >= _MIN_CHARS:
+        if cur_len + plen > TARGET_CHUNK_CHARS and cur_len >= MIN_CHUNK_CHARS:
             out.append((cur_start, ps))
             # Overlap: include the last paragraph of the previous chunk
             # in the next chunk, if it fits within the overlap budget.
-            if last_para is not None and (last_para[1] - last_para[0]) <= _OVERLAP_CHARS:
+            if last_para is not None and (last_para[1] - last_para[0]) <= OVERLAP_CHARS:
                 cur_start = last_para[0]
                 cur_len = (ps - last_para[0]) + plen
             else:

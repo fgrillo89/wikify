@@ -1,5 +1,14 @@
 # Wikification strategies
 
+> **Current state & roadmap**: this document describes the "cube" parameterization of deterministic strategies (sampler × schedule × tiering) and the four anchor cells (E, M, X, agent). Several structural additions are planned in [`plans/structural-improvements.md`](plans/structural-improvements.md) and are NOT yet landed:
+>
+> - **LLM-as-sampler (Phase 3)**: the `llm_policy` orchestrator today picks a sampling *category* (`walk_local`, `jump_uniform`, `jump_pagerank`, `jump_gap`, plus the newly-added `set_allocation` / `set_tier` / `done` control actions). Phase 3 adds a `pick_chunks` action with direct chunk-id selection, backed by a compact `sampler_snapshot` in the orchestrator context. This turns the agent cell from "picks the sampling strategy" into "IS the sampler".
+> - **Images as first-class units (Phase 4)**: caption chunks are tagged in the sampler state, get differentiated residual handling, and a new `jump_figures` action targets high-residual captions.
+> - **Orchestrator call cadence**: the `llm_policy` caches active sampling actions for up to 8 consecutive extract batches before re-querying (so orchestrator cost amortizes). Control actions (`set_tier`, `set_allocation`, `done`) bypass the cache.
+> - **Per-iteration bundle pinning**: the `--bundle` CLI flag pins the bundle path across `create`+`refine` iterations. Multi-iteration workflows must use it.
+>
+> Pricing-normalized tiers are S=1/5, M=3/15, L=15/75 (input/output haiku-equivalent per token) — see `src/wikify_simple/infra/config.py`.
+
 ## The cube
 
 A strategy is one cell in a three-axis cube, on top of one shared

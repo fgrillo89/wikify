@@ -7,8 +7,6 @@ that the rendered HTML resolves wikilinks, stages inline figures into
 ``[^eN]`` evidence markers as proper footnote anchors.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from wikify_simple.paths import BundlePaths

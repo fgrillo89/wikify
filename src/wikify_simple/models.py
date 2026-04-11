@@ -4,8 +4,6 @@ Everything in the package operates on these. If a piece of code needs a new
 shape, add it here first and justify it in the README.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal

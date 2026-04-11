@@ -7,10 +7,8 @@ forces ``jump_rate = 1`` until at least one wiki page exists. Operator
 dispatch is via small dispatch tables, not if/elif chains.
 """
 
-from __future__ import annotations
-
+import heapq
 import random
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -18,6 +16,7 @@ from typing import Protocol
 
 from ..models import CorpusGraph
 from ..store.vectors import VectorStore
+from .config import CHUNKS_PER_LANDED_DOC
 
 
 class LocalOp(str, Enum):
@@ -32,9 +31,6 @@ class GlobalOp(str, Enum):
     COVERAGE_GAP = "coverage_gap"
 
 
-CHUNKS_PER_LANDED_DOC = 3
-
-
 @dataclass
 class SamplerState:
     rng: random.Random
@@ -43,10 +39,16 @@ class SamplerState:
     chunks_by_doc: dict[str, list[str]]
     abstract_chunk_by_doc: dict[str, str]
     pagerank_doc: dict[str, float]
+    neighbors_by_chunk: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    chunk_degree: dict[str, int] = field(default_factory=dict)
+    chunk_to_doc: dict[str, str] = field(default_factory=dict)
     wiki_chunk_ids: set[str] = field(default_factory=set)  # chunks already in any page
     pages_concept_evidence_chunks: list[str] = field(default_factory=list)
     seen_chunks: set[str] = field(default_factory=set)
     coverage_residuals: dict[str, float] = field(default_factory=dict)
+    coverage_versions: dict[str, int] = field(default_factory=dict)
+    coverage_heap: list[tuple[float, int, str]] = field(default_factory=list)  # (-residual, v, cid)
+    doc_seen_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def wiki_is_empty(self) -> bool:
@@ -88,10 +90,102 @@ class LevyMixSampler:
         return out
 
     def _local(self, state: SamplerState) -> str | None:
-        return _LOCAL_DISPATCH[self.local_op](state)
+        return sample_local(state, self.local_op)
 
     def _global(self, state: SamplerState) -> list[str]:
-        return _GLOBAL_DISPATCH[self.global_op](state, self.chunks_per_landed_doc)
+        return sample_global(state, self.global_op, self.chunks_per_landed_doc)
+
+
+def sample_local(state: SamplerState, op: LocalOp) -> str | None:
+    return _LOCAL_DISPATCH[op](state)
+
+
+def sample_global(
+    state: SamplerState,
+    op: GlobalOp,
+    k_per_doc: int = CHUNKS_PER_LANDED_DOC,
+) -> list[str]:
+    return _GLOBAL_DISPATCH[op](state, k_per_doc)
+
+
+def init_coverage_state(
+    state: SamplerState,
+    chunk_ids: list[str],
+    default_residual: float = 1.0,
+) -> None:
+    """Initialise the coverage residual map and heap.
+
+    ``coverage_gap`` ranks chunks by residual descending; higher means less
+    covered by the current wiki evidence set. The residual model is
+    graph-local and cheap: unseen chunks start at ``default_residual`` and
+    are progressively discounted as nearby chunks are read/anchored.
+    """
+    state.coverage_residuals = {cid: float(default_residual) for cid in chunk_ids}
+    state.coverage_versions = {cid: 0 for cid in chunk_ids}
+    state.coverage_heap = [(-float(default_residual), 0, cid) for cid in chunk_ids]
+    heapq.heapify(state.coverage_heap)
+
+
+def restore_coverage_state(
+    state: SamplerState,
+    *,
+    residuals: dict[str, float] | None,
+    seen_chunks: set[str] | None,
+    doc_seen_counts: dict[str, int] | None,
+) -> None:
+    """Restore persisted coverage memory from a previous epoch."""
+    if residuals:
+        state.coverage_residuals = dict(residuals)
+    if seen_chunks:
+        state.seen_chunks = set(seen_chunks)
+    if doc_seen_counts:
+        state.doc_seen_counts = {k: int(v) for k, v in doc_seen_counts.items()}
+    # Rebuild heap and versions from the restored residual map.
+    state.coverage_versions = {cid: 0 for cid in state.coverage_residuals}
+    state.coverage_heap = [(-float(r), 0, cid) for cid, r in state.coverage_residuals.items()]
+    heapq.heapify(state.coverage_heap)
+
+
+def apply_coverage_feedback(state: SamplerState, chunk_id: str, *, as_evidence: bool) -> None:
+    """Update residuals after reading or anchoring a chunk.
+
+    - seen chunk residual -> 0.0
+    - neighbour residuals discounted (stronger discount when chunk became evidence)
+    - same-document chunk residuals discounted progressively with repeated reads
+    """
+    state.seen_chunks.add(chunk_id)
+    _set_residual(state, chunk_id, 0.0)
+
+    near_floor = 0.2 if as_evidence else 0.35
+    for nb in state.neighbors_by_chunk.get(chunk_id, ()):
+        cur = state.coverage_residuals.get(nb, 1.0)
+        if cur > near_floor:
+            _set_residual(state, nb, near_floor)
+
+    doc_id = state.chunk_to_doc.get(chunk_id)
+    if not doc_id:
+        return
+    count = state.doc_seen_counts.get(doc_id, 0) + 1
+    state.doc_seen_counts[doc_id] = count
+    if count == 1:
+        doc_floor = 0.65
+    elif count == 2:
+        doc_floor = 0.50
+    else:
+        doc_floor = 0.35
+    for dc in state.chunks_by_doc.get(doc_id, []):
+        if dc == chunk_id:
+            continue
+        cur = state.coverage_residuals.get(dc, 1.0)
+        if cur > doc_floor:
+            _set_residual(state, dc, doc_floor)
+
+
+def _set_residual(state: SamplerState, chunk_id: str, value: float) -> None:
+    state.coverage_residuals[chunk_id] = value
+    v = state.coverage_versions.get(chunk_id, 0) + 1
+    state.coverage_versions[chunk_id] = v
+    heapq.heappush(state.coverage_heap, (-value, v, chunk_id))
 
 
 # --- local dispatch ------------------------------------------------------
@@ -105,8 +199,7 @@ def _local_similarity_walk(state: SamplerState) -> str | None:
     if not state.pages_concept_evidence_chunks:
         return None
     seed = state.rng.choice(state.pages_concept_evidence_chunks)
-    edges = state.graph.edges.get("similar_strong", []) + state.graph.edges.get("co_section", [])
-    neighbours = [b for a, b in edges if a == seed and b not in state.seen_chunks]
+    neighbours = [b for b in state.neighbors_by_chunk.get(seed, ()) if b not in state.seen_chunks]
     return state.rng.choice(neighbours) if neighbours else None
 
 
@@ -141,10 +234,7 @@ def _doc_chunks_or_empty(state: SamplerState, doc_id: str, k: int) -> list[str]:
     if abs_id and abs_id in chunks:
         out.append(abs_id)
         chunks = [c for c in chunks if c != abs_id]
-    deg = defaultdict(int)
-    for a, b in state.graph.edges.get("similar_strong", []):
-        deg[a] += 1
-    chunks.sort(key=lambda c: -deg.get(c, 0))
+    chunks.sort(key=lambda c: -state.chunk_degree.get(c, 0))
     out.extend(chunks[: max(0, k - len(out))])
     return out
 
@@ -168,10 +258,16 @@ def _global_pagerank(state: SamplerState, k_per_doc: int) -> list[str]:
 def _global_coverage_gap(state: SamplerState, _k_per_doc: int) -> list[str]:
     if not state.coverage_residuals:
         return _global_uniform(state, _k_per_doc)
-    items = sorted(state.coverage_residuals.items(), key=lambda kv: -kv[1])
-    for cid, _ in items:
-        if cid not in state.seen_chunks:
-            return [cid]
+    while state.coverage_heap:
+        neg, v, cid = heapq.heappop(state.coverage_heap)
+        if state.coverage_versions.get(cid, -1) != v:
+            continue
+        if cid in state.seen_chunks:
+            continue
+        # Keep the selected candidate in the heap with the same score so
+        # repeated calls remain stable if the caller skips it.
+        heapq.heappush(state.coverage_heap, (neg, v, cid))
+        return [cid]
     return []
 
 

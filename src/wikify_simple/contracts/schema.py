@@ -5,8 +5,6 @@ These are the only structures the bindings ever see. They are Pydantic v2
 or extra field aborts the call after one retry.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Literal
 
@@ -426,7 +424,7 @@ class WriteRequest(BaseModel):
     artifact_template: str = ""
     corpus_persona: str = ""
     # Editor-writer v2 fields (optional for backwards compatibility)
-    brief: EditorBrief | None = None
+    brief: "EditorBrief | None" = None
     evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
     neighbor_summaries: list[dict] = Field(default_factory=list)
 
@@ -445,11 +443,11 @@ class WriteResponse(BaseModel):
     def _body_has_prose_and_evidence(cls, v: str) -> str:
         """Reject empty / stub / structurally-invalid writer output.
 
-        Enforces both the prose-and-evidence floor (the ``## References``
+        Enforces the prose-and-evidence floor (the ``## References``
         block must be present and well-formed, every ``[^eN]`` marker in
         the prose must have a matching definition, and the figure-mention
-        rule still fires) AND the full Wikipedia-style six-section layout
-        produced by prompts/write_v1.yaml.
+        rule still fires) plus the Wikipedia-style structure produced by
+        ``prompts/write.yaml``.
         """
         if _REFERENCES_HEADING not in v:
             raise ValueError("WriteResponse.body_markdown missing `## References` heading")

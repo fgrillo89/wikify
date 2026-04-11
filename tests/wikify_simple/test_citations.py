@@ -1,7 +1,5 @@
 """Tests for ingest/citations.py."""
 
-from __future__ import annotations
-
 from wikify_simple.ingest.citations import _find_refs_section, extract_citations
 
 SAMPLE_MD = "\n".join(

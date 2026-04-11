@@ -1,7 +1,5 @@
 """Tests for store.wiki_index: alias, reverse lookup, atomic save, rebuild, md render."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest

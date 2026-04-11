@@ -14,15 +14,25 @@ Three guarantees:
   3. No silent zero-token calls. record() raises if input_tokens is None.
 """
 
-from __future__ import annotations
-
 import json
 import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .role import Role
+from ..contracts.roles import Role
+from .config import (
+    ABORT_RATIO,
+    TIER_L_INPUT,
+    TIER_L_OUTPUT,
+    TIER_L_OVERHEAD,
+    TIER_M_INPUT,
+    TIER_M_OUTPUT,
+    TIER_M_OVERHEAD,
+    TIER_S_INPUT,
+    TIER_S_OUTPUT,
+    TIER_S_OVERHEAD,
+)
 
 # --- pricing model -------------------------------------------------------
 #
@@ -65,9 +75,24 @@ class TierPrice:
 
 
 _DEFAULT_TIERS: dict[str, TierPrice] = {
-    "S": TierPrice(name="S", input_per_m=1.0, output_per_m=1.0, fixed_overhead=50.0),
-    "M": TierPrice(name="M", input_per_m=12.0, output_per_m=15.0, fixed_overhead=200.0),
-    "L": TierPrice(name="L", input_per_m=60.0, output_per_m=75.0, fixed_overhead=500.0),
+    "S": TierPrice(
+        name="S",
+        input_per_m=TIER_S_INPUT,
+        output_per_m=TIER_S_OUTPUT,
+        fixed_overhead=TIER_S_OVERHEAD,
+    ),
+    "M": TierPrice(
+        name="M",
+        input_per_m=TIER_M_INPUT,
+        output_per_m=TIER_M_OUTPUT,
+        fixed_overhead=TIER_M_OVERHEAD,
+    ),
+    "L": TierPrice(
+        name="L",
+        input_per_m=TIER_L_INPUT,
+        output_per_m=TIER_L_OUTPUT,
+        fixed_overhead=TIER_L_OVERHEAD,
+    ),
 }
 
 
@@ -140,7 +165,7 @@ class _Aggregates:
         }
 
 
-class BudgetExceeded(RuntimeError):
+class BudgetExceededError(RuntimeError):
     """Cost budget breached; the run aborts cleanly."""
 
 
@@ -150,7 +175,7 @@ class CostMeter:
     Construct one per run. Pass the same instance to every binding call.
     """
 
-    _ABORT_RATIO = 1.05
+    _ABORT_RATIO = ABORT_RATIO
     _STATUS_EVERY_CALLS = 10
     _STATUS_EVERY_SECONDS = 5.0
 
@@ -220,7 +245,9 @@ class CostMeter:
             f.write(record.to_json() + "\n")
         self._maybe_print_status()
         if self._total.haiku_eq > self._budget * self._ABORT_RATIO:
-            raise BudgetExceeded(f"spent {self._total.haiku_eq:.0f} > 1.05 x {self._budget:.0f}")
+            raise BudgetExceededError(
+                f"spent {self._total.haiku_eq:.0f} > 1.05 x {self._budget:.0f}"
+            )
         return record
 
     def snapshot(self) -> dict:

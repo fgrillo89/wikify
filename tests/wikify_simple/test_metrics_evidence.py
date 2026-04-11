@@ -5,8 +5,6 @@ spaces, so ``_build_g_evidence`` saw zero overlap and M3 collapsed to 0
 even when the writer produced valid evidence blocks.
 """
 
-from __future__ import annotations
-
 from wikify_simple.eval.bundle import load_bundle
 from wikify_simple.eval.metrics import spectral_gap_modularity
 

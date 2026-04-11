@@ -37,7 +37,7 @@ Python out of the LLM loop.
 3. **Larger corpus**: 50+ documents to differentiate strategies.
 4. **Port remaining parsers** (PDF, DOCX, PPTX, HTML).
 
-See `src/wikify_simple/HANDOFF.md` for the restart guide.
+See `src/wikify_simple/runbook.md` for the operator runbook.
 
 ---
 

@@ -1,7 +1,5 @@
 """Tests for eval.community (Louvain wrapper)."""
 
-from __future__ import annotations
-
 import numpy as np
 
 from wikify_simple.eval.community import louvain_communities, modularity

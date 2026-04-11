@@ -6,12 +6,9 @@ duplicates per page. This runs AFTER ``_strip_pdf_artifacts`` (citation
 markers, bracket-wrap, dashes) and BEFORE section detection so spans
 align with the cleaned text.
 
-Ported in spirit from the legacy ``wikify.ingest.extract.metadata``
-``_is_noise_paragraph`` (which we re-use directly) plus a small set of
-additional structural strippers the legacy parser performed inline.
+Re-uses ``_is_noise_paragraph`` from ``metadata.py`` plus a small set of
+additional structural strippers.
 """
-
-from __future__ import annotations
 
 import re
 
@@ -128,7 +125,7 @@ def _strip_leading_journal_heading(md: str) -> str:
 
 
 def _strip_noise_paragraphs(md: str) -> str:
-    """Drop whole paragraphs that match the legacy noise marker list."""
+    """Drop whole paragraphs that match the noise marker list."""
     paragraphs = re.split(r"\n\s*\n", md)
     kept = [p for p in paragraphs if not is_noise_paragraph(p)]
     return "\n\n".join(kept)

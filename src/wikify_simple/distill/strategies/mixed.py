@@ -8,8 +8,6 @@ write costs ~10-14k heq, but a 0.4 split only left ~20k for writes
 (2 calls). 0.65 leaves ~32k → ~3-4 writes per 1x budget.
 """
 
-from __future__ import annotations
-
 from ..pipeline import StrategyConfig
 from ..sampler import GlobalOp, LevyMixSampler, LocalOp
 from ..schedule import AdaptiveSchedule
@@ -24,7 +22,9 @@ def build(seed: int = 0) -> StrategyConfig:
             jump_rate=0.1,
         ),
         schedule=AdaptiveSchedule(exploit_fraction_initial=0.65),
-        tier_explore="S",
-        tier_exploit="M",
+        extract_tier="S",
+        write_tier="M",
+        edit_tier="M",
+        compact_tier="S",
         seed=seed,
     )

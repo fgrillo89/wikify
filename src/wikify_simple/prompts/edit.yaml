@@ -1,4 +1,4 @@
-name: wikify_simple/edit/v1
+name: wikify_simple/edit
 role: editor
 version: 1
 input_schema:

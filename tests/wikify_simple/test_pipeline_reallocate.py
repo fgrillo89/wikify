@@ -7,8 +7,6 @@ remaining budget. The pipeline records ``split_initial`` and
 ``split_reallocated`` in the run snapshot so this is observable.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
@@ -46,8 +44,8 @@ def _strategy(seed: int = 0) -> StrategyConfig:
             exploit_fraction_initial=0.4,
             novelty_threshold=10.0,  # always triggers shift
         ),
-        tier_explore="S",
-        tier_exploit="M",
+        extract_tier="S",
+        write_tier="M",
         seed=seed,
     )
 

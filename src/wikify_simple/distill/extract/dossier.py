@@ -8,14 +8,13 @@ Dossiers persist to disk at ``<bundle>/_dossiers/<page_id>.json`` so they
 survive across incremental runs (``--feed``).
 """
 
-from __future__ import annotations
-
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Self
 
-from ..store.page_naming import url_slug
+from wikify_simple.store.page_naming import url_slug
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -56,7 +55,7 @@ class DossierEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> DossierEntry:
+    def from_dict(cls, d: dict) -> Self:
         return cls(
             chunk_id=d["chunk_id"],
             doc_id=d["doc_id"],
@@ -162,7 +161,7 @@ class Dossier:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> Dossier:
+    def from_dict(cls, d: dict) -> Self:
         dossier = cls(
             page_id=d["page_id"],
             title=d["title"],
@@ -189,27 +188,25 @@ class Dossier:
             "aliases": self.aliases,
             "kind": self.kind,
             "category": self.category,
-            "definition": self.canonical_definition or next(
-                (e.definition for e in self.entries if e.definition), ""
-            ),
-            "summary": self.canonical_summary or next(
-                (e.summary for e in self.entries if e.summary), ""
-            ),
-            "parameters": self.merged_parameters or [
-                p for e in self.entries for p in e.parameters
-            ][:10],
-            "mechanisms": self.merged_mechanisms or list(dict.fromkeys(
-                m for e in self.entries for m in e.mechanisms
-            ))[:8],
-            "relationships": self.merged_relationships or [
-                r for e in self.entries for r in e.relationships
-            ][:10],
-            "equations": self.merged_equations or [
-                eq for e in self.entries for eq in e.equations
-            ][:10],
+            "definition": self.canonical_definition
+            or next((e.definition for e in self.entries if e.definition), ""),
+            "summary": self.canonical_summary
+            or next((e.summary for e in self.entries if e.summary), ""),
+            "parameters": self.merged_parameters
+            or [p for e in self.entries for p in e.parameters][:10],
+            "mechanisms": self.merged_mechanisms
+            or list(dict.fromkeys(m for e in self.entries for m in e.mechanisms))[:8],
+            "relationships": self.merged_relationships
+            or [r for e in self.entries for r in e.relationships][:10],
+            "equations": self.merged_equations
+            or [eq for e in self.entries for eq in e.equations][:10],
             "evidence": [
-                {"chunk_id": e.chunk_id, "doc_id": e.doc_id, "quote": e.quote,
-                 "section_type": e.section_type}
+                {
+                    "chunk_id": e.chunk_id,
+                    "doc_id": e.doc_id,
+                    "quote": e.quote,
+                    "section_type": e.section_type,
+                }
                 for e in self.entries
             ],
             "n_sources": self.n_source_docs,

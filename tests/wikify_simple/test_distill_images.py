@@ -1,17 +1,15 @@
 """Distill pipeline consumes ImageIndex when present."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
-from wikify_simple.agents.protocols import Extractor, Writer
-from wikify_simple.agents.schema import (
+from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+from wikify_simple.contracts.protocols import Extractor, Writer
+from wikify_simple.contracts.schema import (
     ExtractRequest,
     ExtractResponse,
     WriteRequest,
     WriteResponse,
 )
-from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
 from wikify_simple.distill.strategies import STRATEGIES
 from wikify_simple.infra.cache import ExtractCache

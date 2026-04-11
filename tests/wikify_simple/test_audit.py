@@ -1,7 +1,5 @@
 """Per-bundle ``_audit.md`` writer (graphify item 6e)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from wikify_simple.eval.audit import write_audit

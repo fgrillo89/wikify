@@ -12,8 +12,6 @@ Pages without a sidecar are treated as fully confident (score 1.0,
 label "extracted").
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from statistics import mean, median
 

@@ -5,10 +5,10 @@ between strategies and any model dispatcher. They are built once, locked,
 and never reasoned about again.
 """
 
+from ..contracts.roles import Role, response_reserve, role_spec, total_context
 from .cache import ExtractCache, ExtractCacheKey
 from .context_envelope import ContextEnvelope, Pool, Required, SlotSpec
 from .cost_meter import CallRecord, CostMeter, TierPrice
-from .role import Role, response_reserve, role_spec, total_context
 from .tokens import count_tokens
 
 __all__ = [

@@ -1,7 +1,5 @@
 """Read/write wiki page .md files (frontmatter + body + evidence footnotes)."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
