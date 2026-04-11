@@ -13,6 +13,7 @@ from wikify_simple.contracts.schema import (
 )
 from wikify_simple.models import Chunk, WikiPage
 from wikify_simple.paths import BundlePaths
+from wikify_simple.prompts.registry import _content_hash
 from wikify_simple.store.images_index import ImageIndex, ImageRecord
 
 from ..extract.dossier import DossierEntry, DossierStore
@@ -28,6 +29,11 @@ class WriteRequestConfig:
     artifact_text: str
     person_artifact_text: str
     persona_text: str
+    style_guide_hash: str | None = None
+    field_guide_hash: str | None = None
+    artifact_template_hash: str | None = None
+    person_artifact_hash: str | None = None
+    corpus_persona_hash: str | None = None
 
 
 def is_writable_page(page: WikiPage) -> bool:
@@ -89,6 +95,9 @@ def build_write_request(
         if len(neighbor_summaries) >= 8:
             break
 
+    is_person = page.kind == "person"
+    artifact_text = cfg.person_artifact_text if is_person else cfg.artifact_text
+    artifact_hash = cfg.person_artifact_hash if is_person else cfg.artifact_template_hash
     return WriteRequest(
         page_id=page.id,
         page_kind=page.kind,
@@ -104,15 +113,18 @@ def build_write_request(
             )
             for ev in page.evidence
         ],
-        neighbor_titles=[p.title for p in all_pages if p.id != page.id][:8],
         prompt_template=cfg.prompt_name,
         model_id=cfg.model_id,
         tier=cfg.writer_tier,
         figures=page_figures,
         style_guide=cfg.style_text,
         field_guide=cfg.field_text,
-        artifact_template=cfg.person_artifact_text if page.kind == "person" else cfg.artifact_text,
+        artifact_template=artifact_text,
         corpus_persona=cfg.persona_text,
+        style_guide_hash=cfg.style_guide_hash,
+        field_guide_hash=cfg.field_guide_hash,
+        artifact_template_hash=artifact_hash,
+        corpus_persona_hash=cfg.corpus_persona_hash,
         brief=briefs.get(page.id),
         evidence_v2=evidence_v2,
         neighbor_summaries=neighbor_summaries,

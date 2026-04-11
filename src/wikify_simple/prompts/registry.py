@@ -18,6 +18,7 @@ The layered loaders read from sibling directories ``fields/`` and
 ``artifact_types/``. The artifact templates are wiki-shaped.
 """
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -134,6 +135,28 @@ _GENERIC_PERSONA = (
     "invent claims, never reveal how the evidence was retrieved, and never "
     "describe the document you are writing in meta terms."
 )
+
+
+def _content_hash(text: str) -> str:
+    """Return first 16 hex chars of sha256 of the utf-8 encoded text."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def compose_writer_prompt_layer_hashes(field: str, artifact: str) -> dict[str, str]:
+    """Return content-based hashes for each stable prompt layer.
+
+    Keys: ``style_guide``, ``field_guide``, ``artifact_template``.
+    Values: first 16 hex chars of sha256 of the layer text.
+
+    The persona layer is NOT hashed here because it is corpus-specific
+    and loaded separately by the pipeline. Callers should hash the persona
+    text directly with :func:`_content_hash` if needed.
+    """
+    return {
+        "style_guide": _content_hash(load_style_guide()),
+        "field_guide": _content_hash(load_field_guide(field)),
+        "artifact_template": _content_hash(load_artifact_template(artifact)),
+    }
 
 
 def compose_writer_prompt(

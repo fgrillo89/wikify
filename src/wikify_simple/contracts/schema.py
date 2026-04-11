@@ -403,26 +403,32 @@ class WriteRequest(BaseModel):
     model_config = _STRICT
 
     page_id: str
-    page_kind: str  # "concept" | "person"
+    page_kind: str  # "article" | "person"
     title: str
     aliases: list[str]
     skeleton: str
     evidence: list[WriteEvidenceRef]
-    neighbor_titles: list[str]
     prompt_template: str
     model_id: str
     tier: str
     figures: list[ImageRef] = Field(default_factory=list)
-    # Layered writer-prompt context. These are loaded once per run by
-    # ``distill.pipeline.run`` and round-tripped through every dispatch.
-    # They are large strings (style guide ~5k chars, field guide ~1.5k,
-    # artifact template ~2k, persona ~1.5k) but the pipeline reuses the
-    # same instances across all WriteRequests in a run, so the cost is
-    # paid in bytes-on-the-wire, not in repeated loads.
+    # Layered writer-prompt context. Inline strings are the canonical
+    # payload for fake/heuristic bindings. The hash fields allow the
+    # file_dispatch runtime to cache each stable layer once per session
+    # and fetch it from _meta/prompt_layers/<hash>.md instead of
+    # re-sending the full text on every write dispatch. Vendor-neutral:
+    # no Anthropic/OpenAI SDK primitive is used. The cache lives in the
+    # skill runtime (Claude Code session memory).
     style_guide: str = ""
     field_guide: str = ""
     artifact_template: str = ""
     corpus_persona: str = ""
+    # Content-based hashes for layer cache lookup (sha256[:16], hex).
+    # None when the runtime does not support hash-based delivery.
+    style_guide_hash: str | None = None
+    field_guide_hash: str | None = None
+    artifact_template_hash: str | None = None
+    corpus_persona_hash: str | None = None
     # Editor-writer v2 fields (optional for backwards compatibility)
     brief: "EditorBrief | None" = None
     evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
