@@ -44,6 +44,7 @@ from ..contracts.schema import (
     WriteResponse,
 )
 from ..infra.cost_meter import BudgetExceededError, CostMeter
+from ..ingest.sampler_index import load_sampler_index
 from ..models import Chunk, Document, WikiPage
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import (
@@ -207,7 +208,7 @@ def run(
         persona_text=persona_text,
     )
 
-    state = _build_sampler_state(rng, docs, chunks, graph, vectors)
+    state = _build_sampler_state(rng, docs, chunks, graph, vectors, corpus=corpus)
     use_coverage_memory = iteration == "refine" and not feed
     if use_coverage_memory:
         mem = load_coverage_memory(bundle)
@@ -561,15 +562,46 @@ def _build_sampler_state(
     chunks: list[Chunk],
     graph,
     vectors,
+    corpus: CorpusPaths | None = None,
 ) -> SamplerState:
+    import sys
+
+    # Try to load the pre-computed index written by ingest.
+    idx = load_sampler_index(corpus.sampler_index_path) if corpus is not None else None
+    if idx is not None and corpus is not None:
+        # Assemble SamplerState from the persisted index.
+        neighbour_map = {cid: tuple(ns) for cid, ns in idx["neighbors_by_chunk"].items()}
+        # Load real pagerank if available, fall back to uniform.
+        pagerank = _load_pagerank(corpus)
+        if not pagerank:
+            pagerank = _uniform_pagerank(idx["doc_ids_sorted"])
+        all_chunk_ids = idx["content_chunk_ids"] + idx["caption_chunk_ids"]
+        state = SamplerState(
+            rng=rng,
+            graph=graph,
+            vectors=vectors,
+            chunks_by_doc=idx["chunks_by_doc"],
+            abstract_chunk_by_doc=idx["abstract_chunk_by_doc"],
+            pagerank_doc=pagerank,
+            neighbors_by_chunk=neighbour_map,
+            chunk_degree=idx["chunk_degree"],
+            chunk_to_doc=idx["chunk_to_doc"],
+        )
+        init_coverage_state(state, all_chunk_ids)
+        return state
+
+    # Older corpus without sampler_index.json: fall back to in-memory build.
+    sys.stderr.write(
+        "[pipeline] sampler_index.json not found; rebuilding in memory (re-ingest to pre-compute)\n"
+    )
     chunks_by_doc: dict[str, list[str]] = defaultdict(list)
     abstract_by_doc: dict[str, str] = {}
     chunk_to_doc: dict[str, str] = {}
-    all_chunk_ids: list[str] = []
+    all_chunk_ids_fb: list[str] = []
     for c in chunks:
         chunks_by_doc[c.doc_id].append(c.id)
         chunk_to_doc[c.id] = c.doc_id
-        all_chunk_ids.append(c.id)
+        all_chunk_ids_fb.append(c.id)
         if c.id not in abstract_by_doc:
             abstract_by_doc[c.doc_id] = c.id  # first chunk == abstract proxy
     pagerank = _uniform_pagerank(list(chunks_by_doc.keys()))
@@ -580,8 +612,8 @@ def _build_sampler_state(
     for a, b in graph.edges.get("co_section", []):
         neighbours[a].add(b)
         neighbours[b].add(a)
-    neighbour_map = {cid: tuple(sorted(ns)) for cid, ns in neighbours.items()}
-    degree = {cid: len(neighbour_map.get(cid, ())) for cid in all_chunk_ids}
+    neighbour_map_fb = {cid: tuple(sorted(ns)) for cid, ns in neighbours.items()}
+    degree = {cid: len(neighbour_map_fb.get(cid, ())) for cid in all_chunk_ids_fb}
     state = SamplerState(
         rng=rng,
         graph=graph,
@@ -589,11 +621,11 @@ def _build_sampler_state(
         chunks_by_doc=dict(chunks_by_doc),
         abstract_chunk_by_doc=abstract_by_doc,
         pagerank_doc=pagerank,
-        neighbors_by_chunk=neighbour_map,
+        neighbors_by_chunk=neighbour_map_fb,
         chunk_degree=degree,
         chunk_to_doc=chunk_to_doc,
     )
-    init_coverage_state(state, all_chunk_ids)
+    init_coverage_state(state, all_chunk_ids_fb)
     return state
 
 
@@ -612,6 +644,17 @@ def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:
         return {}
     w = 1.0 / len(doc_ids)
     return {d: w for d in doc_ids}
+
+
+def _load_pagerank(corpus: CorpusPaths) -> dict[str, float]:
+    """Load pre-computed pagerank from disk, or return empty dict if absent."""
+    p = corpus.pagerank_path
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _finalize_pages(

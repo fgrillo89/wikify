@@ -7,8 +7,11 @@ modulo file content (file hash → doc id).
 """
 
 import hashlib
+import json
 import re
 from pathlib import Path
+
+import networkx as nx
 
 from ..infra.embedding import embed_texts
 from ..models import Chunk, DocSection, Document
@@ -30,6 +33,7 @@ from .corpus_graph import build_corpus_graph
 from .coupling import compute_coupling
 from .images import caption_chunks_for, save_doc_images
 from .parsers.registry import parse_file
+from .sampler_index import build_sampler_index, save_sampler_index
 from .topics import extract_topics, write_topics
 
 
@@ -112,6 +116,15 @@ def ingest_corpus(input_dir: Path, output_dir: Path) -> CorpusPaths:
 
     graph = build_corpus_graph(docs, all_chunks_list, store)
     write_graph(paths, graph)
+
+    # Pre-compute the corpus-level sampler index so distill iterations can
+    # load it instead of rebuilding from scratch on every run.
+    sampler_idx = build_sampler_index(docs, all_chunks_list, graph, store)
+    save_sampler_index(paths.sampler_index_path, sampler_idx)
+
+    # Real PageRank on the doc graph (cites + doc_similar edges).
+    # Replaces the uniform fallback used inside _build_sampler_state.
+    _write_pagerank(paths, docs, graph)
 
     vocab = extract_topics(docs_chunks_pairs, declared_per_doc=declared)
     write_topics(paths.topics_path, vocab)
@@ -251,6 +264,28 @@ def _image_slug(path: Path) -> str:
         return slug or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
     cut = slug[:80].rsplit("_", 1)[0]
     return cut or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+
+
+def _write_pagerank(paths: CorpusPaths, docs: list[Document], graph) -> None:
+    """Compute real PageRank on the doc graph and persist to pagerank.json."""
+    doc_ids = [d.id for d in docs]
+    g = nx.Graph()
+    g.add_nodes_from(doc_ids)
+    if graph is not None:
+        node_set = set(doc_ids)
+        for etype in ("cites", "doc_similar"):
+            for src, dst in graph.edges.get(etype, []):
+                if src not in node_set or dst not in node_set or src == dst:
+                    continue
+                if g.has_edge(src, dst):
+                    g[src][dst]["weight"] += 1.0
+                else:
+                    g.add_edge(src, dst, weight=1.0)
+    if g.number_of_nodes() == 0:
+        pagerank: dict[str, float] = {}
+    else:
+        pagerank = dict(nx.pagerank(g, weight="weight"))
+    paths.pagerank_path.write_text(json.dumps(pagerank), encoding="utf-8")
 
 
 def _sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
