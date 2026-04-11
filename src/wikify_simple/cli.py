@@ -8,6 +8,8 @@ from pathlib import Path
 import typer
 
 from .distill.pipeline import run as pipeline_run
+from .distill.pipeline import run_with_preloaded
+from .distill.preload import preload_corpus
 from .distill.strategies import STRATEGIES
 from .infra.cache import ExtractCache
 from .infra.cost_meter import CostMeter
@@ -268,6 +270,123 @@ def distill(
         )
     else:
         typer.echo(f"bundle written to {bundle.root}")
+
+
+@app.command()
+def campaign(
+    strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
+    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
+    policy: str = typer.Option("rule_policy", "--policy", help="rule_policy | llm_policy"),
+    budget: str = typer.Option("1x", "--budget", help="Haiku-equivalent tokens per iteration."),
+    iterations: int = typer.Option(1, "--iterations", help="Number of iterations to run."),
+    extract_tier: str | None = typer.Option(None, "--extract-tier", help="S | M | L"),
+    write_tier: str | None = typer.Option(None, "--write-tier", help="S | M | L"),
+    edit_tier: str | None = typer.Option(None, "--edit-tier", help="S | M | L"),
+    compact_tier: str | None = typer.Option(None, "--compact-tier", help="S | M | L"),
+    exploit_fraction: float | None = typer.Option(None, "--exploit-fraction"),
+    seed: int = typer.Option(0, "--seed"),
+    corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
+    bundle_dir: Path = typer.Option(..., "--bundle", help="Bundle path (required for campaign)."),
+    cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
+    field: str | None = typer.Option(None, "--field"),
+    artifact: str = typer.Option("wiki_concept", "--artifact"),
+) -> None:
+    """Run N iterations of distillation in one process, loading the corpus once."""
+    from .prompts import available_artifact_templates, available_field_guides
+
+    if policy not in ("rule_policy", "llm_policy"):
+        raise typer.BadParameter(f"unknown policy: {policy}")
+    if strategy not in STRATEGIES:
+        raise typer.BadParameter(f"unknown strategy: {strategy}")
+    if iterations < 1:
+        raise typer.BadParameter("--iterations must be >= 1")
+    for tier_name, tier_val in (
+        ("extract-tier", extract_tier),
+        ("write-tier", write_tier),
+        ("edit-tier", edit_tier),
+        ("compact-tier", compact_tier),
+    ):
+        if tier_val is not None and tier_val not in _VALID_TIERS:
+            raise typer.BadParameter(
+                f"--{tier_name} must be one of {_VALID_TIERS}; got {tier_val!r}"
+            )
+    if exploit_fraction is not None and not 0.0 <= exploit_fraction <= 1.0:
+        raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
+    if binding == "file_dispatch" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+        raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+
+    if field is None:
+        from .distill.extract.field_detect import detect_field
+
+        field = detect_field(CorpusPaths(root=corpus_dir))
+        typer.echo(f"auto-detected field: {field}")
+    if field not in available_field_guides():
+        raise typer.BadParameter(f"unknown field {field!r}; available: {available_field_guides()}")
+    if artifact not in available_artifact_templates():
+        raise typer.BadParameter(
+            f"unknown artifact {artifact!r}; available: {available_artifact_templates()}"
+        )
+
+    budget_haiku_eq = _parse_budget(budget)
+    corpus = CorpusPaths(root=corpus_dir)
+    bundle = BundlePaths(root=bundle_dir)
+    bundle.ensure()
+
+    # Load the corpus ONCE for all iterations.
+    preloaded = preload_corpus(corpus)
+
+    # Single ExtractCache instance — survives across iterations so in-process
+    # cache lookups after iteration 1 are free.
+    cache = ExtractCache(root=cache_dir)
+
+    for i in range(1, iterations + 1):
+        iter_seed = seed + i - 1
+        iteration_op = "create" if i == 1 else "refine"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        run_id = f"campaign_{strategy}_{budget}_seed{iter_seed}_iter{i}_{ts}"
+
+        meter = CostMeter(
+            budget_haiku_eq=budget_haiku_eq,
+            run_id=run_id,
+            events_path=bundle.calls_path,
+        )
+        extractor, writer, editor, compactor, orchestrator = _wire_binding(binding, cache, meter)
+        if policy == "llm_policy" and orchestrator is None:
+            raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
+
+        cfg = STRATEGIES[strategy](seed=iter_seed)
+        cfg.field_name = field
+        cfg.artifact_name = artifact
+        cfg.policy_name = policy
+        if extract_tier is not None:
+            cfg.extract_tier = extract_tier
+        if write_tier is not None:
+            cfg.write_tier = write_tier
+        if edit_tier is not None:
+            cfg.edit_tier = edit_tier
+        if compact_tier is not None:
+            cfg.compact_tier = compact_tier
+        if exploit_fraction is not None:
+            cfg.exploit_fraction_override = exploit_fraction
+
+        run_with_preloaded(
+            preloaded=preloaded,
+            bundle=bundle,
+            strategy=cfg,
+            extractor=extractor,
+            writer=writer,
+            meter=meter,
+            budget_haiku_eq=budget_haiku_eq,
+            iteration=iteration_op,
+            editor=editor,
+            compactor=compactor,
+            orchestrator=orchestrator,
+            policy_name=policy,
+        )
+
+        typer.echo(f"iteration {i}/{iterations} done (run_id={run_id})")
+
+    typer.echo(f"campaign complete: {bundle.root}")
 
 
 def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
