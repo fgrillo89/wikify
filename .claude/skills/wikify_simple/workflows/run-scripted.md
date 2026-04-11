@@ -25,7 +25,7 @@ User-facing workflow: the user sets every knob up front, this skill runs the pip
 | `exploit_fraction` | strategy default | 0..1 |
 | `seed` | `0` | RNG seed for the first iteration (increments per iteration). |
 | `field` | auto-detect | Writer field guide. |
-| `artifact` | `wiki_concept` | Writer artifact template. |
+| `artifact` | `wiki_article` | Writer artifact template (`wiki_article` or `wiki_person`). |
 | `render_html` | `true` | Render HTML after the final iteration. |
 | `run_eval` | `true` | Run eval after the final iteration. |
 

@@ -23,7 +23,7 @@ User-facing workflow for the LLM-driven scenario. The user sets budget and itera
 | `budget_per_iteration` | `50000` | Haiku-equivalent tokens per iteration. |
 | `seed` | `0` | RNG seed (increments per iteration). |
 | `field` | auto-detect | Writer field guide. |
-| `artifact` | `wiki_concept` | Writer artifact template. |
+| `artifact` | `wiki_article` | Writer artifact template (`wiki_article` or `wiki_person`). |
 | `render_html` | `true` | Render HTML after the final iteration. |
 | `run_eval` | `true` | Eval after the final iteration. |
 

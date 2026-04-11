@@ -21,7 +21,7 @@ prompt_template: |
 
   1. **title**: canonical concept name (2-120 chars)
   2. **aliases**: alternative names or abbreviations
-  3. **kind**: "concept" or "person"
+  3. **kind**: "article" or "person"
   4. **category**: phenomenon | method | material | device | theory | metric | organization | other (null for person)
   5. **quote**: verbatim span from chunk_text (5-400 chars) -- evidence anchor
   6. **definition**: one-sentence definition of this concept (in your own words)

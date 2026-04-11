@@ -54,7 +54,6 @@ dependencies = [
 
 [project.optional-dependencies]
 gdrive = ["google-api-python-client>=2.130", "google-auth-oauthlib>=1.2"]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4"]
 
 [build-system]
 requires = ["hatchling"]
@@ -80,5 +79,6 @@ pythonpath = ["src"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-cov>=7.0",
     "ruff>=0.15.8",
 ]

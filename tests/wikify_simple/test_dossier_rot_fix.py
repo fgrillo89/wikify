@@ -148,7 +148,7 @@ def _make_dossier_dict() -> dict:
         "page_id": "Atomic Layer Deposition",
         "title": "Atomic Layer Deposition",
         "aliases": ["ALD"],
-        "kind": "concept",
+        "kind": "article",
         "category": "method",
         "definition": (
             "Atomic layer deposition (ALD) is a self-limiting vapor-phase thin-film growth "
@@ -191,7 +191,7 @@ def test_dossier_to_yaml_contains_expected_fields():
     parsed = yaml.safe_load(result)
     assert parsed["page_id"] == "Atomic Layer Deposition"
     assert parsed["title"] == "Atomic Layer Deposition"
-    assert parsed["kind"] == "concept"
+    assert parsed["kind"] == "article"
     assert "definition" in parsed
     assert "summary" in parsed
     assert "ALD" in parsed["aliases"]

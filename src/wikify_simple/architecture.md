@@ -50,7 +50,7 @@ form possible:
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
 | Embeddings       | vector store (chroma / lancedb / ...) | similarity edges               |
 | Corpus graph     | `corpus/graph.json` (or .parquet)     | sampling decisions             |
-| **Wiki pages**   | **`wiki/concepts/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
+| **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
 | Runs / telemetry | `runs/{run_id}/...`                   | reports                        |
 
@@ -76,7 +76,7 @@ These are the contracts. Everything else is implementation.
 ### Wiki side
 
 - `WikiPage` (in-memory representation of a `.md` file)
-  - `id`, `kind` (`concept` | `person`), `title`, `aliases`
+  - `id`, `kind` (`article` | `person`), `title`, `aliases`
   - `body_markdown` (the human prose)
   - `evidence: list[Evidence]`
   - `links: list[str]` (other wiki page ids)
@@ -101,13 +101,21 @@ These are the contracts. Everything else is implementation.
 ## People and articles are separate kinds
 
 Articles and people are separate `kind`s with separate directories
-(`wiki/concepts/`, `wiki/people/` today; renaming to `wiki/articles/` is
-tracked in Phase 6D of `plans/structural-improvements.md`) and separate
-artifact templates. An article page is built from chunks that *describe
-an idea*; a person page is built from chunks that *attribute work to a
-name* plus document metadata.
+(`wiki/articles/` and `wiki/people/`) and separate artifact templates.
+An article page is built from chunks that *describe an idea*; a person
+page is built from chunks that *attribute work to a name* plus document
+metadata.
 
-Today, person pages are produced by a hybrid path: `distill/write/author_pages.py::build_author_pages` emits deterministic skeletons from document metadata, and the writer enriches them when enough chunk-level evidence accumulates. Phase 6B retires the deterministic-skeleton path entirely: person pages will be written by the model like article pages, with author metadata (publications, coauthors, citations) attached to the `WriteRequest` as `author_context` for grounding. Until that phase lands, the current hybrid remains in place but its output has known quality issues (see the Phase 6 context in the structural-improvements plan).
+Person pages are written by the model just like article pages. Author
+metadata is assembled at ingest/distill time by
+`distill/write/author_context.py::build_author_context` and attached to
+the `WriteRequest` as `author_context` (primary publications, cited
+works, collaborators, year range, affiliations) for grounding. The
+writer produces biographical prose in Wikipedia voice; the
+"appears in this corpus" phrasing is banned. The writer is robust to
+missing `author_context` (non-author persons mentioned only in chunk
+prose): the lead degrades to `**Name** is credited with [contribution
+grounded in evidence]`.
 
 ## Package layout
 

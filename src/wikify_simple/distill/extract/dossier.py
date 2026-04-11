@@ -247,7 +247,7 @@ def dossier_to_yaml(dossier_dict: dict) -> str:
     out: dict = {
         "page_id": dossier_dict.get("page_id", ""),
         "title": dossier_dict.get("title", ""),
-        "kind": dossier_dict.get("kind", "concept"),
+        "kind": dossier_dict.get("kind", "article"),
     }
     if dossier_dict.get("aliases"):
         out["aliases"] = dossier_dict["aliases"]

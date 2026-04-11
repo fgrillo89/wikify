@@ -97,7 +97,7 @@ WRITER_SPEC = [
     Required("schema",            fixed=1K),
     Required("page_skeleton",     variable),
     Pool("evidence_chunks",       floor=4K, ceiling=80K, ranker=relevance),
-    Pool("neighbor_titles",       floor=0,  ceiling=8K, ranker=g_evidence),
+    Pool("neighbor_summaries",    floor=0,  ceiling=8K, ranker=g_evidence),
 ]
 
 ORCHESTRATOR_SPEC = [

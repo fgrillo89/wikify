@@ -22,7 +22,8 @@
 | `--out` | path | `data/wikis` | Fallback when `--bundle` is not set. |
 | `--phase` | `all` / `extract` / `write` | `all` | Phase gate. |
 | `--field` | field-guide name | auto-detect | `materials_science`, `biology`, ... |
-| `--artifact` | artifact template | `wiki_concept` | Currently `wiki_concept` or `wiki_person` (renaming to `wiki_article` is Phase 6D). |
+| `--artifact` | artifact template | `wiki_article` | One of `wiki_article`, `wiki_person`. |
+| `--verbalize` | bool | `false` | Ad-hoc diagnostic flag. When set, every handler emits a 1-3 sentence `reasoning` field and the pipeline appends non-empty entries to `<bundle>/_meta/verbalize.jsonl`. See `test-run-playbook.md` Part 8. |
 
 **Orchestrate tier is locked at L (opus)** — not exposed as a flag. See `contracts/roles.py`.
 

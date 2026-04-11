@@ -487,7 +487,7 @@ class WriteResponse(BaseModel):
     model_config = _STRICT
 
     page_id: str
-    page_kind: str = ""  # "concept" | "article" | "person" -- empty means unknown
+    page_kind: str = ""  # "article" | "person" -- empty means unknown
     body_markdown: str
     used_markers: list[str]
     tokens_in: int

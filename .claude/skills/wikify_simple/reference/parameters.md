@@ -61,7 +61,7 @@ Strategy defaults: E=0.2, M=0.65 (adaptive), X=0.6.
 | Flag | Default | Description |
 |---|---|---|
 | `--field` | auto-detect from corpus topics | Field guide YAML (e.g. `materials_science`, `biology`, `physics`). See `src/wikify_simple/prompts/fields/`. |
-| `--artifact` | `wiki_concept` | Artifact template (e.g. `wiki_concept`, `wiki_person`). See `src/wikify_simple/prompts/artifact_types/`. |
+| `--artifact` | `wiki_article` | Artifact template (one of `wiki_article`, `wiki_person`). See `src/wikify_simple/prompts/artifact_types/`. |
 
 ## Environment variables
 

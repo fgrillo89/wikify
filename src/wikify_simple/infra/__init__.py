@@ -1,29 +1,10 @@
-"""Shared infrastructure: cost meter, cache, context envelope.
+"""Shared infrastructure: cost meter, cache, context envelope, tokens.
 
-Pure Python. No LLM, no domain logic. These three pieces are the contract
-between strategies and any model dispatcher. They are built once, locked,
-and never reasoned about again.
+Pure Python. No LLM, no domain logic. Import submodules directly —
+``from wikify_simple.infra.cost_meter import CostMeter``. This package
+intentionally does NOT re-export symbols because ``contracts/roles.py``
+imports from ``infra/context_envelope`` at module load time, and
+re-exports here would trigger ``infra/cost_meter`` (which imports from
+``contracts/roles.py``) inside the partial-init window, creating a
+cycle.
 """
-
-from ..contracts.roles import Role, response_reserve, role_spec, total_context
-from .cache import ExtractCache, ExtractCacheKey
-from .context_envelope import ContextEnvelope, Pool, Required, SlotSpec
-from .cost_meter import CallRecord, CostMeter, TierPrice
-from .tokens import count_tokens
-
-__all__ = [
-    "CallRecord",
-    "ContextEnvelope",
-    "CostMeter",
-    "ExtractCache",
-    "ExtractCacheKey",
-    "Pool",
-    "Required",
-    "Role",
-    "SlotSpec",
-    "TierPrice",
-    "count_tokens",
-    "response_reserve",
-    "role_spec",
-    "total_context",
-]
