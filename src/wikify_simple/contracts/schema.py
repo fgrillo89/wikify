@@ -356,8 +356,8 @@ def _check_wikipedia_structure(body: str, page_kind: str = "") -> None:
     if not h2_keys:
         raise ValueError("WriteResponse.body_markdown needs at least one `## H2` heading")
 
-    # For article/concept pages: require at least 2 non-appendix H2 headings.
-    if page_kind in ("concept", "article"):
+    # For article pages: require at least 2 non-appendix H2 headings.
+    if page_kind == "article":
         non_appendix = [k for k in h2_keys if k.strip() not in _APPENDIX_LABELS]
         if len(non_appendix) < 2:
             raise ValueError(

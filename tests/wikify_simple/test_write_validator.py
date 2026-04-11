@@ -287,10 +287,10 @@ def _concept_body_with_h2s(*h2_labels: str) -> str:
 
 
 def _mk_concept(body: str) -> WriteResponse:
-    """Like _mk but with page_kind='concept' to activate the Phase 6A check."""
+    """Like _mk but with page_kind='article' to activate the Phase 6A check."""
     return WriteResponse(
         page_id="Atomic Layer Deposition",
-        page_kind="concept",
+        page_kind="article",
         body_markdown=body,
         used_markers=["e1", "e2"],
         tokens_in=300,
