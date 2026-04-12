@@ -1,8 +1,9 @@
 """Token-based cost accounting: figures payload must move the meter."""
 
-from .fakes import FakeWriter
-from wikify.schema import ImageRef, WriteEvidenceRef, WriteRequest
 from wikify.meter import CostMeter, TierPrice
+from wikify.schema import ImageRef, WriteEvidenceRef, WriteRequest
+
+from .fakes import FakeWriter
 
 
 def _meter(tmp_path) -> CostMeter:

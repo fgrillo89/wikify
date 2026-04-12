@@ -20,9 +20,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..config import CHUNKS_PER_LANDED_DOC
 from ..models import CorpusGraph
 from ..store.vectors import VectorStore
-from ..config import CHUNKS_PER_LANDED_DOC
 from ..types import ModelTier
 
 if TYPE_CHECKING:

@@ -12,15 +12,15 @@ from pathlib import Path
 
 import pytest
 
-from .fakes import FakeExtractor, FakeWriter
-from wikify.distill.pipeline import run as pipeline_run
-from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
-from wikify.distill.strategy import AdaptiveBudget
-from wikify.distill.strategy import StrategyConfig
 from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
+from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify.distill.pipeline import run as pipeline_run
+from wikify.distill.strategy import AdaptiveBudget, StrategyConfig
 from wikify.ingest.pipeline import ingest_corpus
+from wikify.meter import CostMeter
 from wikify.paths import BundlePaths, CorpusPaths
+
+from .fakes import FakeExtractor, FakeWriter
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

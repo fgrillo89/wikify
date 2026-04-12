@@ -108,7 +108,7 @@ After `cli ingest` finishes, the corpus directory contains:
 | `contracts/roles.py` | Role enum + per-role spec lists |
 | `contracts/normalize.py` | Text normalization for quote validation |
 | `bindings/file_dispatch.py` | File-dispatch bindings (via `Dispatch` class) |
-| `ingest/refresh.py` | Parallel parse + per-doc persist + embed + graph + sampler index, in that order |
+| `ingest/pipeline.py` | Incremental ingest: parallel parse, manifest-based dedup, vector reuse, derived rebuild |
 | `ingest/equations.py` | Display/inline/chemical/unicode/named equation extractor |
 | `ingest/figure_refs.py` | Caption-first figure / table / scheme extractor from body markdown |
 | `ingest/figures.py` | Binary figure extractor; caption-only filter; scanned-page dedup by raw page bytes |

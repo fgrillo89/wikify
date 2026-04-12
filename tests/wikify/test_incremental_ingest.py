@@ -423,3 +423,102 @@ def test_duplicate_content_alias_sync(sources_dir, corpus_dir):
     active = [s for s in manifest.sources.values()
               if s.status == "active"]
     assert len(active) == 1
+
+
+# --- Duplicate-content with different filenames (alias doc_id fix) ---
+
+def test_duplicate_content_different_names_alias(sources_dir, corpus_dir):
+    """copy1/foo.md and copy2/bar.md with identical bytes: alias must
+    reference foo's persisted doc_id, not a non-existent bar_<hash>."""
+    (sources_dir / "copy1").mkdir()
+    (sources_dir / "copy2").mkdir()
+    body = "Identical body."
+    _write_md(sources_dir / "copy1" / "foo.md", "Paper", body)
+    _write_md(sources_dir / "copy2" / "bar.md", "Paper", body)
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    assert len(active) == 2
+
+    # Both must reference the same doc_id (the one actually on disk)
+    doc_ids = {s.doc_id for s in active}
+    assert len(doc_ids) == 1, f"Expected shared doc_id, got {doc_ids}"
+
+    # That doc_id must actually exist on disk
+    shared = doc_ids.pop()
+    assert (paths.docs_dir / f"{shared}.json").exists()
+
+
+# --- Unknown parser backend fails fast ---
+
+def test_unknown_parser_backend_raises(sources_dir, corpus_dir):
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
+    with pytest.raises(ValueError, match="unknown parser backend"):
+        ingest_corpus(
+            sources_dir, corpus_dir,
+            max_workers=1, parser_backend="nonexistent",
+        )
+
+
+# --- Same-stem sources with RawImage: image sidecars don't collide ---
+
+def test_same_stem_images_survive(sources_dir, corpus_dir):
+    """Two same-stem PDFs with images must get separate image dirs."""
+    from wikify.ingest.parsers.registry import RawImage
+
+    (sources_dir / "set1").mkdir()
+    (sources_dir / "set2").mkdir()
+    _write_md(sources_dir / "set1" / "alpha.md", "A1", "Set1.")
+    _write_md(sources_dir / "set2" / "alpha.md", "A2", "Set2.")
+
+    png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDATx\x9cc\xf8\xff"
+        b"\xff?\x00\x05\xfe\x02\xfeA5\xc8\x91"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+
+    call_count = [0]
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def parse_with_images(path, **kw):
+        kind, result = real_parse(path, **kw)
+        if "alpha" in path.name:
+            call_count[0] += 1
+            result.raw_images = [
+                RawImage(
+                    data=png, ext="png",
+                    caption=f"Fig from {path.parent.name}",
+                    label=f"Fig. {call_count[0]}",
+                )
+            ]
+        return kind, result
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=parse_with_images,
+    ):
+        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    docs = list_documents(paths)
+    assert len(docs) == 2
+
+    # Both docs should have images and distinct image_dirs
+    image_dirs = {d.image_dir for d in docs}
+    assert len(image_dirs) == 2, (
+        f"Image dir collision: {image_dirs}"
+    )
+
+    # Both image dirs should have sidecars on disk
+    for d in docs:
+        img_dir = Path(d.image_dir)
+        sidecars = list(img_dir.glob("*.json")) if img_dir.exists() else []
+        assert sidecars, f"No sidecars for doc {d.id} in {d.image_dir}"

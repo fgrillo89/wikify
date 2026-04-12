@@ -29,10 +29,10 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from .types import (
-    ModelTier,
-    Role,
-)
+from .cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from .config import DISPATCH_TIMEOUT, POLL_INTERVAL
+from .context import response_reserve, total_context
+from .meter import CostMeter
 from .schema import (
     EditorBrief,
     Equation,
@@ -49,10 +49,10 @@ from .schema import (
     WriteRequest,
     WriteResponse,
 )
-from .context import response_reserve, total_context
-from .cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
-from .config import DISPATCH_TIMEOUT, POLL_INTERVAL
-from .meter import CostMeter
+from .types import (
+    ModelTier,
+    Role,
+)
 
 # ---------------------------------------------------------------------------
 # normalize_for_substring — tolerant text normalization for quote matching

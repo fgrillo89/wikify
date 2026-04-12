@@ -5,14 +5,15 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from .fakes import FakeExtractor, FakeWriter
+from wikify.cache import ExtractCache
 from wikify.cli import app
 from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import build_strategy
-from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
 from wikify.ingest.pipeline import ingest_corpus
+from wikify.meter import CostMeter
 from wikify.paths import BundlePaths
+
+from .fakes import FakeExtractor, FakeWriter
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

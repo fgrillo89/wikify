@@ -23,12 +23,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from ..paths import BundlePaths, CorpusPaths
 from ..schema import (
     MaintenanceAction,
     MaintenanceReport,
     QueryLogEntry,
 )
-from ..paths import BundlePaths, CorpusPaths
 from ..store.wiki_index import WikiIndex
 
 # Similarity threshold: if the wiki's best page excerpt for the question

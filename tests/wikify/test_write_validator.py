@@ -14,18 +14,19 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from .fakes import FakeWriter
+from wikify.distill.author_context import build_author_context
+from wikify.distill.dossier import DossierStore
+from wikify.distill.write_prep import WriteRequestConfig, build_write_request
+from wikify.meter import CostMeter
+from wikify.models import Document, Evidence, WikiPage
 from wikify.schema import (
     WriteEvidenceRef,
     WriteRequest,
     WriteResponse,
 )
-from wikify.distill.dossier import DossierStore
-from wikify.distill.author_context import build_author_context
-from wikify.distill.write_prep import WriteRequestConfig, build_write_request
-from wikify.meter import CostMeter
-from wikify.models import Document, Evidence, WikiPage
 from wikify.store.images_index import ImageIndex
+
+from .fakes import FakeWriter
 
 
 def _meter(tmp_path: Path) -> CostMeter:

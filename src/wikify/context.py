@@ -7,7 +7,6 @@ from typing import Union
 from .config import CHARS_PER_TOKEN
 from .types import Role
 
-
 # --- token counting ------------------------------------------------------
 
 

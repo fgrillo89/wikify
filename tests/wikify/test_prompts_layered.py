@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from wikify.schema import WriteEvidenceRef, WriteRequest
 from wikify.distill.persona import (
     build_persona_prompt,
     generate_corpus_persona,
@@ -20,6 +19,7 @@ from wikify.prompts import (
     load_field_guide,
     load_style_guide,
 )
+from wikify.schema import WriteEvidenceRef, WriteRequest
 
 
 def test_load_style_guide_returns_full_file() -> None:

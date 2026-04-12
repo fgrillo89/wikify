@@ -2,21 +2,22 @@
 
 from pathlib import Path
 
-from .fakes import FakeExtractor, FakeWriter
-from wikify.types import Extractor, Writer
+from wikify.cache import ExtractCache
+from wikify.distill.pipeline import run as pipeline_run
+from wikify.distill.strategy import build_strategy
+from wikify.ingest.pipeline import ingest_corpus
+from wikify.meter import CostMeter
+from wikify.paths import BundlePaths
 from wikify.schema import (
     ExtractRequest,
     ExtractResponse,
     WriteRequest,
     WriteResponse,
 )
-from wikify.distill.pipeline import run as pipeline_run
-from wikify.distill.strategy import build_strategy
-from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
-from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths
 from wikify.store.images_index import ImageIndex, ImageRecord, save_images_index
+from wikify.types import Extractor, Writer
+
+from .fakes import FakeExtractor, FakeWriter
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

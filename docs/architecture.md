@@ -93,7 +93,7 @@ These are the contracts. Everything else is implementation.
     embeddings; `similar_strong` is the cosine >= `STRONG_COS` filter)
   - `co_section`: chunk <-> chunk (same doc + same section path)
   - `cites`: doc -> doc (directed; resolved against the corpus by the
-    year-bucketed fuzzy matcher in `refresh.py::_populate_doc_edges`)
+    year-bucketed fuzzy matcher in `pipeline.py::_populate_doc_edges`)
   - `cites_same`: doc <-> doc (undirected bibliographic coupling, top-k
     per doc by shared-reference count)
   - `doc_similar`: doc <-> doc (mean-pooled embedding cosine >=
@@ -126,7 +126,7 @@ These are the contracts. Everything else is implementation.
 
 ## Ingest pipeline order
 
-`ingest/refresh.py::ingest_corpus` runs in this order — order matters
+`ingest/pipeline.py::ingest_corpus` runs in this order — order matters
 because the corpus graph depends on populated doc-level edges:
 
 1. **Parse + chunk per source in parallel** (`ProcessPoolExecutor`,
@@ -236,8 +236,11 @@ src/wikify/
     corpus_graph.py     # builds CorpusGraph (cites + cites_same too)
     explorer_index.py   # pre-computed explorer state, written by ingest
     topics.py           # topic extraction (used by GT-C in eval)
-    refresh.py          # idempotent corpus refresh entry point;
-                        # ProcessPoolExecutor parallel parsing
+    pipeline.py         # incremental ingest entry point;
+                        # parallel parsing, manifest-based dedup,
+                        # vector reuse, physical stale removal
+    manifest.py         # CorpusManifest, SourceRecord, ChangeSet,
+                        # diff_sources for incremental ingest
 
   store/                # disk I/O for corpus and wikis
     corpus.py           # read documents/chunks/embeddings

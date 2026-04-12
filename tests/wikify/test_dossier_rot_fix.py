@@ -23,10 +23,10 @@ from wikify.distill.dossier import (
     dossier_to_yaml,
 )
 from wikify.distill.explorer import (
+    ExplorerState,
     GlobalOp,
     LevyExplorer,
     LocalOp,
-    ExplorerState,
     init_coverage_state,
 )
 from wikify.models import CorpusGraph
@@ -356,8 +356,8 @@ def test_write_io_lineage_creates_expected_files(tmp_path):
     }
 
     # Simulate candidates (minimal structure).
-    from wikify.schema import ExtractedConcept
     from wikify.distill.dossier import Candidate
+    from wikify.schema import ExtractedConcept
 
     candidates = [
         Candidate(

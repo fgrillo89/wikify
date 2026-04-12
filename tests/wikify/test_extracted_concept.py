@@ -19,14 +19,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from wikify.cache import ExtractCache
 from wikify.dispatch import Dispatch
+from wikify.meter import CostMeter
 from wikify.schema import (
     ExtractedConcept,
     ExtractRequest,
     QuoteNotInChunkError,
 )
-from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
 
 # --- schema-level tests --------------------------------------------------
 

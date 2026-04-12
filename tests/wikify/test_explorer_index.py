@@ -15,12 +15,12 @@ from pathlib import Path
 import pytest
 
 from wikify.distill.pipeline import _build_explorer_state
-from wikify.ingest.pipeline import ingest_corpus
 from wikify.ingest.explorer_index import (
     build_explorer_index,
     load_explorer_index,
     save_explorer_index,
 )
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.paths import CorpusPaths
 from wikify.store.corpus import all_chunks, list_documents, read_graph, read_vector_store
 

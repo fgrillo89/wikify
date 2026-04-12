@@ -13,16 +13,16 @@ Exercises:
 import json
 from pathlib import Path
 
-from wikify.schema import (
-    EscalationEvent,
-    MaintenanceAction,
-)
 from wikify.distill.maintenance import (
     load_query_log,
     run_maintenance,
 )
 from wikify.distill.query import persist_query_log
 from wikify.paths import BundlePaths, CorpusPaths
+from wikify.schema import (
+    EscalationEvent,
+    MaintenanceAction,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

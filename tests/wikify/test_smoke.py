@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from wikify.cache import ExtractCache
 from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import build_strategy
+from wikify.embedding import embed_texts
 from wikify.eval.bundle import load_bundle
 from wikify.eval.metrics import (
     concept_recall,
@@ -16,10 +18,8 @@ from wikify.eval.metrics import (
     person_recall,
     spectral_gap_modularity,
 )
-from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
-from wikify.embedding import embed_texts
 from wikify.ingest.pipeline import ingest_corpus
+from wikify.meter import CostMeter
 from wikify.paths import BundlePaths, CorpusPaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"

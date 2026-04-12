@@ -1,8 +1,8 @@
 """Tests for distill/canonicalize.py -- person candidate handling."""
 
-from wikify.schema import ExtractedConcept
 from wikify.distill.dossier import Candidate, canonicalize
 from wikify.models import Evidence, WikiPage
+from wikify.schema import ExtractedConcept
 
 
 def _concept_candidate(title: str, chunk_id: str, doc_id: str) -> Candidate:

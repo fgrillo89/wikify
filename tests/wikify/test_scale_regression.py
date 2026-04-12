@@ -6,10 +6,10 @@ import time
 import numpy as np
 
 from wikify.distill.explorer import (
+    ExplorerState,
     GlobalOp,
     LevyExplorer,
     LocalOp,
-    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
 )

@@ -139,9 +139,14 @@ def parse_file(
     """Dispatch a source file to the right parser.
 
     ``parser_backend`` selects an override table registered via
-    ``register_parser_backend``.  Unregistered backends raise
-    ``ValueError``.  ``"default"`` always works.
+    ``register_parser_backend``.  Unknown backends raise ``ValueError``.
+    ``"default"`` always works.
     """
+    if parser_backend != "default" and parser_backend not in _BACKEND_OVERRIDES:
+        raise ValueError(
+            f"unknown parser backend {parser_backend!r}; "
+            f"registered: {sorted(_BACKEND_OVERRIDES) or ['(none)']}"
+        )
     suffix = path.suffix.lower().lstrip(".")
     overrides = _BACKEND_OVERRIDES.get(parser_backend, {})
     loader = overrides.get(suffix) or _SUFFIX_TABLE.get(suffix)

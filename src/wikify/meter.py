@@ -20,8 +20,6 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .types import Role
-from .types import ModelTier
 from .config import (
     ABORT_RATIO,
     TIER_L_INPUT,
@@ -34,6 +32,7 @@ from .config import (
     TIER_S_OUTPUT,
     TIER_S_OVERHEAD,
 )
+from .types import ModelTier, Role
 
 # --- pricing model -------------------------------------------------------
 #

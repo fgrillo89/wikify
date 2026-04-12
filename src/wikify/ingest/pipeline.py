@@ -396,22 +396,19 @@ def _embed_chunks_incremental(
     target_ids = [c.id for c in all_chunks]
     target_set = set(target_ids)
 
-    # Check embedder fingerprint: skip reuse if backend changed.
+    # Check embedder fingerprint: skip reuse if backend/model/dim changed.
     backend = current_backend()
     embedder_changed = False
     if paths.vectors_path.exists():
         old_meta = read_meta(paths.vectors_path)
         if old_meta is not None:
-            cur_backend = str(backend["backend"])
-            cur_dim = int(backend.get("dim") or 0)
-            if old_meta.backend != cur_backend or (
-                cur_dim and old_meta.dim != cur_dim
-            ):
+            cur_fp = _embedder_fingerprint(backend)
+            old_fp = f"{old_meta.backend}:{old_meta.model}:{old_meta.dim}"
+            if cur_fp != old_fp:
                 embedder_changed = True
                 print(
-                    f"[ingest] embedder changed "
-                    f"({old_meta.backend}/{old_meta.dim} -> "
-                    f"{cur_backend}/{cur_dim}), re-embedding all",
+                    f"[ingest] embedder changed ({old_fp} -> {cur_fp}), "
+                    f"re-embedding all",
                     file=sys.stderr,
                 )
 
@@ -600,6 +597,15 @@ def write_pagerank(paths: CorpusPaths, docs: list[Document], graph) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Embedder fingerprint
+# ---------------------------------------------------------------------------
+
+def _embedder_fingerprint(backend: dict) -> str:
+    """Single fingerprint string for backend + model + dim."""
+    return f"{backend['backend']}:{backend.get('model', '')}:{backend.get('dim', '')}"
+
+
+# ---------------------------------------------------------------------------
 # Stage: doc resave (with populated edges)
 # ---------------------------------------------------------------------------
 
@@ -714,6 +720,14 @@ def ingest_corpus(
         diff_sources,
         source_id_for,
     )
+    from .parsers.registry import _BACKEND_OVERRIDES
+
+    # Fail fast on unknown parser backend before doing any work.
+    if parser_backend != "default" and parser_backend not in _BACKEND_OVERRIDES:
+        raise ValueError(
+            f"unknown parser backend {parser_backend!r}; "
+            f"registered: {sorted(_BACKEND_OVERRIDES) or ['(none)']}"
+        )
 
     timings: dict[str, float] = {}
     t0_run = time.monotonic()
@@ -733,6 +747,15 @@ def ingest_corpus(
         # Intra-run dedup: two source paths with identical bytes share
         # one doc_id.  Parse only the first; record the second as a
         # manifest alias so sync-mode knows both reference the same doc.
+        #
+        # hash_to_doc tracks content_hash -> persisted doc_id. Seeded
+        # from active manifest records so aliases from prior runs resolve
+        # correctly. Updated from the first parsed source in this run.
+        hash_to_doc: dict[str, str] = {
+            s.content_hash: s.doc_id
+            for s in manifest.sources.values()
+            if s.status == "active"
+        }
         seen_hashes: dict[str, str] = {}  # hash -> first source_id
         deduped: list[Path] = []
         dedup_aliases: list[tuple[str, str, str]] = []  # (sid, h, did)
@@ -746,14 +769,18 @@ def ingest_corpus(
                 sid = change_set.path_to_sid.get(str(src))
                 if sid is None:
                     sid = source_id_for(src, input_dir)
-                did = doc_id_for(src)
-                dedup_aliases.append((sid, h, did))
+                # Use the persisted doc_id, not a recomputed one from
+                # the skipped path (different stem -> wrong doc_id).
+                persisted_did = hash_to_doc.get(h, doc_id_for(src))
+                dedup_aliases.append((sid, h, persisted_did))
                 print(f"  [skip-intra] {src.name}", file=sys.stderr)
                 continue
             first_sid = change_set.path_to_sid.get(str(src))
             if first_sid is None:
                 first_sid = source_id_for(src, input_dir)
             seen_hashes[h] = first_sid
+            # Pre-register the doc_id that will be persisted for this hash
+            hash_to_doc[h] = doc_id_for(src)
             deduped.append(src)
         change_set.to_parse = deduped
 
@@ -915,11 +942,7 @@ def ingest_corpus(
     manifest.last_ingest = SourceRecord.now_iso()
     from ..embedding import current_backend
 
-    backend = current_backend()
-    manifest.embedder_fingerprint = (
-        f"{backend['backend']}:{backend.get('model', '')}:"
-        f"{backend.get('dim', '')}"
-    )
+    manifest.embedder_fingerprint = _embedder_fingerprint(current_backend())
     manifest.save(paths.manifest_path)
 
     _print_timings(timings, t0_run)
