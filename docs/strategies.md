@@ -1,13 +1,6 @@
 # Wikification strategies
 
-> **Current state & roadmap**: this document describes the "cube" parameterization of deterministic strategies (sampler × schedule × tiering) and the four anchor cells (E, M, X, agent). Several structural additions are planned in [`plans/structural-improvements.md`](plans/structural-improvements.md) and are NOT yet landed:
->
-> - **LLM-as-sampler (Phase 3)**: the `guided` orchestrator today picks a sampling *category* (`walk_local`, `jump_uniform`, `jump_pagerank`, `jump_gap`, plus the newly-added `set_allocation` / `set_tier` / `done` control actions). Phase 3 adds a `pick_chunks` action with direct chunk-id selection, backed by a compact `sampler_snapshot` in the orchestrator context. This turns the agent cell from "picks the sampling strategy" into "IS the sampler".
-> - **Images as first-class units (Phase 4)**: caption chunks are tagged in the sampler state, get differentiated residual handling, and a new `jump_figures` action targets high-residual captions.
-> - **Orchestrator call cadence**: the `guided` caches active sampling actions for up to 8 consecutive extract batches before re-querying (so orchestrator cost amortizes). Control actions (`set_tier`, `set_allocation`, `done`) bypass the cache.
-> - **Per-iteration bundle pinning**: the `--bundle` CLI flag pins the bundle path across `create`+`refine` iterations. Multi-iteration workflows must use it.
->
-> Pricing-normalized tiers are S=1/5, M=3/15, L=15/75 (input/output haiku-equivalent per token) — see `src/wikify/infra/config.py`.
+Pricing-normalized tiers are S=1/5, M=3/15, L=15/75 (input/output haiku-equivalent per token) — see `src/wikify/config.py`.
 
 ## The cube
 
@@ -34,7 +27,7 @@ infrastructure layer. Three axes, seven knobs, one orthogonal flag.
 
 The seven knobs collapse what was previously a list of named strategies
 into an interpretable parameter space grounded in search-theory: the
-two-process structure (local exploit + global jump) from Lévy-flight
+two-process structure (local exploit + global jump) from Levy-flight
 foraging and frontier-based exploration, the explore/exploit split from
 bandit theory, and tier-per-mode for cost-aware planning.
 
@@ -55,11 +48,11 @@ data/cache/extract/{model_id}/{prompt_hash}/{chunk_id}.json
 
 Properties:
 
-- **Free re-runs.** Same `(corpus, prompt)` → zero extraction tokens after
+- **Free re-runs.** Same `(corpus, prompt)` -> zero extraction tokens after
   the first time. Ablation cells share most of their reads with their
   anchor cell, so the marginal cost of an ablation is far below its
   notional cost.
-- **Cross-strategy fairness.** Two samplers that read the same chunk pay
+- **Cross-strategy fairness.** Two explorers that read the same chunk pay
   for it once.
 - **Honest telemetry.** The cache stores the *first-time* token cost; the
   cost meter reports it whether the call hit or missed, so the study
@@ -74,10 +67,10 @@ priority-fill builder.
 ```
 TOTAL_CONTEXT     = 128K        # global cap, every call
 RESPONSE_RESERVE  = 8K          # reserved for the model output
-                                # → effective input cap = 120K
+                                # -> effective input cap = 120K
 ```
 
-The cap is a *ceiling*, not a floor. Typical extractor calls use 3K–8K
+The cap is a *ceiling*, not a floor. Typical extractor calls use 3K-8K
 because the spec ceilings stop the fill early. The cap only bites for
 unusual calls (very long chunks, foundational pages with many evidence
 items). Raising the cap raises *headroom*, not typical cost.
@@ -127,23 +120,25 @@ wall_seconds, cache_hit, prompt_hash. Aggregates into the run's
 
 Three guarantees:
 
-1. **Hard abort on budget overrun** at `1.05 × budget_target`.
+1. **Hard abort on budget overrun** at `1.05 x budget_target`.
 2. **Hard abort on context overrun** if a builder ever produces a prompt
    over the cap (asserts a builder bug).
 3. **No silent zero-tokens.** A response with `usage = None` raises.
 
 Live status to stderr every 10 calls or 5 seconds, whichever comes first.
 
-## Axis A — Sampler
+## Axis A — Explorer
 
-A sampler is a parameter triple. Every old A1–A8 falls out as a special
-case.
+An explorer is a parameter triple (implemented as `LevyExplorer` in
+`distill/explorer.py`). Every old A1-A8 falls out as a special case. The
+`Explorer` protocol, `ExplorerState`, and `build_explorer_index` live in
+the same module.
 
 | Variable | Domain | Granularity | Meaning |
 |---|---|---|---|
 | `local_op` | `none` / `similarity_walk` / `refine_uncertain` | chunk | What "step locally" means: walk `similar_strong`/`co_section` from the current concept's evidence chunks (`similarity_walk`), or pick chunks adjacent to high-entropy cached extractions (`refine_uncertain`). |
-| `global_op` | `uniform` / `pagerank` / `coverage_gap` | doc-then-chunk *or* chunk | What "jump globally" means. |
-| `jump_rate` | `[0, 1]` | – | Per step, probability of a global jump instead of a local step. The Lévy mixing parameter. |
+| `global_op` | `uniform` / `pagerank` / `coverage_gap` / `figures` | doc-then-chunk *or* chunk | What "jump globally" means. |
+| `jump_rate` | `[0, 1]` | - | Per step, probability of a global jump instead of a local step. The Levy mixing parameter. |
 
 ### Granularity rules (chunk vs doc)
 
@@ -158,6 +153,7 @@ lives at exactly one level:
 | `uniform` (global) | **doc-then-chunk** | pick a doc, then read 3 chunks (abstract + top-2 by `similar_strong` degree). Pure chunk-uniform is dominated by long documents. |
 | `pagerank` (global) | **doc-then-chunk** | PageRank lives on `cites` / `doc_similar`; once a doc is picked, the same per-doc rule applies. |
 | `coverage_gap` (global) | chunk | the M1 residual is per-chunk; doc-level averages destroy the gradient. |
+| `figures` (global) | chunk | targets high-residual caption chunks from the caption heap. |
 
 A local step costs 1 chunk of budget. A doc-then-chunk global jump costs
 `chunks_per_landed_doc = 3` chunks of budget; a chunk-native global jump
@@ -172,7 +168,7 @@ selected per strategy as a sub-flag of `local_op` / `global_op`:
 
 - **`images = caption_only` (default).** The image's caption + alt text
   are embedded at ingest and indexed *as if they were chunks*. The
-  sampler treats them as ordinary candidates for `similar_strong` walks,
+  explorer treats them as ordinary candidates for `similar_strong` walks,
   `coverage_gap`, and `pagerank`. Picking an "image chunk" feeds the
   caption text to the extractor; the image binary itself is never
   loaded by a model. Cheap, deterministic, no vision tier needed.
@@ -189,7 +185,8 @@ images into the corpus graph + into M1's coverage residual. The
 text is genuinely insufficient (slide-heavy decks, figure-heavy review
 articles); turn it on as a separate ablation, not as the default.
 
-For the agent cell, the action menu gains `inspect_figure(image_id)`
+For the agent cell, the action menu includes `jump_figures(k)` which
+targets high-residual caption chunks, and `inspect_figure(image_id)`
 which dispatches a one-shot vision call regardless of mode — the agent
 has explicit control. Same hard budget rules.
 
@@ -204,7 +201,7 @@ and no semantic anchor. On mvp20 this filter dropped 47/164 binaries
 real figure. The remaining captioned images all get `near_chunk_ids`
 populated by `link_chunks_to_images` (100 % link rate).
 
-#### `near_chunk_ids` and chunk → image binding
+#### `near_chunk_ids` and chunk -> image binding
 
 For every image with a caption, `link_chunks_to_images` scans body
 chunks for inline `Fig. N` / `Figure 2a` / `Table 3` / `Scheme 4`
@@ -239,7 +236,7 @@ Two non-chunk-text payloads now land in every `ExtractRequest`:
   body-only captions (no binary backing) to `evidence_figures`.
 
 These additions are all per-chunk filters; total context per extract
-call rises by 1–2 kB on a typical mvp20 chunk and stays well within
+call rises by 1-2 kB on a typical mvp20 chunk and stays well within
 the priority-fill envelope's pool ceilings.
 
 ### Bootstrap (round zero)
@@ -250,7 +247,7 @@ has at least one concept page with evidence. The bootstrap rule is
 fixed: an abstract sweep — one chunk per doc (the abstract chunk) — for
 the smallest possible scaffold to anchor subsequent walks.
 
-## Axis B — Schedule
+## Axis B — Budget allocator
 
 | Variable | Domain | Meaning |
 |---|---|---|
@@ -278,12 +275,12 @@ Reported as a column on every run, not as a study axis.
 Three deterministic anchors plus one model-driven cell. Each is one
 specific point in the seven-knob space.
 
-| Cell | sampler                                       | schedule         | tiering | One-line interpretation |
+| Cell | explorer                                      | schedule         | tiering | One-line interpretation |
 |------|-----------------------------------------------|------------------|---------|-------------------------|
 | **E** explore | `(none, pagerank, 1.0)`                  | `(0.2, static)`   | `(S, S)` | breadth-first cheap floor |
-| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.65, adaptive)` | `(S, M)` | the Lévy + Bayesian-opt prescription; the headline candidate |
+| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.65, adaptive)` | `(S, M)` | the Levy + Bayesian-opt prescription; the headline candidate |
 | **X** exploit | `(similarity_walk, none, 0.0)`           | `(0.6, static)`   | `(M, M)` | depth-first quality ceiling |
-| **agent**     | model-driven (replaces axes A and B)     | – | `(orchestrate=L, extract=S, write=M)` | upper reference for state-leverage; one expensive model in a planning loop |
+| **agent**     | model-driven (replaces axes A and B)     | - | `(orchestrate=L, extract=S, write=M)` | upper reference for state-leverage; one expensive model in a planning loop |
 
 `E` is the cost floor; `X` is the quality ceiling; `M` is the literature-
 blessed middle and the candidate the study expects to win; `agent` is the
@@ -294,28 +291,42 @@ on the table.
 
 The `agent` cell replaces axes A and B with one master model running a
 planning loop. The model picks among a fixed action menu; the harness
-executes each action and updates state.
+executes each action via `execute_action` in `distill/explorer.py` and
+updates the `ExplorerState`.
 
-Action menu (the only LLM verbs in the cell):
+Action menu (the full vocabulary from `execute_action`):
 
 | Action | Cost | Returns |
 |---|---|---|
-| `walk_local(concept_id, k)` | k × extract_tier | k chunks via `similarity_walk` |
-| `jump_uniform(n_docs)` | n × 3 × extract_tier | abstract + 2 chunks each |
-| `jump_pagerank(n_docs, graph)` | n × 3 × extract_tier | pagerank-weighted docs |
-| `jump_gap(k)` | k × extract_tier | k chunks from current `coverage_gap` set |
-| `propose_concept(title, aliases, evidence_ids)` | ~free | adds candidate (no model call) |
-| `merge_concepts(a, b)` | ~free | merges two candidates |
-| `inspect_page(id)` | small × orchestrate_tier | returns one page in full (load-bearing: the orchestrator's only way to see a body) |
-| `write_page(id)` | 1 × write_tier | runs the write step |
-| `inspect_metric(name)` | ~free | returns a current scalar (`F`, `β`, `Q`, count) |
-| `done` | – | terminates |
+| `walk_local(k)` | k x extract_tier | k chunks via `similarity_walk` from the `LevyExplorer` |
+| `jump_uniform(n_docs)` | n x 3 x extract_tier | abstract + 2 chunks each |
+| `jump_pagerank(n_docs)` | n x 3 x extract_tier | pagerank-weighted docs |
+| `jump_gap(n_docs)` | n x 3 x extract_tier | chunks from current `coverage_gap` set |
+| `jump_figures(k)` | k x extract_tier | high-residual caption chunks from the caption heap |
+| `pick_chunks(chunk_ids, reason)` | len(ids) x extract_tier | direct chunk-id selection from the `build_snapshot` context |
+| `set_allocation(exploit_fraction)` | ~free | mutates `RuntimeOverrides.exploit_fraction`; pipeline picks up on next iteration |
+| `set_tier(role, tier)` | ~free | mutates per-role tier (extract/write/edit/compact; orchestrate is locked) |
+| `done` | - | terminates |
+
+The orchestrator's planning context includes a compact `build_snapshot`
+of the `ExplorerState`: top-20 unseen chunks by coverage residual,
+per-doc coverage counts, and aggregate content stats (~2-4 kB of JSON).
+This gives the agent direct visibility into the explorer's state,
+enabling `pick_chunks` to target specific high-value chunks by id.
+
+Auxiliary tools available to the orchestrator (outside `execute_action`):
+
+| Tool | Cost | Returns |
+|---|---|---|
+| `inspect_page(id)` | small x orchestrate_tier | returns one page in full |
+| `inspect_metric(name)` | ~free | returns a current scalar (`F`, `beta`, `Q`, count) |
+| `semantic_query(query)` | embedding cost | returns top-k chunks matching a free-text query |
 
 The orchestrator runs one tier-`L` SDK call per action, each with the
 ORCHESTRATOR_SPEC envelope. The action verbs share primitives with the
 deterministic cells, so cache hits across cells are real.
 
-Hard caps: `max_actions = 4 × n_concepts_target`, mandatory `write_page`
+Hard caps: `max_actions = 4 x n_concepts_target`, mandatory `write_page`
 quota by mid-budget, single-action token cap from the envelope. Susceptibility
 is reinstated for this one cell — agent runs use 2 seeds.
 
@@ -331,7 +342,7 @@ is reinstated for this one cell — agent runs use 2 seeds.
 | `(extract_tier, write_tier)` | `{(S,S), (S,M), (S,L), (M,L)}` | 4 |
 | `dedup_after_extract` | `{on, off}` | 2 |
 
-Total: **21 ablation cells per corpus**, each at the `1×` budget level.
+Total: **21 ablation cells per corpus**, each at the `1x` budget level.
 Plus the 4 anchor cells at three budgets each = **12 anchor runs**.
 Grand total: **33 runs per corpus**, all coherent. Replicate on a second
 corpus only if axis rankings look corpus-dependent on the first.
@@ -344,24 +355,24 @@ These are not study knobs. They are fixed at config time.
 |---|---|---|
 | `TOTAL_CONTEXT` | 128K | context envelope |
 | `RESPONSE_RESERVE` | 8K | context envelope |
-| `chunks_per_landed_doc` | 3 | sampler |
+| `chunks_per_landed_doc` | 3 | explorer |
 | `dedup_after_extract` (default) | `on` | extract pipeline |
-| `bootstrap_rule` | abstract sweep | sampler |
-| `cost meter abort threshold` | 1.05 × budget | cost meter |
+| `bootstrap_rule` | abstract sweep | explorer |
+| `cost meter abort threshold` | 1.05 x budget | cost meter |
 | `live status interval` | 10 calls or 5 seconds | cost meter |
 | `extractor cache key` | `(model_id, prompt_hash, chunk_id)` | cache |
 | `K, M, N, P` | derived from spec ceilings | context envelope |
 
 ## Open questions
 
-1. **`jump_rate = 0.1` as the locked Lévy default**, swept only if the
+1. **`jump_rate = 0.1` as the locked Levy default**, swept only if the
    ablation row shows `M` is sensitive to it.
 2. **Adaptive switch threshold**: at what value of `dN/dC` does the
-   schedule shift to write-heavy? Pick by eye on the first real run.
+   budget allocator shift to write-heavy? Pick by eye on the first real run.
 3. **`refine_uncertain` viability**: needs a probe — does cached-extraction
    entropy correlate with anything useful? Drop the option if not.
 4. **`agent` master-tier ablation**: also test `M` as master (cheaper
    planner) to see if `L` is necessary.
 5. **Bootstrap budget**: how many chunks does round zero get? My lean is
-   `min(n_docs, 0.1 × total_budget)` so it scales with corpus size but
+   `min(n_docs, 0.1 x total_budget)` so it scales with corpus size but
    never dominates.

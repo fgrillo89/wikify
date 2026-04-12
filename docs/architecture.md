@@ -1,9 +1,5 @@
 # wikify -- architecture
 
-> **Current state & roadmap**: this document describes the layout and contracts as they stand today. The active structural roadmap — pre-computed sampler index, campaign driver, LLM-as-sampler, image sampling, output-quality fixes, renames — is tracked in [`plans/structural-improvements.md`](plans/structural-improvements.md). Read that file when planning new work. See also [`test-run-playbook.md`](test-run-playbook.md) before running any end-to-end test.
-
-> **Recent additions (post-roadmap, landed)**: equation and figure_ref extractors at ingest time; PDF TOC integration for section detection; populated `near_chunk_ids` (image → body chunks); citation-graph fix (was always silently empty); abstract-proxy fix (was pointing at the LAST chunk per doc instead of the first); caption-only image policy (uncaptioned image binaries are dropped); references-tail cleanup exemption (`doi:` no longer kills citation paragraphs). The extract handler now receives per-chunk `equations` and `figure_captions` arrays; the writer now ranks figures by `near_chunk_ids` overlap with cited evidence chunks. See git log for the full set; this file describes the post-change state.
-
 ## What the system does
 
 1. **Ingest** raw documents (pdf, docx, pptx, html, md) into a normalized
@@ -94,13 +90,13 @@ These are the contracts. Everything else is implementation.
 - `CorpusGraph` -- nodes are `Document` and `Chunk` ids; edges are typed:
   - `contains`: doc -> chunk
   - `similar_knn` / `similar_strong`: chunk <-> chunk (kNN over
-    embeddings; `similar_strong` is the cosine ≥ `STRONG_COS` filter)
+    embeddings; `similar_strong` is the cosine >= `STRONG_COS` filter)
   - `co_section`: chunk <-> chunk (same doc + same section path)
   - `cites`: doc -> doc (directed; resolved against the corpus by the
     year-bucketed fuzzy matcher in `refresh.py::_populate_doc_edges`)
   - `cites_same`: doc <-> doc (undirected bibliographic coupling, top-k
     per doc by shared-reference count)
-  - `doc_similar`: doc <-> doc (mean-pooled embedding cosine ≥
+  - `doc_similar`: doc <-> doc (mean-pooled embedding cosine >=
     `DOC_SIM_COS`, currently 0.75 — same threshold as `doc.similar_to`)
 
 ### Wiki side
@@ -149,10 +145,10 @@ because the corpus graph depends on populated doc-level edges:
 5. **`build_corpus_graph`** — reads `Document.cites` and
    `Document.cites_same` directly to populate the graph's `cites` and
    `cites_same` edge sets, then writes `graph.json`.
-6. **`build_sampler_index`** — pre-computes the corpus-side sampler
+6. **`build_explorer_index`** — pre-computes the corpus-side explorer
    state (chunks_by_doc, neighbours, abstract proxy, content vs caption
    chunks). Skips chunks whose `section_type` is in
-   `{references, acknowledgments, appendix}` so the sampler never
+   `{references, acknowledgments, appendix}` so the explorer never
    dispatches reference entries to the extractor.
 7. **`_write_pagerank`** — real PageRank on the doc graph using
    `cites + doc_similar + cites_same` as edges (not uniform).
@@ -169,7 +165,7 @@ metadata.
 
 Person pages are written by the model just like article pages. Author
 metadata is assembled at ingest/distill time by
-`distill/write/author_context.py::build_author_context` and attached to
+`distill/author_context.py::build_author_context` and attached to
 the `WriteRequest` as `author_context` (primary publications, cited
 works, collaborators, year range, affiliations) for grounding. The
 writer produces biographical prose in Wikipedia voice; the
@@ -182,160 +178,142 @@ grounded in evidence]`.
 
 ```
 src/wikify/
-  __init__.py
-  models.py                 # Document, Chunk, CorpusGraph, Evidence,
-                            # WikiPage, WikiGraph, Stage, Run
-  paths.py                  # the only module that knows where things live
+  types.py              # enums (ModelTier, Role, StrategyId) + Protocols
+                        # (Extractor, Compactor, Editor, Writer,
+                        # Orchestrator, Querier)
+  config.py             # all constants
+  schema.py             # Pydantic v2 request/response models
+  context.py            # context envelope + role specs + count_tokens
+  meter.py              # CostMeter: per-call accounting + budget gate
+  cache.py              # ExtractCache: deterministic per-chunk cache
+  embedding.py          # switchable embedding backend
+  dispatch.py           # single Dispatch class (file-based)
+  models.py             # Document, Chunk, CorpusGraph, Evidence,
+                        # WikiPage, WikiGraph, Stage, Run
+  paths.py              # CorpusPaths, BundlePaths
 
-  infra/                    # shared infrastructure (no LLM, no domain logic)
-    __init__.py
-    cost_meter.py           # CostMeter: per-call accounting + budget gate
-    cache.py                # ExtractCache: deterministic per-chunk cache
-    context_envelope.py     # ContextEnvelope: priority-fill prompt builder
-    tokens.py               # tokeniser-agnostic token-count helper
-    embedding.py            # switchable embedding backend
+  distill/              # strategies and their primitives
+    strategy.py         # budget allocation + strategy config + run modes
+    explorer.py         # Explorer protocol + LevyExplorer + ExplorerState
+                        # + action dispatch + build_snapshot
+    pipeline.py         # the distillation loop
+    dossier.py          # canonicalization + dossier assembly
+    write_prep.py       # write request building + related + crosslink
+    author_context.py   # build_author_context for person pages
+    persona.py          # persona selection
+    field_detect.py     # field detection heuristics
+    query.py            # corpus query engine
+    maintenance.py      # post-run maintenance
+    iteration.py        # create/refine/merge operations
+    preload.py          # preloaded corpus state
 
-  contracts/                # protocols and schemas; no concrete LLM code
-    __init__.py
-    protocols.py            # Extractor, Writer, Orchestrator (Protocol)
-    schema.py               # structured request/response shapes (Pydantic v2)
-    normalize.py            # text normalization for quote validation
-    roles.py                # Role enum + per-role spec lists
-
-  bindings/                 # the only place model dispatch lives
-    __init__.py
-    fake.py                 # deterministic fakes for tests + dry runs
-    heuristic.py            # inline regex extraction + article assembly
-    file_dispatch.py        # file-based dispatch: writes/reads request and
-                            # response files at well-known paths
-
-  store/                    # disk I/O for corpus and wikis
-    __init__.py
-    corpus.py               # read documents/chunks/embeddings
-    vectors.py              # thin vector-db wrapper
-    wiki_files.py           # read/write wiki page .md files
-    wiki_index.py           # bundle index (_index.json, _index.md)
-    images_index.py         # per-corpus image index
-    bundle_embeddings.py    # cached page-body embeddings for eval
-    corpus_profile.py       # PageRank, Louvain, betweenness
-
-  ingest/                   # corpus build
-    __init__.py
-    parsers/                # one parser per kind
-      pdf.py                # uses pymupdf4llm layout engine with
-                            # header=False/footer=False; falls back to
-                            # fitz blocks-mode for scanned PDFs;
-                            # captures TOC via doc.get_toc()
+  ingest/               # corpus build
+    parsers/            # one parser per kind
+      pdf.py            # uses pymupdf4llm layout engine with
+                        # header=False/footer=False; falls back to
+                        # fitz blocks-mode for scanned PDFs;
+                        # captures TOC via doc.get_toc()
       docx.py
       pptx.py
       html.py
       markdown.py
       registry.py
-      _sections.py          # section_spans (markdown headings) +
-                            # toc_spans (TOC-driven, used when ≥3 entries)
-      _clean.py             # parse-time markdown cleanup; protects
-                            # references-tail from aggressive noise filtering
-    chunker.py              # markdown -> [Chunk]
-    images.py               # save_doc_images (caption-only),
-                            # link_chunks_to_images (populates
-                            # near_chunk_ids), caption_chunks_for
-    figures.py              # binary figure extraction; drops uncaptioned
-                            # images by default; scanned-page fallback
-                            # dedupes by raw page bytes
-    figure_refs.py          # caption-first body extraction
-    equations.py            # display/inline/chemical/unicode/named/image
-    citations.py            # references section detection + structured parse;
-                            # author-anchored fallback for landing-page papers
-    corpus_graph.py         # builds CorpusGraph (cites + cites_same too)
-    sampler_index.py        # pre-computed sampler state, written by ingest
-    topics.py               # topic extraction (used by GT-C in eval)
-    refresh.py              # idempotent corpus refresh entry point;
-                            # ProcessPoolExecutor parallel parsing
+      _sections.py      # section_spans (markdown headings) +
+                        # toc_spans (TOC-driven, used when >=3 entries)
+      _clean.py         # parse-time markdown cleanup; protects
+                        # references-tail from aggressive noise filtering
+    chunker.py          # markdown -> [Chunk]
+    images.py           # save_doc_images (caption-only),
+                        # link_chunks_to_images (populates
+                        # near_chunk_ids), caption_chunks_for
+    figures.py          # binary figure extraction; drops uncaptioned
+                        # images by default; scanned-page fallback
+                        # dedupes by raw page bytes
+    figure_refs.py      # caption-first body extraction
+    equations.py        # display/inline/chemical/unicode/named/image
+    citations.py        # references section detection + structured parse;
+                        # author-anchored fallback for landing-page papers
+    corpus_graph.py     # builds CorpusGraph (cites + cites_same too)
+    explorer_index.py   # pre-computed explorer state, written by ingest
+    topics.py           # topic extraction (used by GT-C in eval)
+    refresh.py          # idempotent corpus refresh entry point;
+                        # ProcessPoolExecutor parallel parsing
 
-  distill/                  # strategies and their primitives
-    __init__.py
-    sampler.py              # Sampler protocol + LevyMixSampler
-    schedule.py             # Schedule protocol + static/adaptive variants
-    pipeline.py             # fixed list of stages every cell runs
-    iteration.py            # create/refine/merge operations
-    policy.py               # scripted / guided shared interface
-    extract/                # extraction subpackage
-    write/                  # write subpackage
-    strategies/
-      __init__.py           # public exports
-      registry.py           # StrategyId enum, config table, single factory
+  store/                # disk I/O for corpus and wikis
+    corpus.py           # read documents/chunks/embeddings
+    vectors.py          # thin vector-db wrapper
+    wiki_files.py       # read/write wiki page .md files
+    wiki_index.py       # bundle index (_index.json, _index.md)
+    images_index.py     # per-corpus image index
+    bundle_embeddings.py  # cached page-body embeddings for eval
+    corpus_profile.py   # PageRank, Louvain, betweenness
 
-  eval/                     # metrics and audit
-    __init__.py
+  eval/                 # metrics and audit
     bundle.py
     metrics.py
     audit.py
+    community.py
 
-  render/html/              # static site renderer
+  render/html/          # static site renderer
     templates/
     static/
 
-  prompts/                  # prompt templates
+  prompts/              # prompt templates
     registry.py
     style_guide.md
     fields/
     artifact_types/
 
-  cli.py                    # thin Typer adapter; one command per verb
+  cli.py                # thin Typer adapter; one command per verb
+```
 
-src/wikify/
-  architecture.md           # this file
-  strategies.md             # sampler / schedule / tiering cube
-  metrics.md                # M1-M6 + GT-C + GT-P
-  runbook.md                # operator runbook: CLI flags, environment, workflows
-  test-run-playbook.md      # reproducible test-run procedure + quality review
-  plans/
-    structural-improvements.md   # active roadmap: Phases 1-6
+Documentation lives alongside the code in `docs/`:
+
+```
+docs/
+  architecture.md       # this file
+  strategies.md         # explorer / schedule / tiering cube
+  metrics.md            # M1-M6 + GT-C + GT-P
+  runbook.md            # operator runbook: CLI flags, environment, workflows
+  test-run-playbook.md  # reproducible test-run procedure + quality review
 ```
 
 ## Dependency direction
 
 ```
-                          models.py
-                              ^
-                              |
-        +---------------------+---------------------+
-        |                     |                     |
-       infra/               store/              eval/
-        ^                     ^                     ^
-        |                     |                     |
-        +----+----+           |                     |
-             |    |           |                     |
-      contracts/ paths.py     |                     |
-             ^                |                     |
-             |                |                     |
-        +----+-----+----------+                     |
-        |                                           |
-     distill/                                       |
-        ^                                           |
-        |                                           |
-     bindings/  <-- only place that talks to file dispatch
-        ^
-        |
-      cli.py  <-- thin adapter; wires bindings into distill
+                        models.py
+                            ^
+                            |
+      types.py  config.py  context.py  schema.py
+            ^       ^          ^          ^
+            |       |          |          |
+         meter.py  cache.py  embedding.py
+                       ^
+                       |
+                   dispatch.py
+                       ^
+                       |
+                   distill/
+                       ^
+                       |
+                    cli.py
 ```
 
-Strategy configs in `distill/strategies/registry.py` are data rows over sampler,
-schedule, and tier knobs plus a single factory. They never import `bindings/`.
-The CLI wires a concrete binding (real `file_dispatch.py` or `fake.py`) into
-the distill pipeline at run time.
+Strategy configs in `distill/strategy.py` are data rows over explorer,
+schedule, and tier knobs plus a single factory. They never import dispatch.
+The CLI wires a concrete dispatch into the distill pipeline at run time.
 
 ## Coding standards
 
 1. **Functions over namespace classes.** A `class` is justified only by
    shared mutable state or a real polymorphism need.
 2. **Constructor injection over module-level globals.** Strategies, the
-   cost meter, the cache, the context envelope, and the agent bindings
-   are all passed in.
+   cost meter, the cache, the context envelope, and the dispatch are
+   all passed in.
 3. **Modules <= 400 LOC.** Split anything that grows past 600.
-4. **Protocols for real extension points.** `Extractor`, `Writer`,
-   `Orchestrator`, `Embedder`, `ChunkStore`, `Sampler` are `Protocol`
-   classes. Concrete implementations live in their own modules.
+4. **Protocols for real extension points.** `Extractor`, `Compactor`,
+   `Editor`, `Writer`, `Orchestrator`, `Querier`, `Explorer` are
+   `Protocol` classes. Concrete implementations live in their own modules.
 5. **Top-of-file imports.** No lazy imports except for genuinely optional
    dependencies.
 6. **Enums and dispatch tables over `if/elif` chains** when branching on
@@ -352,10 +330,10 @@ the distill pipeline at run time.
 
 ## Key types and protocols
 
-The full types live in `models.py` and in `contracts/protocols.py`:
+The full types live in `models.py` and in `types.py`:
 
 ```python
-# contracts/protocols.py
+# types.py
 class Extractor(Protocol):
     def extract(self, request: ExtractRequest) -> ExtractResponse: ...
 
@@ -371,7 +349,7 @@ pool, plus per-chunk `equations` (filtered from `Document.equations` via
 `Chunk.equation_ids`) and per-chunk `figure_captions` (combining images
 whose `near_chunk_ids` includes this chunk PLUS `Document.figure_refs`
 in the same top-level section). The Protocol does not expose tokens or
-models -- it exposes *content*. The binding is responsible for turning
+models -- it exposes *content*. The dispatch is responsible for turning
 content into a model call. The strategy never sees the SDK.
 
 `WriteRequest.figures` is **ranked by relevance**: each candidate image
@@ -382,12 +360,12 @@ The list is capped at `_PAGE_FIGURES_TOP_K = 8` so the writer prompt
 isn't flooded with figures unrelated to the cited claims.
 
 ```python
-# distill/sampler.py
-class Sampler(Protocol):
-    def next_batch(self, state: SamplerState, k: int) -> list[ChunkRef]: ...
+# distill/explorer.py
+class Explorer(Protocol):
+    def next_batch(self, state: ExplorerState, k: int) -> list[ChunkRef]: ...
 
 @dataclass(frozen=True)
-class LevyMixSampler:
+class LevyExplorer:
     local_op: LocalOp
     global_op: GlobalOp
     jump_rate: float

@@ -1,12 +1,6 @@
 # Wikification metrics
 
-> **Current state & roadmap**: this document defines the core metrics (M1 coverage residual, M2 Heaps, M3 graph crystallinity, M5 hit rate, M6 grounding) plus GT-C and GT-P. Image-specific metrics (`image_coverage_residual`, `figure_reference_rate`, `n_figures_referenced_in_bodies`) are planned in Phase 4 of [`plans/structural-improvements.md`](plans/structural-improvements.md). The cost ratios referenced in this doc (haiku-equivalent normalization) were recalibrated against Claude 4.5/4.6 pricing — see `src/wikify/infra/config.py` for the live values: S=1/5, M=3/15, L=15/75 (input/output per-token, normalized to Haiku).
->
-> **Inputs landed since the original metrics design**:
-> - **Caption-only images** at ingest. The 29% over-emission of uncaptioned page-graphic binaries (decorative elements, equation glyphs, page rules) is now dropped at the figure extractor. M1 was previously contaminated by chunk-residuals against decorative graphics that no wiki page would ever cover; the cleaned image set is the right baseline.
-> - **Citation graph populated correctly** for the first time. M3's `G_evidence` is unaffected (it uses doc-membership intersections, not the corpus graph), but the `G_links` diagnostic graph and any pagerank-based hit-rate weighting now reflect real cross-paper edges. The pre-fix corpus graph had silently empty `cites` edges due to a build-order bug; communities and importance scoring on the doc graph were running on doc_similar alone.
-> - **Sampler skips references / acknowledgments / appendix chunks**. M5 (hit rate) is now computed against a smaller, more honest denominator: the sampler can no longer dispatch reference entries to the extractor and accidentally count them as "reads." Pre-fix runs over-counted total reads by ~14% on mvp20.
-> - **Per-chunk equations + figure_captions in `ExtractRequest`**. Extract calls now ground parameter/mechanism extraction in equation context and ground figure-evidence selection in `near_chunk_ids` overlap. The grounding gate (M6/G2) is unchanged in definition but the verbatim-quote substring check is now more likely to find a real anchor because the model has explicit equation latex to copy from rather than re-transcribing prose.
+Pricing-normalized tiers are S=1/5, M=3/15, L=15/75 (input/output haiku-equivalent per token) — see `src/wikify/config.py`.
 
 ## Framing
 
@@ -43,22 +37,22 @@ explicitly because every metric below operates on a bundle, independently.
 
 ## Cost axis (the x-axis of every plot)
 
-`C = Σ_calls tokens_in × price_in(tier) + tokens_out × price_out(tier)`
+`C = sum_calls tokens_in x price_in(tier) + tokens_out x price_out(tier)`
 normalised so haiku = 1. Reported in **haiku-equivalent tokens**. Stable
 across pricing changes. Time (wallclock seconds) is reported alongside
 but is secondary — token cost is what the study optimises.
 
-Every metric below is a function `f(wiki_bundle) → scalar`. The study's
+Every metric below is a function `f(wiki_bundle) -> scalar`. The study's
 primary artifact is the curve `f(bundle(strategy, C, seed))` vs `C`,
-averaged over 3 seeds, with a shaded ±1σ band.
+averaged over 3 seeds, with a shaded +/-1 sigma band.
 
 ## The core metrics
 
 The study tracks four metrics, plus one integrity gate:
 
 - **M1** corpus coverage residual `F(C)` — primary order parameter
-- **M2** Heaps exponent `β(C)` — vocabulary saturation
-- **M3** graph crystallinity `Q(C), Δλ(C)` — structural order parameter
+- **M2** Heaps exponent `beta(C)` — vocabulary saturation
+- **M3** graph crystallinity `Q(C), delta_lambda(C)` — structural order parameter
 - **M5** hit rate `H(C)` — efficiency
 - **M6** grounding gate — integrity floor (not a metric, a gate)
 
@@ -77,7 +71,7 @@ is diagnostic.
 ### M1 — Corpus coverage residual (free energy)
 
 **Definition.**
-For each chunk `c` in the corpus, let `d(c) = 1 - max_{p ∈ wiki} cos(embed(c), embed(body(p)))`
+For each chunk `c` in the corpus, let `d(c) = 1 - max_{p in wiki} cos(embed(c), embed(body(p)))`
 be its residual distance to the nearest wiki page. Define
 
 ```
@@ -94,7 +88,7 @@ not how the page is *named*.
 
 **Interpretation.** The "free energy" of the corpus given the wiki. If
 the wiki perfectly explains the corpus, every chunk has a close wiki page
-and `F → 0`. If the wiki misses topics, the chunks in those topics
+and `F -> 0`. If the wiki misses topics, the chunks in those topics
 contribute a large residual. No reference wiki required; this is purely
 a property of `(corpus, wiki_bundle)`.
 
@@ -104,8 +98,8 @@ embedding-based explanation (you can never get to 0 — some chunks are
 just noise). The **knee** of the curve is the budget at which the wiki
 has absorbed most of the corpus. Strategies are compared by:
 
-- the floor `F_∞` they asymptote to (lower is better),
-- the budget `C_½` at which they reach halfway to that floor (lower is
+- the floor `F_inf` they asymptote to (lower is better),
+- the budget `C_half` at which they reach halfway to that floor (lower is
   better),
 - the smoothness of the descent (rugged curves = unstable sampling).
 
@@ -124,26 +118,26 @@ budget `C`. We track the whole trajectory `{(C_i, N_i)}` by running the
 same strategy at increasing budgets (or, for strategies that expose
 intermediate checkpoints, reading them off a single run).
 
-Fit `N(C) ≈ a · C^β`. Report `β(C)` as a sliding window.
+Fit `N(C) ~ a * C^beta`. Report `beta(C)` as a sliding window.
 
 **Interpretation.** This is Heaps' law for wikis. In a healthy run,
-`β` starts near 1 (every unit of budget finds a new concept) and decays
+`beta` starts near 1 (every unit of budget finds a new concept) and decays
 toward 0 (new budget finds no new concepts because the lexicon has
-saturated). The **crossover** from `β ≈ 1` to `β ≈ 0` is the wikification
+saturated). The **crossover** from `beta ~ 1` to `beta ~ 0` is the wikification
 analog of a vocabulary phase transition.
 
 **Curve shape.** A good strategy shows a clean crossover. A pathological
 strategy either:
 
-- never leaves `β ≈ 1` (exploring forever, never consolidating — too
+- never leaves `beta ~ 1` (exploring forever, never consolidating — too
   greedy on breadth),
-- collapses to `β ≈ 0` immediately (stuck in one neighbourhood — too
+- collapses to `beta ~ 0` immediately (stuck in one neighbourhood — too
   greedy on depth),
-- has a non-monotone `β` (unstable sampling).
+- has a non-monotone `beta` (unstable sampling).
 
 **Cost.** Trivially cheap — counting pages.
 
-**Why.** Gives us a single number per budget (`β`) that captures the
+**Why.** Gives us a single number per budget (`beta`) that captures the
 breadth/depth tradeoff without any reference.
 
 ### Defining the wiki graph (prerequisite for M3)
@@ -159,7 +153,7 @@ rather than structural coherence. We need a graph that is:
   cross-link step is — two strategies with identical extracted concepts
   but different link-step hyperparameters should get the same M3;
 - **stable under sparsification**: the choice of how to thin the graph
-  should not change the qualitative shape of `Q(C)` and `Δλ(C)`.
+  should not change the qualitative shape of `Q(C)` and `delta_lambda(C)`.
 
 The natural primitive in a wiki bundle that satisfies all three is
 **evidence overlap**. Every page lists the corpus chunks it is anchored
@@ -177,22 +171,22 @@ as the order-parameter graph:
   edges are real semantic links: a person who worked on a concept will
   share evidence with that concept's page).
 - **Edges**: weighted by **document-level** evidence cosine. For each
-  page `p`, let `D(p) = { d : ∃ chunk c ∈ evidence(p), doc(c) = d }`.
+  page `p`, let `D(p) = { d : exists chunk c in evidence(p), doc(c) = d }`.
   Edge weight:
 
   ```
-  w(p, q) = |D(p) ∩ D(q)| / sqrt(|D(p)| · |D(q)|)
+  w(p, q) = |D(p) intersection D(q)| / sqrt(|D(p)| * |D(q)|)
   ```
 
   This is the cosine of the binary doc-membership vectors. Doc-level,
   not chunk-level, because chunk-level overlap is too sparse on real
-  corpora — a page typically cites 5–20 chunks and pairwise chunk-set
+  corpora — a page typically cites 5-20 chunks and pairwise chunk-set
   intersections are mostly empty. Doc-level captures the "same
   literature" signal cleanly.
 - **Sparsification**: keep the **top-k = 10 strongest edges per node**,
   union (not mutual). No magic threshold. `k = 10` is arbitrary but
   reported as a sensitivity-study knob; the qualitative shape of `Q(C)`
-  should not depend on it within `k ∈ [5, 20]`.
+  should not depend on it within `k in [5, 20]`.
 - **Self-loops**: no.
 - **Direction**: undirected.
 - **Isolated nodes**: kept as singletons. Pages that share no
@@ -201,7 +195,7 @@ as the order-parameter graph:
 
 `G_evidence` is computed from the page files alone, in seconds, with no
 embeddings and no cross-link state. Two strategies that produce the
-same set of `(page → evidence chunks)` mappings will produce **exactly
+same set of `(page -> evidence chunks)` mappings will produce **exactly
 the same** `G_evidence`. That is what makes it strategy-fair.
 
 #### G_links (secondary, diagnostic only)
@@ -209,21 +203,21 @@ the same** `G_evidence`. That is what makes it strategy-fair.
 - **Nodes**: same.
 - **Edges**: the explicit `links` lists in each page's frontmatter,
   symmetrised. Unweighted (or weighted by reciprocity).
-- **Reported as**: a second `Q(C)` and `Δλ(C)` curve, **diagnostic only**,
+- **Reported as**: a second `Q(C)` and `delta_lambda(C)` curve, **diagnostic only**,
   not the M3 order parameter.
 
 `G_links` measures the cross-link step's quality, not the wiki's
 underlying structure. Comparing `Q(G_evidence)` and `Q(G_links)` for the
 same bundle is itself diagnostic:
 
-- `Q(G_evidence)` high, `Q(G_links)` low → the content is crystalline
+- `Q(G_evidence)` high, `Q(G_links)` low -> the content is crystalline
   but the strategy's cross-link step is failing to surface it. Fix the
   cross-link step.
-- `Q(G_evidence)` low, `Q(G_links)` high → the strategy is wikifying
+- `Q(G_evidence)` low, `Q(G_links)` high -> the strategy is wikifying
   the formatting (writing pages that link to each other) without
   underlying evidence convergence. Suspect.
-- both high → real crystallinity, well surfaced.
-- both low → still in the disordered regime.
+- both high -> real crystallinity, well surfaced.
+- both low -> still in the disordered regime.
 
 This split is the main reason the wiki-graph definition matters: we
 want to be able to tell those four cases apart.
@@ -233,10 +227,10 @@ want to be able to tell those four cases apart.
 **Definition.**
 On `G_evidence` (defined above), compute the **modularity** `Q` of the
 best community partition (deterministic Leiden) and the **spectral gap**
-`Δλ` of the normalised Laplacian — the gap between the second and third
+`delta_lambda` of the normalised Laplacian — the gap between the second and third
 smallest eigenvalues.
 
-Report `Q(C)` and `Δλ(C)` on `G_evidence` (the order parameter), with
+Report `Q(C)` and `delta_lambda(C)` on `G_evidence` (the order parameter), with
 the same two metrics on `G_links` reported underneath as diagnostic
 overlays.
 
@@ -244,25 +238,25 @@ overlays.
 
 - Modularity near 0 = the wiki graph is structurally random (the pages
   do not organise into coherent domains — the wiki is an amorphous blob).
-- Modularity near 0.3–0.7 = the wiki has crystallised into communities
+- Modularity near 0.3-0.7 = the wiki has crystallised into communities
   that correspond to topical domains.
 - Large spectral gap = a small number of well-separated communities
   dominate. This is a genuine phase-transition signature: in percolation
   and clustering models the spectral gap opens up exactly when a giant
   ordered component appears.
 
-**Curve shape.** In a healthy run, `Q(C)` and `Δλ(C)` rise from ~0 at low
+**Curve shape.** In a healthy run, `Q(C)` and `delta_lambda(C)` rise from ~0 at low
 budget, hit a plateau, and stay there. A strategy that never reaches the
 plateau is producing a structurally random wiki — lots of pages, no
 coherence. The budget at which the plateau starts is the "crystallisation
 budget" for that strategy.
 
-**Cost.** Leiden on ~10³ nodes: milliseconds. Sparse eigendecomposition
+**Cost.** Leiden on ~10^3 nodes: milliseconds. Sparse eigendecomposition
 for the spectral gap: milliseconds.
 
 **Why.** This is the direct physics analog the user asked for. Two
 strategies can produce the same number of pages at the same cost, but
-one may be crystalline and the other amorphous. `Q` and `Δλ` tell them
+one may be crystalline and the other amorphous. `Q` and `delta_lambda` tell them
 apart.
 
 ### M5 — Hit rate (efficiency)
@@ -316,7 +310,7 @@ cannot be traded off.
 
 Two cheap, deterministic reference signals built from data we already
 have at ingest time. Neither requires any LLM call. They are reported as
-per-run scalars alongside the M1–M5 curves.
+per-run scalars alongside the M1-M5 curves.
 
 ### GT-P — People from bibliography metadata
 
@@ -337,8 +331,8 @@ Pipeline:
 
 **Metric: `R_P = |matched(G_people)| / |G_people|`** — fraction of
 canonical authors that have a matching `kind: person` page in the wiki
-bundle, where matching is `normalize(page.title) ∈ G_people` OR
-`any(normalize(alias) ∈ G_people)`. No embeddings needed for people —
+bundle, where matching is `normalize(page.title) in G_people` OR
+`any(normalize(alias) in G_people)`. No embeddings needed for people —
 name normalisation is sufficient.
 
 This is a real recall number, deterministic, free, and computable on
@@ -346,26 +340,24 @@ arbitrarily large corpora.
 
 ### GT-C — Concepts from cleaned ingest topic extraction
 
-The current ingest pipeline already extracts a topic vocabulary per
-document and a corpus-wide topic vocabulary, with author-declared
-keywords flagged. Specifically:
+The ingest pipeline extracts a topic vocabulary per document and a
+corpus-wide topic vocabulary, with author-declared keywords flagged.
+The implementation lives in `wikify.ingest.topics`:
 
-- `wikify.ingest.vault.linker.compute_all_links` returns
-  `(per_paper_links, corpus_vocabulary, paper_declared)`. The
-  `corpus_vocabulary` is the deduplicated union of topics across the
-  corpus. The `paper_declared` map flags topics that came from the
-  document's own declared keywords (high precision) versus topics
-  inferred from the body (lower precision).
-- `wikify.ingest.vault.linker._deduplicate_topics` already merges
-  plurals, absorbs substrings, and merges stem variants.
-- Topics are stored in the `PaperTopic` table with the `is_declared`
-  flag, so we can read them back per-paper at any time.
+- `extract_topics(docs_chunks, declared_per_doc)` returns a
+  `TopicVocabulary` with `.topics` (the deduplicated corpus vocabulary)
+  and `.declared` (topics that came from explicit "Keywords:" /
+  "Index Terms:" sections in documents — high precision).
+- Internal deduplication merges plurals, absorbs substrings, and merges
+  stem variants.
+- The vocabulary is serialised to `corpus/topics.json` via
+  `TopicVocabulary.to_dict()` and can be read back at eval time.
 
 We reuse this directly. We do **not** invent a new noun-phrase
 extractor. The pipeline for GT-C:
 
-1. Pull `corpus_vocabulary` and the per-paper topic lists from the
-   ingest DB.
+1. Load `corpus/topics.json` (or recompute via `extract_topics` if not
+   cached).
 2. Sanitise:
    - drop topics with document frequency `> 0.5 * n_docs` (too generic
      to be a wiki concept);
@@ -374,15 +366,15 @@ extractor. The pipeline for GT-C:
    - drop topics that are pure stop-phrases (a tiny hand-curated
      blacklist: "introduction", "results", "discussion", "method",
      "abstract", etc.);
-   - re-run the existing `_deduplicate_topics` once more on the
-     filtered set, in case the filter exposed new merges.
+   - re-run deduplication once more on the filtered set, in case the
+     filter exposed new merges.
 3. Embed each surviving topic phrase once, with the same embedding model
    used for the vector store. Cache the embeddings on disk
    (`data/eval/gt_c_embeddings.npz`) so this is paid once per corpus.
 4. **Two reference sets**, both reported:
-   - `G_concepts_declared`: only topics with `is_declared = true` for
-     at least one paper. Higher precision, lower recall — these are
-     things authors themselves named as keywords.
+   - `G_concepts_declared`: only topics from `TopicVocabulary.declared`.
+     Higher precision, lower recall — these are things authors themselves
+     named as keywords.
    - `G_concepts_all`: declared + inferred, after sanitisation. Lower
      precision, higher recall.
 
@@ -390,7 +382,7 @@ extractor. The pipeline for GT-C:
 and `G_concepts_all`, with matching defined as:
 
 - `normalize(topic) == normalize(page.title)` OR
-  `normalize(topic) ∈ {normalize(a) for a in page.aliases}`, OR
+  `normalize(topic) in {normalize(a) for a in page.aliases}`, OR
 - `cos(embed(topic), embed(body(page))) >= 0.78`
 
 The second clause is what makes the embedding cache worth building: a
@@ -421,8 +413,8 @@ For each `(strategy, corpus)`, the study produces four plots, each with
 cost (haiku-equivalent tokens) on the x-axis, one line per strategy:
 
 1. `F(C)` — corpus coverage residual (M1) **[primary]**
-2. `β(C)` — Heaps exponent (M2)
-3. `Q(C)` and `Δλ(C)` — graph crystallinity on `G_evidence` (M3),
+2. `beta(C)` — Heaps exponent (M2)
+3. `Q(C)` and `delta_lambda(C)` — graph crystallinity on `G_evidence` (M3),
    with the same two metrics on `G_links` reported as overlay
 4. `H(C)` — hit rate (M5)
 
@@ -438,18 +430,18 @@ achieves lower `F` at lower `C`. The Pareto frontier on `(C, F)` is the
 headline result. The other curves are diagnostic — they explain *why* a
 strategy is on or off the frontier.
 
-Hard gate: `G1 ≥ 0.9 ∧ G2 ≥ 0.99` (M5). Runs below are excluded.
+Hard gate: `G1 >= 0.9 and G2 >= 0.99` (M6). Runs below are excluded.
 
 ## Optional: QA panel (kept for final validation)
 
 Scripted question answering over strategy-wiki bundles, with a human
 panel rating the answers, is **kept as an option for a final validation
-pass on one corpus**, once the curve-based study has identified 2–3
+pass on one corpus**, once the curve-based study has identified 2-3
 candidate strategies. It is not part of the core loop.
 
 Protocol when/if we run it:
 
-- fix a set of 20–30 scripted questions per corpus, designed to probe
+- fix a set of 20-30 scripted questions per corpus, designed to probe
   both central and niche concepts;
 - for each candidate strategy-wiki bundle, a zero-knowledge agent reads
   only that bundle and answers the questions;
@@ -470,7 +462,7 @@ about the metrics.
 
 3. **`G_evidence` sparsification (M3).** `k = 10` top-k per node is the
    default. Verify `Q(C)` shape is qualitatively stable for
-   `k ∈ [5, 20]`. If not, switch to disparity-filter sparsification.
+   `k in [5, 20]`. If not, switch to disparity-filter sparsification.
 
 4. **Cosine vs Jaccard in `G_evidence`.** Cosine is the default; less
    punishing on hub pages (foundational concepts, prolific people).
