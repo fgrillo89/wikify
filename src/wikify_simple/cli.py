@@ -7,10 +7,11 @@ from pathlib import Path
 
 import typer
 
+from .contracts.tiers import ModelTier
 from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
-from .distill.strategies import STRATEGIES
+from .distill.strategies import STRATEGY_CONFIGS, build_strategy
 from .infra.cache import ExtractCache
 from .infra.cost_meter import CostMeter
 from .ingest.refresh import ingest_corpus
@@ -20,7 +21,7 @@ app = typer.Typer(add_completion=False, help="wikify_simple CLI")
 
 
 _BUDGET_TABLE = {"0.1x": 5_000.0, "1x": 50_000.0, "3x": 150_000.0}
-_VALID_TIERS = ("S", "M", "L")
+_VALID_TIERS = tuple(tier.value for tier in ModelTier)
 
 
 def _parse_budget(raw: str) -> float:
@@ -184,7 +185,7 @@ def distill(
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
         raise typer.BadParameter("--iteration merge only supports --phase all")
-    if strategy not in STRATEGIES:
+    if strategy not in STRATEGY_CONFIGS:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if field is None:
         from .distill.extract.field_detect import detect_field
@@ -244,19 +245,19 @@ def distill(
     if policy == "llm_policy" and orchestrator is None:
         raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
 
-    cfg = STRATEGIES[strategy](seed=seed)
+    cfg = build_strategy(strategy, seed=seed)
     cfg.field_name = field
     cfg.artifact_name = artifact
     cfg.policy_name = policy
     # Apply per-role tier overrides if the user supplied them.
     if extract_tier is not None:
-        cfg.extract_tier = extract_tier
+        cfg.extract_tier = ModelTier(extract_tier)
     if write_tier is not None:
-        cfg.write_tier = write_tier
+        cfg.write_tier = ModelTier(write_tier)
     if edit_tier is not None:
-        cfg.edit_tier = edit_tier
+        cfg.edit_tier = ModelTier(edit_tier)
     if compact_tier is not None:
-        cfg.compact_tier = compact_tier
+        cfg.compact_tier = ModelTier(compact_tier)
     # Apply allocation override (goes through PolicyRuntime in pipeline.run).
     if exploit_fraction is not None:
         cfg.exploit_fraction_override = exploit_fraction
@@ -320,7 +321,7 @@ def campaign(
 
     if policy not in ("rule_policy", "llm_policy"):
         raise typer.BadParameter(f"unknown policy: {policy}")
-    if strategy not in STRATEGIES:
+    if strategy not in STRATEGY_CONFIGS:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if iterations < 1:
         raise typer.BadParameter("--iterations must be >= 1")
@@ -378,18 +379,18 @@ def campaign(
         if policy == "llm_policy" and orchestrator is None:
             raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
 
-        cfg = STRATEGIES[strategy](seed=iter_seed)
+        cfg = build_strategy(strategy, seed=iter_seed)
         cfg.field_name = field
         cfg.artifact_name = artifact
         cfg.policy_name = policy
         if extract_tier is not None:
-            cfg.extract_tier = extract_tier
+            cfg.extract_tier = ModelTier(extract_tier)
         if write_tier is not None:
-            cfg.write_tier = write_tier
+            cfg.write_tier = ModelTier(write_tier)
         if edit_tier is not None:
-            cfg.edit_tier = edit_tier
+            cfg.edit_tier = ModelTier(edit_tier)
         if compact_tier is not None:
-            cfg.compact_tier = compact_tier
+            cfg.compact_tier = ModelTier(compact_tier)
         if exploit_fraction is not None:
             cfg.exploit_fraction_override = exploit_fraction
 

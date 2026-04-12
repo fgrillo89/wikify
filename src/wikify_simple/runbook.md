@@ -14,7 +14,7 @@
 
 | Flag | Values | Default | Notes |
 |---|---|---|---|
-| `--strategy` | `E` / `M` / `X` | required | Strategy preset (sampler + schedule + default tiers). |
+| `--strategy` | `E` / `M` / `X` | required | Strategy config (sampler + schedule + default tiers). |
 | `--policy` | `rule_policy` / `llm_policy` | `rule_policy` | `llm_policy` requires `--binding file_dispatch`. |
 | `--binding` | `fake` / `heuristic` / `file_dispatch` | `fake` | `file_dispatch` requires `WIKIFY_SIMPLE_ALLOW_NETWORK=1`. |
 | `--budget` | integer, `Nk`, `NM`, or `0.1x`/`1x`/`3x` | `1x` | Haiku-equivalent tokens. Shortcuts: `0.1x=5k`, `1x=50k`, `3x=150k`. |
@@ -126,7 +126,7 @@ After `cli ingest` finishes, the corpus directory contains:
 | `distill/schedule.py` | Budget split (static / adaptive) |
 | `distill/iteration.py` | Create/refine/merge operations |
 | `distill/policy.py` | Rule and LLM policy shared interface |
-| `distill/strategies/` | E, M, X preset configurations |
+| `distill/strategies/registry.py` | E, M, X config registry and factory |
 | `contracts/schema.py` | All Pydantic schemas (incl. `EquationRef`, `FigureCaption`, `ExtractRequest`) |
 | `contracts/protocols.py` | Extractor, Compactor, Editor, Writer protocols |
 | `contracts/roles.py` | Role enum + per-role spec lists |
@@ -162,7 +162,7 @@ return its top chunks). Tails -> local walk (follow similarity edges from
 an existing wiki chunk). Bootstrap forces global jumps until the wiki has
 content to walk from. Fallback to global when local walk is exhausted.
 
-The three presets:
+The three built-in strategy configs:
 
 | Strategy | local | global | jump_rate | schedule | tiers |
 |----------|-------|--------|-----------|----------|-------|
@@ -316,7 +316,7 @@ unexpected key fails. Read `contracts/schema.py` for the canonical shape.
 
 The extractor over-consumed and the writer ran out. Re-run with a higher
 `--budget` or shift the extract/write split in the strategy schedule
-(`distill/strategies/mixed.py`).
+(`distill/strategies/registry.py`).
 
 ### Cache miss explosion
 

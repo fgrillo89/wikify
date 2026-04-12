@@ -43,6 +43,7 @@ from ..contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
+from ..contracts.tiers import ModelTier
 from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from ..infra.config import DISPATCH_TIMEOUT, POLL_INTERVAL
 from ..infra.cost_meter import CostMeter
@@ -259,7 +260,7 @@ def _record_call(
     meter: CostMeter,
     *,
     role: Role,
-    tier: str,
+    tier: ModelTier | str,
     input_tokens: int,
     output_tokens: int,
     wall_seconds: float,

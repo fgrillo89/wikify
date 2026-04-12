@@ -78,9 +78,9 @@ def test_mixed_strategy_uses_tier_m_for_writer():
 
     Guards against a silent bump back to L.
     """
-    from wikify_simple.distill.strategies.mixed import build
+    from wikify_simple.distill.strategies import build_strategy
 
-    cfg = build()
+    cfg = build_strategy("M")
     assert cfg.write_tier == "M"
 
 

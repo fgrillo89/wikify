@@ -12,10 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
-from wikify_simple.distill.pipeline import StrategyConfig, run_with_preloaded
+from wikify_simple.distill.pipeline import run_with_preloaded
 from wikify_simple.distill.preload import preload_corpus
 from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
 from wikify_simple.distill.schedule import StaticSchedule
+from wikify_simple.distill.strategies import StrategyConfig
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus

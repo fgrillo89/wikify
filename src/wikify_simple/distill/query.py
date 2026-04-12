@@ -30,6 +30,7 @@ from ..contracts.schema import (
     QueryLogEntry,
     QueryRequest,
 )
+from ..contracts.tiers import ModelTier, model_id_for_tier
 from ..ingest.topics import _PHRASE_RE
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import load_prompt
@@ -129,7 +130,7 @@ def persist_query_log(
     links_followed: list[str] | None = None,
     escalation_events: list[EscalationEvent] | None = None,
     model_id: str = "",
-    tier: str = "",
+    tier: ModelTier | str = "",
 ) -> str:
     """Write one QueryLogEntry to ``<bundle>/_meta/query_log/<id>.json``.
 
@@ -171,8 +172,8 @@ def run(
     question: str,
     querier: Querier,
     embed: Callable[[Sequence[str]], np.ndarray],
-    model_id: str = "haiku",
-    tier: str = "exploit",
+    model_id: str = model_id_for_tier(ModelTier.MEDIUM),
+    tier: ModelTier | str = ModelTier.MEDIUM,
     cache_root: Path | None = None,
     save_log: bool = True,
 ) -> QueryAnswer:

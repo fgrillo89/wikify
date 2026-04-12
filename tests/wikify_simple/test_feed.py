@@ -13,7 +13,7 @@ import pytest
 
 from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
@@ -34,7 +34,7 @@ def _run(bundle: BundlePaths, cache: ExtractCache, corpus: CorpusPaths, feed: bo
         run_id="feed-test",
         events_path=bundle.calls_path,
     )
-    cfg = STRATEGIES["M"](seed=0)
+    cfg = build_strategy("M", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

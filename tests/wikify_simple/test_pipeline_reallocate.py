@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
-from wikify_simple.distill.pipeline import StrategyConfig
 from wikify_simple.distill.pipeline import run as pipeline_run
 from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
 from wikify_simple.distill.schedule import AdaptiveSchedule
+from wikify_simple.distill.strategies import StrategyConfig
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus

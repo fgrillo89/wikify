@@ -25,7 +25,7 @@ from wikify_simple.distill.query import (
 from wikify_simple.distill.query import (
     run as query_run,
 )
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.infra.embedding import embed_texts
@@ -46,7 +46,7 @@ def ready_bundle(tmp_path_factory):
         run_id="qt_test",
         events_path=bundle.calls_path,
     )
-    cfg = STRATEGIES["M"](seed=0)
+    cfg = build_strategy("M", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

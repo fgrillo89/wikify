@@ -36,10 +36,10 @@ import pytest
 from wikify_simple.contracts.protocols import Writer
 from wikify_simple.contracts.roles import Role, response_reserve, total_context
 from wikify_simple.contracts.schema import WriteRequest, WriteResponse
-from wikify_simple.distill.pipeline import StrategyConfig
 from wikify_simple.distill.pipeline import run as pipeline_run
 from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
 from wikify_simple.distill.schedule import StaticSchedule
+from wikify_simple.distill.strategies import StrategyConfig
 from wikify_simple.infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus

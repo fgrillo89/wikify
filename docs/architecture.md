@@ -540,7 +540,7 @@ src/wikify_simple/
 |   |-- author_pages.py     #   deterministic + model-enriched person pages
 |   |-- crosslink.py        #   inter-page link discovery
 |   |-- field_detect.py     #   auto-detect corpus field from topics
-|   `-- strategies/         #   mixed.py (exploit/explore schedule)
+|   `-- strategies/         #   config registry and factory for E/M/X
 |
 |-- eval/                   # metrics -> audit -> bundle analysis
 |   |-- metrics.py          #   M1-M6, GT-P, GT-C, g_links, g_evidence

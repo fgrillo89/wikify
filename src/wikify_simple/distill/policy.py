@@ -14,12 +14,13 @@ from typing import Literal, Protocol
 
 from ..contracts.protocols import Orchestrator
 from ..contracts.schema import OrchState
+from ..contracts.tiers import ModelTier
 from ..models import WikiPage
 from .sampler import GlobalOp, Sampler, SamplerState, sample_global
 
 PolicyName = Literal["rule_policy", "llm_policy"]
 
-_VALID_TIERS = ("S", "M", "L")
+_VALID_TIERS = {tier.value for tier in ModelTier}
 _MUTABLE_ROLES = ("extract", "write", "edit", "compact")
 
 
@@ -42,12 +43,12 @@ class PolicyRuntime:
     call, not a dispatch argument.
     """
 
-    extract_tier: str = "S"
-    write_tier: str = "M"
-    edit_tier: str = "M"
-    compact_tier: str = "S"
+    extract_tier: ModelTier = ModelTier.SMALL
+    write_tier: ModelTier = ModelTier.MEDIUM
+    edit_tier: ModelTier = ModelTier.MEDIUM
+    compact_tier: ModelTier = ModelTier.SMALL
     # orchestrate_tier is locked at "L"; the LLM policy cannot change it
-    orchestrate_tier: str = "L"
+    orchestrate_tier: ModelTier = ModelTier.LARGE
     # exploit_fraction in [0, 1]. None means "use schedule default".
     exploit_fraction: float | None = None
     # Reallocation epoch: incremented whenever the LLM policy sets a
@@ -301,7 +302,7 @@ class LlmPolicy:
                 role = str(args.get("role", "")).strip()
                 tier = str(args.get("tier", "")).strip().upper()
                 if role in _MUTABLE_ROLES and tier in _VALID_TIERS:
-                    setattr(self._runtime, f"{role}_tier", tier)
+                    setattr(self._runtime, f"{role}_tier", ModelTier(tier))
                 return ExtractDecision(action=name, batch=(), meta={"role": role, "tier": tier})
             case _:
                 # Unknown action -> deterministic fallback.

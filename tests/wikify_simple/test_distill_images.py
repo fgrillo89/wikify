@@ -11,7 +11,7 @@ from wikify_simple.contracts.schema import (
     WriteResponse,
 )
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
@@ -83,7 +83,7 @@ def _run_once(tmp_path, *, inject_image: bool):
         run_id="M_1x_seed0",
         events_path=bundle.calls_path,
     )
-    cfg = STRATEGIES["M"](seed=0)
+    cfg = build_strategy("M", seed=0)
     extractor = _RecordingExtractor(FakeExtractor(cache, meter))
     writer = _RecordingWriter(FakeWriter(meter))
     pipeline_run(

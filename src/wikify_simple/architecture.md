@@ -262,10 +262,8 @@ src/wikify_simple/
     extract/                # extraction subpackage
     write/                  # write subpackage
     strategies/
-      __init__.py
-      explore.py            # cell E
-      mixed.py              # cell M
-      exploit.py            # cell X
+      __init__.py           # public exports
+      registry.py           # StrategyId enum, config table, single factory
 
   eval/                     # metrics and audit
     __init__.py
@@ -322,9 +320,10 @@ src/wikify_simple/
       cli.py  <-- thin adapter; wires bindings into distill
 ```
 
-Strategies in `distill/strategies/*` depend on `contracts/protocols.py` and
-`infra/`. They never import `bindings/`. The CLI wires a concrete binding
-(real `file_dispatch.py` or `fake.py`) into the strategy at run time.
+Strategy configs in `distill/strategies/registry.py` are data rows over sampler,
+schedule, and tier knobs plus a single factory. They never import `bindings/`.
+The CLI wires a concrete binding (real `file_dispatch.py` or `fake.py`) into
+the distill pipeline at run time.
 
 ## Coding standards
 

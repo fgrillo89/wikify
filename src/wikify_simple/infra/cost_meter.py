@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..contracts.roles import Role
+from ..contracts.tiers import ModelTier
 from .config import (
     ABORT_RATIO,
     TIER_L_INPUT,
@@ -61,7 +62,7 @@ from .config import (
 class TierPrice:
     """Per-token price + per-call overhead in haiku-equivalent units."""
 
-    name: str
+    name: ModelTier
     input_per_m: float
     output_per_m: float
     fixed_overhead: float = 0.0
@@ -74,26 +75,30 @@ class TierPrice:
         return token_cost + self.fixed_overhead
 
 
-_DEFAULT_TIERS: dict[str, TierPrice] = {
-    "S": TierPrice(
-        name="S",
+_DEFAULT_TIERS: dict[ModelTier, TierPrice] = {
+    ModelTier.SMALL: TierPrice(
+        name=ModelTier.SMALL,
         input_per_m=TIER_S_INPUT,
         output_per_m=TIER_S_OUTPUT,
         fixed_overhead=TIER_S_OVERHEAD,
     ),
-    "M": TierPrice(
-        name="M",
+    ModelTier.MEDIUM: TierPrice(
+        name=ModelTier.MEDIUM,
         input_per_m=TIER_M_INPUT,
         output_per_m=TIER_M_OUTPUT,
         fixed_overhead=TIER_M_OVERHEAD,
     ),
-    "L": TierPrice(
-        name="L",
+    ModelTier.LARGE: TierPrice(
+        name=ModelTier.LARGE,
         input_per_m=TIER_L_INPUT,
         output_per_m=TIER_L_OUTPUT,
         fixed_overhead=TIER_L_OVERHEAD,
     ),
 }
+
+
+def _coerce_tier(tier: ModelTier | str) -> ModelTier:
+    return tier if isinstance(tier, ModelTier) else ModelTier(tier)
 
 
 # --- per-call record -----------------------------------------------------
@@ -102,7 +107,7 @@ _DEFAULT_TIERS: dict[str, TierPrice] = {
 @dataclass(frozen=True)
 class CallRecord:
     role: Role
-    tier: str
+    tier: ModelTier
     input_tokens: int
     output_tokens: int
     context_used: int
@@ -115,6 +120,7 @@ class CallRecord:
     def to_json(self) -> str:
         d = asdict(self)
         d["role"] = self.role.value
+        d["tier"] = self.tier.value
         return json.dumps(d, separators=(",", ":"))
 
 
@@ -184,18 +190,18 @@ class CostMeter:
         budget_haiku_eq: float,
         run_id: str,
         events_path: Path,
-        tiers: dict[str, TierPrice] | None = None,
+        tiers: dict[ModelTier | str, TierPrice] | None = None,
         status_stream=sys.stderr,
     ) -> None:
         self._budget = budget_haiku_eq
         self._run_id = run_id
         self._events_path = events_path
         self._events_path.parent.mkdir(parents=True, exist_ok=True)
-        self._tiers = tiers or dict(_DEFAULT_TIERS)
+        self._tiers = {_coerce_tier(k): v for k, v in (tiers or _DEFAULT_TIERS).items()}
         self._status_stream = status_stream
         self._total = _Aggregates()
         self._by_role: dict[Role, _Aggregates] = {r: _Aggregates() for r in Role}
-        self._by_tier: dict[str, _Aggregates] = {}
+        self._by_tier: dict[ModelTier, _Aggregates] = {}
         self._last_status_call = 0
         self._last_status_t = time.monotonic()
 
@@ -207,13 +213,13 @@ class CostMeter:
     def spent_haiku_eq(self) -> float:
         return self._total.haiku_eq
 
-    def haiku_eq_for(self, tier: str, tokens_in: int, tokens_out: int) -> float:
-        return self._tiers[tier].haiku_eq(tokens_in, tokens_out)
+    def haiku_eq_for(self, tier: ModelTier | str, tokens_in: int, tokens_out: int) -> float:
+        return self._tiers[_coerce_tier(tier)].haiku_eq(tokens_in, tokens_out)
 
     def record(
         self,
         role: Role,
-        tier: str,
+        tier: ModelTier | str,
         input_tokens: int | None,
         output_tokens: int | None,
         context_cap: int,
@@ -225,10 +231,11 @@ class CostMeter:
             raise RuntimeError("CostMeter.record refuses None token counts")
         if input_tokens > context_cap:
             raise RuntimeError(f"context overrun: {input_tokens} > {context_cap} ({role}/{tier})")
-        haiku_eq = self.haiku_eq_for(tier, input_tokens, output_tokens)
+        tier_id = _coerce_tier(tier)
+        haiku_eq = self.haiku_eq_for(tier_id, input_tokens, output_tokens)
         record = CallRecord(
             role=role,
-            tier=tier,
+            tier=tier_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             context_used=input_tokens,
@@ -240,7 +247,7 @@ class CostMeter:
         )
         self._total.update(record)
         self._by_role[role].update(record)
-        self._by_tier.setdefault(tier, _Aggregates()).update(record)
+        self._by_tier.setdefault(tier_id, _Aggregates()).update(record)
         with self._events_path.open("a", encoding="utf-8") as f:
             f.write(record.to_json() + "\n")
         self._maybe_print_status()
@@ -257,7 +264,7 @@ class CostMeter:
             "budget_used_haiku_eq": self._total.haiku_eq,
             "wall_seconds": self._total.wall_seconds,
             "by_role": {r.value: agg.to_dict() for r, agg in self._by_role.items()},
-            "by_tier": {t: agg.to_dict() for t, agg in self._by_tier.items()},
+            "by_tier": {t.value: agg.to_dict() for t, agg in self._by_tier.items()},
             "context": {
                 "used_max": self._total.context_used_max,
                 "used_mean": (

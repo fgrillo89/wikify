@@ -46,6 +46,7 @@ from ..contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
+from ..contracts.tiers import model_id_for_tier
 from ..infra.cost_meter import BudgetExceededError, CostMeter
 from ..ingest.sampler_index import load_sampler_index
 from ..models import Chunk, Document, WikiPage
@@ -91,10 +92,6 @@ from .write.requests import (
     save_pages_manifest,
     save_write_requests,
 )
-
-
-    #   orchestrate = L (opus, locked — not user-settable)
-
 
 Phase = Literal["all", "extract", "write"]
 Iteration = Literal["create", "refine", "merge"]
@@ -181,7 +178,7 @@ def run_with_preloaded(
             bundle,
             merge_from_bundle,
             meter,
-            model_id=strategy.model_id,
+            model_id=model_id_for_tier(strategy.write_tier),
             strategy_name=strategy.name,
         )
         return
@@ -238,7 +235,7 @@ def run_with_preloaded(
         },
     )
     write_req_cfg = WriteRequestConfig(
-        model_id=strategy.model_id,
+        model_id=model_id_for_tier(strategy.write_tier),
         writer_tier=strategy.write_tier,
         prompt_name=WRITE_PROMPT,
         style_text=style_text,
@@ -289,8 +286,6 @@ def run_with_preloaded(
         # Apply a user-supplied or LLM-supplied override by constructing
         # a one-shot StaticSchedule split. The strategy's own schedule is
         # still kept for reallocate() behaviour downstream.
-        from .schedule import StaticSchedule
-
         split = StaticSchedule(exploit_fraction=runtime.exploit_fraction).initial_split(
             budget_haiku_eq
         )
@@ -320,8 +315,6 @@ def run_with_preloaded(
             # If the LLM policy changed the allocation, re-split the
             # REMAINING budget on the new exploit_fraction and continue.
             if runtime.allocation_epoch != last_allocation_epoch:
-                from .schedule import StaticSchedule
-
                 remaining = max(0.0, budget_haiku_eq - meter.spent_haiku_eq)
                 new_split = StaticSchedule(
                     exploit_fraction=runtime.exploit_fraction or 0.5
@@ -366,7 +359,7 @@ def run_with_preloaded(
                     chunk_text=ck.text,
                     canonical_titles=[c.concept.title for c in candidates[-32:]],
                     prompt_template=EXTRACT_PROMPT,
-                    model_id=strategy.model_id,
+                    model_id=model_id_for_tier(runtime.extract_tier),
                     tier=runtime.extract_tier,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
                     equations=_equations_for_chunk(ck, docs_by_id),
@@ -596,7 +589,11 @@ def run_with_preloaded(
     # ---- write loop (phase=all) -----------------------------------------
     # Rebuild write_req_cfg with the (possibly mutated) runtime write tier
     # so the LLM policy's set_tier actions take effect on writer calls.
-    write_req_cfg = dataclasses.replace(write_req_cfg, writer_tier=runtime.write_tier)
+    write_req_cfg = dataclasses.replace(
+        write_req_cfg,
+        model_id=model_id_for_tier(runtime.write_tier),
+        writer_tier=runtime.write_tier,
+    )
     avg_write_cost = 30_000.0
     n_writes_completed = 0
     try:
@@ -1013,7 +1010,7 @@ def _finalize_pages(
         page.provenance = updated_page_provenance(
             existing=(page.provenance or {}),
             run_id=meter._run_id,  # noqa: SLF001
-            model_id=strategy.model_id,
+            model_id=model_id_for_tier(strategy.write_tier),
             strategy_name=strategy.name,
             iteration=iteration,
             drafted=bool(page.body_markdown.strip()),

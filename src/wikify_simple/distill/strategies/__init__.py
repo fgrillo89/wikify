@@ -1,7 +1,15 @@
-"""Thin assembly files: pick sampler + schedule + tiering, hand to pipeline.run."""
+"""Public strategy configs and factory."""
 
-from .exploit import build as build_exploit
-from .explore import build as build_explore
-from .mixed import build as build_mixed
+from .registry import (
+    STRATEGY_CONFIGS,
+    StrategyConfig,
+    StrategyId,
+    build_strategy,
+)
 
-STRATEGIES = {"E": build_explore, "M": build_mixed, "X": build_exploit}
+__all__ = [
+    "STRATEGY_CONFIGS",
+    "StrategyConfig",
+    "StrategyId",
+    "build_strategy",
+]

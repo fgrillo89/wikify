@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .tiers import ModelTier
+
 _REFERENCES_HEADING = "## References"
 _MARKER_RE = re.compile(r"\[\^e\d+\]")
 _EVIDENCE_DEF_RE = re.compile(r"^\[\^e\d+\]:")
@@ -136,7 +138,7 @@ class ExtractRequest(BaseModel):
     canonical_titles: list[str]  # known wiki page titles to dedup against
     prompt_template: str  # used by the cache key
     model_id: str
-    tier: str  # "S" | "M" | "L"
+    tier: ModelTier
     images_for_doc: list[ImageRef] = Field(default_factory=list)
     # Equations whose source offset falls inside this chunk's char_span.
     # Computed at ingest time via Document.equations + Chunk.equation_ids
@@ -496,7 +498,7 @@ class WriteRequest(BaseModel):
     evidence: list[WriteEvidenceRef]
     prompt_template: str
     model_id: str
-    tier: str
+    tier: ModelTier
     figures: list[ImageRef] = Field(default_factory=list)
     # Layered writer-prompt context. Inline strings are the canonical
     # payload for fake/heuristic bindings. The hash fields allow the
@@ -690,7 +692,7 @@ class QueryRequest(BaseModel):
     evidence: list[QueryEvidence]
     prompt_template: str
     model_id: str
-    tier: str
+    tier: ModelTier
 
     @field_validator("question")
     @classmethod

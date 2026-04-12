@@ -7,7 +7,7 @@ import pytest
 
 from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.infra.cache import ExtractCache
 from wikify_simple.infra.cost_meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
@@ -32,7 +32,7 @@ def _meter(bundle: BundlePaths, run_id: str) -> CostMeter:
 def test_invalid_staged_response_falls_back_to_writer(corpus, tmp_path):
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")
-    cfg = STRATEGIES["M"](seed=0)
+    cfg = build_strategy("M", seed=0)
 
     # Phase 1: extract to materialize _write_requests + _pages.json.
     pipeline_run(

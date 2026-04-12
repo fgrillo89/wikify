@@ -6,7 +6,7 @@ import pytest
 
 from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.eval.bundle import load_bundle
 from wikify_simple.eval.metrics import (
     EmbedderMismatch,
@@ -35,7 +35,7 @@ def loaded_bundle(tmp_path_factory):
         run_id="M_1x_seed0",
         events_path=bundle.calls_path,
     )
-    cfg = STRATEGIES["M"](seed=0)
+    cfg = build_strategy("M", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

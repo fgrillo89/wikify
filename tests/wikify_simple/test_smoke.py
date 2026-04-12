@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import STRATEGIES
+from wikify_simple.distill.strategies import build_strategy
 from wikify_simple.eval.bundle import load_bundle
 from wikify_simple.eval.metrics import (
     concept_recall,
@@ -45,7 +45,7 @@ def test_distill_produces_bundle(strategy, corpus, tmp_path):
     extractor = FakeExtractor(cache, meter)
     writer = FakeWriter(meter)
 
-    cfg = STRATEGIES[strategy](seed=0)
+    cfg = build_strategy(strategy, seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,
@@ -105,7 +105,7 @@ def test_heaps_over_seeds(corpus, tmp_path):
         bundle = BundlePaths(root=tmp_path / f"M_b{i}")
         cache = ExtractCache(root=tmp_path / f"cache_{i}")
         meter = CostMeter(budget_haiku_eq=budget, run_id=f"M_b{i}", events_path=bundle.calls_path)
-        cfg = STRATEGIES["M"](seed=i)
+        cfg = build_strategy("M", seed=i)
         pipeline_run(
             corpus=corpus,
             bundle=bundle,

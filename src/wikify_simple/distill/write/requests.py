@@ -11,6 +11,7 @@ from wikify_simple.contracts.schema import (
     WriteEvidenceRefV2,
     WriteRequest,
 )
+from wikify_simple.contracts.tiers import ModelTier
 from wikify_simple.models import Chunk, WikiPage
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.images_index import ImageIndex, ImageRecord
@@ -23,7 +24,7 @@ from .related import compute_related_pages
 @dataclass(frozen=True)
 class WriteRequestConfig:
     model_id: str
-    writer_tier: str
+    writer_tier: ModelTier
     prompt_name: str
     style_text: str
     field_text: str
