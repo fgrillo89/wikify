@@ -70,10 +70,10 @@ Rules:
   truth.
 
 ## Distill Strategy Rules
-For `wikify_simple/distill`, apply the architecture style above as follows:
+For `wikify/distill`, apply the architecture style above as follows:
 
 - E/M/X strategy definitions live together in
-  `src/wikify_simple/distill/strategies/registry.py`.
+  `src/wikify/distill/strategies/registry.py`.
 - `strategies/__init__.py` should only re-export the public API.
 - Do not split one-line strategy differences across separate modules such as
   `explore.py`, `mixed.py`, and `exploit.py`.

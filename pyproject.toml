@@ -62,9 +62,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 # Project name is "wikify" but the actual package on disk is
-# ``src/wikify_simple``. Tell hatchling where to find it so the
+# ``src/wikify``. Tell hatchling where to find it so the
 # editable install (and any future wheel) ships the right module.
-packages = ["src/wikify_simple"]
+packages = ["src/wikify"]
 
 [tool.ruff]
 line-length = 100
@@ -74,10 +74,9 @@ target-version = "py312"
 select = ["E", "F", "I", "N", "W"]
 
 [tool.ruff.lint.per-file-ignores]
-"scripts/*.py" = ["E501"]
 # metrics.py uses math-style uppercase variables (W, M, L, Q) intentionally.
-"src/wikify_simple/eval/metrics.py" = ["N803", "N806"]
-"src/wikify_simple/eval/audit.py" = ["N806"]
+"src/wikify/eval/metrics.py" = ["N803", "N806"]
+"src/wikify/eval/audit.py" = ["N806"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

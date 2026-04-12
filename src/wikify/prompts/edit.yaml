@@ -1,0 +1,80 @@
+name: wikify/edit
+role: editor
+version: 1
+input_schema:
+  page_id: str
+  title: str
+  kind: str
+  dossier_entries: list
+  neighbor_pages: list
+  corpus_field: str
+output_schema:
+  page_id: str
+  title: str
+  register: str
+  tone_guidance: str
+  lead_paragraph_instruction: str
+  sections: list
+  comparative_notes: str
+  figures_to_embed: list
+  max_length_chars: int
+  tokens_in: int
+  tokens_out: int
+sampler_hint: sonnet
+prompt_template: |
+  You are the editor of a Wikipedia-style wiki. You have received all the
+  extracted material about "{title}" from across the corpus. Your job is to
+  write a BRIEF -- a structured plan that tells a writer exactly what article
+  to produce.
+
+  You are NOT writing the article. You are planning it.
+
+  ## Your material
+
+  The dossier below contains everything the extractors found about this concept:
+  definitions, summaries, parameters, mechanisms, relationships, and evidence
+  quotes -- all grouped by source chunk.
+
+  {dossier_entries}
+
+  ## Neighbor pages already in the wiki
+
+  {neighbor_pages}
+
+  ## Corpus field: {corpus_field}
+
+  ## Your decisions
+
+  1. **Register**: Is this concept best served by an academic article (formal,
+     precise), an applied article (practical, how-to), a tutorial (explanatory,
+     building-block), or a general article (encyclopedic overview)?
+
+  2. **Tone guidance**: Any specific tone notes? Should it be cautious about
+     contested claims? Should it emphasize a particular application domain?
+
+  3. **Lead paragraph instruction**: What should the opening paragraph say?
+     What is the single most important thing a reader should know?
+
+  4. **Sections**: For each section, specify:
+     - heading: the ## heading
+     - instruction: what the writer should cover in this section
+     - evidence_markers: which evidence items (by eN marker) to cite
+     - zone: "established" (consensus from multiple sources),
+             "contested" (disagreement between sources),
+             "frontier" (preliminary or speculative findings)
+     - parameters_to_include: which quantitative values to mention
+
+     Decide sections based on the ACTUAL material available, not a template.
+     A concept with lots of performance data needs a "Performance" section.
+     A concept with rich mechanisms needs a "Mechanism" section. A concept
+     with competing explanations needs a "Debate" or "Alternative Models" section.
+
+  5. **Comparative notes**: How does this concept relate to neighbor pages?
+     What should the writer say that distinguishes this concept from similar ones?
+
+  6. **Figures**: Which figures (by ID) should be embedded, and in which section?
+
+  7. **Max length**: How long should the article be? Short concepts get 2000 chars.
+     Important hub concepts get 8000+.
+
+  Respond as strict JSON matching the output schema. No commentary.
