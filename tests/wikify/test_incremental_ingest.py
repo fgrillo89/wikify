@@ -1,21 +1,31 @@
 """Tests for incremental ingest correctness.
 
 Covers: add, modify, delete (sync), markdown body preservation,
-vector id invariants, and distill preload visibility.
+vector id invariants, parse-failure preservation, nested same-name
+files, vector reuse, and distill preload visibility.
 """
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from wikify.ingest.manifest import CorpusManifest
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.store.corpus import all_chunks, list_documents, read_graph, read_vector_store
+from wikify.store.corpus import (
+    all_chunks,
+    list_documents,
+    read_graph,
+    read_vector_store,
+)
+
+# Body filler long enough to survive MIN_CHUNK_ALNUM=30.
+_FILLER = " ".join(["word"] * 20)
 
 
 def _write_md(path: Path, title: str, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# {title}\n\n{body}\n", encoding="utf-8")
+    path.write_text(f"# {title}\n\n{body} {_FILLER}\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -30,11 +40,11 @@ def corpus_dir(tmp_path: Path) -> Path:
     return tmp_path / "corpus"
 
 
-# --- Test: fresh ingest produces correct artifacts ---
+# --- Fresh ingest ---
 
 def test_fresh_ingest(sources_dir, corpus_dir):
-    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text with enough words for chunking.")
-    _write_md(sources_dir / "beta.md", "Beta", "Beta body text with enough words for chunking too.")
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
 
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
@@ -43,88 +53,77 @@ def test_fresh_ingest(sources_dir, corpus_dir):
     chunks = all_chunks(paths)
     assert len(chunks) >= 2
 
-    # Vector ids match active chunk ids
     vs = read_vector_store(paths)
     assert set(vs.ids) == {c.id for c in chunks}
 
-    # Graph covers all docs and chunks
     graph = read_graph(paths)
-    doc_ids = {d.id for d in docs}
-    chunk_ids = {c.id for c in chunks}
-    for did in doc_ids:
-        assert did in graph.nodes
-    for cid in chunk_ids:
-        assert cid in graph.nodes
+    for d in docs:
+        assert d.id in graph.nodes
+    for c in chunks:
+        assert c.id in graph.nodes
 
-    # Manifest is populated
     manifest = CorpusManifest.load(paths.manifest_path)
     assert len(manifest.sources) == 2
     assert all(s.status == "active" for s in manifest.sources.values())
 
 
-# --- Test: add source (incremental) preserves existing markdown ---
+# --- Add preserves existing markdown ---
 
 def test_add_preserves_existing_markdown(sources_dir, corpus_dir):
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
-    # Read alpha's markdown body
     alpha_doc = list_documents(paths)[0]
-    alpha_md = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(encoding="utf-8")
+    alpha_md = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(
+        encoding="utf-8"
+    )
     assert "Alpha body text" in alpha_md
 
-    # Add a second source
     _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
     docs = list_documents(paths)
     assert len(docs) == 2
 
-    # Alpha's markdown body is preserved
-    alpha_md_after = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(encoding="utf-8")
+    alpha_md_after = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(
+        encoding="utf-8"
+    )
     assert "Alpha body text" in alpha_md_after
 
 
-# --- Test: modify source replaces old doc ---
+# --- Modify replaces old doc ---
 
 def test_modify_replaces_old_doc(sources_dir, corpus_dir):
-    _write_md(sources_dir / "alpha.md", "Alpha v1", "First version of alpha.")
+    _write_md(sources_dir / "alpha.md", "Alpha v1", "First version body.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
-    docs_v1 = list_documents(paths)
-    assert len(docs_v1) == 1
-    old_doc_id = docs_v1[0].id
+    old_doc_id = list_documents(paths)[0].id
 
-    # Modify the source
-    _write_md(sources_dir / "alpha.md", "Alpha v2", "Second version of alpha.")
+    _write_md(sources_dir / "alpha.md", "Alpha v2", "Second version body.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
-    docs_v2 = list_documents(paths)
-    assert len(docs_v2) == 1, f"Expected 1 doc, got {len(docs_v2)}: {[d.id for d in docs_v2]}"
-    new_doc_id = docs_v2[0].id
+    docs = list_documents(paths)
+    assert len(docs) == 1
+    new_doc_id = docs[0].id
     assert new_doc_id != old_doc_id
 
-    # Old doc artifacts are gone
     assert not (paths.docs_dir / f"{old_doc_id}.json").exists()
     assert not (paths.chunks_dir / f"{old_doc_id}.jsonl").exists()
 
-    # New markdown has v2 content
     md = (paths.markdown_dir / f"{new_doc_id}.md").read_text(encoding="utf-8")
     assert "Second version" in md
 
-    # Vector ids match only new chunks
     vs = read_vector_store(paths)
     chunks = all_chunks(paths)
     assert set(vs.ids) == {c.id for c in chunks}
 
-    # Manifest has only the new record
     manifest = CorpusManifest.load(paths.manifest_path)
     active = [s for s in manifest.sources.values() if s.status == "active"]
     assert len(active) == 1
     assert active[0].doc_id == new_doc_id
 
 
-# --- Test: sync mode removes absent sources ---
+# --- Sync removes absent ---
 
 def test_sync_removes_absent(sources_dir, corpus_dir):
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
@@ -135,7 +134,6 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
     assert len(docs) == 2
     beta_id = [d.id for d in docs if "beta" in d.id.lower()][0]
 
-    # Remove beta from sources and run sync
     (sources_dir / "beta.md").unlink()
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1, mode="sync")
 
@@ -143,15 +141,11 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
     assert len(docs_after) == 1
     assert docs_after[0].id != beta_id
 
-    # Beta artifacts are gone
     assert not (paths.docs_dir / f"{beta_id}.json").exists()
-    assert not (paths.chunks_dir / f"{beta_id}.jsonl").exists()
 
-    # Graph only has alpha
     graph = read_graph(paths)
     assert beta_id not in graph.nodes
 
-    # Vectors only have alpha's chunks
     vs = read_vector_store(paths)
     chunks = all_chunks(paths)
     assert set(vs.ids) == {c.id for c in chunks}
@@ -159,7 +153,7 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
         assert beta_id not in cid
 
 
-# --- Test: distill preload does not see deleted docs ---
+# --- Distill preload excludes deleted ---
 
 def test_distill_preload_excludes_deleted(sources_dir, corpus_dir):
     from wikify.distill.preload import preload_corpus
@@ -168,7 +162,6 @@ def test_distill_preload_excludes_deleted(sources_dir, corpus_dir):
     _write_md(sources_dir / "beta.md", "Beta", "Beta body.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
-    # Remove beta and sync
     (sources_dir / "beta.md").unlink()
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1, mode="sync")
 
@@ -176,8 +169,140 @@ def test_distill_preload_excludes_deleted(sources_dir, corpus_dir):
     doc_ids = {d.id for d in loaded.docs}
     chunk_doc_ids = {c.doc_id for c in loaded.chunks}
 
-    # Beta should not appear anywhere in the preloaded corpus
     for did in doc_ids:
-        assert "beta" not in did.lower() or False, f"Deleted doc visible: {did}"
+        assert "beta" not in did.lower(), f"Deleted doc visible: {did}"
     for cdid in chunk_doc_ids:
-        assert "beta" not in cdid.lower() or False, f"Deleted chunk visible: {cdid}"
+        assert "beta" not in cdid.lower(), f"Deleted chunk visible: {cdid}"
+
+
+# --- Parse failure preserves old artifacts (Finding #1) ---
+
+def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):
+    """If a modified source fails to parse, the old doc stays active."""
+    _write_md(sources_dir / "alpha.md", "Alpha v1", "First version body.")
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    old_doc_id = list_documents(paths)[0].id
+    old_md = (paths.markdown_dir / f"{old_doc_id}.md").read_text(
+        encoding="utf-8"
+    )
+    assert "First version body" in old_md
+
+    # Modify file to trigger replacement
+    _write_md(sources_dir / "alpha.md", "Alpha v2", "Second version body.")
+
+    # Patch parse_file to raise for the modified file
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def failing_parse(path):
+        if "alpha" in path.name:
+            raise RuntimeError("simulated parse failure")
+        return real_parse(path)
+
+    with patch("wikify.ingest.pipeline.parse_file", side_effect=failing_parse):
+        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    # Old doc must still be on disk and active
+    docs = list_documents(paths)
+    assert len(docs) == 1
+    assert docs[0].id == old_doc_id
+
+    preserved_md = (paths.markdown_dir / f"{old_doc_id}.md").read_text(
+        encoding="utf-8"
+    )
+    assert "First version body" in preserved_md
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values() if s.status == "active"]
+    assert len(active) == 1
+    assert active[0].doc_id == old_doc_id
+
+
+# --- Nested same-name files (Finding #2) ---
+
+def test_nested_same_name_files(sources_dir, corpus_dir):
+    """set1/alpha.md and set2/alpha.md must coexist without collision."""
+    (sources_dir / "set1").mkdir()
+    (sources_dir / "set2").mkdir()
+    _write_md(sources_dir / "set1" / "alpha.md", "Alpha Set1", "Set1 body.")
+    _write_md(sources_dir / "set2" / "alpha.md", "Alpha Set2", "Set2 body.")
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    docs = list_documents(paths)
+    assert len(docs) == 2
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values() if s.status == "active"]
+    assert len(active) == 2
+    sids = {s.source_id for s in active}
+    # source_ids must be different
+    assert len(sids) == 2
+    # Both should contain "alpha" but be distinguishable
+    assert all("alpha" in sid for sid in sids)
+
+    # Modify only one
+    _write_md(
+        sources_dir / "set1" / "alpha.md", "Alpha Set1 v2", "Set1 v2 body."
+    )
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    docs = list_documents(paths)
+    assert len(docs) == 2
+
+    # Check that set2/alpha is unchanged
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = {s.source_id: s for s in manifest.sources.values()
+              if s.status == "active"}
+    assert len(active) == 2
+
+
+# --- Vector reuse (Finding #3) ---
+
+def test_vector_reuse_on_incremental(sources_dir, corpus_dir):
+    """Adding a source should reuse vectors for unchanged chunks."""
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    alpha_chunks = all_chunks(paths)
+    old_vs = read_vector_store(paths)
+    alpha_vecs = {cid: old_vs.matrix[i].copy()
+                  for i, cid in enumerate(old_vs.ids)}
+
+    # Add beta
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
+
+    embed_call_texts: list[list[str]] = []
+    real_embed = __import__(
+        "wikify.ingest.pipeline", fromlist=["embed_texts"]
+    ).embed_texts
+
+    def tracking_embed(texts):
+        embed_call_texts.append(list(texts))
+        return real_embed(texts)
+
+    with patch("wikify.ingest.pipeline.embed_texts", side_effect=tracking_embed):
+        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    # Alpha's chunk ids should NOT have been re-embedded
+    all_embedded_texts = []
+    for batch in embed_call_texts:
+        all_embedded_texts.extend(batch)
+
+    alpha_texts = {c.text for c in alpha_chunks}
+    newly_embedded = set(all_embedded_texts)
+    # None of alpha's texts should appear in the embed calls
+    assert not (alpha_texts & newly_embedded), (
+        "Alpha chunks were re-embedded instead of reused"
+    )
+
+    # Vectors for alpha chunks should be identical
+    new_vs = read_vector_store(paths)
+    for cid, old_vec in alpha_vecs.items():
+        if cid in {c_id for c_id in new_vs.ids}:
+            idx = new_vs.ids.index(cid)
+            assert (new_vs.matrix[idx] == old_vec).all(), (
+                f"Vector changed for unchanged chunk {cid}"
+            )

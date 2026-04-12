@@ -55,33 +55,41 @@ def _dense_similarity_edges(vectors: VectorStore):
     return knn_edges, strong_edges
 
 
-def test_blockwise_matches_dense():
-    """Blockwise graph must produce exactly the same knn + strong edges."""
+def test_blockwise_matches_dense_default():
+    """Default block_size (1024) on 40 chunks -- single block."""
     docs, chunks, store = _make_corpus(n_docs=5, chunks_per_doc=8, dim=32)
 
-    # Build via the production blockwise path
     graph = build_corpus_graph(docs, chunks, store)
     blockwise_knn = set(map(tuple, graph.edges.get("similar_knn", [])))
     blockwise_strong = set(map(tuple, graph.edges.get("similar_strong", [])))
 
-    # Build via the dense reference
     dense_knn, dense_strong = _dense_similarity_edges(store)
 
     assert blockwise_knn == dense_knn, (
-        f"knn mismatch: {len(blockwise_knn)} blockwise vs {len(dense_knn)} dense"
+        f"knn mismatch: {len(blockwise_knn)} vs {len(dense_knn)}"
     )
     assert blockwise_strong == dense_strong, (
-        f"strong mismatch: {len(blockwise_strong)} blockwise vs "
-        f"{len(dense_strong)} dense"
+        f"strong mismatch: {len(blockwise_strong)} vs {len(dense_strong)}"
     )
 
 
 def test_blockwise_matches_dense_small_block():
-    """Force block_size < n_chunks to exercise the multi-block path."""
+    """block_size=4 on 15 chunks -- exercises the multi-block path."""
     docs, chunks, store = _make_corpus(n_docs=3, chunks_per_doc=5, dim=16)
+    assert store.matrix.shape[0] == 15  # sanity
 
-    # Monkeypatch block_size to 4 so we get multiple blocks for 15 chunks.
-    graph = build_corpus_graph(docs, chunks, store)
+    graph = build_corpus_graph(
+        docs, chunks, store, similarity_block_size=4,
+    )
     blockwise_knn = set(map(tuple, graph.edges.get("similar_knn", [])))
-    dense_knn, _ = _dense_similarity_edges(store)
-    assert blockwise_knn == dense_knn
+    blockwise_strong = set(map(tuple, graph.edges.get("similar_strong", [])))
+
+    dense_knn, dense_strong = _dense_similarity_edges(store)
+
+    assert blockwise_knn == dense_knn, (
+        f"multi-block knn mismatch: {len(blockwise_knn)} vs {len(dense_knn)}"
+    )
+    assert blockwise_strong == dense_strong, (
+        f"multi-block strong mismatch: "
+        f"{len(blockwise_strong)} vs {len(dense_strong)}"
+    )

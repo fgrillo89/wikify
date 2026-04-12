@@ -358,16 +358,68 @@ def _persist_bundles(
 # Stage: embed
 # ---------------------------------------------------------------------------
 
-def _embed_chunks(
+def _embed_chunks_incremental(
     all_chunks: list[Chunk],
     paths: CorpusPaths,
+    stale_doc_ids: set[str],
 ) -> VectorStore:
-    """Embed all chunks and persist vectors + metadata."""
-    if all_chunks:
-        matrix = embed_texts([c.text for c in all_chunks])
-        store = VectorStore(ids=[c.id for c in all_chunks], matrix=matrix)
+    """Embed chunks, reusing existing vectors for unchanged chunks.
+
+    Loads the existing vector store, keeps rows whose chunk ids are still
+    active and not from stale docs, embeds only the new/changed chunks,
+    and merges into one store. Validates that the result covers exactly
+    the active chunk ids.
+    """
+    import numpy as np
+
+    from ..store.vectors import load_vectors
+
+    target_ids = [c.id for c in all_chunks]
+    target_set = set(target_ids)
+
+    # Try to load existing vectors for reuse
+    reusable: dict[str, np.ndarray] = {}
+    if paths.vectors_path.exists() and not stale_doc_ids == target_set:
+        try:
+            old_store = load_vectors(paths.vectors_path)
+            for i, cid in enumerate(old_store.ids):
+                if cid in target_set:
+                    reusable[cid] = old_store.matrix[i]
+        except Exception:  # noqa: BLE001
+            pass  # corrupt or incompatible -- re-embed everything
+
+    # Determine which chunks need fresh embedding
+    to_embed = [c for c in all_chunks if c.id not in reusable]
+
+    if to_embed:
+        new_matrix = embed_texts([c.text for c in to_embed])
+        for i, c in enumerate(to_embed):
+            reusable[c.id] = new_matrix[i]
+
+    n_reused = len(target_ids) - len(to_embed)
+    n_embedded = len(to_embed)
+    if n_reused > 0:
+        print(
+            f"[ingest] vectors: {n_reused} reused, {n_embedded} embedded",
+            file=sys.stderr,
+        )
+
+    # Assemble final store in target_ids order
+    if target_ids:
+        rows = [reusable[cid] for cid in target_ids]
+        import numpy as _np
+
+        matrix = _np.stack(rows, axis=0)
     else:
-        store = VectorStore(ids=[], matrix=embed_texts([]))
+        matrix = embed_texts([])
+    store = VectorStore(ids=target_ids, matrix=matrix)
+
+    # Validate: vector ids == active chunk ids
+    assert set(store.ids) == target_set, (
+        f"vector/chunk mismatch: {len(store.ids)} vectors, "
+        f"{len(target_set)} chunks"
+    )
+
     write_vector_store(paths, store)
 
     from ..embedding import current_backend
@@ -608,12 +660,11 @@ def ingest_corpus(
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
-    Incremental: parses only new/changed sources, physically removes
-    stale artifacts for replaced/deleted sources, then rebuilds all
-    derived artifacts from the full active corpus.
+    Incremental: parses only new/changed sources, then removes stale
+    artifacts only for sources whose replacement parse *succeeded*,
+    then rebuilds derived artifacts from the full active corpus.
 
-    ``mode`` can be ``additive`` (default, never deletes absent sources)
-    or ``sync`` (removes sources no longer present in ``input_dir``).
+    ``mode``: ``additive`` (default) or ``sync`` (removes absent sources).
     """
     from ..store.corpus import all_chunks as load_all_chunks
     from ..store.corpus import list_documents
@@ -635,7 +686,9 @@ def ingest_corpus(
     with _timed(timings, "enumerate+dedupe"):
         manifest = CorpusManifest.load(paths.manifest_path)
         raw_sources = sorted(iter_sources(input_dir))
-        change_set = diff_sources(raw_sources, manifest, mode=mode)
+        change_set = diff_sources(
+            raw_sources, manifest, input_root=input_dir, mode=mode,
+        )
 
         # Intra-run dedup (two files with same content)
         seen_hashes: set[str] = set()
@@ -670,29 +723,11 @@ def ingest_corpus(
         )
         return paths
 
-    # --- Remove stale artifacts for replaced/deleted sources ---
+    # --- 1. Parse new/changed sources FIRST (before removing anything) ---
 
-    stale_doc_ids: set[str] = set()
-
-    # Collect doc_ids to remove from replacements (content changed)
-    for sid, old_doc_id in change_set.to_replace.items():
-        stale_doc_ids.add(old_doc_id)
-        print(f"  [replace] {sid}: removing old {old_doc_id}", file=sys.stderr)
-
-    # Collect doc_ids to remove from deletions (sync mode)
-    for sid in change_set.to_delete:
-        rec = manifest.sources.get(sid)
-        if rec and rec.status == "active":
-            stale_doc_ids.add(rec.doc_id)
-            manifest.sources[sid].status = "deleted"
-            print(f"  [delete] {sid} ({rec.doc_id})", file=sys.stderr)
-
-    # Physically remove stale doc/chunk/markdown/image artifacts
-    if stale_doc_ids:
-        with _timed(timings, "remove stale"):
-            _remove_doc_artifacts(paths, stale_doc_ids)
-
-    # --- Parse new/changed sources ---
+    bundles: list[_ParsedBundle] = []
+    declared: dict[str, list[str]] = {}
+    raw_md: dict[str, str] = {}
 
     if change_set.to_parse:
         with _timed(timings, "parse+chunk"):
@@ -700,27 +735,67 @@ def ingest_corpus(
 
         with _timed(timings, "per-doc persist"):
             _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
-
-        # Update manifest with new source records
-        for bundle in bundles:
-            sid = source_id_for(Path(bundle.src_path))
-            h = bundle.doc_id.rsplit("_", 1)[-1]
-            rec = SourceRecord(
-                source_id=sid,
-                source_path=bundle.src_path,
-                content_hash=h,
-                doc_id=bundle.doc_id,
-                status="active",
-                chunk_ids=[c.id for c in bundle.chunks],
-                parsed_at=SourceRecord.now_iso(),
-            )
-            manifest.sources[sid] = rec
     else:
-        declared, raw_md = {}, {}
         timings["parse+chunk"] = 0.0
         timings["per-doc persist"] = 0.0
 
-    # --- Derived rebuild (corpus-wide, from the active corpus on disk) ---
+    # --- 2. Determine which replacements succeeded ---
+    # A replacement succeeded if a bundle was produced for that source_id.
+    # If parsing failed, the old doc stays active.
+
+    parsed_sids: set[str] = set()
+    for bundle in bundles:
+        sid = change_set.path_to_sid.get(bundle.src_path)
+        if sid is None:
+            sid = source_id_for(Path(bundle.src_path), input_dir)
+        parsed_sids.add(sid)
+
+    stale_doc_ids: set[str] = set()
+
+    # Only remove old artifacts for replacements that produced a bundle
+    for sid, old_doc_id in change_set.to_replace.items():
+        if sid in parsed_sids:
+            stale_doc_ids.add(old_doc_id)
+            print(f"  [replace] {sid}: old {old_doc_id}", file=sys.stderr)
+        else:
+            print(
+                f"  [replace-skipped] {sid}: parse failed, keeping {old_doc_id}",
+                file=sys.stderr,
+            )
+
+    # Sync deletes: remove absent sources
+    for sid in change_set.to_delete:
+        rec = manifest.sources.get(sid)
+        if rec and rec.status == "active":
+            stale_doc_ids.add(rec.doc_id)
+            manifest.sources[sid].status = "deleted"
+            print(f"  [delete] {sid} ({rec.doc_id})", file=sys.stderr)
+
+    # --- 3. Remove stale artifacts ---
+
+    if stale_doc_ids:
+        with _timed(timings, "remove stale"):
+            _remove_doc_artifacts(paths, stale_doc_ids)
+
+    # --- 4. Update manifest with successfully parsed sources ---
+
+    for bundle in bundles:
+        sid = change_set.path_to_sid.get(bundle.src_path)
+        if sid is None:
+            sid = source_id_for(Path(bundle.src_path), input_dir)
+        h = bundle.doc_id.rsplit("_", 1)[-1]
+        rec = SourceRecord(
+            source_id=sid,
+            source_path=bundle.src_path,
+            content_hash=h,
+            doc_id=bundle.doc_id,
+            status="active",
+            chunk_ids=[c.id for c in bundle.chunks],
+            parsed_at=SourceRecord.now_iso(),
+        )
+        manifest.sources[sid] = rec
+
+    # --- 5. Derived rebuild (full active corpus on disk) ---
 
     with _timed(timings, "load active corpus"):
         all_docs = list_documents(paths)
@@ -733,7 +808,9 @@ def ingest_corpus(
                 declared[doc.id] = doc.metadata["keywords"]
 
     with _timed(timings, "embed"):
-        store = _embed_chunks(all_chunks_list, paths)
+        store = _embed_chunks_incremental(
+            all_chunks_list, paths, stale_doc_ids,
+        )
 
     with _timed(timings, "doc edges"):
         populate_doc_edges(all_docs, all_pairs, store)
@@ -762,7 +839,7 @@ def ingest_corpus(
     with _timed(timings, "doc resave"):
         _resave_docs(paths, all_docs, raw_md)
 
-    # --- Save manifest ---
+    # --- 6. Save manifest ---
     manifest.last_ingest = SourceRecord.now_iso()
     from ..embedding import current_backend
 

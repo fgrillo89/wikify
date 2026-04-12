@@ -27,6 +27,8 @@ def build_corpus_graph(
     docs: list[Document],
     chunks: list[Chunk],
     vectors: VectorStore,
+    *,
+    similarity_block_size: int = 1024,
 ) -> CorpusGraph:
     nodes: dict[str, dict] = {}
     for d in docs:
@@ -54,9 +56,8 @@ def build_corpus_graph(
     if vectors.matrix.shape[0] >= 2:
         n = vectors.matrix.shape[0]
         k = min(KNN_K, n - 1)
-        block_size = 1024
-        for start in range(0, n, block_size):
-            end = min(start + block_size, n)
+        for start in range(0, n, similarity_block_size):
+            end = min(start + similarity_block_size, n)
             block = vectors.matrix[start:end]
             sims = block @ vectors.matrix.T  # shape: (block_size, n)
             # Zero out self-similarities within the block

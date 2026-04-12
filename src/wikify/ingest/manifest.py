@@ -1,18 +1,11 @@
 """Corpus manifest: tracks source records for incremental ingest.
 
-The manifest records which source files have been ingested, their content
-hashes, and the fingerprints of the parser/chunker/embedder that processed
-them.  This lets the pipeline skip unchanged sources and detect when a
-backend change requires a rebuild.
-
 Identity model:
-  - ``source_id`` is the stable filename stem (e.g. ``"paper_A"``).  It
-    stays the same when the file's content changes.
-  - ``content_hash`` is the sha1[:12] of the file bytes.  It changes when
-    the file is modified.
+  - ``source_id`` is the POSIX relative path from the ingest input root
+    (e.g. ``"set1/alpha"`` for ``input/set1/alpha.md``).  Stable across
+    content changes; distinguishes same-named files in subdirectories.
+  - ``content_hash`` is the sha1[:12] of the file bytes.
   - ``doc_id`` is ``{stem}_{content_hash}`` and changes with content.
-    When a source is modified, the old doc_id's artifacts are removed and
-    replaced by the new doc_id's artifacts.
 """
 
 from __future__ import annotations
@@ -20,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 
@@ -28,8 +21,8 @@ from typing import Literal
 class SourceRecord:
     """One ingested source file."""
 
-    source_id: str  # stable identity: filename stem
-    source_path: str  # original path (informational)
+    source_id: str  # stable identity: relative POSIX path without extension
+    source_path: str  # original absolute path (informational)
     content_hash: str  # sha1[:12] of file bytes
     doc_id: str  # {stem}_{content_hash}
     status: Literal["active", "deleted"] = "active"
@@ -50,8 +43,6 @@ class CorpusManifest:
     sources: dict[str, SourceRecord] = field(default_factory=dict)
     last_ingest: str = ""
     embedder_fingerprint: str = ""
-
-    # --- persistence ---
 
     def save(self, path: Path) -> None:
         data = {
@@ -93,7 +84,6 @@ class CorpusManifest:
         return {s.source_id for s in self.sources.values() if s.status == "active"}
 
     def find_by_source_id(self, source_id: str) -> SourceRecord | None:
-        """Find the active record for a given source_id, or None."""
         rec = self.sources.get(source_id)
         if rec and rec.status == "active":
             return rec
@@ -108,31 +98,40 @@ class ChangeSet:
     unchanged: list[str]  # source_ids that are unchanged
     to_delete: list[str]  # source_ids to remove (sync mode only)
     to_replace: dict[str, str]  # source_id -> old_doc_id (content changed)
+    # Map from source absolute path -> source_id, computed during diff.
+    path_to_sid: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
         return not self.to_parse and not self.to_delete
 
 
-def source_id_for(path: Path) -> str:
-    """Stable source identity from filename (not content)."""
-    return path.stem
+def source_id_for(path: Path, input_root: Path) -> str:
+    """Stable source identity: POSIX relative path from input root, no ext.
+
+    ``input/set1/alpha.md`` with root ``input/`` -> ``"set1/alpha"``.
+    Falls back to stem if path is not under root.
+    """
+    try:
+        rel = path.resolve().relative_to(input_root.resolve())
+    except ValueError:
+        return path.stem
+    return str(PurePosixPath(rel.with_suffix("")))
 
 
 def diff_sources(
     input_dir_sources: list[Path],
     manifest: CorpusManifest,
     *,
+    input_root: Path,
     mode: Literal["additive", "sync"] = "additive",
     content_hash_fn=None,
 ) -> ChangeSet:
-    """Compare source files against the manifest to determine what to process.
+    """Compare source files against the manifest.
 
-    Identity is by filename stem (``source_id_for(path)``).  Content changes
-    are detected by comparing content hashes.
-
-    ``additive`` mode: add new sources, replace changed sources, never delete.
-    ``sync`` mode: also tombstone sources no longer present in input.
+    ``input_root`` is the top-level input directory, used to compute
+    stable relative source_ids that distinguish same-named files in
+    subdirectories.
     """
     from .pipeline import content_hash as _default_hash
 
@@ -140,12 +139,14 @@ def diff_sources(
 
     to_parse: list[Path] = []
     unchanged: list[str] = []
-    to_replace: dict[str, str] = {}  # source_id -> old_doc_id
+    to_replace: dict[str, str] = {}
     seen_source_ids: set[str] = set()
+    path_to_sid: dict[str, str] = {}
 
     for src in input_dir_sources:
-        sid = source_id_for(src)
+        sid = source_id_for(src, input_root)
         seen_source_ids.add(sid)
+        path_to_sid[str(src)] = sid
         try:
             h = hash_fn(src)
         except OSError:
@@ -154,13 +155,10 @@ def diff_sources(
 
         existing = manifest.find_by_source_id(sid)
         if existing is None:
-            # New source
             to_parse.append(src)
         elif existing.content_hash == h:
-            # Unchanged
             unchanged.append(sid)
         else:
-            # Content changed -- need to re-parse and replace old artifacts
             to_replace[sid] = existing.doc_id
             to_parse.append(src)
 
@@ -175,4 +173,5 @@ def diff_sources(
         unchanged=unchanged,
         to_delete=to_delete,
         to_replace=to_replace,
+        path_to_sid=path_to_sid,
     )
