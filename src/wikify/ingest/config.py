@@ -1,5 +1,13 @@
 """Ingest pipeline configuration constants."""
 
+# -- section filtering -------------------------------------------------------
+# Section types that carry no extractable knowledge. Used by the explorer
+# index builder to exclude chunks and by distill to skip at extraction time.
+# Centralised here so ingest and distill stay in sync.
+SKIP_SECTION_TYPES: frozenset[str] = frozenset(
+    {"references", "acknowledgments", "appendix"}
+)
+
 # -- chunking ----------------------------------------------------------------
 TARGET_CHUNK_CHARS = 1600  # target chunk size (~400 tokens)
 MIN_CHUNK_CHARS = 200  # minimum chunk size before flush

@@ -22,7 +22,9 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from ..types import Querier, ModelTier
+from ..ingest.topics import _PHRASE_RE
+from ..paths import BundlePaths, CorpusPaths
+from ..prompts import load_prompt
 from ..schema import (
     EscalationEvent,
     QueryAnswer,
@@ -30,11 +32,9 @@ from ..schema import (
     QueryLogEntry,
     QueryRequest,
 )
-from ..ingest.topics import _PHRASE_RE
-from ..paths import BundlePaths, CorpusPaths
-from ..prompts import load_prompt
 from ..store.bundle_embeddings import load_or_compute
 from ..store.wiki_index import WikiIndex
+from ..types import ModelTier, Querier
 
 if TYPE_CHECKING:
     from ..eval.bundle import Bundle

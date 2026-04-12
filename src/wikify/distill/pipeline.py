@@ -35,19 +35,8 @@ from typing import Literal, cast
 
 from pydantic import ValidationError
 
-from ..types import Compactor, Editor, Extractor, Orchestrator, Writer
-from ..schema import (
-    EditorBrief,
-    EquationRef,
-    ExtractRequest,
-    FigureCaption,
-    ImageRef,
-    QuoteNotInChunkError,
-    WriteRequest,
-    WriteResponse,
-)
-from ..meter import BudgetExceededError, CostMeter
 from ..ingest.explorer_index import load_explorer_index
+from ..meter import BudgetExceededError, CostMeter
 from ..models import Chunk, Document, WikiPage
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import (
@@ -58,16 +47,34 @@ from ..prompts import (
     load_style_guide,
 )
 from ..prompts.registry import _content_hash
+from ..schema import (
+    EditorBrief,
+    EquationRef,
+    ExtractRequest,
+    FigureCaption,
+    ImageRef,
+    QuoteNotInChunkError,
+    WriteRequest,
+    WriteResponse,
+)
 from ..store.images_index import ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
+from ..types import Compactor, Editor, Extractor, Orchestrator, Writer
+from .author_context import build_author_context
 from .dossier import (
+    SKIP_SECTION_TYPES,
     Candidate,
     Dossier,
     DossierEntry,
     DossierStore,
-    SKIP_SECTION_TYPES,
     canonicalize,
+)
+from .explorer import (
+    ExplorerState,
+    apply_coverage_feedback,
+    init_coverage_state,
+    restore_coverage_state,
 )
 from .iteration import (
     append_run_history,
@@ -77,6 +84,7 @@ from .iteration import (
     save_coverage_memory,
     updated_page_provenance,
 )
+from .preload import PreloadedCorpus, preload_corpus
 from .strategy import (
     BudgetSplit,
     ModeContext,
@@ -86,18 +94,10 @@ from .strategy import (
     StrategyConfig,
     build_mode,
 )
-from .preload import PreloadedCorpus, preload_corpus
-from .explorer import (
-    ExplorerState,
-    apply_coverage_feedback,
-    init_coverage_state,
-    restore_coverage_state,
-)
-from .author_context import build_author_context
 from .write_prep import (
-    crosslink,
     WriteRequestConfig,
     build_write_request,
+    crosslink,
     is_writable_page,
     load_pages_manifest,
     save_pages_manifest,

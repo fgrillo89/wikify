@@ -7,25 +7,25 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .fakes import FakeExtractor, FakeOrchestrator, FakeWriter
-from wikify.distill.pipeline import run as pipeline_run
+from wikify.cache import ExtractCache
 from wikify.distill.explorer import (
+    ExplorerState,
     GlobalOp,
     LevyExplorer,
     LocalOp,
-    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
     restore_coverage_state,
 )
-from wikify.distill.strategy import StaticBudget
-from wikify.distill.strategy import StrategyConfig
-from wikify.cache import ExtractCache
+from wikify.distill.pipeline import run as pipeline_run
+from wikify.distill.strategy import StaticBudget, StrategyConfig
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
-from wikify.ingest.refresh import ingest_corpus
 from wikify.models import CorpusGraph
 from wikify.paths import BundlePaths, CorpusPaths
 from wikify.store.vectors import VectorStore
+
+from .fakes import FakeExtractor, FakeOrchestrator, FakeWriter
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

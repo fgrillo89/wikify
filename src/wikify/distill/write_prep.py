@@ -8,6 +8,8 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 
+from wikify.models import Chunk, WikiPage
+from wikify.paths import BundlePaths
 from wikify.schema import (
     EditorBrief,
     ImageRef,
@@ -15,10 +17,8 @@ from wikify.schema import (
     WriteEvidenceRefV2,
     WriteRequest,
 )
-from wikify.types import ModelTier
-from wikify.models import Chunk, WikiPage
-from wikify.paths import BundlePaths
 from wikify.store.images_index import ImageIndex, ImageRecord
+from wikify.types import ModelTier
 
 from .author_context import AuthorContext, _author_key
 from .dossier import DossierEntry, DossierStore, dossier_to_yaml

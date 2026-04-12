@@ -1,7 +1,7 @@
 """Image persistence for wikify.
 
-Parsers emit *raw* image dicts via ``ParseResult.metadata['_raw_images']``
-and ``refresh.py`` calls ``save_doc_images`` to persist each image as:
+Parsers emit typed ``RawImage`` records via ``ParseResult.raw_images``
+and the pipeline calls ``save_doc_images`` to persist each image as:
 
     corpus/images/{paper_slug}/{label}.{ext}      # binary
     corpus/images/{paper_slug}/{label}.{ext}.json # sidecar
@@ -19,6 +19,8 @@ post-ingest image inventory.
 
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -26,6 +28,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..models import Chunk, DocImage
+from .parsers.registry import RawImage
 
 __all__ = [
     "save_doc_images",
@@ -41,32 +44,23 @@ logger = logging.getLogger(__name__)
 def save_doc_images(
     doc_id: str,
     image_dir: Path,
-    raw_images: list[dict],
+    raw_images: list[RawImage],
 ) -> list[DocImage]:
-    """Persist raw parser image blobs + sidecar JSON; return DocImage records.
-
-    Record shapes accepted:
-      - ``{bytes, ext, page, caption, alt_text?, label?, bbox?, ...}`` (binary)
-      - ``{url, caption?, alt_text?, page?}`` (url-only; html remote refs)
-    """
+    """Persist typed RawImage records as binaries + sidecar JSON; return DocImage records."""
     out: list[DocImage] = []
     image_dir.mkdir(parents=True, exist_ok=True)
     used_names: set[str] = set()
     for i, rec in enumerate(raw_images or []):
-        blob = rec.get("bytes")
-        page = rec.get("page")
-        caption = rec.get("caption", "") or ""
-        alt_text = rec.get("alt_text", "") or ""
-        bbox = rec.get("bbox")
-        label = rec.get("label")
-        if blob:
-            ext = (rec.get("ext") or "png").lstrip(".")
-            stem = _figure_stem(label, i)
+        caption = rec.caption or ""
+        alt_text = rec.alt_text or ""
+        if rec.data:
+            ext = (rec.ext or "png").lstrip(".")
+            stem = _figure_stem(rec.label, i)
             stem = _disambiguate(stem, used_names)
             used_names.add(stem)
             img_id = f"{doc_id}/{stem}"
             bin_path = image_dir / f"{stem}.{ext}"
-            bin_path.write_bytes(blob)
+            bin_path.write_bytes(rec.data)
             rel_path = str(bin_path)
             _write_sidecar(
                 bin_path,
@@ -75,14 +69,14 @@ def save_doc_images(
                     "path": rel_path,
                     "caption": caption,
                     "alt_text": alt_text,
-                    "page": page,
+                    "page": rec.page,
                     "near_chunk_ids": [],
-                    "source_bbox": bbox,
-                    "label": rec.get("label"),
-                    "media_type": rec.get("media_type"),
-                    "width": rec.get("width"),
-                    "height": rec.get("height"),
-                    "content_hash": rec.get("content_hash"),
+                    "source_bbox": list(rec.bbox) if rec.bbox else None,
+                    "label": rec.label,
+                    "media_type": rec.media_type,
+                    "width": rec.width,
+                    "height": rec.height,
+                    "content_hash": rec.content_hash,
                     "source_url": None,
                 },
             )
@@ -92,14 +86,14 @@ def save_doc_images(
                     path=rel_path,
                     caption=caption,
                     alt_text=alt_text,
-                    page=page,
+                    page=rec.page,
                 )
             )
         else:
-            url = rec.get("url") or rec.get("src") or ""
+            url = rec.url or ""
             if not url:
                 continue
-            stem = _figure_stem(label, i)
+            stem = _figure_stem(rec.label, i)
             stem = _disambiguate(stem, used_names)
             used_names.add(stem)
             img_id = f"{doc_id}/{stem}"
@@ -109,7 +103,7 @@ def save_doc_images(
                 "path": url,
                 "caption": caption,
                 "alt_text": alt_text,
-                "page": page,
+                "page": rec.page,
                 "near_chunk_ids": [],
                 "source_bbox": None,
                 "label": None,
@@ -123,7 +117,7 @@ def save_doc_images(
                     path=url,
                     caption=caption,
                     alt_text=alt_text,
-                    page=page,
+                    page=rec.page,
                 )
             )
     return out
@@ -370,7 +364,7 @@ def rewrite_sidecar_near_chunks(image_dir: Path, near: dict[str, list[str]]) -> 
 
     Reads every ``*.json`` in ``image_dir``, looks up its id in ``near``,
     and rewrites the file with the populated list. No-op for ids absent
-    from the map. Used by ``refresh.py`` after chunks are linked.
+    from the map. Used by ``pipeline.py`` after chunks are linked.
     """
     if not image_dir.exists() or not near:
         return

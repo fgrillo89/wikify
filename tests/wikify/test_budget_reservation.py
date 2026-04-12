@@ -33,18 +33,16 @@ from pathlib import Path
 
 import pytest
 
-from wikify.types import Writer
-from wikify.types import Role
-from wikify.context import response_reserve, total_context
-from wikify.schema import WriteRequest, WriteResponse
-from wikify.distill.pipeline import run as pipeline_run
-from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
-from wikify.distill.strategy import StaticBudget
-from wikify.distill.strategy import StrategyConfig
 from wikify.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from wikify.context import response_reserve, total_context
+from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify.distill.pipeline import run as pipeline_run
+from wikify.distill.strategy import StaticBudget, StrategyConfig
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
-from wikify.ingest.refresh import ingest_corpus
 from wikify.paths import BundlePaths, CorpusPaths
+from wikify.schema import WriteRequest, WriteResponse
+from wikify.types import Role, Writer
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
@@ -73,8 +71,9 @@ class _CostTunedExtractor:
         self._meter = meter
 
     def extract(self, request):
-        from .fakes import _fake_extract_payload
         from wikify.schema import ExtractedConcept, ExtractResponse
+
+        from .fakes import _fake_extract_payload
 
         key = ExtractCacheKey(
             binding_name=self.BINDING_NAME,

@@ -4,22 +4,23 @@ from pathlib import Path
 
 import pytest
 
-from .fakes import FakeExtractor, FakeWriter
+from wikify.cache import ExtractCache
 from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import build_strategy
+from wikify.embedding import embedder_for
 from wikify.eval.bundle import load_bundle
 from wikify.eval.metrics import (
     EmbedderMismatch,
     coverage_residual,
     g_links_modularity,
 )
-from wikify.cache import ExtractCache
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
-from wikify.embedding import embedder_for
-from wikify.ingest.refresh import ingest_corpus
 from wikify.paths import BundlePaths
 from wikify.store.vectors import load_vectors
 from wikify.store.vectors_meta import read_meta
+
+from .fakes import FakeExtractor, FakeWriter
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

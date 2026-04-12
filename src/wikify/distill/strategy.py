@@ -12,16 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from ..types import ModelTier, Orchestrator, StrategyId
-from ..schema import OrchState
 from ..config import CURATE_FRACTION, NOVELTY_THRESHOLD
+from ..schema import OrchState
+from ..types import ModelTier, Orchestrator, StrategyId
 from .explorer import (
-    ExplorerState,
     Explorer,
+    ExplorerState,
     ExtractDecision,
+    GlobalOp,
     LevyExplorer,
     LocalOp,
-    GlobalOp,
     build_snapshot,
     execute_action,
 )

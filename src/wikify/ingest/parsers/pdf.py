@@ -1,8 +1,7 @@
 """PDF parser using pymupdf4llm + fitz.
 
-Returns a ``ParseResult``. Image bytes are captured as raw
-payloads in ``metadata['_raw_images']`` so the refresh pipeline can
-persist them (see ``ingest/images.py::save_doc_images``).
+Returns a ``ParseResult`` with typed ``RawImage`` records in the
+``raw_images`` field (see ``ingest/images.py::save_doc_images``).
 """
 
 import re
@@ -95,11 +94,10 @@ def parse(path: Path) -> ParseResult:
         sections = section_spans(md_text)
 
     title = metadata.get("title") or path.stem
-    metadata["_raw_images"] = images_raw
     return ParseResult(
         markdown=md_text,
         sections=sections,
-        images=[],  # populated by refresh.py via save_doc_images
+        raw_images=images_raw,
         metadata=metadata,
         title=title,
     )

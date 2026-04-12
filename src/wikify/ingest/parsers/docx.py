@@ -1,8 +1,6 @@
 """DOCX parser.
 
-Strips SQLModel/Paper/vault coupling; returns a ``ParseResult``. Images
-found under ``word/media/*`` are emitted as raw records in
-``metadata['_raw_images']`` for ``refresh.py`` to persist.
+Returns a ``ParseResult`` with typed ``RawImage`` records.
 """
 
 import re
@@ -17,7 +15,7 @@ from ..metadata import (
     parse_filename,
 )
 from ._sections import section_spans
-from .registry import ParseResult
+from .registry import ParseResult, RawImage
 
 
 def parse(path: Path) -> ParseResult:
@@ -27,13 +25,12 @@ def parse(path: Path) -> ParseResult:
     md_text = _docx_to_markdown(doc)
     metadata = _extract_docx_metadata(doc, md_text, path.name)
     images_raw = _extract_images(doc)
-    metadata["_raw_images"] = images_raw
 
     title = metadata.get("title") or path.stem
     return ParseResult(
         markdown=md_text,
         sections=section_spans(md_text),
-        images=[],
+        raw_images=images_raw,
         metadata=metadata,
         title=title,
     )
@@ -156,8 +153,8 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
     }
 
 
-def _extract_images(doc) -> list[dict]:
-    raw: list[dict] = []
+def _extract_images(doc) -> list[RawImage]:
+    raw: list[RawImage] = []
     try:
         part = doc.part
         for rel in part.related_parts.values():
@@ -168,14 +165,7 @@ def _extract_images(doc) -> list[dict]:
             blob = getattr(rel, "blob", None) or getattr(rel, "_blob", None)
             if not blob:
                 continue
-            raw.append(
-                {
-                    "bytes": blob,
-                    "ext": ext,
-                    "page": None,
-                    "caption": "",
-                }
-            )
+            raw.append(RawImage(data=blob, ext=ext))
     except Exception:
         return raw
     return raw

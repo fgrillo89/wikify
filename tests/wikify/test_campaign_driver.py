@@ -12,14 +12,13 @@ from unittest.mock import patch
 
 import pytest
 
+from wikify.cache import ExtractCache
+from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
 from wikify.distill.pipeline import run_with_preloaded
 from wikify.distill.preload import preload_corpus
-from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
-from wikify.distill.strategy import StaticBudget
-from wikify.distill.strategy import StrategyConfig
-from wikify.cache import ExtractCache
+from wikify.distill.strategy import StaticBudget, StrategyConfig
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
-from wikify.ingest.refresh import ingest_corpus
 from wikify.paths import BundlePaths, CorpusPaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
@@ -48,8 +47,9 @@ def _strategy(seed: int = 0) -> StrategyConfig:
 
 def test_preload_corpus_called_once(corpus, tmp_path):
     """Corpus loaders are called once; run_with_preloaded is called N times."""
-    from .fakes import FakeExtractor, FakeWriter
     from wikify.store.corpus import list_documents as _list_docs_real
+
+    from .fakes import FakeExtractor, FakeWriter
 
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")

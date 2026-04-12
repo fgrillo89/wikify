@@ -1,15 +1,14 @@
 """PPTX parser.
 
 Emits one ``## Slide N`` heading per slide so ``section_spans`` yields
-one DocSection per slide. Picture shapes become raw image records in
-``metadata['_raw_images']``.
+one DocSection per slide. Picture shapes become typed ``RawImage`` records.
 """
 
 from pathlib import Path
 
 from ..metadata import clean_markdown, extract_summary, parse_filename
 from ._sections import section_spans
-from .registry import ParseResult
+from .registry import ParseResult, RawImage
 
 
 def parse(path: Path) -> ParseResult:
@@ -55,12 +54,11 @@ def parse(path: Path) -> ParseResult:
         "summary": extract_summary(md_text),
         "year": year,
         "doi": None,
-        "_raw_images": images_raw,
     }
     return ParseResult(
         markdown=md_text,
         sections=section_spans(md_text),
-        images=[],
+        raw_images=images_raw,
         metadata=metadata,
         title=title,
     )
@@ -145,8 +143,8 @@ def _pptx_to_markdown(prs) -> str:
     return "\n\n".join(sections)
 
 
-def _extract_images(prs) -> list[dict]:
-    raw: list[dict] = []
+def _extract_images(prs) -> list[RawImage]:
+    raw: list[RawImage] = []
     for slide_idx, slide in enumerate(prs.slides, start=1):
         slide_title = ""
         for shape in slide.shapes:
@@ -161,12 +159,12 @@ def _extract_images(prs) -> list[dict]:
                     continue
                 img = shape.image
                 raw.append(
-                    {
-                        "bytes": img.blob,
-                        "ext": (img.ext or "png").lstrip("."),
-                        "page": slide_idx,
-                        "caption": slide_title,
-                    }
+                    RawImage(
+                        data=img.blob,
+                        ext=(img.ext or "png").lstrip("."),
+                        page=slide_idx,
+                        caption=slide_title,
+                    )
                 )
             except Exception:
                 continue

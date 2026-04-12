@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from wikify.distill.pipeline import _append_verbalize
+from wikify.paths import BundlePaths
 from wikify.schema import (
     ExtractedConcept,
     ExtractRequest,
@@ -12,8 +14,6 @@ from wikify.schema import (
     WriteRequest,
     WriteResponse,
 )
-from wikify.distill.pipeline import _append_verbalize
-from wikify.paths import BundlePaths
 
 
 def _a_body(h2: list[str]) -> str:

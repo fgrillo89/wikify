@@ -12,10 +12,10 @@ import threading
 import time
 from pathlib import Path
 
-from wikify.dispatch import Dispatch
-from wikify.schema import ExtractRequest, ExtractResponse
 from wikify.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from wikify.dispatch import Dispatch
 from wikify.meter import CostMeter
+from wikify.schema import ExtractRequest, ExtractResponse
 
 # --- fake dispatcher thread ----------------------------------------------
 

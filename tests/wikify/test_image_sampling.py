@@ -8,13 +8,13 @@ import pytest
 from wikify.distill.explorer import (
     _CAPTION_DEFAULT_RESIDUAL,
     _CAPTION_NEAR_FLOOR,
+    ExplorerState,
     GlobalOp,
     LevyExplorer,
     LocalOp,
-    ExplorerState,
     apply_coverage_feedback,
-    init_coverage_state,
     explore_global,
+    init_coverage_state,
 )
 from wikify.eval.metrics import image_coverage_residual
 from wikify.models import CorpusGraph
@@ -142,8 +142,8 @@ class TestJumpFigures:
         assert batch == ["cap1"]
 
     def test_jump_figures_via_policy(self):
-        from wikify.distill.strategy import GuidedMode, ModeContext, RuntimeOverrides
         from wikify.distill.explorer import LevyExplorer
+        from wikify.distill.strategy import GuidedMode, ModeContext, RuntimeOverrides
 
         caps = {"cap1", "cap2"}
         all_ids = ["txt1", "cap1", "cap2"]

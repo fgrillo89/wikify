@@ -17,7 +17,9 @@ from typing import Callable
 
 import pytest
 
+from wikify.cache import ExtractCache
 from wikify.dispatch import Dispatch
+from wikify.meter import CostMeter
 from wikify.schema import (
     ExtractRequest,
     ExtractResponse,
@@ -28,8 +30,6 @@ from wikify.schema import (
     WriteRequest,
     WriteResponse,
 )
-from wikify.cache import ExtractCache
-from wikify.meter import CostMeter
 
 # --- fake dispatcher thread ----------------------------------------------
 

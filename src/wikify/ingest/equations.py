@@ -1,14 +1,10 @@
 """Extract mathematical, chemical, and named equations from markdown.
 
-Ported from ``archive/wikify/ingest/extract/equations.py`` with two
-simplifications:
-
-* We emit plain ``dict`` records instead of a Pydantic/SQLModel class so
-  we can serialise directly alongside ``Document.citations``.
-* Chunk binding happens outside this module — the refresh pipeline walks
-  each chunk's ``char_span`` once and attaches any equation ids whose
-  source offset falls inside it. This keeps the extractor a pure
-  function of markdown text.
+Emits plain ``dict`` records (serialised alongside ``Document.citations``).
+Chunk binding happens outside this module -- the pipeline walks each
+chunk's ``char_span`` once and attaches any equation ids whose source
+offset falls inside it. This keeps the extractor a pure function of
+markdown text.
 
 Returned records:
     {

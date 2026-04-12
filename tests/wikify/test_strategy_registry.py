@@ -1,9 +1,10 @@
 """Strategy configs are data rows consumed by one factory."""
 
 from wikify.distill.explorer import GlobalOp, LevyExplorer, LocalOp
-from wikify.distill.strategy import AdaptiveBudget, StaticBudget
 from wikify.distill.strategy import (
     STRATEGY_CONFIGS,
+    AdaptiveBudget,
+    StaticBudget,
     StrategyId,
     build_strategy,
 )

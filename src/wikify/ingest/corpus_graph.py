@@ -9,7 +9,7 @@ Materialises the seven edge kinds in the saved graph.json:
 share at least ``min_strength`` references).
 
 Order matters: this builder must run AFTER ``_populate_doc_edges`` in
-``refresh.py`` so the doc-side ``cites`` / ``cites_same`` lists are
+``pipeline.py`` so the doc-side ``cites`` / ``cites_same`` lists are
 populated. Pre-fix it ran earlier and the citation/coupling edges were
 silently empty.
 """
@@ -27,6 +27,8 @@ def build_corpus_graph(
     docs: list[Document],
     chunks: list[Chunk],
     vectors: VectorStore,
+    *,
+    similarity_block_size: int = 1024,
 ) -> CorpusGraph:
     nodes: dict[str, dict] = {}
     for d in docs:
@@ -49,18 +51,30 @@ def build_corpus_graph(
             for j in range(i + 1, len(ids)):
                 edges["co_section"].append((ids[i], ids[j]))
 
-    # similarity edges
+    # similarity edges -- blockwise to bound peak memory at
+    # block_size * n_chunks instead of n_chunks^2.
     if vectors.matrix.shape[0] >= 2:
-        sims = vectors.matrix @ vectors.matrix.T
-        np.fill_diagonal(sims, -1.0)
-        n = sims.shape[0]
+        n = vectors.matrix.shape[0]
         k = min(KNN_K, n - 1)
-        for i in range(n):
-            top = np.argpartition(-sims[i], k - 1)[:k]
-            for j in top:
-                edges["similar_knn"].append((vectors.ids[i], vectors.ids[int(j)]))
-                if sims[i, j] >= STRONG_COS:
-                    edges["similar_strong"].append((vectors.ids[i], vectors.ids[int(j)]))
+        for start in range(0, n, similarity_block_size):
+            end = min(start + similarity_block_size, n)
+            block = vectors.matrix[start:end]
+            sims = block @ vectors.matrix.T  # shape: (block_size, n)
+            # Zero out self-similarities within the block
+            for local_i in range(end - start):
+                sims[local_i, start + local_i] = -1.0
+            for local_i in range(end - start):
+                global_i = start + local_i
+                row = sims[local_i]
+                top = np.argpartition(-row, k - 1)[:k]
+                for j in top:
+                    edges["similar_knn"].append(
+                        (vectors.ids[global_i], vectors.ids[int(j)])
+                    )
+                    if row[j] >= STRONG_COS:
+                        edges["similar_strong"].append(
+                            (vectors.ids[global_i], vectors.ids[int(j)])
+                        )
 
     # doc_similar via mean-pooled per-doc embeddings
     by_doc_idx: dict[str, list[int]] = defaultdict(list)
@@ -82,7 +96,7 @@ def build_corpus_graph(
 
     # cites: directed doc→doc edges from the resolved citation graph.
     # We read ``Document.cites`` directly (the post-embedding fuzzy
-    # matcher in refresh.py populates it). The previous version of this
+    # matcher in pipeline.py populates it). The previous version of this
     # block read ``d.metadata["cites"]`` which was never set, so the
     # citation edges in the corpus graph were silently empty for the
     # entire history of this module.
@@ -94,7 +108,7 @@ def build_corpus_graph(
 
     # cites_same: undirected bibliographic-coupling edges. Two docs are
     # coupled when they share references; ``compute_coupling`` produces
-    # the per-doc top-k list and refresh.py stores it on
+    # the per-doc top-k list and pipeline.py stores it on
     # ``Document.cites_same``. We surface it as a graph edge kind so
     # corpus_profile, pagerank, and community detection can use it as
     # a signal alongside cites and doc_similar.

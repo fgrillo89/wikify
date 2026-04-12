@@ -23,7 +23,7 @@ All docs live under `src/wikify/`. Read in this order:
 
 ## Boundaries
 
-- `ingest/` -- parse, chunk, embed, graph, citations
+- `ingest/` -- parse, chunk, embed, graph, citations, manifest (pipeline.py is the entry point)
 - `distill/` -- the distillation loop: strategy, explorer, pipeline, dossier, write prep
 - `eval/` -- metrics (M1-M6, GT-P, GT-C)
 - `render/html/` -- static site generation
@@ -54,7 +54,7 @@ data/
 ## CLI Commands
 
 ```
-uv run python -m wikify.cli ingest ...
+uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default]
 uv run python -m wikify.cli distill --strategy {E|M|X} --mode {scripted|guided} ...
 uv run python -m wikify.cli campaign --strategy M --iterations 3 ...
 uv run python -m wikify.cli eval --bundle ... --corpus ...

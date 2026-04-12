@@ -7,15 +7,15 @@ from pathlib import Path
 
 import typer
 
-from .types import ModelTier
+from .cache import ExtractCache
 from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
 from .distill.strategy import STRATEGY_CONFIGS, build_strategy
-from .cache import ExtractCache
+from .ingest.pipeline import ingest_corpus
 from .meter import CostMeter
-from .ingest.refresh import ingest_corpus
 from .paths import BundlePaths, CorpusPaths
+from .types import ModelTier
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
 
@@ -59,12 +59,24 @@ def ingest(
         "--workers",
         help="Parse parallelism. 0 = 60%% of CPU cores (default), 1 = serial.",
     ),
+    mode: str = typer.Option(
+        "additive",
+        "--mode",
+        help="additive (default) or sync (removes absent sources).",
+    ),
+    parser: str = typer.Option(
+        "default",
+        "--parser",
+        help="Parser backend: 'default' or a name registered via register_parser_backend().",
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
     paths = ingest_corpus(
         input_dir,
         output_dir,
         max_workers=None if workers == 0 else workers,
+        mode=mode,
+        parser_backend=parser,
     )
     typer.echo(f"corpus written to {paths.root}")
 
@@ -548,9 +560,9 @@ def eval_bundle(
     report: Path | None = typer.Option(None, "--report"),
 ) -> None:
     """Compute M1/M3/M5/M6 metrics for a bundle and write a report."""
+    from .embedding import embedder_for
     from .eval import metrics
     from .eval.bundle import load_bundle
-    from .embedding import embedder_for
     from .store.corpus import all_chunks
     from .store.vectors import load_vectors
     from .store.vectors_meta import read_meta

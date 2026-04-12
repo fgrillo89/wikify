@@ -116,3 +116,50 @@ def test_handles_multiple_kinds_same_doc():
     assert ("figure", 2) in keys
     assert ("table", 1) in keys
     assert ("scheme", 1) in keys
+
+
+def test_case_insensitive_figure():
+    """FIGURE, figure, and Fig should all match."""
+    md = "FIGURE 1. Uppercase caption.\n\nfigure 2. Lowercase caption."
+    refs = extract_figure_refs(md)
+    nums = {r["num"] for r in refs}
+    assert 1 in nums
+    assert 2 in nums
+
+
+def test_tab_abbreviation():
+    """Tab. N should match as table kind."""
+    md = "Tab. 1. Abbreviation of Table."
+    refs = extract_figure_refs(md)
+    assert refs and refs[0]["kind"] == "table"
+    assert refs[0]["num"] == 1
+
+
+def test_illustration_caption():
+    md = "Illustration 1. Overview of the experimental setup."
+    refs = extract_figure_refs(md)
+    assert refs and refs[0]["kind"] == "figure"
+    assert refs[0]["num"] == 1
+
+
+def test_schematic_caption():
+    md = "Schematic 1. Cross-section of the thin film stack."
+    refs = extract_figure_refs(md)
+    assert refs and refs[0]["kind"] == "figure"
+    assert refs[0]["num"] == 1
+
+
+def test_graphical_abstract():
+    md = "Graphical Abstract. Summary of the synthesis process."
+    refs = extract_figure_refs(md)
+    assert refs and refs[0]["kind"] == "figure"
+    assert refs[0]["num"] == 0
+    assert "Summary" in refs[0]["caption"]
+
+
+def test_graphical_abstract_no_separator():
+    """Graphical Abstract alone on a line (no caption separator)."""
+    md = "## Abstract\n\nGraphical Abstract"
+    refs = extract_figure_refs(md)
+    assert refs and refs[0]["kind"] == "figure"
+    assert refs[0]["num"] == 0

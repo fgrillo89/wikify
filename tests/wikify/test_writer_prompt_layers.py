@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from wikify.schema import WriteEvidenceRef, WriteRequest
 from wikify.distill.write_prep import WriteRequestConfig, build_write_request
 from wikify.models import Evidence, WikiPage
 from wikify.paths import BundlePaths
 from wikify.prompts.registry import _content_hash, compose_writer_prompt_layer_hashes
+from wikify.schema import WriteEvidenceRef, WriteRequest
 from wikify.store.images_index import ImageIndex
 
 # --- helpers -----------------------------------------------------------------
