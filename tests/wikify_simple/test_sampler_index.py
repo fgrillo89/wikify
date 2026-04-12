@@ -1,7 +1,7 @@
 """Round-trip tests for the ingest-time sampler index.
 
 Verifies that:
-1. build_sampler_index + save_sampler_index + load_sampler_index is lossless.
+1. build_explorer_index + save_explorer_index + load_explorer_index is lossless.
 2. A SamplerState assembled from the loaded index has identical fields to
    one produced by the existing in-memory build path in _build_sampler_state.
 3. ingest_corpus writes sampler_index.json and pagerank.json to disk.
@@ -16,10 +16,10 @@ import pytest
 
 from wikify_simple.distill.pipeline import _build_sampler_state
 from wikify_simple.ingest.refresh import ingest_corpus
-from wikify_simple.ingest.sampler_index import (
-    build_sampler_index,
-    load_sampler_index,
-    save_sampler_index,
+from wikify_simple.ingest.explorer_index import (
+    build_explorer_index,
+    load_explorer_index,
+    save_explorer_index,
 )
 from wikify_simple.paths import CorpusPaths
 from wikify_simple.store.corpus import all_chunks, list_documents, read_graph, read_vector_store
@@ -39,7 +39,7 @@ def corpus(tmp_path_factory) -> CorpusPaths:
 
 
 def test_ingest_writes_sampler_index(corpus):
-    assert corpus.sampler_index_path.exists(), "sampler_index.json missing after ingest"
+    assert corpus.explorer_index_path.exists(), "sampler_index.json missing after ingest"
 
 
 def test_ingest_writes_pagerank(corpus):
@@ -65,10 +65,10 @@ def test_round_trip(corpus, tmp_path):
     graph = read_graph(corpus)
     vectors = read_vector_store(corpus)
 
-    idx = build_sampler_index(docs, chunks, graph, vectors)
+    idx = build_explorer_index(docs, chunks, graph, vectors)
     p = tmp_path / "sampler_index.json"
-    save_sampler_index(p, idx)
-    loaded = load_sampler_index(p)
+    save_explorer_index(p, idx)
+    loaded = load_explorer_index(p)
 
     assert loaded is not None
     assert loaded["version"] == 1
@@ -83,7 +83,7 @@ def test_round_trip(corpus, tmp_path):
 
 
 def test_load_missing_returns_none(tmp_path):
-    result = load_sampler_index(tmp_path / "nonexistent.json")
+    result = load_explorer_index(tmp_path / "nonexistent.json")
     assert result is None
 
 
@@ -132,7 +132,7 @@ def test_caption_chunk_ids_have_image_section_path(corpus):
     chunks = all_chunks(corpus)
     chunk_map = {c.id: c for c in chunks}
 
-    idx = load_sampler_index(corpus.sampler_index_path)
+    idx = load_explorer_index(corpus.explorer_index_path)
     assert idx is not None
 
     for cid in idx["caption_chunk_ids"]:

@@ -4,13 +4,13 @@ import json
 from datetime import datetime, timezone
 from typing import cast
 
-from ..infra.cost_meter import CostMeter
+from ..meter import CostMeter
 from ..models import Evidence, PageKind, WikiPage
 from ..paths import BundlePaths
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
-from .sampler import SamplerState
-from .write.crosslink import crosslink
+from .explorer import ExplorerState
+from .write_prep import crosslink
 
 
 def load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
@@ -92,7 +92,7 @@ def append_run_history(bundle: BundlePaths, snapshot: dict) -> None:
         f.write(json.dumps(snapshot, separators=(",", ":"), default=str) + "\n")
 
 
-def save_coverage_memory(bundle: BundlePaths, state: SamplerState, *, run_id: str) -> None:
+def save_coverage_memory(bundle: BundlePaths, state: ExplorerState, *, run_id: str) -> None:
     bundle.meta_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_id,

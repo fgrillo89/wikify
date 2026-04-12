@@ -7,13 +7,13 @@ from pathlib import Path
 
 import typer
 
-from .contracts.tiers import ModelTier
+from .types import ModelTier
 from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
-from .distill.strategies import STRATEGY_CONFIGS, build_strategy
-from .infra.cache import ExtractCache
-from .infra.cost_meter import CostMeter
+from .distill.strategy import STRATEGY_CONFIGS, build_strategy
+from .cache import ExtractCache
+from .meter import CostMeter
 from .ingest.refresh import ingest_corpus
 from .paths import BundlePaths, CorpusPaths
 
@@ -72,11 +72,10 @@ def ingest(
 @app.command()
 def distill(
     strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
-    policy: str = typer.Option(
-        "rule_policy",
-        "--policy",
-        help="rule_policy | llm_policy",
+    mode: str = typer.Option(
+        "scripted",
+        "--mode",
+        help="scripted | guided",
     ),
     budget: str = typer.Option(
         "1x",
@@ -89,22 +88,22 @@ def distill(
     extract_tier: str | None = typer.Option(
         None,
         "--extract-tier",
-        help="S | M | L. Override the strategy default (typically S=haiku).",
+        help="S | M | L. Override the strategy default (typically S=small model).",
     ),
     write_tier: str | None = typer.Option(
         None,
         "--write-tier",
-        help="S | M | L. Override the strategy default (typically M=sonnet).",
+        help="S | M | L. Override the strategy default (typically M=medium model).",
     ),
     edit_tier: str | None = typer.Option(
         None,
         "--edit-tier",
-        help="S | M | L. Override the strategy default (typically M=sonnet).",
+        help="S | M | L. Override the strategy default (typically M=medium model).",
     ),
     compact_tier: str | None = typer.Option(
         None,
         "--compact-tier",
-        help="S | M | L. Override the strategy default (typically S=haiku).",
+        help="S | M | L. Override the strategy default (typically S=small model).",
     ),
     exploit_fraction: float | None = typer.Option(
         None,
@@ -175,8 +174,8 @@ def distill(
 
     if phase not in ("all", "extract", "write"):
         raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
-    if policy not in ("rule_policy", "llm_policy"):
-        raise typer.BadParameter(f"unknown policy: {policy}")
+    if mode not in ("scripted", "guided"):
+        raise typer.BadParameter(f"unknown mode: {mode}")
     if iteration not in ("create", "refine", "merge"):
         raise typer.BadParameter(f"unknown iteration: {iteration}")
     if feed and iteration == "create":
@@ -198,8 +197,8 @@ def distill(
         raise typer.BadParameter(
             f"unknown artifact {artifact!r}; available: {available_artifact_templates()}"
         )
-    if binding == "file_dispatch" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
     budget_haiku_eq = _parse_budget(budget)
     for tier_name, tier_val in (
         ("extract-tier", extract_tier),
@@ -241,14 +240,11 @@ def distill(
         events_path=bundle.calls_path,
     )
 
-    extractor, writer, editor, compactor, orchestrator = _wire_binding(binding, cache, meter)
-    if policy == "llm_policy" and orchestrator is None:
-        raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
+    from .dispatch import Dispatch
+
+    dispatch = Dispatch(meter, cache)
 
     cfg = build_strategy(strategy, seed=seed)
-    cfg.field_name = field
-    cfg.artifact_name = artifact
-    cfg.policy_name = policy
     # Apply per-role tier overrides if the user supplied them.
     if extract_tier is not None:
         cfg.extract_tier = ModelTier(extract_tier)
@@ -265,17 +261,19 @@ def distill(
         corpus=CorpusPaths(root=corpus_dir),
         bundle=bundle,
         strategy=cfg,
-        extractor=extractor,
-        writer=writer,
+        extractor=dispatch,
+        writer=dispatch,
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
         feed=feed,
         iteration=iteration,
         merge_from_bundle=(BundlePaths(root=merge_from) if merge_from is not None else None),
-        editor=editor,
-        compactor=compactor,
-        orchestrator=orchestrator,
-        policy_name=policy,
+        editor=dispatch,
+        compactor=dispatch,
+        orchestrator=dispatch,
+        mode_name=mode,
+        field_name=field,
+        artifact_name=artifact,
         phase=phase,
         verbalize=verbalize,
     )
@@ -286,7 +284,7 @@ def distill(
             f"bundle written to {bundle.root} "
             f"(n_cached_skipped={snap.get('n_cached_skipped', 0)}, "
             f"n_new_extracted={snap.get('n_new_extracted', 0)}, "
-            f"iteration={snap.get('iteration', iteration)}, policy={snap.get('policy', policy)})"
+            f"iteration={snap.get('iteration', iteration)}, mode={snap.get('policy', mode)})"
         )
     else:
         typer.echo(f"bundle written to {bundle.root}")
@@ -295,8 +293,7 @@ def distill(
 @app.command()
 def campaign(
     strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
-    policy: str = typer.Option("rule_policy", "--policy", help="rule_policy | llm_policy"),
+    mode: str = typer.Option("scripted", "--mode", help="scripted | guided"),
     budget: str = typer.Option("1x", "--budget", help="Haiku-equivalent tokens per iteration."),
     iterations: int = typer.Option(1, "--iterations", help="Number of iterations to run."),
     extract_tier: str | None = typer.Option(None, "--extract-tier", help="S | M | L"),
@@ -319,8 +316,8 @@ def campaign(
     """Run N iterations of distillation in one process, loading the corpus once."""
     from .prompts import available_artifact_templates, available_field_guides
 
-    if policy not in ("rule_policy", "llm_policy"):
-        raise typer.BadParameter(f"unknown policy: {policy}")
+    if mode not in ("scripted", "guided"):
+        raise typer.BadParameter(f"unknown mode: {mode}")
     if strategy not in STRATEGY_CONFIGS:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if iterations < 1:
@@ -337,8 +334,8 @@ def campaign(
             )
     if exploit_fraction is not None and not 0.0 <= exploit_fraction <= 1.0:
         raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
-    if binding == "file_dispatch" and os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
 
     if field is None:
         from .distill.extract.field_detect import detect_field
@@ -375,14 +372,12 @@ def campaign(
             run_id=run_id,
             events_path=bundle.calls_path,
         )
-        extractor, writer, editor, compactor, orchestrator = _wire_binding(binding, cache, meter)
-        if policy == "llm_policy" and orchestrator is None:
-            raise typer.BadParameter(f"binding {binding!r} does not provide an orchestrator")
+
+        from .dispatch import Dispatch
+
+        dispatch = Dispatch(meter, cache)
 
         cfg = build_strategy(strategy, seed=iter_seed)
-        cfg.field_name = field
-        cfg.artifact_name = artifact
-        cfg.policy_name = policy
         if extract_tier is not None:
             cfg.extract_tier = ModelTier(extract_tier)
         if write_tier is not None:
@@ -398,15 +393,17 @@ def campaign(
             preloaded=preloaded,
             bundle=bundle,
             strategy=cfg,
-            extractor=extractor,
-            writer=writer,
+            extractor=dispatch,
+            writer=dispatch,
             meter=meter,
             budget_haiku_eq=budget_haiku_eq,
             iteration=iteration_op,
-            editor=editor,
-            compactor=compactor,
-            orchestrator=orchestrator,
-            policy_name=policy,
+            editor=dispatch,
+            compactor=dispatch,
+            orchestrator=dispatch,
+            mode_name=mode,
+            field_name=field,
+            artifact_name=artifact,
             verbalize=verbalize,
         )
 
@@ -415,80 +412,22 @@ def campaign(
     typer.echo(f"campaign complete: {bundle.root}")
 
 
-def _wire_binding(name: str, cache: ExtractCache, meter: CostMeter):
-    match name:
-        case "fake":
-            from .bindings.fake import (
-                FakeCompactor,
-                FakeEditor,
-                FakeExtractor,
-                FakeOrchestrator,
-                FakeWriter,
-            )
-
-            return (
-                FakeExtractor(cache, meter),
-                FakeWriter(meter),
-                FakeEditor(),
-                FakeCompactor(),
-                FakeOrchestrator(meter),
-            )
-        case "heuristic":
-            from .bindings.heuristic import (
-                HeuristicCompactor,
-                HeuristicEditor,
-                HeuristicExtractor,
-                HeuristicWriter,
-            )
-
-            return (
-                HeuristicExtractor(cache, meter),
-                HeuristicWriter(meter),
-                HeuristicEditor(),
-                HeuristicCompactor(),
-                None,
-            )
-        case "file_dispatch":
-            from .bindings.file_dispatch import (
-                FileDispatchCompactor,
-                FileDispatchEditor,
-                FileDispatchExtractor,
-                FileDispatchOrchestrator,
-                FileDispatchWriter,
-            )
-
-            return (
-                FileDispatchExtractor(cache, meter),
-                FileDispatchWriter(meter),
-                FileDispatchEditor(meter),
-                FileDispatchCompactor(meter),
-                FileDispatchOrchestrator(meter),
-            )
-        case _:
-            raise typer.BadParameter(f"unknown binding: {name}")
-
-
 @app.command("persona-generate")
 def persona_generate(
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     field: str = typer.Option("generic", "--field"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
 ) -> None:
     """Generate and persist the corpus persona at <corpus>/persona.txt."""
+    from .dispatch import make_persona_complete
     from .distill.write.persona import generate_corpus_persona
     from .store.corpus import list_documents
 
+    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
+
     corpus = CorpusPaths(root=corpus_dir)
     docs = list_documents(corpus)
-    complete = None
-    if binding == "file_dispatch":
-        if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-            raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
-        from .bindings.file_dispatch import make_persona_complete
-
-        complete = make_persona_complete()
-    elif binding != "fake":
-        raise typer.BadParameter(f"unknown binding: {binding}")
+    complete = make_persona_complete()
     text = generate_corpus_persona(
         corpus=corpus,
         sample_docs=docs,
@@ -518,7 +457,6 @@ def field_detect_cmd(
 def maintenance(
     bundle_dir: Path = typer.Option(..., "--bundle"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Scan and report without deleting logs."),
 ) -> None:
     """Scan the query log and emit wiki improvement actions."""
@@ -526,7 +464,7 @@ def maintenance(
 
     bundle = BundlePaths(root=bundle_dir)
     corpus = CorpusPaths(root=corpus_dir)
-    report = run_maintenance(bundle, corpus, binding=binding, dry_run=dry_run)
+    report = run_maintenance(bundle, corpus, dry_run=dry_run)
     typer.echo(
         f"maintenance: scanned={report.queries_scanned} "
         f"dispatched={report.actions_dispatched} "
@@ -543,36 +481,27 @@ def maintenance(
 def query(
     question: str = typer.Argument(...),
     bundle_dir: Path = typer.Option(..., "--bundle"),
-    binding: str = typer.Option("fake", "--binding", help="fake | heuristic | file_dispatch"),
-    model: str = typer.Option("haiku", "--model"),
+    model: str = typer.Option(ModelTier.MEDIUM.value, "--model"),
     corpus_dir: Path = typer.Option(Path("data/corpus"), "--corpus"),
     out_root: Path = typer.Option(Path("data/queries"), "--out"),
     save_log: bool = typer.Option(True, "--save-log/--no-save-log"),
 ) -> None:
     """Ask a question against a wiki bundle; write the answer to data/queries/."""
+    from .dispatch import Dispatch
     from .distill.query import run as query_run
-    from .infra.embedding import embed_texts
+    from .embedding import embed_texts
+
+    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
+        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
 
     bundle = BundlePaths(root=bundle_dir)
     corpus = CorpusPaths(root=corpus_dir)
-    match binding:
-        case "fake":
-            from .bindings.fake import FakeQuerier
-
-            querier = FakeQuerier()
-        case "file_dispatch":
-            if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-                raise typer.BadParameter("live binding requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
-            from .bindings.file_dispatch import FileDispatchQuerier
-
-            meter = CostMeter(
-                budget_haiku_eq=1e9,
-                run_id="query",
-                events_path=Path("data/queries/_calls.jsonl"),
-            )
-            querier = FileDispatchQuerier(meter)
-        case _:
-            raise typer.BadParameter(f"unknown binding: {binding}")
+    meter = CostMeter(
+        budget_haiku_eq=1e9,
+        run_id="query",
+        events_path=Path("data/queries/_calls.jsonl"),
+    )
+    querier = Dispatch(meter, ExtractCache(root=Path("data/cache/extract")))
 
     answer = query_run(
         bundle=bundle,
@@ -581,6 +510,7 @@ def query(
         querier=querier,
         embed=embed_texts,
         model_id=model,
+        tier=ModelTier.MEDIUM,
         save_log=save_log,
     )
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -628,7 +558,7 @@ def eval_bundle(
     """Compute M1/M3/M5/M6 metrics for a bundle and write a report."""
     from .eval import metrics
     from .eval.bundle import load_bundle
-    from .infra.embedding import embedder_for
+    from .embedding import embedder_for
     from .store.corpus import all_chunks
     from .store.vectors import load_vectors
     from .store.vectors_meta import read_meta
@@ -658,9 +588,9 @@ def eval_bundle(
     # M1_image: image coverage and figure reference rate.
     import numpy as _np
 
-    from .ingest.sampler_index import load_sampler_index
+    from .ingest.explorer_index import load_explorer_index
 
-    sampler_idx = load_sampler_index(corpus.sampler_index_path)
+    sampler_idx = load_explorer_index(corpus.explorer_index_path)
     caption_ids: list[str] = sampler_idx["caption_chunk_ids"] if sampler_idx else []
     _empty_cap = _np.empty((0, vs.matrix.shape[1]), dtype="float32")
     if caption_ids:

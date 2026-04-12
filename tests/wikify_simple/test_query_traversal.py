@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeQuerier, FakeWriter
-from wikify_simple.contracts.schema import EscalationEvent, QueryLogEntry
+from .fakes import FakeExtractor, FakeQuerier, FakeWriter
+from wikify_simple.schema import EscalationEvent, QueryLogEntry
 from wikify_simple.distill.pipeline import run as pipeline_run
 from wikify_simple.distill.query import (
     persist_query_log,
@@ -25,10 +25,10 @@ from wikify_simple.distill.query import (
 from wikify_simple.distill.query import (
     run as query_run,
 )
-from wikify_simple.distill.strategies import build_strategy
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
-from wikify_simple.infra.embedding import embed_texts
+from wikify_simple.distill.strategy import build_strategy
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
+from wikify_simple.embedding import embed_texts
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -119,7 +119,7 @@ def test_read_corpus_chunks_capped_at_5(tmp_path):
 def test_persist_query_log_writes_valid_entry(tmp_path):
     bundle = BundlePaths(root=tmp_path / "bundle")
     bundle.ensure()
-    from wikify_simple.contracts.schema import QueryAnswer
+    from wikify_simple.schema import QueryAnswer
     answer = QueryAnswer(text="Some answer.", citations=["P1"], chunks=[], follow_ups=[])
     entry_id = persist_query_log(
         bundle,
@@ -143,7 +143,7 @@ def test_persist_query_log_writes_valid_entry(tmp_path):
 def test_persist_query_log_with_escalation(tmp_path):
     bundle = BundlePaths(root=tmp_path / "bundle")
     bundle.ensure()
-    from wikify_simple.contracts.schema import QueryAnswer
+    from wikify_simple.schema import QueryAnswer
     answer = QueryAnswer(text="Escalated.", citations=[], chunks=[], follow_ups=[])
     ev = EscalationEvent(reason="wiki insufficient", chunk_ids=["c1", "c2"])
     entry_id = persist_query_log(

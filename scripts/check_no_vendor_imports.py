@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "wikify_simple"
-ALLOWED_FILES = {ROOT / "bindings" / "file_dispatch.py"}
+ALLOWED_FILES = {ROOT / "dispatch.py"}
 
 FORBIDDEN_PATTERNS = (
     "import anthropic",

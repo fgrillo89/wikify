@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import build_strategy
+from wikify_simple.distill.strategy import build_strategy
 from wikify_simple.eval.bundle import load_bundle
 from wikify_simple.eval.metrics import (
     concept_recall,
@@ -16,9 +16,9 @@ from wikify_simple.eval.metrics import (
     person_recall,
     spectral_gap_modularity,
 )
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
-from wikify_simple.infra.embedding import embed_texts
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
+from wikify_simple.embedding import embed_texts
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -33,7 +33,7 @@ def corpus(tmp_path_factory) -> CorpusPaths:
 
 @pytest.mark.parametrize("strategy", ["E", "M", "X"])
 def test_distill_produces_bundle(strategy, corpus, tmp_path):
-    from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+    from .fakes import FakeExtractor, FakeWriter
 
     bundle = BundlePaths(root=tmp_path / f"{strategy}_1x_seed0")
     cache = ExtractCache(root=tmp_path / "cache")
@@ -98,7 +98,7 @@ def test_distill_produces_bundle(strategy, corpus, tmp_path):
 
 def test_heaps_over_seeds(corpus, tmp_path):
     """M2: feed three bundles into heaps_exponent."""
-    from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+    from .fakes import FakeExtractor, FakeWriter
 
     bundles = []
     for i, budget in enumerate([5_000.0, 10_000.0, 20_000.0]):

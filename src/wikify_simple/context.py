@@ -1,29 +1,26 @@
-"""Priority-fill context envelope builder.
-
-Builds a single prompt string for a model call, guaranteed to fit within
-the global context cap. The cap is enforced here and only here. No model,
-no agent, no skill is trusted to respect a context budget — the prompt
-they receive is constructed by this builder and is the only thing they
-ever see.
-
-The builder walks a per-role spec list:
-  1. Every Required slot gets its fixed share (or its variable content's
-     actual length).
-  2. Every Pool slot gets at least its floor.
-  3. Leftover budget is distributed top-down by spec order until the
-     effective cap is hit.
-  4. Items in any pool that don't fit are summarised in one line
-     ("23 more elided").
-
-If the Required slots alone exceed the effective cap, the builder raises
-ContextOverflowError rather than truncating silently.
-"""
+"""Context envelope builder, role specs, and token counting."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Union
 
-from .tokens import count_tokens
+from .config import CHARS_PER_TOKEN
+from .types import Role
+
+
+# --- token counting ------------------------------------------------------
+
+
+def count_tokens(text: str) -> int:
+    """Estimate the number of tokens in `text`.
+
+    Returns 0 for empty input. The estimate is a rule of thumb; callers
+    that need exact counts should not use this function.
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // CHARS_PER_TOKEN)
+
 
 # --- slot specs ----------------------------------------------------------
 
@@ -191,3 +188,68 @@ class ContextEnvelope:
             if body:
                 out_lines.append(body)
         return "\n\n".join(out_lines)
+
+
+# --- global caps ---------------------------------------------------------
+
+_TOTAL_CONTEXT = 128_000  # tokens; effective input cap = TOTAL - RESERVE
+_RESPONSE_RESERVE = 8_000
+
+
+def total_context() -> int:
+    return _TOTAL_CONTEXT
+
+
+def response_reserve() -> int:
+    return _RESPONSE_RESERVE
+
+
+# --- role specs ----------------------------------------------------------
+
+# Pool names are stable identifiers; the strategy code populates pools by
+# these names when constructing a request.
+
+_EXTRACTOR_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=1_000),
+    Required(name="target_chunk", fixed_tokens=None),  # variable
+    Pool(name="canonical_titles", floor_tokens=1_000, ceiling_tokens=4_000),
+]
+
+_WRITER_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=1_000),
+    Required(name="page_skeleton", fixed_tokens=None),  # variable
+    Pool(name="evidence_chunks", floor_tokens=4_000, ceiling_tokens=80_000),
+    Pool(name="neighbor_summaries", floor_tokens=0, ceiling_tokens=8_000),
+]
+
+_COMPACTOR_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=500),
+    Pool(name="dossier_entries", floor_tokens=2_000, ceiling_tokens=20_000),
+]
+
+_EDITOR_SPEC: list[SlotSpec] = [
+    Required(name="schema", fixed_tokens=1_000),
+    Pool(name="dossier", floor_tokens=2_000, ceiling_tokens=30_000),
+    Pool(name="wiki_index", floor_tokens=1_000, ceiling_tokens=10_000),
+]
+
+_ORCHESTRATOR_SPEC: list[SlotSpec] = [
+    Required(name="state_header", fixed_tokens=2_000),
+    Required(name="action_menu", fixed_tokens=2_000),
+    Pool(name="page_index", floor_tokens=4_000, ceiling_tokens=40_000),
+    Pool(name="action_history", floor_tokens=4_000, ceiling_tokens=20_000),
+    Pool(name="open_candidates", floor_tokens=2_000, ceiling_tokens=20_000),
+]
+
+
+_SPECS: dict[Role, list[SlotSpec]] = {
+    Role.EXTRACTOR: _EXTRACTOR_SPEC,
+    Role.COMPACTOR: _COMPACTOR_SPEC,
+    Role.EDITOR: _EDITOR_SPEC,
+    Role.WRITER: _WRITER_SPEC,
+    Role.ORCHESTRATOR: _ORCHESTRATOR_SPEC,
+}
+
+
+def role_spec(role: Role) -> list[SlotSpec]:
+    return _SPECS[role]

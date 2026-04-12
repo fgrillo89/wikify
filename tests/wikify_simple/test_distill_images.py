@@ -2,18 +2,18 @@
 
 from pathlib import Path
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
-from wikify_simple.contracts.protocols import Extractor, Writer
-from wikify_simple.contracts.schema import (
+from .fakes import FakeExtractor, FakeWriter
+from wikify_simple.types import Extractor, Writer
+from wikify_simple.schema import (
     ExtractRequest,
     ExtractResponse,
     WriteRequest,
     WriteResponse,
 )
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import build_strategy
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.strategy import build_strategy
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.images_index import ImageIndex, ImageRecord, save_images_index

@@ -10,7 +10,7 @@ Exercises:
 - related_pages field populated in WriteRequest
 """
 
-from wikify_simple.distill.write.related import (
+from wikify_simple.distill.write_prep import (
     _jaccard,
     _tokenise,
     compute_related_pages,
@@ -142,8 +142,8 @@ def test_no_overlap_excluded():
 
 def test_related_pages_in_write_request(tmp_path):
     """build_write_request populates related_pages on the WriteRequest."""
-    from wikify_simple.distill.extract.dossier import DossierStore
-    from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
+    from wikify_simple.distill.dossier import DossierStore
+    from wikify_simple.distill.write_prep import WriteRequestConfig, build_write_request
     from wikify_simple.models import Evidence, WikiPage
     from wikify_simple.store.images_index import ImageIndex
 

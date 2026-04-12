@@ -35,8 +35,8 @@ from typing import Literal, cast
 
 from pydantic import ValidationError
 
-from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Writer
-from ..contracts.schema import (
+from ..types import Compactor, Editor, Extractor, Orchestrator, Writer
+from ..schema import (
     EditorBrief,
     EquationRef,
     ExtractRequest,
@@ -46,9 +46,8 @@ from ..contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
-from ..contracts.tiers import model_id_for_tier
-from ..infra.cost_meter import BudgetExceededError, CostMeter
-from ..ingest.sampler_index import load_sampler_index
+from ..meter import BudgetExceededError, CostMeter
+from ..ingest.explorer_index import load_explorer_index
 from ..models import Chunk, Document, WikiPage
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import (
@@ -62,8 +61,14 @@ from ..prompts.registry import _content_hash
 from ..store.images_index import ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
-from .extract.canonicalize import Candidate, canonicalize
-from .extract.dossier import SKIP_SECTION_TYPES, Dossier, DossierEntry, DossierStore
+from .dossier import (
+    Candidate,
+    Dossier,
+    DossierEntry,
+    DossierStore,
+    SKIP_SECTION_TYPES,
+    canonicalize,
+)
 from .iteration import (
     append_run_history,
     load_coverage_memory,
@@ -72,19 +77,25 @@ from .iteration import (
     save_coverage_memory,
     updated_page_provenance,
 )
-from .policy import PolicyContext, PolicyName, PolicyRuntime, build_policy
+from .strategy import (
+    BudgetSplit,
+    ModeContext,
+    ModeName,
+    RuntimeOverrides,
+    StaticBudget,
+    StrategyConfig,
+    build_mode,
+)
 from .preload import PreloadedCorpus, preload_corpus
-from .sampler import (
-    SamplerState,
+from .explorer import (
+    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
     restore_coverage_state,
 )
-from .schedule import BudgetSplit, StaticSchedule
-from .strategies import StrategyConfig
-from .write.author_context import build_author_context
-from .write.crosslink import crosslink
-from .write.requests import (
+from .author_context import build_author_context
+from .write_prep import (
+    crosslink,
     WriteRequestConfig,
     build_write_request,
     is_writable_page,
@@ -118,7 +129,9 @@ def run(
     editor: Editor | None = None,
     compactor: Compactor | None = None,
     orchestrator: Orchestrator | None = None,
-    policy_name: str | None = None,
+    mode_name: str | None = None,
+    field_name: str = "generic",
+    artifact_name: str = "wiki_article",
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
@@ -141,7 +154,9 @@ def run(
         editor=editor,
         compactor=compactor,
         orchestrator=orchestrator,
-        policy_name=policy_name,
+        mode_name=mode_name,
+        field_name=field_name,
+        artifact_name=artifact_name,
         compact_threshold=compact_threshold,
         phase=phase,
         verbalize=verbalize,
@@ -165,11 +180,14 @@ def run_with_preloaded(
     editor: Editor | None = None,
     compactor: Compactor | None = None,
     orchestrator: Orchestrator | None = None,
-    policy_name: str | None = None,
+    mode_name: str | None = None,
+    field_name: str = "generic",
+    artifact_name: str = "wiki_article",
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
 ) -> None:
+    effective_mode_name = mode_name or "scripted"
     if feed and iteration == "create":
         iteration = "refine"
     bundle.ensure()
@@ -178,7 +196,7 @@ def run_with_preloaded(
             bundle,
             merge_from_bundle,
             meter,
-            model_id=model_id_for_tier(strategy.write_tier),
+            model_id=strategy.write_tier.value,
             strategy_name=strategy.name,
         )
         return
@@ -213,11 +231,11 @@ def run_with_preloaded(
     graph = preloaded.graph
 
     style_text = load_style_guide()
-    field_text = load_field_guide(strategy.field_name)
-    artifact_text = load_artifact_template(strategy.artifact_name)
+    field_text = load_field_guide(field_name)
+    artifact_text = load_artifact_template(artifact_name)
     person_artifact_text = load_artifact_template("wiki_person")
     persona_text = preloaded.persona_text
-    layer_hashes = compose_writer_prompt_layer_hashes(strategy.field_name, strategy.artifact_name)
+    layer_hashes = compose_writer_prompt_layer_hashes(field_name, artifact_name)
     person_artifact_hash = _content_hash(person_artifact_text)
     corpus_persona_hash = _content_hash(persona_text) if persona_text else None
     _write_prompt_layer_files(
@@ -235,7 +253,7 @@ def run_with_preloaded(
         },
     )
     write_req_cfg = WriteRequestConfig(
-        model_id=model_id_for_tier(strategy.write_tier),
+        model_id=strategy.write_tier.value,
         writer_tier=strategy.write_tier,
         prompt_name=WRITE_PROMPT,
         style_text=style_text,
@@ -267,7 +285,7 @@ def run_with_preloaded(
     # Mutable runtime seeded from the strategy's per-role tiers. The LLM
     # policy mutates this object in response to set_tier / set_allocation
     # actions; the pipeline reads it on every iteration.
-    runtime = PolicyRuntime(
+    runtime = RuntimeOverrides(
         extract_tier=strategy.extract_tier,
         write_tier=strategy.write_tier,
         edit_tier=strategy.edit_tier,
@@ -275,22 +293,22 @@ def run_with_preloaded(
         orchestrate_tier=strategy.orchestrate_tier,
         exploit_fraction=strategy.exploit_fraction_override,
     )
-    policy = build_policy(
-        name=cast(PolicyName, policy_name or strategy.policy_name),
-        sampler=strategy.sampler,
+    policy = build_mode(
+        name=cast(ModeName, effective_mode_name),
+        explorer=strategy.explorer,
         orchestrator=orchestrator,
         runtime=runtime,
     )
 
     if runtime.exploit_fraction is not None:
         # Apply a user-supplied or LLM-supplied override by constructing
-        # a one-shot StaticSchedule split. The strategy's own schedule is
+        # a one-shot StaticBudget split. The strategy's own schedule is
         # still kept for reallocate() behaviour downstream.
-        split = StaticSchedule(exploit_fraction=runtime.exploit_fraction).initial_split(
+        split = StaticBudget(exploit_fraction=runtime.exploit_fraction).initial_split(
             budget_haiku_eq
         )
     else:
-        split = strategy.schedule.initial_split(budget_haiku_eq)
+        split = strategy.budget.initial_split(budget_haiku_eq)
     last_allocation_epoch = runtime.allocation_epoch
 
     # Reserve 95% of the planned write budget before the extract loop so
@@ -316,7 +334,7 @@ def run_with_preloaded(
             # REMAINING budget on the new exploit_fraction and continue.
             if runtime.allocation_epoch != last_allocation_epoch:
                 remaining = max(0.0, budget_haiku_eq - meter.spent_haiku_eq)
-                new_split = StaticSchedule(
+                new_split = StaticBudget(
                     exploit_fraction=runtime.exploit_fraction or 0.5
                 ).initial_split(remaining)
                 split = BudgetSplit(
@@ -359,7 +377,7 @@ def run_with_preloaded(
                     chunk_text=ck.text,
                     canonical_titles=[c.concept.title for c in candidates[-32:]],
                     prompt_template=EXTRACT_PROMPT,
-                    model_id=model_id_for_tier(runtime.extract_tier),
+                    model_id=runtime.extract_tier.value,
                     tier=runtime.extract_tier,
                     images_for_doc=[_to_imageref(r) for r in images_index.for_doc(ck.doc_id)],
                     equations=_equations_for_chunk(ck, docs_by_id),
@@ -434,7 +452,7 @@ def run_with_preloaded(
         unique_titles = {_normalize_title(c.concept.title) for c in candidates}
         novelty_rate = len(unique_titles) / len(chunks_read)
         remaining = max(budget_haiku_eq - meter.spent_haiku_eq, 0.0)
-        new_split = strategy.schedule.reallocate(remaining=remaining, novelty_rate=novelty_rate)
+        new_split = strategy.budget.reallocate(remaining=remaining, novelty_rate=novelty_rate)
         # Rebase: keep already-spent extract budget pinned, add the
         # reallocated extract/write/curate slices on top.
         split = BudgetSplit(
@@ -573,7 +591,7 @@ def run_with_preloaded(
             split,
             novelty_rate,
             iteration,
-            policy_name or strategy.policy_name,
+            effective_mode_name,
             policy_events,
         )
         # Patch dossier_summary into the already-written snapshot.
@@ -591,7 +609,7 @@ def run_with_preloaded(
     # so the LLM policy's set_tier actions take effect on writer calls.
     write_req_cfg = dataclasses.replace(
         write_req_cfg,
-        model_id=model_id_for_tier(runtime.write_tier),
+        model_id=runtime.write_tier.value,
         writer_tier=runtime.write_tier,
     )
     avg_write_cost = 30_000.0
@@ -654,7 +672,7 @@ def run_with_preloaded(
     snapshot["n_new_extracted"] = misses_delta
     snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
-    snapshot["policy"] = policy_name or strategy.policy_name
+    snapshot["mode"] = effective_mode_name
     snapshot["policy_actions"] = policy_events
     snapshot["split_initial"] = {
         "extract_haiku_eq": split_initial.extract_haiku_eq,
@@ -734,13 +752,13 @@ def _build_sampler_state(
     graph,
     vectors,
     corpus: CorpusPaths | None = None,
-) -> SamplerState:
+) -> ExplorerState:
     import sys
 
     # Try to load the pre-computed index written by ingest.
-    idx = load_sampler_index(corpus.sampler_index_path) if corpus is not None else None
+    idx = load_explorer_index(corpus.explorer_index_path) if corpus is not None else None
     if idx is not None and corpus is not None:
-        # Assemble SamplerState from the persisted index.
+        # Assemble ExplorerState from the persisted index.
         neighbour_map = {cid: tuple(ns) for cid, ns in idx["neighbors_by_chunk"].items()}
         # Load real pagerank if available, fall back to uniform.
         pagerank = _load_pagerank(corpus)
@@ -748,7 +766,7 @@ def _build_sampler_state(
             pagerank = _uniform_pagerank(idx["doc_ids_sorted"])
         all_chunk_ids = idx["content_chunk_ids"] + idx["caption_chunk_ids"]
         caption_ids: set[str] = set(idx["caption_chunk_ids"])
-        state = SamplerState(
+        state = ExplorerState(
             rng=rng,
             graph=graph,
             vectors=vectors,
@@ -800,7 +818,7 @@ def _build_sampler_state(
         neighbours[b].add(a)
     neighbour_map_fb = {cid: tuple(sorted(ns)) for cid, ns in neighbours.items()}
     degree = {cid: len(neighbour_map_fb.get(cid, ())) for cid in all_chunk_ids_fb}
-    state = SamplerState(
+    state = ExplorerState(
         rng=rng,
         graph=graph,
         vectors=vectors,
@@ -1010,7 +1028,7 @@ def _finalize_pages(
         page.provenance = updated_page_provenance(
             existing=(page.provenance or {}),
             run_id=meter._run_id,  # noqa: SLF001
-            model_id=model_id_for_tier(strategy.write_tier),
+            model_id=strategy.write_tier.value,
             strategy_name=strategy.name,
             iteration=iteration,
             drafted=bool(page.body_markdown.strip()),
@@ -1096,7 +1114,7 @@ def _write_extract_snapshot(
     split: BudgetSplit,
     novelty_rate: float,
     iteration: Iteration,
-    policy_name: str,
+    mode_name: str,
     policy_events: list[dict],
 ) -> None:
     """Write a partial run snapshot after the extract phase."""
@@ -1114,7 +1132,7 @@ def _write_extract_snapshot(
     snapshot["n_new_extracted"] = misses_delta
     snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
-    snapshot["policy"] = policy_name
+    snapshot["mode"] = mode_name
     snapshot["policy_actions"] = policy_events
     snapshot["split_initial"] = {
         "extract_haiku_eq": split_initial.extract_haiku_eq,
@@ -1141,12 +1159,12 @@ def _policy_context(
     pages: list[WikiPage],
     candidates: list[Candidate],
     docs_total: int,
-) -> PolicyContext:
+) -> ModeContext:
     page_ids = {p.id for p in pages}
     n_concepts = sum(1 for p in pages if p.kind == "article")
     n_people = sum(1 for p in pages if p.kind == "person")
     docs_covered = len({ev.doc_id for p in pages for ev in p.evidence})
-    return PolicyContext(
+    return ModeContext(
         run_id=run_id,
         n_pages=len(page_ids),
         n_candidates=len(candidates),

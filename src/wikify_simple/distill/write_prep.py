@@ -1,24 +1,193 @@
-"""WriteRequest construction and staged request persistence."""
+"""Write request building, related page lookup, and cross-linking."""
+
+from __future__ import annotations
 
 import dataclasses
 import json
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 
-from wikify_simple.contracts.schema import (
+from wikify_simple.schema import (
     EditorBrief,
     ImageRef,
     WriteEvidenceRef,
     WriteEvidenceRefV2,
     WriteRequest,
 )
-from wikify_simple.contracts.tiers import ModelTier
+from wikify_simple.types import ModelTier
 from wikify_simple.models import Chunk, WikiPage
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.images_index import ImageIndex, ImageRecord
 
-from ..extract.dossier import DossierEntry, DossierStore, dossier_to_yaml
 from .author_context import AuthorContext, _author_key
-from .related import compute_related_pages
+from .dossier import DossierEntry, DossierStore, dossier_to_yaml
+
+# ---------------------------------------------------------------------------
+# Related pages
+# ---------------------------------------------------------------------------
+
+_STOP = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "and",
+        "or",
+        "to",
+        "is",
+        "in",
+        "on",
+        "for",
+        "with",
+        "by",
+        "at",
+        "from",
+        "as",
+    }
+)
+_TOKEN_RE = re.compile(r"[a-z][a-z0-9_-]+")
+_SEE_ALSO_RE = re.compile(r"^##\s*see\s+also\b", re.IGNORECASE | re.MULTILINE)
+
+
+def _tokenise(text: str) -> frozenset[str]:
+    tokens = _TOKEN_RE.findall(text.lower())
+    return frozenset(t for t in tokens if t not in _STOP and len(t) >= 3)
+
+
+def _jaccard(a: frozenset, b: frozenset) -> float:
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+def _extract_see_also(body: str) -> list[str]:
+    """Return lines from a ## See also section (if present)."""
+    m = _SEE_ALSO_RE.search(body)
+    if m is None:
+        return []
+    after = body[m.end():]
+    # Collect until next ## heading or end.
+    next_h2 = re.search(r"^##\s", after, re.MULTILINE)
+    section = after[: next_h2.start()] if next_h2 else after
+    links: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("-") or stripped.startswith("*"):
+            stripped = stripped.lstrip("-*").strip()
+        if stripped:
+            links.append(stripped)
+    return links[:10]
+
+
+def compute_related_pages(
+    page: WikiPage,
+    all_pages: list[WikiPage],
+    k: int = 5,
+) -> list[dict]:
+    """Return top-k related pages for *page* from *all_pages*.
+
+    Each result is:
+    ``{id, title, topic_overlap, body_excerpt, see_also, evidence_doc_ids}``
+
+    The caller is responsible for excluding *page* itself via ``page.id``;
+    this function also skips pages without a body or without evidence.
+    """
+    cand_terms = _tokenise(page.title + " " + " ".join(page.aliases))
+    cand_docs: frozenset[str] = frozenset(ev.doc_id for ev in page.evidence)
+
+    scored: list[tuple[float, WikiPage]] = []
+    for other in all_pages:
+        if other.id == page.id:
+            continue
+        other_terms = _tokenise(other.title + " " + " ".join(other.aliases))
+        other_docs: frozenset[str] = frozenset(ev.doc_id for ev in other.evidence)
+        token_j = _jaccard(cand_terms, other_terms)
+        doc_j = _jaccard(cand_docs, other_docs)
+        score = 0.5 * token_j + 0.5 * doc_j
+        if score > 0.0:
+            scored.append((score, other))
+
+    scored.sort(key=lambda t: -t[0])
+    top = scored[:k]
+
+    results: list[dict] = []
+    for score, other in top:
+        body = other.body_markdown or ""
+        excerpt = body.strip()[:500]
+        see_also = _extract_see_also(body)
+        results.append(
+            {
+                "id": other.id,
+                "title": other.title,
+                "topic_overlap": round(score, 4),
+                "body_excerpt": excerpt,
+                "see_also": see_also,
+                "evidence_doc_ids": [ev.doc_id for ev in other.evidence],
+            }
+        )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Crosslink
+# ---------------------------------------------------------------------------
+
+_CROSSLINK_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def crosslink(pages: list[WikiPage]) -> list[WikiPage]:
+    """Populate `links` on each WikiPage by alias matching + evidence overlap.
+
+    No LLM. Two pages are linked if (a) one mentions the other's title or alias
+    in its body, or (b) they share at least one source document via evidence.
+    """
+    # alias -> page ids
+    alias_to_ids: dict[str, list[str]] = defaultdict(list)
+    for p in pages:
+        alias_to_ids[p.title.lower()].append(p.id)
+        for a in p.aliases:
+            alias_to_ids[a.lower()].append(p.id)
+    alias_by_first_token: dict[str, list[tuple[str, list[str]]]] = defaultdict(list)
+    for alias, ids in alias_to_ids.items():
+        toks = _CROSSLINK_TOKEN_RE.findall(alias)
+        if not toks:
+            continue
+        alias_by_first_token[toks[0]].append((alias, ids))
+
+    # evidence overlap by doc
+    doc_to_pages: dict[str, set[str]] = defaultdict(set)
+    for p in pages:
+        for ev in p.evidence:
+            doc_to_pages[ev.doc_id].add(p.id)
+
+    for p in pages:
+        links: set[str] = set(p.links)
+        body = (p.body_markdown or "").lower()
+        body_tokens = set(_CROSSLINK_TOKEN_RE.findall(body))
+        scanned: set[str] = set()
+        for tok in body_tokens:
+            for alias, ids in alias_by_first_token.get(tok, []):
+                if alias in scanned:
+                    continue
+                scanned.add(alias)
+                if alias and alias != p.title.lower() and alias in body:
+                    for tid in ids:
+                        if tid != p.id:
+                            links.add(tid)
+        for ev in p.evidence:
+            for tid in doc_to_pages.get(ev.doc_id, set()):
+                if tid != p.id:
+                    links.add(tid)
+        p.links = sorted(links)
+    return pages
+
+
+# ---------------------------------------------------------------------------
+# Write requests
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

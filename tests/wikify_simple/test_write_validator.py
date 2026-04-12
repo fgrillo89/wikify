@@ -14,16 +14,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.bindings.fake import FakeWriter
-from wikify_simple.contracts.schema import (
+from .fakes import FakeWriter
+from wikify_simple.schema import (
     WriteEvidenceRef,
     WriteRequest,
     WriteResponse,
 )
-from wikify_simple.distill.extract.dossier import DossierStore
-from wikify_simple.distill.write.author_context import build_author_context
-from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.dossier import DossierStore
+from wikify_simple.distill.author_context import build_author_context
+from wikify_simple.distill.write_prep import WriteRequestConfig, build_write_request
+from wikify_simple.meter import CostMeter
 from wikify_simple.models import Document, Evidence, WikiPage
 from wikify_simple.store.images_index import ImageIndex
 
@@ -409,7 +409,7 @@ def test_fake_writer_minimal_evidence_passes_validator(tmp_path: Path) -> None:
 
 
 def test_fake_writer_with_figures_passes_validator(tmp_path: Path) -> None:
-    from wikify_simple.contracts.schema import ImageRef
+    from wikify_simple.schema import ImageRef
 
     meter = _meter(tmp_path)
     fw = FakeWriter(meter)

@@ -1,8 +1,8 @@
 """Strategy configs are data rows consumed by one factory."""
 
-from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
-from wikify_simple.distill.schedule import AdaptiveSchedule, StaticSchedule
-from wikify_simple.distill.strategies import (
+from wikify_simple.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify_simple.distill.strategy import AdaptiveBudget, StaticBudget
+from wikify_simple.distill.strategy import (
     STRATEGY_CONFIGS,
     StrategyId,
     build_strategy,
@@ -19,12 +19,12 @@ def test_build_strategy_instantiates_mixed_from_config():
     assert cfg.seed == 7
     assert cfg.extract_tier == "S"
     assert cfg.write_tier == "M"
-    assert isinstance(cfg.sampler, LevyMixSampler)
-    assert cfg.sampler.local_op is LocalOp.SIMILARITY_WALK
-    assert cfg.sampler.global_op is GlobalOp.COVERAGE_GAP
-    assert cfg.sampler.jump_rate == 0.1
-    assert isinstance(cfg.schedule, AdaptiveSchedule)
-    assert cfg.schedule.exploit_fraction_initial == 0.65
+    assert isinstance(cfg.explorer, LevyExplorer)
+    assert cfg.explorer.local_op is LocalOp.SIMILARITY_WALK
+    assert cfg.explorer.global_op is GlobalOp.COVERAGE_GAP
+    assert cfg.explorer.jump_rate == 0.1
+    assert isinstance(cfg.budget, AdaptiveBudget)
+    assert cfg.budget.exploit_fraction_initial == 0.65
 
 
 def test_build_strategy_accepts_string_ids():
@@ -32,7 +32,7 @@ def test_build_strategy_accepts_string_ids():
     assert cfg.name == "X"
     assert cfg.seed == 3
     assert cfg.extract_tier == "M"
-    assert isinstance(cfg.schedule, StaticSchedule)
-    assert cfg.sampler.local_op is LocalOp.SIMILARITY_WALK
-    assert cfg.sampler.global_op is GlobalOp.UNIFORM
-    assert cfg.sampler.jump_rate == 0.0
+    assert isinstance(cfg.budget, StaticBudget)
+    assert cfg.explorer.local_op is LocalOp.SIMILARITY_WALK
+    assert cfg.explorer.global_op is GlobalOp.UNIFORM
+    assert cfg.explorer.jump_rate == 0.0

@@ -64,7 +64,7 @@ def coverage_residual(
                 "coverage_residual: must supply either an explicit embed callable "
                 "or a CorpusPaths handle so the embedder can be reconstructed"
             )
-        from ..infra.embedding import embedder_for
+        from ..embedding import embedder_for
         from ..store.vectors_meta import read_meta
 
         meta = read_meta(corpus.vectors_path)

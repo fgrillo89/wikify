@@ -1,8 +1,8 @@
 """Token-based cost accounting: figures payload must move the meter."""
 
-from wikify_simple.bindings.fake import FakeWriter
-from wikify_simple.contracts.schema import ImageRef, WriteEvidenceRef, WriteRequest
-from wikify_simple.infra.cost_meter import CostMeter, TierPrice
+from .fakes import FakeWriter
+from wikify_simple.schema import ImageRef, WriteEvidenceRef, WriteRequest
+from wikify_simple.meter import CostMeter, TierPrice
 
 
 def _meter(tmp_path) -> CostMeter:
@@ -78,7 +78,7 @@ def test_mixed_strategy_uses_tier_m_for_writer():
 
     Guards against a silent bump back to L.
     """
-    from wikify_simple.distill.strategies import build_strategy
+    from wikify_simple.distill.strategy import build_strategy
 
     cfg = build_strategy("M")
     assert cfg.write_tier == "M"

@@ -1,6 +1,6 @@
 """ExtractCache key must partition on binding name."""
 
-from wikify_simple.infra.cache import ExtractCacheKey
+from wikify_simple.cache import ExtractCacheKey
 
 
 def test_binding_name_partitions_relpath():

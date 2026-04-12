@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeQuerier, FakeWriter
+from .fakes import FakeExtractor, FakeQuerier, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
 from wikify_simple.distill.query import run as query_run
-from wikify_simple.distill.strategies import build_strategy
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
-from wikify_simple.infra.embedding import embed_texts
+from wikify_simple.distill.strategy import build_strategy
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
+from wikify_simple.embedding import embed_texts
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -81,8 +81,9 @@ def test_query_returns_answer_without_mutation(ready_bundle, tmp_path, question)
     assert before == after, "query mutated the bundle"
 
 
-def test_query_cli_writes_md(tmp_path, ready_bundle):
+def test_query_cli_writes_md(tmp_path, ready_bundle, monkeypatch):
     bundle, corpus = ready_bundle
+    monkeypatch.setenv("WIKIFY_SIMPLE_ALLOW_NETWORK", "1")
     from typer.testing import CliRunner
 
     from wikify_simple.cli import app
@@ -98,8 +99,6 @@ def test_query_cli_writes_md(tmp_path, ready_bundle):
             str(bundle.root),
             "--corpus",
             str(corpus.root),
-            "--binding",
-            "fake",
             "--out",
             str(out_root),
         ],

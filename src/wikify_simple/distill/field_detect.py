@@ -18,7 +18,7 @@ from pathlib import Path
 from wikify_simple.paths import CorpusPaths
 from wikify_simple.prompts import available_field_guides
 
-_FIELDS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "fields"
+_FIELDS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "fields"
 _FIELD_CACHE_FILENAME = "field.txt"
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 

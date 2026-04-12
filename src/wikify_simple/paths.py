@@ -52,8 +52,8 @@ class CorpusPaths:
         return self.root / "persona.txt"
 
     @property
-    def sampler_index_path(self) -> Path:
-        return self.root / "sampler_index.json"
+    def explorer_index_path(self) -> Path:
+        return self.root / "explorer_index.json"
 
     @property
     def pagerank_path(self) -> Path:

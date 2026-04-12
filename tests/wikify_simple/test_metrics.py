@@ -4,18 +4,18 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+from .fakes import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import build_strategy
+from wikify_simple.distill.strategy import build_strategy
 from wikify_simple.eval.bundle import load_bundle
 from wikify_simple.eval.metrics import (
     EmbedderMismatch,
     coverage_residual,
     g_links_modularity,
 )
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
-from wikify_simple.infra.embedding import embedder_for
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
+from wikify_simple.embedding import embedder_for
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths
 from wikify_simple.store.vectors import load_vectors

@@ -5,18 +5,18 @@ import random
 import numpy as np
 import pytest
 
-from wikify_simple.contracts.schema import OrchAction
-from wikify_simple.distill.policy import (
-    LlmPolicy,
-    PolicyContext,
-    PolicyRuntime,
-    _build_sampler_snapshot,
+from wikify_simple.schema import OrchAction
+from wikify_simple.distill.strategy import (
+    GuidedMode,
+    ModeContext,
+    RuntimeOverrides,
 )
-from wikify_simple.distill.sampler import (
+from wikify_simple.distill.explorer import (
     GlobalOp,
-    LevyMixSampler,
+    LevyExplorer,
     LocalOp,
-    SamplerState,
+    ExplorerState,
+    build_snapshot,
     init_coverage_state,
     semantic_query_chunks,
 )
@@ -34,12 +34,12 @@ class _ScriptedOrchestrator:
         return next(self._actions)
 
 
-def _sampler() -> LevyMixSampler:
-    return LevyMixSampler(local_op=LocalOp.NONE, global_op=GlobalOp.UNIFORM, jump_rate=1.0)
+def _explorer() -> LevyExplorer:
+    return LevyExplorer(local_op=LocalOp.NONE, global_op=GlobalOp.UNIFORM, jump_rate=1.0)
 
 
-def _ctx() -> PolicyContext:
-    return PolicyContext(
+def _ctx() -> ModeContext:
+    return ModeContext(
         run_id="t",
         n_pages=0,
         n_candidates=0,
@@ -51,10 +51,10 @@ def _ctx() -> PolicyContext:
 
 
 def test_set_tier_mutates_runtime():
-    rt = PolicyRuntime()
+    rt = RuntimeOverrides()
     assert rt.write_tier == "M"
     orch = _ScriptedOrchestrator([OrchAction(name="set_tier", args={"role": "write", "tier": "L"})])
-    policy = LlmPolicy(orch, _sampler(), runtime=rt)
+    policy = GuidedMode(orch, _explorer(), runtime=rt)
     decision = policy.next_extract(state=object(), k=4, ctx=_ctx())
     assert decision.action == "set_tier"
     assert decision.batch == ()
@@ -62,33 +62,33 @@ def test_set_tier_mutates_runtime():
 
 
 def test_set_tier_locked_for_orchestrator():
-    rt = PolicyRuntime()
+    rt = RuntimeOverrides()
     orch = _ScriptedOrchestrator(
         [OrchAction(name="set_tier", args={"role": "orchestrate", "tier": "S"})]
     )
-    policy = LlmPolicy(orch, _sampler(), runtime=rt)
+    policy = GuidedMode(orch, _explorer(), runtime=rt)
     policy.next_extract(state=object(), k=4, ctx=_ctx())
     assert rt.orchestrate_tier == "L"
 
 
 def test_set_tier_rejects_invalid_tier():
-    rt = PolicyRuntime()
+    rt = RuntimeOverrides()
     orch = _ScriptedOrchestrator(
         [OrchAction(name="set_tier", args={"role": "extract", "tier": "Q"})]
     )
-    policy = LlmPolicy(orch, _sampler(), runtime=rt)
+    policy = GuidedMode(orch, _explorer(), runtime=rt)
     policy.next_extract(state=object(), k=4, ctx=_ctx())
     assert rt.extract_tier == "S"
 
 
 def test_set_allocation_mutates_runtime_and_bumps_epoch():
-    rt = PolicyRuntime()
+    rt = RuntimeOverrides()
     assert rt.exploit_fraction is None
     assert rt.allocation_epoch == 0
     orch = _ScriptedOrchestrator(
         [OrchAction(name="set_allocation", args={"exploit_fraction": 0.7})]
     )
-    policy = LlmPolicy(orch, _sampler(), runtime=rt)
+    policy = GuidedMode(orch, _explorer(), runtime=rt)
     decision = policy.next_extract(state=object(), k=4, ctx=_ctx())
     assert decision.action == "set_allocation"
     assert rt.exploit_fraction == 0.7
@@ -96,11 +96,11 @@ def test_set_allocation_mutates_runtime_and_bumps_epoch():
 
 
 def test_set_allocation_rejects_out_of_range():
-    rt = PolicyRuntime()
+    rt = RuntimeOverrides()
     orch = _ScriptedOrchestrator(
         [OrchAction(name="set_allocation", args={"exploit_fraction": 1.5})]
     )
-    policy = LlmPolicy(orch, _sampler(), runtime=rt)
+    policy = GuidedMode(orch, _explorer(), runtime=rt)
     policy.next_extract(state=object(), k=4, ctx=_ctx())
     assert rt.exploit_fraction is None
     assert rt.allocation_epoch == 0
@@ -109,10 +109,10 @@ def test_set_allocation_rejects_out_of_range():
 # --- pick_chunks tests ---------------------------------------------------
 
 
-def _sampler_state_with_seen() -> SamplerState:
-    """Tiny SamplerState with 4 chunks; c1/c2 already seen."""
+def _explorer_state_with_seen() -> ExplorerState:
+    """Tiny ExplorerState with 4 chunks; c1/c2 already seen."""
     ids = ["c1", "c2", "c3", "c4"]
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(0),
         graph=CorpusGraph(nodes={}, edges={}),
         vectors=VectorStore(ids=ids, matrix=np.eye(4, dtype=np.float32)),
@@ -129,11 +129,11 @@ def _sampler_state_with_seen() -> SamplerState:
 
 
 def test_pick_chunks_returns_novel_ids():
-    state = _sampler_state_with_seen()
+    state = _explorer_state_with_seen()
     orch = _ScriptedOrchestrator(
         [OrchAction(name="pick_chunks", args={"chunk_ids": ["c3", "c4"], "reason": "test"})]
     )
-    policy = LlmPolicy(orch, _sampler())
+    policy = GuidedMode(orch, _explorer())
     decision = policy.next_extract(state=state, k=4, ctx=_ctx())
     assert decision.action == "pick_chunks"
     assert set(decision.batch) == {"c3", "c4"}
@@ -141,12 +141,12 @@ def test_pick_chunks_returns_novel_ids():
 
 
 def test_pick_chunks_filters_already_seen():
-    state = _sampler_state_with_seen()
+    state = _explorer_state_with_seen()
     # c1 and c2 are already seen; only c3 is novel here
     orch = _ScriptedOrchestrator(
         [OrchAction(name="pick_chunks", args={"chunk_ids": ["c1", "c2", "c3"], "reason": "dedup"})]
     )
-    policy = LlmPolicy(orch, _sampler())
+    policy = GuidedMode(orch, _explorer())
     decision = policy.next_extract(state=state, k=4, ctx=_ctx())
     assert decision.batch == ("c3",)
     assert decision.meta["n_requested"] == 3
@@ -154,23 +154,23 @@ def test_pick_chunks_filters_already_seen():
 
 
 def test_pick_chunks_all_seen_returns_empty_batch():
-    state = _sampler_state_with_seen()
+    state = _explorer_state_with_seen()
     # All requested chunks are already seen
     orch = _ScriptedOrchestrator(
         [OrchAction(name="pick_chunks", args={"chunk_ids": ["c1", "c2"], "reason": "empty"})]
     )
-    policy = LlmPolicy(orch, _sampler())
+    policy = GuidedMode(orch, _explorer())
     decision = policy.next_extract(state=state, k=4, ctx=_ctx())
     assert decision.batch == ()
     assert decision.meta["n_novel"] == 0
 
 
 def test_pick_chunks_reason_logged_in_events():
-    state = _sampler_state_with_seen()
+    state = _explorer_state_with_seen()
     orch = _ScriptedOrchestrator(
         [OrchAction(name="pick_chunks", args={"chunk_ids": ["c3"], "reason": "semantic hit"})]
     )
-    policy = LlmPolicy(orch, _sampler())
+    policy = GuidedMode(orch, _explorer())
     policy.next_extract(state=state, k=4, ctx=_ctx())
     events = policy.drain_events()
     assert len(events) == 1
@@ -179,14 +179,14 @@ def test_pick_chunks_reason_logged_in_events():
 
 def test_pick_chunks_not_cached():
     """pick_chunks must NOT be cached; the next call must re-query the orchestrator."""
-    state = _sampler_state_with_seen()
+    state = _explorer_state_with_seen()
     orch = _ScriptedOrchestrator(
         [
             OrchAction(name="pick_chunks", args={"chunk_ids": ["c3"], "reason": "first"}),
             OrchAction(name="pick_chunks", args={"chunk_ids": ["c4"], "reason": "second"}),
         ]
     )
-    policy = LlmPolicy(orch, _sampler(), persist_batches=8)
+    policy = GuidedMode(orch, _explorer(), persist_batches=8)
     d1 = policy.next_extract(state=state, k=4, ctx=_ctx())
     d2 = policy.next_extract(state=state, k=4, ctx=_ctx())
     # Both calls should go to the orchestrator, returning different batches.
@@ -198,23 +198,23 @@ def test_pick_chunks_not_cached():
 
 
 def test_sampler_snapshot_content():
-    state = _sampler_state_with_seen()
-    snap = _build_sampler_snapshot(state)
+    state = _explorer_state_with_seen()
+    snap = build_snapshot(state)
     assert "top_gap_chunks" in snap
     assert "doc_coverage" in snap
     assert "content_stats" in snap
 
 
 def test_sampler_snapshot_top_gap_chunks_excludes_seen():
-    state = _sampler_state_with_seen()
-    snap = _build_sampler_snapshot(state)
+    state = _explorer_state_with_seen()
+    snap = build_snapshot(state)
     seen_in_gap = [e["chunk_id"] for e in snap["top_gap_chunks"] if e["chunk_id"] in {"c1", "c2"}]
     assert seen_in_gap == []
 
 
 def test_sampler_snapshot_doc_coverage_matches_seen_counts():
-    state = _sampler_state_with_seen()
-    snap = _build_sampler_snapshot(state)
+    state = _explorer_state_with_seen()
+    snap = build_snapshot(state)
     # d1 has 2 seen chunks
     assert snap["doc_coverage"].get("d1") == 2
     # d2 has 0 seen chunks, should not appear
@@ -222,8 +222,8 @@ def test_sampler_snapshot_doc_coverage_matches_seen_counts():
 
 
 def test_sampler_snapshot_content_stats():
-    state = _sampler_state_with_seen()
-    snap = _build_sampler_snapshot(state)
+    state = _explorer_state_with_seen()
+    snap = build_snapshot(state)
     stats = snap["content_stats"]
     assert stats["n_seen"] == 2
     assert stats["n_chunks"] == 4
@@ -232,7 +232,7 @@ def test_sampler_snapshot_content_stats():
 def test_sampler_snapshot_capped_at_20():
     """top_gap_chunks must contain at most 20 entries."""
     ids = [f"c{i}" for i in range(50)]
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(0),
         graph=CorpusGraph(nodes={}, edges={}),
         vectors=VectorStore(ids=ids, matrix=np.eye(50, dtype=np.float32)),
@@ -242,18 +242,18 @@ def test_sampler_snapshot_capped_at_20():
         chunk_to_doc={cid: "d1" for cid in ids},
     )
     init_coverage_state(state, ids)
-    snap = _build_sampler_snapshot(state)
+    snap = build_snapshot(state)
     assert len(snap["top_gap_chunks"]) <= 20
 
 
 # --- semantic_query_chunks tests -----------------------------------------
 
 
-def _four_chunk_state() -> SamplerState:
+def _four_chunk_state() -> ExplorerState:
     """4 chunks with orthogonal unit vectors for deterministic cosine tests."""
     ids = ["c1", "c2", "c3", "c4"]
     matrix = np.eye(4, dtype=np.float32)
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(0),
         graph=CorpusGraph(nodes={}, edges={}),
         vectors=VectorStore(ids=ids, matrix=matrix),
@@ -295,7 +295,7 @@ def test_semantic_query_page_scope_filters_by_doc():
 
 
 def test_semantic_query_empty_store_returns_empty():
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(0),
         graph=CorpusGraph(nodes={}, edges={}),
         vectors=VectorStore(ids=[], matrix=np.zeros((0, 4), dtype=np.float32)),

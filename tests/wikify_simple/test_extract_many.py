@@ -12,10 +12,10 @@ import threading
 import time
 from pathlib import Path
 
-from wikify_simple.bindings.file_dispatch import FileDispatchExtractor
-from wikify_simple.contracts.schema import ExtractRequest, ExtractResponse
-from wikify_simple.infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.dispatch import Dispatch
+from wikify_simple.schema import ExtractRequest, ExtractResponse
+from wikify_simple.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from wikify_simple.meter import CostMeter
 
 # --- fake dispatcher thread ----------------------------------------------
 
@@ -109,7 +109,7 @@ def test_extract_many_batch_order(tmp_path: Path) -> None:
     try:
         meter = _meter(tmp_path)
         cache = ExtractCache(root=tmp_path / "cache")
-        extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
+        extractor = Dispatch(meter, cache, dispatch_dir=dispatch_root)
 
         chunk_ids = ["c1", "c2", "c3", "c4"]
         reqs = [_make_req(cid) for cid in chunk_ids]
@@ -134,7 +134,7 @@ def test_extract_many_cache_hit_skips_dispatch(tmp_path: Path) -> None:
     try:
         meter = _meter(tmp_path)
         cache = ExtractCache(root=tmp_path / "cache")
-        extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
+        extractor = Dispatch(meter, cache, dispatch_dir=dispatch_root)
 
         # Pre-populate chunks c1 and c3 in the cache directly.
         cached_ids = {"c1", "c3"}
@@ -191,7 +191,7 @@ def test_extract_single_wrapper(tmp_path: Path) -> None:
     try:
         meter = _meter(tmp_path)
         cache = ExtractCache(root=tmp_path / "cache")
-        extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
+        extractor = Dispatch(meter, cache, dispatch_dir=dispatch_root)
 
         req = _make_req("solo")
         resp = extractor.extract(req)

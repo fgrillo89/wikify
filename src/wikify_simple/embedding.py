@@ -4,7 +4,7 @@ Backend selected by env var ``WIKIFY_SIMPLE_EMBEDDER``:
 
 - ``fastembed`` (default): serves ``sentence-transformers/all-MiniLM-L6-v2``
   through ONNX Runtime via the ``fastembed`` library. 384-d output, ~75
-  chunks/sec on commodity CPU (~1.6× the legacy PyTorch path on the same
+  chunks/sec on commodity CPU (~1.6x the legacy PyTorch path on the same
   model, same dimensionality, same MTEB score). No PyTorch dependency.
 - ``hash``: deterministic hashed bag-of-words projection. Offline, no
   model dependency, adequate for CI/smoke. 128-d.
@@ -12,7 +12,7 @@ Backend selected by env var ``WIKIFY_SIMPLE_EMBEDDER``:
 Returns row-unit-norm float32 ``np.ndarray`` with shape ``(len(texts), dim)``.
 
 Use ``embedder_for(backend, model)`` when you need an *explicit* embedder
-(no env var dependency) — eval and query call this to construct the same
+(no env var dependency) --- eval and query call this to construct the same
 embedder that ingest used, based on ``vectors.meta.json``.
 """
 

@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.bindings.file_dispatch import FileDispatchExtractor
-from wikify_simple.contracts.schema import ExtractRequest
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.dispatch import Dispatch
+from wikify_simple.schema import ExtractRequest
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 
 
 class _InvalidResponder:
@@ -68,7 +68,7 @@ def test_invalid_response_writes_error_artifact(tmp_path):
             events_path=tmp_path / "calls.jsonl",
         )
         cache = ExtractCache(root=tmp_path / "cache")
-        extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
+        extractor = Dispatch(meter, cache, dispatch_dir=dispatch_root)
         req = ExtractRequest(
             chunk_id="chunk-err",
             chunk_text="any text will do here because validation will fail first.",

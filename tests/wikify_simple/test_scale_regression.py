@@ -5,20 +5,20 @@ import time
 
 import numpy as np
 
-from wikify_simple.distill.sampler import (
+from wikify_simple.distill.explorer import (
     GlobalOp,
-    LevyMixSampler,
+    LevyExplorer,
     LocalOp,
-    SamplerState,
+    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
 )
-from wikify_simple.distill.write.crosslink import crosslink
+from wikify_simple.distill.write_prep import crosslink
 from wikify_simple.models import CorpusGraph, Evidence, WikiPage
 from wikify_simple.store.vectors import VectorStore
 
 
-def _sampler_state(n_docs: int, chunks_per_doc: int) -> SamplerState:
+def _sampler_state(n_docs: int, chunks_per_doc: int) -> ExplorerState:
     rng = random.Random(0)
     chunk_ids: list[str] = []
     chunks_by_doc: dict[str, list[str]] = {}
@@ -45,7 +45,7 @@ def _sampler_state(n_docs: int, chunks_per_doc: int) -> SamplerState:
     matrix = rnd.standard_normal((len(chunk_ids), 16), dtype=np.float32)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     matrix = matrix / np.where(norms > 0, norms, 1.0)
-    state = SamplerState(
+    state = ExplorerState(
         rng=rng,
         graph=CorpusGraph(nodes={}, edges={"similar_strong": edges, "co_section": []}),
         vectors=VectorStore(ids=chunk_ids, matrix=matrix),
@@ -63,7 +63,7 @@ def _sampler_state(n_docs: int, chunks_per_doc: int) -> SamplerState:
 
 def _run_sampler_workload(n_docs: int) -> float:
     state = _sampler_state(n_docs=n_docs, chunks_per_doc=5)
-    sampler = LevyMixSampler(
+    sampler = LevyExplorer(
         local_op=LocalOp.SIMILARITY_WALK,
         global_op=GlobalOp.COVERAGE_GAP,
         jump_rate=0.15,

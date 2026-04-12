@@ -18,7 +18,7 @@ from pathlib import Path
 
 import networkx as nx
 
-from ..infra.embedding import embed_texts
+from ..embedding import embed_texts
 from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
 from ..store.corpus import (
@@ -45,7 +45,7 @@ from .images import (
     save_doc_images,
 )
 from .parsers.registry import ParseResult, parse_file
-from .sampler_index import build_sampler_index, save_sampler_index
+from .explorer_index import build_explorer_index, save_explorer_index
 from .topics import extract_topics, write_topics
 
 
@@ -331,7 +331,7 @@ def ingest_corpus(
 
     # Persist embedder backend metadata so eval/query can reconstruct the
     # exact same embedder later. Dim is the matrix's actual width.
-    from ..infra.embedding import current_backend
+    from ..embedding import current_backend
 
     backend = current_backend()
     meta = VectorsMeta(
@@ -359,8 +359,8 @@ def ingest_corpus(
 
     # Stage 7: sampler index ----------------------------------------
     t = time.monotonic()
-    sampler_idx = build_sampler_index(docs, all_chunks_list, graph, store)
-    save_sampler_index(paths.sampler_index_path, sampler_idx)
+    sampler_idx = build_explorer_index(docs, all_chunks_list, graph, store)
+    save_explorer_index(paths.explorer_index_path, sampler_idx)
     timings["sampler index"] = time.monotonic() - t
 
     # Stage 8: pagerank ---------------------------------------------

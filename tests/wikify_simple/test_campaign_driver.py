@@ -14,11 +14,11 @@ import pytest
 
 from wikify_simple.distill.pipeline import run_with_preloaded
 from wikify_simple.distill.preload import preload_corpus
-from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
-from wikify_simple.distill.schedule import StaticSchedule
-from wikify_simple.distill.strategies import StrategyConfig
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify_simple.distill.strategy import StaticBudget
+from wikify_simple.distill.strategy import StrategyConfig
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -34,12 +34,12 @@ def corpus(tmp_path_factory) -> CorpusPaths:
 def _strategy(seed: int = 0) -> StrategyConfig:
     return StrategyConfig(
         name="M",
-        sampler=LevyMixSampler(
+        explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,
             jump_rate=0.3,
         ),
-        schedule=StaticSchedule(exploit_fraction=0.5),
+        budget=StaticBudget(exploit_fraction=0.5),
         extract_tier="S",
         write_tier="M",
         seed=seed,
@@ -48,7 +48,7 @@ def _strategy(seed: int = 0) -> StrategyConfig:
 
 def test_preload_corpus_called_once(corpus, tmp_path):
     """Corpus loaders are called once; run_with_preloaded is called N times."""
-    from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+    from .fakes import FakeExtractor, FakeWriter
     from wikify_simple.store.corpus import list_documents as _list_docs_real
 
     bundle = BundlePaths(root=tmp_path / "bundle")
@@ -83,7 +83,7 @@ def test_preload_corpus_called_once(corpus, tmp_path):
 
 def test_iteration_two_is_refine(corpus, tmp_path):
     """Iteration 2 calls load_existing_pages (refine semantics)."""
-    from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+    from .fakes import FakeExtractor, FakeWriter
 
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")
@@ -123,7 +123,7 @@ def test_iteration_two_is_refine(corpus, tmp_path):
 
 def test_both_iterations_produce_run_json(corpus, tmp_path):
     """Each iteration writes a _run.json snapshot to the bundle."""
-    from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+    from .fakes import FakeExtractor, FakeWriter
 
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")

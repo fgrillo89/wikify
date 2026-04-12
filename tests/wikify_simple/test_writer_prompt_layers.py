@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.contracts.schema import WriteEvidenceRef, WriteRequest
-from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
+from wikify_simple.schema import WriteEvidenceRef, WriteRequest
+from wikify_simple.distill.write_prep import WriteRequestConfig, build_write_request
 from wikify_simple.models import Evidence, WikiPage
 from wikify_simple.paths import BundlePaths
 from wikify_simple.prompts.registry import _content_hash, compose_writer_prompt_layer_hashes
@@ -65,7 +65,7 @@ def test_layer_hashes_stable_across_sequential_calls(tmp_path: Path) -> None:
     images = _make_images_index(tmp_path)
     page = _make_page()
     cfg = _make_cfg()
-    from wikify_simple.distill.extract.dossier import DossierStore
+    from wikify_simple.distill.dossier import DossierStore
 
     ds = DossierStore(tmp_path)
     req1 = build_write_request(page, [page], {}, ds, {}, images, cfg)
@@ -81,7 +81,7 @@ def test_layer_hashes_populated_on_build_write_request(tmp_path: Path) -> None:
     images = _make_images_index(tmp_path)
     page = _make_page()
     cfg = _make_cfg()
-    from wikify_simple.distill.extract.dossier import DossierStore
+    from wikify_simple.distill.dossier import DossierStore
 
     ds = DossierStore(tmp_path)
     req = build_write_request(page, [page], {}, ds, {}, images, cfg)

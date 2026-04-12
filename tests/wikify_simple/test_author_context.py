@@ -1,6 +1,6 @@
 """Tests for distill/write/author_context.py."""
 
-from wikify_simple.distill.write.author_context import (
+from wikify_simple.distill.author_context import (
     AuthorContext,
     _author_key,
     build_author_context,

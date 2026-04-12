@@ -1,6 +1,6 @@
-"""Build and persist the corpus-level sampler index.
+"""Build and persist the corpus-level explorer index.
 
-Everything in ``build_sampler_index`` is a pure function of the corpus
+Everything in ``build_explorer_index`` is a pure function of the corpus
 (docs, chunks, graph, vectors). Extracted verbatim from
 ``distill/pipeline.py::_build_sampler_state`` so distill iterations can
 load it instead of rebuilding from scratch.
@@ -13,8 +13,8 @@ from pathlib import Path
 
 from ..models import Chunk, Document
 
-# Section types that carry no extractable knowledge — skip them at sampler
-# state build time so the global samplers never dispatch them. Mirrors the
+# Section types that carry no extractable knowledge — skip them at explorer
+# index build time so the global samplers never dispatch them. Mirrors the
 # in-memory fallback path in ``distill/pipeline.py``. Hard-coded here
 # (instead of imported from ``distill.extract.dossier``) to keep ingest
 # free of distill-side dependencies.
@@ -23,13 +23,13 @@ _SKIP_SECTION_TYPES: frozenset[str] = frozenset(
 )
 
 
-def build_sampler_index(
+def build_explorer_index(
     docs: list[Document],
     chunks: list[Chunk],
     graph,
     vectors,  # noqa: ARG001  # reserved for future vector-side fields
 ) -> dict:
-    """Compute the pure corpus-only sampler state as a serialisable dict.
+    """Compute the pure corpus-only explorer state as a serialisable dict.
 
     Returns a dict with keys:
         version, chunks_by_doc, chunk_to_doc, abstract_chunk_by_doc,
@@ -107,17 +107,17 @@ def build_sampler_index(
     }
 
 
-def save_sampler_index(path: Path, index: dict) -> None:
-    """Persist the sampler index as JSON."""
+def save_explorer_index(path: Path, index: dict) -> None:
+    """Persist the explorer index as JSON."""
     path.write_text(json.dumps(index), encoding="utf-8")
 
 
-def load_sampler_index(path: Path) -> dict | None:
-    """Load the sampler index from disk, or return None if absent/unreadable."""
+def load_explorer_index(path: Path) -> dict | None:
+    """Load the explorer index from disk, or return None if absent/unreadable."""
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[sampler_index] failed to load {path}: {exc}\n")
+        sys.stderr.write(f"[explorer_index] failed to load {path}: {exc}\n")
         return None

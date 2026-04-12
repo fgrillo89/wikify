@@ -5,25 +5,25 @@ import random
 import numpy as np
 import pytest
 
-from wikify_simple.distill.sampler import (
+from wikify_simple.distill.explorer import (
     _CAPTION_DEFAULT_RESIDUAL,
     _CAPTION_NEAR_FLOOR,
     GlobalOp,
-    LevyMixSampler,
+    LevyExplorer,
     LocalOp,
-    SamplerState,
+    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
-    sample_global,
+    explore_global,
 )
 from wikify_simple.eval.metrics import image_coverage_residual
 from wikify_simple.models import CorpusGraph
 from wikify_simple.store.vectors import VectorStore
 
 
-def _make_state(caption_ids: set[str], all_ids: list[str]) -> SamplerState:
+def _make_state(caption_ids: set[str], all_ids: list[str]) -> ExplorerState:
     doc_map = {cid: "d1" for cid in all_ids}
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(42),
         graph=CorpusGraph(nodes={}, edges={"similar_strong": [], "co_section": []}),
         vectors=VectorStore(
@@ -69,7 +69,7 @@ class TestCaptionTagging:
         caps = {"cap1"}
         all_ids = ["txt1", "txt2", "cap1"]
         # txt1 neighbors: txt2 (text) and cap1 (caption)
-        state = SamplerState(
+        state = ExplorerState(
             rng=random.Random(0),
             graph=CorpusGraph(nodes={}, edges={"similar_strong": [], "co_section": []}),
             vectors=VectorStore(ids=all_ids, matrix=np.eye(3, dtype=np.float32)),
@@ -100,7 +100,7 @@ class TestJumpFigures:
         caps = {"cap1", "cap2"}
         all_ids = ["txt1", "txt2", "cap1", "cap2"]
         state = _make_state(caps, all_ids)
-        result = sample_global(state, GlobalOp.FIGURES)
+        result = explore_global(state, GlobalOp.FIGURES)
         assert len(result) == 1
         assert result[0] in caps
 
@@ -110,7 +110,7 @@ class TestJumpFigures:
         state = _make_state(caps, all_ids)
         state.seen_chunks.add("cap1")
         state.seen_chunks.add("cap2")
-        result = sample_global(state, GlobalOp.FIGURES)
+        result = explore_global(state, GlobalOp.FIGURES)
         assert result == []
 
     def test_jump_figures_returns_highest_residual_caption(self):
@@ -118,32 +118,32 @@ class TestJumpFigures:
         all_ids = ["txt1", "cap1", "cap2"]
         state = _make_state(caps, all_ids)
         # Manually set cap2 to higher residual
-        from wikify_simple.distill.sampler import _set_residual
+        from wikify_simple.distill.explorer import _set_residual
 
         _set_residual(state, "cap1", 0.3)
         _set_residual(state, "cap2", 0.9)
-        result = sample_global(state, GlobalOp.FIGURES)
+        result = explore_global(state, GlobalOp.FIGURES)
         assert result == ["cap2"]
 
     def test_jump_figures_empty_when_no_captions(self):
         all_ids = ["txt1", "txt2"]
         state = _make_state(set(), all_ids)
-        result = sample_global(state, GlobalOp.FIGURES)
+        result = explore_global(state, GlobalOp.FIGURES)
         assert result == []
 
     def test_levy_mix_sampler_figures_op(self):
         caps = {"cap1"}
         all_ids = ["txt1", "cap1"]
         state = _make_state(caps, all_ids)
-        sampler = LevyMixSampler(
+        sampler = LevyExplorer(
             local_op=LocalOp.NONE, global_op=GlobalOp.FIGURES, jump_rate=1.0
         )
         batch = sampler.next_batch(state, 1)
         assert batch == ["cap1"]
 
     def test_jump_figures_via_policy(self):
-        from wikify_simple.distill.policy import LlmPolicy, PolicyContext, PolicyRuntime
-        from wikify_simple.distill.sampler import LevyMixSampler
+        from wikify_simple.distill.strategy import GuidedMode, ModeContext, RuntimeOverrides
+        from wikify_simple.distill.explorer import LevyExplorer
 
         caps = {"cap1", "cap2"}
         all_ids = ["txt1", "cap1", "cap2"]
@@ -151,18 +151,18 @@ class TestJumpFigures:
 
         class _FakeOrch:
             def step(self, s):
-                from wikify_simple.contracts.schema import OrchAction
+                from wikify_simple.schema import OrchAction
 
                 return OrchAction(name="jump_figures", args={"k": 2})
 
-        policy = LlmPolicy(
+        policy = GuidedMode(
             orchestrator=_FakeOrch(),
-            fallback_sampler=LevyMixSampler(
+            fallback_explorer=LevyExplorer(
                 local_op=LocalOp.NONE, global_op=GlobalOp.UNIFORM, jump_rate=1.0
             ),
-            runtime=PolicyRuntime(),
+            runtime=RuntimeOverrides(),
         )
-        ctx = PolicyContext(
+        ctx = ModeContext(
             run_id="test",
             n_pages=0,
             n_candidates=0,

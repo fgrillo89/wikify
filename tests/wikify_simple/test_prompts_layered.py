@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.contracts.schema import WriteEvidenceRef, WriteRequest
-from wikify_simple.distill.write.persona import (
+from wikify_simple.schema import WriteEvidenceRef, WriteRequest
+from wikify_simple.distill.persona import (
     build_persona_prompt,
     generate_corpus_persona,
     load_corpus_persona,

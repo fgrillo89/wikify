@@ -33,15 +33,16 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.contracts.protocols import Writer
-from wikify_simple.contracts.roles import Role, response_reserve, total_context
-from wikify_simple.contracts.schema import WriteRequest, WriteResponse
+from wikify_simple.types import Writer
+from wikify_simple.types import Role
+from wikify_simple.context import response_reserve, total_context
+from wikify_simple.schema import WriteRequest, WriteResponse
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
-from wikify_simple.distill.schedule import StaticSchedule
-from wikify_simple.distill.strategies import StrategyConfig
-from wikify_simple.infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify_simple.distill.strategy import StaticBudget
+from wikify_simple.distill.strategy import StrategyConfig
+from wikify_simple.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -72,8 +73,8 @@ class _CostTunedExtractor:
         self._meter = meter
 
     def extract(self, request):
-        from wikify_simple.bindings.fake import _fake_extract_payload
-        from wikify_simple.contracts.schema import ExtractedConcept, ExtractResponse
+        from .fakes import _fake_extract_payload
+        from wikify_simple.schema import ExtractedConcept, ExtractResponse
 
         key = ExtractCacheKey(
             binding_name=self.BINDING_NAME,
@@ -169,12 +170,12 @@ class _CostTunedWriter(Writer):
 def _strategy() -> StrategyConfig:
     return StrategyConfig(
         name="M",
-        sampler=LevyMixSampler(
+        explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,
             jump_rate=0.1,
         ),
-        schedule=StaticSchedule(exploit_fraction=0.6),
+        budget=StaticBudget(exploit_fraction=0.6),
         extract_tier="S",
         write_tier="M",
         seed=42,

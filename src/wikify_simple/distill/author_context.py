@@ -55,7 +55,7 @@ class CitedWork:
 class AuthorContext:
     """Structured grounding context attached to a person-page WriteRequest.
 
-    This is context only — it is never emitted to disk as its own file.
+    This is context only --- it is never emitted to disk as its own file.
     The writer uses it as grounded facts when composing biographical prose.
     All fields are plain data; no prose, no bullet rendering, no wikilinks.
     """
@@ -71,7 +71,7 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
     """Return one AuthorContext per unique valid corpus author across docs.
 
     Keyed by _author_key(name). Citation-only authors who appear in fewer
-    than 2 distinct citations are still included — the context is for
+    than 2 distinct citations are still included --- the context is for
     grounding, not for filtering (the writer decides relevance).
     """
     bucket: dict[str, dict] = {}

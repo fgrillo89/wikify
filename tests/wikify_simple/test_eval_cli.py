@@ -5,12 +5,12 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+from .fakes import FakeExtractor, FakeWriter
 from wikify_simple.cli import app
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.strategies import build_strategy
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.strategy import build_strategy
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths
 

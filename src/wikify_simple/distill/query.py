@@ -22,15 +22,14 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from ..contracts.protocols import Querier
-from ..contracts.schema import (
+from ..types import Querier, ModelTier
+from ..schema import (
     EscalationEvent,
     QueryAnswer,
     QueryEvidence,
     QueryLogEntry,
     QueryRequest,
 )
-from ..contracts.tiers import ModelTier, model_id_for_tier
 from ..ingest.topics import _PHRASE_RE
 from ..paths import BundlePaths, CorpusPaths
 from ..prompts import load_prompt
@@ -39,7 +38,7 @@ from ..store.wiki_index import WikiIndex
 
 if TYPE_CHECKING:
     from ..eval.bundle import Bundle
-from .config import BODY_EXCERPT_CHARS, MAX_CANDIDATES
+from ..config import BODY_EXCERPT_CHARS, MAX_CANDIDATES
 
 QUERY_PROMPT = load_prompt("wikify_simple/query").name
 _STOP = frozenset(
@@ -172,7 +171,7 @@ def run(
     question: str,
     querier: Querier,
     embed: Callable[[Sequence[str]], np.ndarray],
-    model_id: str = model_id_for_tier(ModelTier.MEDIUM),
+    model_id: str = ModelTier.MEDIUM.value,
     tier: ModelTier | str = ModelTier.MEDIUM,
     cache_root: Path | None = None,
     save_log: bool = True,

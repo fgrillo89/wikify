@@ -1,6 +1,6 @@
 """Tests for the tolerant quote-substring normalizer."""
 
-from wikify_simple.contracts.normalize import normalize_for_substring
+from wikify_simple.dispatch import normalize_for_substring
 
 
 def test_clean_text_identity_lowercase():

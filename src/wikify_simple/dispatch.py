@@ -3,13 +3,12 @@
 Strategies never import this module. The CLI wires it into a run when
 ``--binding file_dispatch`` is passed. The binding writes a request file at
 a well-known path, blocks for a matching response file, validates the
-JSON against ``contracts/schema.py``, deducts from the cost meter, and
-consults the extraction cache for extract calls so cache hits are
-zero-token and never spawn a subagent.
+JSON against ``schema.py``, deducts from the cost meter, and consults the
+extraction cache for extract calls so cache hits are zero-token and never
+spawn a subagent.
 
 Architecturally this file is the *only* place vendor-specific dispatch
-lives. ``scripts/check_no_vendor_imports.py`` enforces that no other file
-references the dispatcher or imports the anthropic SDK.
+lives.
 
 Dispatch directory resolution:
   1. explicit ``dispatch_dir`` passed to the binding constructor
@@ -20,7 +19,9 @@ Dispatch directory resolution:
 import contextlib
 import json
 import os
+import re
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -28,28 +29,101 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ..contracts.normalize import normalize_for_substring
-from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
-from ..contracts.roles import Role, response_reserve, total_context
-from ..contracts.schema import (
+from .types import (
+    ModelTier,
+    Role,
+)
+from .schema import (
     EditorBrief,
+    Equation,
+    ExtractedConcept,
     ExtractRequest,
     ExtractResponse,
     OrchAction,
     OrchState,
+    Parameter,
     QueryRequest,
     QueryResponse,
     QuoteNotInChunkError,
+    Relationship,
     WriteRequest,
     WriteResponse,
 )
-from ..contracts.tiers import ModelTier
-from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
-from ..infra.config import DISPATCH_TIMEOUT, POLL_INTERVAL
-from ..infra.cost_meter import CostMeter
+from .context import response_reserve, total_context
+from .cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from .config import DISPATCH_TIMEOUT, POLL_INTERVAL
+from .meter import CostMeter
+
+# ---------------------------------------------------------------------------
+# normalize_for_substring — tolerant text normalization for quote matching
+# ---------------------------------------------------------------------------
+
+# All dash variants observed in pymupdf output.
+_DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212-"
+_DASH_RE = re.compile(f"[{re.escape(_DASHES)}]")
+
+# Curly / typographic quotes -> straight.
+_CURLY_SINGLE = "\u2018\u2019\u201a\u201b"
+_CURLY_DOUBLE = "\u201c\u201d\u201e\u201f"
+
+# [12] or [12-15] inline citation markers.
+_CITE_RE = re.compile(r"\[\d+(?:-\d+)?\]")
+
+# [word] bracket-wrapping artifact: lowercase ASCII token of length >= 2
+# OR a run of digits. We deliberately do NOT match single letters like
+# ``[a]`` / ``[b]`` because those are legitimate subfigure refs.
+_BRACKET_WRAP_RE = re.compile(r"\[([a-z0-9]{2,})\]")
+
+_WS_RE = re.compile(r"\s+")
+
+# Markdown emphasis markers (`**bold**`, `*italic*`, `_italic_`,
+# `__bold__`). The model strips these when emitting a clean quote;
+# the raw chunk keeps them. Strip on both sides for comparison.
+_MD_EMPHASIS_RE = re.compile(r"[*_]+")
+
+# After dash normalization, collapse whitespace around '-' so
+# ``chua - a`` and ``chua-a`` compare equal.
+_DASH_WS_RE = re.compile(r"\s*-\s*")
+
+
+def normalize_for_substring(s: str) -> str:
+    """Normalize text for tolerant substring matching against noisy
+    PDF-extracted chunks. Preserves the *information* in the string
+    while erasing artifacts the model legitimately cleans up.
+    """
+    # 1. NFKC unicode normalization
+    s = unicodedata.normalize("NFKC", s)
+    # 2. Dash variants -> ASCII '-'
+    s = _DASH_RE.sub("-", s)
+    # 3. Curly quotes -> straight
+    for ch in _CURLY_SINGLE:
+        s = s.replace(ch, "'")
+    for ch in _CURLY_DOUBLE:
+        s = s.replace(ch, '"')
+    # 4. Strip [NN] / [NN-NN] citation markers
+    s = _CITE_RE.sub("", s)
+    # 5. Unwrap [token] bracket-wrap artifacts (lowercase word/digits, >=2)
+    s = _BRACKET_WRAP_RE.sub(r"\1", s)
+    # 6. Strip markdown emphasis markers (**bold**, _italic_, etc.)
+    s = _MD_EMPHASIS_RE.sub("", s)
+    # 7. Collapse whitespace
+    s = _WS_RE.sub(" ", s).strip()
+    # 8. Collapse whitespace around hyphens
+    s = _DASH_WS_RE.sub("-", s)
+    # 9. Lowercase
+    return s.lower()
+
+
+# ---------------------------------------------------------------------------
+# Dispatch helpers (module-level, stateless)
+# ---------------------------------------------------------------------------
 
 _REQ_DIR_ENV = "WIKIFY_SIMPLE_DISPATCH_DIR"
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+BINDING_NAME = "file_dispatch"
+
+QUERY_PROMPT = "wikify_simple/query"
 
 
 def resolve_dispatch_dir(explicit: Path | str | None = None) -> Path:
@@ -98,14 +172,7 @@ def _error_path(req_path: Path) -> Path:
 
 
 def _write_error_artifact(req_path: Path, model_cls: type, raw, exc: Exception) -> Path:
-    """Persist a debuggable rejection record next to the request file.
-
-    On validation (or post-validation binding-check) failure we want the
-    operator to inspect what the dispatcher produced, so we write a
-    sibling ``<rid>.error.json`` with the error message, the raw dict,
-    and the schema name. The request file is intentionally kept; only
-    the response file is cleaned up by the caller's ``finally`` block.
-    """
+    """Persist a debuggable rejection record next to the request file."""
     err_path = _error_path(req_path)
     try:
         payload = {
@@ -126,14 +193,7 @@ def _assert_quotes_in_chunk(
     req_path: Path,
     raw,
 ) -> None:
-    """Structural barrier against hallucinated paraphrased quotes.
-
-    Schemas don't see ``chunk_text``, so the substring rule lives in the
-    binding. If any extracted quote is not a verbatim (whitespace-
-    tolerant) substring of the source chunk we raise
-    ``QuoteNotInChunkError`` and drop a ``.error.json`` artifact so the
-    operator can see which concept the dispatcher hallucinated.
-    """
+    """Structural barrier against hallucinated paraphrased quotes."""
     normalized_chunk = normalize_for_substring(chunk_text)
     for concept in response.concepts:
         q = concept.quote.strip()
@@ -154,11 +214,6 @@ def _validate_or_record(
 ) -> ModelT:
     """Validate ``raw`` against ``model_cls``; on failure try to salvage
     (for ExtractResponse) or write .error.json and re-raise.
-
-    For ``ExtractResponse`` specifically, if the failure is in one or
-    more ``concepts[i]`` entries, drop the bad concepts and revalidate
-    with the clean subset. This means a single bad title no longer
-    kills all five concepts in a batch.
     """
     try:
         return model_cls.model_validate(raw)
@@ -175,12 +230,7 @@ def _try_salvage_extract_response(
     raw,
     exc: ValidationError,
 ) -> ModelT | None:
-    """Drop bad ``concepts[i]`` entries from an ExtractResponse and retry.
-
-    Returns the revalidated response on success, or None if the raw is
-    not an ExtractResponse, has no concepts list, the errors are not
-    concept-local, or the cleaned response still fails.
-    """
+    """Drop bad ``concepts[i]`` entries from an ExtractResponse and retry."""
     if model_cls.__name__ != "ExtractResponse":
         return None
     if not isinstance(raw, dict):
@@ -194,11 +244,10 @@ def _try_salvage_extract_response(
         if len(loc) >= 2 and loc[0] == "concepts" and isinstance(loc[1], int):
             bad_indices.add(loc[1])
     if not bad_indices:
-        # Failure wasn't concept-local (e.g. chunk_id missing); no salvage.
         return None
     salvaged_concepts = [c for i, c in enumerate(concepts) if i not in bad_indices]
     if not salvaged_concepts:
-        return None  # nothing left worth returning
+        return None
     salvaged_raw = dict(raw)
     salvaged_raw["concepts"] = salvaged_concepts
     try:
@@ -279,22 +328,122 @@ def _record_call(
     )
 
 
-# --- extractor -----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Persona generator factory (used by cli.py persona-generate command)
+# ---------------------------------------------------------------------------
 
 
-class FileDispatchExtractor(Extractor):
-    BINDING_NAME = "file_dispatch"
+def make_persona_complete(
+    *,
+    dispatch_dir: Path | str | None = None,
+) -> Callable[[str], str]:
+    """Return a ``complete(prompt) -> str`` callable backed by the dispatcher."""
+    root = resolve_dispatch_dir(dispatch_dir)
+
+    def _complete(prompt: str) -> str:
+        raw = _dispatch_raw(root, "persona", {"prompt": prompt})
+        if not isinstance(raw, dict):
+            raise ValueError(f"persona dispatch returned non-dict: {raw!r}")
+        text = raw.get("text", "")
+        if not isinstance(text, str):
+            raise ValueError("persona dispatch response missing 'text' field")
+        return text
+
+    return _complete
+
+
+# ---------------------------------------------------------------------------
+# extract_many helpers (cache serialization)
+# ---------------------------------------------------------------------------
+
+
+def _concept_kwargs(c: dict) -> dict:
+    """Build kwargs for ExtractedConcept from a cached payload dict."""
+    kwargs = {
+        "title": c["title"],
+        "aliases": c["aliases"],
+        "kind": c["kind"],
+        "quote": c["quote"],
+        "category": c.get("category"),
+        "confidence": c.get("confidence", "extracted"),
+        "score": c.get("score", 1.0),
+        "definition": c.get("definition", ""),
+        "summary": c.get("summary", ""),
+    }
+    if c.get("parameters"):
+        kwargs["parameters"] = [Parameter(**p) for p in c["parameters"]]
+    if c.get("mechanisms"):
+        kwargs["mechanisms"] = c["mechanisms"]
+    if c.get("relationships"):
+        kwargs["relationships"] = [Relationship(**r) for r in c["relationships"]]
+    if c.get("equations"):
+        kwargs["equations"] = [Equation(**eq) for eq in c["equations"]]
+    return kwargs
+
+
+def _entry_to_response(entry: CachedExtract) -> ExtractResponse:
+    payload = entry.payload
+    return ExtractResponse(
+        chunk_id=payload["chunk_id"],
+        concepts=[ExtractedConcept(**_concept_kwargs(c)) for c in payload["concepts"]],
+        tokens_in=entry.tokens_in,
+        tokens_out=entry.tokens_out,
+    )
+
+
+def _response_to_entry(response: ExtractResponse) -> CachedExtract:
+    return CachedExtract(
+        payload={
+            "chunk_id": response.chunk_id,
+            "concepts": [
+                {
+                    "title": c.title,
+                    "aliases": list(c.aliases),
+                    "kind": c.kind,
+                    "quote": c.quote,
+                    "category": c.category,
+                    "confidence": c.confidence,
+                    "score": c.score,
+                    "definition": c.definition,
+                    "summary": c.summary,
+                    "parameters": [p.model_dump() for p in c.parameters],
+                    "mechanisms": list(c.mechanisms),
+                    "relationships": [r.model_dump() for r in c.relationships],
+                    "equations": [eq.model_dump() for eq in c.equations],
+                }
+                for c in response.concepts
+            ],
+        },
+        tokens_in=response.tokens_in,
+        tokens_out=response.tokens_out,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch — consolidated file-dispatch binding
+# ---------------------------------------------------------------------------
+
+
+class Dispatch:
+    """File-based request/response dispatch. The only place model calls live.
+
+    Satisfies the Extractor, Writer, Compactor, Editor, Orchestrator, and
+    Querier protocols via duck typing. Pipeline receives one ``Dispatch``
+    object instead of separate bindings.
+    """
 
     def __init__(
         self,
-        cache: ExtractCache,
         meter: CostMeter,
+        cache: ExtractCache,
         *,
         dispatch_dir: Path | str | None = None,
     ) -> None:
-        self._cache = cache
         self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+        self._cache = cache
+        self._dir = resolve_dispatch_dir(dispatch_dir)
+
+    # --- extract -----------------------------------------------------------
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
         return self.extract_many([request])[0]
@@ -307,70 +456,9 @@ class FileDispatchExtractor(Extractor):
         so the dispatcher can handle them concurrently. Cost-meter accounting
         runs serially after all responses are collected.
         """
-        from ..contracts.schema import Equation, ExtractedConcept, Parameter, Relationship
-
-        def _concept_kwargs(c: dict) -> dict:
-            # Backwards-compatible: older cached payloads may omit v2 fields.
-            kwargs = {
-                "title": c["title"],
-                "aliases": c["aliases"],
-                "kind": c["kind"],
-                "quote": c["quote"],
-                "category": c.get("category"),
-                "confidence": c.get("confidence", "extracted"),
-                "score": c.get("score", 1.0),
-                "definition": c.get("definition", ""),
-                "summary": c.get("summary", ""),
-            }
-            if c.get("parameters"):
-                kwargs["parameters"] = [Parameter(**p) for p in c["parameters"]]
-            if c.get("mechanisms"):
-                kwargs["mechanisms"] = c["mechanisms"]
-            if c.get("relationships"):
-                kwargs["relationships"] = [Relationship(**r) for r in c["relationships"]]
-            if c.get("equations"):
-                kwargs["equations"] = [Equation(**eq) for eq in c["equations"]]
-            return kwargs
-
-        def _entry_to_response(entry: CachedExtract) -> ExtractResponse:
-            payload = entry.payload
-            return ExtractResponse(
-                chunk_id=payload["chunk_id"],
-                concepts=[ExtractedConcept(**_concept_kwargs(c)) for c in payload["concepts"]],
-                tokens_in=entry.tokens_in,
-                tokens_out=entry.tokens_out,
-            )
-
-        def _response_to_entry(response: ExtractResponse) -> CachedExtract:
-            return CachedExtract(
-                payload={
-                    "chunk_id": response.chunk_id,
-                    "concepts": [
-                        {
-                            "title": c.title,
-                            "aliases": list(c.aliases),
-                            "kind": c.kind,
-                            "quote": c.quote,
-                            "category": c.category,
-                            "confidence": c.confidence,
-                            "score": c.score,
-                            "definition": c.definition,
-                            "summary": c.summary,
-                            "parameters": [p.model_dump() for p in c.parameters],
-                            "mechanisms": list(c.mechanisms),
-                            "relationships": [r.model_dump() for r in c.relationships],
-                            "equations": [eq.model_dump() for eq in c.equations],
-                        }
-                        for c in response.concepts
-                    ],
-                },
-                tokens_in=response.tokens_in,
-                tokens_out=response.tokens_out,
-            )
-
         keys = [
             ExtractCacheKey(
-                binding_name=self.BINDING_NAME,
+                binding_name=BINDING_NAME,
                 model_id=req.model_id,
                 prompt_hash=prompt_hash(req.prompt_template),
                 chunk_id=req.chunk_id,
@@ -379,7 +467,6 @@ class FileDispatchExtractor(Extractor):
         ]
 
         # Probe cache on disk to identify which requests need dispatch.
-        # Accessing _root avoids adding a public peek API to ExtractCache.
         cache_root = self._cache._root  # noqa: SLF001
         uncached_set: set[int] = {
             i for i, key in enumerate(keys) if not (cache_root / key.relpath()).exists()
@@ -387,13 +474,12 @@ class FileDispatchExtractor(Extractor):
 
         # Write all uncached request files up front so the dispatcher can
         # begin handling them concurrently before we start polling.
-        # dispatch_info is parallel to sorted(uncached_set).
         uncached_order = sorted(uncached_set)
         dispatch_info: list[tuple[Path, Path, ExtractRequest]] = []
         for i in uncached_order:
             req = requests[i]
             req_path, res_path = _write_request(
-                self._dispatch_dir, "extract", req.model_dump(mode="json")
+                self._dir, "extract", req.model_dump(mode="json")
             )
             dispatch_info.append((req_path, res_path, req))
 
@@ -422,8 +508,6 @@ class FileDispatchExtractor(Extractor):
             raise TimeoutError(f"no response at {res_path}")
 
         # Validate dispatched responses and clean up files.
-        # validated[j] holds the ExtractResponse for dispatch slot j on success.
-        # errors[j] holds the exception if validation failed, for re-raise below.
         validated: dict[int, ExtractResponse] = {}
         errors: dict[int, Exception] = {}
         for j, (req_path, res_path, req) in enumerate(dispatch_info):
@@ -433,23 +517,22 @@ class FileDispatchExtractor(Extractor):
                 _assert_quotes_in_chunk(response, req.chunk_text, req_path, raw)
                 validated[j] = response
             except (ValidationError, QuoteNotInChunkError) as exc:
-                errors[j] = exc  # .error.json already written by helpers above
+                errors[j] = exc
             finally:
                 _cleanup(res_path)
                 if not _error_path(req_path).exists():
                     _cleanup(req_path)
 
         # Collect (entry, was_hit) for every request via get_or_extract.
-        # For already-cached items the compute lambda is never invoked.
-        # For newly dispatched items the compute wraps the validated response.
         t0 = time.monotonic()
         entries: list[tuple[CachedExtract, bool]] = []
         dispatch_cursor = 0
         for i, (req, key) in enumerate(zip(requests, keys)):
             if i not in uncached_set:
-                # Cache hit — get_or_extract finds the file and never calls compute.
                 def _unreachable() -> CachedExtract:  # noqa: E306
-                    raise AssertionError("cache probe found a miss that disk check said was a hit")
+                    raise AssertionError(
+                        "cache probe found a miss that disk check said was a hit"
+                    )
 
                 entry, was_hit = self._cache.get_or_extract(key, _unreachable)
                 entries.append((entry, was_hit))
@@ -457,8 +540,6 @@ class FileDispatchExtractor(Extractor):
                 j = dispatch_cursor
                 dispatch_cursor += 1
                 if j in errors:
-                    # Re-raise the original exception so the pipeline's
-                    # try/except can skip this chunk exactly as single extract does.
                     raise errors[j]
                 resp = validated[j]
                 entry, was_hit = self._cache.get_or_extract(
@@ -466,7 +547,7 @@ class FileDispatchExtractor(Extractor):
                 )
                 entries.append((entry, was_hit))
 
-        # Record meter costs sequentially and build final responses in input order.
+        # Record meter costs and build final responses in input order.
         wall = time.monotonic() - t0
         results: list[ExtractResponse] = []
         for req, key, (entry, was_hit) in zip(requests, keys, entries):
@@ -483,25 +564,16 @@ class FileDispatchExtractor(Extractor):
             results.append(_entry_to_response(entry))
         return results
 
-
-# --- writer --------------------------------------------------------------
-
-
-class FileDispatchWriter(Writer):
-    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
-        self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+    # --- write -------------------------------------------------------------
 
     def write(self, request: WriteRequest) -> WriteResponse:
         t0 = time.monotonic()
         response, raw = _dispatch_model_with_raw(
-            self._dispatch_dir,
+            self._dir,
             "write",
             request.model_dump(mode="json"),
             WriteResponse,
         )
-        # Re-validate with page_kind from the originating request so the
-        # article-structure check (_check_wikipedia_structure) has the kind.
         if not response.page_kind:
             response = WriteResponse.model_validate(
                 {**raw, "page_kind": request.page_kind}
@@ -517,19 +589,12 @@ class FileDispatchWriter(Writer):
         )
         return response
 
-
-# --- compactor -----------------------------------------------------------
-
-
-class FileDispatchCompactor(Compactor):
-    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
-        self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+    # --- compact -----------------------------------------------------------
 
     def compact(self, page_id: str, title: str, entries: list[dict]) -> dict:
         t0 = time.monotonic()
         raw = _dispatch_raw(
-            self._dispatch_dir,
+            self._dir,
             "compact",
             {"page_id": page_id, "title": title, "entries": entries},
         )
@@ -544,21 +609,14 @@ class FileDispatchCompactor(Compactor):
         )
         return raw
 
-
-# --- editor --------------------------------------------------------------
-
-
-class FileDispatchEditor(Editor):
-    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
-        self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+    # --- edit --------------------------------------------------------------
 
     def edit(
         self, page_id: str, title: str, dossier: list[dict], neighbors: list[dict]
     ) -> EditorBrief:
         t0 = time.monotonic()
         brief, raw = _dispatch_model_with_raw(
-            self._dispatch_dir,
+            self._dir,
             "edit",
             {
                 "page_id": page_id,
@@ -579,19 +637,12 @@ class FileDispatchEditor(Editor):
         )
         return brief
 
+    # --- orchestrate -------------------------------------------------------
 
-# --- orchestrator --------------------------------------------------------
-
-
-class FileDispatchOrchestrator(Orchestrator):
-    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
-        self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
-
-    def step(self, state: OrchState) -> OrchAction:
+    def orchestrate(self, state: OrchState) -> OrchAction:
         t0 = time.monotonic()
         action = _dispatch_model(
-            self._dispatch_dir,
+            self._dir,
             "orchestrate",
             {
                 "run_id": state.run_id,
@@ -612,49 +663,12 @@ class FileDispatchOrchestrator(Orchestrator):
         )
         return action
 
-
-# --- persona generator ---------------------------------------------------
-
-
-def make_persona_complete(
-    *,
-    dispatch_dir: Path | str | None = None,
-) -> Callable[[str], str]:
-    """Return a ``complete(prompt) -> str`` callable backed by the dispatcher.
-
-    The callable writes one ``persona/{rid}.request.json`` payload, blocks
-    on the matching response file, and returns the ``text`` field. This
-    is the only persona-specific dispatch path; ``distill.persona`` stays
-    binding-agnostic.
-    """
-    root = resolve_dispatch_dir(dispatch_dir)
-
-    def _complete(prompt: str) -> str:
-        raw = _dispatch_raw(root, "persona", {"prompt": prompt})
-        if not isinstance(raw, dict):
-            raise ValueError(f"persona dispatch returned non-dict: {raw!r}")
-        text = raw.get("text", "")
-        if not isinstance(text, str):
-            raise ValueError("persona dispatch response missing 'text' field")
-        return text
-
-    return _complete
-
-
-# --- querier -------------------------------------------------------------
-
-QUERY_PROMPT = "wikify_simple/query"
-
-
-class FileDispatchQuerier(Querier):
-    def __init__(self, meter: CostMeter, *, dispatch_dir: Path | str | None = None) -> None:
-        self._meter = meter
-        self._dispatch_dir = resolve_dispatch_dir(dispatch_dir)
+    # --- query -------------------------------------------------------------
 
     def answer(self, request: QueryRequest) -> QueryResponse:
         t0 = time.monotonic()
         response = _dispatch_model(
-            self._dispatch_dir,
+            self._dir,
             "query",
             request.model_dump(mode="json"),
             QueryResponse,

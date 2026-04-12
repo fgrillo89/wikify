@@ -19,14 +19,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from wikify_simple.bindings.file_dispatch import FileDispatchExtractor
-from wikify_simple.contracts.schema import (
+from wikify_simple.dispatch import Dispatch
+from wikify_simple.schema import (
     ExtractedConcept,
     ExtractRequest,
     QuoteNotInChunkError,
 )
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 
 # --- schema-level tests --------------------------------------------------
 
@@ -198,14 +198,14 @@ class _SingleResponder:
             time.sleep(0.02)
 
 
-def _make_extractor(tmp_path: Path, dispatch_root: Path) -> FileDispatchExtractor:
+def _make_extractor(tmp_path: Path, dispatch_root: Path) -> Dispatch:
     meter = CostMeter(
         budget_haiku_eq=1_000_000.0,
         run_id="concept-test",
         events_path=tmp_path / "calls.jsonl",
     )
     cache = ExtractCache(root=tmp_path / "cache")
-    return FileDispatchExtractor(cache, meter, dispatch_dir=dispatch_root)
+    return Dispatch(meter, cache, dispatch_dir=dispatch_root)
 
 
 def test_quote_not_in_chunk_rejected_by_binding(tmp_path):

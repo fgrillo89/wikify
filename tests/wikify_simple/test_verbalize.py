@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from wikify_simple.contracts.schema import (
+from wikify_simple.schema import (
     ExtractedConcept,
     ExtractRequest,
     ExtractResponse,

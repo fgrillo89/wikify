@@ -20,8 +20,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..contracts.roles import Role
-from ..contracts.tiers import ModelTier
+from .types import Role
+from .types import ModelTier
 from .config import (
     ABORT_RATIO,
     TIER_L_INPUT,

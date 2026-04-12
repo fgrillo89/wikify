@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .tiers import ModelTier
+from .types import ModelTier
 
 _REFERENCES_HEADING = "## References"
 _MARKER_RE = re.compile(r"\[\^e\d+\]")

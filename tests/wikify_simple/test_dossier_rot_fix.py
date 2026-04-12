@@ -15,18 +15,18 @@ import random
 import numpy as np
 import yaml  # noqa: I001
 
-from wikify_simple.distill.extract.dossier import (
+from wikify_simple.distill.dossier import (
     SKIP_SECTION_TYPES,
     Dossier,
     DossierEntry,
     DossierStore,
     dossier_to_yaml,
 )
-from wikify_simple.distill.sampler import (
+from wikify_simple.distill.explorer import (
     GlobalOp,
-    LevyMixSampler,
+    LevyExplorer,
     LocalOp,
-    SamplerState,
+    ExplorerState,
     init_coverage_state,
 )
 from wikify_simple.models import CorpusGraph
@@ -46,9 +46,9 @@ def test_skip_section_types_contains_expected():
     assert "abstract" not in SKIP_SECTION_TYPES
 
 
-def _make_sampler_state(chunks_by_doc: dict[str, list[str]]) -> SamplerState:
+def _make_sampler_state(chunks_by_doc: dict[str, list[str]]) -> ExplorerState:
     all_ids = [cid for ids in chunks_by_doc.values() for cid in ids]
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(42),
         graph=CorpusGraph(nodes={}, edges={}),
         vectors=VectorStore(ids=all_ids, matrix=np.eye(len(all_ids), dtype=np.float32)),
@@ -74,7 +74,7 @@ def test_sampler_only_sees_non_skip_chunks():
     # content_only chunks = only body/abstract/methods.
     content_chunks = {"d1": ["c_body", "c_abstract"], "d2": ["c_methods"]}
     state = _make_sampler_state(content_chunks)
-    sampler = LevyMixSampler(
+    sampler = LevyExplorer(
         local_op=LocalOp.NONE, global_op=GlobalOp.UNIFORM, jump_rate=1.0
     )
     batch = sampler.next_batch(state, k=10)
@@ -226,7 +226,7 @@ def test_dossier_to_yaml_is_more_compact_than_json():
 
 
 def test_build_write_request_populates_dossier_context_yaml(tmp_path):
-    from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
+    from wikify_simple.distill.write_prep import WriteRequestConfig, build_write_request
     from wikify_simple.models import Evidence, WikiPage
     from wikify_simple.paths import BundlePaths
     from wikify_simple.store.images_index import ImageIndex
@@ -288,7 +288,7 @@ def test_build_write_request_populates_dossier_context_yaml(tmp_path):
 
 
 def test_build_write_request_empty_yaml_when_no_dossier(tmp_path):
-    from wikify_simple.distill.write.requests import WriteRequestConfig, build_write_request
+    from wikify_simple.distill.write_prep import WriteRequestConfig, build_write_request
     from wikify_simple.models import Evidence, WikiPage
     from wikify_simple.paths import BundlePaths
     from wikify_simple.store.images_index import ImageIndex
@@ -356,8 +356,8 @@ def test_write_io_lineage_creates_expected_files(tmp_path):
     }
 
     # Simulate candidates (minimal structure).
-    from wikify_simple.contracts.schema import ExtractedConcept
-    from wikify_simple.distill.extract.canonicalize import Candidate
+    from wikify_simple.schema import ExtractedConcept
+    from wikify_simple.distill.dossier import Candidate
 
     candidates = [
         Candidate(

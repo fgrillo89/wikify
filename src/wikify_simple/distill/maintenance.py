@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from ..contracts.schema import (
+from ..schema import (
     MaintenanceAction,
     MaintenanceReport,
     QueryLogEntry,

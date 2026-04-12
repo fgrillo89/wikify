@@ -1,4 +1,4 @@
-"""Infrastructure configuration constants."""
+"""Configuration constants for wikify_simple. Pure values, no imports."""
 
 # -- token estimation --------------------------------------------------------
 CHARS_PER_TOKEN = 4  # rule-of-thumb for English prose (~10% accurate)
@@ -18,8 +18,8 @@ ABORT_RATIO = 1.05  # hard-abort at this multiple of budget target
 # — output tokens are counted at the tier's output multiplier separately.
 #
 # Haiku  (S): input 1x, output 5x baseline
-# Sonnet (M): input 3x, output 15x → 3x Haiku on both
-# Opus   (L): input 15x, output 75x → 15x Haiku on both
+# Sonnet (M): input 3x, output 15x -> 3x Haiku on both
+# Opus   (L): input 15x, output 75x -> 15x Haiku on both
 TIER_S_INPUT = 1.0
 TIER_S_OUTPUT = 5.0
 TIER_S_OVERHEAD = 50.0
@@ -30,6 +30,17 @@ TIER_L_INPUT = 15.0
 TIER_L_OUTPUT = 75.0
 TIER_L_OVERHEAD = 300.0
 
-# -- file dispatch -----------------------------------------------------------
+# -- dispatch ----------------------------------------------------------------
 DISPATCH_TIMEOUT = 600.0  # seconds to wait for a response file
 POLL_INTERVAL = 0.05  # seconds between polls for response file
+
+# -- explorer ----------------------------------------------------------------
+CHUNKS_PER_LANDED_DOC = 3  # chunks sampled per global-jump document landing
+
+# -- budget ------------------------------------------------------------------
+CURATE_FRACTION = 0.05  # fraction of total budget reserved for curation
+NOVELTY_THRESHOLD = 0.05  # dN/dC below which adaptive schedule shifts to write
+
+# -- query -------------------------------------------------------------------
+MAX_CANDIDATES = 12  # max wiki pages considered per query
+BODY_EXCERPT_CHARS = 600  # characters of page body included in evidence

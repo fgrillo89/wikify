@@ -1,7 +1,7 @@
 """Adaptive schedule reallocation after the extract loop completes.
 
 When extract finishes normally (i.e. budget not exceeded) and the realised
-novelty rate (unique concepts / chunks read) is below the AdaptiveSchedule
+novelty rate (unique concepts / chunks read) is below the AdaptiveBudget
 threshold, ``Schedule.reallocate`` should bump the write share of the
 remaining budget. The pipeline records ``split_initial`` and
 ``split_reallocated`` in the run snapshot so this is observable.
@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeWriter
+from .fakes import FakeExtractor, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.sampler import GlobalOp, LevyMixSampler, LocalOp
-from wikify_simple.distill.schedule import AdaptiveSchedule
-from wikify_simple.distill.strategies import StrategyConfig
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.explorer import GlobalOp, LevyExplorer, LocalOp
+from wikify_simple.distill.strategy import AdaptiveBudget
+from wikify_simple.distill.strategy import StrategyConfig
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.paths import BundlePaths, CorpusPaths
 
@@ -34,13 +34,13 @@ def corpus(tmp_path_factory) -> CorpusPaths:
 def _strategy(seed: int = 0) -> StrategyConfig:
     return StrategyConfig(
         name="M",
-        sampler=LevyMixSampler(
+        explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,
             jump_rate=0.1,
         ),
         # very low novelty threshold so the small fixture trips it
-        schedule=AdaptiveSchedule(
+        budget=AdaptiveBudget(
             exploit_fraction_initial=0.4,
             novelty_threshold=10.0,  # always triggers shift
         ),

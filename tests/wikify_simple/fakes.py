@@ -14,9 +14,10 @@ exercised.
 import re
 import time
 
-from ..contracts.protocols import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
-from ..contracts.roles import Role, response_reserve, total_context
-from ..contracts.schema import (
+from wikify_simple.types import Compactor, Editor, Extractor, Orchestrator, Querier, Writer
+from wikify_simple.types import Role
+from wikify_simple.context import response_reserve, total_context
+from wikify_simple.schema import (
     BriefSection,
     EditorBrief,
     ExtractedConcept,
@@ -30,8 +31,8 @@ from ..contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
-from ..infra.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
-from ..infra.cost_meter import CostMeter
+from wikify_simple.cache import CachedExtract, ExtractCache, ExtractCacheKey, prompt_hash
+from wikify_simple.meter import CostMeter
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]+")
 

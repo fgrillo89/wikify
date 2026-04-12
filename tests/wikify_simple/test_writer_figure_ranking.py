@@ -7,8 +7,8 @@ and the list is capped to keep the prompt focused.
 
 from pathlib import Path
 
-from wikify_simple.distill.extract.dossier import DossierStore
-from wikify_simple.distill.write.requests import (
+from wikify_simple.distill.dossier import DossierStore
+from wikify_simple.distill.write_prep import (
     WriteRequestConfig,
     build_write_request,
 )

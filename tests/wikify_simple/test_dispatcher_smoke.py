@@ -17,12 +17,8 @@ from typing import Callable
 
 import pytest
 
-from wikify_simple.bindings.file_dispatch import (
-    FileDispatchExtractor,
-    FileDispatchQuerier,
-    FileDispatchWriter,
-)
-from wikify_simple.contracts.schema import (
+from wikify_simple.dispatch import Dispatch
+from wikify_simple.schema import (
     ExtractRequest,
     ExtractResponse,
     QueryEvidence,
@@ -32,8 +28,8 @@ from wikify_simple.contracts.schema import (
     WriteRequest,
     WriteResponse,
 )
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 
 # --- fake dispatcher thread ----------------------------------------------
 
@@ -192,7 +188,7 @@ def _no_residual_files(root: Path) -> None:
 def test_extractor_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
     cache = ExtractCache(root=tmp_path / "cache")
-    extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatcher)
+    extractor = Dispatch(meter, cache, dispatch_dir=dispatcher)
 
     req = ExtractRequest(
         chunk_id="chunk-1",
@@ -215,7 +211,8 @@ def test_extractor_dispatcher_roundtrip(tmp_path, dispatcher):
 
 def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
-    writer = FileDispatchWriter(meter, dispatch_dir=dispatcher)
+    cache = ExtractCache(tmp_path / "cache")
+    writer = Dispatch(meter, cache, dispatch_dir=dispatcher)
 
     req = WriteRequest(
         page_id="p1",
@@ -243,7 +240,8 @@ def test_writer_dispatcher_roundtrip(tmp_path, dispatcher):
 
 def test_querier_dispatcher_roundtrip(tmp_path, dispatcher):
     meter = _meter(tmp_path)
-    querier = FileDispatchQuerier(meter, dispatch_dir=dispatcher)
+    cache = ExtractCache(tmp_path / "cache")
+    querier = Dispatch(meter, cache, dispatch_dir=dispatcher)
 
     req = QueryRequest(
         question="What is ALD?",
@@ -273,7 +271,7 @@ def test_extractor_cache_hit_skips_dispatcher(tmp_path, dispatcher):
     dispatcher (so a torn-down dispatcher would still work)."""
     meter = _meter(tmp_path)
     cache = ExtractCache(root=tmp_path / "cache")
-    extractor = FileDispatchExtractor(cache, meter, dispatch_dir=dispatcher)
+    extractor = Dispatch(meter, cache, dispatch_dir=dispatcher)
 
     req = ExtractRequest(
         chunk_id="chunk-cached",

@@ -7,21 +7,21 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from wikify_simple.bindings.fake import FakeExtractor, FakeOrchestrator, FakeWriter
+from .fakes import FakeExtractor, FakeOrchestrator, FakeWriter
 from wikify_simple.distill.pipeline import run as pipeline_run
-from wikify_simple.distill.sampler import (
+from wikify_simple.distill.explorer import (
     GlobalOp,
-    LevyMixSampler,
+    LevyExplorer,
     LocalOp,
-    SamplerState,
+    ExplorerState,
     apply_coverage_feedback,
     init_coverage_state,
     restore_coverage_state,
 )
-from wikify_simple.distill.schedule import StaticSchedule
-from wikify_simple.distill.strategies import StrategyConfig
-from wikify_simple.infra.cache import ExtractCache
-from wikify_simple.infra.cost_meter import CostMeter
+from wikify_simple.distill.strategy import StaticBudget
+from wikify_simple.distill.strategy import StrategyConfig
+from wikify_simple.cache import ExtractCache
+from wikify_simple.meter import CostMeter
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.models import CorpusGraph
 from wikify_simple.paths import BundlePaths, CorpusPaths
@@ -30,9 +30,9 @@ from wikify_simple.store.vectors import VectorStore
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
 
-def _synthetic_state() -> SamplerState:
+def _synthetic_state() -> ExplorerState:
     ids = ["c1", "c2", "c3", "c4"]
-    state = SamplerState(
+    state = ExplorerState(
         rng=random.Random(0),
         graph=CorpusGraph(
             nodes={},
@@ -61,7 +61,7 @@ def test_coverage_gap_picks_highest_residual_unseen():
         seen_chunks={"c3"},
         doc_seen_counts={"d2": 1},
     )
-    sampler = LevyMixSampler(local_op=LocalOp.NONE, global_op=GlobalOp.COVERAGE_GAP, jump_rate=1.0)
+    sampler = LevyExplorer(local_op=LocalOp.NONE, global_op=GlobalOp.COVERAGE_GAP, jump_rate=1.0)
     batch = sampler.next_batch(state, 1)
     assert batch == ["c2"]
 
@@ -88,15 +88,14 @@ def test_llm_policy_records_actions_in_snapshot(corpus, tmp_path):
     )
     cfg = StrategyConfig(
         name="M",
-        sampler=LevyMixSampler(
+        explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,
             jump_rate=0.1,
         ),
-        schedule=StaticSchedule(exploit_fraction=0.4),
+        budget=StaticBudget(exploit_fraction=0.4),
         extract_tier="S",
         write_tier="S",
-        policy_name="llm_policy",
         seed=0,
     )
     pipeline_run(
@@ -107,9 +106,9 @@ def test_llm_policy_records_actions_in_snapshot(corpus, tmp_path):
         writer=FakeWriter(meter),
         meter=meter,
         budget_haiku_eq=30_000.0,
-        policy_name="llm_policy",
+        mode_name="guided",
         orchestrator=FakeOrchestrator(meter, max_steps=2),
     )
     snap = json.loads(bundle.run_path.read_text(encoding="utf-8"))
-    assert snap["policy"] == "llm_policy"
-    assert any(ev.get("policy") == "llm_policy" for ev in snap.get("policy_actions", []))
+    assert snap["mode"] == "guided"
+    assert any(ev.get("mode") == "guided" for ev in snap.get("policy_actions", []))

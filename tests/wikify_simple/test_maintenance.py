@@ -13,7 +13,7 @@ Exercises:
 import json
 from pathlib import Path
 
-from wikify_simple.contracts.schema import (
+from wikify_simple.schema import (
     EscalationEvent,
     MaintenanceAction,
 )
@@ -31,7 +31,7 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
 
 def _write_log_entry(bundle: BundlePaths, question: str, pages_touched=None, escalate=False) -> str:
-    from wikify_simple.contracts.schema import QueryAnswer
+    from wikify_simple.schema import QueryAnswer
     answer = QueryAnswer(text="Test answer.", citations=[], chunks=[], follow_ups=[])
     ev = [EscalationEvent(reason="r", chunk_ids=["c1"])] if escalate else []
     return persist_query_log(
