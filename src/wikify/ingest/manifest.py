@@ -4,6 +4,15 @@ The manifest records which source files have been ingested, their content
 hashes, and the fingerprints of the parser/chunker/embedder that processed
 them.  This lets the pipeline skip unchanged sources and detect when a
 backend change requires a rebuild.
+
+Identity model:
+  - ``source_id`` is the stable filename stem (e.g. ``"paper_A"``).  It
+    stays the same when the file's content changes.
+  - ``content_hash`` is the sha1[:12] of the file bytes.  It changes when
+    the file is modified.
+  - ``doc_id`` is ``{stem}_{content_hash}`` and changes with content.
+    When a source is modified, the old doc_id's artifacts are removed and
+    replaced by the new doc_id's artifacts.
 """
 
 from __future__ import annotations
@@ -19,10 +28,10 @@ from typing import Literal
 class SourceRecord:
     """One ingested source file."""
 
-    source_id: str  # stable identity (stem + content hash)
+    source_id: str  # stable identity: filename stem
     source_path: str  # original path (informational)
     content_hash: str  # sha1[:12] of file bytes
-    doc_id: str
+    doc_id: str  # {stem}_{content_hash}
     status: Literal["active", "deleted"] = "active"
     chunk_ids: list[str] = field(default_factory=list)
     parsed_at: str = ""  # ISO timestamp
@@ -80,8 +89,15 @@ class CorpusManifest:
     def active_doc_ids(self) -> set[str]:
         return {s.doc_id for s in self.sources.values() if s.status == "active"}
 
-    def active_content_hashes(self) -> set[str]:
-        return {s.content_hash for s in self.sources.values() if s.status == "active"}
+    def active_source_ids(self) -> set[str]:
+        return {s.source_id for s in self.sources.values() if s.status == "active"}
+
+    def find_by_source_id(self, source_id: str) -> SourceRecord | None:
+        """Find the active record for a given source_id, or None."""
+        rec = self.sources.get(source_id)
+        if rec and rec.status == "active":
+            return rec
+        return None
 
 
 @dataclass
@@ -91,10 +107,16 @@ class ChangeSet:
     to_parse: list[Path]  # new or changed sources
     unchanged: list[str]  # source_ids that are unchanged
     to_delete: list[str]  # source_ids to remove (sync mode only)
+    to_replace: dict[str, str]  # source_id -> old_doc_id (content changed)
 
     @property
     def is_empty(self) -> bool:
         return not self.to_parse and not self.to_delete
+
+
+def source_id_for(path: Path) -> str:
+    """Stable source identity from filename (not content)."""
+    return path.stem
 
 
 def diff_sources(
@@ -106,42 +128,51 @@ def diff_sources(
 ) -> ChangeSet:
     """Compare source files against the manifest to determine what to process.
 
-    ``additive`` mode: only add new/changed sources, never delete.
+    Identity is by filename stem (``source_id_for(path)``).  Content changes
+    are detected by comparing content hashes.
+
+    ``additive`` mode: add new sources, replace changed sources, never delete.
     ``sync`` mode: also tombstone sources no longer present in input.
     """
     from .pipeline import content_hash as _default_hash
 
     hash_fn = content_hash_fn or _default_hash
-    existing_hashes = manifest.active_content_hashes()
 
     to_parse: list[Path] = []
-    seen_hashes: set[str] = set()
+    unchanged: list[str] = []
+    to_replace: dict[str, str] = {}  # source_id -> old_doc_id
     seen_source_ids: set[str] = set()
 
     for src in input_dir_sources:
+        sid = source_id_for(src)
+        seen_source_ids.add(sid)
         try:
             h = hash_fn(src)
         except OSError:
             to_parse.append(src)
             continue
-        source_id = f"{src.stem}_{h}"
-        seen_source_ids.add(source_id)
-        seen_hashes.add(h)
-        if h in existing_hashes:
-            continue  # unchanged
-        if source_id in manifest.sources and manifest.sources[source_id].content_hash == h:
-            continue  # same file, same content
-        to_parse.append(src)
 
-    unchanged = [
-        sid for sid, rec in manifest.sources.items()
-        if rec.status == "active" and rec.content_hash in seen_hashes
-    ]
+        existing = manifest.find_by_source_id(sid)
+        if existing is None:
+            # New source
+            to_parse.append(src)
+        elif existing.content_hash == h:
+            # Unchanged
+            unchanged.append(sid)
+        else:
+            # Content changed -- need to re-parse and replace old artifacts
+            to_replace[sid] = existing.doc_id
+            to_parse.append(src)
 
     to_delete: list[str] = []
     if mode == "sync":
-        for sid, rec in manifest.sources.items():
-            if rec.status == "active" and rec.content_hash not in seen_hashes:
+        for sid in manifest.active_source_ids():
+            if sid not in seen_source_ids:
                 to_delete.append(sid)
 
-    return ChangeSet(to_parse=to_parse, unchanged=unchanged, to_delete=to_delete)
+    return ChangeSet(
+        to_parse=to_parse,
+        unchanged=unchanged,
+        to_delete=to_delete,
+        to_replace=to_replace,
+    )

@@ -523,8 +523,35 @@ def _resave_docs(
         (paths.docs_dir / f"{doc.id}.json").write_text(
             json.dumps(_doc_to_dict(doc)), encoding="utf-8"
         )
-        body = raw_markdown_by_id.get(doc.id, "")
+        body = raw_markdown_by_id.get(doc.id)
+        if body is None:
+            # Unchanged doc -- read existing markdown body from disk.
+            md_path = paths.markdown_dir / f"{doc.id}.md"
+            if md_path.exists():
+                body = _read_body_from_doc_markdown(md_path)
+            else:
+                body = ""
         write_doc_markdown(paths, doc, body)
+
+
+def _read_body_from_doc_markdown(md_path: Path) -> str:
+    """Read the body text from an enriched doc markdown file.
+
+    The file has YAML frontmatter (``---`` ... ``---``) followed by the
+    body, then an ``## Edges`` section. We strip frontmatter and edges
+    to recover the original parsed body.
+    """
+    text = md_path.read_text(encoding="utf-8")
+    # Strip YAML frontmatter
+    if text.startswith("---"):
+        end = text.find("\n---\n", 4)
+        if end != -1:
+            text = text[end + 5:]
+    # Strip the ## Edges section appended by write_doc_markdown
+    edges_idx = text.find("\n## Edges\n")
+    if edges_idx != -1:
+        text = text[:edges_idx]
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -581,16 +608,21 @@ def ingest_corpus(
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
-    Incremental: parses only new/changed sources, then rebuilds all
-    derived artifacts (graph, index, pagerank, etc.) from the full active
-    corpus so they never go stale.
+    Incremental: parses only new/changed sources, physically removes
+    stale artifacts for replaced/deleted sources, then rebuilds all
+    derived artifacts from the full active corpus.
 
-    ``mode`` can be ``additive`` (default, never deletes) or ``sync``
-    (tombstones sources no longer present in ``input_dir``).
+    ``mode`` can be ``additive`` (default, never deletes absent sources)
+    or ``sync`` (removes sources no longer present in ``input_dir``).
     """
     from ..store.corpus import all_chunks as load_all_chunks
     from ..store.corpus import list_documents
-    from .manifest import CorpusManifest, SourceRecord, diff_sources
+    from .manifest import (
+        CorpusManifest,
+        SourceRecord,
+        diff_sources,
+        source_id_for,
+    )
 
     timings: dict[str, float] = {}
     t0_run = time.monotonic()
@@ -621,12 +653,13 @@ def ingest_corpus(
             deduped.append(src)
         change_set.to_parse = deduped
 
-    n_existing = len(change_set.unchanged)
+    n_unchanged = len(change_set.unchanged)
     n_new = len(change_set.to_parse)
     n_delete = len(change_set.to_delete)
+    n_replace = len(change_set.to_replace)
     print(
-        f"[ingest] {n_existing} existing, {n_new} new/changed, "
-        f"{n_delete} to delete",
+        f"[ingest] {n_unchanged} unchanged, {n_new} to parse "
+        f"({n_replace} replacements), {n_delete} to delete",
         file=sys.stderr,
     )
 
@@ -637,30 +670,43 @@ def ingest_corpus(
         )
         return paths
 
-    # --- Source processing (per-file, incremental) ---
+    # --- Remove stale artifacts for replaced/deleted sources ---
 
-    # Handle deletions in sync mode
-    if change_set.to_delete:
-        for sid in change_set.to_delete:
-            if sid in manifest.sources:
-                manifest.sources[sid].status = "deleted"
-            print(f"  [delete] {sid}", file=sys.stderr)
+    stale_doc_ids: set[str] = set()
 
-    # Parse new/changed sources
+    # Collect doc_ids to remove from replacements (content changed)
+    for sid, old_doc_id in change_set.to_replace.items():
+        stale_doc_ids.add(old_doc_id)
+        print(f"  [replace] {sid}: removing old {old_doc_id}", file=sys.stderr)
+
+    # Collect doc_ids to remove from deletions (sync mode)
+    for sid in change_set.to_delete:
+        rec = manifest.sources.get(sid)
+        if rec and rec.status == "active":
+            stale_doc_ids.add(rec.doc_id)
+            manifest.sources[sid].status = "deleted"
+            print(f"  [delete] {sid} ({rec.doc_id})", file=sys.stderr)
+
+    # Physically remove stale doc/chunk/markdown/image artifacts
+    if stale_doc_ids:
+        with _timed(timings, "remove stale"):
+            _remove_doc_artifacts(paths, stale_doc_ids)
+
+    # --- Parse new/changed sources ---
+
     if change_set.to_parse:
         with _timed(timings, "parse+chunk"):
             bundles = _parse_sources(change_set.to_parse, paths, max_workers)
 
         with _timed(timings, "per-doc persist"):
-            new_docs, new_chunks, new_pairs, declared, raw_md = (
-                _persist_bundles(bundles, paths)
-            )
+            _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
 
         # Update manifest with new source records
         for bundle in bundles:
-            h = bundle.doc_id.rsplit("_", 1)[-1]  # extract hash from doc_id
+            sid = source_id_for(Path(bundle.src_path))
+            h = bundle.doc_id.rsplit("_", 1)[-1]
             rec = SourceRecord(
-                source_id=bundle.doc_id,
+                source_id=sid,
                 source_path=bundle.src_path,
                 content_hash=h,
                 doc_id=bundle.doc_id,
@@ -668,22 +714,18 @@ def ingest_corpus(
                 chunk_ids=[c.id for c in bundle.chunks],
                 parsed_at=SourceRecord.now_iso(),
             )
-            manifest.sources[bundle.doc_id] = rec
+            manifest.sources[sid] = rec
     else:
         declared, raw_md = {}, {}
         timings["parse+chunk"] = 0.0
         timings["per-doc persist"] = 0.0
 
-    # --- Derived rebuild (corpus-wide, must see the full active corpus) ---
-    # Load ALL active docs/chunks for derived artifact rebuild, not just
-    # the newly parsed ones. This is the critical fix: previously the
-    # derived artifacts (graph, vectors, index) only saw new documents.
+    # --- Derived rebuild (corpus-wide, from the active corpus on disk) ---
 
     with _timed(timings, "load active corpus"):
         all_docs = list_documents(paths)
         all_chunks_list = load_all_chunks(paths)
         all_pairs = _build_pairs(all_docs, all_chunks_list)
-        # Merge declared keywords from existing docs
         for doc in all_docs:
             if doc.id not in declared and isinstance(
                 doc.metadata.get("keywords"), list
@@ -718,9 +760,6 @@ def ingest_corpus(
         write_corpus_bibtex(paths, all_docs)
 
     with _timed(timings, "doc resave"):
-        # Only new docs have raw markdown in memory; existing docs get
-        # empty string which write_doc_markdown handles (it reads from
-        # disk when the body is absent).
         _resave_docs(paths, all_docs, raw_md)
 
     # --- Save manifest ---
@@ -729,12 +768,52 @@ def ingest_corpus(
 
     backend = current_backend()
     manifest.embedder_fingerprint = (
-        f"{backend['backend']}:{backend.get('model', '')}:{backend.get('dim', '')}"
+        f"{backend['backend']}:{backend.get('model', '')}:"
+        f"{backend.get('dim', '')}"
     )
     manifest.save(paths.manifest_path)
 
     _print_timings(timings, t0_run)
     return paths
+
+
+def _remove_doc_artifacts(paths: CorpusPaths, doc_ids: set[str]) -> None:
+    """Physically delete corpus artifacts for the given doc_ids.
+
+    Removes doc JSON, chunks JSONL, markdown, and image directory so
+    they are not picked up by ``list_documents`` / ``all_chunks`` during
+    the derived rebuild.
+    """
+    import shutil
+
+    for did in doc_ids:
+        doc_json = paths.docs_dir / f"{did}.json"
+        if doc_json.exists():
+            doc_json.unlink()
+        chunk_jsonl = paths.chunks_dir / f"{did}.jsonl"
+        if chunk_jsonl.exists():
+            chunk_jsonl.unlink()
+        md_file = paths.markdown_dir / f"{did}.md"
+        if md_file.exists():
+            md_file.unlink()
+    # Image dirs use slugified names, not doc_ids directly.  Walk the
+    # image folder and check sidecar JSON for matching doc_ids.
+    if paths.images_dir.exists():
+        for img_dir in paths.images_dir.iterdir():
+            if not img_dir.is_dir():
+                continue
+            # Check if any sidecar in this dir belongs to a stale doc
+            sidecars = list(img_dir.glob("*.json"))
+            if not sidecars:
+                continue
+            try:
+                first = json.loads(sidecars[0].read_text(encoding="utf-8"))
+                img_id = first.get("id", "")
+                img_doc_id = img_id.split("/", 1)[0] if "/" in img_id else ""
+                if img_doc_id in doc_ids:
+                    shutil.rmtree(img_dir)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _build_pairs(
