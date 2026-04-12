@@ -2,45 +2,43 @@
 
 ## Status (2026-04-12)
 
-### Phase A: Consolidation
+### Phase A: Consolidation -- Done
 
 | # | Item | Status |
 |---|------|--------|
 | 1 | Type RawImage contract | Done |
 | 2 | Parser protocol + registry (enum + factory) | Done |
 | 3 | Explicit typed stages (equations/captions/citations/media/metadata) | Done (explicit calls, no generic protocol) |
-| 4 | Slim refresh.py -> pipeline.py | Partial (~650L, staged but not decomposed) |
-| 5 | Centralize config (SKIP_SECTION_TYPES dedup) | Not done |
+| 4 | Decompose pipeline.py | Done (4 extracted helpers, orchestrator ~60L) |
+| 5 | Centralize config (SKIP_SECTION_TYPES) | Done (already in ingest/config.py, imported everywhere) |
 | 6 | Per-stage timing + progress logs | Done (_timed + _print_timings) |
 
-### Phase B: Incremental ingest
+### Phase B: Incremental ingest -- Done
 
 | # | Item | Status |
 |---|------|--------|
 | 7 | Corpus manifest / record manager | Done |
-| 8 | Atomic staging / publish | Not done |
+| 8 | Atomic writes for corpus artifacts and manifest | Done (tempfile + os.replace) |
 | 9 | Split pipeline: changed-source + derived rebuild | Done |
-| 10 | Test incremental and sync modes | Done (18 tests) |
+| 10 | Test incremental and sync modes | Done (19 tests) |
 
-### Phase C: Scale hardening
+### Phase C: Scale hardening -- Done
 
 | # | Item | Status |
 |---|------|--------|
 | 11 | Blockwise top-k/threshold graph build | Done |
-| 12 | Scale tests (50-paper correctness, 200-1000 timing) | Not done |
+| 12 | Scale tests (50-paper correctness, incremental, timing) | Done (test_ingest_scale.py) |
 | 13 | Embedding migration guards (fingerprint mismatch) | Done |
 
-### Phase D: Extensions
+### Phase D: Extensions -- Deferred
 
-| # | Item | Status |
-|---|------|--------|
-| 14 | DocType classification with overrides | Not done |
-| 15 | CorpusReader protocol for distill preload | Not done |
-| 16 | Parser quality harness (pymupdf vs alternatives) | Not done |
-| 17 | Docling parser behind config | Not done (architecture ready) |
-| 18 | Alternative store / ANN backend | Not done |
-
-### Remaining work (phases 5, 8, 12, 14-18 + partial 4)
+| # | Item | Defer until |
+|---|------|-------------|
+| 14 | DocType classification with overrides | A second consumer needs doc classification |
+| 15 | CorpusReader protocol for distill preload | A second store backend is implemented |
+| 16 | Parser quality harness (pymupdf vs alternatives) | A second parser package is available |
+| 17 | Docling parser behind config | docling is added as a dependency |
+| 18 | Alternative store / ANN backend | Scale tests reveal file-per-doc is a bottleneck |
 
 ## Lessons from the distill consolidation
 
