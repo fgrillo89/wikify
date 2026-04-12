@@ -39,6 +39,7 @@ def _render(doc: Document, body: str) -> str:
         authors = [authors]
     year = meta.get("year")
     doi = meta.get("doi")
+    venue = meta.get("venue") or meta.get("journal")
     topics = meta.get("keywords") or []
     lines: list[str] = ["---"]
     lines.append(f"title: {_yaml_scalar(doc.title)}")
@@ -49,6 +50,8 @@ def _render(doc: Document, body: str) -> str:
         lines.append(f"year: {year}")
     if doi:
         lines.append(f"doi: {_yaml_scalar(str(doi))}")
+    if venue:
+        lines.append(f"venue: {_yaml_scalar(str(venue))}")
     if topics:
         lines.append(f"topics: {json.dumps(list(topics), ensure_ascii=False)}")
     lines.append(f"source_path: {_yaml_scalar(doc.source_path)}")

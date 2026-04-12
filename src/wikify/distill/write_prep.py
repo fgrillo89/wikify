@@ -17,6 +17,7 @@ from wikify.schema import (
     WriteEvidenceRefV2,
     WriteRequest,
 )
+from wikify.store.bibliography import citation_context_for_docs
 from wikify.store.images_index import ImageIndex, ImageRecord
 from wikify.types import ModelTier
 
@@ -229,6 +230,7 @@ def build_write_request(
     images_index: ImageIndex,
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
+    citation_index: dict | None = None,
 ) -> WriteRequest:
     """Build a WriteRequest for a single page.
 
@@ -349,6 +351,9 @@ def build_write_request(
         evidence_v2=evidence_v2,
         neighbor_summaries=neighbor_summaries,
         author_context=page_author_context,
+        citation_context=(
+            citation_context_for_docs(citation_index, page_doc_ids) if citation_index else {}
+        ),
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
         verbalize=cfg.verbalize,
@@ -364,6 +369,7 @@ def save_write_requests(
     images_index: ImageIndex,
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
+    citation_index: dict | None = None,
 ) -> None:
     """Serialize WriteRequest JSONs to ``_write_requests/``."""
     out = bundle.write_requests_dir
@@ -380,6 +386,7 @@ def save_write_requests(
             images_index,
             cfg,
             author_ctx,
+            citation_index,
         )
         path = out / f"{page.id}.request.json"
         path.write_text(req.model_dump_json(indent=2), encoding="utf-8")

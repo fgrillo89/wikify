@@ -15,7 +15,7 @@ from .write_prep import crosslink
 
 def load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
     """Load prior wiki pages from a bundle dir as ``WikiPage`` objects."""
-    from ..eval.bundle import _parse_page
+    from ..store.wiki_bundle import parse_page
 
     pages: list[WikiPage] = []
     for sub in ("articles", "people"):
@@ -24,7 +24,7 @@ def load_existing_pages(bundle: BundlePaths) -> list[WikiPage]:
             continue
         for path in sorted(page_dir.glob("*.md")):
             try:
-                parsed = _parse_page(path)
+                parsed = parse_page(path)
             except Exception:
                 continue
             pages.append(

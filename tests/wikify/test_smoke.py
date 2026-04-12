@@ -8,7 +8,6 @@ from wikify.cache import ExtractCache
 from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import build_strategy
 from wikify.embedding import embed_texts
-from wikify.eval.bundle import load_bundle
 from wikify.eval.metrics import (
     concept_recall,
     coverage_residual,
@@ -21,6 +20,7 @@ from wikify.eval.metrics import (
 from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
 from wikify.paths import BundlePaths, CorpusPaths
+from wikify.store.wiki_bundle import load_bundle
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 

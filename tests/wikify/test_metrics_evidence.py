@@ -5,8 +5,8 @@ spaces, so ``_build_g_evidence`` saw zero overlap and M3 collapsed to 0
 even when the writer produced valid evidence blocks.
 """
 
-from wikify.eval.bundle import load_bundle
 from wikify.eval.metrics import spectral_gap_modularity
+from wikify.store.wiki_bundle import load_bundle
 
 
 def _write_page(d, pid, evidence_lines):

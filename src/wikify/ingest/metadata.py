@@ -1,8 +1,8 @@
 """Metadata extraction helpers for parsers (pdf/docx/pptx/html).
 
 Stdlib imports only, no dataclasses returned to the outside. Helpers
-cover title, authors, summary, year, DOI, and a slide-aware summary
-synthesiser.
+cover title, authors, summary, year, DOI, venue, and a slide-aware
+summary synthesiser.
 """
 
 import re
@@ -60,8 +60,14 @@ def parse_authors(raw: str) -> list[str]:
 def extract_doi(text: str) -> str | None:
     m = re.search(r"(10\.\d{4,}/[^\s]+)", text)
     if m:
-        return m.group(1).rstrip(".,;)")
+        doi = re.split(r"[?#&]", m.group(1), maxsplit=1)[0]
+        return doi.rstrip(".,;)]}>")
     return None
+
+
+def extract_document_doi(md_text: str) -> str | None:
+    """Extract a document DOI while ignoring the references section."""
+    return extract_doi(_pre_references_window(md_text))
 
 
 def extract_year_from_pdf_meta(meta: dict) -> int | None:
@@ -143,6 +149,79 @@ def extract_summary(md_text: str) -> str | None:
         return clean_markdown(text)
 
     return None
+
+
+def extract_venue(md_text: str) -> str | None:
+    """Extract a likely journal / venue name from parser markdown.
+
+    This is intentionally conservative: it only accepts structural publisher
+    patterns that show up in paper front/back matter, and returns ``None`` for
+    generic landing text such as "Contents lists available at ScienceDirect".
+    """
+    window = _pre_references_window(md_text)
+
+    for line in window.splitlines():
+        venue = _venue_from_homepage_line(line)
+        if venue:
+            return venue
+
+    for line in window.splitlines():
+        venue = _venue_from_italic_citation(line)
+        if venue:
+            return venue
+
+    for line in window.splitlines():
+        venue = _venue_from_volume_line(line, require_heading=False)
+        if venue:
+            return venue
+
+    # Some parser outputs leave the journal citation as a final heading after
+    # article body text, e.g. "## Nature 453, 80-83 (2008)". Only accept this
+    # whole-document scan for headings to avoid harvesting reference entries.
+    for line in md_text.splitlines():
+        venue = _venue_from_volume_line(line, require_heading=True)
+        if venue:
+            return venue
+
+    return None
+
+
+def extract_publication_fields(md_text: str) -> dict[str, str]:
+    """Extract BibTeX-ready publication fields from parser markdown."""
+    window = _pre_references_window(md_text)
+
+    fields: dict[str, str] = {}
+
+    for line in window.splitlines():
+        line_fields = _publication_from_cite_this_line(line)
+        if line_fields:
+            fields.update(line_fields)
+            return fields
+
+    for line in window.splitlines():
+        venue = _venue_from_published_by_line(line) or _venue_from_homepage_line(line)
+        if venue:
+            fields.setdefault("venue", venue)
+            return fields
+
+    for line in window.splitlines():
+        line_fields = _publication_from_italic_citation(line)
+        if line_fields:
+            fields.update(line_fields)
+            return fields
+
+    for line in window.splitlines():
+        line_fields = _publication_from_volume_line(line, require_heading=False)
+        if line_fields:
+            fields.update(line_fields)
+            return fields
+
+    for line in md_text.splitlines():
+        line_fields = _publication_from_volume_line(line, require_heading=True)
+        if line_fields:
+            fields.update(line_fields)
+            return fields
+    return fields
 
 
 def clean_markdown(text: str) -> str:
@@ -246,6 +325,164 @@ def _extract_surname(author_hint: str) -> str:
 
 
 # --- internal ------------------------------------------------------------
+
+
+def _pre_references_window(md_text: str) -> str:
+    """Return early paper text, stopping before references when detectable."""
+    window = md_text[:12000]
+    ref_re = re.compile(
+        r"(?im)^\s*(?:#+\s*)?(?:references|bibliography|works\s+cited)\b"
+    )
+    match = ref_re.search(window)
+    if match:
+        return window[: match.start()]
+    return window
+
+
+def _venue_from_homepage_line(line: str) -> str | None:
+    cleaned = _strip_heading(line)
+    match = re.search(r"(.+?)\s+journal\s+homepage\s*:", cleaned, re.IGNORECASE)
+    if not match:
+        return None
+    return _clean_venue_candidate(match.group(1))
+
+
+def _venue_from_published_by_line(line: str) -> str | None:
+    cleaned = _plain_markdown_line(line)
+    match = re.search(
+        r"(?P<venue>[A-Z][A-Za-z0-9& .:'/\-]{2,120}?)\s+published\s+by\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    candidate = match.group("venue").split(".")[-1]
+    return _clean_venue_candidate(candidate)
+
+
+def _venue_from_italic_citation(line: str) -> str | None:
+    fields = _publication_from_italic_citation(line)
+    return fields.get("venue") if fields else None
+
+
+def _publication_from_italic_citation(line: str) -> dict[str, str] | None:
+    match = re.match(
+        r"^\s*(?:#+\s*)?[_*]{1,2}(?P<venue>[^_*]{2,120})[_*]{1,2}"
+        r"\s+(?P<volume>\d{1,4})\s*,\s*(?P<pages>[A-Za-z]?\d+[A-Za-z]?(?:[-\u2013]\d+)?)",
+        line,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return _publication_fields_from_match(match)
+
+
+def _publication_from_cite_this_line(line: str) -> dict[str, str] | None:
+    cleaned = _plain_markdown_line(line)
+    cleaned = re.sub(r"(?i)^cite\s+this:\s*", "", cleaned).strip()
+    match = re.match(
+        r"^(?P<venue>[A-Z][A-Za-z0-9& .:'/\-]{1,100}?)\s+"
+        r"(?:19|20)\d{2}\s*,\s*"
+        r"(?P<volume>\d{1,4})\s*,\s*"
+        r"(?P<pages>[A-Za-z]?\d+[A-Za-z]?(?:[-\u2013]\d+)?)",
+        cleaned,
+    )
+    if not match:
+        return None
+    return _publication_fields_from_match(match)
+
+
+def _venue_from_volume_line(line: str, *, require_heading: bool) -> str | None:
+    fields = _publication_from_volume_line(line, require_heading=require_heading)
+    return fields.get("venue") if fields else None
+
+
+def _publication_from_volume_line(
+    line: str, *, require_heading: bool
+) -> dict[str, str] | None:
+    if require_heading and not re.match(r"^\s*#+\s+", line):
+        return None
+    cleaned = _plain_markdown_line(line)
+    match = re.match(
+        r"^(?P<venue>[A-Z][A-Za-z0-9& .:'/\-]{1,100}?)\s+"
+        r"(?P<volume>\d{1,4})\s*,\s*(?P<pages>[A-Za-z]?\d+[A-Za-z]?(?:[-\u2013]\d+)?)"
+        r"\s*\((?:19|20)\d{2}\)",
+        cleaned,
+    )
+    if not match:
+        return None
+    return _publication_fields_from_match(match)
+
+
+def _publication_fields_from_match(match: re.Match[str]) -> dict[str, str] | None:
+    venue = _clean_venue_candidate(match.group("venue"))
+    if not venue:
+        return None
+    fields = {"venue": venue}
+    volume = (match.groupdict().get("volume") or "").strip()
+    pages = (match.groupdict().get("pages") or "").strip().replace("\u2013", "-")
+    if volume:
+        fields["volume"] = volume
+    if pages:
+        fields["pages"] = pages
+    return fields
+
+
+def _strip_heading(line: str) -> str:
+    return re.sub(r"^\s*#+\s*", "", line.strip())
+
+
+def _plain_markdown_line(line: str) -> str:
+    line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+    return clean_markdown(_strip_heading(line))
+
+
+def _clean_venue_candidate(candidate: str) -> str | None:
+    candidate = clean_markdown(candidate)
+    candidate = re.sub(r"<[^>]+>", "", candidate)
+    candidate = re.sub(r"\s+", " ", candidate).strip(" -:;,")
+    candidate = re.sub(
+        r"\s+journal\s+homepage\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip(" -:;,")
+    if not _is_valid_venue(candidate):
+        return None
+    return candidate
+
+
+def _is_valid_venue(candidate: str) -> bool:
+    lower = candidate.lower()
+    if len(candidate) < 2 or len(candidate) > 120:
+        return False
+    if not any(c.isalpha() for c in candidate):
+        return False
+    if re.search(r"https?://|www\.|@", lower):
+        return False
+    noise = (
+        "contents lists available",
+        "sciencedirect",
+        "journal homepage",
+        "articles you may be interested in",
+        "article info",
+        "abstract",
+        "keywords",
+        "introduction",
+        "references",
+        "bibliography",
+        "doi",
+        "citation",
+        "downloaded",
+        "copyright",
+        "view export",
+        "accepted manuscript",
+    )
+    if any(marker in lower for marker in noise):
+        return False
+    if len(candidate.split()) > 12:
+        return False
+    return True
 
 _AUTHOR_NOISE = {
     "ieee",

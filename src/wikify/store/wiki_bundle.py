@@ -293,7 +293,7 @@ def _extract_evidence(body: str) -> list[Evidence]:
     return out
 
 
-def _clean_body(body: str) -> str:
+def clean_body(body: str) -> str:
     """Drop frontmatter sections we don't want in the M1 embedding.
 
     Keeps: page intro and any prose H2 sections that aren't in
@@ -309,7 +309,7 @@ def _clean_body(body: str) -> str:
 # --- public loader -------------------------------------------------------
 
 
-def _parse_page(path: Path) -> Page:
+def parse_page(path: Path) -> Page:
     raw = path.read_text(encoding="utf-8")
     m = _FRONTMATTER_RE.match(raw)
     if not m:
@@ -317,7 +317,7 @@ def _parse_page(path: Path) -> Page:
     fm = _parse_frontmatter(m.group("fm"))
     body = m.group("body")
     evidence = _extract_evidence(body)
-    body_clean = _clean_body(body)
+    body_clean = clean_body(body)
 
     def _as_list(v) -> list[str]:
         if v is None:
@@ -356,7 +356,7 @@ def load_bundle(root: str | Path) -> Bundle:
         if not d.exists():
             continue
         for f in sorted(d.glob("*.md")):
-            pages.append(_parse_page(f))
+            pages.append(parse_page(f))
 
     run_meta: dict = {}
     run_path = root / "_run.json"

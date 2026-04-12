@@ -190,7 +190,7 @@ class TestImageCoverageResidual:
     def _make_bundle(self, body_texts: list[str]):
         from pathlib import Path
 
-        from wikify.eval.bundle import Bundle, Page
+        from wikify.store.wiki_bundle import Bundle, Page
 
         pages = [
             Page(
@@ -227,7 +227,7 @@ class TestImageCoverageResidual:
     def test_returns_one_when_no_pages(self):
         from pathlib import Path
 
-        from wikify.eval.bundle import Bundle
+        from wikify.store.wiki_bundle import Bundle
 
         bundle = Bundle(name="test", root=Path("."), pages=[])
         cap_embeds = np.zeros((3, 4), dtype=np.float32)

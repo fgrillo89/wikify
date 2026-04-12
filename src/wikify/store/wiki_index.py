@@ -177,20 +177,9 @@ class WikiIndex:
 
     @classmethod
     def load(cls, bundle: BundlePaths) -> "WikiIndex":
-        import os as _os
-
-        if _os.environ.get("WIKIFY_SKIP_PAGE_ID_MIGRATION") != "1":
-            try:
-                migrate_concepts_dir(bundle)
-            except Exception:  # pragma: no cover - migration is best-effort
-                pass
-            try:
-                migrate_prefixed_page_ids(bundle)
-            except Exception:  # pragma: no cover - migration is best-effort
-                pass
         path = bundle.root / _INDEX_FILENAME
         if not path.exists():
-            return rebuild_index(bundle)
+            return cls(bundle_root=bundle.root)
         data = json.loads(path.read_text(encoding="utf-8"))
         entries = {
             e["id"]: IndexEntry(
@@ -253,7 +242,7 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     Used when the index file is missing or stale. Reads only the YAML
     frontmatter; never blocks on the body.
     """
-    from ..eval.bundle import _parse_page  # reuse the existing tiny parser
+    from .wiki_bundle import parse_page
 
     entries: dict[str, IndexEntry] = {}
     for sub in ("articles", "people"):
@@ -261,7 +250,7 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
         if not d.exists():
             continue
         for f in sorted(d.glob("*.md")):
-            page = _parse_page(f)
+            page = parse_page(f)
             entries[page.id] = IndexEntry(
                 id=page.id,
                 kind=page.kind,
@@ -283,8 +272,8 @@ def migrate_concepts_dir(bundle: BundlePaths) -> bool:
     Idempotent: if ``articles/`` already exists (or ``concepts/`` does not
     exist), this is a no-op. Returns True if a rename was performed.
 
-    Called lazily by ``WikiIndex.load`` so older bundles keep working after
-    the Phase 6D upgrade without any manual migration step.
+    Must be called explicitly before ``WikiIndex.load`` when migrating
+    older bundles that still use the ``concepts/`` directory name.
     """
     if not bundle.root.exists():
         return False

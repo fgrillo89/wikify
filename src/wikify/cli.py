@@ -12,7 +12,7 @@ from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
 from .distill.strategy import STRATEGY_CONFIGS, build_strategy
-from .ingest.pipeline import ingest_corpus
+from .ingest.pipeline import ingest_corpus, refresh_corpus
 from .meter import CostMeter
 from .paths import BundlePaths, CorpusPaths
 from .types import ModelTier
@@ -69,6 +69,11 @@ def ingest(
         "--parser",
         help="Parser backend: 'default' (pymupdf). Extensible via registry.",
     ),
+    no_refresh: bool = typer.Option(
+        False,
+        "--no-refresh",
+        help="Skip derived-artifact rebuild (embeddings, graph, topics, etc.).",
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
     paths = ingest_corpus(
@@ -77,8 +82,21 @@ def ingest(
         max_workers=None if workers == 0 else workers,
         mode=mode,
         parser_backend=parser,
+        refresh=not no_refresh,
     )
     typer.echo(f"corpus written to {paths.root}")
+
+
+@app.command()
+def refresh(
+    corpus_dir: Path = typer.Argument(..., help="Path to the corpus directory."),
+) -> None:
+    """Rebuild derived artifacts (embeddings, graph, topics, etc.)."""
+    from .paths import CorpusPaths
+
+    paths = CorpusPaths(root=corpus_dir)
+    refresh_corpus(paths)
+    typer.echo(f"refresh complete: {paths.root}")
 
 
 @app.command()
@@ -562,10 +580,10 @@ def eval_bundle(
     """Compute M1/M3/M5/M6 metrics for a bundle and write a report."""
     from .embedding import embedder_for
     from .eval import metrics
-    from .eval.bundle import load_bundle
     from .store.corpus import all_chunks
     from .store.vectors import load_vectors
     from .store.vectors_meta import read_meta
+    from .store.wiki_bundle import load_bundle
 
     corpus = CorpusPaths(root=corpus_dir)
     bundle = load_bundle(bundle_dir)

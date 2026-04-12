@@ -206,6 +206,7 @@ def run_with_preloaded(
     chunks = preloaded.chunks
     chunks_by_id = preloaded.chunks_by_id
     images_index = preloaded.images_index
+    citation_index = preloaded.citation_index
 
     # ---- write-only phase: skip extraction entirely ---------------------
     if phase == "write":
@@ -575,6 +576,7 @@ def run_with_preloaded(
         images_index,
         write_req_cfg,
         author_ctx,
+        citation_index,
     )
     if phase == "extract":
         save_pages_manifest(bundle, pages)
@@ -633,6 +635,7 @@ def run_with_preloaded(
                 images_index,
                 write_req_cfg,
                 author_ctx,
+                citation_index,
             )
             try:
                 resp = writer.write(req)

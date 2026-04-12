@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from ..models import Chunk, CorpusGraph, DocImage, Document
@@ -63,6 +64,49 @@ def all_chunks(paths: CorpusPaths) -> list[Chunk]:
     for doc in list_documents(paths):
         out.extend(read_chunks(paths, doc.id))
     return out
+
+
+def read_chunks_by_id(
+    corpus: CorpusPaths,
+    chunk_ids: Sequence[str],
+    limit: int | None = None,
+) -> list[Chunk]:
+    """Look up chunks by id using the real ``chunks/{doc_id}.jsonl`` layout.
+
+    Scans JSONL files to find the requested chunk ids. Preserves the
+    requested order. Returns only chunks that exist.  Stops after
+    *limit* returned chunks (in requested order) when provided.
+    """
+    wanted = set(chunk_ids)
+    if not wanted:
+        return []
+
+    # Scan all JSONL files to build a complete map of wanted chunks.
+    found: dict[str, Chunk] = {}
+    if not corpus.chunks_dir.exists():
+        return []
+    for f in corpus.chunks_dir.glob("*.jsonl"):
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if not line:
+                continue
+            d = json.loads(line)
+            cid = d.get("id", "")
+            if cid in wanted:
+                found[cid] = _chunk_from_dict(d)
+                if len(found) == len(wanted):
+                    break
+        if len(found) == len(wanted):
+            break
+
+    # Return in requested order, capped by limit.
+    cap = limit if limit is not None else len(chunk_ids)
+    result: list[Chunk] = []
+    for cid in chunk_ids:
+        if cid in found:
+            result.append(found[cid])
+            if len(result) >= cap:
+                break
+    return result
 
 
 def write_graph(paths: CorpusPaths, graph: CorpusGraph) -> None:

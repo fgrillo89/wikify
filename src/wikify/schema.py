@@ -526,6 +526,10 @@ class WriteRequest(BaseModel):
     # emitted to disk as a standalone artifact. The writer uses it as grounded
     # facts; it is NOT directly citable (cite via evidence[i] instead).
     author_context: dict | None = None
+    # Structured citation context from corpus/citation_index.json. Includes
+    # source-paper BibTeX keys and a capped list of references cited by the
+    # evidence sources, so writers can cite consistently without parsing BibTeX.
+    citation_context: dict = Field(default_factory=dict)
     # YAML-serialised dossier context for the writer. Compact alternative to
     # repeating the same definition/summary across each evidence_v2 entry.
     # Empty string when no dossier exists for this page.

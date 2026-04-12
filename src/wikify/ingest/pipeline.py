@@ -51,7 +51,7 @@ from .images import (
     rewrite_sidecar_near_chunks,
     save_doc_images,
 )
-from .parsers.registry import ParseResult, parse_file, validate_backend
+from .parsers.registry import parse_file, validate_backend
 from .topics import extract_topics, write_topics
 
 # ---------------------------------------------------------------------------
@@ -70,22 +70,18 @@ def _timed(timings: dict[str, float], label: str):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class _ParsedBundle:
-    """Everything a worker produces for one source file.
+class FileReceipt:
+    """Lightweight result from a parse+persist worker.
 
-    Carries only picklable data so it can cross a ProcessPoolExecutor
-    boundary.
+    Only carries identifiers and stats -- the full document, markdown,
+    and chunks are already persisted to disk.
     """
 
     src_path: str
-    kind: str
     doc_id: str
-    parsed: ParseResult
-    chunks: list[Chunk]
-    image_dir: str
-    equations: list[dict]
-    figure_refs: list[dict]
-    parse_seconds: float = 0.0
+    n_chunks: int
+    declared_keywords: list[str]
+    parse_seconds: float
 
 
 # ---------------------------------------------------------------------------
@@ -133,26 +129,31 @@ def _default_workers() -> int:
     return max(2, int(cpu * 0.6))
 
 
-def _parse_worker(
+def _parse_and_persist_worker(
     src_str: str,
-    images_root_str: str,
+    corpus_root_str: str,
     parser_backend: str = "default",
-) -> _ParsedBundle:
-    """Parse + chunk one source file. Runs in a worker process."""
+) -> FileReceipt:
+    """Parse, chunk, enrich, and persist one source file. Returns a lightweight receipt.
+
+    Runs in a worker process. Reconstructs CorpusPaths from the root string
+    since dataclasses with Path fields don't pickle reliably across processes.
+    """
     src = Path(src_str)
-    images_root = Path(images_root_str)
+    paths = CorpusPaths(root=Path(corpus_root_str))
     t_worker = time.monotonic()
+
     kind, parsed = parse_file(src, parser_backend=parser_backend)
     did = doc_id_for(src)
 
+    # Images
     img_slug = image_slug(did)
-    image_dir_path = images_root / img_slug
-    image_dir = str(image_dir_path)
-
+    image_dir_path = paths.images_dir / img_slug
     if parsed.raw_images:
         saved = save_doc_images(did, image_dir_path, parsed.raw_images)
         parsed.images.extend(saved)
 
+    # Chunks
     docling_chunks = parsed.metadata.pop("_docling_chunks", None)
     if docling_chunks:
         chunks = _chunks_from_docling(did, docling_chunks)
@@ -160,20 +161,49 @@ def _parse_worker(
         chunks = chunk_document(did, parsed.markdown, parsed.sections)
     chunks += caption_chunks_for(did, parsed.images, ord_offset=len(chunks))
 
+    # Equations + figure refs
     equations = extract_equations(parsed.markdown)
     figure_refs = extract_figure_refs(parsed.markdown)
     bind_equations_to_chunks(chunks, equations)
 
-    return _ParsedBundle(
-        src_path=str(src),
+    # Citations + image linking + sections
+    citations = extract_citations(parsed.markdown, did)
+    near_map = link_chunks_to_images(chunks, parsed.images)
+    rewrite_sidecar_near_chunks(image_dir_path, near_map)
+    sections = sections_from_chunks(chunks)
+
+    # Build Document
+    doc = Document(
+        id=did,
+        source_path=str(src),
         kind=kind,
+        title=parsed.title or src.stem,
+        metadata=dict(parsed.metadata),
+        markdown_path=str(paths.markdown_dir / f"{did}.md"),
+        image_dir=str(image_dir_path),
+        sections=sections,
+        images=list(parsed.images),
+        n_chunks=len(chunks),
+        n_tokens=sum(len(c.text) // 4 for c in chunks),
+        citations=citations,
+        equations=list(equations),
+        figure_refs=list(figure_refs),
+    )
+
+    # Persist atomically
+    write_document(paths, doc, parsed.markdown, chunks)
+
+    # Declared keywords for topic extraction
+    kw = parsed.metadata.get("keywords")
+    declared = list(kw) if isinstance(kw, list) else []
+
+    elapsed = time.monotonic() - t_worker
+    return FileReceipt(
+        src_path=str(src),
         doc_id=did,
-        parsed=parsed,
-        chunks=chunks,
-        image_dir=image_dir,
-        equations=equations,
-        figure_refs=figure_refs,
-        parse_seconds=time.monotonic() - t_worker,
+        n_chunks=len(chunks),
+        declared_keywords=declared,
+        parse_seconds=elapsed,
     )
 
 
@@ -251,113 +281,182 @@ def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
 
 
 # ---------------------------------------------------------------------------
-# Stage: parallel parse + chunk
+# Derived-artifact health check
 # ---------------------------------------------------------------------------
 
-def _parse_sources(
+def _derived_artifacts_missing(paths: CorpusPaths) -> bool:
+    """True if the corpus has docs but is missing key derived artifacts.
+
+    Catches the case where ingest completed but refresh crashed or was
+    skipped -- re-running ``ingest`` should detect this and run refresh.
+    """
+    has_docs = paths.docs_dir.exists() and any(paths.docs_dir.iterdir())
+    if not has_docs:
+        return False
+    # Check the three cheapest-to-verify derived artifacts.
+    return (
+        not paths.vectors_path.exists()
+        or not (paths.root / "graph.json").exists()
+        or not (paths.root / "topics.json").exists()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery: detect already-persisted docs from a prior interrupted run
+# ---------------------------------------------------------------------------
+
+def _recover_completed(
+    sources: list[Path],
+    paths: CorpusPaths,
+) -> tuple[list[Path], list[FileReceipt]]:
+    """Split sources into (still_to_parse, already_done).
+
+    If a prior ingest crashed after persisting some files but before
+    saving the manifest, the doc JSON + chunks JSONL will be on disk
+    without a manifest entry. We detect those and build synthetic
+    receipts so they aren't re-parsed.
+    """
+    still: list[Path] = []
+    recovered: list[FileReceipt] = []
+
+    for src in sources:
+        did = doc_id_for(src)
+        doc_json = paths.docs_dir / f"{did}.json"
+        chunks_jsonl = paths.chunks_dir / f"{did}.jsonl"
+        md_file = paths.markdown_dir / f"{did}.md"
+
+        if doc_json.exists() and chunks_jsonl.exists() and md_file.exists():
+            # All three artifacts present -- build a synthetic receipt.
+            chunk_ids = _read_chunk_ids(paths, did)
+            # Read declared keywords from the persisted doc JSON.
+            kw: list[str] = []
+            try:
+                doc_data = json.loads(doc_json.read_text(encoding="utf-8"))
+                meta_kw = (doc_data.get("metadata") or {}).get("keywords")
+                if isinstance(meta_kw, list):
+                    kw = meta_kw
+            except Exception:  # noqa: BLE001
+                pass
+            recovered.append(FileReceipt(
+                src_path=str(src),
+                doc_id=did,
+                n_chunks=len(chunk_ids),
+                declared_keywords=kw,
+                parse_seconds=0.0,
+            ))
+        else:
+            still.append(src)
+
+    if recovered:
+        print(
+            f"[ingest] recovered {len(recovered)} docs from prior "
+            f"interrupted run (skipping re-parse)",
+            file=sys.stderr,
+        )
+
+    return still, recovered
+
+
+# ---------------------------------------------------------------------------
+# Stage: streaming parse + persist (new pipeline)
+# ---------------------------------------------------------------------------
+
+def _stream_parse_and_persist(
     sources: list[Path],
     paths: CorpusPaths,
     max_workers: int | None,
     parser_backend: str = "default",
-) -> list[_ParsedBundle]:
-    """Parse and chunk all sources in parallel. Returns sorted bundles."""
+) -> list[FileReceipt]:
+    """Parse, persist each source in parallel. Returns sorted receipts."""
+    from tqdm import tqdm
+
     workers = max_workers if max_workers is not None else _default_workers()
-    bundles: list[_ParsedBundle] = []
-    if workers > 1 and len(sources) > 1:
-        images_root_str = str(paths.images_dir)
-        print(
-            f"[ingest] parsing {len(sources)} sources with {workers} workers",
-            file=sys.stderr,
-        )
+    receipts: list[FileReceipt] = []
+    total = len(sources)
+    corpus_root_str = str(paths.root)
+    failed = 0
+
+    # Docling uses a GPU model -- don't duplicate across processes.
+    if parser_backend == "docling":
+        workers = 1
+
+    bar = tqdm(
+        total=total,
+        desc=f"[ingest] parse+persist ({workers}w)",
+        unit="file",
+        file=sys.stderr,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+    )
+
+    if workers > 1 and total > 1:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(
-                    _parse_worker, str(src), images_root_str, parser_backend,
+                    _parse_and_persist_worker, str(src), corpus_root_str,
+                    parser_backend,
                 ): src
                 for src in sources
             }
             for fut in as_completed(futures):
                 src = futures[fut]
                 try:
-                    bundles.append(fut.result())
+                    receipt = fut.result()
+                    receipts.append(receipt)
+                    bar.set_postfix_str(
+                        f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
+                        refresh=False,
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[ingest] parse failed for {src.name}: {exc}", file=sys.stderr)
+                    failed += 1
+                    bar.set_postfix_str(
+                        f"FAIL {src.name[:40]}",
+                        refresh=False,
+                    )
+                    tqdm.write(
+                        f"[ingest] FAIL {src.name}: {exc}",
+                        file=sys.stderr,
+                    )
+                bar.update(1)
     else:
         for src in sources:
             try:
-                bundles.append(
-                    _parse_worker(str(src), str(paths.images_dir), parser_backend)
+                receipt = _parse_and_persist_worker(
+                    str(src), corpus_root_str, parser_backend,
+                )
+                receipts.append(receipt)
+                bar.set_postfix_str(
+                    f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
+                    refresh=False,
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[ingest] parse failed for {src.name}: {exc}", file=sys.stderr)
+                failed += 1
+                bar.set_postfix_str(
+                    f"FAIL {src.name[:40]}",
+                    refresh=False,
+                )
+                tqdm.write(
+                    f"[ingest] FAIL {src.name}: {exc}",
+                    file=sys.stderr,
+                )
+            bar.update(1)
 
-    bundles.sort(key=lambda b: b.src_path)
+    bar.close()
+
+    if failed:
+        print(f"[ingest] {failed}/{total} files failed", file=sys.stderr)
+
+    receipts.sort(key=lambda r: r.src_path)
 
     # Slowest-paper report
-    slow = sorted(bundles, key=lambda b: -b.parse_seconds)[:5]
+    slow = sorted(receipts, key=lambda r: -r.parse_seconds)[:5]
     if slow and slow[0].parse_seconds > 5.0:
         print("[ingest] slowest papers (parser CPU time):", file=sys.stderr)
-        for b in slow:
-            name = Path(b.src_path).name[:60]
-            print(f"  {b.parse_seconds:6.2f}s  {name}", file=sys.stderr)
+        for r in slow:
+            name = Path(r.src_path).name[:60]
+            print(f"  {r.parse_seconds:6.2f}s  {name}", file=sys.stderr)
 
-    return bundles
+    return receipts
 
-
-# ---------------------------------------------------------------------------
-# Stage: per-doc persist
-# ---------------------------------------------------------------------------
-
-def _persist_bundles(
-    bundles: list[_ParsedBundle],
-    paths: CorpusPaths,
-) -> tuple[
-    list[Document], list[Chunk], list[tuple[str, list[Chunk]]],
-    dict[str, list[str]], dict[str, str],
-]:
-    """Persist parsed bundles. Returns (docs, chunks, pairs, keywords, markdown)."""
-    docs: list[Document] = []
-    all_chunks: list[Chunk] = []
-    pairs: list[tuple[str, list[Chunk]]] = []
-    declared: dict[str, list[str]] = {}
-    raw_markdown_by_id: dict[str, str] = {}
-
-    for bundle in bundles:
-        src = Path(bundle.src_path)
-        chunks = bundle.chunks
-        parsed = bundle.parsed
-
-        markdown_path = str(paths.markdown_dir / f"{bundle.doc_id}.md")
-        sections = sections_from_chunks(chunks)
-
-        near_map = link_chunks_to_images(chunks, parsed.images)
-        rewrite_sidecar_near_chunks(Path(bundle.image_dir), near_map)
-
-        doc = Document(
-            id=bundle.doc_id,
-            source_path=str(src),
-            kind=bundle.kind,
-            title=parsed.title or src.stem,
-            metadata=dict(parsed.metadata),
-            markdown_path=markdown_path,
-            image_dir=bundle.image_dir,
-            sections=sections,
-            images=list(parsed.images),
-            n_chunks=len(chunks),
-            n_tokens=sum(len(c.text) // 4 for c in chunks),
-            citations=extract_citations(parsed.markdown, bundle.doc_id),
-            equations=list(bundle.equations or []),
-            figure_refs=list(bundle.figure_refs or []),
-        )
-        write_document(paths, doc, parsed.markdown, chunks)
-        raw_markdown_by_id[bundle.doc_id] = parsed.markdown
-        docs.append(doc)
-        all_chunks.extend(chunks)
-        pairs.append((bundle.doc_id, chunks))
-        if isinstance(parsed.metadata.get("keywords"), list):
-            declared[bundle.doc_id] = parsed.metadata["keywords"]
-
-    return docs, all_chunks, pairs, declared, raw_markdown_by_id
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +706,6 @@ def _embedder_fingerprint(backend: dict) -> str:
 def _resave_docs(
     paths: CorpusPaths,
     docs: list[Document],
-    raw_markdown_by_id: dict[str, str],
 ) -> None:
     from ..store.corpus import _doc_to_dict, atomic_write_text
 
@@ -616,14 +714,11 @@ def _resave_docs(
             paths.docs_dir / f"{doc.id}.json",
             json.dumps(_doc_to_dict(doc)),
         )
-        body = raw_markdown_by_id.get(doc.id)
-        if body is None:
-            # Unchanged doc -- read existing markdown body from disk.
-            md_path = paths.markdown_dir / f"{doc.id}.md"
-            if md_path.exists():
-                body = _read_body_from_doc_markdown(md_path)
-            else:
-                body = ""
+        md_path = paths.markdown_dir / f"{doc.id}.md"
+        if md_path.exists():
+            body = _read_body_from_doc_markdown(md_path)
+        else:
+            body = ""
         write_doc_markdown(paths, doc, body)
 
 
@@ -767,7 +862,7 @@ def _prepare_change_set(
 
 
 def _identify_stale_docs(
-    bundles: list[_ParsedBundle],
+    receipts: list[FileReceipt],
     dedup_aliases: list[tuple[str, str, str]],
     change_set,
     manifest,
@@ -777,10 +872,10 @@ def _identify_stale_docs(
     from .manifest import source_id_for
 
     parsed_sids: set[str] = set()
-    for bundle in bundles:
-        sid = change_set.path_to_sid.get(bundle.src_path)
+    for receipt in receipts:
+        sid = change_set.path_to_sid.get(receipt.src_path)
         if sid is None:
-            sid = source_id_for(Path(bundle.src_path), input_dir)
+            sid = source_id_for(Path(receipt.src_path), input_dir)
         parsed_sids.add(sid)
 
     aliased_sids = {sid for sid, _, _ in dedup_aliases}
@@ -807,9 +902,21 @@ def _identify_stale_docs(
     return stale_doc_ids
 
 
+def _read_chunk_ids(paths: CorpusPaths, doc_id: str) -> list[str]:
+    """Read just the chunk ids from a persisted JSONL file (no text loaded)."""
+    p = paths.chunks_dir / f"{doc_id}.jsonl"
+    if not p.exists():
+        return []
+    ids: list[str] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            ids.append(json.loads(line)["id"])
+    return ids
+
+
 def _update_manifest(
     manifest,
-    bundles: list[_ParsedBundle],
+    receipts: list[FileReceipt],
     dedup_aliases: list[tuple[str, str, str]],
     change_set,
     paths: CorpusPaths,
@@ -818,23 +925,23 @@ def _update_manifest(
     """Register parsed sources and dedup aliases in the manifest."""
     from .manifest import SourceRecord, source_id_for
 
-    for bundle in bundles:
-        sid = change_set.path_to_sid.get(bundle.src_path)
+    for receipt in receipts:
+        sid = change_set.path_to_sid.get(receipt.src_path)
         if sid is None:
-            sid = source_id_for(Path(bundle.src_path), input_dir)
-        h = bundle.doc_id.rsplit("_", 1)[-1]
+            sid = source_id_for(Path(receipt.src_path), input_dir)
+        h = receipt.doc_id.rsplit("_", 1)[-1]
         manifest.sources[sid] = SourceRecord(
             source_id=sid,
-            source_path=bundle.src_path,
+            source_path=receipt.src_path,
             content_hash=h,
-            doc_id=bundle.doc_id,
+            doc_id=receipt.doc_id,
             status="active",
-            chunk_ids=[c.id for c in bundle.chunks],
+            chunk_ids=_read_chunk_ids(paths, receipt.doc_id),
             parsed_at=SourceRecord.now_iso(),
         )
 
     # Register dedup aliases only if the target doc_id actually exists.
-    persisted_doc_ids = {b.doc_id for b in bundles}
+    persisted_doc_ids = {r.doc_id for r in receipts}
     for alias_sid, alias_h, alias_did in dedup_aliases:
         target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
         if alias_did not in persisted_doc_ids and not target_on_disk:
@@ -858,58 +965,149 @@ def _update_manifest(
         )
 
 
-def _rebuild_derived(
+
+# ---------------------------------------------------------------------------
+# Public: refresh corpus-wide derived artifacts
+# ---------------------------------------------------------------------------
+
+
+def refresh_corpus(
     paths: CorpusPaths,
-    stale_doc_ids: set[str],
-    declared: dict[str, list[str]],
-    raw_md: dict[str, str],
-    timings: dict[str, float],
+    *,
+    stale_doc_ids: set[str] | None = None,
 ) -> None:
-    """Rebuild all corpus-wide derived artifacts from the active corpus."""
+    """Rebuild derived artifacts (embeddings, graph, topics, etc.).
+
+    Loads the active corpus from disk, embeds chunks, then runs the
+    refresh DAG defined below.  Each wave runs its steps in parallel;
+    waves run sequentially so later steps can depend on earlier results.
+
+    To add a new derived artifact: add a ``_refresh_*`` function and
+    place its name in the appropriate wave (or add a new wave).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     from ..store.corpus import all_chunks as load_all_chunks
     from ..store.corpus import list_documents
 
+    timings: dict[str, float] = {}
+    t0 = time.monotonic()
+
+    if stale_doc_ids is None:
+        stale_doc_ids = set()
+
+    # ---- shared context loaded once, passed to every step ----
     with _timed(timings, "load active corpus"):
         all_docs = list_documents(paths)
         all_chunks_list = load_all_chunks(paths)
         all_pairs = _build_pairs(all_docs, all_chunks_list)
+        declared: dict[str, list[str]] = {}
         for doc in all_docs:
-            if doc.id not in declared and isinstance(
-                doc.metadata.get("keywords"), list
-            ):
-                declared[doc.id] = doc.metadata["keywords"]
+            kw = doc.metadata.get("keywords")
+            if isinstance(kw, list):
+                declared[doc.id] = kw
 
     with _timed(timings, "embed"):
-        store = _embed_chunks_incremental(
-            all_chunks_list, paths, stale_doc_ids,
-        )
+        store = _embed_chunks_incremental(all_chunks_list, paths, stale_doc_ids)
 
-    with _timed(timings, "doc edges"):
-        populate_doc_edges(all_docs, all_pairs, store)
+    # Mutable context dict -- steps can publish results for later waves.
+    ctx: dict = dict(
+        paths=paths,
+        docs=all_docs,
+        chunks=all_chunks_list,
+        pairs=all_pairs,
+        declared=declared,
+        store=store,
+        graph=None,  # populated by wave B
+    )
 
-    with _timed(timings, "corpus graph"):
-        graph = build_corpus_graph(all_docs, all_chunks_list, store)
-        write_graph(paths, graph)
+    # ---- execute the DAG ----
+    for wave_label, step_names in REFRESH_DAG:
+        steps = [(_REFRESH_STEPS[name], name) for name in step_names]
+        with _timed(timings, wave_label):
+            if len(steps) == 1:
+                steps[0][0](ctx)
+            else:
+                with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+                    futs = {pool.submit(fn, ctx): name for fn, name in steps}
+                    for fut in futs:
+                        fut.result()  # propagate exceptions
 
-    with _timed(timings, "explorer index"):
-        idx = build_explorer_index(all_docs, all_chunks_list, graph, store)
-        save_explorer_index(paths.explorer_index_path, idx)
+    _print_timings(timings, t0)
 
-    with _timed(timings, "pagerank"):
-        write_pagerank(paths, all_docs, graph)
 
-    with _timed(timings, "topics"):
-        vocab = extract_topics(all_pairs, declared_per_doc=declared)
-        write_topics(paths.topics_path, vocab)
+# ---------------------------------------------------------------------------
+# Refresh DAG: waves and steps
+# ---------------------------------------------------------------------------
+# Each wave is (label, [step_names]).  Steps within a wave run in parallel.
+# Waves run sequentially -- a step may depend on anything from earlier waves.
+#
+# To add a step: define ``_refresh_<name>(ctx)`` and register it in
+# ``_REFRESH_STEPS``, then place the key in the right wave.
 
-    with _timed(timings, "image index"):
-        build_images_index(paths, doc_ids=[d.id for d in all_docs])
+def _refresh_doc_edges(ctx: dict) -> None:
+    populate_doc_edges(ctx["docs"], ctx["pairs"], ctx["store"])
 
-    with _timed(timings, "bibliography"):
-        write_corpus_bibliography(paths, all_docs)
 
-    with _timed(timings, "doc resave"):
-        _resave_docs(paths, all_docs, raw_md)
+def _refresh_topics(ctx: dict) -> None:
+    vocab = extract_topics(ctx["pairs"], declared_per_doc=ctx["declared"])
+    write_topics(ctx["paths"].topics_path, vocab)
+
+
+def _refresh_images_index(ctx: dict) -> None:
+    build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
+
+
+def _refresh_bibliography(ctx: dict) -> None:
+    write_corpus_bibliography(ctx["paths"], ctx["docs"])
+
+
+def _refresh_corpus_graph(ctx: dict) -> None:
+    graph = build_corpus_graph(ctx["docs"], ctx["chunks"], ctx["store"])
+    write_graph(ctx["paths"], graph)
+    ctx["graph"] = graph  # safe: wave B runs alone, wave C starts after barrier
+
+
+def _refresh_explorer_index(ctx: dict) -> None:
+    idx = build_explorer_index(
+        ctx["docs"], ctx["chunks"], ctx["graph"], ctx["store"],
+    )
+    save_explorer_index(ctx["paths"].explorer_index_path, idx)
+
+
+def _refresh_pagerank(ctx: dict) -> None:
+    write_pagerank(ctx["paths"], ctx["docs"], ctx["graph"])
+
+
+def _refresh_doc_resave(ctx: dict) -> None:
+    _resave_docs(ctx["paths"], ctx["docs"])
+
+
+_REFRESH_STEPS: dict[str, callable] = {
+    "doc_edges":      _refresh_doc_edges,
+    "topics":         _refresh_topics,
+    "images_index":   _refresh_images_index,
+    "bibliography":   _refresh_bibliography,
+    "corpus_graph":   _refresh_corpus_graph,
+    "explorer_index": _refresh_explorer_index,
+    "pagerank":       _refresh_pagerank,
+    "doc_resave":     _refresh_doc_resave,
+}
+
+REFRESH_DAG: list[tuple[str, list[str]]] = [
+    # Wave A: independent -- only needs docs + store
+    ("wave A (edges+topics+images+bib)", [
+        "doc_edges", "topics", "images_index", "bibliography",
+    ]),
+    # Wave B: needs doc_edges (populates doc.similar_to, .cites, .cites_same)
+    ("wave B (corpus graph)", [
+        "corpus_graph",
+    ]),
+    # Wave C: needs graph
+    ("wave C (explorer+pagerank+resave)", [
+        "explorer_index", "pagerank", "doc_resave",
+    ]),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -924,14 +1122,19 @@ def ingest_corpus(
     max_workers: int | None = None,
     mode: str = "additive",
     parser_backend: str = "default",
+    refresh: bool = True,
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
-    Incremental: parses only new/changed sources, then removes stale
-    artifacts only for sources whose replacement parse *succeeded*,
-    then rebuilds derived artifacts from the full active corpus.
+    Streaming: each source is parsed, enriched, and persisted to disk
+    individually. Only lightweight ``FileReceipt`` objects are kept in
+    memory, so this scales to thousands of papers without OOM.
 
-    ``mode``: ``additive`` (default) or ``sync`` (removes absent sources).
+    After all sources are persisted the manifest is saved (crash-recovery
+    boundary). If ``refresh=True`` (default), corpus-wide derived
+    artifacts (embeddings, graph, topics, etc.) are rebuilt via
+    ``refresh_corpus()``. Pass ``refresh=False`` or use ``--no-refresh``
+    from the CLI to skip.
     """
     from .manifest import SourceRecord
 
@@ -948,37 +1151,53 @@ def ingest_corpus(
         input_dir, paths, mode, timings,
     )
 
+    # If nothing changed but derived artifacts are missing, still run refresh.
+    needs_refresh = refresh and _derived_artifacts_missing(paths)
     if change_set.is_empty and not dedup_aliases:
-        print(
-            "[ingest] nothing to do -- corpus already contains every source",
-            file=sys.stderr,
-        )
+        if needs_refresh:
+            print(
+                "[ingest] sources unchanged, but derived artifacts missing "
+                "-- running refresh",
+                file=sys.stderr,
+            )
+            refresh_corpus(paths)
+        else:
+            print(
+                "[ingest] nothing to do -- corpus already contains every source",
+                file=sys.stderr,
+            )
         return paths
 
-    # 2. Parse new/changed sources (before removing anything)
-    bundles: list[_ParsedBundle] = []
-    declared: dict[str, list[str]] = {}
-    raw_md: dict[str, str] = {}
-
+    # 2. Stream parse+persist (each file written to disk as it completes).
+    #    Crash resume: if a prior run persisted artifacts but crashed before
+    #    saving the manifest, those files are already on disk. We skip them
+    #    and build synthetic receipts instead of re-parsing.
+    receipts: list[FileReceipt] = []
     if change_set.to_parse:
-        with _timed(timings, "parse+chunk"):
-            bundles = _parse_sources(
-                change_set.to_parse, paths, max_workers, parser_backend,
-            )
-        with _timed(timings, "per-doc persist"):
-            _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
+        to_parse, recovered = _recover_completed(
+            change_set.to_parse, paths,
+        )
+        receipts.extend(recovered)
+        if to_parse:
+            with _timed(timings, "parse+persist (streaming)"):
+                receipts.extend(
+                    _stream_parse_and_persist(
+                        to_parse, paths, max_workers, parser_backend,
+                    )
+                )
+        else:
+            timings["parse+persist (streaming)"] = 0.0
     else:
-        timings["parse+chunk"] = 0.0
-        timings["per-doc persist"] = 0.0
+        timings["parse+persist (streaming)"] = 0.0
 
     # 3. Identify stale doc_ids from replacements + deletes
     stale_doc_ids = _identify_stale_docs(
-        bundles, dedup_aliases, change_set, manifest, input_dir,
+        receipts, dedup_aliases, change_set, manifest, input_dir,
     )
 
     # 4. Update manifest with new records + aliases
     _update_manifest(
-        manifest, bundles, dedup_aliases, change_set, paths, input_dir,
+        manifest, receipts, dedup_aliases, change_set, paths, input_dir,
     )
 
     # 5. Remove stale artifacts (only if no other source references them)
@@ -991,15 +1210,30 @@ def ingest_corpus(
         with _timed(timings, "remove stale"):
             _remove_doc_artifacts(paths, safe_to_remove)
 
-    # 6. Rebuild all derived artifacts from full active corpus
-    _rebuild_derived(paths, stale_doc_ids, declared, raw_md, timings)
-
-    # 7. Save manifest
+    # 6. Save manifest (crash-recovery boundary: all per-doc artifacts
+    #    are on disk, manifest is consistent. A crash during refresh
+    #    loses only derived artifacts, which are fully reproducible
+    #    by re-running ``refresh``.)
     manifest.last_ingest = SourceRecord.now_iso()
-    from ..embedding import current_backend
-
-    manifest.embedder_fingerprint = _embedder_fingerprint(current_backend())
     manifest.save(paths.manifest_path)
+
+    # 7. Rebuild derived artifacts
+    if refresh:
+        refresh_corpus(paths, stale_doc_ids=stale_doc_ids)
+    else:
+        print(
+            "[ingest] --no-refresh: skipping derived artifacts",
+            file=sys.stderr,
+        )
+
+    # 8. Save manifest again with embedder fingerprint (after refresh)
+    if refresh:
+        from ..embedding import current_backend
+
+        manifest.embedder_fingerprint = _embedder_fingerprint(
+            current_backend(),
+        )
+        manifest.save(paths.manifest_path)
 
     _print_timings(timings, t0_run)
     return paths

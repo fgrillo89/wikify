@@ -37,7 +37,7 @@ from ..store.wiki_index import WikiIndex
 from ..types import ModelTier, Querier
 
 if TYPE_CHECKING:
-    from ..eval.bundle import Bundle
+    from ..store.wiki_bundle import Bundle
 from ..config import BODY_EXCERPT_CHARS, MAX_CANDIDATES
 
 QUERY_PROMPT = load_prompt("wikify/query").name
@@ -101,23 +101,13 @@ def read_corpus_chunks(corpus: CorpusPaths, chunk_ids: list[str]) -> list[dict]:
     skipped. Pure Python. No model calls. Capped at 5 chunks per call to
     keep token spend predictable.
     """
-    results: list[dict] = []
-    for cid in chunk_ids[:5]:
-        chunk_path = corpus.chunks_dir / f"{cid}.json"
-        if not chunk_path.exists():
-            continue
-        try:
-            data = json.loads(chunk_path.read_text(encoding="utf-8"))
-            results.append(
-                {
-                    "id": data.get("id", cid),
-                    "doc_id": data.get("doc_id", ""),
-                    "text": data.get("text", ""),
-                }
-            )
-        except Exception:
-            continue
-    return results
+    from ..store.corpus import read_chunks_by_id
+
+    chunks = read_chunks_by_id(corpus, chunk_ids, limit=5)
+    return [
+        {"id": c.id, "doc_id": c.doc_id, "text": c.text}
+        for c in chunks
+    ]
 
 
 def persist_query_log(
@@ -229,11 +219,11 @@ def run(
         else:
             missed.append(p)
 
-    # 3. Embedding fallback for missed phrases. Loads pages via _parse_page
+    # 3. Embedding fallback for missed phrases. Loads pages via parse_page
     #    and caches page-body embeddings beside the bundle index.
-    if missed and len(index) > 0:
-        from ..eval.bundle import _parse_page
+    from ..store.wiki_bundle import parse_page
 
+    if missed and len(index) > 0:
         pages_for_embed: list = []
         ordered_ids: list[str] = []
         for entry in index:
@@ -241,7 +231,7 @@ def run(
             if not page_path.exists():
                 continue
             try:
-                pages_for_embed.append(_parse_page(page_path))
+                pages_for_embed.append(parse_page(page_path))
                 ordered_ids.append(entry.id)
             except Exception:
                 continue
@@ -282,8 +272,6 @@ def run(
     candidates = candidates[:MAX_CANDIDATES]
 
     # 5. Build evidence.
-    from ..eval.bundle import _parse_page
-
     evidence: list[QueryEvidence] = []
     for pid in candidates:
         entry = index.get(pid)
@@ -293,7 +281,7 @@ def run(
         if not page_path.exists():
             continue
         try:
-            page = _parse_page(page_path)
+            page = parse_page(page_path)
         except Exception:
             continue
         evidence.append(

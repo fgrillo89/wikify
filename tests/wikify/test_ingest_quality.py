@@ -11,6 +11,10 @@ from pathlib import Path
 from wikify.ingest.metadata import (
     _parse_author_line,
     extract_authors_from_markdown,
+    extract_document_doi,
+    extract_doi,
+    extract_publication_fields,
+    extract_venue,
     extract_year_from_pdf_meta,
 )
 from wikify.ingest.pipeline import sections_from_chunks as _sections_from_chunks
@@ -76,6 +80,96 @@ def test_extract_authors_from_markdown_beats_single_meta_author(tmp_path: Path):
     names = extract_authors_from_markdown(md)
     assert len(names) == 4
     assert names[0] == "H. Kim"
+
+
+def test_extract_venue_from_sciencedirect_homepage_heading():
+    md = (
+        "## Chemical Engineering Journal journal homepage: www.elsevier.com/locate/cej\n\n"
+        "# Paper Title\n\n"
+        "Abstract text."
+    )
+    assert extract_venue(md) == "Chemical Engineering Journal"
+
+
+def test_extract_venue_ignores_generic_sciencedirect_homepage_line():
+    md = (
+        "Contents lists available at ScienceDirect journal homepage: "
+        "www.elsevier.com/locate/jalcom\n\n"
+        "# Paper Title\n\n"
+        "Abstract text."
+    )
+    assert extract_venue(md) is None
+
+
+def test_extract_venue_from_italic_volume_line():
+    md = "_J. Appl. Phys._ 117, 044901 (2015)\n\n# Paper Title\n\nAbstract text."
+    assert extract_venue(md) == "J. Appl. Phys."
+
+
+def test_extract_publication_fields_from_italic_volume_line():
+    md = "_J. Appl. Phys._ 117, 044901 (2015)\n\n# Paper Title\n\nAbstract text."
+    assert extract_publication_fields(md) == {
+        "venue": "J. Appl. Phys.",
+        "volume": "117",
+        "pages": "044901",
+    }
+
+
+def test_extract_publication_fields_from_acs_cite_this_line():
+    md = (
+        "**Cite This:** _ACS Materials Lett._ 2023, 5, 3080-3092 "
+        "**Read Online**"
+    )
+    assert extract_publication_fields(md) == {
+        "venue": "ACS Materials Lett.",
+        "volume": "5",
+        "pages": "3080-3092",
+    }
+
+
+def test_extract_publication_fields_from_published_by_line():
+    md = (
+        "Copyright 2023 The Authors. Advanced Functional Materials published by "
+        "Wiley-VCH GmbH.\n\n# Paper"
+    )
+    assert extract_publication_fields(md) == {
+        "venue": "Advanced Functional Materials",
+    }
+
+
+def test_extract_venue_from_trailing_heading_volume_line():
+    md = (
+        "# Memristor Paper\n\n"
+        "Abstract text.\n\n"
+        "## References\n\n"
+        "1. Some reference. Nature 111, 1 (2000).\n\n"
+        "## Nature 453, 80-83 (2008)\n"
+    )
+    assert extract_venue(md) == "Nature"
+
+
+def test_extract_publication_fields_from_trailing_heading_volume_line():
+    md = "# Paper\n\nBody.\n\n## Nature 453, 80-83 (2008)\n"
+    assert extract_publication_fields(md) == {
+        "venue": "Nature",
+        "volume": "453",
+        "pages": "80-83",
+    }
+
+
+def test_doi_extraction_strips_markdown_bracket_artifacts():
+    md = "Available at http://dx.doi.org/10.1063/1.4905792]"
+    assert extract_doi(md) == "10.1063/1.4905792"
+
+
+def test_doi_extraction_strips_url_query_artifacts():
+    md = "https://pubs.acs.org/action/showCitFormats?doi=10.1021/acsmaterialslett.3c00600&ref=pdf"
+    assert extract_doi(md) == "10.1021/acsmaterialslett.3c00600"
+
+
+def test_document_doi_ignores_references_section():
+    md = "# Paper\n\nBody.\n\n## References\n\n1. Ref doi:10.1063/5.0093964"
+    assert extract_document_doi(md) is None
 
 
 def test_topic_filter_rejects_noise_phrases():

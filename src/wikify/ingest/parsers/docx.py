@@ -8,7 +8,8 @@ from pathlib import Path
 
 from ..metadata import (
     clean_markdown,
-    extract_doi,
+    extract_document_doi,
+    extract_publication_fields,
     extract_summary,
     first_heading,
     parse_authors,
@@ -144,13 +145,15 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
     if not year and fn_year:
         year = fn_year
 
-    return {
+    metadata = {
         "title": title,
         "authors": authors,
         "summary": extract_summary(md_text),
         "year": year,
-        "doi": extract_doi(md_text[:3000]),
+        "doi": extract_document_doi(md_text),
     }
+    metadata.update(extract_publication_fields(md_text))
+    return metadata
 
 
 def _extract_images(doc) -> list[RawImage]:
