@@ -228,6 +228,93 @@ def clean_markdown_text(md: str) -> str:
     return out.strip() + "\n"
 
 
+# --- sentence stitching + caption separation -----------------------------
+
+# A paragraph that starts with a figure/table/scheme caption pattern.
+# These should be visually separated from surrounding prose.
+_CAPTION_START_RE = re.compile(
+    r"^\s*\*{0,2}(?:Fig(?:ure)?|Table|Scheme)\.?\s*\d+",
+    re.IGNORECASE,
+)
+
+# Characters that end a complete sentence — if the previous paragraph
+# ends with one of these, it's NOT a broken continuation.
+_SENTENCE_ENDERS = frozenset(".!?:)")
+
+
+def _stitch_and_separate(md: str) -> str:
+    """Fix two pymupdf4llm column-reconstruction artifacts in one pass.
+
+    1. **Sentence stitching**: when a paragraph ends mid-sentence
+       (no sentence-ending punctuation) and the next paragraph starts
+       with a lowercase letter, the two are fragments of the same
+       sentence that pymupdf4llm split at a column boundary. We merge
+       them back into one paragraph. Conservative: only fires when
+       BOTH signals are present, so real paragraph breaks (which
+       typically end with a period or start with a capital) are safe.
+
+    2. **Caption separation**: figure / table / scheme caption lines
+       that don't already have blank-line boundaries get them inserted
+       so they render as their own paragraph instead of visually
+       merging with adjacent prose.
+
+    Runs in O(paragraphs) — negligible on any corpus we've tested.
+    """
+    paragraphs = md.split("\n\n")
+    if len(paragraphs) <= 1:
+        return md
+
+    out: list[str] = []
+    i = 0
+    while i < len(paragraphs):
+        para = paragraphs[i]
+        stripped = para.strip()
+
+        # If this paragraph is a caption, ensure it's isolated.
+        if _CAPTION_START_RE.match(stripped):
+            out.append(para)
+            i += 1
+            continue
+
+        # Look ahead: can we stitch this paragraph to the next one?
+        if i + 1 < len(paragraphs):
+            next_para = paragraphs[i + 1].strip()
+
+            # Don't stitch across a caption — it's a real boundary.
+            if _CAPTION_START_RE.match(next_para):
+                out.append(para)
+                i += 1
+                continue
+
+            # Stitch condition:
+            #   (a) this paragraph ends without a sentence-ender
+            #   (b) next paragraph starts with a lowercase letter
+            # Both must hold. Real paragraph breaks almost always
+            # end with a period and the next starts with a capital.
+            if stripped and next_para:
+                last_char = stripped.rstrip()[-1] if stripped.rstrip() else ""
+                first_char = ""
+                for ch in next_para:
+                    if ch.isalpha():
+                        first_char = ch
+                        break
+                if (
+                    last_char
+                    and last_char not in _SENTENCE_ENDERS
+                    and first_char
+                    and first_char.islower()
+                ):
+                    para = para.rstrip() + " " + paragraphs[i + 1].lstrip()
+                    i += 2
+                    out.append(para)
+                    continue
+
+        out.append(para)
+        i += 1
+
+    return "\n\n".join(out)
+
+
 # --- body normalization --------------------------------------------------
 
 # pymupdf4llm's column reconstruction sometimes drops a dropcap letter
@@ -278,7 +365,12 @@ def _normalize_body_text(md: str) -> str:
     md = re.sub(r"[ \t]+\n", "\n", md)
     # 6. Collapse runs of spaces (but never newlines) to a single space.
     md = re.sub(r"[ \t]{2,}", " ", md)
-    # 7. Normalize the IEEE-style "Index Terms" section label to "Keywords"
+    # 7. Stitch sentence continuations that pymupdf4llm's column
+    #    reconstruction split across paragraph breaks, and ensure figure
+    #    caption lines have clean blank-line boundaries so they don't
+    #    visually interrupt prose flow.
+    md = _stitch_and_separate(md)
+    # 8. Normalize the IEEE-style "Index Terms" section label to "Keywords"
     #    — the two are identical in purpose and we'd rather report one
     #    canonical name across the corpus (topics.py already accepts both).
     #    The source can wrap the label in any combination of ``_``/``*``
