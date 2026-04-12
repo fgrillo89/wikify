@@ -269,7 +269,7 @@ def run_with_preloaded(
         verbalize=verbalize,
     )
 
-    state = _build_sampler_state(
+    state = _build_explorer_state(
         rng, docs, chunks, graph, vectors, corpus=preloaded.corpus_paths
     )
     use_coverage_memory = iteration == "refine" and not feed
@@ -745,7 +745,7 @@ def _normalize_title(t: str) -> str:
 # --- sampler state -------------------------------------------------------
 
 
-def _build_sampler_state(
+def _build_explorer_state(
     rng: random.Random,
     docs: list[Document],
     chunks: list[Chunk],

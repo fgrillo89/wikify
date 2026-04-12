@@ -3,7 +3,7 @@
 Verifies that:
 1. build_explorer_index + save_explorer_index + load_explorer_index is lossless.
 2. A SamplerState assembled from the loaded index has identical fields to
-   one produced by the existing in-memory build path in _build_sampler_state.
+   one produced by the existing in-memory build path in _build_explorer_state.
 3. ingest_corpus writes sampler_index.json and pagerank.json to disk.
 4. The write phase of pipeline.run skips graph/vector loads (loads index instead).
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from wikify_simple.distill.pipeline import _build_sampler_state
+from wikify_simple.distill.pipeline import _build_explorer_state
 from wikify_simple.ingest.refresh import ingest_corpus
 from wikify_simple.ingest.explorer_index import (
     build_explorer_index,
@@ -104,9 +104,9 @@ def test_sampler_state_fields_match(corpus):
     rng_b = random.Random(42)
 
     # In-memory path (no corpus kwarg -> fallback)
-    state_old = _build_sampler_state(rng_a, docs, chunks, graph, vectors, corpus=None)
+    state_old = _build_explorer_state(rng_a, docs, chunks, graph, vectors, corpus=None)
     # Index-backed path
-    state_new = _build_sampler_state(rng_b, docs, chunks, graph, vectors, corpus=corpus)
+    state_new = _build_explorer_state(rng_b, docs, chunks, graph, vectors, corpus=corpus)
 
     assert state_old.chunks_by_doc == state_new.chunks_by_doc
     assert state_old.chunk_to_doc == state_new.chunk_to_doc
