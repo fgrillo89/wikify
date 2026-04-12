@@ -218,7 +218,7 @@ src/wikify/
       pptx.py
       html.py
       markdown.py
-      registry.py       # ParserBackend enum + unified dispatch table
+      registry.py       # ParserBackend enum + factory dispatch
       _sections.py      # section_spans (markdown headings) +
                         # toc_spans (TOC-driven, used when >=3 entries)
       _clean.py         # parse-time markdown cleanup; protects
