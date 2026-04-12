@@ -74,6 +74,11 @@ def ingest(
         "--no-refresh",
         help="Skip derived-artifact rebuild (embeddings, graph, topics, etc.).",
     ),
+    resolve_bibliography_doi: bool = typer.Option(
+        False,
+        "--resolve-bibliography-doi",
+        help="Use DOI content negotiation to fill missing bibliography metadata.",
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
     paths = ingest_corpus(
@@ -83,6 +88,7 @@ def ingest(
         mode=mode,
         parser_backend=parser,
         refresh=not no_refresh,
+        resolve_bibliography_doi=resolve_bibliography_doi,
     )
     typer.echo(f"corpus written to {paths.root}")
 

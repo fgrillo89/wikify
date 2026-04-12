@@ -1,0 +1,27 @@
+{
+  "doc_bibkeys": {
+    "foo_7ea099074b7c": "foo_7ea099074b7c"
+  },
+  "doc_citations": {
+    "foo_7ea099074b7c": []
+  },
+  "doi_bibkeys": {},
+  "entries": {
+    "foo_7ea099074b7c": {
+      "authors": [],
+      "bibkey": "foo_7ea099074b7c",
+      "citation_ords": [],
+      "doc_id": "foo_7ea099074b7c",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Foo",
+      "url": "",
+      "venue": "",
+      "year": ""
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {},
+  "title_bibkeys": {}
+}

@@ -16,6 +16,7 @@ from wikify.ingest.metadata import (
     extract_publication_fields,
     extract_venue,
     extract_year_from_pdf_meta,
+    first_heading,
 )
 from wikify.ingest.pipeline import sections_from_chunks as _sections_from_chunks
 from wikify.ingest.topics import _is_valid_keyword
@@ -82,6 +83,93 @@ def test_extract_authors_from_markdown_beats_single_meta_author(tmp_path: Path):
     assert names[0] == "H. Kim"
 
 
+def test_first_heading_accepts_docling_h2_after_frontmatter():
+    md = (
+        "---\n"
+        "title: filename fallback\n"
+        "---\n\n"
+        "<!-- image -->\n\n"
+        "## LETTERS\n\n"
+        "## Real Paper Title \ue907\n\n"
+        "Body."
+    )
+    assert first_heading(md) == "Real Paper Title"
+
+
+def test_parse_author_line_keeps_markdown_linked_authors():
+    line = "[Yu. Matveyev ; K. Egorov; A. Markeev; A. Zenkevich](javascript:;)"
+    assert _parse_author_line(line) == [
+        "Yu. Matveyev",
+        "K. Egorov",
+        "A. Markeev",
+        "A. Zenkevich",
+    ]
+
+
+def test_parse_author_line_strips_numbered_affiliation_markers():
+    line = "Fabia F. Athena, 1 Matthew P. West, 2 Pradip Basnet, 2 Jinho Hah, 2"
+    assert _parse_author_line(line) == [
+        "Fabia F. Athena",
+        "Matthew P. West",
+        "Pradip Basnet",
+        "Jinho Hah",
+    ]
+
+
+def test_parse_author_line_splits_pipe_separated_author_list():
+    line = "Weiwei Li 1 | Chunbo Duan 2 | Ying Wei 1 | Hui Xu 2"
+    assert _parse_author_line(line) == [
+        "Weiwei Li",
+        "Chunbo Duan",
+        "Ying Wei",
+        "Hui Xu",
+    ]
+
+
+def test_extract_authors_truncates_inline_affiliations_after_title():
+    md = (
+        "## Pure CMOS embedded Artificial Synaptic Device\n\n"
+        "Hsin-Yuan Yu 1 , Yao-Hung Huang 1 , Yue-Der Chih 2 , "
+        "Jonathan Chang 2 , Ya-Chin King 1 , Chrong Jung Lin 1 "
+        "1 Institute of Electronics Engineering, National Tsing Hua University"
+    )
+    assert extract_authors_from_markdown(md, fn_author="Hu") == [
+        "Hsin-Yuan Yu",
+        "Yao-Hung Huang",
+        "Yue-Der Chih",
+        "Jonathan Chang",
+        "Ya-Chin King",
+        "Chrong Jung Lin",
+    ]
+
+
+def test_extract_authors_keeps_single_real_author_before_affiliation():
+    md = (
+        "## Impact of Pulse Width on Analog Switching Response\n\n"
+        "Aarti Dahiya Department of Electronics Engineering Indian Institute "
+        "of Technology 24DR0241@iitism.ac.in\n\n"
+        "## Abstract\n\n"
+    )
+    assert extract_authors_from_markdown(md, fn_author="Dahiya") == ["Aarti Dahiya"]
+
+
+def test_extract_authors_prefers_full_author_line_over_correspondence():
+    md = (
+        "*CORRESPONDENCE Sanjay Kumar, sanjaysihag91@gmail.com\n\n"
+        "Rahul Ramesh, rahulk129@gmail.com\n\n"
+        "Ramesh R, Stathopoulos S, Kumar S and Prodromakis T (2026) Article title.\n\n"
+        "Rahul Ramesh 1 *, Spyros Stathopoulos 1 , Sanjay Kumar 1,2 *, "
+        "Hannah Levene 1 and Themis Prodromakis 1 *"
+    )
+    assert extract_authors_from_markdown(md, fn_author="Ramesh") == [
+        "Rahul Ramesh",
+        "Spyros Stathopoulos",
+        "Sanjay Kumar",
+        "Hannah Levene",
+        "Themis Prodromakis",
+    ]
+
+
 def test_extract_venue_from_sciencedirect_homepage_heading():
     md = (
         "## Chemical Engineering Journal journal homepage: www.elsevier.com/locate/cej\n\n"
@@ -124,6 +212,15 @@ def test_extract_publication_fields_from_acs_cite_this_line():
         "venue": "ACS Materials Lett.",
         "volume": "5",
         "pages": "3080-3092",
+    }
+
+
+def test_extract_publication_fields_strips_cite_as_prefix():
+    md = "Cite as: J. Appl. Phys. 131 , 204901 (2022); doi: 10.1063/5.0087001"
+    assert extract_publication_fields(md) == {
+        "venue": "J. Appl. Phys.",
+        "volume": "131",
+        "pages": "204901",
     }
 
 

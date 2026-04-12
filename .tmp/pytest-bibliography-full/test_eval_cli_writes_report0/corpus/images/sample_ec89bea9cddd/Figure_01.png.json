@@ -1,0 +1,22 @@
+{
+  "id": "sample_ec89bea9cddd/Figure_01",
+  "path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_eval_cli_writes_report0\\corpus\\images\\sample_ec89bea9cddd\\Figure_01.png",
+  "caption": "Checker pattern used as a synthetic fixture image.",
+  "alt_text": "",
+  "page": 1,
+  "near_chunk_ids": [
+    "sample_ec89bea9cddd__c0000__6785f47a"
+  ],
+  "source_bbox": [
+    72.0,
+    200.0,
+    272.0,
+    400.0
+  ],
+  "label": "Figure 1",
+  "media_type": "figure",
+  "width": 320,
+  "height": 320,
+  "content_hash": "b984c9ff1b6149436e97d4724f032ddf1d419fbcb1af728533ee6e3b9fc8cac2",
+  "source_url": null
+}

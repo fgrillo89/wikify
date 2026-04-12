@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "Photocatalysis",
+      "kind": "article",
+      "title": "Photocatalysis",
+      "aliases": [],
+      "path": "articles/Photocatalysis.md",
+      "n_evidence": 1,
+      "doc_ids": [
+        "doc1"
+      ],
+      "links": []
+    }
+  ]
+}

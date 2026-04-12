@@ -40,9 +40,9 @@ def _sanitize_id(s: str) -> str:
 
 def _clean_doi(value: object) -> str:
     text = str(value or "").strip()
-    match = re.search(r"(10\.\d{4,}/[^\s]+)", text)
+    match = re.search(r"(10\.\d{4,}/[^\s<>\]]+)", text)
     if match:
-        doi = re.split(r"[?#&]", match.group(1), maxsplit=1)[0]
+        doi = re.split(r"[?#&\]]", match.group(1), maxsplit=1)[0]
         return doi.rstrip(".,;)]}>")
     return text.rstrip(".,;)]}>")
 
@@ -82,14 +82,27 @@ def _add_optional(entry: dict[str, str], field: str, value: object) -> None:
         entry[field] = text
 
 
+def _clean_title(value: str) -> str:
+    value = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", value)
+    text = re.sub(r"[\ue000-\uf8ff]", "", value)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _clean_venue(value: str) -> str:
+    text = re.sub(r"(?i)^(?:cite\s+as|citation)\s*:\s*", "", value.strip())
+    return re.sub(r"\s+", " ", text).strip(" -:;,")
+
+
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
     authors_list = _as_list(metadata.get("authors"))
+    title = _clean_title(_as_text(doc.title))
 
     year = metadata.get("year")
     year_str = str(year) if year else ""
     doi = _clean_doi(metadata.get("doi"))
-    venue = _first_text(metadata, "venue", "journal", "publicationTitle")
+    venue = _clean_venue(_first_text(metadata, "venue", "journal", "publicationTitle"))
     url = _first_text(metadata, "url", "URL")
     if not url and doi:
         url = f"https://doi.org/{doi}"
@@ -99,7 +112,7 @@ def _document_entry(doc: Document) -> dict[str, str]:
     entry: dict[str, str] = {
         "ENTRYTYPE": "article",
         "ID": _sanitize_id(doc.id),
-        "title": doc.title or "",
+        "title": title,
         "author": " and ".join(authors_list),
     }
     if year_str:
@@ -350,9 +363,11 @@ def _reference_entry(
         external = lookup(doi)
 
     authors = _as_list(external.get("authors")) or _as_list(citation.get("authors"))
-    title = _first_text(external, "title") or _as_text(citation.get("title"))
+    title = _clean_title(_first_text(external, "title") or _as_text(citation.get("title")))
     year = _first_text(external, "year") or _as_text(citation.get("year"))
-    venue = _first_text(external, "venue", "journal") or _as_text(citation.get("venue"))
+    venue = _clean_venue(
+        _first_text(external, "venue", "journal") or _as_text(citation.get("venue"))
+    )
     doi = _clean_doi(external.get("doi") or doi)
     if _is_identifier_title(title, doi):
         title = ""
@@ -512,9 +527,16 @@ def _with_fallback_metadata(
     This lets derived artifact rebuilds improve ``library.bib`` for unchanged
     docs without forcing an expensive PDF reparse.
     """
-    metadata = dict(doc.metadata or {})
+    original_metadata = dict(doc.metadata or {})
+    metadata = dict(original_metadata)
     source_path = Path(doc.source_path) if doc.source_path else Path()
     _, fn_author, _ = parse_filename(source_path.name)
+
+    if metadata.get("doi"):
+        metadata["doi"] = _clean_doi(metadata.get("doi"))
+    for venue_key in ("venue", "journal", "publicationTitle"):
+        if metadata.get(venue_key):
+            metadata[venue_key] = _clean_venue(_as_text(metadata.get(venue_key)))
 
     needs_publication = not (
         metadata.get("venue")
@@ -525,19 +547,32 @@ def _with_fallback_metadata(
     needs_doi = not metadata.get("doi")
     needs_authors = _authors_need_fallback(metadata, fn_author)
     needs_title = _title_needs_fallback(doc.title)
-    if not needs_publication and not needs_doi and not needs_authors and not needs_title:
+    if (
+        not needs_publication
+        and not needs_doi
+        and not needs_authors
+        and not needs_title
+        and metadata == original_metadata
+    ):
         return doc
 
     text = _read_doc_markdown(corpus, doc)
     title = doc.title
 
     if text and needs_title:
-        heading = first_heading(text)
+        metadata_title = _as_text(metadata.get("title"))
+        heading = (
+            metadata_title
+            if metadata_title and not _title_needs_fallback(metadata_title)
+            else ""
+        )
+        if not heading:
+            heading = _best_markdown_title(text, title) or first_heading(text) or ""
         if heading and not _title_needs_fallback(heading):
-            title = heading
+            title = _clean_title(heading)
     if text and needs_authors:
         authors = extract_authors_from_markdown(text, fn_author=fn_author)
-        if len(authors) >= 2 or (authors and not metadata.get("authors")):
+        if len(authors) >= 2 or authors:
             metadata["authors"] = authors
     if text and needs_publication:
         for key, value in extract_publication_fields(text).items():
@@ -560,7 +595,7 @@ def _with_fallback_metadata(
             prefer_authors=_authors_need_fallback(metadata, fn_author),
         )
 
-    if metadata == (doc.metadata or {}) and title == doc.title:
+    if metadata == original_metadata and title == doc.title:
         return doc
     return replace(doc, title=title, metadata=metadata)
 
@@ -581,6 +616,73 @@ def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
 def _title_needs_fallback(title: str) -> bool:
     clean = title.strip()
     return bool(re.match(r"^\[\d{4}\s+[^\]]+\]", clean))
+
+
+def _best_markdown_title(md_text: str, fallback_title: str) -> str:
+    """Pick the heading that best matches the filename-derived title."""
+    target_tokens = set(_normalise_title_key(_strip_filename_title_prefix(fallback_title)).split())
+    best: tuple[float, int, str] = (0.0, 0, "")
+    for heading in _markdown_headings(md_text):
+        if _heading_is_generic(heading):
+            continue
+        tokens = set(_normalise_title_key(heading).split())
+        if not tokens:
+            continue
+        overlap = len(tokens & target_tokens)
+        score = overlap / max(len(target_tokens), 1)
+        if score > best[0] or (score == best[0] and len(heading) > best[1]):
+            best = (score, len(heading), heading)
+    if best[0] >= 0.25:
+        return best[2]
+    return ""
+
+
+def _markdown_headings(md_text: str) -> list[str]:
+    headings: list[str] = []
+    in_frontmatter = False
+    for line in md_text.splitlines():
+        stripped = line.strip()
+        if stripped == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+        if in_frontmatter:
+            continue
+        match = re.match(r"^#{1,6}\s+(.+)$", stripped)
+        if not match:
+            continue
+        heading = _clean_title(re.sub(r"[\ue000-\uf8ff]", "", match.group(1)))
+        if heading:
+            headings.append(heading)
+    return headings
+
+
+def _strip_filename_title_prefix(title: str) -> str:
+    match = re.match(r"^\[\d{4}\s+[^\]]+\]\s*[-–—]?\s*(.+)$", title.strip())
+    return match.group(1) if match else title
+
+
+def _heading_is_generic(heading: str) -> bool:
+    lower = heading.casefold().strip()
+    generic = {
+        "article",
+        "articles",
+        "letters",
+        "paper",
+        "review",
+        "open access",
+        "research article",
+        "articles you may be interested in",
+        "references",
+        "bibliography",
+        "affiliations",
+        "abstract",
+    }
+    if lower in generic:
+        return True
+    journalish = r"\b(journal|science|nature|iscience|flexmat)\b"
+    if len(heading.split()) <= 2 and re.search(journalish, lower):
+        return True
+    return False
 
 
 def _merge_external_metadata(

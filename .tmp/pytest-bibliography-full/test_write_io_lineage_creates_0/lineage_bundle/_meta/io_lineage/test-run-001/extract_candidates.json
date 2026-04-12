@@ -1,0 +1,12 @@
+[
+  {
+    "chunk_id": "c1",
+    "doc_id": "d1",
+    "title": "Atomic Layer Deposition",
+    "kind": "article",
+    "has_definition": true,
+    "has_summary": true,
+    "definition_words": 8,
+    "summary_words": 14
+  }
+]

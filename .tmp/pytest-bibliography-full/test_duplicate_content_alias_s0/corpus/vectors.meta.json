@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "backend": "hash",
+  "dim": 128,
+  "model": null
+}

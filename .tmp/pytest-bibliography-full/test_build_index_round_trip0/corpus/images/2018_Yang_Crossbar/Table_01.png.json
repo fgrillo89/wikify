@@ -1,0 +1,15 @@
+{
+  "id": "[2018 Yang] Crossbar_abcd/Table_01",
+  "path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_build_index_round_trip0\\corpus\\images\\2018_Yang_Crossbar\\Table_01.png",
+  "caption": "table",
+  "alt_text": "",
+  "page": 1,
+  "near_chunk_ids": [],
+  "source_bbox": null,
+  "label": "Table 1",
+  "media_type": "table",
+  "width": 1,
+  "height": 1,
+  "content_hash": null,
+  "source_url": null
+}

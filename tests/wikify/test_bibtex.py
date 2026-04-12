@@ -159,6 +159,41 @@ def test_write_corpus_bibtex_can_merge_generic_doi_metadata(tmp_path):
     assert entry["author"] == "D. Strukov and G. Snider"
 
 
+def test_write_corpus_bibtex_repairs_docling_like_metadata_from_markdown(tmp_path):
+    doc = _doc(
+        "paper_abc123",
+        "[2015 Matveyev] Resistive switching and synaptic properties of fully "
+        "atomic layer deposition grown TiNHfO2",
+        ["Matveyev"],
+        2015,
+    )
+    doc.metadata["doi"] = "10.1063/1.4905792&domain=pdf&date_stamp=2015-01-26"
+    doc.metadata["venue"] = "Cite as: J. Appl. Phys."
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus.ensure()
+    (corpus.markdown_dir / f"{doc.id}.md").write_text(
+        "---\n"
+        "title: filename fallback\n"
+        "---\n\n"
+        "## Resistive switching and synaptic properties of fully atomic layer "
+        "deposition grown TiN/HfO2/TiN devices \ue907\n\n"
+        "[Yu. Matveyev ; K. Egorov; A. Markeev; A. Zenkevich](javascript:;)\n\n"
+        "J. Appl. Phys. 117, 044901 (2015)\n\n"
+        "[https://doi.org/10.1063/1.4905792](https://doi.org/10.1063/1.4905792)\n",
+        encoding="utf-8",
+    )
+
+    bib_path = write_corpus_bibtex(corpus, [doc])
+    entry = bibtexparser.loads(bib_path.read_text(encoding="utf-8")).entries[0]
+    assert entry["title"] == (
+        "Resistive switching and synaptic properties of fully atomic layer deposition "
+        "grown TiN/HfO2/TiN devices"
+    )
+    assert entry["author"] == "Yu. Matveyev and K. Egorov and A. Markeev and A. Zenkevich"
+    assert entry["doi"] == "10.1063/1.4905792"
+    assert entry["journal"] == "J. Appl. Phys."
+
+
 def test_write_corpus_bibliography_writes_reference_artifacts(tmp_path):
     docs = [
         _doc("a_1", "Title A", ["Alice"], 2020),

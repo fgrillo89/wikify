@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "by_doc": {
+    "ald_3f51697abcb3": [
+      {
+        "id": "ald_3f51697abcb3/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/ald_3f51697abcb3/Figure_01.png",
+        "sidecar": "images/ald_3f51697abcb3/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "catalysis_668a13e2a99d": [
+      {
+        "id": "catalysis_668a13e2a99d/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/catalysis_668a13e2a99d/Figure_01.png",
+        "sidecar": "images/catalysis_668a13e2a99d/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "photocatalysis_18772db59f42": [
+      {
+        "id": "photocatalysis_18772db59f42/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/photocatalysis_18772db59f42/Figure_01.png",
+        "sidecar": "images/photocatalysis_18772db59f42/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "sample_43927e5422e6": [
+      {
+        "id": "sample_43927e5422e6/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/sample_43927e5422e6/Figure_01.png",
+        "sidecar": "images/sample_43927e5422e6/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "sample_45fc29a57bba": [
+      {
+        "id": "sample_45fc29a57bba/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/sample_45fc29a57bba/Figure_01.png",
+        "sidecar": "images/sample_45fc29a57bba/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "sample_a553e1dafce9": [
+      {
+        "id": "sample_a553e1dafce9/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/sample_a553e1dafce9/Figure_01.png",
+        "sidecar": "images/sample_a553e1dafce9/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "sample_ec89bea9cddd": [
+      {
+        "id": "sample_ec89bea9cddd/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/sample_ec89bea9cddd/Figure_01.png",
+        "sidecar": "images/sample_ec89bea9cddd/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "semiconductors_7cfed7b03e16": [
+      {
+        "id": "semiconductors_7cfed7b03e16/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/semiconductors_7cfed7b03e16/Figure_01.png",
+        "sidecar": "images/semiconductors_7cfed7b03e16/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ],
+    "water_splitting_ab61c0090310": [
+      {
+        "id": "water_splitting_ab61c0090310/Figure_01",
+        "label": "Figure 1",
+        "caption": "synthetic figure for tests",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/water_splitting_ab61c0090310/Figure_01.png",
+        "sidecar": "images/water_splitting_ab61c0090310/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 100,
+        "height": 100,
+        "near_chunk_ids": []
+      }
+    ]
+  },
+  "by_alias": {
+    "ald_3f51697abcb3/figure_1": "ald_3f51697abcb3/Figure_01",
+    "ald_3f51697abcb3/figure_01": "ald_3f51697abcb3/Figure_01",
+    "catalysis_668a13e2a99d/figure_1": "catalysis_668a13e2a99d/Figure_01",
+    "catalysis_668a13e2a99d/figure_01": "catalysis_668a13e2a99d/Figure_01",
+    "photocatalysis_18772db59f42/figure_1": "photocatalysis_18772db59f42/Figure_01",
+    "photocatalysis_18772db59f42/figure_01": "photocatalysis_18772db59f42/Figure_01",
+    "sample_43927e5422e6/figure_1": "sample_43927e5422e6/Figure_01",
+    "sample_43927e5422e6/figure_01": "sample_43927e5422e6/Figure_01",
+    "sample_45fc29a57bba/figure_1": "sample_45fc29a57bba/Figure_01",
+    "sample_45fc29a57bba/figure_01": "sample_45fc29a57bba/Figure_01",
+    "sample_a553e1dafce9/figure_1": "sample_a553e1dafce9/Figure_01",
+    "sample_a553e1dafce9/figure_01": "sample_a553e1dafce9/Figure_01",
+    "sample_ec89bea9cddd/figure_1": "sample_ec89bea9cddd/Figure_01",
+    "sample_ec89bea9cddd/figure_01": "sample_ec89bea9cddd/Figure_01",
+    "semiconductors_7cfed7b03e16/figure_1": "semiconductors_7cfed7b03e16/Figure_01",
+    "semiconductors_7cfed7b03e16/figure_01": "semiconductors_7cfed7b03e16/Figure_01",
+    "water_splitting_ab61c0090310/figure_1": "water_splitting_ab61c0090310/Figure_01",
+    "water_splitting_ab61c0090310/figure_01": "water_splitting_ab61c0090310/Figure_01"
+  }
+}

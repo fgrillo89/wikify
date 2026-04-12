@@ -1,0 +1,72 @@
+[
+  {
+    "chunk_id": "sample_45fc29a57bba/fig_000__caption",
+    "doc_id": "sample_45fc29a57bba",
+    "title": "sample",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "sample_ec89bea9cddd/Figure_01__caption",
+    "doc_id": "sample_ec89bea9cddd",
+    "title": "checker",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "sample_ec89bea9cddd/Figure_01__caption",
+    "doc_id": "sample_ec89bea9cddd",
+    "title": "pattern",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "water_splitting_ab61c0090310__c0001__cf444055",
+    "doc_id": "water_splitting_ab61c0090310",
+    "title": "photoelectrochemical",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "water_splitting_ab61c0090310__c0001__cf444055",
+    "doc_id": "water_splitting_ab61c0090310",
+    "title": "single",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "water_splitting_ab61c0090310__c0002__f3df6bea",
+    "doc_id": "water_splitting_ab61c0090310",
+    "title": "practical",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  },
+  {
+    "chunk_id": "water_splitting_ab61c0090310__c0002__f3df6bea",
+    "doc_id": "water_splitting_ab61c0090310",
+    "title": "photoelectrodes",
+    "kind": "article",
+    "has_definition": false,
+    "has_summary": false,
+    "definition_words": 0,
+    "summary_words": 0
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "page_id": "semiconductor",
+  "title": "semiconductor",
+  "aliases": [],
+  "kind": "article",
+  "category": "method",
+  "entries": [
+    {
+      "chunk_id": "photocatalysis_18772db59f42__c0002__84fe1523",
+      "doc_id": "photocatalysis_18772db59f42",
+      "quote": "When a semiconductor photocatalyst absorbs a photon with energy greater than its band gap, an electron is promoted from the valence band to the conduction band, leaving a hole in the valence band.",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "conclusion",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

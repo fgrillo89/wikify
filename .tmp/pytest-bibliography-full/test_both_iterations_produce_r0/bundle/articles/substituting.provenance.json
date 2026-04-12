@@ -1,0 +1,36 @@
+{
+  "confidence_scores": [
+    {
+      "label": "extracted",
+      "score": 1.0
+    }
+  ],
+  "confidence_min": 1.0,
+  "confidence_mean": 1.0,
+  "confidence_count_by_label": {
+    "extracted": 1
+  },
+  "run_id": "snap-test-iter2",
+  "model": "M",
+  "strategy": "M",
+  "iteration": "refine",
+  "current_run_id": "snap-test-iter2",
+  "history": [
+    {
+      "run_id": "snap-test-iter1",
+      "iteration": "create",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": false,
+      "timestamp_utc": "2026-04-12T23:50:11.790885+00:00"
+    },
+    {
+      "run_id": "snap-test-iter2",
+      "iteration": "refine",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": true,
+      "timestamp_utc": "2026-04-12T23:50:12.263349+00:00"
+    }
+  ]
+}

@@ -975,6 +975,7 @@ def refresh_corpus(
     paths: CorpusPaths,
     *,
     stale_doc_ids: set[str] | None = None,
+    resolve_bibliography_doi: bool = False,
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.).
 
@@ -1019,6 +1020,7 @@ def refresh_corpus(
         declared=declared,
         store=store,
         graph=None,  # populated by wave B
+        resolve_bibliography_doi=resolve_bibliography_doi,
     )
 
     # ---- execute the DAG ----
@@ -1059,7 +1061,11 @@ def _refresh_images_index(ctx: dict) -> None:
 
 
 def _refresh_bibliography(ctx: dict) -> None:
-    write_corpus_bibliography(ctx["paths"], ctx["docs"])
+    write_corpus_bibliography(
+        ctx["paths"],
+        ctx["docs"],
+        resolve_doi=ctx.get("resolve_bibliography_doi", False),
+    )
 
 
 def _refresh_corpus_graph(ctx: dict) -> None:
@@ -1123,6 +1129,7 @@ def ingest_corpus(
     mode: str = "additive",
     parser_backend: str = "default",
     refresh: bool = True,
+    resolve_bibliography_doi: bool = False,
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1160,7 +1167,10 @@ def ingest_corpus(
                 "-- running refresh",
                 file=sys.stderr,
             )
-            refresh_corpus(paths)
+            refresh_corpus(
+                paths,
+                resolve_bibliography_doi=resolve_bibliography_doi,
+            )
         else:
             print(
                 "[ingest] nothing to do -- corpus already contains every source",
@@ -1219,7 +1229,11 @@ def ingest_corpus(
 
     # 7. Rebuild derived artifacts
     if refresh:
-        refresh_corpus(paths, stale_doc_ids=stale_doc_ids)
+        refresh_corpus(
+            paths,
+            stale_doc_ids=stale_doc_ids,
+            resolve_bibliography_doi=resolve_bibliography_doi,
+        )
     else:
         print(
             "[ingest] --no-refresh: skipping derived artifacts",

@@ -12,12 +12,21 @@ from dataclasses import dataclass
 
 
 def first_heading(md_text: str) -> str | None:
+    in_frontmatter = False
     for line in md_text.split("\n"):
         stripped = line.strip()
-        if stripped.startswith("# "):
-            heading = stripped.lstrip("# ").strip()
+        if stripped == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+        if in_frontmatter:
+            continue
+        match = re.match(r"^#{1,6}\s+(?P<title>.+)$", stripped)
+        if match:
+            heading = match.group("title").strip()
             heading = clean_markdown(heading)
-            if heading:
+            heading = re.sub(r"[\ue000-\uf8ff]", "", heading)
+            heading = re.sub(r"\s+", " ", heading).strip()
+            if heading and not _is_heading_noise(heading):
                 return heading
     return None
 
@@ -58,9 +67,9 @@ def parse_authors(raw: str) -> list[str]:
 
 
 def extract_doi(text: str) -> str | None:
-    m = re.search(r"(10\.\d{4,}/[^\s]+)", text)
+    m = re.search(r"(10\.\d{4,}/[^\s<>\]]+)", text)
     if m:
-        doi = re.split(r"[?#&]", m.group(1), maxsplit=1)[0]
+        doi = re.split(r"[?#&\]]", m.group(1), maxsplit=1)[0]
         return doi.rstrip(".,;)]}>")
     return None
 
@@ -265,6 +274,7 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
     if fn_author:
         surname = _extract_surname(fn_author)
         if surname:
+            best_names: list[str] = []
             surname_re = re.compile(rf"\b{re.escape(surname)}\b", re.IGNORECASE)
             for line in lines:
                 s = line.strip()
@@ -272,15 +282,14 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
                     continue
                 if not surname_re.search(s):
                     continue
-                if re.search(
-                    r"(?i)(university|department|institute|school|laboratory"
-                    r"|\blab\b|@|e-mail|email|nanotechnology|j\. phys\.)",
-                    s,
-                ):
+                if re.search(r"(?i)(correspondence|nanotechnology|j\. phys\.)", s):
                     continue
-                names = _parse_author_line(s)
+                names = _parse_author_line(_author_line_prefix(s))
                 if names and any(surname.lower() in n.lower() for n in names):
-                    return names
+                    if len(names) > len(best_names):
+                        best_names = names
+            if best_names:
+                return best_names
 
     # Strategy 2: first-heading heuristic. Used for single-author papers or
     # when no fn_author hint is available. Unchanged from the original.
@@ -299,18 +308,22 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
             continue
         if re.match(r"(?i)^#*\s*\*?\*?(abstract|introduction|index\s+terms|keywords)", line):
             break
-        if re.search(
-            r"(?i)(university|department|institute|school|laboratory"
-            r"|lab\b|@|e-mail|email)",
-            line,
-        ):
-            continue
-        candidates.append(line)
+        candidates.append(_author_line_prefix(line))
     for line in candidates:
         names = _parse_author_line(line)
         if len(names) >= 2:
             return names
     return []
+
+
+def _author_line_prefix(line: str) -> str:
+    """Keep the author segment before affiliation/email prose starts."""
+    return re.split(
+        r"(?i)\b(?:department|institute|school|laboratory|centre|center|university"
+        r"|college|faculty|e-mail|email)\b|@",
+        line,
+        maxsplit=1,
+    )[0].strip(" ,;")
 
 
 def _extract_surname(author_hint: str) -> str:
@@ -441,6 +454,7 @@ def _clean_venue_candidate(candidate: str) -> str | None:
     candidate = clean_markdown(candidate)
     candidate = re.sub(r"<[^>]+>", "", candidate)
     candidate = re.sub(r"\s+", " ", candidate).strip(" -:;,")
+    candidate = re.sub(r"(?i)^(?:cite\s+as|citation)\s*:\s*", "", candidate).strip()
     candidate = re.sub(
         r"\s+journal\s+homepage\b.*$",
         "",
@@ -483,6 +497,25 @@ def _is_valid_venue(candidate: str) -> bool:
     if len(candidate.split()) > 12:
         return False
     return True
+
+
+def _is_heading_noise(heading: str) -> bool:
+    lower = heading.casefold()
+    return lower in {
+        "articles you may be interested in",
+        "letters",
+        "paper",
+        "articles",
+        "review",
+        "open access",
+        "references",
+        "bibliography",
+        "works cited",
+        "affiliations",
+        "abstract",
+        "article",
+        "check for updates",
+    }
 
 _AUTHOR_NOISE = {
     "ieee",
@@ -736,6 +769,7 @@ def _looks_like_journal(name: str) -> bool:
 
 def _parse_author_line(line: str) -> list[str]:
     cleaned = re.sub(r"^#+\s*", "", line)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cleaned)
     # Strip leading bullet markers (-, *, +, •) that pymupdf4llm leaves on
     # recommendation lists like "- Zhao Jin-Wei, ...".
     cleaned = re.sub(r"^[\-*+•]\s+", "", cleaned)
@@ -758,13 +792,18 @@ def _parse_author_line(line: str) -> list[str]:
     cleaned = cleaned.replace("&", ",")
     # Strip trailing per-author affiliation superscripts like "H. Kim 1,2"
     # -> "H. Kim" and "M. R. Mahmoodi 1" -> "M. R. Mahmoodi".
-    cleaned = re.sub(r"(?<=[A-Za-z])\s+\d+(?:\s*,\s*\d+)*\b", "", cleaned)
+    cleaned = re.sub(
+        r",\s*\d+(?:\s*,\s*\d+)*(?:\s*,\s*[a-z])?\)?\s*",
+        ", ",
+        cleaned,
+    )
+    cleaned = re.sub(r"(?<=[A-Za-z])(?:\s+\d+(?:\s*,\s*\d+)*)+\b", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return []
     # Split on commas OR semicolons OR " and " — AIP landing pages often
     # use semicolons ("Yu. Matveyev ; K. Egorov; A. Markeev; A. Zenkevich").
-    parts = re.split(r"[,;]\s*|\s+and\s+", cleaned)
+    parts = re.split(r"[,;|]\s*|\s+and\s+", cleaned)
     names: list[str] = []
     for part in parts:
         part = part.strip().rstrip(",. ")

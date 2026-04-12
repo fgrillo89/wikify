@@ -1,0 +1,28 @@
+{
+  "confidence_scores": [
+    {
+      "label": "extracted",
+      "score": 1.0
+    }
+  ],
+  "confidence_min": 1.0,
+  "confidence_mean": 1.0,
+  "confidence_count_by_label": {
+    "extracted": 1
+  },
+  "run_id": "refine-test-iter2",
+  "model": "M",
+  "strategy": "M",
+  "iteration": "refine",
+  "current_run_id": "refine-test-iter2",
+  "history": [
+    {
+      "run_id": "refine-test-iter2",
+      "iteration": "refine",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": false,
+      "timestamp_utc": "2026-04-12T23:50:11.585700+00:00"
+    }
+  ]
+}

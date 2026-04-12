@@ -1,0 +1,1 @@
+{"chunk_id": "chunk-err", "chunk_text": "any text will do here because validation will fail first.", "canonical_titles": [], "prompt_template": "wikify/extract", "model_id": "claude-haiku", "tier": "S", "images_for_doc": [], "equations": [], "figure_captions": [], "verbalize": false}

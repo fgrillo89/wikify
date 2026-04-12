@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "by_doc": {
+    "[2018 Yang] Crossbar_abcd": [
+      {
+        "id": "[2018 Yang] Crossbar_abcd/Table_01",
+        "label": "Table 1",
+        "caption": "table",
+        "alt_text": "",
+        "page": 1,
+        "path": "images/2018_Yang_Crossbar/Table_01.png",
+        "sidecar": "images/2018_Yang_Crossbar/Table_01.png.json",
+        "media_type": "table",
+        "width": 1,
+        "height": 1,
+        "near_chunk_ids": []
+      }
+    ],
+    "[2020 Liu] Optimization_ff17142a965a": [
+      {
+        "id": "[2020 Liu] Optimization_ff17142a965a/fig_002",
+        "label": null,
+        "caption": "loose img",
+        "alt_text": "",
+        "page": 4,
+        "path": "images/2020_Liu_Optimization/fig_002.png",
+        "sidecar": "images/2020_Liu_Optimization/fig_002.png.json",
+        "media_type": "figure",
+        "width": 1,
+        "height": 1,
+        "near_chunk_ids": []
+      },
+      {
+        "id": "[2020 Liu] Optimization_ff17142a965a/Figure_01",
+        "label": "Fig. 1",
+        "caption": "schematic",
+        "alt_text": "",
+        "page": 2,
+        "path": "images/2020_Liu_Optimization/Figure_01.png",
+        "sidecar": "images/2020_Liu_Optimization/Figure_01.png.json",
+        "media_type": "figure",
+        "width": 1,
+        "height": 1,
+        "near_chunk_ids": []
+      },
+      {
+        "id": "[2020 Liu] Optimization_ff17142a965a/Figure_02",
+        "label": "Fig. 2",
+        "caption": "i-v curve",
+        "alt_text": "",
+        "page": 3,
+        "path": "images/2020_Liu_Optimization/Figure_02.png",
+        "sidecar": "images/2020_Liu_Optimization/Figure_02.png.json",
+        "media_type": "figure",
+        "width": 1,
+        "height": 1,
+        "near_chunk_ids": []
+      }
+    ]
+  },
+  "by_alias": {
+    "[2018 Yang] Crossbar_abcd/tab_01": "[2018 Yang] Crossbar_abcd/Table_01",
+    "[2018 Yang] Crossbar_abcd/tab_1": "[2018 Yang] Crossbar_abcd/Table_01",
+    "[2018 Yang] Crossbar_abcd/table_01": "[2018 Yang] Crossbar_abcd/Table_01",
+    "[2018 Yang] Crossbar_abcd/table_1": "[2018 Yang] Crossbar_abcd/Table_01",
+    "[2020 Liu] Optimization_ff17142a965a/fig_002": "[2020 Liu] Optimization_ff17142a965a/fig_002",
+    "[2020 Liu] Optimization_ff17142a965a/fig_02": "[2020 Liu] Optimization_ff17142a965a/Figure_02",
+    "[2020 Liu] Optimization_ff17142a965a/fig_2": "[2020 Liu] Optimization_ff17142a965a/Figure_02",
+    "[2020 Liu] Optimization_ff17142a965a/figure_02": "[2020 Liu] Optimization_ff17142a965a/Figure_02",
+    "[2020 Liu] Optimization_ff17142a965a/figure_2": "[2020 Liu] Optimization_ff17142a965a/Figure_02",
+    "[2020 Liu] Optimization_ff17142a965a/fig_01": "[2020 Liu] Optimization_ff17142a965a/Figure_01",
+    "[2020 Liu] Optimization_ff17142a965a/fig_1": "[2020 Liu] Optimization_ff17142a965a/Figure_01",
+    "[2020 Liu] Optimization_ff17142a965a/figure_01": "[2020 Liu] Optimization_ff17142a965a/Figure_01",
+    "[2020 Liu] Optimization_ff17142a965a/figure_1": "[2020 Liu] Optimization_ff17142a965a/Figure_01"
+  }
+}

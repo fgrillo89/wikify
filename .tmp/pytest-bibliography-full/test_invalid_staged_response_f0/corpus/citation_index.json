@@ -1,0 +1,165 @@
+{
+  "doc_bibkeys": {
+    "ald_3f51697abcb3": "ald_3f51697abcb3",
+    "catalysis_668a13e2a99d": "catalysis_668a13e2a99d",
+    "photocatalysis_18772db59f42": "photocatalysis_18772db59f42",
+    "sample_43927e5422e6": "sample_43927e5422e6",
+    "sample_45fc29a57bba": "sample_45fc29a57bba",
+    "sample_a553e1dafce9": "sample_a553e1dafce9",
+    "sample_ec89bea9cddd": "sample_ec89bea9cddd",
+    "semiconductors_7cfed7b03e16": "semiconductors_7cfed7b03e16",
+    "water_splitting_ab61c0090310": "water_splitting_ab61c0090310"
+  },
+  "doc_citations": {
+    "ald_3f51697abcb3": [],
+    "catalysis_668a13e2a99d": [],
+    "photocatalysis_18772db59f42": [],
+    "sample_43927e5422e6": [],
+    "sample_45fc29a57bba": [],
+    "sample_a553e1dafce9": [],
+    "sample_ec89bea9cddd": [],
+    "semiconductors_7cfed7b03e16": [],
+    "water_splitting_ab61c0090310": []
+  },
+  "doi_bibkeys": {},
+  "entries": {
+    "ald_3f51697abcb3": {
+      "authors": [
+        "Tuomo Suntola"
+      ],
+      "bibkey": "ald_3f51697abcb3",
+      "citation_ords": [],
+      "doc_id": "ald_3f51697abcb3",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Atomic layer deposition overview",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "catalysis_668a13e2a99d": {
+      "authors": [
+        "Gerhard Ertl"
+      ],
+      "bibkey": "catalysis_668a13e2a99d",
+      "citation_ords": [],
+      "doc_id": "catalysis_668a13e2a99d",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Heterogeneous catalysis principles",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "photocatalysis_18772db59f42": {
+      "authors": [
+        "Akira Fujishima",
+        "Kenichi Honda"
+      ],
+      "bibkey": "photocatalysis_18772db59f42",
+      "citation_ords": [],
+      "doc_id": "photocatalysis_18772db59f42",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Photocatalysis fundamentals",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "sample_43927e5422e6": {
+      "authors": [],
+      "bibkey": "sample_43927e5422e6",
+      "citation_ords": [],
+      "doc_id": "sample_43927e5422e6",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Sample DOCX",
+      "url": "",
+      "venue": "",
+      "year": "2013"
+    },
+    "sample_45fc29a57bba": {
+      "authors": [],
+      "bibkey": "sample_45fc29a57bba",
+      "citation_ords": [],
+      "doc_id": "sample_45fc29a57bba",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "sample",
+      "url": "",
+      "venue": "",
+      "year": "2013"
+    },
+    "sample_a553e1dafce9": {
+      "authors": [
+        "Jane Doe"
+      ],
+      "bibkey": "sample_a553e1dafce9",
+      "citation_ords": [],
+      "doc_id": "sample_a553e1dafce9",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Sample HTML",
+      "url": "",
+      "venue": "",
+      "year": "2023"
+    },
+    "sample_ec89bea9cddd": {
+      "authors": [],
+      "bibkey": "sample_ec89bea9cddd",
+      "citation_ords": [],
+      "doc_id": "sample_ec89bea9cddd",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "sample",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "semiconductors_7cfed7b03e16": {
+      "authors": [
+        "Walter Brattain"
+      ],
+      "bibkey": "semiconductors_7cfed7b03e16",
+      "citation_ords": [],
+      "doc_id": "semiconductors_7cfed7b03e16",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Semiconductor physics primer",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "water_splitting_ab61c0090310": {
+      "authors": [
+        "Akira Fujishima"
+      ],
+      "bibkey": "water_splitting_ab61c0090310",
+      "citation_ords": [],
+      "doc_id": "water_splitting_ab61c0090310",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Photoelectrochemical water splitting",
+      "url": "",
+      "venue": "",
+      "year": ""
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {},
+  "title_bibkeys": {
+    "atomic layer deposition overview": "ald_3f51697abcb3",
+    "heterogeneous catalysis principles": "catalysis_668a13e2a99d",
+    "photoelectrochemical water splitting": "water_splitting_ab61c0090310",
+    "semiconductor physics primer": "semiconductors_7cfed7b03e16"
+  }
+}

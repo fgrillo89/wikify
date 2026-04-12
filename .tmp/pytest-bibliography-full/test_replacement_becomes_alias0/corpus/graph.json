@@ -1,0 +1,1 @@
+{"nodes": {"foo_7ea099074b7c": {"kind": "doc", "title": "Foo"}, "foo_7ea099074b7c__c0000__2a0f5090": {"kind": "chunk", "doc_id": "foo_7ea099074b7c"}}, "edges": {"contains": [["foo_7ea099074b7c", "foo_7ea099074b7c__c0000__2a0f5090"]]}}

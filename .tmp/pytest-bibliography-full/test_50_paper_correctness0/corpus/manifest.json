@@ -1,0 +1,558 @@
+{
+  "schema_version": 1,
+  "corpus_id": "",
+  "last_ingest": "2026-04-12T23:50:30+00:00",
+  "embedder_fingerprint": "hash:None:128",
+  "sources": {
+    "paper000": {
+      "source_id": "paper000",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper000.md",
+      "content_hash": "fdcca4e10a4d",
+      "doc_id": "paper000_fdcca4e10a4d",
+      "status": "active",
+      "chunk_ids": [
+        "paper000_fdcca4e10a4d__c0000__e276e475"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper001": {
+      "source_id": "paper001",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper001.md",
+      "content_hash": "8c4a40148b4c",
+      "doc_id": "paper001_8c4a40148b4c",
+      "status": "active",
+      "chunk_ids": [
+        "paper001_8c4a40148b4c__c0000__7801ba00"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper002": {
+      "source_id": "paper002",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper002.md",
+      "content_hash": "638f61bbb2cc",
+      "doc_id": "paper002_638f61bbb2cc",
+      "status": "active",
+      "chunk_ids": [
+        "paper002_638f61bbb2cc__c0000__7a953d36"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper003": {
+      "source_id": "paper003",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper003.md",
+      "content_hash": "3a647e2699cf",
+      "doc_id": "paper003_3a647e2699cf",
+      "status": "active",
+      "chunk_ids": [
+        "paper003_3a647e2699cf__c0000__9da27d5e"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper004": {
+      "source_id": "paper004",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper004.md",
+      "content_hash": "1bba472a34fd",
+      "doc_id": "paper004_1bba472a34fd",
+      "status": "active",
+      "chunk_ids": [
+        "paper004_1bba472a34fd__c0000__485cdc77"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper005": {
+      "source_id": "paper005",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper005.md",
+      "content_hash": "cb736abb28f9",
+      "doc_id": "paper005_cb736abb28f9",
+      "status": "active",
+      "chunk_ids": [
+        "paper005_cb736abb28f9__c0000__1dc03bad"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper006": {
+      "source_id": "paper006",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper006.md",
+      "content_hash": "e62af251fb29",
+      "doc_id": "paper006_e62af251fb29",
+      "status": "active",
+      "chunk_ids": [
+        "paper006_e62af251fb29__c0000__b642c0d3"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper007": {
+      "source_id": "paper007",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper007.md",
+      "content_hash": "58786e499672",
+      "doc_id": "paper007_58786e499672",
+      "status": "active",
+      "chunk_ids": [
+        "paper007_58786e499672__c0000__94289913"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper008": {
+      "source_id": "paper008",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper008.md",
+      "content_hash": "f39449190608",
+      "doc_id": "paper008_f39449190608",
+      "status": "active",
+      "chunk_ids": [
+        "paper008_f39449190608__c0000__d394f20b"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper009": {
+      "source_id": "paper009",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper009.md",
+      "content_hash": "a95bd9015864",
+      "doc_id": "paper009_a95bd9015864",
+      "status": "active",
+      "chunk_ids": [
+        "paper009_a95bd9015864__c0000__988ca346"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper010": {
+      "source_id": "paper010",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper010.md",
+      "content_hash": "2ebf3fbde87f",
+      "doc_id": "paper010_2ebf3fbde87f",
+      "status": "active",
+      "chunk_ids": [
+        "paper010_2ebf3fbde87f__c0000__ddef9b27"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper011": {
+      "source_id": "paper011",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper011.md",
+      "content_hash": "7274543ef105",
+      "doc_id": "paper011_7274543ef105",
+      "status": "active",
+      "chunk_ids": [
+        "paper011_7274543ef105__c0000__320b1041"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper012": {
+      "source_id": "paper012",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper012.md",
+      "content_hash": "d5054434c8c8",
+      "doc_id": "paper012_d5054434c8c8",
+      "status": "active",
+      "chunk_ids": [
+        "paper012_d5054434c8c8__c0000__2194e133"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper013": {
+      "source_id": "paper013",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper013.md",
+      "content_hash": "6780c98fcbb6",
+      "doc_id": "paper013_6780c98fcbb6",
+      "status": "active",
+      "chunk_ids": [
+        "paper013_6780c98fcbb6__c0000__c5246c92"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper014": {
+      "source_id": "paper014",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper014.md",
+      "content_hash": "32b81e869242",
+      "doc_id": "paper014_32b81e869242",
+      "status": "active",
+      "chunk_ids": [
+        "paper014_32b81e869242__c0000__6ab58ef0"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper015": {
+      "source_id": "paper015",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper015.md",
+      "content_hash": "37513314c3bf",
+      "doc_id": "paper015_37513314c3bf",
+      "status": "active",
+      "chunk_ids": [
+        "paper015_37513314c3bf__c0000__b654cb46"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper016": {
+      "source_id": "paper016",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper016.md",
+      "content_hash": "86cb73b491bf",
+      "doc_id": "paper016_86cb73b491bf",
+      "status": "active",
+      "chunk_ids": [
+        "paper016_86cb73b491bf__c0000__5121dd3b"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper017": {
+      "source_id": "paper017",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper017.md",
+      "content_hash": "6b4c17429752",
+      "doc_id": "paper017_6b4c17429752",
+      "status": "active",
+      "chunk_ids": [
+        "paper017_6b4c17429752__c0000__58093d0f"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper018": {
+      "source_id": "paper018",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper018.md",
+      "content_hash": "6eab4875ff47",
+      "doc_id": "paper018_6eab4875ff47",
+      "status": "active",
+      "chunk_ids": [
+        "paper018_6eab4875ff47__c0000__64b4c987"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper019": {
+      "source_id": "paper019",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper019.md",
+      "content_hash": "178d4903951d",
+      "doc_id": "paper019_178d4903951d",
+      "status": "active",
+      "chunk_ids": [
+        "paper019_178d4903951d__c0000__6a6db214"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper020": {
+      "source_id": "paper020",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper020.md",
+      "content_hash": "0f6908952976",
+      "doc_id": "paper020_0f6908952976",
+      "status": "active",
+      "chunk_ids": [
+        "paper020_0f6908952976__c0000__f9cf7b83"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper021": {
+      "source_id": "paper021",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper021.md",
+      "content_hash": "77df4e81d6d4",
+      "doc_id": "paper021_77df4e81d6d4",
+      "status": "active",
+      "chunk_ids": [
+        "paper021_77df4e81d6d4__c0000__e8c920a6"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper022": {
+      "source_id": "paper022",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper022.md",
+      "content_hash": "67e02d1cdf17",
+      "doc_id": "paper022_67e02d1cdf17",
+      "status": "active",
+      "chunk_ids": [
+        "paper022_67e02d1cdf17__c0000__a84b8211"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper023": {
+      "source_id": "paper023",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper023.md",
+      "content_hash": "93868953be39",
+      "doc_id": "paper023_93868953be39",
+      "status": "active",
+      "chunk_ids": [
+        "paper023_93868953be39__c0000__88a010a8"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper024": {
+      "source_id": "paper024",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper024.md",
+      "content_hash": "840c91bf507d",
+      "doc_id": "paper024_840c91bf507d",
+      "status": "active",
+      "chunk_ids": [
+        "paper024_840c91bf507d__c0000__7cd36653"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper025": {
+      "source_id": "paper025",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper025.md",
+      "content_hash": "1fb580b9427b",
+      "doc_id": "paper025_1fb580b9427b",
+      "status": "active",
+      "chunk_ids": [
+        "paper025_1fb580b9427b__c0000__87c6a8b0"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper026": {
+      "source_id": "paper026",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper026.md",
+      "content_hash": "90898c2e91ee",
+      "doc_id": "paper026_90898c2e91ee",
+      "status": "active",
+      "chunk_ids": [
+        "paper026_90898c2e91ee__c0000__cb537cb8"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper027": {
+      "source_id": "paper027",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper027.md",
+      "content_hash": "762fd58bc99e",
+      "doc_id": "paper027_762fd58bc99e",
+      "status": "active",
+      "chunk_ids": [
+        "paper027_762fd58bc99e__c0000__45f6e995"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper028": {
+      "source_id": "paper028",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper028.md",
+      "content_hash": "01877a7e99f7",
+      "doc_id": "paper028_01877a7e99f7",
+      "status": "active",
+      "chunk_ids": [
+        "paper028_01877a7e99f7__c0000__a0eee5bb"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper029": {
+      "source_id": "paper029",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper029.md",
+      "content_hash": "4f5e66d023d3",
+      "doc_id": "paper029_4f5e66d023d3",
+      "status": "active",
+      "chunk_ids": [
+        "paper029_4f5e66d023d3__c0000__1ddbb3ce"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper030": {
+      "source_id": "paper030",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper030.md",
+      "content_hash": "982c245bc50a",
+      "doc_id": "paper030_982c245bc50a",
+      "status": "active",
+      "chunk_ids": [
+        "paper030_982c245bc50a__c0000__4fd1dd5e"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper031": {
+      "source_id": "paper031",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper031.md",
+      "content_hash": "b19e8854714b",
+      "doc_id": "paper031_b19e8854714b",
+      "status": "active",
+      "chunk_ids": [
+        "paper031_b19e8854714b__c0000__49f0c8b9"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper032": {
+      "source_id": "paper032",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper032.md",
+      "content_hash": "3d1cc2fb53a6",
+      "doc_id": "paper032_3d1cc2fb53a6",
+      "status": "active",
+      "chunk_ids": [
+        "paper032_3d1cc2fb53a6__c0000__fd65cc3f"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper033": {
+      "source_id": "paper033",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper033.md",
+      "content_hash": "d5cb64263662",
+      "doc_id": "paper033_d5cb64263662",
+      "status": "active",
+      "chunk_ids": [
+        "paper033_d5cb64263662__c0000__f754e2cc"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper034": {
+      "source_id": "paper034",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper034.md",
+      "content_hash": "a75d4f88dd7e",
+      "doc_id": "paper034_a75d4f88dd7e",
+      "status": "active",
+      "chunk_ids": [
+        "paper034_a75d4f88dd7e__c0000__d83601c4"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper035": {
+      "source_id": "paper035",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper035.md",
+      "content_hash": "bfd37d2b8ec5",
+      "doc_id": "paper035_bfd37d2b8ec5",
+      "status": "active",
+      "chunk_ids": [
+        "paper035_bfd37d2b8ec5__c0000__4048b4de"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper036": {
+      "source_id": "paper036",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper036.md",
+      "content_hash": "9ae34ce68673",
+      "doc_id": "paper036_9ae34ce68673",
+      "status": "active",
+      "chunk_ids": [
+        "paper036_9ae34ce68673__c0000__2ed4e843"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper037": {
+      "source_id": "paper037",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper037.md",
+      "content_hash": "c1c387276931",
+      "doc_id": "paper037_c1c387276931",
+      "status": "active",
+      "chunk_ids": [
+        "paper037_c1c387276931__c0000__ea4509d6"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper038": {
+      "source_id": "paper038",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper038.md",
+      "content_hash": "abb92cfa804b",
+      "doc_id": "paper038_abb92cfa804b",
+      "status": "active",
+      "chunk_ids": [
+        "paper038_abb92cfa804b__c0000__dc33ed2a"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper039": {
+      "source_id": "paper039",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper039.md",
+      "content_hash": "03ad35cb20f1",
+      "doc_id": "paper039_03ad35cb20f1",
+      "status": "active",
+      "chunk_ids": [
+        "paper039_03ad35cb20f1__c0000__abffbca5"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper040": {
+      "source_id": "paper040",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper040.md",
+      "content_hash": "8a9e5b4a7961",
+      "doc_id": "paper040_8a9e5b4a7961",
+      "status": "active",
+      "chunk_ids": [
+        "paper040_8a9e5b4a7961__c0000__6923a35a"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper041": {
+      "source_id": "paper041",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper041.md",
+      "content_hash": "caff5d28f67e",
+      "doc_id": "paper041_caff5d28f67e",
+      "status": "active",
+      "chunk_ids": [
+        "paper041_caff5d28f67e__c0000__54d73617"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper042": {
+      "source_id": "paper042",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper042.md",
+      "content_hash": "09409d37e83a",
+      "doc_id": "paper042_09409d37e83a",
+      "status": "active",
+      "chunk_ids": [
+        "paper042_09409d37e83a__c0000__b5e7e0c3"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper043": {
+      "source_id": "paper043",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper043.md",
+      "content_hash": "1a15c87365bc",
+      "doc_id": "paper043_1a15c87365bc",
+      "status": "active",
+      "chunk_ids": [
+        "paper043_1a15c87365bc__c0000__2ad44980"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper044": {
+      "source_id": "paper044",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper044.md",
+      "content_hash": "a0d0939e012d",
+      "doc_id": "paper044_a0d0939e012d",
+      "status": "active",
+      "chunk_ids": [
+        "paper044_a0d0939e012d__c0000__9434588e"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper045": {
+      "source_id": "paper045",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper045.md",
+      "content_hash": "14e9795d1eaf",
+      "doc_id": "paper045_14e9795d1eaf",
+      "status": "active",
+      "chunk_ids": [
+        "paper045_14e9795d1eaf__c0000__4644a204"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper046": {
+      "source_id": "paper046",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper046.md",
+      "content_hash": "ac8991ae1d59",
+      "doc_id": "paper046_ac8991ae1d59",
+      "status": "active",
+      "chunk_ids": [
+        "paper046_ac8991ae1d59__c0000__5d7bf262"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper047": {
+      "source_id": "paper047",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper047.md",
+      "content_hash": "084e459a5ee8",
+      "doc_id": "paper047_084e459a5ee8",
+      "status": "active",
+      "chunk_ids": [
+        "paper047_084e459a5ee8__c0000__034cfc91"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper048": {
+      "source_id": "paper048",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper048.md",
+      "content_hash": "ce67487fc3f5",
+      "doc_id": "paper048_ce67487fc3f5",
+      "status": "active",
+      "chunk_ids": [
+        "paper048_ce67487fc3f5__c0000__0b0085fa"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    },
+    "paper049": {
+      "source_id": "paper049",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_50_paper_correctness0\\sources\\paper049.md",
+      "content_hash": "9f978aae3718",
+      "doc_id": "paper049_9f978aae3718",
+      "status": "active",
+      "chunk_ids": [
+        "paper049_9f978aae3718__c0000__4b67b1ce"
+      ],
+      "parsed_at": "2026-04-12T23:50:30+00:00"
+    }
+  }
+}

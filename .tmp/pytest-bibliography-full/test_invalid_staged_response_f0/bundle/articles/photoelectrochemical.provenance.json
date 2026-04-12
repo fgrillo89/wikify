@@ -1,0 +1,32 @@
+{
+  "confidence_scores": [
+    {
+      "label": "extracted",
+      "score": 1.0
+    },
+    {
+      "label": "extracted",
+      "score": 1.0
+    }
+  ],
+  "confidence_min": 1.0,
+  "confidence_mean": 1.0,
+  "confidence_count_by_label": {
+    "extracted": 2
+  },
+  "run_id": "write-phase-main",
+  "model": "M",
+  "strategy": "M",
+  "iteration": "refine",
+  "current_run_id": "write-phase-main",
+  "history": [
+    {
+      "run_id": "write-phase-main",
+      "iteration": "refine",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": false,
+      "timestamp_utc": "2026-04-12T23:51:00.415500+00:00"
+    }
+  ]
+}
