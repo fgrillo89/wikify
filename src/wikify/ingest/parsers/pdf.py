@@ -11,7 +11,8 @@ from ..figures import extract_pdf_media
 from ..metadata import (
     clean_markdown,
     extract_authors_from_markdown,
-    extract_doi,
+    extract_document_doi,
+    extract_publication_fields,
     extract_summary,
     extract_year_from_pdf_meta,
     first_heading,
@@ -192,16 +193,19 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
     # year (Chua 1971 → 1999, Matveyev 2015 → 2026 etc). On a miss, year
     # is None — never the current year.
     year = fn_year or extract_year_from_pdf_meta(meta)
-    doi = extract_doi(md_text[:3000])
+    doi = extract_document_doi(md_text)
+    publication = extract_publication_fields(md_text)
     summary = extract_summary(md_text)
 
-    return {
+    metadata = {
         "title": title,
         "authors": authors,
         "year": year,
         "doi": doi,
         "summary": summary,
     }
+    metadata.update(publication)
+    return metadata
 
 
 # Image extraction now lives in ``ingest/figures.py::extract_pdf_media``.

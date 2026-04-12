@@ -15,7 +15,12 @@ def test_doc_markdown_has_frontmatter_and_edges(tmp_path: Path) -> None:
         source_path="/tmp/paper_abc.pdf",
         kind="pdf",
         title="A Great Paper",
-        metadata={"authors": ["Alice A", "Bob B"], "year": 2020, "doi": "10.1/x"},
+        metadata={
+            "authors": ["Alice A", "Bob B"],
+            "year": 2020,
+            "doi": "10.1/x",
+            "venue": "J. Appl. Phys.",
+        },
         markdown_path="",
         image_dir="",
         similar_to=["paper_xyz"],
@@ -28,6 +33,7 @@ def test_doc_markdown_has_frontmatter_and_edges(tmp_path: Path) -> None:
     assert "title:" in text
     assert "Alice A" in text
     assert "year: 2020" in text
+    assert "venue: J. Appl. Phys." in text
     assert "[[papers/paper_cited]]" in text
     assert "[[papers/paper_xyz]]" in text
     assert "[[papers/paper_coupled]]" in text
