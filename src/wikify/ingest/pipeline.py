@@ -36,7 +36,7 @@ from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from ..store.vectors_meta import VectorsMeta
 from ..store.vectors_meta import write_meta as write_vectors_meta
-from .bibtex import write_corpus_bibtex
+from .bibtex import write_corpus_bibliography
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
@@ -153,7 +153,11 @@ def _parse_worker(
         saved = save_doc_images(did, image_dir_path, parsed.raw_images)
         parsed.images.extend(saved)
 
-    chunks = chunk_document(did, parsed.markdown, parsed.sections)
+    docling_chunks = parsed.metadata.pop("_docling_chunks", None)
+    if docling_chunks:
+        chunks = _chunks_from_docling(did, docling_chunks)
+    else:
+        chunks = chunk_document(did, parsed.markdown, parsed.sections)
     chunks += caption_chunks_for(did, parsed.images, ord_offset=len(chunks))
 
     equations = extract_equations(parsed.markdown)
@@ -171,6 +175,42 @@ def _parse_worker(
         figure_refs=figure_refs,
         parse_seconds=time.monotonic() - t_worker,
     )
+
+
+def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]:
+    """Build Chunk objects from Docling's HybridChunker output."""
+    import hashlib
+
+    from .config import MIN_CHUNK_ALNUM
+    from .section_classifier import classify_section_path
+
+    chunks: list[Chunk] = []
+    offset = 0
+    for ord_, dc in enumerate(docling_chunks):
+        text = dc["text"].strip()
+        if not text:
+            continue
+        alnum = sum(1 for c in text if c.isalnum())
+        if alnum < MIN_CHUNK_ALNUM:
+            continue
+        heading_path = dc.get("heading_path", ["body"])
+        section_type = classify_section_path(heading_path).value
+        h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+        cid = f"{doc_id}__c{ord_:04d}__{h}"
+        end = offset + len(text)
+        chunks.append(
+            Chunk(
+                id=cid,
+                doc_id=doc_id,
+                ord=ord_,
+                text=text,
+                char_span=(offset, end),
+                section_path=list(heading_path),
+                section_type=section_type,
+            )
+        )
+        offset = end
+    return chunks
 
 
 def bind_equations_to_chunks(chunks: list[Chunk], equations: list[dict]) -> None:
@@ -865,8 +905,8 @@ def _rebuild_derived(
     with _timed(timings, "image index"):
         build_images_index(paths, doc_ids=[d.id for d in all_docs])
 
-    with _timed(timings, "bibtex"):
-        write_corpus_bibtex(paths, all_docs)
+    with _timed(timings, "bibliography"):
+        write_corpus_bibliography(paths, all_docs)
 
     with _timed(timings, "doc resave"):
         _resave_docs(paths, all_docs, raw_md)
