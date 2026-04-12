@@ -36,7 +36,7 @@ from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from ..store.vectors_meta import VectorsMeta
 from ..store.vectors_meta import write_meta as write_vectors_meta
-from .bibtex import write_corpus_bibtex
+from .bibtex import write_corpus_bibliography
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
@@ -824,6 +824,7 @@ def _rebuild_derived(
     declared: dict[str, list[str]],
     raw_md: dict[str, str],
     timings: dict[str, float],
+    resolve_bibliography_doi: bool = False,
 ) -> None:
     """Rebuild all corpus-wide derived artifacts from the active corpus."""
     from ..store.corpus import all_chunks as load_all_chunks
@@ -865,8 +866,12 @@ def _rebuild_derived(
     with _timed(timings, "image index"):
         build_images_index(paths, doc_ids=[d.id for d in all_docs])
 
-    with _timed(timings, "bibtex"):
-        write_corpus_bibtex(paths, all_docs)
+    with _timed(timings, "bibliography"):
+        write_corpus_bibliography(
+            paths,
+            all_docs,
+            resolve_doi=resolve_bibliography_doi,
+        )
 
     with _timed(timings, "doc resave"):
         _resave_docs(paths, all_docs, raw_md)
@@ -884,6 +889,7 @@ def ingest_corpus(
     max_workers: int | None = None,
     mode: str = "additive",
     parser_backend: str = "default",
+    resolve_bibliography_doi: bool = False,
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -952,7 +958,14 @@ def ingest_corpus(
             _remove_doc_artifacts(paths, safe_to_remove)
 
     # 6. Rebuild all derived artifacts from full active corpus
-    _rebuild_derived(paths, stale_doc_ids, declared, raw_md, timings)
+    _rebuild_derived(
+        paths,
+        stale_doc_ids,
+        declared,
+        raw_md,
+        timings,
+        resolve_bibliography_doi=resolve_bibliography_doi,
+    )
 
     # 7. Save manifest
     manifest.last_ingest = SourceRecord.now_iso()

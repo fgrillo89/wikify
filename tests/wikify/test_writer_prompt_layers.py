@@ -93,6 +93,44 @@ def test_layer_hashes_populated_on_build_write_request(tmp_path: Path) -> None:
     assert all(c in "0123456789abcdef" for c in req.style_guide_hash)
 
 
+def test_build_write_request_includes_structured_citation_context(tmp_path: Path) -> None:
+    images = _make_images_index(tmp_path)
+    page = _make_page()
+    cfg = _make_cfg()
+    from wikify.distill.dossier import DossierStore
+
+    ds = DossierStore(tmp_path)
+    citation_index = {
+        "entries": {
+            "d1_key": {
+                "bibkey": "d1_key",
+                "kind": "source",
+                "title": "Source Paper",
+                "authors": ["A. Author"],
+                "year": "2024",
+                "venue": "Journal A",
+                "doi": "10.1/source",
+            },
+            "ref_key": {
+                "bibkey": "ref_key",
+                "kind": "reference",
+                "title": "Cited Work",
+                "authors": ["B. Author"],
+                "year": "2020",
+                "venue": "Journal B",
+                "doi": "10.1/ref",
+            },
+        },
+        "doc_bibkeys": {"d1": "d1_key"},
+        "doc_citations": {"d1": ["ref_key"]},
+    }
+
+    req = build_write_request(page, [page], {}, ds, {}, images, cfg, citation_index=citation_index)
+
+    assert req.citation_context["sources"]["d1"]["bibkey"] == "d1_key"
+    assert req.citation_context["cited_by_sources"]["d1"][0]["bibkey"] == "ref_key"
+
+
 # --- 5B.2: hash function is content-based ------------------------------------
 
 

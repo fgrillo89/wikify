@@ -63,6 +63,22 @@ class CorpusPaths:
     def manifest_path(self) -> Path:
         return self.root / "manifest.json"
 
+    @property
+    def library_bib_path(self) -> Path:
+        return self.root / "library.bib"
+
+    @property
+    def references_bib_path(self) -> Path:
+        return self.root / "references.bib"
+
+    @property
+    def bibliography_bib_path(self) -> Path:
+        return self.root / "bibliography.bib"
+
+    @property
+    def citation_index_path(self) -> Path:
+        return self.root / "citation_index.json"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)

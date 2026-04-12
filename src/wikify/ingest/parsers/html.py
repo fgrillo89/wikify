@@ -16,12 +16,17 @@ from .registry import ParseResult, RawImage
 def parse(path: Path) -> ParseResult:
     html = path.read_text(encoding="utf-8", errors="replace")
     body = _extract_text(html)
-    title = _extract_title(html) or path.stem
+    title = _extract_meta_tag(html, name="citation_title") or _extract_title(html) or path.stem
     year = _extract_year(html)
-    authors = _extract_author(html)
+    authors = _extract_meta_tags(html, name="citation_author") or _extract_author(html)
     description = _extract_meta_tag(html, prop="og:description") or _extract_meta_tag(
         html, name="description"
     )
+    first_page = _extract_meta_tag(html, name="citation_firstpage")
+    last_page = _extract_meta_tag(html, name="citation_lastpage")
+    pages = first_page
+    if first_page and last_page and last_page != first_page:
+        pages = f"{first_page}-{last_page}"
 
     raw_images = _extract_html_images(html, path)
     metadata = {
@@ -29,7 +34,19 @@ def parse(path: Path) -> ParseResult:
         "authors": authors,
         "summary": description or None,
         "year": year,
-        "doi": None,
+        "doi": _extract_meta_tag(html, name="citation_doi") or None,
+        "venue": _extract_meta_tag(html, name="citation_journal_title")
+        or _extract_meta_tag(html, name="citation_conference_title")
+        or None,
+        "volume": _extract_meta_tag(html, name="citation_volume") or None,
+        "issue": _extract_meta_tag(html, name="citation_issue") or None,
+        "pages": pages or None,
+        "publisher": _extract_meta_tag(html, name="citation_publisher") or None,
+        "issn": _extract_meta_tag(html, name="citation_issn") or None,
+        "url": _extract_meta_tag(html, name="citation_public_url")
+        or _extract_meta_tag(html, name="citation_pdf_url")
+        or None,
+        "keywords": _extract_keywords(html),
     }
     return ParseResult(
         markdown=body,
@@ -133,6 +150,34 @@ def _extract_meta_tag(html: str, prop: str = "", name: str = "") -> str:
     return m.group(1).strip() if m else ""
 
 
+def _extract_meta_tags(html: str, prop: str = "", name: str = "") -> list[str]:
+    attrs = []
+    key = prop or name
+    attr_name = "property" if prop else "name"
+    for m in re.finditer(r"<meta\b([^>]*)>", html, re.IGNORECASE):
+        tag = m.group(1)
+        key_m = re.search(
+            rf'{attr_name}=["\']?{re.escape(key)}["\']?',
+            tag,
+            re.IGNORECASE,
+        )
+        if not key_m:
+            continue
+        content_m = re.search(r'content=["\']([^"\']+)', tag, re.IGNORECASE)
+        if content_m:
+            attrs.append(content_m.group(1).strip())
+    return attrs
+
+
+def _extract_keywords(html: str) -> list[str]:
+    raw = _extract_meta_tag(html, name="citation_keywords") or _extract_meta_tag(
+        html, name="keywords"
+    )
+    if not raw:
+        return []
+    return [kw.strip() for kw in re.split(r"[,;]", raw) if kw.strip()]
+
+
 def _extract_title(html: str) -> str:
     m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
     if m:
@@ -145,6 +190,8 @@ def _extract_title(html: str) -> str:
 
 def _extract_year(html: str) -> int | None:
     cands: list[str] = []
+    cands.append(_extract_meta_tag(html, name="citation_publication_date"))
+    cands.append(_extract_meta_tag(html, name="citation_online_date"))
     cands.append(_extract_meta_tag(html, prop="article:published_time"))
     cands.append(_extract_meta_tag(html, prop="og:updated_time"))
     cands.append(_extract_meta_tag(html, name="date"))
