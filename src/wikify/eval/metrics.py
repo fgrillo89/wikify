@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .bundle import Bundle, Page
+from ..store.wiki_bundle import Bundle, Page
 from .community import louvain_communities
 from .community import modularity as _nx_modularity
 

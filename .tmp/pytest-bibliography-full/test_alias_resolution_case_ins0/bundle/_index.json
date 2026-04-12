@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "Atomic Layer Deposition",
+      "kind": "article",
+      "title": "Atomic Layer Deposition",
+      "aliases": [
+        "ALD"
+      ],
+      "path": "articles/Atomic Layer Deposition.md",
+      "n_evidence": 1,
+      "doc_ids": [
+        "d1"
+      ],
+      "links": []
+    }
+  ]
+}

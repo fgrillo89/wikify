@@ -10,6 +10,8 @@ from wikify.store.wiki_files import write_page
 from wikify.store.wiki_index import (
     WikiIndex,
     build_index,
+    migrate_concepts_dir,
+    rebuild_index,
 )
 
 
@@ -83,10 +85,17 @@ def test_atomic_save_keeps_existing_file(bundle):
     assert "Photocatalysis" in reloaded
 
 
-def test_rebuild_path_when_missing(bundle):
+def test_load_returns_empty_when_missing(bundle):
     idx_path = bundle.root / "_index.json"
     idx_path.unlink()
     idx = WikiIndex.load(bundle)
+    assert len(idx) == 0, "load() must not rebuild implicitly"
+
+
+def test_rebuild_index_when_missing(bundle):
+    idx_path = bundle.root / "_index.json"
+    idx_path.unlink()
+    idx = rebuild_index(bundle)
     assert "Photocatalysis" in idx
     assert "TiO2" in idx
     assert idx.resolve_alias("TiO2") == "TiO2"
@@ -109,9 +118,8 @@ def test_index_md_contains_bullets(bundle):
 
 
 def test_migrate_concepts_dir_roundtrip(tmp_path):
-    """An old bundle with a concepts/ directory is transparently migrated to
-    articles/ on the first WikiIndex.load() call. Idempotent: a second load
-    is a no-op and returns the same pages.
+    """An old bundle with a concepts/ directory is migrated via explicit
+    migrate_concepts_dir() call. Idempotent: a second call is a no-op.
     """
     root = tmp_path / "bundle"
     old_dir = root / "concepts"
@@ -131,20 +139,22 @@ def test_migrate_concepts_dir_roundtrip(tmp_path):
     (old_dir / "Photocatalysis.md").write_text(page_text, encoding="utf-8")
 
     bundle = BundlePaths(root=root)
-    # First load: migration happens.
-    idx = WikiIndex.load(bundle)
+    # Explicit migration.
+    assert migrate_concepts_dir(bundle) is True
 
     assert not (root / "concepts").exists(), "concepts/ should have been renamed"
     assert (root / "articles").exists(), "articles/ should now exist"
-    assert "Photocatalysis" in idx
 
     # Frontmatter kind rewritten to "article".
     migrated_text = (root / "articles" / "Photocatalysis.md").read_text(encoding="utf-8")
     assert "kind: article" in migrated_text
 
-    # Second load: idempotent, still finds the page.
-    idx2 = WikiIndex.load(bundle)
-    assert "Photocatalysis" in idx2
+    # Rebuild index after migration.
+    idx = rebuild_index(bundle)
+    assert "Photocatalysis" in idx
+
+    # Second call: idempotent.
+    assert migrate_concepts_dir(bundle) is False
     assert not (root / "concepts").exists()
 
 

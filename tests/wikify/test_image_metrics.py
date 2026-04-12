@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from wikify.eval.bundle import Bundle, Page
 from wikify.eval.metrics import figure_reference_counts, image_coverage_residual
+from wikify.store.wiki_bundle import Bundle, Page
 
 
 def _make_bundle(body_texts: list[str], run_meta: dict | None = None) -> Bundle:

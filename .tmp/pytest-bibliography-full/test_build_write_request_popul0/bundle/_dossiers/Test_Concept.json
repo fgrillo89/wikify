@@ -1,0 +1,30 @@
+{
+  "page_id": "Test Concept",
+  "title": "Test Concept",
+  "aliases": [],
+  "kind": "article",
+  "category": null,
+  "entries": [
+    {
+      "chunk_id": "c1",
+      "doc_id": "d1",
+      "quote": "Test Concept is a well-known phenomenon in materials science.",
+      "definition": "Test Concept is a representative phenomenon used in unit tests. It demonstrates that the dossier pipeline correctly populates the writer context with structured knowledge extracted from the corpus.",
+      "summary": "This chunk reports that Test Concept exhibits characteristic behaviour under standard conditions. The authors measure key parameters and compare them against prior work, concluding that the concept is well understood.",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "body",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

@@ -1,0 +1,11 @@
+{
+  "id": "02ec0c9c9b7f4eb9925794d72ee4eb6d",
+  "question": "test save log question",
+  "asked_at": "2026-04-12T23:50:52.568244+00:00",
+  "answer_text": "[fake] question='test save log question' supported by 0 pages",
+  "pages_touched": [],
+  "links_followed": [],
+  "escalation_events": [],
+  "model_id": "M",
+  "tier": "M"
+}

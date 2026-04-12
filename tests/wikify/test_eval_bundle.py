@@ -1,6 +1,6 @@
-"""Tests for the tolerant evidence-block parser in eval.bundle."""
+"""Tests for the tolerant evidence-block parser in store.wiki_bundle."""
 
-from wikify.eval.bundle import _extract_evidence, load_bundle
+from wikify.store.wiki_bundle import _extract_evidence, load_bundle
 
 
 def _one(body: str):

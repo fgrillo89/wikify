@@ -2,7 +2,7 @@
 
 Walks a
 bundle's ``articles/`` and ``people/`` directories, parses each page
-through the canonical ``eval.bundle._parse_page`` parser, runs the
+through the canonical ``store.wiki_bundle.parse_page`` parser, runs the
 markdown body through ``python-markdown`` (with the ``footnotes``,
 ``tables``, ``attr_list``, ``def_list``, and ``pymdownx.superfences``
 extensions), resolves ``[[wikilinks]]`` against the bundle's
@@ -25,10 +25,10 @@ from typing import Any, Self
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from wikify.eval.bundle import Bundle, Page, load_bundle
 from wikify.ingest.metadata import _is_valid_author
 from wikify.paths import BundlePaths
 from wikify.store.page_naming import url_slug
+from wikify.store.wiki_bundle import Bundle, Page, load_bundle
 from wikify.store.wiki_index import WikiIndex, _normalize
 
 WIKI_NAME = "Wikify Simple"

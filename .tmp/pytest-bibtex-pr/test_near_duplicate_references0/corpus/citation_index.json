@@ -1,0 +1,87 @@
+{
+  "doc_bibkeys": {
+    "a_1": "a_1",
+    "b_2": "b_2"
+  },
+  "doc_citations": {
+    "a_1": [
+      "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo"
+    ],
+    "b_2": [
+      "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo"
+    ]
+  },
+  "doi_bibkeys": {
+    "10.1000/a": "a_1",
+    "10.1000/b": "b_2",
+    "10.1109/ted.2022.3172400": "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo"
+  },
+  "entries": {
+    "a_1": {
+      "authors": [
+        "Alice"
+      ],
+      "bibkey": "a_1",
+      "citation_ords": [],
+      "doc_id": "a_1",
+      "doi": "10.1000/a",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Title A",
+      "url": "https://doi.org/10.1000/a",
+      "venue": "",
+      "year": "2020"
+    },
+    "b_2": {
+      "authors": [
+        "Bob"
+      ],
+      "bibkey": "b_2",
+      "citation_ords": [],
+      "doc_id": "b_2",
+      "doi": "10.1000/b",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Title B",
+      "url": "https://doi.org/10.1000/b",
+      "venue": "",
+      "year": "2021"
+    },
+    "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo": {
+      "authors": [
+        "Kumar S",
+        "Agarwal A",
+        "Mukherjee S"
+      ],
+      "bibkey": "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo",
+      "citation_ords": [
+        {
+          "doc_id": "a_1",
+          "ord": 1
+        },
+        {
+          "doc_id": "b_2",
+          "ord": 2
+        }
+      ],
+      "doi": "10.1109/TED.2022.3172400",
+      "kind": "reference",
+      "raw_text": "S. Kumar, A. Agarwal, S. Mukherjee. Electrical performance of large-area Y2O3 memristive crossbar array with ultralow C2C variability IEEE Trans. (2022).",
+      "source_doc_ids": [
+        "a_1",
+        "b_2"
+      ],
+      "title": "Electrical performance of large-area Y2O3 memristive crossbar array with ultralow C2C variability IEEE Trans",
+      "url": "https://doi.org/10.1109/TED.2022.3172400",
+      "venue": "IEEE Transactions on Electron Devices",
+      "year": "2022"
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {
+    "2022|electrical performance large area y2o3 memristive crossbar array ultralow c2c": "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo"
+  },
+  "title_bibkeys": {
+    "electrical performance of large area y2o3 memristive crossbar array with ultralow c2c variability ieee trans": "ref_2022_Kumar_S_Electrical_performance_of_large_area_Y2O3_memristive_crossbar_array_with_ultralo"
+  }
+}

@@ -169,7 +169,7 @@ class ImageIndex:
     def load(cls, corpus: CorpusPaths) -> "ImageIndex":
         path = corpus.images_index_path
         if not path.exists():
-            return rebuild_images_index(corpus)
+            return cls(corpus_root=corpus.root)
         data = json.loads(path.read_text(encoding="utf-8"))
         by_doc: dict[str, list[ImageRecord]] = {}
         by_alias: dict[str, str] = {}

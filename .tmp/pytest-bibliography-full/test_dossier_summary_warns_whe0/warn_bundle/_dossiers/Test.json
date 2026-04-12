@@ -1,0 +1,82 @@
+{
+  "page_id": "Test",
+  "title": "Test",
+  "aliases": [],
+  "kind": "article",
+  "category": null,
+  "entries": [
+    {
+      "chunk_id": "c0",
+      "doc_id": "d1",
+      "quote": "citation text here only",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "references",
+      "figure_ids": []
+    },
+    {
+      "chunk_id": "c1",
+      "doc_id": "d1",
+      "quote": "citation text here only",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "references",
+      "figure_ids": []
+    },
+    {
+      "chunk_id": "c2",
+      "doc_id": "d1",
+      "quote": "citation text here only",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "references",
+      "figure_ids": []
+    },
+    {
+      "chunk_id": "c3",
+      "doc_id": "d1",
+      "quote": "citation text here only",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "references",
+      "figure_ids": []
+    },
+    {
+      "chunk_id": "c4",
+      "doc_id": "d1",
+      "quote": "substantive chunk text about the concept and its properties.",
+      "definition": "This concept is a well-defined phenomenon in materials science with unique properties.",
+      "summary": "The chunk describes characteristic measurements under test conditions.",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "body",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

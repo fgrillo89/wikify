@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "corpus_id": "",
+  "last_ingest": "2026-04-12T23:50:53+00:00",
+  "embedder_fingerprint": "hash:None:128",
+  "sources": {
+    "a": {
+      "source_id": "a",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_similar_to_populated_on_o0\\src\\a.md",
+      "content_hash": "9229fb86af5a",
+      "doc_id": "a_9229fb86af5a",
+      "status": "active",
+      "chunk_ids": [
+        "a_9229fb86af5a__c0000__b4af30d7",
+        "a_9229fb86af5a__c0001__b4af30d7"
+      ],
+      "parsed_at": "2026-04-12T23:50:53+00:00"
+    },
+    "b": {
+      "source_id": "b",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_similar_to_populated_on_o0\\src\\b.md",
+      "content_hash": "f1bf58b40b60",
+      "doc_id": "b_f1bf58b40b60",
+      "status": "active",
+      "chunk_ids": [
+        "b_f1bf58b40b60__c0000__b4af30d7",
+        "b_f1bf58b40b60__c0001__b4af30d7"
+      ],
+      "parsed_at": "2026-04-12T23:50:53+00:00"
+    },
+    "c": {
+      "source_id": "c",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_similar_to_populated_on_o0\\src\\c.md",
+      "content_hash": "e664e7f0440b",
+      "doc_id": "c_e664e7f0440b",
+      "status": "active",
+      "chunk_ids": [
+        "c_e664e7f0440b__c0000__5672cecc"
+      ],
+      "parsed_at": "2026-04-12T23:50:53+00:00"
+    }
+  }
+}

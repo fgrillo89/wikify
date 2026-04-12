@@ -1,0 +1,29 @@
+{
+  "source": "extraction",
+  "confidence_scores": [
+    {
+      "label": "extracted",
+      "score": 1.0
+    }
+  ],
+  "confidence_min": 1.0,
+  "confidence_mean": 1.0,
+  "confidence_count_by_label": {
+    "extracted": 1
+  },
+  "run_id": "Q_1x_seed0",
+  "model": "M",
+  "strategy": "M",
+  "iteration": "create",
+  "current_run_id": "Q_1x_seed0",
+  "history": [
+    {
+      "run_id": "Q_1x_seed0",
+      "iteration": "create",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": false,
+      "timestamp_utc": "2026-04-12T23:50:50.008445+00:00"
+    }
+  ]
+}

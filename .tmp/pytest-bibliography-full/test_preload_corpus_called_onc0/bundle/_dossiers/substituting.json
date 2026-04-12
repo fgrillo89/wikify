@@ -1,0 +1,30 @@
+{
+  "page_id": "substituting",
+  "title": "substituting",
+  "aliases": [],
+  "kind": "article",
+  "category": "method",
+  "entries": [
+    {
+      "chunk_id": "semiconductors_7cfed7b03e16__c0002__b6a69a1e",
+      "doc_id": "semiconductors_7cfed7b03e16",
+      "quote": "Substituting a small fraction of host atoms with dopants having a different valence introduces either extra electrons or extra holes.",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "conclusion",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

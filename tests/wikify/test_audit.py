@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from wikify.eval.audit import write_audit
-from wikify.eval.bundle import Bundle, Page
-from wikify.eval.bundle import Evidence as BundleEvidence
+from wikify.store.wiki_bundle import Bundle, Page
+from wikify.store.wiki_bundle import Evidence as BundleEvidence
 
 
 def _page(

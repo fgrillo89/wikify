@@ -1,0 +1,30 @@
+{
+  "page_id": "semiconductors",
+  "title": "semiconductors",
+  "aliases": [],
+  "kind": "article",
+  "category": "method",
+  "entries": [
+    {
+      "chunk_id": "sample_a553e1dafce9__c0000__4df0e646",
+      "doc_id": "sample_a553e1dafce9",
+      "quote": "Semiconductors are the foundation of modern electronics.",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "body",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

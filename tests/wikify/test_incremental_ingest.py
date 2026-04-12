@@ -657,7 +657,7 @@ def test_unregistered_backend_raises_before_ingest(sources_dir, corpus_dir):
     with pytest.raises(ValueError, match="unknown parser backend"):
         ingest_corpus(
             sources_dir, corpus_dir,
-            max_workers=1, parser_backend="docling",
+            max_workers=1, parser_backend="nonexistent_parser",
         )
     # No corpus artifacts should have been created.
     assert not corpus_dir.exists() or not list(corpus_dir.iterdir())

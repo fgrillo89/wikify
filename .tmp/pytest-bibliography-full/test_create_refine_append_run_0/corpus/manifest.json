@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "corpus_id": "",
+  "last_ingest": "2026-04-12T23:50:39+00:00",
+  "embedder_fingerprint": "hash:None:128",
+  "sources": {
+    "ald": {
+      "source_id": "ald",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\ald.md",
+      "content_hash": "3f51697abcb3",
+      "doc_id": "ald_3f51697abcb3",
+      "status": "active",
+      "chunk_ids": [
+        "ald_3f51697abcb3__c0000__d7a6828f",
+        "ald_3f51697abcb3__c0001__f3e051dc",
+        "ald_3f51697abcb3__c0002__f0706bfe"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    },
+    "catalysis": {
+      "source_id": "catalysis",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\catalysis.md",
+      "content_hash": "668a13e2a99d",
+      "doc_id": "catalysis_668a13e2a99d",
+      "status": "active",
+      "chunk_ids": [
+        "catalysis_668a13e2a99d__c0000__2124cf99",
+        "catalysis_668a13e2a99d__c0001__a6e33f9a",
+        "catalysis_668a13e2a99d__c0002__7df30f91"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    },
+    "photocatalysis": {
+      "source_id": "photocatalysis",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\photocatalysis.md",
+      "content_hash": "18772db59f42",
+      "doc_id": "photocatalysis_18772db59f42",
+      "status": "active",
+      "chunk_ids": [
+        "photocatalysis_18772db59f42__c0000__c6eb4b06",
+        "photocatalysis_18772db59f42__c0001__38407392",
+        "photocatalysis_18772db59f42__c0002__84fe1523"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    },
+    "sample": {
+      "source_id": "sample",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\sample.pptx",
+      "content_hash": "45fc29a57bba",
+      "doc_id": "sample_45fc29a57bba",
+      "status": "active",
+      "chunk_ids": [
+        "sample_45fc29a57bba__c0000__be5857c7",
+        "sample_45fc29a57bba__c0001__fb7297a9",
+        "sample_45fc29a57bba/fig_000__caption"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    },
+    "semiconductors": {
+      "source_id": "semiconductors",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\semiconductors.md",
+      "content_hash": "7cfed7b03e16",
+      "doc_id": "semiconductors_7cfed7b03e16",
+      "status": "active",
+      "chunk_ids": [
+        "semiconductors_7cfed7b03e16__c0000__e0b8f8d1",
+        "semiconductors_7cfed7b03e16__c0001__fc69ccb6",
+        "semiconductors_7cfed7b03e16__c0002__b6a69a1e"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    },
+    "water_splitting": {
+      "source_id": "water_splitting",
+      "source_path": "C:\\dev\\scholarforge_bibliography_pr\\tests\\fixtures\\tiny\\water_splitting.md",
+      "content_hash": "ab61c0090310",
+      "doc_id": "water_splitting_ab61c0090310",
+      "status": "active",
+      "chunk_ids": [
+        "water_splitting_ab61c0090310__c0000__1825384d",
+        "water_splitting_ab61c0090310__c0001__cf444055",
+        "water_splitting_ab61c0090310__c0002__f3df6bea"
+      ],
+      "parsed_at": "2026-04-12T23:50:38+00:00"
+    }
+  }
+}

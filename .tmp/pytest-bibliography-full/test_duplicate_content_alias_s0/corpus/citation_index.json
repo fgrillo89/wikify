@@ -1,0 +1,27 @@
+{
+  "doc_bibkeys": {
+    "paper_ed30b1503cfd": "paper_ed30b1503cfd"
+  },
+  "doc_citations": {
+    "paper_ed30b1503cfd": []
+  },
+  "doi_bibkeys": {},
+  "entries": {
+    "paper_ed30b1503cfd": {
+      "authors": [],
+      "bibkey": "paper_ed30b1503cfd",
+      "citation_ords": [],
+      "doc_id": "paper_ed30b1503cfd",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Paper",
+      "url": "",
+      "venue": "",
+      "year": ""
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {},
+  "title_bibkeys": {}
+}

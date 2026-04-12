@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..eval.bundle import Bundle, _clean_body
+from .wiki_bundle import Bundle, clean_body
 
 _CACHE_NAME = "_page_embeddings.npz"
 
@@ -26,7 +26,7 @@ def load_or_compute(
     """Return (ids, matrix) of unit-norm page-body embeddings.
 
     ``pages`` is an iterable of objects with ``.id`` and ``.body_clean``
-    (or ``.body_markdown``; we also pass through ``_clean_body`` if the
+    (or ``.body_markdown``; we also pass through ``clean_body`` if the
     caller hands us unclean bodies).
 
     The caller must pass the corpus's own embedder (the one whose backend
@@ -57,7 +57,7 @@ def load_or_compute(
     for p in pages_list:
         body = getattr(p, "body_clean", None)
         if body is None:
-            body = _clean_body(getattr(p, "body_markdown", "") or "")
+            body = clean_body(getattr(p, "body_markdown", "") or "")
         texts.append(body)
     matrix = embed(texts) if texts else np.zeros((0, 0), dtype=np.float32)
     try:

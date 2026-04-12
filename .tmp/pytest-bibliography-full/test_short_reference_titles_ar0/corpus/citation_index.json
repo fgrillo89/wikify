@@ -1,0 +1,97 @@
+{
+  "doc_bibkeys": {
+    "a_1": "a_1",
+    "b_2": "b_2"
+  },
+  "doc_citations": {
+    "a_1": [
+      "ref_2019_A_One_Memristor_model"
+    ],
+    "b_2": [
+      "ref_2019_B_Two_Memristor_model"
+    ]
+  },
+  "doi_bibkeys": {
+    "10.1000/a": "a_1",
+    "10.1000/b": "b_2"
+  },
+  "entries": {
+    "a_1": {
+      "authors": [
+        "Alice"
+      ],
+      "bibkey": "a_1",
+      "citation_ords": [],
+      "doc_id": "a_1",
+      "doi": "10.1000/a",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Title A",
+      "url": "https://doi.org/10.1000/a",
+      "venue": "",
+      "year": "2020"
+    },
+    "b_2": {
+      "authors": [
+        "Bob"
+      ],
+      "bibkey": "b_2",
+      "citation_ords": [],
+      "doc_id": "b_2",
+      "doi": "10.1000/b",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Title B",
+      "url": "https://doi.org/10.1000/b",
+      "venue": "",
+      "year": "2021"
+    },
+    "ref_2019_A_One_Memristor_model": {
+      "authors": [
+        "A. One"
+      ],
+      "bibkey": "ref_2019_A_One_Memristor_model",
+      "citation_ords": [
+        {
+          "doc_id": "a_1",
+          "ord": 1
+        }
+      ],
+      "doi": "",
+      "kind": "reference",
+      "raw_text": "A. One. Memristor model. Journal A (2019).",
+      "source_doc_ids": [
+        "a_1"
+      ],
+      "title": "Memristor model",
+      "url": "",
+      "venue": "Journal A",
+      "year": "2019"
+    },
+    "ref_2019_B_Two_Memristor_model": {
+      "authors": [
+        "B. Two"
+      ],
+      "bibkey": "ref_2019_B_Two_Memristor_model",
+      "citation_ords": [
+        {
+          "doc_id": "b_2",
+          "ord": 2
+        }
+      ],
+      "doi": "",
+      "kind": "reference",
+      "raw_text": "B. Two. Memristor model. Journal B (2019).",
+      "source_doc_ids": [
+        "b_2"
+      ],
+      "title": "Memristor model",
+      "url": "",
+      "venue": "Journal B",
+      "year": "2019"
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {},
+  "title_bibkeys": {}
+}

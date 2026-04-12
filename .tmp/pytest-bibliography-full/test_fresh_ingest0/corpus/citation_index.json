@@ -1,0 +1,42 @@
+{
+  "doc_bibkeys": {
+    "alpha_e28fdced13d2": "alpha_e28fdced13d2",
+    "beta_895fd03217fa": "beta_895fd03217fa"
+  },
+  "doc_citations": {
+    "alpha_e28fdced13d2": [],
+    "beta_895fd03217fa": []
+  },
+  "doi_bibkeys": {},
+  "entries": {
+    "alpha_e28fdced13d2": {
+      "authors": [],
+      "bibkey": "alpha_e28fdced13d2",
+      "citation_ords": [],
+      "doc_id": "alpha_e28fdced13d2",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Alpha",
+      "url": "",
+      "venue": "",
+      "year": ""
+    },
+    "beta_895fd03217fa": {
+      "authors": [],
+      "bibkey": "beta_895fd03217fa",
+      "citation_ords": [],
+      "doc_id": "beta_895fd03217fa",
+      "doi": "",
+      "kind": "source",
+      "source_doc_ids": [],
+      "title": "Beta",
+      "url": "",
+      "venue": "",
+      "year": ""
+    }
+  },
+  "schema_version": 1,
+  "signature_bibkeys": {},
+  "title_bibkeys": {}
+}

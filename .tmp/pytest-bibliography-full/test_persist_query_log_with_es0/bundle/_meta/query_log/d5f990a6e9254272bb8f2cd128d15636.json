@@ -1,0 +1,19 @@
+{
+  "id": "d5f990a6e9254272bb8f2cd128d15636",
+  "question": "Detailed question?",
+  "asked_at": "2026-04-12T23:50:52.553749+00:00",
+  "answer_text": "Escalated.",
+  "pages_touched": [],
+  "links_followed": [],
+  "escalation_events": [
+    {
+      "reason": "wiki insufficient",
+      "chunk_ids": [
+        "c1",
+        "c2"
+      ]
+    }
+  ],
+  "model_id": "",
+  "tier": ""
+}

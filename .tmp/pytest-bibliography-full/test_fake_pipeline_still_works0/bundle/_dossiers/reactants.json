@@ -1,0 +1,30 @@
+{
+  "page_id": "reactants",
+  "title": "reactants",
+  "aliases": [],
+  "kind": "article",
+  "category": "method",
+  "entries": [
+    {
+      "chunk_id": "catalysis_668a13e2a99d__c0001__a6e33f9a",
+      "doc_id": "catalysis_668a13e2a99d",
+      "quote": "Reactants must first adsorb onto the catalyst surface.",
+      "definition": "",
+      "summary": "",
+      "parameters": [],
+      "mechanisms": [],
+      "relationships": [],
+      "equations": [],
+      "section_type": "body",
+      "figure_ids": []
+    }
+  ],
+  "canonical_definition": "",
+  "canonical_summary": "",
+  "merged_parameters": [],
+  "merged_mechanisms": [],
+  "merged_relationships": [],
+  "merged_equations": [],
+  "n_source_docs": 1,
+  "n_compactions": 0
+}

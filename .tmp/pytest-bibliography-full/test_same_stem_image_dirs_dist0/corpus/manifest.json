@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "corpus_id": "",
+  "last_ingest": "2026-04-12T23:50:28+00:00",
+  "embedder_fingerprint": "hash:None:128",
+  "sources": {
+    "set1/alpha": {
+      "source_id": "set1/alpha",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_same_stem_image_dirs_dist0\\sources\\set1\\alpha.md",
+      "content_hash": "cd0d925a5c64",
+      "doc_id": "alpha_cd0d925a5c64",
+      "status": "active",
+      "chunk_ids": [
+        "alpha_cd0d925a5c64__c0000__1d234dd9"
+      ],
+      "parsed_at": "2026-04-12T23:50:28+00:00"
+    },
+    "set2/alpha": {
+      "source_id": "set2/alpha",
+      "source_path": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_same_stem_image_dirs_dist0\\sources\\set2\\alpha.md",
+      "content_hash": "2aced8fc6668",
+      "doc_id": "alpha_2aced8fc6668",
+      "status": "active",
+      "chunk_ids": [
+        "alpha_2aced8fc6668__c0000__6d0b4598"
+      ],
+      "parsed_at": "2026-04-12T23:50:28+00:00"
+    }
+  }
+}

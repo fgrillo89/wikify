@@ -1,0 +1,36 @@
+{
+  "bundle": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_eval_cli_writes_report0\\bundle",
+  "corpus": "C:\\dev\\scholarforge\\.tmp\\pytest-bibliography-full\\test_eval_cli_writes_report0\\corpus",
+  "embedder": {
+    "backend": "hash",
+    "dim": 128,
+    "model": null
+  },
+  "M1_coverage_residual": 0.7316117882728577,
+  "M1_image_coverage_residual": 0.7013036608695984,
+  "M1_image_figure_counts": {
+    "n_figures_referenced_in_bodies": 0,
+    "n_total_captions": 0,
+    "figure_reference_rate": null
+  },
+  "M3_g_evidence": {
+    "modularity": 0.4342745182199511,
+    "spectral_gap": 8.91545566078333e-16,
+    "n_nodes": 18.0,
+    "n_edges": 35.0
+  },
+  "M3_g_links": {
+    "modularity": 0.43387755102040815,
+    "spectral_gap": 5.87434763042274e-16,
+    "n_nodes": 18.0,
+    "n_edges": 35.0
+  },
+  "M5_hit_rate": 0.0,
+  "M6_grounding": {
+    "g1_anchoring": 1.0,
+    "g2_evidence_ok": 1.0,
+    "n_sentences": 0,
+    "n_markers": 0,
+    "passes": true
+  }
+}

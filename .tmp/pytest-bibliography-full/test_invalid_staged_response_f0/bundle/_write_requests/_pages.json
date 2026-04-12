@@ -1,0 +1,1240 @@
+[
+  {
+    "id": "atomic",
+    "kind": "article",
+    "title": "atomic",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "ald_3f51697abcb3__c0000__d7a6828f",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Atomic layer deposition is a thin-film deposition technique based on the sequential use of self-limiting gas-phase chemical reactions.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "ald_3f51697abcb3__c0001__f3e051dc",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Each atomic layer deposition cycle consists of two half-reactions separated by inert gas purges.",
+        "locator": ""
+      },
+      {
+        "marker": "e3",
+        "chunk_id": "ald_3f51697abcb3__c0002__f0706bfe",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Atomic layer deposition produces conformal films on high aspect ratio substrates with sub-nanometer thickness control.",
+        "locator": ""
+      },
+      {
+        "marker": "e4",
+        "chunk_id": "sample_43927e5422e6__c0000__264dd2bb",
+        "doc_id": "sample_43927e5422e6",
+        "quote": "Keywords: atomic layer deposition, thin films",
+        "locator": ""
+      },
+      {
+        "marker": "e5",
+        "chunk_id": "sample_45fc29a57bba__c0001__fb7297a9",
+        "doc_id": "sample_45fc29a57bba",
+        "quote": "Atomic layer deposition offers precise thickness control.",
+        "locator": ""
+      },
+      {
+        "marker": "e6",
+        "chunk_id": "sample_43927e5422e6__c0001__a0d38886",
+        "doc_id": "sample_43927e5422e6",
+        "quote": "Atomic layer deposition grows thin films one monolayer at a time.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 6
+      }
+    }
+  },
+  {
+    "id": "layer",
+    "kind": "article",
+    "title": "layer",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "ald_3f51697abcb3__c0000__d7a6828f",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Atomic layer deposition is a thin-film deposition technique based on the sequential use of self-limiting gas-phase chemical reactions.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "ald_3f51697abcb3__c0001__f3e051dc",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Each atomic layer deposition cycle consists of two half-reactions separated by inert gas purges.",
+        "locator": ""
+      },
+      {
+        "marker": "e3",
+        "chunk_id": "ald_3f51697abcb3__c0002__f0706bfe",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Atomic layer deposition produces conformal films on high aspect ratio substrates with sub-nanometer thickness control.",
+        "locator": ""
+      },
+      {
+        "marker": "e4",
+        "chunk_id": "sample_45fc29a57bba__c0001__fb7297a9",
+        "doc_id": "sample_45fc29a57bba",
+        "quote": "Atomic layer deposition offers precise thickness control.",
+        "locator": ""
+      },
+      {
+        "marker": "e5",
+        "chunk_id": "sample_43927e5422e6__c0001__a0d38886",
+        "doc_id": "sample_43927e5422e6",
+        "quote": "Atomic layer deposition grows thin films one monolayer at a time.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 5
+      }
+    }
+  },
+  {
+    "id": "Tuomo Suntola",
+    "kind": "person",
+    "title": "Tuomo Suntola",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "ald_3f51697abcb3__c0000__d7a6828f",
+        "doc_id": "ald_3f51697abcb3",
+        "quote": "Tuomo Suntola pioneered the method in the 1970s for thin-film electroluminescent displays.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "source": "extraction",
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "heterogeneous",
+    "kind": "article",
+    "title": "heterogeneous",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0000__2124cf99",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Heterogeneous catalysis describes catalytic reactions in which the catalyst occupies a different phase from the reactants, most often a solid catalyst acting on gas or liquid reactants.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "catalysis",
+    "kind": "article",
+    "title": "catalysis",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0000__2124cf99",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Heterogeneous catalysis describes catalytic reactions in which the catalyst occupies a different phase from the reactants, most often a solid catalyst acting on gas or liquid reactants.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "Gerhard Ertl",
+    "kind": "person",
+    "title": "Gerhard Ertl",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0000__2124cf99",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Gerhard Ertl received the Nobel prize in chemistry for elucidating the surface chemistry of ammonia synthesis on iron.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "source": "extraction",
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "photocatalysis",
+    "kind": "article",
+    "title": "photocatalysis",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0000__c6eb4b06",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "Photocatalysis refers to the acceleration of a photoreaction in the presence of a catalyst.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "sample_45fc29a57bba__c0000__be5857c7",
+        "doc_id": "sample_45fc29a57bba",
+        "quote": "Photocatalysis converts sunlight into chemical fuel.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 2
+      }
+    }
+  },
+  {
+    "id": "refers",
+    "kind": "article",
+    "title": "refers",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0000__c6eb4b06",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "Photocatalysis refers to the acceleration of a photoreaction in the presence of a catalyst.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "akira",
+    "kind": "article",
+    "title": "akira",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0001__38407392",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "In 1972 Akira Fujishima and Kenichi Honda demonstrated water splitting on a titanium dioxide electrode under ultraviolet illumination.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "fujishima",
+    "kind": "article",
+    "title": "fujishima",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0001__38407392",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "In 1972 Akira Fujishima and Kenichi Honda demonstrated water splitting on a titanium dioxide electrode under ultraviolet illumination.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "Akira Fujishima",
+    "kind": "person",
+    "title": "Akira Fujishima",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0001__38407392",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "In 1972 Akira Fujishima and Kenichi Honda demonstrated water splitting on a titanium dioxide electrode under ultraviolet illumination.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "source": "extraction",
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "semiconductor",
+    "kind": "article",
+    "title": "semiconductor",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0002__84fe1523",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "When a semiconductor photocatalyst absorbs a photon with energy greater than its band gap, an electron is promoted from the valence band to the conduction band, leaving a hole in the valence band.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0000__e0b8f8d1",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "A semiconductor is a material whose electrical conductivity falls between that of a conductor and an insulator.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 2
+      }
+    }
+  },
+  {
+    "id": "photocatalyst",
+    "kind": "article",
+    "title": "photocatalyst",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "photocatalysis_18772db59f42__c0002__84fe1523",
+        "doc_id": "photocatalysis_18772db59f42",
+        "quote": "When a semiconductor photocatalyst absorbs a photon with energy greater than its band gap, an electron is promoted from the valence band to the conduction band, leaving a hole in the valence band.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "keywords",
+    "kind": "article",
+    "title": "keywords",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_43927e5422e6__c0000__264dd2bb",
+        "doc_id": "sample_43927e5422e6",
+        "quote": "Keywords: atomic layer deposition, thin films",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "sample_ec89bea9cddd__c0000__6785f47a",
+        "doc_id": "sample_ec89bea9cddd",
+        "quote": "Sample PDF\n\nKeywords: photocatalysis, water splitting\n\nPhotocatalysis drives water splitting on TiO2 surfaces.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 2
+      }
+    }
+  },
+  {
+    "id": "converts",
+    "kind": "article",
+    "title": "converts",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_45fc29a57bba__c0000__be5857c7",
+        "doc_id": "sample_45fc29a57bba",
+        "quote": "Photocatalysis converts sunlight into chemical fuel.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "semiconductors",
+    "kind": "article",
+    "title": "semiconductors",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_a553e1dafce9__c0000__4df0e646",
+        "doc_id": "sample_a553e1dafce9",
+        "quote": "Semiconductors are the foundation of modern electronics.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "foundation",
+    "kind": "article",
+    "title": "foundation",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_a553e1dafce9__c0000__4df0e646",
+        "doc_id": "sample_a553e1dafce9",
+        "quote": "Semiconductors are the foundation of modern electronics.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "sample",
+    "kind": "article",
+    "title": "sample",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_ec89bea9cddd__c0000__6785f47a",
+        "doc_id": "sample_ec89bea9cddd",
+        "quote": "Sample PDF\n\nKeywords: photocatalysis, water splitting\n\nPhotocatalysis drives water splitting on TiO2 surfaces.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "sample_45fc29a57bba/fig_000__caption",
+        "doc_id": "sample_45fc29a57bba",
+        "quote": "Sample PPTX",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 2
+      }
+    }
+  },
+  {
+    "id": "material",
+    "kind": "article",
+    "title": "material",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0000__e0b8f8d1",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "A semiconductor is a material whose electrical conductivity falls between that of a conductor and an insulator.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "Walter Brattain",
+    "kind": "person",
+    "title": "Walter Brattain",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0000__e0b8f8d1",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "Walter Brattain and his colleagues at Bell Labs demonstrated the first transistor using a germanium crystal in 1947.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "source": "extraction",
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "electronic",
+    "kind": "article",
+    "title": "electronic",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0001__fc69ccb6",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "The electronic states of a crystalline semiconductor form continuous bands separated by an energy gap called the band gap.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "states",
+    "kind": "article",
+    "title": "states",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0001__fc69ccb6",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "The electronic states of a crystalline semiconductor form continuous bands separated by an energy gap called the band gap.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "substituting",
+    "kind": "article",
+    "title": "substituting",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0002__b6a69a1e",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "Substituting a small fraction of host atoms with dopants having a different valence introduces either extra electrons or extra holes.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "small",
+    "kind": "article",
+    "title": "small",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "semiconductors_7cfed7b03e16__c0002__b6a69a1e",
+        "doc_id": "semiconductors_7cfed7b03e16",
+        "quote": "Substituting a small fraction of host atoms with dopants having a different valence introduces either extra electrons or extra holes.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "photoelectrochemical",
+    "kind": "article",
+    "title": "photoelectrochemical",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "water_splitting_ab61c0090310__c0000__1825384d",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "Photoelectrochemical water splitting uses semiconductor electrodes immersed in aqueous electrolyte to convert solar energy into hydrogen fuel.",
+        "locator": ""
+      },
+      {
+        "marker": "e2",
+        "chunk_id": "water_splitting_ab61c0090310__c0001__cf444055",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "A photoelectrochemical cell may use a single photoactive electrode paired with a metal counter electrode, or two photoactive electrodes wired in tandem.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        },
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 2
+      }
+    }
+  },
+  {
+    "id": "water",
+    "kind": "article",
+    "title": "water",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "water_splitting_ab61c0090310__c0000__1825384d",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "Photoelectrochemical water splitting uses semiconductor electrodes immersed in aqueous electrolyte to convert solar energy into hydrogen fuel.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "reactants",
+    "kind": "article",
+    "title": "reactants",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0001__a6e33f9a",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Reactants must first adsorb onto the catalyst surface.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "first",
+    "kind": "article",
+    "title": "first",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0001__a6e33f9a",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Reactants must first adsorb onto the catalyst surface.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "catalytic",
+    "kind": "article",
+    "title": "catalytic",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0002__7df30f91",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Catalytic activity is concentrated at specific surface configurations called active sites.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "activity",
+    "kind": "article",
+    "title": "activity",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "catalysis_668a13e2a99d__c0002__7df30f91",
+        "doc_id": "catalysis_668a13e2a99d",
+        "quote": "Catalytic activity is concentrated at specific surface configurations called active sites.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "figure",
+    "kind": "article",
+    "title": "figure",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_a553e1dafce9/fig_000__caption",
+        "doc_id": "sample_a553e1dafce9",
+        "quote": "a figure",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "checker",
+    "kind": "article",
+    "title": "checker",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_ec89bea9cddd/Figure_01__caption",
+        "doc_id": "sample_ec89bea9cddd",
+        "quote": "Checker pattern used as a synthetic fixture image.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "pattern",
+    "kind": "article",
+    "title": "pattern",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "sample_ec89bea9cddd/Figure_01__caption",
+        "doc_id": "sample_ec89bea9cddd",
+        "quote": "Checker pattern used as a synthetic fixture image.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "single",
+    "kind": "article",
+    "title": "single",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "water_splitting_ab61c0090310__c0001__cf444055",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "A photoelectrochemical cell may use a single photoactive electrode paired with a metal counter electrode, or two photoactive electrodes wired in tandem.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "practical",
+    "kind": "article",
+    "title": "practical",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "water_splitting_ab61c0090310__c0002__f3df6bea",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "Practical photoelectrodes must combine an appropriate band gap with stability in aqueous electrolyte under illumination.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  },
+  {
+    "id": "photoelectrodes",
+    "kind": "article",
+    "title": "photoelectrodes",
+    "aliases": [],
+    "body_markdown": "",
+    "evidence": [
+      {
+        "marker": "e1",
+        "chunk_id": "water_splitting_ab61c0090310__c0002__f3df6bea",
+        "doc_id": "water_splitting_ab61c0090310",
+        "quote": "Practical photoelectrodes must combine an appropriate band gap with stability in aqueous electrolyte under illumination.",
+        "locator": ""
+      }
+    ],
+    "links": [],
+    "provenance": {
+      "confidence_scores": [
+        {
+          "label": "extracted",
+          "score": 1.0
+        }
+      ],
+      "confidence_min": 1.0,
+      "confidence_mean": 1.0,
+      "confidence_count_by_label": {
+        "extracted": 1
+      }
+    }
+  }
+]

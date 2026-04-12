@@ -1,17 +1,18 @@
 """Evaluation harness for wikify wiki bundles.
 
-Two modules:
-  - bundle.py: load a wiki bundle from disk into typed objects
+Modules:
   - metrics.py: one pure function per metric (M1, M2, M3, M5, M6, GT-P, GT-C)
 
 Every metric takes a Bundle (and, where needed, a Corpus or a callable) and
 returns a scalar or a small dataclass. No metric mutates anything. No metric
 calls an LLM.
 
+Bundle/Page/Evidence types and loading live in ``store.wiki_bundle``.
+
 See ../metrics.md for the definitions.
 """
 
-from .bundle import Bundle, Evidence, Page, load_bundle
+from ..store.wiki_bundle import Bundle, Evidence, Page, load_bundle
 from .metrics import (
     GroundingResult,
     HeapsFit,

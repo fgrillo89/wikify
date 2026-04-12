@@ -95,8 +95,9 @@ def test_read_corpus_chunks_missing(tmp_path):
 def test_read_corpus_chunks_present(tmp_path):
     corpus = CorpusPaths(root=tmp_path / "corpus")
     corpus.chunks_dir.mkdir(parents=True, exist_ok=True)
-    chunk = {"id": "c1", "doc_id": "d1", "text": "hello world"}
-    (corpus.chunks_dir / "c1.json").write_text(json.dumps(chunk), encoding="utf-8")
+    chunk = {"id": "c1", "doc_id": "d1", "ord": 0, "text": "hello world",
+             "char_span": [0, 11], "section_path": "", "section_type": "body"}
+    (corpus.chunks_dir / "d1.jsonl").write_text(json.dumps(chunk), encoding="utf-8")
     result = read_corpus_chunks(corpus, ["c1"])
     assert len(result) == 1
     assert result[0]["text"] == "hello world"
@@ -105,13 +106,31 @@ def test_read_corpus_chunks_present(tmp_path):
 def test_read_corpus_chunks_capped_at_5(tmp_path):
     corpus = CorpusPaths(root=tmp_path / "corpus")
     corpus.chunks_dir.mkdir(parents=True, exist_ok=True)
+    lines = []
     for i in range(8):
-        (corpus.chunks_dir / f"c{i}.json").write_text(
-            json.dumps({"id": f"c{i}", "doc_id": "d1", "text": f"text {i}"}),
-            encoding="utf-8",
-        )
+        lines.append(json.dumps({"id": f"c{i}", "doc_id": "d1", "ord": i, "text": f"text {i}",
+                                  "char_span": [0, 6], "section_path": "", "section_type": "body"}))
+    (corpus.chunks_dir / "d1.jsonl").write_text("\n".join(lines), encoding="utf-8")
     result = read_corpus_chunks(corpus, [f"c{i}" for i in range(8)])
     assert len(result) == 5
+
+
+def test_read_chunks_by_id_respects_requested_order(tmp_path):
+    """Regression: limit must apply after requested-order sort, not during scan."""
+    from wikify.store.corpus import read_chunks_by_id
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus.chunks_dir.mkdir(parents=True, exist_ok=True)
+    # Disk order: c0 before c9 (both in d1.jsonl).
+    lines = []
+    for i in [0, 9]:
+        lines.append(json.dumps({"id": f"c{i}", "doc_id": "d1", "ord": i, "text": f"text {i}",
+                                  "char_span": [0, 6], "section_path": "", "section_type": "body"}))
+    (corpus.chunks_dir / "d1.jsonl").write_text("\n".join(lines), encoding="utf-8")
+    # Request c9 first, limit=1. Must return c9, not c0.
+    result = read_chunks_by_id(corpus, ["c9", "c0"], limit=1)
+    assert len(result) == 1
+    assert result[0].id == "c9"
 
 
 # --- persist_query_log -----------------------------------------------

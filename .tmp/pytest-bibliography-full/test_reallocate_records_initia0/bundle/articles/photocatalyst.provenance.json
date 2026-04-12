@@ -1,0 +1,28 @@
+{
+  "confidence_scores": [
+    {
+      "label": "extracted",
+      "score": 1.0
+    }
+  ],
+  "confidence_min": 1.0,
+  "confidence_mean": 1.0,
+  "confidence_count_by_label": {
+    "extracted": 1
+  },
+  "run_id": "realloc-test",
+  "model": "M",
+  "strategy": "M",
+  "iteration": "create",
+  "current_run_id": "realloc-test",
+  "history": [
+    {
+      "run_id": "realloc-test",
+      "iteration": "create",
+      "model": "M",
+      "strategy": "M",
+      "drafted_body": true,
+      "timestamp_utc": "2026-04-12T23:50:45.402811+00:00"
+    }
+  ]
+}
