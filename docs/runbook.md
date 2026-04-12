@@ -99,16 +99,14 @@ After `cli ingest` finishes, the corpus directory contains:
 | `distill/extract/` | Extraction subpackage |
 | `distill/write/` | Write subpackage |
 | `distill/explorer.py` | LevyMixSampler (local/global/jump_rate) |
-| `distill/schedule.py` | Budget split (static / adaptive) |
 | `distill/iteration.py` | Create/refine/merge operations |
-| `distill/policy.py` | Rule and LLM policy shared interface |
-| `distill/strategy.py` | E, M, X config registry and factory |
+| `distill/strategy.py` | E, M, X config registry, factory, budget allocators, run modes |
 | `schema.py` | All Pydantic schemas (incl. `EquationRef`, `FigureCaption`, `ExtractRequest`) |
-| `contracts/protocols.py` | Extractor, Compactor, Editor, Writer protocols |
-| `contracts/roles.py` | Role enum + per-role spec lists |
-| `contracts/normalize.py` | Text normalization for quote validation |
-| `bindings/file_dispatch.py` | File-dispatch bindings (via `Dispatch` class) |
+| `types.py` | Extractor, Compactor, Editor, Writer, Orchestrator protocols; ModelTier, StrategyId |
+| `dispatch.py` | Single file-dispatch class (satisfies all role protocols) |
 | `ingest/pipeline.py` | Incremental ingest: parallel parse, manifest-based dedup, vector reuse, derived rebuild |
+| `ingest/manifest.py` | SourceRecord, CorpusManifest, ChangeSet, diff_sources |
+| `ingest/parsers/registry.py` | ParserBackend enum + factory dispatch, validate_backend, parse_file |
 | `ingest/equations.py` | Display/inline/chemical/unicode/named equation extractor |
 | `ingest/figure_refs.py` | Caption-first figure / table / scheme extractor from body markdown |
 | `ingest/figures.py` | Binary figure extractor; caption-only filter; scanned-page dedup by raw page bytes |

@@ -2,23 +2,45 @@
 
 ## Status (2026-04-12)
 
-Completed:
-- **P2 (parser abstraction)**: `RawImage` is typed (not `metadata["_raw_images"]`).
-  `ParserBackend` enum + factory + unified `_PARSER_TABLE` dispatch.  Adding a
-  new backend (e.g. docling) = one parser module + one enum member with
-  `_overrides()` + `--parser <name>` on CLI.  `validate_backend()` fails fast
-  before ingest if the backend module is missing.
-- **Incremental ingest**: manifest-based dedup, replacement-before-delete safety,
-  alias dedup, cross-run dedup. Old `_dedupe_sources` / `_existing_corpus_hashes`
-  removed.
-- **Pipeline renamed**: `refresh.py` -> `pipeline.py`.
+### Phase A: Consolidation
 
-Remaining (not in scope for this pass):
-- P1 (god function): pipeline.py is ~650L, staged but still one function.
-- P3 (enrichment protocol): explicit typed calls, no shared protocol yet.
-- P4 (storage adapter): still file-based, not protocol-backed.
-- P5 (distill coupling): implicit shapes, no corpus reader protocol.
-- P6 (scattered config): partially addressed; SKIP_SECTION_TYPES still duped.
+| # | Item | Status |
+|---|------|--------|
+| 1 | Type RawImage contract | Done |
+| 2 | Parser protocol + registry (enum + factory) | Done |
+| 3 | Explicit typed stages (equations/captions/citations/media/metadata) | Done (explicit calls, no generic protocol) |
+| 4 | Slim refresh.py -> pipeline.py | Partial (~650L, staged but not decomposed) |
+| 5 | Centralize config (SKIP_SECTION_TYPES dedup) | Not done |
+| 6 | Per-stage timing + progress logs | Done (_timed + _print_timings) |
+
+### Phase B: Incremental ingest
+
+| # | Item | Status |
+|---|------|--------|
+| 7 | Corpus manifest / record manager | Done |
+| 8 | Atomic staging / publish | Not done |
+| 9 | Split pipeline: changed-source + derived rebuild | Done |
+| 10 | Test incremental and sync modes | Done (18 tests) |
+
+### Phase C: Scale hardening
+
+| # | Item | Status |
+|---|------|--------|
+| 11 | Blockwise top-k/threshold graph build | Done |
+| 12 | Scale tests (50-paper correctness, 200-1000 timing) | Not done |
+| 13 | Embedding migration guards (fingerprint mismatch) | Done |
+
+### Phase D: Extensions
+
+| # | Item | Status |
+|---|------|--------|
+| 14 | DocType classification with overrides | Not done |
+| 15 | CorpusReader protocol for distill preload | Not done |
+| 16 | Parser quality harness (pymupdf vs alternatives) | Not done |
+| 17 | Docling parser behind config | Not done (architecture ready) |
+| 18 | Alternative store / ANN backend | Not done |
+
+### Remaining work (phases 5, 8, 12, 14-18 + partial 4)
 
 ## Lessons from the distill consolidation
 
