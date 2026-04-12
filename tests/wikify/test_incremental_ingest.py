@@ -651,3 +651,77 @@ def test_unregistered_backend_raises_before_ingest(sources_dir, corpus_dir):
         )
     # No corpus artifacts should have been created.
     assert not corpus_dir.exists() or not list(corpus_dir.iterdir())
+
+
+# --- Atomic write: crash mid-persist leaves corpus recoverable ---
+
+def test_crash_mid_persist_recoverable(sources_dir, corpus_dir):
+    """If ingest crashes after persisting some docs but before finishing,
+    a subsequent ingest should recover cleanly."""
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
+    _write_md(sources_dir / "gamma.md", "Gamma", "Gamma body text.")
+
+    call_count = [0]
+    real_write = __import__(
+        "wikify.store.corpus", fromlist=["write_document"]
+    ).write_document
+
+    def crash_on_second(paths_arg, doc, markdown, chunks):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            raise OSError("simulated disk failure")
+        return real_write(paths_arg, doc, markdown, chunks)
+
+    # First ingest crashes mid-persist
+    with patch(
+        "wikify.ingest.pipeline.write_document",
+        side_effect=crash_on_second,
+    ):
+        try:
+            ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        except OSError:
+            pass  # expected crash
+
+    # Second ingest should succeed cleanly (additive mode re-parses all)
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+    docs = list_documents(paths)
+    assert len(docs) == 3
+
+
+# --- Atomic write: crash during final resave leaves corpus recoverable ---
+
+def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
+    """If ingest crashes during the final _resave_docs (after graph
+    population), a subsequent ingest should recover cleanly."""
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
+
+    from wikify.store.corpus import atomic_write_text
+
+    call_count = [0]
+    real_write = atomic_write_text
+
+    def crash_during_resave(path, content):
+        # Let initial write_document calls through; crash on the
+        # doc resave pass (which rewrites docs/*.json a second time).
+        if "docs" in str(path) and path.suffix == ".json":
+            call_count[0] += 1
+            # First 2 calls are initial persist; 3rd+ are resave
+            if call_count[0] > 2:
+                raise OSError("simulated resave failure")
+        return real_write(path, content)
+
+    with patch(
+        "wikify.store.corpus.atomic_write_text",
+        side_effect=crash_during_resave,
+    ):
+        try:
+            ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        except OSError:
+            pass  # expected crash
+
+    # Second ingest should succeed cleanly
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+    docs = list_documents(paths)
+    assert len(docs) == 2

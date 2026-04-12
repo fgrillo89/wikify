@@ -546,7 +546,9 @@ def write_pagerank(paths: CorpusPaths, docs: list[Document], graph) -> None:
         pagerank: dict[str, float] = {}
     else:
         pagerank = dict(nx.pagerank(g, weight="weight"))
-    paths.pagerank_path.write_text(json.dumps(pagerank), encoding="utf-8")
+    from ..store.corpus import atomic_write_text
+
+    atomic_write_text(paths.pagerank_path, json.dumps(pagerank))
 
 
 # ---------------------------------------------------------------------------
@@ -567,11 +569,12 @@ def _resave_docs(
     docs: list[Document],
     raw_markdown_by_id: dict[str, str],
 ) -> None:
-    from ..store.corpus import _doc_to_dict
+    from ..store.corpus import _doc_to_dict, atomic_write_text
 
     for doc in docs:
-        (paths.docs_dir / f"{doc.id}.json").write_text(
-            json.dumps(_doc_to_dict(doc)), encoding="utf-8"
+        atomic_write_text(
+            paths.docs_dir / f"{doc.id}.json",
+            json.dumps(_doc_to_dict(doc)),
         )
         body = raw_markdown_by_id.get(doc.id)
         if body is None:
@@ -646,43 +649,26 @@ def _print_timings(timings: dict[str, float], t0: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline entry point
+# Pipeline stages (called from ingest_corpus)
 # ---------------------------------------------------------------------------
 
-def ingest_corpus(
+
+def _prepare_change_set(
     input_dir: Path,
-    output_dir: Path,
-    *,
-    max_workers: int | None = None,
-    mode: str = "additive",
-    parser_backend: str = "default",
-) -> CorpusPaths:
-    """Ingest a directory of sources into a corpus bundle.
+    paths: CorpusPaths,
+    mode: str,
+    timings: dict[str, float],
+) -> tuple:
+    """Enumerate sources, diff against manifest, deduplicate.
 
-    Incremental: parses only new/changed sources, then removes stale
-    artifacts only for sources whose replacement parse *succeeded*,
-    then rebuilds derived artifacts from the full active corpus.
-
-    ``mode``: ``additive`` (default) or ``sync`` (removes absent sources).
+    Returns ``(manifest, change_set, dedup_aliases)`` or ``None`` when
+    nothing has changed.
     """
-    from ..store.corpus import all_chunks as load_all_chunks
-    from ..store.corpus import list_documents
     from .manifest import (
         CorpusManifest,
-        SourceRecord,
         diff_sources,
         source_id_for,
     )
-    # Fail fast on unknown parser backend before doing any work.
-    validate_backend(parser_backend)
-
-    timings: dict[str, float] = {}
-    t0_run = time.monotonic()
-
-    paths = CorpusPaths(root=output_dir)
-    paths.ensure()
-
-    # --- Load manifest and diff sources ---
 
     with _timed(timings, "enumerate+dedupe"):
         manifest = CorpusManifest.load(paths.manifest_path)
@@ -691,13 +677,6 @@ def ingest_corpus(
             raw_sources, manifest, input_root=input_dir, mode=mode,
         )
 
-        # Intra-run dedup: two source paths with identical bytes share
-        # one doc_id.  Parse only the first; record the second as a
-        # manifest alias so sync-mode knows both reference the same doc.
-        #
-        # hash_to_doc tracks content_hash -> persisted doc_id. Seeded
-        # from active manifest records so aliases from prior runs resolve
-        # correctly. Updated from the first parsed source in this run.
         # hash_to_doc: content_hash -> persisted doc_id.  Seeded from
         # active manifest records so cross-run duplicates are caught.
         hash_to_doc: dict[str, str] = {
@@ -707,7 +686,7 @@ def ingest_corpus(
         }
         deduped: list[Path] = []
         dedup_aliases: list[tuple[str, str, str]] = []  # (sid, h, did)
-        seen_this_run: set[str] = set()  # hashes seen in to_parse
+        seen_this_run: set[str] = set()
         for src in change_set.to_parse:
             try:
                 h = content_hash(src)
@@ -719,16 +698,12 @@ def ingest_corpus(
                 sid = source_id_for(src, input_dir)
 
             if h in seen_this_run:
-                # Intra-run duplicate: same bytes as another to_parse entry
                 persisted_did = hash_to_doc.get(h, doc_id_for(src))
                 dedup_aliases.append((sid, h, persisted_did))
                 print(f"  [skip-intra] {src.name}", file=sys.stderr)
                 continue
 
             if h in hash_to_doc:
-                # Content already in corpus (cross-run duplicate or a
-                # replacement whose new bytes match an existing doc).
-                # Register as alias instead of re-parsing.
                 dedup_aliases.append((sid, h, hash_to_doc[h]))
                 print(f"  [skip-cross] {src.name}", file=sys.stderr)
                 continue
@@ -748,32 +723,18 @@ def ingest_corpus(
         file=sys.stderr,
     )
 
-    if change_set.is_empty and not dedup_aliases:
-        print(
-            "[ingest] nothing to do -- corpus already contains every source",
-            file=sys.stderr,
-        )
-        return paths
+    return manifest, change_set, dedup_aliases
 
-    # --- 1. Parse new/changed sources FIRST (before removing anything) ---
 
-    bundles: list[_ParsedBundle] = []
-    declared: dict[str, list[str]] = {}
-    raw_md: dict[str, str] = {}
-
-    if change_set.to_parse:
-        with _timed(timings, "parse+chunk"):
-            bundles = _parse_sources(
-                change_set.to_parse, paths, max_workers, parser_backend,
-            )
-
-        with _timed(timings, "per-doc persist"):
-            _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
-    else:
-        timings["parse+chunk"] = 0.0
-        timings["per-doc persist"] = 0.0
-
-    # --- 2. Collect stale doc_ids from successful replacements + deletes ---
+def _identify_stale_docs(
+    bundles: list[_ParsedBundle],
+    dedup_aliases: list[tuple[str, str, str]],
+    change_set,
+    manifest,
+    input_dir: Path,
+) -> set[str]:
+    """Determine which old doc_ids are stale after successful parses/aliases."""
+    from .manifest import source_id_for
 
     parsed_sids: set[str] = set()
     for bundle in bundles:
@@ -783,13 +744,10 @@ def ingest_corpus(
         parsed_sids.add(sid)
 
     aliased_sids = {sid for sid, _, _ in dedup_aliases}
-
     stale_doc_ids: set[str] = set()
 
     for sid, old_doc_id in change_set.to_replace.items():
         if sid in parsed_sids or sid in aliased_sids:
-            # Replacement succeeded (parsed) or content now matches an
-            # existing doc (aliased). Either way the old doc is stale.
             stale_doc_ids.add(old_doc_id)
             print(f"  [replace] {sid}: old {old_doc_id}", file=sys.stderr)
         else:
@@ -806,15 +764,26 @@ def ingest_corpus(
             manifest.sources[sid].status = "deleted"
             print(f"  [delete] {sid} ({rec.doc_id})", file=sys.stderr)
 
-    # --- 3. Update manifest BEFORE removal so still_active_doc_ids ---
-    #     reflects the new records (replacements point at new doc_ids).
+    return stale_doc_ids
+
+
+def _update_manifest(
+    manifest,
+    bundles: list[_ParsedBundle],
+    dedup_aliases: list[tuple[str, str, str]],
+    change_set,
+    paths: CorpusPaths,
+    input_dir: Path,
+) -> None:
+    """Register parsed sources and dedup aliases in the manifest."""
+    from .manifest import SourceRecord, source_id_for
 
     for bundle in bundles:
         sid = change_set.path_to_sid.get(bundle.src_path)
         if sid is None:
             sid = source_id_for(Path(bundle.src_path), input_dir)
         h = bundle.doc_id.rsplit("_", 1)[-1]
-        rec = SourceRecord(
+        manifest.sources[sid] = SourceRecord(
             source_id=sid,
             source_path=bundle.src_path,
             content_hash=h,
@@ -823,15 +792,10 @@ def ingest_corpus(
             chunk_ids=[c.id for c in bundle.chunks],
             parsed_at=SourceRecord.now_iso(),
         )
-        manifest.sources[sid] = rec
 
     # Register dedup aliases only if the target doc_id actually exists.
-    # If the canonical source's parse failed, its doc_id was never
-    # persisted -- registering an alias to it would corrupt the manifest.
-    # For replacements that became aliases, update the existing record.
     persisted_doc_ids = {b.doc_id for b in bundles}
     for alias_sid, alias_h, alias_did in dedup_aliases:
-        # Target must exist: either just persisted or already on disk.
         target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
         if alias_did not in persisted_doc_ids and not target_on_disk:
             print(
@@ -853,21 +817,17 @@ def ingest_corpus(
             parsed_at=SourceRecord.now_iso(),
         )
 
-    # --- 4. Remove stale artifacts ---
-    # Only remove physical artifacts if no other active source still
-    # references the same doc_id (handles duplicate-content aliases).
 
-    still_active_doc_ids = {
-        s.doc_id for s in manifest.sources.values()
-        if s.status == "active"
-    }
-    safe_to_remove = stale_doc_ids - still_active_doc_ids
-
-    if safe_to_remove:
-        with _timed(timings, "remove stale"):
-            _remove_doc_artifacts(paths, safe_to_remove)
-
-    # --- 5. Derived rebuild (full active corpus on disk) ---
+def _rebuild_derived(
+    paths: CorpusPaths,
+    stale_doc_ids: set[str],
+    declared: dict[str, list[str]],
+    raw_md: dict[str, str],
+    timings: dict[str, float],
+) -> None:
+    """Rebuild all corpus-wide derived artifacts from the active corpus."""
+    from ..store.corpus import all_chunks as load_all_chunks
+    from ..store.corpus import list_documents
 
     with _timed(timings, "load active corpus"):
         all_docs = list_documents(paths)
@@ -911,7 +871,90 @@ def ingest_corpus(
     with _timed(timings, "doc resave"):
         _resave_docs(paths, all_docs, raw_md)
 
-    # --- 6. Save manifest ---
+
+# ---------------------------------------------------------------------------
+# Pipeline entry point
+# ---------------------------------------------------------------------------
+
+
+def ingest_corpus(
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    max_workers: int | None = None,
+    mode: str = "additive",
+    parser_backend: str = "default",
+) -> CorpusPaths:
+    """Ingest a directory of sources into a corpus bundle.
+
+    Incremental: parses only new/changed sources, then removes stale
+    artifacts only for sources whose replacement parse *succeeded*,
+    then rebuilds derived artifacts from the full active corpus.
+
+    ``mode``: ``additive`` (default) or ``sync`` (removes absent sources).
+    """
+    from .manifest import SourceRecord
+
+    validate_backend(parser_backend)
+
+    timings: dict[str, float] = {}
+    t0_run = time.monotonic()
+
+    paths = CorpusPaths(root=output_dir)
+    paths.ensure()
+
+    # 1. Enumerate, diff, dedupe
+    manifest, change_set, dedup_aliases = _prepare_change_set(
+        input_dir, paths, mode, timings,
+    )
+
+    if change_set.is_empty and not dedup_aliases:
+        print(
+            "[ingest] nothing to do -- corpus already contains every source",
+            file=sys.stderr,
+        )
+        return paths
+
+    # 2. Parse new/changed sources (before removing anything)
+    bundles: list[_ParsedBundle] = []
+    declared: dict[str, list[str]] = {}
+    raw_md: dict[str, str] = {}
+
+    if change_set.to_parse:
+        with _timed(timings, "parse+chunk"):
+            bundles = _parse_sources(
+                change_set.to_parse, paths, max_workers, parser_backend,
+            )
+        with _timed(timings, "per-doc persist"):
+            _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
+    else:
+        timings["parse+chunk"] = 0.0
+        timings["per-doc persist"] = 0.0
+
+    # 3. Identify stale doc_ids from replacements + deletes
+    stale_doc_ids = _identify_stale_docs(
+        bundles, dedup_aliases, change_set, manifest, input_dir,
+    )
+
+    # 4. Update manifest with new records + aliases
+    _update_manifest(
+        manifest, bundles, dedup_aliases, change_set, paths, input_dir,
+    )
+
+    # 5. Remove stale artifacts (only if no other source references them)
+    still_active_doc_ids = {
+        s.doc_id for s in manifest.sources.values()
+        if s.status == "active"
+    }
+    safe_to_remove = stale_doc_ids - still_active_doc_ids
+    if safe_to_remove:
+        with _timed(timings, "remove stale"):
+            _remove_doc_artifacts(paths, safe_to_remove)
+
+    # 6. Rebuild all derived artifacts from full active corpus
+    _rebuild_derived(paths, stale_doc_ids, declared, raw_md, timings)
+
+    # 7. Save manifest
     manifest.last_ingest = SourceRecord.now_iso()
     from ..embedding import current_backend
 

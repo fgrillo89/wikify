@@ -46,7 +46,9 @@ def write_meta(vectors_path: Path, meta: VectorsMeta) -> Path:
         "dim": int(meta.dim),
         "model": meta.model,
     }
-    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    from .corpus import atomic_write_text
+
+    atomic_write_text(out, json.dumps(payload, indent=2))
     return out
 
 

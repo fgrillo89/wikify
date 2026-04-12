@@ -80,5 +80,7 @@ def write_corpus_bibtex(corpus: CorpusPaths, docs: list[Document]) -> Path:
         else:
             seen[entry_id] = 0
         entries.append(bib.strip())
-    bib_path.write_text("\n\n".join(entries) + "\n", encoding="utf-8")
+    from ..store.corpus import atomic_write_text
+
+    atomic_write_text(bib_path, "\n\n".join(entries) + "\n")
     return bib_path

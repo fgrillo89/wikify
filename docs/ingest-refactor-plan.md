@@ -2,23 +2,43 @@
 
 ## Status (2026-04-12)
 
-Completed:
-- **P2 (parser abstraction)**: `RawImage` is typed (not `metadata["_raw_images"]`).
-  `ParserBackend` enum + factory + unified `_PARSER_TABLE` dispatch.  Adding a
-  new backend (e.g. docling) = one parser module + one enum member with
-  `_overrides()` + `--parser <name>` on CLI.  `validate_backend()` fails fast
-  before ingest if the backend module is missing.
-- **Incremental ingest**: manifest-based dedup, replacement-before-delete safety,
-  alias dedup, cross-run dedup. Old `_dedupe_sources` / `_existing_corpus_hashes`
-  removed.
-- **Pipeline renamed**: `refresh.py` -> `pipeline.py`.
+### Phase A: Consolidation -- Done
 
-Remaining (not in scope for this pass):
-- P1 (god function): pipeline.py is ~650L, staged but still one function.
-- P3 (enrichment protocol): explicit typed calls, no shared protocol yet.
-- P4 (storage adapter): still file-based, not protocol-backed.
-- P5 (distill coupling): implicit shapes, no corpus reader protocol.
-- P6 (scattered config): partially addressed; SKIP_SECTION_TYPES still duped.
+| # | Item | Status |
+|---|------|--------|
+| 1 | Type RawImage contract | Done |
+| 2 | Parser protocol + registry (enum + factory) | Done |
+| 3 | Explicit typed stages (equations/captions/citations/media/metadata) | Done (explicit calls, no generic protocol) |
+| 4 | Decompose pipeline.py | Done (4 extracted helpers, orchestrator ~60L) |
+| 5 | Centralize config (SKIP_SECTION_TYPES) | Done (already in ingest/config.py, imported everywhere) |
+| 6 | Per-stage timing + progress logs | Done (_timed + _print_timings) |
+
+### Phase B: Incremental ingest -- Done
+
+| # | Item | Status |
+|---|------|--------|
+| 7 | Corpus manifest / record manager | Done |
+| 8 | Atomic writes for ingest outputs | Done (tempfile + os.replace for docs, chunks, markdown, graph, vectors npz/ids/meta, pagerank, explorer index, topics, bibtex, manifest, doc resave. Exception: per-source image sidecars, re-parsed on next ingest if corrupt.) |
+| 9 | Split pipeline: changed-source + derived rebuild | Done |
+| 10 | Test incremental and sync modes | Done (19 tests) |
+
+### Phase C: Scale hardening -- Done
+
+| # | Item | Status |
+|---|------|--------|
+| 11 | Blockwise top-k/threshold graph build | Done |
+| 12 | Scale tests (50-paper correctness, incremental, timing) | Done (test_ingest_scale.py) |
+| 13 | Embedding migration guards (fingerprint mismatch) | Done |
+
+### Phase D: Extensions -- Deferred
+
+| # | Item | Defer until |
+|---|------|-------------|
+| 14 | DocType classification with overrides | A second consumer needs doc classification |
+| 15 | CorpusReader protocol for distill preload | A second store backend is implemented |
+| 16 | Parser quality harness (pymupdf vs alternatives) | A second parser package is available |
+| 17 | Docling parser behind config | docling is added as a dependency |
+| 18 | Alternative store / ANN backend | Scale tests reveal file-per-doc is a bottleneck |
 
 ## Lessons from the distill consolidation
 
