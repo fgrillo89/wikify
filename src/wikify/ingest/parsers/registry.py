@@ -1,12 +1,22 @@
-"""Dispatch a source file to the right parser based on suffix."""
+"""Dispatch a source file to the right parser based on suffix.
+
+Parser configuration lives in one table.  Adding a new backend (e.g.
+docling) requires one parser module, one row in ``_BACKEND_PARSERS``,
+and selecting it via ``--parser docling`` on the CLI.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
 from wikify.models import DocImage, DocKind
+
+# ---------------------------------------------------------------------------
+# Data types produced by parsers
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -51,109 +61,175 @@ class DocumentParser(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Parser table -- one entry per supported format.  Lazy imports keep
-# heavy dependencies (pymupdf, python-docx, ...) out of the module top.
+# Parser backend enum
+# ---------------------------------------------------------------------------
+
+
+class ParserBackend(str, Enum):
+    """Known parser backends.
+
+    ``DEFAULT`` is always available.  Others may require optional
+    dependencies -- call ``validate_backend()`` before starting ingest.
+    """
+
+    DEFAULT = "default"
+    DOCLING = "docling"
+
+    @classmethod
+    def from_str(cls, value: str) -> ParserBackend:
+        """Resolve a CLI string to a backend, including custom backends."""
+        try:
+            return cls(value)
+        except ValueError:
+            if value in _CUSTOM_BACKENDS:
+                # Custom backends registered at import time are valid but
+                # don't have an enum member.  Return as-is via the str base.
+                return value  # type: ignore[return-value]
+            raise ValueError(
+                f"unknown parser backend {value!r}; "
+                f"available: {sorted(b.value for b in cls)}"
+                + (f" + custom: {sorted(_CUSTOM_BACKENDS)}" if _CUSTOM_BACKENDS else "")
+            ) from None
+
+
+# ---------------------------------------------------------------------------
+# Unified parser table
+#
+# One entry per (suffix, backend) pair.  Each maps to:
+#   - a DocKind for the Document record
+#   - a lazy loader that returns the parser module
+#
+# Lazy imports keep heavy dependencies (pymupdf, python-docx, ...) out of
+# the module top level.
 # ---------------------------------------------------------------------------
 
 
 def _lazy_md():
     from . import markdown as p
-
     return p
 
 
 def _lazy_pdf():
     from . import pdf as p
-
     return p
 
 
 def _lazy_docx():
     from . import docx as p
-
     return p
 
 
 def _lazy_pptx():
     from . import pptx as p
-
     return p
 
 
 def _lazy_html():
     from . import html as p
-
     return p
 
 
-ParserBackend = str  # "default" | "docling" | custom key
-
-_SUFFIX_TABLE: dict[str, callable] = {
-    "md": _lazy_md,
-    "markdown": _lazy_md,
-    "txt": _lazy_md,
-    "pdf": _lazy_pdf,
-    "docx": _lazy_docx,
-    "pptx": _lazy_pptx,
-    "html": _lazy_html,
-    "htm": _lazy_html,
+# suffix -> (DocKind, lazy_loader)
+_PARSER_TABLE: dict[str, tuple[DocKind, callable]] = {
+    "md":       ("md",   _lazy_md),
+    "markdown": ("md",   _lazy_md),
+    "txt":      ("md",   _lazy_md),
+    "pdf":      ("pdf",  _lazy_pdf),
+    "docx":     ("docx", _lazy_docx),
+    "pptx":     ("pptx", _lazy_pptx),
+    "html":     ("html", _lazy_html),
+    "htm":      ("html", _lazy_html),
 }
 
-_KIND_TABLE: dict[str, DocKind] = {
-    "md": "md",
-    "markdown": "md",
-    "txt": "md",
-    "pdf": "pdf",
-    "docx": "docx",
-    "pptx": "pptx",
-    "html": "html",
-    "htm": "html",
+# Per-backend override tables.  Each maps suffix -> (DocKind, lazy_loader).
+# The DEFAULT backend uses _PARSER_TABLE directly; named backends override
+# specific suffixes.
+_BACKEND_PARSERS: dict[str, dict[str, tuple[DocKind, callable]]] = {
+    # Docling: PDF-only override.  Lazy import fails fast if not installed.
+    ParserBackend.DOCLING.value: {
+        "pdf": ("pdf", lambda: _require_docling()),
+    },
 }
 
-# Per-backend override tables.  Each maps suffix -> lazy loader.
-# "default" is the built-in table above.
-_BACKEND_OVERRIDES: dict[str, dict[str, callable]] = {}
+# Custom backends registered by plugins at import time.
+_CUSTOM_BACKENDS: dict[str, dict[str, tuple[DocKind, callable]]] = {}
+
+
+def _require_docling():
+    """Lazy-load the docling parser module, or raise with install instructions."""
+    try:
+        from . import docling as p
+        return p
+    except ImportError as exc:
+        raise ImportError(
+            "docling parser backend requires the 'docling' package. "
+            "Install it with: uv add docling"
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def register_parser_backend(
-    name: str, overrides: dict[str, callable],
+    name: str, overrides: dict[str, tuple[DocKind, callable]],
 ) -> None:
-    """Register a named parser backend that overrides specific formats.
+    """Register a custom parser backend that overrides specific formats.
 
     **Must be called at import time** (module top-level or package
     ``__init__``), not dynamically at runtime.  On Windows,
     ``ProcessPoolExecutor`` workers start fresh processes that only
     see registrations made during module import.
 
-    Example (in a plugin module imported before ``ingest_corpus``)::
+    Example::
 
-        register_parser_backend("docling", {"pdf": _lazy_docling_pdf})
+        register_parser_backend("my_parser", {"pdf": ("pdf", _lazy_my_pdf)})
     """
-    _BACKEND_OVERRIDES[name] = overrides
+    _CUSTOM_BACKENDS[name] = overrides
+
+
+def available_backends() -> list[str]:
+    """Return all known backend names (enum + custom)."""
+    return sorted(
+        [b.value for b in ParserBackend]
+        + list(_CUSTOM_BACKENDS)
+    )
+
+
+def validate_backend(backend: str | ParserBackend) -> None:
+    """Raise ``ValueError`` if *backend* is unknown.
+
+    Call this before ingest starts so the user gets a clear error
+    before any files are parsed.
+    """
+    key = backend.value if isinstance(backend, ParserBackend) else backend
+    if key == ParserBackend.DEFAULT.value:
+        return
+    if key not in _BACKEND_PARSERS and key not in _CUSTOM_BACKENDS:
+        raise ValueError(
+            f"unknown parser backend {key!r}; "
+            f"available: {available_backends()}"
+        )
 
 
 def parse_file(
     path: Path,
     *,
-    parser_backend: ParserBackend = "default",
+    parser_backend: str | ParserBackend = ParserBackend.DEFAULT,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
-    ``parser_backend`` selects an override table registered via
-    ``register_parser_backend``.  Unknown backends raise ``ValueError``.
-    ``"default"`` always works.
+    ``parser_backend`` selects an override table.  Unknown backends
+    raise ``ValueError``.  ``"default"`` always works.
     """
-    if parser_backend != "default" and parser_backend not in _BACKEND_OVERRIDES:
-        raise ValueError(
-            f"unknown parser backend {parser_backend!r}; "
-            f"registered: {sorted(_BACKEND_OVERRIDES) or ['(none)']}"
-        )
+    key = parser_backend.value if isinstance(parser_backend, ParserBackend) else parser_backend
+    validate_backend(key)
+
     suffix = path.suffix.lower().lstrip(".")
-    overrides = _BACKEND_OVERRIDES.get(parser_backend, {})
-    loader = overrides.get(suffix) or _SUFFIX_TABLE.get(suffix)
-    if loader is None:
+    overrides = _BACKEND_PARSERS.get(key) or _CUSTOM_BACKENDS.get(key) or {}
+    entry = overrides.get(suffix) or _PARSER_TABLE.get(suffix)
+    if entry is None:
         raise ValueError(f"unsupported file type: {path.suffix}")
-    kind = _KIND_TABLE.get(suffix)
-    if kind is None:
-        raise ValueError(f"unsupported file type: {path.suffix}")
+    kind, loader = entry
     return kind, loader().parse(path)

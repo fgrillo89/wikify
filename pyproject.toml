@@ -17,7 +17,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "chromadb>=0.5",
     # numerical / graph computation
-    "scipy>=1.13",  # used by networkx.pagerank inside ingest/refresh.py
+    "scipy>=1.13",  # used by networkx.pagerank inside ingest/pipeline.py
     # LLM interface
     "litellm>=1.40",
     "tiktoken>=0.7",

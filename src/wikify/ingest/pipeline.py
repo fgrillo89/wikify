@@ -51,7 +51,7 @@ from .images import (
     rewrite_sidecar_near_chunks,
     save_doc_images,
 )
-from .parsers.registry import ParseResult, parse_file
+from .parsers.registry import ParseResult, parse_file, validate_backend
 from .topics import extract_topics, write_topics
 
 # ---------------------------------------------------------------------------
@@ -208,53 +208,6 @@ def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
             out.append(sec)
         sec.chunk_ids.append(c.id)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Deduplication
-# ---------------------------------------------------------------------------
-
-def _existing_corpus_hashes(paths: CorpusPaths) -> set[str]:
-    if not paths.docs_dir.exists():
-        return set()
-    out: set[str] = set()
-    for f in paths.docs_dir.glob("*.json"):
-        stem = f.stem
-        if len(stem) >= 13 and stem[-13] == "_":
-            out.add(stem[-12:])
-    return out
-
-
-def _dedupe_sources(
-    raw_sources: list[Path],
-    paths: CorpusPaths,
-) -> tuple[list[Path], dict]:
-    """Filter sources to genuinely-new files (intra-run + cross-run dedup)."""
-    seen_hashes: set[str] = set()
-    existing_hashes = _existing_corpus_hashes(paths)
-    unique: list[Path] = []
-    intra_dupe_paths: list[Path] = []
-    existing_paths: list[Path] = []
-    for src in raw_sources:
-        try:
-            h = content_hash(src)
-        except OSError:
-            unique.append(src)
-            continue
-        if h in existing_hashes:
-            existing_paths.append(src)
-            continue
-        if h in seen_hashes:
-            intra_dupe_paths.append(src)
-            continue
-        seen_hashes.add(h)
-        unique.append(src)
-    return unique, {
-        "intra_dupes": len(intra_dupe_paths),
-        "intra_dupe_paths": intra_dupe_paths,
-        "existing": len(existing_paths),
-        "existing_paths": existing_paths,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -720,14 +673,8 @@ def ingest_corpus(
         diff_sources,
         source_id_for,
     )
-    from .parsers.registry import _BACKEND_OVERRIDES
-
     # Fail fast on unknown parser backend before doing any work.
-    if parser_backend != "default" and parser_backend not in _BACKEND_OVERRIDES:
-        raise ValueError(
-            f"unknown parser backend {parser_backend!r}; "
-            f"registered: {sorted(_BACKEND_OVERRIDES) or ['(none)']}"
-        )
+    validate_backend(parser_backend)
 
     timings: dict[str, float] = {}
     t0_run = time.monotonic()

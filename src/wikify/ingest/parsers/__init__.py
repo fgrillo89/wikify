@@ -1,1 +1,1 @@
-"""One parser per source kind. Each returns (markdown, sections, images, metadata)."""
+"""One parser per source kind. Each returns a ParseResult via the registry."""
