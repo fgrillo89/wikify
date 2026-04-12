@@ -220,6 +220,13 @@ _CITE_RE = re.compile(r"\[\d+(?:-\d+)?\]")
 # contain a space and do not match.
 _BRACKET_WRAP_RE = re.compile(r"\[([A-Za-z0-9]{2,20})\]")
 
+# Bracket-enclosed punctuation / symbol remnants that survive after the
+# main citation markers are stripped: ``[,]``, ``[†]``, ``[⊥]``,
+# ``[§]``, ``[*]``, ``[‡]``, etc. Produced by pymupdf4llm when it
+# wraps footnote anchors in brackets that partially overlap citation
+# markers. Each of these is pure noise in the prose.
+_BRACKET_JUNK_RE = re.compile(r"\[[\s,;.*†‡§⊥✉⊗]+\]")
+
 # Unicode dash variants -> ASCII '-'
 _DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 _DASH_RE = re.compile(f"[{re.escape(_DASHES)}]")
@@ -239,6 +246,7 @@ def _strip_pdf_artifacts(md: str) -> str:
     if not md:
         return md
     md = _CITE_RE.sub("", md)
+    md = _BRACKET_JUNK_RE.sub("", md)
     md = _BRACKET_WRAP_RE.sub(r"\1", md)
     md = _DASH_RE.sub("-", md)
     md = _HSPACE_RE.sub(" ", md)

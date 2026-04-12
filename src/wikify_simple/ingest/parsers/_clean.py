@@ -28,6 +28,10 @@ _JOURNAL_HEADING_RE = re.compile(
 )
 
 # Boilerplate single lines (case-insensitive substring match)
+# Structural noise: substring phrases that never appear in real research
+# prose — they always indicate licensing, access-control, or boilerplate
+# metadata. We don't hardcode domain names; bare URLs are caught by the
+# regex below.
 _LINE_NOISE_SUBSTRINGS = (
     "authorized licensed use limited to",
     "downloaded on",
@@ -36,30 +40,44 @@ _LINE_NOISE_SUBSTRINGS = (
     "this article has been accepted",
     "personal use of this material",
     "permission to make digital",
-    "published by",
     "accepted for publication",
-    "manuscript received",
     "redistribution",
     "free of charge via the internet",
     "supporting information",
     "available free of charge",
 )
 
-# Single-line patterns matched by regex (copyright, DOI, volume/issue, URLs)
+# Single-line patterns matched by regex. Each branch is structurally
+# defined (captures a FORMAT, not a specific domain or journal name) so
+# it generalizes to any paper/publisher without maintenance.
 _LINE_NOISE_RE = re.compile(
     r"(?i)^(?:"
-    r"(?:copyright\s*)?(?:\(c\)|©)\s*\d{4}"  # © 2010 ...
-    r"|doi:\s*10\.\d{4,}"  # DOI: 10.1021/...
-    r"|https?://(?:dx\.)?doi\.org/"  # https://doi.org/...
-    r"|https?://pubs\.\w+\.org/"  # https://pubs.acs.org/...
-    r"|vol\.?\s*\d+\s*[,|]\s*(?:no\.?\s*\d+|issue)"  # Vol 453 | No. 1
-    r"|pp?\.?\s*\d+\s*[-–]\s*\d+"  # pp. 100-105
-    r"|e?-?mail:"  # email: / E-mail:
-    r"|received\s+\d{1,2}\s+\w+\s+\d{4}"  # Received 3 January 2010
-    r"|revised\s+\d{1,2}\s+\w+\s+\d{4}"  # Revised 15 March 2010
-    r"|published\s+(?:online\s+)?\d{1,2}\s+\w+\s+\d{4}"  # Published online ...
+    r"(?:copyright\s*)?(?:\(c\)|©)\s*\d{4}"  # any copyright notice
+    r"|doi:\s*10\.\d{4,}"  # any DOI
+    r"|https?://\S{10,}"  # any bare URL line (no surrounding prose)
+    r"|www\.\S{5,}"  # any www. bare URL line
+    r"|vol\.?\s*\d+\s*[,|]\s*(?:no\.?\s*\d+|issue)"  # volume/issue metadata
+    r"|pp?\.?\s*\d+\s*[-–]\s*\d+"  # page-range metadata
+    r"|e?-?mail:\s*\S+"  # email: lines
     r")",
 )
+
+# Structural detector for journal date-block metadata. Instead of
+# pattern-matching specific date formats, we detect short paragraphs
+# that contain ≥2 of the canonical journal-lifecycle verbs AND a 4-digit
+# year. These are ALWAYS metadata — no research prose contains
+# "Received: Month Day, Year Accepted: Month Day, Year" as a sentence.
+_DATE_BLOCK_VERBS = frozenset({"received", "accepted", "published", "revised"})
+
+
+def _is_date_metadata_line(line: str) -> bool:
+    """True if ``line`` is a journal date-block rather than research prose."""
+    if len(line) > 250:
+        return False
+    lower = line.lower()
+    verb_hits = sum(1 for v in _DATE_BLOCK_VERBS if v in lower)
+    has_year = bool(re.search(r"\b(19|20)\d{2}\b", line))
+    return verb_hits >= 2 and has_year
 
 
 def _is_running_header_candidate(line: str) -> bool:
@@ -90,12 +108,21 @@ def _strip_repeated_headers(md: str) -> str:
 
 
 def _strip_line_noise(md: str) -> str:
-    """Drop individual lines that match licensing-notice substrings or regex patterns.
+    """Drop individual lines that match structural noise patterns.
 
     Only drops *short* lines — boilerplate footers are always short, and
     long lines (full paragraphs that happen to mention a noise substring
     in passing) must be preserved. Paragraph-level noise is handled
     separately by ``_strip_noise_paragraphs``.
+
+    Three structural detectors (none hardcodes a specific journal or
+    domain):
+    1. Substring: licensing/access-control phrases that never appear in
+       research prose.
+    2. Regex: format-based patterns (copyright, DOI, bare URL, page
+       range, email line, volume/issue).
+    3. Date-block: short lines with ≥2 of {received, accepted, published,
+       revised} + a 4-digit year — always journal metadata, never prose.
     """
     out: list[str] = []
     for ln in md.split("\n"):
@@ -105,6 +132,8 @@ def _strip_line_noise(md: str) -> str:
             if any(s in low for s in _LINE_NOISE_SUBSTRINGS):
                 continue
             if _LINE_NOISE_RE.match(stripped):
+                continue
+            if _is_date_metadata_line(stripped):
                 continue
         out.append(ln)
     return "\n".join(out)
