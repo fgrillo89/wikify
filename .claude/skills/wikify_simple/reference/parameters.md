@@ -24,10 +24,7 @@ Every user-settable knob, grouped by category, with defaults and acceptable rang
 
 | Flag | Default | Description |
 |---|---|---|
-| `--policy` | `rule_policy` | `rule_policy` (deterministic sampler) / `llm_policy` (orchestrator picks actions). |
-| `--binding` | `fake` | `fake` (test stub) / `heuristic` (fast in-process) / `file_dispatch` (model-backed via Claude skills). |
-
-`llm_policy` requires `--binding file_dispatch`. `file_dispatch` requires `WIKIFY_SIMPLE_ALLOW_NETWORK=1`.
+| `--mode` | `scripted` | `scripted` (deterministic sampler) / `guided` (orchestrator picks actions). |
 
 ## Budget
 
@@ -67,19 +64,18 @@ Strategy defaults: E=0.2, M=0.65 (adaptive), X=0.6.
 
 | Var | Default | Description |
 |---|---|---|
-| `WIKIFY_SIMPLE_ALLOW_NETWORK` | unset | Must be `1` to use `file_dispatch` binding. |
 | `WIKIFY_SIMPLE_DISPATCH_DIR` | `data/dispatch` | Base directory for file-dispatch requests. |
 | `WIKIFY_SIMPLE_EMBEDDER` | `hash` | Embedder backend: `hash` (fast, 128d) or `sentence_transformers` (all-MiniLM-L6-v2, 384d). |
 | `WIKIFY_SKIP_PAGE_ID_MIGRATION` | unset | Skip the `concept-*.md` → natural-title migration pass. |
 
 ## What the user CANNOT set directly
 - Orchestrate tier (locked at L).
-- The orchestrator's action selection (that's the llm_policy's job).
+- The orchestrator's action selection (that's the guided's job).
 - The per-chunk cache key (computed from prompt + chunk content).
 - The cost meter thresholds (hardcoded at 1.05× budget abort).
 
 ## What the LLM policy can override mid-run
-When running with `--policy llm_policy`, the orchestrator can change:
+When running with `--mode guided`, the orchestrator can change:
 - `exploit_fraction` (via `set_allocation`)
 - `extract_tier`, `write_tier`, `edit_tier`, `compact_tier` (via `set_tier`)
 

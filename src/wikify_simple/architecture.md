@@ -258,7 +258,7 @@ src/wikify_simple/
     schedule.py             # Schedule protocol + static/adaptive variants
     pipeline.py             # fixed list of stages every cell runs
     iteration.py            # create/refine/merge operations
-    policy.py               # rule_policy / llm_policy shared interface
+    policy.py               # scripted / guided shared interface
     extract/                # extraction subpackage
     write/                  # write subpackage
     strategies/

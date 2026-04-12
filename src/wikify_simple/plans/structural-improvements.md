@@ -146,7 +146,7 @@ These are cheap to produce (already in `SamplerState`) and give the LLM enough g
 - `src/wikify_simple/distill/sampler.py` — new `semantic_query_chunks(state, query_vec, k, scope)` helper that does the cosine scan; callable from the handler via Python import
 - `.claude/skills/wikify_simple/handlers/orchestrate.md` — rewrite. Document the new `pick_chunks` action, document the two tools (`semantic_query`, `inspect_pages`), show a worked example of query → inspect → pick. Keep the existing sampler actions as a "cheap fallback" section.
 - `.claude/skills/wikify_simple/reference/orchestrator.md` — update the action catalog.
-- `tests/wikify_simple/test_llm_policy_control_actions.py` — add tests for `pick_chunks` (valid ids, filtered-vs-seen, empty ids) and for the sampler_snapshot construction.
+- `tests/wikify_simple/test_guided_control_actions.py` — add tests for `pick_chunks` (valid ids, filtered-vs-seen, empty ids) and for the sampler_snapshot construction.
 
 ### Verification
 
@@ -656,7 +656,7 @@ Approximate sizing:
 1. `uv run python -m wikify_simple.cli ingest data/papers/mvp20 --out /tmp/mvp20_check` produces `sampler_index.json`, `pagerank.json`, and the existing artifacts.
 2. `uv run python -m wikify_simple.cli campaign --strategy M --iterations 3 --budget 50000 --corpus /tmp/mvp20_check --bundle /tmp/mvp20_bundle` runs all 3 iterations in one Python process.
 3. `uv run python -m wikify_simple.cli distill --phase write --bundle /tmp/mvp20_bundle ...` does not load the vector store or corpus graph (verify via stderr instrumentation).
-4. With `--policy llm_policy`, the LLM campaign uses `pick_chunks` at least once and `jump_figures` at least once, visible in `_run.json::policy_actions`.
+4. With `--mode guided`, the LLM campaign uses `pick_chunks` at least once and `jump_figures` at least once, visible in `_run.json::policy_actions`.
 5. `uv run python -m wikify_simple.cli eval --bundle /tmp/mvp20_bundle --corpus /tmp/mvp20_check` reports `image_coverage_residual`, `figure_reference_rate`, and `n_figures_referenced_in_bodies` in `_metrics.json`.
 6. `_run.json::budget_used_haiku_eq` never exceeds 105 % of the target on any iteration (Phase 5C reservation in action).
 7. `_run.json::by_role.writer.input_tokens` per call drops ~50 % after Phase 5B lands (fixed prompt layers delivered once per serve-dispatch session).

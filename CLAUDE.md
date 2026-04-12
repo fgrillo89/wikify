@@ -29,6 +29,63 @@ All comparisons must run under the same pipeline contract and telemetry.
 - If you wrote 200 lines and it could be 50, rewrite it.
 - **No dead versioning.** When iterating on a file (prompt, schema, template, plan), delete the old version and keep the new one under the canonical name. Do NOT leave `foo_v1.yaml` sitting next to `foo_v2.yaml` as a fallback "just in case." Do NOT rename the file by appending a version suffix — the file system IS the version, git history IS the changelog. The only acceptable version-suffixed files are those where the OLD version is still actively reachable from production code during a real migration, and in that case the migration must be on a tracked task with a deadline.
 
+### Architectural Style
+Write code so the reader can understand the business behavior without jumping
+through a maze of tiny abstractions. Locality of behavior is the default.
+
+- Code that changes together should live together.
+- Prefer one explicit data table over several one-line modules or subclasses
+  when behavior differs only by configuration.
+- Prefer one config object with clear ownership over parallel concepts such as
+  "preset", "strategy", "factory config", and "runtime config" unless each has
+  a distinct job that can be explained in one sentence.
+- Keep `__init__.py` files boring: public re-exports only. Do not put config,
+  factories, side effects, or business behavior there.
+- Classify every new knob before adding it:
+  - Domain or strategy knob: belongs with the business object it changes.
+  - Runtime knob: belongs on the pipeline/service function that runs the work.
+  - Adapter knob: belongs in CLI/MCP/skill/runtime wiring and is passed inward
+    explicitly.
+  - Policy knob: belongs in the policy runtime or action schema.
+- Do not smuggle runtime choices into domain config by mutating config objects
+  after construction. Pass runtime choices as explicit parameters.
+- For small closed vocabularies, use a shared enum at the contract boundary.
+  Do not scatter ad hoc strings or tiny conversion helpers through the code.
+- Vendor/model/provider names should stay at adapter boundaries. Core business
+  logic should use domain terms such as role, tier, strategy id, or policy id.
+- A factory should instantiate; it should not hide a second registry. If a
+  registry stores constructor defaults, prefer `Thing(**DEFAULTS[key], seed=seed)`
+  over building an object and then cloning/replacing it.
+- Delete superseded structure in the same change. Leaving the old module,
+  alias, preset layer, or helper behind creates a second source of truth.
+
+Good shape:
+
+```python
+DEFAULTS = {
+    "balanced": dict(
+        sampler=LevyMixSampler(...),
+        schedule=AdaptiveSchedule(...),
+        tier=ModelTier.MEDIUM,
+    ),
+}
+
+
+def build_config(kind: ConfigId | str, *, seed: int = 0) -> Config:
+    key = kind.value if isinstance(kind, ConfigId) else kind
+    return Config(**DEFAULTS[key], seed=seed)
+```
+
+Bad smell:
+
+```python
+# Three modules that only differ by constants.
+# A Preset object that only maps 1:1 to Config.
+# A Strategy object whose only behavior is returning Config.
+# A domain config mutated by the CLI to carry runtime-only options.
+# A helper that turns Enum("M") into "tier-M" when tier.value would do.
+```
+
 ### Surgical Changes
 When editing existing code:
 - Do not "improve" adjacent code, comments, or formatting.
@@ -110,6 +167,91 @@ If a task explicitly touches legacy `src/wikify/*`, then also read:
 - Run and provenance history are append-only.
 - Coverage memory persists across epochs where refine semantics require it.
 
+## Distill Design Rules
+
+The general architectural style above applies directly to distill. Keep distill
+easy to read at a glance. Structure should follow the business logic of a run:
+
+- `distill/strategies/registry.py` owns the E/M/X strategy table and the single
+  factory.
+- `distill/pipeline.py` owns run-time execution and prompt-layer choices.
+- `distill/policy.py` owns rule/model policy behavior and mutable run-time
+  controls.
+- `contracts/` owns closed vocabularies and request/response schemas shared by
+  bindings.
+- `bindings/` and CLI code are adapters. They wire dependencies and pass user
+  choices in, but should not become a second place where distill behavior lives.
+
+Strategy config is for what actually varies between E/M/X: sampler, schedule,
+tiers, allocation override, and seed. Do not add field guides, artifact
+templates, policy selection, binding names, prompt names, model ids, cache paths,
+or CLI-only flags to `StrategyConfig`. Those are run parameters or adapter
+concerns and should be explicit arguments to the pipeline.
+
+Preferred distill shape:
+
+```python
+class StrategyId(str, Enum):
+    EXPLORE = "E"
+    MIXED = "M"
+    EXPLOIT = "X"
+
+
+@dataclass
+class StrategyConfig:
+    name: str
+    sampler: Sampler
+    schedule: Schedule
+    extract_tier: ModelTier
+    write_tier: ModelTier
+    edit_tier: ModelTier = ModelTier.MEDIUM
+    compact_tier: ModelTier = ModelTier.SMALL
+    orchestrate_tier: ModelTier = ModelTier.LARGE
+    exploit_fraction_override: float | None = None
+    seed: int = 0
+
+
+STRATEGY_CONFIGS = {
+    StrategyId.MIXED.value: dict(
+        name="M",
+        sampler=LevyMixSampler(...),
+        schedule=AdaptiveSchedule(...),
+        extract_tier=ModelTier.SMALL,
+        write_tier=ModelTier.MEDIUM,
+    ),
+}
+
+
+def build_strategy(strategy_id: StrategyId | str, *, seed: int = 0) -> StrategyConfig:
+    key = strategy_id.value if isinstance(strategy_id, StrategyId) else strategy_id
+    return StrategyConfig(**STRATEGY_CONFIGS[key], seed=seed)
+```
+
+Avoid:
+
+```python
+# Do not split one-line strategy differences across explore.py/mixed.py/exploit.py.
+# Do not make both "preset" and "config" layers unless they have different jobs.
+# Do not store model_id on StrategyConfig when routing is by ModelTier.
+# Do not put executable config/factory logic in strategies/__init__.py.
+```
+
+`ModelTier` is the single vocabulary for `S`, `M`, and `L`. Request schemas,
+policy runtime, strategy configs, and cost accounting should use `ModelTier`
+directly. When a string label is needed for cache keys, provenance, or JSON,
+use `tier.value`; do not introduce a `model_id_for_tier()` helper or a parallel
+strategy-level `model_id` field.
+
+When introducing a new distill knob, first classify it:
+
+- Strategy knob: changes E/M/X science, belongs in `StrategyConfig`.
+- Runtime knob: changes this run without defining E/M/X, belongs on
+  `pipeline.run(...)` / `run_with_preloaded(...)`.
+- Policy knob: changes adaptive behavior during a run, belongs in
+  `PolicyRuntime` or policy action schemas.
+- Adapter knob: CLI, binding, or runtime-specific wiring only, stays in the
+  adapter and is passed inward explicitly.
+
 ## Runtime Neutrality
 
 Keep product architecture runtime-neutral:
@@ -180,3 +322,4 @@ Format:
 - **Pipeline error handling**: Per-call `ValidationError` and `QuoteNotInChunkError` are caught and skipped. The run continues; `.error.json` artifacts are left for postmortem.
 - **Coverage gap must be stateful**: Strategy experiments require real `coverage_gap` updates and persistence across refine epochs; static coverage scores invalidate comparisons.
 - **Policy comparability**: `rule_policy` and `llm_policy` must emit actions through one shared interface with common telemetry fields.
+- **Locality of behavior**: Prefer a clear local data table plus one factory over scattered one-line modules, parallel preset/config layers, or `__init__.py` behavior. Classify knobs before adding them: domain/strategy, runtime, policy, or adapter. Runtime choices should be explicit parameters, not fields smuggled into domain config.

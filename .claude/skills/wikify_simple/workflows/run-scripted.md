@@ -14,8 +14,7 @@ User-facing workflow: the user sets every knob up front, this skill runs the pip
 | `corpus` | `data/corpus` | Path to an already-ingested corpus. |
 | `bundle` | `data/wikis/<run_id>` | Bundle output directory. |
 | `strategy` | `M` | E (breadth) / M (mixed, headline) / X (depth). |
-| `policy` | `rule_policy` | `rule_policy` (deterministic sampler) — this workflow does NOT use llm_policy. |
-| `binding` | `heuristic` | `fake` / `heuristic` / `file_dispatch`. Only `file_dispatch` needs serve-dispatch running. |
+| `policy` | `scripted` | `scripted` (deterministic sampler) — this workflow does NOT use guided. |
 | `iterations` | `1` | How many iterations to run. First is `create`, rest are `refine`. |
 | `budget_per_iteration` | `50000` | Haiku-equivalent tokens per iteration. Accepts 50000, 50k, 1.5M, 1x, 3x. |
 | `extract_tier` | `S` | S/M/L |
@@ -29,16 +28,15 @@ User-facing workflow: the user sets every knob up front, this skill runs the pip
 | `render_html` | `true` | Render HTML after the final iteration. |
 | `run_eval` | `true` | Run eval after the final iteration. |
 
-Orchestrator tier is locked at L (opus) — not exposed here because rule_policy does not use the orchestrator.
+Orchestrator tier is locked at L (opus) — not exposed here because scripted does not use the orchestrator.
 
 ## Steps
 1. Verify `corpus` exists (`ls <corpus>/docs` should be non-empty). If missing, tell the user to run `wikify-simple ingest` first.
 2. Pick an explicit bundle path. If the user gave `bundle`, use it directly. Otherwise build one: `BUNDLE=data/wikis/scripted_<strategy>_<timestamp>`.
-3. If `binding == file_dispatch`, verify `WIKIFY_SIMPLE_ALLOW_NETWORK=1` is set and ask the user to run `wikify_simple/runtime/serve-dispatch` in a parallel Claude session.
-4. Run the campaign in one process:
+3. Run the campaign in one process:
    ```
    uv run python -m wikify_simple.cli campaign \
-     --strategy {strategy} --policy {policy} --binding {binding} \
+     --strategy {strategy} --policy {policy} \
      --budget {budget_per_iteration} --iterations {iterations} --seed {seed} \
      --extract-tier {extract_tier} --write-tier {write_tier} \
      --edit-tier {edit_tier} --compact-tier {compact_tier} \
@@ -60,9 +58,8 @@ Orchestrator tier is locked at L (opus) — not exposed here because rule_policy
 ## Failure modes
 - Corpus missing → abort with a message asking the user to ingest first.
 - Process dies mid-campaign → bundle is in a partially-refined state (coverage memory is saved after each iteration). The user can re-invoke with `--iterations 1 --bundle $BUNDLE` to continue one more refine pass, or delete `$BUNDLE` to start over.
-- `file_dispatch` binding with no serve-dispatch running → the Python harness will time out after 600s per dispatch. Tell the user to start serve-dispatch.
+- Dispatch with no serve-dispatch running → the Python harness will time out after 600s per dispatch. Tell the user to start serve-dispatch.
 
 ## Notes
-- For fast iteration (10-30s per iteration), use `binding=heuristic`. Everything stays in-process.
-- For quality, use `binding=file_dispatch`. The user must also start `/wikify_simple/runtime/serve-dispatch` in a second Claude session.
 - The corpus (chunks, vectors, graph) is loaded exactly once regardless of `--iterations`. ExtractCache is also reused across iterations so in-process cache hits are free after iteration 1.
+- The user must start `/wikify_simple/runtime/serve-dispatch` in a second Claude session to handle dispatch round-trips.

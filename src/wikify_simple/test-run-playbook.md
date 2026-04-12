@@ -45,14 +45,13 @@ mkdir -p data/dispatch/{extract,write,compact,edit,orchestrate,query}
 ### 1.3 Environment
 
 ```bash
-export WIKIFY_SIMPLE_ALLOW_NETWORK=1
 export WIKIFY_SIMPLE_EMBEDDER=fastembed
 export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch   # default
 ```
 
 ---
 
-## Part 2 — Scripted run (rule_policy + file_dispatch)
+## Part 2 — Scripted run (scripted + file_dispatch)
 
 3 iterations, 50k heq budget per iteration, strategy M. The scripted mode tests the deterministic sampler + model-backed dispatch path.
 
@@ -62,7 +61,7 @@ export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch   # default
 
 ```bash
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy rule_policy --binding file_dispatch \
+  --strategy M --mode scripted \
   --budget 50000 --extract-tier S --write-tier M \
   --exploit-fraction 0.65 --seed 0 --iteration create \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
@@ -75,7 +74,7 @@ Note: `--bundle` (not `--out`) pins every iteration to the same path. Without it
 
 ```bash
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy rule_policy --binding file_dispatch \
+  --strategy M --mode scripted \
   --budget 50000 --extract-tier S --write-tier M \
   --exploit-fraction 0.65 --seed 1 --iteration refine \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
@@ -89,7 +88,7 @@ Each distill invocation blocks on `data/dispatch/<role>/<rid>.request.json` file
 
 ---
 
-## Part 3 — LLM campaign run (llm_policy + file_dispatch)
+## Part 3 — LLM campaign run (guided + file_dispatch)
 
 1-3 iterations depending on budget (200k heq / iter is the realistic floor per Phase 5B of the structural-improvements plan; 30k-50k is the smoke-test range). The orchestrator decides sampling, tiers, and allocation.
 
@@ -97,7 +96,7 @@ Each distill invocation blocks on `data/dispatch/<role>/<rid>.request.json` file
 
 ```bash
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy llm_policy --binding file_dispatch \
+  --strategy M --mode guided \
   --budget 200000 --seed 0 --iteration create \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/campaign
@@ -105,7 +104,7 @@ uv run python -m wikify_simple.cli distill \
 
 The orchestrator's initial decisions are expected to be `jump_uniform` or `jump_pagerank`. Budget overshoot of up to ~30 k heq per decision is expected (orchestrator at tier L). Watch for the LLM policy cache: after Phase 1/5 of the structural plan lands, each active action persists for 8 batches before the next orchestrator call.
 
-### 3.2 Servicing dispatches (llm_policy specific)
+### 3.2 Servicing dispatches (guided specific)
 
 Same as §2.2 but expect `orchestrate/*.request.json` files too. The orchestrator handler needs more context than the extract handler — the current payload is minimal but will grow when Phase 3 of the plan (sampler_snapshot) lands.
 
@@ -548,7 +547,7 @@ Pick 3 metrics and set explicit target values. Example targets for mvp20_v7 scri
 
 Each iteration of the autoresearch loop:
 
-1. **Run**: `wikify-simple campaign --strategy M --iterations 3 --budget 50000 --bundle data/wikify_simple/test_runs/loop_<iter> --verbalize --policy rule_policy` (and again with `llm_policy`).
+1. **Run**: `wikify-simple campaign --strategy M --iterations 3 --budget 50000 --bundle data/wikify_simple/test_runs/loop_<iter> --verbalize --mode scripted` (and again with `guided`).
 2. **Render + eval**: `wikify-simple html --bundle <bundle>` and `wikify-simple eval --bundle <bundle> --corpus <corpus>`.
 3. **Playbook review**: walk Parts 5, 7, 8, 9, 10 in order. Produce the reviewer checklist pass rate (Part 10.3).
 4. **Diff**: compare the 5 metrics to the previous iteration's values. Identify the biggest regression and the biggest gap-vs-target.

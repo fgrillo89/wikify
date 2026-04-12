@@ -6,7 +6,7 @@ description: Long-running loop that services file-dispatch requests from a wikif
 # serve-dispatch
 
 ## When to use this skill
-Invoke this skill when a `wikify-simple` CLI process is running with `--binding file_dispatch` and needs a Claude session to handle its dispatch requests. This is the ONLY way to service `file_dispatch` runs; the `fake` and `heuristic` bindings do not dispatch to skills at all.
+Invoke this skill when a `wikify-simple` CLI process is running and needs a Claude session to handle its dispatch requests.
 
 ## How it works
 The Python harness (`wikify-simple distill ...` or `wikify-simple query ...`) writes request JSON files to role subdirectories under the dispatch dir (default `data/dispatch/`, overridable via `WIKIFY_SIMPLE_DISPATCH_DIR`).
@@ -50,4 +50,4 @@ The write handler reads each write request's hash fields (`style_guide_hash`, `f
 If a handler writes `<rid>.error.json`, the Python harness will log it, skip the request, and continue. You should do the same: log it to stdout and move to the next request. DO NOT block the loop on errors.
 
 ## Important
-Only needed when `--binding file_dispatch`. The `fake` and `heuristic` bindings execute in-process with no file dispatch.
+This skill services file-dispatch requests from the Python harness. The harness writes request files and blocks until this skill writes the corresponding response files.

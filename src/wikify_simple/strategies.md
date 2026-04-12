@@ -2,9 +2,9 @@
 
 > **Current state & roadmap**: this document describes the "cube" parameterization of deterministic strategies (sampler × schedule × tiering) and the four anchor cells (E, M, X, agent). Several structural additions are planned in [`plans/structural-improvements.md`](plans/structural-improvements.md) and are NOT yet landed:
 >
-> - **LLM-as-sampler (Phase 3)**: the `llm_policy` orchestrator today picks a sampling *category* (`walk_local`, `jump_uniform`, `jump_pagerank`, `jump_gap`, plus the newly-added `set_allocation` / `set_tier` / `done` control actions). Phase 3 adds a `pick_chunks` action with direct chunk-id selection, backed by a compact `sampler_snapshot` in the orchestrator context. This turns the agent cell from "picks the sampling strategy" into "IS the sampler".
+> - **LLM-as-sampler (Phase 3)**: the `guided` orchestrator today picks a sampling *category* (`walk_local`, `jump_uniform`, `jump_pagerank`, `jump_gap`, plus the newly-added `set_allocation` / `set_tier` / `done` control actions). Phase 3 adds a `pick_chunks` action with direct chunk-id selection, backed by a compact `sampler_snapshot` in the orchestrator context. This turns the agent cell from "picks the sampling strategy" into "IS the sampler".
 > - **Images as first-class units (Phase 4)**: caption chunks are tagged in the sampler state, get differentiated residual handling, and a new `jump_figures` action targets high-residual captions.
-> - **Orchestrator call cadence**: the `llm_policy` caches active sampling actions for up to 8 consecutive extract batches before re-querying (so orchestrator cost amortizes). Control actions (`set_tier`, `set_allocation`, `done`) bypass the cache.
+> - **Orchestrator call cadence**: the `guided` caches active sampling actions for up to 8 consecutive extract batches before re-querying (so orchestrator cost amortizes). Control actions (`set_tier`, `set_allocation`, `done`) bypass the cache.
 > - **Per-iteration bundle pinning**: the `--bundle` CLI flag pins the bundle path across `create`+`refine` iterations. Multi-iteration workflows must use it.
 >
 > Pricing-normalized tiers are S=1/5, M=3/15, L=15/75 (input/output haiku-equivalent per token) — see `src/wikify_simple/infra/config.py`.
@@ -25,8 +25,8 @@ infrastructure layer. Three axes, seven knobs, one orthogonal flag.
         v           v                       v
      axis A       axis B                 axis C
      sampler      schedule               tiering
-   (local_op,   (exploit_fraction,   (tier_explore,
-    global_op,   adaptive)            tier_exploit)
+   (local_op,   (exploit_fraction,   (extract_tier,
+    global_op,   adaptive)            write_tier)
     jump_rate)
 
    + dedup_after_extract : bool        (free flag)
@@ -261,8 +261,11 @@ the smallest possible scaffold to anchor subsequent walks.
 
 | Variable | Domain | Meaning |
 |---|---|---|
-| `tier_explore` | `S` / `M` / `L` | Tier used for the extract stage. |
-| `tier_exploit` | `S` / `M` / `L` | Tier used for the write stage. Curate inherits the higher of the two. |
+| `extract_tier` | `S` / `M` / `L` | Tier used for the extract stage. |
+| `write_tier` | `S` / `M` / `L` | Tier used for the write stage. |
+| `edit_tier` | `S` / `M` / `L` | Tier used for editor calls; defaults to `M`. |
+| `compact_tier` | `S` / `M` / `L` | Tier used for compact calls; defaults to `S`. |
+| `orchestrate_tier` | `S` / `M` / `L` | Tier used for orchestrator calls; locked to `L`. |
 
 ## Free flag — `dedup_after_extract`
 
@@ -278,9 +281,9 @@ specific point in the seven-knob space.
 | Cell | sampler                                       | schedule         | tiering | One-line interpretation |
 |------|-----------------------------------------------|------------------|---------|-------------------------|
 | **E** explore | `(none, pagerank, 1.0)`                  | `(0.2, static)`   | `(S, S)` | breadth-first cheap floor |
-| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.4, adaptive)` | `(S, L)` | the Lévy + Bayesian-opt prescription; the headline candidate |
-| **X** exploit | `(similarity_walk, none, 0.0)`           | `(0.6, static)`   | `(M, L)` | depth-first quality ceiling |
-| **agent**     | model-driven (replaces axes A and B)     | – | `(tier_master=L, S, M)` | upper reference for state-leverage; one expensive model in a planning loop |
+| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.65, adaptive)` | `(S, M)` | the Lévy + Bayesian-opt prescription; the headline candidate |
+| **X** exploit | `(similarity_walk, none, 0.0)`           | `(0.6, static)`   | `(M, M)` | depth-first quality ceiling |
+| **agent**     | model-driven (replaces axes A and B)     | – | `(orchestrate=L, extract=S, write=M)` | upper reference for state-leverage; one expensive model in a planning loop |
 
 `E` is the cost floor; `X` is the quality ceiling; `M` is the literature-
 blessed middle and the candidate the study expects to win; `agent` is the
@@ -297,14 +300,14 @@ Action menu (the only LLM verbs in the cell):
 
 | Action | Cost | Returns |
 |---|---|---|
-| `walk_local(concept_id, k)` | k × tier_explore | k chunks via `similarity_walk` |
-| `jump_uniform(n_docs)` | n × 3 × tier_explore | abstract + 2 chunks each |
-| `jump_pagerank(n_docs, graph)` | n × 3 × tier_explore | pagerank-weighted docs |
-| `jump_gap(k)` | k × tier_explore | k chunks from current `coverage_gap` set |
+| `walk_local(concept_id, k)` | k × extract_tier | k chunks via `similarity_walk` |
+| `jump_uniform(n_docs)` | n × 3 × extract_tier | abstract + 2 chunks each |
+| `jump_pagerank(n_docs, graph)` | n × 3 × extract_tier | pagerank-weighted docs |
+| `jump_gap(k)` | k × extract_tier | k chunks from current `coverage_gap` set |
 | `propose_concept(title, aliases, evidence_ids)` | ~free | adds candidate (no model call) |
 | `merge_concepts(a, b)` | ~free | merges two candidates |
-| `inspect_page(id)` | small × tier_master | returns one page in full (load-bearing: the orchestrator's only way to see a body) |
-| `write_page(id)` | 1 × tier_exploit | runs the write step |
+| `inspect_page(id)` | small × orchestrate_tier | returns one page in full (load-bearing: the orchestrator's only way to see a body) |
+| `write_page(id)` | 1 × write_tier | runs the write step |
 | `inspect_metric(name)` | ~free | returns a current scalar (`F`, `β`, `Q`, count) |
 | `done` | – | terminates |
 
@@ -325,7 +328,7 @@ is reinstated for this one cell — agent runs use 2 seeds.
 | `global_op` | `{uniform, pagerank, coverage_gap}` | 3 |
 | `exploit_fraction` | `{0.2, 0.4, 0.6}` | 3 |
 | `adaptive` | `{false, true}` | 2 |
-| `(tier_explore, tier_exploit)` | `{(S,S), (S,M), (S,L), (M,L)}` | 4 |
+| `(extract_tier, write_tier)` | `{(S,S), (S,M), (S,L), (M,L)}` | 4 |
 | `dedup_after_extract` | `{on, off}` | 2 |
 
 Total: **21 ablation cells per corpus**, each at the `1×` budget level.

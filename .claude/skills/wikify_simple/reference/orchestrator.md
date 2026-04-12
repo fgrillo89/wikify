@@ -2,7 +2,7 @@
 
 The orchestrator is the LLM-policy decision maker. It runs at tier L (opus, locked) and picks ONE action each iteration of the extract loop. It is the only opus-tier caller in the pipeline (excluding handler-level escalation).
 
-The orchestrator is invoked only when `--policy llm_policy`. With `--policy rule_policy` the sampler acts directly and this file is informational.
+The orchestrator is invoked only when `--mode guided`. With `--mode scripted` the sampler acts directly and this file is informational.
 
 ## Request shape
 ```json

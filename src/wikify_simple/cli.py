@@ -197,8 +197,6 @@ def distill(
         raise typer.BadParameter(
             f"unknown artifact {artifact!r}; available: {available_artifact_templates()}"
         )
-    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
     budget_haiku_eq = _parse_budget(budget)
     for tier_name, tier_val in (
         ("extract-tier", extract_tier),
@@ -334,8 +332,6 @@ def campaign(
             )
     if exploit_fraction is not None and not 0.0 <= exploit_fraction <= 1.0:
         raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
-    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
 
     if field is None:
         from .distill.extract.field_detect import detect_field
@@ -422,8 +418,6 @@ def persona_generate(
     from .distill.write.persona import generate_corpus_persona
     from .store.corpus import list_documents
 
-    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
 
     corpus = CorpusPaths(root=corpus_dir)
     docs = list_documents(corpus)
@@ -491,8 +485,6 @@ def query(
     from .distill.query import run as query_run
     from .embedding import embed_texts
 
-    if os.environ.get("WIKIFY_SIMPLE_ALLOW_NETWORK") != "1":
-        raise typer.BadParameter("live dispatch requires WIKIFY_SIMPLE_ALLOW_NETWORK=1")
 
     bundle = BundlePaths(root=bundle_dir)
     corpus = CorpusPaths(root=corpus_dir)
@@ -682,7 +674,6 @@ def _jsonable(obj):
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    import os
     import tempfile
 
     path.parent.mkdir(parents=True, exist_ok=True)

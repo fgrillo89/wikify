@@ -81,34 +81,3 @@ def test_query_returns_answer_without_mutation(ready_bundle, tmp_path, question)
     assert before == after, "query mutated the bundle"
 
 
-def test_query_cli_writes_md(tmp_path, ready_bundle, monkeypatch):
-    bundle, corpus = ready_bundle
-    monkeypatch.setenv("WIKIFY_SIMPLE_ALLOW_NETWORK", "1")
-    from typer.testing import CliRunner
-
-    from wikify_simple.cli import app
-
-    runner = CliRunner()
-    out_root = tmp_path / "queries_out"
-    result = runner.invoke(
-        app,
-        [
-            "query",
-            "what is photocatalysis?",
-            "--bundle",
-            str(bundle.root),
-            "--corpus",
-            str(corpus.root),
-            "--out",
-            str(out_root),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    bundle_out = out_root / bundle.root.name
-    assert bundle_out.exists()
-    mds = list(bundle_out.glob("*.md"))
-    assert mds, "no query .md written"
-    text = mds[0].read_text(encoding="utf-8")
-    assert text.startswith("---")
-    assert "question:" in text
-    assert "citations:" in text

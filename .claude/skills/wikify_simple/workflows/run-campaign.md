@@ -8,8 +8,6 @@ description: Run an LLM-policy distillation campaign where the orchestrator (opu
 User-facing workflow for the LLM-driven scenario. The user sets budget and iterations; the orchestrator decides everything else via its action menu. The corpus is loaded once for all iterations.
 
 ## Required setup
-- `--binding file_dispatch` (the only binding that exposes an orchestrator).
-- `WIKIFY_SIMPLE_ALLOW_NETWORK=1` in the environment.
 - A parallel Claude session running `wikify_simple/runtime/serve-dispatch` to handle file dispatch.
 
 ## Inputs
@@ -28,8 +26,7 @@ User-facing workflow for the LLM-driven scenario. The user sets budget and itera
 | `run_eval` | `true` | Eval after the final iteration. |
 
 ## Locked defaults (NOT user-settable)
-- `policy = llm_policy`
-- `binding = file_dispatch`
+- `policy = guided`
 - `orchestrate_tier = L (opus)` — the orchestrator is always top-tier; this is what makes the escalation model work.
 - Initial tiers: `extract_tier=S`, `write_tier=M`, `edit_tier=M`, `compact_tier=S`. The orchestrator may override any of these mid-run via `set_tier`.
 - Initial allocation: the strategy's default `exploit_fraction`. The orchestrator may override mid-run via `set_allocation`.
@@ -54,13 +51,13 @@ Each extract iteration, the orchestrator picks ONE action:
 - The orchestrator dispatched via `orchestrate/*.request.json` is a DIFFERENT opus call — it is the policy brain for sampling and budget decisions.
 
 ## Steps
-1. Verify the corpus exists and `WIKIFY_SIMPLE_ALLOW_NETWORK=1` is set.
+1. Verify the corpus exists.
 2. Pick an explicit bundle path: `BUNDLE=data/wikis/campaign_<strategy>_<timestamp>`.
 3. Verify a serve-dispatch session is running (or instruct the user to start one in parallel).
 4. Run the campaign in one process:
    ```
    uv run python -m wikify_simple.cli campaign \
-     --strategy {strategy} --policy llm_policy --binding file_dispatch \
+     --strategy {strategy} --mode guided \
      --budget {budget_per_iteration} --iterations {iterations} --seed {seed} \
      --corpus {corpus} --bundle $BUNDLE \
      [--field {field}] --artifact {artifact}

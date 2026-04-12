@@ -15,8 +15,7 @@
 | Flag | Values | Default | Notes |
 |---|---|---|---|
 | `--strategy` | `E` / `M` / `X` | required | Strategy config (sampler + schedule + default tiers). |
-| `--policy` | `rule_policy` / `llm_policy` | `rule_policy` | `llm_policy` requires `--binding file_dispatch`. |
-| `--binding` | `fake` / `heuristic` / `file_dispatch` | `fake` | `file_dispatch` requires `WIKIFY_SIMPLE_ALLOW_NETWORK=1`. |
+| `--mode` | `scripted` / `guided` | `scripted` | Policy mode for the run. |
 | `--budget` | integer, `Nk`, `NM`, or `0.1x`/`1x`/`3x` | `1x` | Haiku-equivalent tokens. Shortcuts: `0.1x=5k`, `1x=50k`, `3x=150k`. |
 | `--extract-tier` | `S` / `M` / `L` | strategy default | Override the extract-call tier. |
 | `--write-tier` | `S` / `M` / `L` | strategy default | Override the writer tier. |
@@ -37,28 +36,14 @@
 
 ## Quick start
 
-### Fast smoke test (heuristic binding, no models, ~5s per iteration)
+### Model-backed scripted run (scripted)
 
 ```bash
-WIKIFY_SIMPLE_EMBEDDER=fastembed uv run python -m wikify_simple.cli distill \
-  --strategy M --binding heuristic --budget 50000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v7 \
-  --bundle data/wikify_simple/test_runs/smoke
-uv run python -m wikify_simple.cli html --bundle data/wikify_simple/test_runs/smoke
-uv run python -m wikify_simple.cli eval --bundle data/wikify_simple/test_runs/smoke --corpus data/wikify_simple/corpora/mvp20_v7
-```
-
-Heuristic is in-process regex; useful for pipeline sanity but produces no real prose. For quality runs use `file_dispatch`.
-
-### Model-backed scripted run (rule_policy + file_dispatch)
-
-```bash
-export WIKIFY_SIMPLE_ALLOW_NETWORK=1
 export WIKIFY_SIMPLE_EMBEDDER=fastembed
 
 # Iteration 1 — create
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy rule_policy --binding file_dispatch \
+  --strategy M --mode scripted \
   --budget 50000 --extract-tier S --write-tier M --exploit-fraction 0.65 \
   --seed 0 --iteration create \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
@@ -66,7 +51,7 @@ uv run python -m wikify_simple.cli distill \
 
 # Iteration 2 / 3 — refine (increment seed)
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy rule_policy --binding file_dispatch \
+  --strategy M --mode scripted \
   --budget 50000 --extract-tier S --write-tier M --exploit-fraction 0.65 \
   --seed 1 --iteration refine \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
@@ -75,26 +60,17 @@ uv run python -m wikify_simple.cli distill \
 
 A parallel Claude Code session running `/wikify_simple/runtime/serve-dispatch` handles the `data/dispatch/` round-trips. See `test-run-playbook.md` for the full procedure.
 
-### LLM campaign run (llm_policy + file_dispatch)
+### LLM campaign run (guided)
 
 ```bash
 uv run python -m wikify_simple.cli distill \
-  --strategy M --policy llm_policy --binding file_dispatch \
+  --strategy M --mode guided \
   --budget 200000 --seed 0 --iteration create \
   --corpus data/wikify_simple/corpora/mvp20_v7 \
   --bundle data/wikify_simple/test_runs/campaign
 ```
 
 Each orchestrator decision costs ~30 k heq at tier L, so a realistic per-iteration budget floor is ~200 k. The LLM policy caches active sampling actions for up to 8 batches before re-querying the orchestrator.
-
-### Pipeline validation (fake binding)
-
-```bash
-uv run python -m wikify_simple.cli distill \
-  --strategy M --binding fake --budget 50000 --seed 0 --iteration create \
-  --corpus data/wikify_simple/corpora/mvp20_v7 \
-  --bundle data/wikify_simple/test_runs/fake
-```
 
 ## What ingest produces
 
@@ -131,9 +107,7 @@ After `cli ingest` finishes, the corpus directory contains:
 | `contracts/protocols.py` | Extractor, Compactor, Editor, Writer protocols |
 | `contracts/roles.py` | Role enum + per-role spec lists |
 | `contracts/normalize.py` | Text normalization for quote validation |
-| `bindings/heuristic.py` | Inline regex extraction + article assembly |
-| `bindings/fake.py` | Deterministic fakes for testing |
-| `bindings/file_dispatch.py` | File-dispatch bindings (staged, slow) |
+| `bindings/file_dispatch.py` | File-dispatch bindings (via `Dispatch` class) |
 | `ingest/refresh.py` | Parallel parse + per-doc persist + embed + graph + sampler index, in that order |
 | `ingest/equations.py` | Display/inline/chemical/unicode/named equation extractor |
 | `ingest/figure_refs.py` | Caption-first figure / table / scheme extractor from body markdown |
@@ -170,7 +144,7 @@ The three built-in strategy configs:
 | M | similarity_walk | coverage_gap | 0.1 | adaptive 65% write | S/M |
 | X | similarity_walk | uniform | 0.0 | static 60% write | M/M |
 
-## Pre-flight (file_dispatch binding)
+## Pre-flight
 
 ### 1. Environment variables
 
@@ -183,8 +157,8 @@ export WIKIFY_SIMPLE_DISPATCH_DIR=data/dispatch        # default
 
 | knob | recommended for mvp20 | why |
 |---|---|---|
-| `--model` | `haiku` | extractor is the hot loop; haiku keeps the run cheap |
-| `--strategy` | `mixed` | exploit/explore split, the default for first runs |
+| `--strategy` | `M` | balanced sampler, adaptive split, and S/M default tiers |
+| `--extract-tier` / `--write-tier` | strategy default | override only for ablations or debugging |
 | `--budget` | `300000` haiku-eq | enough for ~700 extract calls + ~150 write calls + headroom |
 
 Token estimate (mvp20, 689 chunks, <=208 pages):
@@ -209,7 +183,7 @@ The outer Claude Code session needs skill files at
 Skills must match the schemas in `contracts/schema.py` (Pydantic v2,
 `extra="forbid"` -- any extra field rejects the response).
 
-## Step-by-step (file_dispatch binding)
+## Step-by-step
 
 ### 1. Ingest
 
@@ -226,10 +200,8 @@ uv run python -m wikify_simple.cli ingest \
 uv run python -m wikify_simple.cli distill \
   --corpus data/wikify_simple/corpora/mvp20_real \
   --bundle data/wikify_simple/wikis/mvp20_real_M \
-  --strategy mixed \
-  --binding file_dispatch \
+  --strategy M \
   --budget 300000 \
-  --model haiku \
   --seed 0
 ```
 
@@ -267,8 +239,8 @@ rm -f data/dispatch/write/*.request.json data/dispatch/write/*.response.json
 The cache (`data/cache/extract/`) survives. Re-running picks up where
 the budget left off. Pass `--feed` to merge against an existing bundle.
 
-Cache entries are namespaced by binding under
-`data/cache/extract/<binding_name>/<model_id>/<prompt_hash>/<chunk_hash>.json`.
+Cache entries are namespaced under
+`data/cache/extract/<model_id>/<prompt_hash>/<chunk_hash>.json`.
 
 ## Post-run
 
@@ -287,7 +259,6 @@ Writes `_metrics.md` + `_metrics.json` next to the bundle.
 ```bash
 uv run python -m wikify_simple.cli query \
   --bundle data/wikify_simple/wikis/mvp20_real_M \
-  --binding file_dispatch \
   "what is a memristor?"
 ```
 
