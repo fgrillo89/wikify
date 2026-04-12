@@ -36,9 +36,23 @@ class VectorStore:
 
 
 def save_vectors(path: Path, store: VectorStore) -> None:
+    import os
+    import tempfile
+
+    from .corpus import atomic_write_text
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, ids=np.array(store.ids), matrix=store.matrix)
-    (path.with_suffix(".ids.json")).write_text(json.dumps(store.ids), encoding="utf-8")
+    # Atomic npz: write to temp, then os.replace.
+    fd, tmp = tempfile.mkstemp(prefix=".vectors-", suffix=".npz", dir=str(path.parent))
+    os.close(fd)
+    try:
+        np.savez_compressed(tmp, ids=np.array(store.ids), matrix=store.matrix)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    atomic_write_text(path.with_suffix(".ids.json"), json.dumps(store.ids))
 
 
 def load_vectors(path: Path) -> VectorStore:

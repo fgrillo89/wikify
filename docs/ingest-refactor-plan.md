@@ -18,7 +18,7 @@
 | # | Item | Status |
 |---|------|--------|
 | 7 | Corpus manifest / record manager | Done |
-| 8 | Atomic writes for all ingest outputs | Done (tempfile + os.replace for docs, chunks, markdown, graph, pagerank, explorer index, topics, bibtex, vectors meta, manifest, doc resave) |
+| 8 | Atomic writes for ingest outputs | Done (tempfile + os.replace for docs, chunks, markdown, graph, vectors npz/ids/meta, pagerank, explorer index, topics, bibtex, manifest, doc resave. Exception: per-source image sidecars, re-parsed on next ingest if corrupt.) |
 | 9 | Split pipeline: changed-source + derived rebuild | Done |
 | 10 | Test incremental and sync modes | Done (19 tests) |
 
