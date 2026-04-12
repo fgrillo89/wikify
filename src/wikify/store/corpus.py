@@ -1,6 +1,8 @@
 """Read/write the on-disk corpus produced by ingest."""
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from ..models import Chunk, CorpusGraph, DocImage, Document
@@ -8,14 +10,32 @@ from ..paths import CorpusPaths
 from .vectors import VectorStore, load_vectors, save_vectors
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write *content* to *path* atomically via tempfile + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".corpus-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def write_document(paths: CorpusPaths, doc: Document, markdown: str, chunks: list[Chunk]) -> None:
     paths.ensure()
-    (paths.markdown_dir / f"{doc.id}.md").write_text(markdown, encoding="utf-8")
-    (paths.chunks_dir / f"{doc.id}.jsonl").write_text(
-        "\n".join(json.dumps(_chunk_to_dict(c)) for c in chunks),
-        encoding="utf-8",
+    _atomic_write_text(
+        paths.markdown_dir / f"{doc.id}.md", markdown,
     )
-    (paths.docs_dir / f"{doc.id}.json").write_text(json.dumps(_doc_to_dict(doc)), encoding="utf-8")
+    _atomic_write_text(
+        paths.chunks_dir / f"{doc.id}.jsonl",
+        "\n".join(json.dumps(_chunk_to_dict(c)) for c in chunks),
+    )
+    _atomic_write_text(
+        paths.docs_dir / f"{doc.id}.json", json.dumps(_doc_to_dict(doc)),
+    )
 
 
 def list_documents(paths: CorpusPaths) -> list[Document]:
@@ -46,9 +66,9 @@ def all_chunks(paths: CorpusPaths) -> list[Chunk]:
 
 
 def write_graph(paths: CorpusPaths, graph: CorpusGraph) -> None:
-    paths.graph_path.write_text(
+    _atomic_write_text(
+        paths.graph_path,
         json.dumps({"nodes": graph.nodes, "edges": graph.edges}),
-        encoding="utf-8",
     )
 
 

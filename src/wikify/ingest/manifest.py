@@ -11,6 +11,8 @@ Identity model:
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -52,7 +54,17 @@ class CorpusManifest:
             "embedder_fingerprint": self.embedder_fingerprint,
             "sources": {k: asdict(v) for k, v in self.sources.items()},
         }
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        content = json.dumps(data, indent=2)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".manifest-", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     @classmethod
     def load(cls, path: Path) -> CorpusManifest:
