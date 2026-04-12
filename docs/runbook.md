@@ -98,12 +98,12 @@ After `cli ingest` finishes, the corpus directory contains:
 | `distill/pipeline.py` | Main pipeline with phase support |
 | `distill/extract/` | Extraction subpackage |
 | `distill/write/` | Write subpackage |
-| `distill/sampler.py` | LevyMixSampler (local/global/jump_rate) |
+| `distill/explorer.py` | LevyMixSampler (local/global/jump_rate) |
 | `distill/schedule.py` | Budget split (static / adaptive) |
 | `distill/iteration.py` | Create/refine/merge operations |
 | `distill/policy.py` | Rule and LLM policy shared interface |
-| `distill/strategies/registry.py` | E, M, X config registry and factory |
-| `contracts/schema.py` | All Pydantic schemas (incl. `EquationRef`, `FigureCaption`, `ExtractRequest`) |
+| `distill/strategy.py` | E, M, X config registry and factory |
+| `schema.py` | All Pydantic schemas (incl. `EquationRef`, `FigureCaption`, `ExtractRequest`) |
 | `contracts/protocols.py` | Extractor, Compactor, Editor, Writer protocols |
 | `contracts/roles.py` | Role enum + per-role spec lists |
 | `contracts/normalize.py` | Text normalization for quote validation |
@@ -180,7 +180,7 @@ The outer Claude Code session needs skill files at
 - `/wikify/write` -- same shape for `WriteResponse`.
 - `/wikify/query` -- same shape for `QueryResponse`.
 
-Skills must match the schemas in `contracts/schema.py` (Pydantic v2,
+Skills must match the schemas in `schema.py` (Pydantic v2,
 `extra="forbid"` -- any extra field rejects the response).
 
 ## Step-by-step
@@ -281,13 +281,13 @@ The bundle is never mutated by a query call.
 
 `pydantic_core._pydantic_core.ValidationError`. The response file has a
 shape the model rejects. Schemas are strict (`extra="forbid"`), so any
-unexpected key fails. Read `contracts/schema.py` for the canonical shape.
+unexpected key fails. Read `schema.py` for the canonical shape.
 
 ### Budget exhaustion mid-write
 
 The extractor over-consumed and the writer ran out. Re-run with a higher
 `--budget` or shift the extract/write split in the strategy schedule
-(`distill/strategies/registry.py`).
+(`distill/strategy.py`).
 
 ### Cache miss explosion
 
@@ -301,83 +301,15 @@ Fixed in prior commits: `ExtractCacheKey.relpath` hashes the chunk_id and
 the ingest image folder uses a word-bounded <=80-char slug. If you see a
 fresh path-too-long error, check what new field is being written to disk.
 
-## Scaling plan: 200-1000 papers
+## Scaling notes
 
-Target: 200-1000 papers, 12k-60k chunks, 200-500 concept pages.
+At 200-1000 papers (12k-60k chunks):
 
-### Step 1: Adjacency index for sampler (BLOCKER)
+- **Explorer index**: pre-computed at ingest time (`explorer_index.json`), loads in <50ms
+- **Vector store**: numpy, fast at 60k
+- **Metrics**: M1 takes 10-30s at 60k chunks (once per run)
+- **HTML rendering**: I/O bound, 2-8 min for 500 pages
+- **Cache**: 60k JSON files, fine on local SSDs
+- **Memory**: ~10MB per 1000 chunks (vectors) + ~1MB per 1000 chunks (text)
 
-`_local_similarity_walk` scans ALL edges linearly on every walk step.
-At 60k chunks with ~300k edges, this is 300M comparisons.
-
-Fix: build `adjacency: dict[str, list[str]]` and `degree: dict[str, int]`
-once in `_build_sampler_state()`. O(E) per step becomes O(degree).
-
-Files: `distill/sampler.py`, `distill/pipeline.py`
-
-### Step 2: God-node filtering in metrics
-
-Hub concepts (degree > sqrt(n)) dominate PageRank and modularity at
-scale. Detect them and compute metrics both with and without.
-
-Files: `eval/metrics.py`
-
-### Step 3: Richer audit report
-
-Add god-node section, top-3 members per community, summary stats.
-
-Files: `eval/audit.py`
-
-### Step 4: Advisor-pattern escalation
-
-Each agent (haiku/sonnet) can escalate to the editor (opus) when
-uncertain. Escalation lives in the prompt, not in Python wrappers.
-
-### What does NOT need changing at scale
-
-- Vector store (numpy, fast at 60k)
-- Corpus profiling (NetworkX, fast at 1000 docs)
-- HTML renderer (I/O bound, acceptable)
-- Crosslinking (fast string matching)
-- Chunker (cheap per-chunk)
-- Cache (60k JSON files, fine on local SSDs)
-
-### Memory/time expectations
-
-- Memory: ~10MB per 1000 chunks (vectors) + ~1MB per 1000 chunks (text)
-- Sampler: fast after adjacency index (step 1)
-- Metrics: M1 takes 10-30s at 60k chunks (once per run)
-- HTML rendering: I/O bound, 2-8 min for 500 pages
-- Advisor escalation rate: expect ~20% of requests to escalate
-
-## Open items
-
-### Strategy grid sweep
-
-The meaningful grid is `jump_rate x global_op` with local_op fixed at
-similarity_walk:
-
-```
-jump_rate:  [0.0, 0.1, 0.3, 0.5, 1.0]
-global_op:  [uniform, pagerank, coverage_gap]
-```
-
-13 unique configs. Each takes ~3s with heuristic binding. Needs a sweep
-harness that produces a comparison table of M1/M3/M5/G1 metrics.
-
-### Model-backed extraction
-
-Heuristic extraction finds concepts via regex but produces no definitions,
-summaries, or parameters. Staged extraction with haiku subagents would
-produce rich dossiers. Requires serializing ExtractRequests the same way
-WriteRequests are serialized.
-
-### Adaptive schedule tuning
-
-The novelty threshold (0.05) and shift target (0.7) in AdaptiveSchedule
-are untested. The grid sweep should include schedule variants.
-
-### Corpus scaling
-
-20 papers do not differentiate strategies. Need 50+ documents for
-meaningful comparisons.
+Open scaling work: god-node filtering in metrics (hub concepts dominate PageRank), richer audit report (top-3 per community), advisor-pattern escalation (haiku/sonnet escalate to opus when uncertain).

@@ -148,7 +148,6 @@ For `wikify` work, read in this order:
 3. `docs/metrics.md`
 4. `docs/runbook.md`
 5. `docs/test-run-playbook.md` (required before any test run)
-6. `docs/plans/structural-improvements.md` (the current structural roadmap -- phases landed vs pending)
 
 ## Wikify Ground Rules
 
