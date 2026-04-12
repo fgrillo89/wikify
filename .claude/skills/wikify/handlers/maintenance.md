@@ -31,7 +31,7 @@ The maintenance handler receives:
 - `bundle_root`: path to the wiki bundle
 
 ## Output schema
-Reference: `src/wikify/contracts/schema.py::MaintenanceAction`
+Reference: `src/wikify/schema.py::MaintenanceAction`
 
 ```json
 {

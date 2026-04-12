@@ -1,6 +1,6 @@
 ---
 name: wikify/handlers/orchestrate
-description: Pick one OrchAction from the supported menu given run state, advising the LLM policy's next sampling step.
+description: Pick one OrchAction from the supported menu given run state, advising the guided mode's next sampling step.
 tier: L
 dispatch_role: orchestrate
 ---
@@ -18,7 +18,7 @@ orchestrate runs at tier L. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-**Tier is LOCKED at L (opus).** The user cannot override this. The LLM policy cannot override this via `set_tier` — `set_tier` for `role="orchestrate"` is a no-op.
+**Tier is LOCKED at L (opus).** The user cannot override this. The guided mode cannot override this via `set_tier` — `set_tier` for `role="orchestrate"` is a no-op.
 
 ## Cost note
 A single orchestrator decision costs ~30,000 haiku-equivalent tokens at tier L. The pipeline's `LlmPolicy` caches the last active sampling action (`walk_local`, `jump_*`) for up to 8 consecutive extract batches, so you will only be called every ~8 batches plus whenever a control action or `done` resets the cache. This means your decisions should be STRATEGIC (good for the next ~8 batches) rather than tactical. Don't pick a sampler action that only makes sense for the current batch; pick one that will keep paying off.
@@ -36,7 +36,7 @@ Raw shape.
 ```
 
 ## Response schema
-Reference: `src/wikify/contracts/schema.py::OrchAction`
+Reference: `src/wikify/schema.py::OrchAction`
 
 ```json
 {

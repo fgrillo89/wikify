@@ -18,7 +18,7 @@ write runs at tier M. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-(The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
+(The tier may be overridden per-request by the guided mode via `set_tier` — read the request to confirm.)
 
 ## Prompt-layer caching (vendor-neutral)
 
@@ -36,7 +36,7 @@ The request carries two representations of each stable prompt layer:
 **VENDOR NEUTRAL**: Do NOT use Anthropic prompt-caching primitives (`cache_control`) or OpenAI system-message caching APIs. The cache lives in Python/Claude Code session memory only. This design is compatible with adding vendor caching later (the hashes are stable `cache_control` candidates) but does not depend on it.
 
 ## Request schema
-Reference: `src/wikify/contracts/schema.py::WriteRequest`
+Reference: `src/wikify/schema.py::WriteRequest`
 
 ```json
 {
@@ -69,7 +69,7 @@ Reference: `src/wikify/contracts/schema.py::WriteRequest`
 ```
 
 ## Response schema
-Reference: `src/wikify/contracts/schema.py::WriteResponse`
+Reference: `src/wikify/schema.py::WriteResponse`
 
 ```json
 {
@@ -212,7 +212,7 @@ Person pages are biographical articles in Wikipedia voice, not deterministic aut
 
 **Publication lists**: if you include a publications section, use real markdown list syntax with a blank line before each `- ` item so the renderer produces a `<ul>`. Do not follow a bullet item immediately with another bullet item without a blank line between them.
 
-## Validator (matches `contracts/schema.py::_check_wikipedia_structure`)
+## Validator (matches `schema.py::_check_wikipedia_structure`)
 - Total body length >= 1200 characters.
 - No `[[wikilinks]]` anywhere in the body.
 - At least one `## H2` heading.

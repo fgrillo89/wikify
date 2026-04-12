@@ -25,6 +25,9 @@ uv.lock
 Thumbs.db
 desktop.ini
 
+# Archive (legacy code, kept locally)
+archive/
+
 # Ruff
 .ruff_cache/
 

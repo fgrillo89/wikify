@@ -18,7 +18,7 @@ edit runs at tier M. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-(The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
+(The tier may be overridden per-request by the guided mode via `set_tier` — read the request to confirm.)
 
 ## Request schema
 Raw shape.
@@ -50,7 +50,7 @@ Raw shape.
 ```
 
 ## Response schema
-Reference: `src/wikify/contracts/schema.py::EditorBrief`
+Reference: `src/wikify/schema.py::EditorBrief`
 
 ```json
 {

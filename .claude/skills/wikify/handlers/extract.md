@@ -18,10 +18,10 @@ extract runs at tier S. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-(The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
+(The tier may be overridden per-request by the guided mode via `set_tier` — read the request to confirm.)
 
 ## Request schema
-Reference: `src/wikify/contracts/schema.py::ExtractRequest`
+Reference: `src/wikify/schema.py::ExtractRequest`
 
 ```json
 {
@@ -49,7 +49,7 @@ Reference: `src/wikify/contracts/schema.py::ExtractRequest`
 * `figure_captions` lists figures the body discussion already mentions near this chunk. Each entry's `image_id` is set when a binary image was matched, otherwise `null` (caption-only). Use these to populate `evidence_figures` on concepts the figure clearly supports — see "Image awareness" below.
 
 ## Response schema
-Reference: `src/wikify/contracts/schema.py::ExtractResponse`
+Reference: `src/wikify/schema.py::ExtractResponse`
 
 ```json
 {

@@ -18,10 +18,10 @@ query runs at tier M. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-(The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
+(The tier may be overridden per-request by the guided mode via `set_tier` — read the request to confirm.)
 
 ## Request schema
-Reference: `src/wikify/contracts/schema.py::QueryRequest`
+Reference: `src/wikify/schema.py::QueryRequest`
 
 ```json
 {
@@ -41,7 +41,7 @@ Reference: `src/wikify/contracts/schema.py::QueryRequest`
 ```
 
 ## Response schema
-Reference: `src/wikify/contracts/schema.py::QueryResponse`
+Reference: `src/wikify/schema.py::QueryResponse`
 
 ```json
 {

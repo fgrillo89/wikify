@@ -1,4 +1,4 @@
-﻿# Claude Code - Working Conventions
+# Claude Code - Working Conventions
 
 Runtime-specific guidance for using this repo through Claude Code.
 This file is not the architecture source of truth.
@@ -8,8 +8,8 @@ This file is not the architecture source of truth.
 `wikify` is the active track for strategy science.
 The core question is strategy quality vs token cost vs wall-clock time:
 
-- rules-driven exploration and budget allocation (`rule_policy`)
-- model-driven exploration and budget allocation (`llm_policy`)
+- scripted exploration and budget allocation (`scripted` mode)
+- model-driven exploration and budget allocation (`guided` mode)
 
 All comparisons must run under the same pipeline contract and telemetry.
 
@@ -27,7 +27,7 @@ All comparisons must run under the same pipeline contract and telemetry.
 - No "flexibility" or "configurability" that was not requested.
 - No error handling for impossible scenarios.
 - If you wrote 200 lines and it could be 50, rewrite it.
-- **No dead versioning.** When iterating on a file (prompt, schema, template, plan), delete the old version and keep the new one under the canonical name. Do NOT leave `foo_v1.yaml` sitting next to `foo_v2.yaml` as a fallback "just in case." Do NOT rename the file by appending a version suffix — the file system IS the version, git history IS the changelog. The only acceptable version-suffixed files are those where the OLD version is still actively reachable from production code during a real migration, and in that case the migration must be on a tracked task with a deadline.
+- **No dead versioning.** When iterating on a file (prompt, schema, template, plan), delete the old version and keep the new one under the canonical name. Do NOT leave `foo_v1.yaml` sitting next to `foo_v2.yaml` as a fallback "just in case." Do NOT rename the file by appending a version suffix -- the file system IS the version, git history IS the changelog. The only acceptable version-suffixed files are those where the OLD version is still actively reachable from production code during a real migration, and in that case the migration must be on a tracked task with a deadline.
 
 ### Architectural Style
 Write code so the reader can understand the business behavior without jumping
@@ -46,13 +46,13 @@ through a maze of tiny abstractions. Locality of behavior is the default.
   - Runtime knob: belongs on the pipeline/service function that runs the work.
   - Adapter knob: belongs in CLI/MCP/skill/runtime wiring and is passed inward
     explicitly.
-  - Policy knob: belongs in the policy runtime or action schema.
+  - Mode knob: belongs in `RuntimeOverrides` or the strategy's mode logic.
 - Do not smuggle runtime choices into domain config by mutating config objects
   after construction. Pass runtime choices as explicit parameters.
 - For small closed vocabularies, use a shared enum at the contract boundary.
   Do not scatter ad hoc strings or tiny conversion helpers through the code.
 - Vendor/model/provider names should stay at adapter boundaries. Core business
-  logic should use domain terms such as role, tier, strategy id, or policy id.
+  logic should use domain terms such as role, tier, strategy id, or mode.
 - A factory should instantiate; it should not hide a second registry. If a
   registry stores constructor defaults, prefer `Thing(**DEFAULTS[key], seed=seed)`
   over building an object and then cloning/replacing it.
@@ -64,8 +64,8 @@ Good shape:
 ```python
 DEFAULTS = {
     "balanced": dict(
-        sampler=LevyMixSampler(...),
-        schedule=AdaptiveSchedule(...),
+        explorer=LevyExplorer(...),
+        budget=AdaptiveBudget(...),
         tier=ModelTier.MEDIUM,
     ),
 }
@@ -100,19 +100,19 @@ When editing existing code:
 Before shipping ANY non-trivial change (new function, renamed symbol,
 rewritten handler, schema field, CLI flag, removed module):
 1. **Enumerate every caller and every consumer** of the thing you're
-   changing. Use Grep aggressively. Do not guess — verify.
+   changing. Use Grep aggressively. Do not guess -- verify.
 2. **Amend every caller in the same commit.** A PR that updates a
    function signature but leaves callers broken is a bug. A skill that
    references a deleted helper is a bug.
 3. **Delete orphaned code.** If your change makes a helper, a branch, a
    test fixture, or an entire module unused, DELETE it in the same
    commit. Dangling references to removed features are worse than the
-   features themselves — they mislead future readers.
+   features themselves -- they mislead future readers.
 4. **Delete superseded files, don't leave them as "fallback."** See the
    no-dead-versioning rule. A file left "just in case" becomes a second
    source of truth that silently diverges.
 5. **When in doubt, grep for the symbol name across `src/`, `tests/`,
-   `.claude/skills/`, and `docs/`.** All four.
+   and `.claude/skills/`.**
 6. **Name the blast radius in your commit body.** One sentence:
    "Touches X, Y, Z; no other callers." This forces you to actually
    look. If you can't name the radius, you don't know what you changed.
@@ -137,7 +137,7 @@ When asked to assess the output of a pipeline run, a test run, or any generated 
 7. **Metrics are a supplement, never a substitute.** M1/M3/M6 can pass while the rendered output is visually broken; the converse is rarely true. A green metrics report with broken HTML means the metrics are wrong, not that the output is fine.
 8. **After pipeline changes, assume the output is broken until you have verified otherwise.** A "green" test suite proves the code compiles and tests pass; it does not prove the generated artifacts look right.
 
-If a test-run playbook exists (`docs/refactor/test-run-playbook.md` when the wikify version lands), follow it step by step. Do not improvise the review.
+If a test-run playbook exists (`src/wikify/test-run-playbook.md`), follow it step by step. Do not improvise the review.
 
 ## Read First
 
@@ -148,16 +148,9 @@ For `wikify` work, read in this order:
 3. `src/wikify/metrics.md`
 4. `src/wikify/runbook.md`
 5. `src/wikify/test-run-playbook.md` (required before any test run)
-6. `src/wikify/plans/structural-improvements.md` (the current structural roadmap — phases landed vs pending)
-7. `docs/architecture.md` (repo-wide boundaries)
+6. `src/wikify/plans/structural-improvements.md` (the current structural roadmap -- phases landed vs pending)
 
-If a task explicitly touches legacy `src/wikify/*`, then also read:
-
-1. `docs/project-status.md`
-2. `docs/architecture.md`
-3. `docs/refactor/wiki-deep-refactor-plan.md`
-
-## Wikify Simple Ground Rules
+## Wikify Ground Rules
 
 - Product artifact is the wiki bundle on disk.
 - Corpus is authoritative evidence; pages are authoritative human-facing outputs.
@@ -172,19 +165,17 @@ If a task explicitly touches legacy `src/wikify/*`, then also read:
 The general architectural style above applies directly to distill. Keep distill
 easy to read at a glance. Structure should follow the business logic of a run:
 
-- `distill/strategies/registry.py` owns the E/M/X strategy table and the single
-  factory.
+- `distill/strategy.py` owns the E/M/X strategy table, budget allocation,
+  run modes (scripted/guided), and the single factory.
+- `distill/explorer.py` owns corpus navigation (`LevyExplorer`), action
+  dispatch, and `build_snapshot`.
 - `distill/pipeline.py` owns run-time execution and prompt-layer choices.
-- `distill/policy.py` owns rule/model policy behavior and mutable run-time
-  controls.
-- `contracts/` owns closed vocabularies and request/response schemas shared by
-  bindings.
-- `bindings/` and CLI code are adapters. They wire dependencies and pass user
-  choices in, but should not become a second place where distill behavior lives.
+- CLI code is an adapter. It wires dependencies and passes user choices in,
+  but should not become a second place where distill behavior lives.
 
-Strategy config is for what actually varies between E/M/X: sampler, schedule,
-tiers, allocation override, and seed. Do not add field guides, artifact
-templates, policy selection, binding names, prompt names, model ids, cache paths,
+Strategy config is for what actually varies between E/M/X: explorer, budget
+allocator, tiers, allocation override, and seed. Do not add field guides,
+artifact templates, mode selection, prompt names, model ids, cache paths,
 or CLI-only flags to `StrategyConfig`. Those are run parameters or adapter
 concerns and should be explicit arguments to the pipeline.
 
@@ -200,8 +191,8 @@ class StrategyId(str, Enum):
 @dataclass
 class StrategyConfig:
     name: str
-    sampler: Sampler
-    schedule: Schedule
+    explorer: Explorer
+    budget: BudgetAllocator
     extract_tier: ModelTier
     write_tier: ModelTier
     edit_tier: ModelTier = ModelTier.MEDIUM
@@ -214,8 +205,8 @@ class StrategyConfig:
 STRATEGY_CONFIGS = {
     StrategyId.MIXED.value: dict(
         name="M",
-        sampler=LevyMixSampler(...),
-        schedule=AdaptiveSchedule(...),
+        explorer=LevyExplorer(...),
+        budget=AdaptiveBudget(...),
         extract_tier=ModelTier.SMALL,
         write_tier=ModelTier.MEDIUM,
     ),
@@ -233,11 +224,11 @@ Avoid:
 # Do not split one-line strategy differences across explore.py/mixed.py/exploit.py.
 # Do not make both "preset" and "config" layers unless they have different jobs.
 # Do not store model_id on StrategyConfig when routing is by ModelTier.
-# Do not put executable config/factory logic in strategies/__init__.py.
+# Do not put executable config/factory logic in __init__.py.
 ```
 
 `ModelTier` is the single vocabulary for `S`, `M`, and `L`. Request schemas,
-policy runtime, strategy configs, and cost accounting should use `ModelTier`
+mode runtime, strategy configs, and cost accounting should use `ModelTier`
 directly. When a string label is needed for cache keys, provenance, or JSON,
 use `tier.value`; do not introduce a `model_id_for_tier()` helper or a parallel
 strategy-level `model_id` field.
@@ -247,18 +238,17 @@ When introducing a new distill knob, first classify it:
 - Strategy knob: changes E/M/X science, belongs in `StrategyConfig`.
 - Runtime knob: changes this run without defining E/M/X, belongs on
   `pipeline.run(...)` / `run_with_preloaded(...)`.
-- Policy knob: changes adaptive behavior during a run, belongs in
-  `PolicyRuntime` or policy action schemas.
-- Adapter knob: CLI, binding, or runtime-specific wiring only, stays in the
+- Mode knob: changes adaptive behavior during a run, belongs in
+  `RuntimeOverrides` or mode action schemas.
+- Adapter knob: CLI or runtime-specific wiring only, stays in the
   adapter and is passed inward explicitly.
 
 ## Runtime Neutrality
 
 Keep product architecture runtime-neutral:
 
-- `agents/*` defines contracts and schemas.
 - `distill/*` owns business logic and strategy behavior.
-- `bindings/*` are adapters only.
+- `dispatch.py` is the single adapter for file-based request/response.
 - `.claude/skills/*` are execution helpers, not architecture truth.
 
 No product logic should depend on one runtime vendor.
@@ -268,16 +258,15 @@ No product logic should depend on one runtime vendor.
 Use `wikify` CLI workflows instead of ad hoc file mutation:
 
 - `uv run python -m wikify.cli ingest ...`
-- `uv run python -m wikify.cli distill --strategy {E|M|X} --binding ... --policy ... --iteration ...`
+- `uv run python -m wikify.cli distill --strategy {E|M|X} --mode {scripted|guided} ...`
 - `uv run python -m wikify.cli distill --phase extract|write|all ...`
+- `uv run python -m wikify.cli campaign --strategy M --iterations 3 ...`
 - `uv run python -m wikify.cli eval --bundle ... --corpus ...`
 - `uv run python -m wikify.cli query --bundle ... "question"`
 - `uv run python -m wikify.cli html --bundle ...`
 
 ## Prompt and Schema Rules
 
-- Runtime prompt selection for writer should use `write/v2` when available.
-- Keep `write/v1` fallback behavior intact.
 - Staged `.response.json` files must validate against the matching schema
   (`ExtractResponse`, `WriteResponse`, etc.) before consuming them.
 - Validation failures should produce explicit `.error.json` artifacts.
@@ -295,8 +284,8 @@ Use `wikify` CLI workflows instead of ad hoc file mutation:
 - Prefer explicit boundaries and dependency direction.
 - Prefer constructor injection over hidden mutable globals.
 - Use protocols only for real extension points.
-- Keep sampling, policy, and metric logic testable without live model calls.
-- Keep scale-sensitive paths near-linear where possible (sampler and crosslink hot paths).
+- Keep explorer, mode, and metric logic testable without live model calls.
+- Keep scale-sensitive paths near-linear where possible (explorer and crosslink hot paths).
 
 ## Corrections And Lessons Learned
 
@@ -315,11 +304,11 @@ Format:
 - **Skill files are adapters**: Claude-specific skill files are useful operating surfaces, but they are not the architecture source of truth.
 - **wikify page names**: Use natural Wikipedia-style titles ("Atomic Layer Deposition", not "concept-atomic-layer-deposition"). The kind field distinguishes page types; the id IS the title.
 - **wikify writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible `[[wikilinks]]` in prose.
-- **wikify person pages**: Person pages are written by the model like article pages. Author metadata (primary publications, citations, coauthors) is assembled at ingest/distill time and attached to the writer's `WriteRequest` as `author_context` for grounding. The writer produces biographical prose in Wikipedia voice; the "appears in this corpus" phrasing is banned. Robust to missing `author_context` for persons mentioned in text but not authors. (This supersedes the older deterministic `build_author_pages` behaviour, which is being retired in Phase 6B of `src/wikify/plans/structural-improvements.md`.)
-- **No dead versioned files**: The prompt registry once had `extract_v1.yaml`/`extract_v2.yaml`/`write_v1.yaml`/`write_v2.yaml` living side by side — v1 was a silent fallback path and nobody ever went back to clean up. Always delete the superseded version when you ship the new one. If you're ever tempted to keep the old file "just in case," that's a signal the new one isn't ready or the deprecation needs a tracked migration.
+- **wikify person pages**: Person pages are written by the model like article pages. Author metadata (primary publications, citations, coauthors) is assembled at ingest/distill time and attached to the writer's `WriteRequest` as `author_context` for grounding. The writer produces biographical prose in Wikipedia voice; the "appears in this corpus" phrasing is banned. Robust to missing `author_context` for persons mentioned in text but not authors.
+- **No dead versioned files**: Always delete the superseded version when you ship the new one. If you're ever tempted to keep the old file "just in case," that's a signal the new one isn't ready or the deprecation needs a tracked migration.
 - **Quality review means rendered HTML**: Never declare output "good" based on the intermediate markdown. Open the rendered artifact the user would see. Sample pages across kinds (article, person, edge cases), not just the best-looking one. Compare against the user's implicit reference (Wikipedia for wikis, real papers for papers). Enumerate every failure mode you find. See the "Quality Review Protocol" in the Behavioral Guidelines section above for the full protocol.
 - **Quote substring validation**: Uses tolerant normalization (NFKC + dash + brackets + emphasis). Picks verbatim phrases from clean chunks; do not normalize chunk text when selecting quotes.
 - **Pipeline error handling**: Per-call `ValidationError` and `QuoteNotInChunkError` are caught and skipped. The run continues; `.error.json` artifacts are left for postmortem.
 - **Coverage gap must be stateful**: Strategy experiments require real `coverage_gap` updates and persistence across refine epochs; static coverage scores invalidate comparisons.
-- **Policy comparability**: `rule_policy` and `llm_policy` must emit actions through one shared interface with common telemetry fields.
-- **Locality of behavior**: Prefer a clear local data table plus one factory over scattered one-line modules, parallel preset/config layers, or `__init__.py` behavior. Classify knobs before adding them: domain/strategy, runtime, policy, or adapter. Runtime choices should be explicit parameters, not fields smuggled into domain config.
+- **Mode comparability**: `scripted` and `guided` modes must emit actions through one shared interface with common telemetry fields.
+- **Locality of behavior**: Prefer a clear local data table plus one factory over scattered one-line modules, parallel preset/config layers, or `__init__.py` behavior. Classify knobs before adding them: domain/strategy, runtime, mode, or adapter. Runtime choices should be explicit parameters, not fields smuggled into domain config.

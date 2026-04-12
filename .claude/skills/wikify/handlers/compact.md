@@ -18,7 +18,7 @@ compact runs at tier S. This maps to:
 - M -> sonnet-class medium model
 - L -> opus-class large model
 
-(The tier may be overridden per-request by the LLM policy via `set_tier` — read the request to confirm.)
+(The tier may be overridden per-request by the guided mode via `set_tier` — read the request to confirm.)
 
 ## Request schema
 Raw shape (not a pydantic model; consumed directly by the compactor).
