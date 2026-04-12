@@ -7,15 +7,15 @@ from pathlib import Path
 
 import typer
 
-from .types import ModelTier
+from .cache import ExtractCache
 from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
 from .distill.strategy import STRATEGY_CONFIGS, build_strategy
-from .cache import ExtractCache
+from .ingest.pipeline import ingest_corpus
 from .meter import CostMeter
-from .ingest.refresh import ingest_corpus
 from .paths import BundlePaths, CorpusPaths
+from .types import ModelTier
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
 
@@ -548,9 +548,9 @@ def eval_bundle(
     report: Path | None = typer.Option(None, "--report"),
 ) -> None:
     """Compute M1/M3/M5/M6 metrics for a bundle and write a report."""
+    from .embedding import embedder_for
     from .eval import metrics
     from .eval.bundle import load_bundle
-    from .embedding import embedder_for
     from .store.corpus import all_chunks
     from .store.vectors import load_vectors
     from .store.vectors_meta import read_meta

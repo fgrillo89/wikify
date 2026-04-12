@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from wikify.ingest.images import save_doc_images
+from wikify.ingest.parsers.registry import RawImage
 from wikify.paths import CorpusPaths
 from wikify.store.images_index import (
     ImageIndex,
@@ -26,36 +27,12 @@ def corpus_with_images(tmp_path: Path) -> CorpusPaths:
     doc_id = "[2020 Liu] Optimization_ff17142a965a"
     folder = corpus.images_dir / "2020_Liu_Optimization"
     raw = [
-        {
-            "bytes": PNG_1x1,
-            "ext": "png",
-            "page": 2,
-            "caption": "schematic",
-            "label": "Fig. 1",
-            "media_type": "figure",
-            "width": 1,
-            "height": 1,
-        },
-        {
-            "bytes": PNG_1x1,
-            "ext": "png",
-            "page": 3,
-            "caption": "i-v curve",
-            "label": "Fig. 2",
-            "media_type": "figure",
-            "width": 1,
-            "height": 1,
-        },
-        {
-            "bytes": PNG_1x1,
-            "ext": "png",
-            "page": 4,
-            "caption": "loose img",
-            "label": None,
-            "media_type": "figure",
-            "width": 1,
-            "height": 1,
-        },
+        RawImage(data=PNG_1x1, ext="png", page=2, caption="schematic",
+                 label="Fig. 1", media_type="figure", width=1, height=1),
+        RawImage(data=PNG_1x1, ext="png", page=3, caption="i-v curve",
+                 label="Fig. 2", media_type="figure", width=1, height=1),
+        RawImage(data=PNG_1x1, ext="png", page=4, caption="loose img",
+                 media_type="figure", width=1, height=1),
     ]
     save_doc_images(doc_id, folder, raw)
     # Second doc to verify multi-doc dispatch
@@ -64,18 +41,8 @@ def corpus_with_images(tmp_path: Path) -> CorpusPaths:
     save_doc_images(
         doc_id2,
         folder2,
-        [
-            {
-                "bytes": PNG_1x1,
-                "ext": "png",
-                "page": 1,
-                "caption": "table",
-                "label": "Table 1",
-                "media_type": "table",
-                "width": 1,
-                "height": 1,
-            },
-        ],
+        [RawImage(data=PNG_1x1, ext="png", page=1, caption="table",
+                  label="Table 1", media_type="table", width=1, height=1)],
     )
     return corpus
 

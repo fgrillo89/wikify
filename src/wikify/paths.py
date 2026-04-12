@@ -59,6 +59,10 @@ class CorpusPaths:
     def pagerank_path(self) -> Path:
         return self.root / "pagerank.json"
 
+    @property
+    def manifest_path(self) -> Path:
+        return self.root / "manifest.json"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)

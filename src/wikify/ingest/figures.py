@@ -1,8 +1,8 @@
 """PDF figure/media extraction.
 
-Caption-matching, dedup, scan detection, and bbox logic. Returns plain
-dicts that ``ingest/images.py::save_doc_images`` writes to disk alongside
-a JSON sidecar.
+Caption-matching, dedup, scan detection, and bbox logic. Returns typed
+``RawImage`` records that ``ingest/images.py::save_doc_images`` writes to
+disk alongside a JSON sidecar.
 """
 
 import hashlib
@@ -15,6 +15,7 @@ from .config import (
     MIN_IMG_WIDTH,
     SCAN_THRESHOLD,
 )
+from .parsers.registry import RawImage
 
 _FIGURE_CAPTION_RE = re.compile(
     r"(?i)(fig(?:ure)?\.?\s*\d+[a-z]?)\s*[.:\s\u2014\-]+(.*)", re.DOTALL
@@ -47,11 +48,10 @@ class _CaptionMatch:
         self.y_position = y_position
 
 
-def extract_pdf_media(doc, md_text: str) -> list[dict]:
-    """Return a list of raw image dicts extracted from an open fitz Document.
+def extract_pdf_media(doc, md_text: str) -> list[RawImage]:
+    """Return typed RawImage records extracted from an open fitz Document.
 
-    Each dict has ``{bytes, ext, page, caption, label, media_type, bbox,
-    width, height, content_hash}``. Dedup is by content sha256.
+    Dedup is by content sha256.
     """
     raw: list[dict] = []
     seen: set[str] = set()
@@ -80,7 +80,7 @@ def extract_pdf_media(doc, md_text: str) -> list[dict]:
         extracted = _extract_images_on_page(doc, page, image_list, seen)
         raw.extend(_build_records(page_num, extracted, page_captions, md_captions))
 
-    return raw[:MAX_MEDIA_PER_PAPER]
+    return [_dict_to_raw_image(d) for d in raw[:MAX_MEDIA_PER_PAPER]]
 
 
 def _extract_images_on_page(
@@ -335,3 +335,22 @@ def _find_image_bbox(page, xref: int) -> list[float] | None:
     except Exception:
         pass
     return None
+
+
+def _dict_to_raw_image(d: dict) -> RawImage:
+    """Convert an internal image dict to the typed RawImage contract."""
+    bbox = d.get("bbox")
+    return RawImage(
+        data=d.get("bytes"),
+        url=d.get("url"),
+        ext=(d.get("ext") or "png").lstrip("."),
+        caption=d.get("caption", "") or "",
+        alt_text=d.get("alt_text", "") or "",
+        label=d.get("label"),
+        page=d.get("page"),
+        media_type=d.get("media_type"),
+        bbox=tuple(bbox) if bbox else None,
+        width=d.get("width"),
+        height=d.get("height"),
+        content_hash=d.get("content_hash"),
+    )

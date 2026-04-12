@@ -12,15 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from ..models import Chunk, Document
-
-# Section types that carry no extractable knowledge — skip them at explorer
-# index build time so the global samplers never dispatch them. Mirrors the
-# in-memory fallback path in ``distill/pipeline.py``. Hard-coded here
-# (instead of imported from ``distill.extract.dossier``) to keep ingest
-# free of distill-side dependencies.
-_SKIP_SECTION_TYPES: frozenset[str] = frozenset(
-    {"references", "acknowledgments", "appendix"}
-)
+from .config import SKIP_SECTION_TYPES
 
 
 def build_explorer_index(
@@ -48,7 +40,7 @@ def build_explorer_index(
         # them too. Without this filter the index path would dispatch
         # citation entries and ack paragraphs to the extractor and waste
         # budget on bibliography prose.
-        if c.section_type in _SKIP_SECTION_TYPES:
+        if c.section_type in SKIP_SECTION_TYPES:
             continue
         chunks_by_doc[c.doc_id].append(c.id)
         chunk_to_doc[c.id] = c.doc_id

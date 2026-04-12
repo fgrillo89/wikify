@@ -9,8 +9,9 @@ from typing import Self
 
 import yaml
 
-from wikify.schema import ExtractedConcept
+from wikify.ingest.config import SKIP_SECTION_TYPES  # noqa: F401  # re-exported
 from wikify.models import Evidence, WikiPage
+from wikify.schema import ExtractedConcept
 from wikify.store.page_naming import page_id_from_title, url_slug
 
 # ---------------------------------------------------------------------------
@@ -161,10 +162,6 @@ def canonicalize(
 _MIN_DEFINITION_WORDS = 10
 _MIN_SUMMARY_WORDS = 10
 
-# Section types that carry no extractable knowledge.
-SKIP_SECTION_TYPES: frozenset[str] = frozenset(
-    {"references", "acknowledgments", "appendix"}
-)
 
 
 def _norm(s: str) -> str:

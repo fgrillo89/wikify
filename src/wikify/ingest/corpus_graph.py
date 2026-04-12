@@ -49,18 +49,31 @@ def build_corpus_graph(
             for j in range(i + 1, len(ids)):
                 edges["co_section"].append((ids[i], ids[j]))
 
-    # similarity edges
+    # similarity edges -- blockwise to bound peak memory at
+    # block_size * n_chunks instead of n_chunks^2.
     if vectors.matrix.shape[0] >= 2:
-        sims = vectors.matrix @ vectors.matrix.T
-        np.fill_diagonal(sims, -1.0)
-        n = sims.shape[0]
+        n = vectors.matrix.shape[0]
         k = min(KNN_K, n - 1)
-        for i in range(n):
-            top = np.argpartition(-sims[i], k - 1)[:k]
-            for j in top:
-                edges["similar_knn"].append((vectors.ids[i], vectors.ids[int(j)]))
-                if sims[i, j] >= STRONG_COS:
-                    edges["similar_strong"].append((vectors.ids[i], vectors.ids[int(j)]))
+        block_size = 1024
+        for start in range(0, n, block_size):
+            end = min(start + block_size, n)
+            block = vectors.matrix[start:end]
+            sims = block @ vectors.matrix.T  # shape: (block_size, n)
+            # Zero out self-similarities within the block
+            for local_i in range(end - start):
+                sims[local_i, start + local_i] = -1.0
+            for local_i in range(end - start):
+                global_i = start + local_i
+                row = sims[local_i]
+                top = np.argpartition(-row, k - 1)[:k]
+                for j in top:
+                    edges["similar_knn"].append(
+                        (vectors.ids[global_i], vectors.ids[int(j)])
+                    )
+                    if row[j] >= STRONG_COS:
+                        edges["similar_strong"].append(
+                            (vectors.ids[global_i], vectors.ids[int(j)])
+                        )
 
     # doc_similar via mean-pooled per-doc embeddings
     by_doc_idx: dict[str, list[int]] = defaultdict(list)

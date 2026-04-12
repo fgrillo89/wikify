@@ -27,12 +27,11 @@ def test_image_extraction_and_sidecar_round_trip(tmp_path, name, kind):
     parsed_kind, result = parse_file(path)
     assert parsed_kind == kind
 
-    raw = result.metadata.get("_raw_images") or []
-    assert raw, f"{name}: expected at least one raw image"
+    assert result.raw_images, f"{name}: expected at least one raw image"
 
     doc_id = f"{path.stem}_test"
     image_dir = tmp_path / "corpus" / "images" / doc_id
-    saved = save_doc_images(doc_id, image_dir, raw)
+    saved = save_doc_images(doc_id, image_dir, result.raw_images)
     assert saved, "save_doc_images returned nothing"
 
     # (a) binary exists at corpus/images/{doc_id}/...
@@ -67,10 +66,9 @@ def test_pdf_caption_matched():
     """The PDF fixture has a 'Figure 1.' caption under the image."""
     path = FIXTURES / "sample.pdf"
     _, result = parse_file(path)
-    raw = result.metadata.get("_raw_images") or []
-    assert raw
+    assert result.raw_images
     # At least one record should have picked up the Figure 1 caption.
-    labels = [r.get("label") for r in raw]
+    labels = [r.label for r in result.raw_images]
     assert any(lbl and "1" in lbl.lower() for lbl in labels), labels
 
 
@@ -84,12 +82,11 @@ def test_html_remote_image_url_sidecar(tmp_path):
         encoding="utf-8",
     )
     _, result = parse_file(html_src)
-    raw = result.metadata.get("_raw_images") or []
-    assert raw and raw[0].get("url") == "https://example.com/remote.png"
+    assert result.raw_images and result.raw_images[0].url == "https://example.com/remote.png"
 
     doc_id = "html_test"
     image_dir = tmp_path / "corpus" / "images" / doc_id
-    saved = save_doc_images(doc_id, image_dir, raw)
+    saved = save_doc_images(doc_id, image_dir, result.raw_images)
     assert saved
     # URL-only sidecar is fig_000.url.json.
     side = image_dir / "fig_000.url.json"

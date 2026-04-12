@@ -2,7 +2,7 @@
 
 Uses trafilatura for main-text extraction; falls back to a naive tag
 stripper. ``<img>`` tags are parsed from the raw HTML and emitted as
-DocImage records pointing at the src URL (no fetch performed here).
+typed ``RawImage`` records (no fetch performed here).
 """
 
 import datetime
@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from ._sections import section_spans
-from .registry import ParseResult
+from .registry import ParseResult, RawImage
 
 
 def parse(path: Path) -> ParseResult:
@@ -30,26 +30,25 @@ def parse(path: Path) -> ParseResult:
         "summary": description or None,
         "year": year,
         "doi": None,
-        "_raw_images": raw_images,
     }
     return ParseResult(
         markdown=body,
         sections=section_spans(body),
-        images=[],
+        raw_images=raw_images,
         metadata=metadata,
         title=title,
     )
 
 
-def _extract_html_images(html: str, source_path: Path) -> list[dict]:
-    """Return raw image records parsed from <img> tags.
+def _extract_html_images(html: str, source_path: Path) -> list[RawImage]:
+    """Return typed RawImage records parsed from <img> tags.
 
     Local src refs (relative or file://) are resolved against the HTML
     file's directory and copied into the corpus as real bytes. Remote
     refs are recorded as URL-only records that ``save_doc_images`` will
     persist as a sidecar JSON pointing at the URL.
     """
-    out: list[dict] = []
+    out: list[RawImage] = []
     base = source_path.resolve().parent
     for m in re.finditer(r"<img\b([^>]*)>", html, re.IGNORECASE):
         attrs = m.group(1)
@@ -61,47 +60,23 @@ def _extract_html_images(html: str, source_path: Path) -> list[dict]:
         alt = alt_m.group(1) if alt_m else ""
         is_remote = bool(re.match(r"^(https?:|data:|//)", src, re.IGNORECASE))
         if is_remote:
-            out.append(
-                {
-                    "url": src,
-                    "caption": "",
-                    "alt_text": alt,
-                    "page": None,
-                }
-            )
+            out.append(RawImage(url=src, alt_text=alt))
             continue
         # Local: try to resolve against the HTML file dir.
         local = (base / src.lstrip("/")).resolve()
         if not local.exists():
-            # Also try as a straight relative path.
             alt_local = (base / src).resolve()
             if alt_local.exists():
                 local = alt_local
             else:
-                # Record as URL-only so the reference is not lost.
-                out.append(
-                    {
-                        "url": src,
-                        "caption": "",
-                        "alt_text": alt,
-                        "page": None,
-                    }
-                )
+                out.append(RawImage(url=src, alt_text=alt))
                 continue
         try:
             blob = local.read_bytes()
         except OSError:
             continue
         ext = local.suffix.lstrip(".").lower() or "png"
-        out.append(
-            {
-                "bytes": blob,
-                "ext": ext,
-                "page": None,
-                "caption": "",
-                "alt_text": alt,
-            }
-        )
+        out.append(RawImage(data=blob, ext=ext, alt_text=alt))
     return out
 
 
