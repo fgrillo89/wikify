@@ -190,10 +190,13 @@ def available_backends() -> list[str]:
 def _resolve_backend(key: str) -> dict[str, tuple[DocKind, callable]]:
     """Resolve a backend key to its suffix override table.
 
-    Raises ``ValueError`` if the backend is unknown or its parser
-    module cannot be imported.
+    Raises ``ValueError`` if the backend is unknown.  For enum
+    backends, eagerly imports the parser module so missing deps
+    surface immediately.  Custom backends (registered via
+    ``register_parser_backend``) are trusted at registration time;
+    their loaders are invoked lazily during ``parse_file``.
     """
-    # Check custom backends first (registered at import time).
+    # Custom backends are trusted at registration time.
     if key in _CUSTOM_BACKENDS:
         return _CUSTOM_BACKENDS[key]
 
