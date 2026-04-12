@@ -9,7 +9,7 @@ Materialises the seven edge kinds in the saved graph.json:
 share at least ``min_strength`` references).
 
 Order matters: this builder must run AFTER ``_populate_doc_edges`` in
-``refresh.py`` so the doc-side ``cites`` / ``cites_same`` lists are
+``pipeline.py`` so the doc-side ``cites`` / ``cites_same`` lists are
 populated. Pre-fix it ran earlier and the citation/coupling edges were
 silently empty.
 """
@@ -96,7 +96,7 @@ def build_corpus_graph(
 
     # cites: directed doc→doc edges from the resolved citation graph.
     # We read ``Document.cites`` directly (the post-embedding fuzzy
-    # matcher in refresh.py populates it). The previous version of this
+    # matcher in pipeline.py populates it). The previous version of this
     # block read ``d.metadata["cites"]`` which was never set, so the
     # citation edges in the corpus graph were silently empty for the
     # entire history of this module.
@@ -108,7 +108,7 @@ def build_corpus_graph(
 
     # cites_same: undirected bibliographic-coupling edges. Two docs are
     # coupled when they share references; ``compute_coupling`` produces
-    # the per-doc top-k list and refresh.py stores it on
+    # the per-doc top-k list and pipeline.py stores it on
     # ``Document.cites_same``. We surface it as a graph edge kind so
     # corpus_profile, pagerank, and community detection can use it as
     # a signal alongside cites and doc_similar.

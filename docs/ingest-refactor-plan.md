@@ -20,7 +20,7 @@ The distill refactor merged `schedule.py` (52L) + `registry.py` (82L) + `policy.
 
 The strategy configs are 3 rows in one dict, not 3 files. The dispatch classes collapsed from 6 into 1 because the pattern was identical.
 
-**For ingest**: the parser registry is already a single dispatch function -- good. But the post-parse enrichment (equations, figures, figure_refs, citations, metadata) is 5 separate modules with no shared interface. Each returns a different shape of dict. A uniform enrichment protocol would let new enrichers (e.g. docling's table extraction) slot in without touching `refresh.py`.
+**For ingest**: the parser registry is already a single dispatch function -- good. But the post-parse enrichment (equations, figures, figure_refs, citations, metadata) is 5 separate modules with no explicit stage boundary. Each returns a different shape of dict. Typed stage functions and an applicability table would let new enrichments (e.g. docling's table extraction) slot in without turning `refresh.py` into the control-flow bottleneck.
 
 ### 4. Separate definition from usage
 
@@ -122,7 +122,7 @@ Five separate modules (equations, figure_refs, figures, citations, metadata) eac
 - Are called at different points in refresh.py
 - Have no common protocol
 
-Adding a new enricher (e.g. docling's table extraction, or a model-based metadata extractor) requires modifying refresh.py's control flow.
+Adding a new enrichment stage (e.g. docling's table extraction, or a model-based metadata extractor) requires modifying refresh.py's control flow.
 
 ### P4: Storage is hardcoded everywhere
 
@@ -158,9 +158,27 @@ The shapes are implicit -- there's no protocol for "a corpus reader."
 
 ## Proposed refactoring
 
-### Principle: stages as composable functions, storage behind a protocol
+### Principle: source records are incremental; corpus indexes are reproducible
 
-The pipeline should be a sequence of typed stages, each a pure function from input to output. Storage should be a thin protocol that the pipeline writes to and distill reads from.
+The pipeline should distinguish durable source records from derived corpus
+indexes:
+
+- **Source artifacts are incremental**: parse, media extraction, chunking, and
+  embedding should run only for new or changed source files.
+- **Global corpus artifacts are reproducible**: graph, citation resolution,
+  bibliographic coupling, PageRank, topics, explorer index, image index, and
+  BibTeX should be rebuilt from the active source records unless a later phase
+  proves a partial update is both correct and faster.
+
+This mirrors the practical pattern used by modern RAG ingestion systems:
+track stable source ids + content hashes, skip unchanged inputs, upsert changed
+leaf records, and rebuild or republish global indexes from a consistent record
+set. Keep that pattern simple here: a file-based manifest first, optional
+database/vector backends later.
+
+The pipeline should still be a sequence of typed stages, each with explicit
+inputs and outputs. Storage should be a thin adapter around corpus-level
+operations, not a protocol that leaks JSON/JSONL/NPZ sidecar details.
 
 ### New module structure
 
@@ -181,9 +199,9 @@ src/wikify/ingest/
     clean.py            structural noise stripping (was _clean.py)
     sections.py         section span detection (was _sections.py)
 
-  # --- Enrichment ---
+  # --- Enrichment / typed stages ---
   enrich/
-    protocol.py         Enricher protocol: enrich(doc, chunks, markdown) -> EnrichResult
+    stages.py           Stage applicability table + shared typed stage helpers
     equations.py        Equation extraction
     media.py            Figure binary extraction + image persistence (was figures.py + images.py)
     captions.py         Inline caption extraction (was figure_refs.py)
@@ -196,13 +214,58 @@ src/wikify/ingest/
   graph.py              Corpus graph + coupling + doc edges (was corpus_graph.py + coupling.py)
   index.py              Explorer index + PageRank (was explorer_index.py + pagerank logic)
 
-  # --- Storage (new protocol layer) ---
+  # --- Storage / manifest ---
   store/
-    protocol.py         CorpusWriter protocol: write_document, write_chunks, write_vectors, etc.
-    filesystem.py       Current file-based implementation (JSON, JSONL, npz, sidecars)
+    manifest.py         SourceRecord + CorpusManifest
+    filesystem.py       FileSystemStore with staging, validation, atomic publish
+    reader.py           CorpusReader protocol for distill preload
 ```
 
 ### Key abstractions
+
+#### 0. Corpus manifest / record manager
+
+Before introducing alternative storage backends, ingest needs a small local
+record manager. This is the correctness and speed primitive for incremental
+ingest.
+
+```python
+@dataclass
+class SourceRecord:
+    source_id: str                 # stable identity for this source
+    source_path: str
+    content_hash: str              # sha1/sha256 of source bytes
+    doc_id: str
+    status: Literal["active", "deleted"]
+    parser_fingerprint: str
+    chunker_fingerprint: str
+    embedder_fingerprint: str
+    chunk_ids: list[str]
+    parsed_at: str
+
+@dataclass
+class CorpusManifest:
+    schema_version: int
+    corpus_id: str
+    sources: dict[str, SourceRecord]
+    last_successful_ingest: str
+```
+
+The manifest enables three ingest modes:
+
+| Mode | Meaning | Deletes missing sources? |
+|------|---------|--------------------------|
+| `additive` | Add new/changed files, leave old sources alone | no |
+| `sync` | Make the corpus match the input source set | yes, via tombstones |
+| `rebuild` | Reprocess every active source from scratch | optional |
+
+The manifest also guards migration boundaries:
+- if the embedder fingerprint changes, fail unless `--rebuild-vectors` or
+  `--rebuild` is requested;
+- if parser/chunker fingerprints change, assume chunk ids and derived caches
+  are invalid and require a rebuild;
+- if a previous ingest left a staging directory behind, recover or discard it
+  before writing new artifacts.
 
 #### 1. Parser protocol (extensible for docling)
 
@@ -256,96 +319,78 @@ PARSERS: dict[str, DocumentParser] = {
 # PARSERS["pdf"] = DoclingParser()
 ```
 
-#### 2. Enricher protocol (composable post-parse steps)
+#### 2. Typed ingest stages before a generic enricher protocol
+
+The enrichment modules do not all have the same natural input shape:
+equations and figure refs are markdown-only, PDF media extraction needs parser
+or PDF-level state, image persistence needs binary blobs and paths, citations
+need reference text, and metadata needs source + parsed text. Forcing these
+into one `enrich(doc, chunks, markdown)` protocol would make the interface too
+generic too early.
+
+Use explicit stage functions first:
 
 ```python
-class Enricher(Protocol):
-    def enrich(self, doc: Document, chunks: list[Chunk], markdown: str) -> EnrichResult: ...
-
-@dataclass
-class EnrichResult:
-    doc_updates: dict           # fields to merge into Document
-    chunk_updates: dict[str, dict]  # chunk_id -> fields to merge
+raw = parse_source(source, parser)
+chunks = chunk_source(raw.markdown, raw.sections)
+equations = extract_equations(raw.markdown)
+figure_refs = extract_figure_refs(raw.markdown)
+images = persist_images(raw.raw_images, source, paths)
+citations = extract_citations(raw.markdown, doc_id)
+metadata = extract_metadata(source, raw)
 ```
 
-Each enricher is a standalone function that reads the document + chunks and returns structured updates. The pipeline composes them:
+If two or more stages later converge on the same input/output shape, introduce
+a protocol for that narrower family. Until then, explicit typed calls are
+clearer, easier to profile, and less likely to hide scale costs.
+
+#### 3. Corpus store adapter (storage-agnostic later)
+
+The first storage abstraction should be higher-level than the current files:
+read/write documents, chunks, vectors, graph, images, manifest, and derived
+indexes. It should not expose JSON/JSONL/NPZ/sidecar mechanics as protocol
+methods.
+
+Start with a concrete `FileSystemStore(CorpusPaths)` that owns staging,
+validation, and atomic publish. Add `CorpusReader` for distill first:
 
 ```python
-ENRICHERS: list[Enricher] = [
-    EquationEnricher(),
-    CaptionEnricher(),
-    CitationEnricher(),
-    MetadataEnricher(),
-]
-
-for enricher in ENRICHERS:
-    result = enricher.enrich(doc, chunks, markdown)
-    apply_updates(doc, chunks, result)
-```
-
-Adding a new enricher (e.g. docling table extraction) means adding one entry to the list.
-
-#### 3. Corpus store protocol (storage-agnostic)
-
-```python
-class CorpusWriter(Protocol):
-    def write_document(self, doc: Document) -> None: ...
-    def write_chunks(self, doc_id: str, chunks: list[Chunk]) -> None: ...
-    def write_markdown(self, doc_id: str, text: str) -> None: ...
-    def write_vectors(self, ids: list[str], matrix: np.ndarray, meta: dict) -> None: ...
-    def write_graph(self, graph: CorpusGraph) -> None: ...
-    def write_image(self, image: RawImage, doc_id: str) -> Path: ...
-
 class CorpusReader(Protocol):
     def list_documents(self) -> list[Document]: ...
     def read_chunks(self, doc_id: str) -> list[Chunk]: ...
+    def read_all_chunks(self) -> list[Chunk]: ...
     def read_vectors(self) -> VectorStore: ...
     def read_graph(self) -> CorpusGraph: ...
-    ...
+    def read_manifest(self) -> CorpusManifest: ...
 ```
 
-The current file-based implementation becomes `FileSystemStore(CorpusPaths)`. A future SQLite store would implement the same protocols. Distill's `preload_corpus()` would accept a `CorpusReader` instead of `CorpusPaths`.
-
-**Important**: this is NOT an immediate requirement. The protocol should be defined, and the file-based implementation should be the default. SQLite/ChromaDB can be added later without changing the pipeline.
+A writer protocol can wait until the filesystem implementation stabilizes.
+SQLite/LanceDB/Qdrant/Chroma can be added later if exact file-based ingest
+misses scale targets.
 
 #### 4. Pipeline as stage composition
 
 ```python
 def ingest(
     input_dir: Path,
-    store: CorpusWriter,
+    store: FileSystemStore,
     parsers: dict[str, DocumentParser] | None = None,
-    enrichers: list[Enricher] | None = None,
     embedder: Callable | None = None,
 ) -> CorpusPaths:
     parsers = parsers or DEFAULT_PARSERS
-    enrichers = enrichers or DEFAULT_ENRICHERS
     embedder = embedder or default_embedder()
 
-    # Stage 1: enumerate + dedupe
-    sources = enumerate_sources(input_dir, store)
+    manifest = store.read_manifest()
+    change_set = diff_sources(input_dir, manifest)
+    with store.staging_ingest() as staged:
+        changed = process_changed_sources(change_set, parsers)
+        staged.write_source_artifacts(changed)
 
-    # Stage 2: parse + chunk (parallel)
-    bundles = parse_parallel(sources, parsers)
-
-    # Stage 3: enrich + persist
-    docs = []
-    for bundle in bundles:
-        doc, chunks = assemble(bundle)
-        for enricher in enrichers:
-            apply(enricher.enrich(doc, chunks, bundle.markdown), doc, chunks)
-        store.write_document(doc)
-        store.write_chunks(doc.id, chunks)
-        docs.append((doc, chunks))
-
-    # Stage 4: embed
-    all_chunks = flatten(chunks for _, chunks in docs)
-    vectors = embedder([c.text for c in all_chunks])
-    store.write_vectors([c.id for c in all_chunks], vectors, embedder_meta())
-
-    # Stage 5-8: graph, index, pagerank, topics
-    graph = build_graph(docs, vectors)
-    store.write_graph(graph)
+        docs, chunks = staged.read_active_corpus(manifest, change_set)
+        vectors = staged.merge_vectors(manifest, change_set, changed, embedder)
+        graph = rebuild_derived_artifacts(staged, docs, chunks, vectors)
+        staged.validate_invariants()
+        staged.publish_atomically()
     ...
 ```
 
@@ -365,41 +410,72 @@ The pipeline must distinguish two modes:
 2. **Incremental ingest** (adding files to an existing corpus): parse only new sources, then **merge** them into existing artifacts.
 
 Merge means:
-- **Vectors**: load existing `vectors.npz`, append new chunk embeddings, save the merged matrix. (NumPy vstack is trivial.)
-- **Graph**: load existing `graph.json`, add new nodes/edges from new docs + recompute edges between old and new docs (similarity, citation matching). This is the expensive part -- old-to-new doc similarity requires comparing new doc mean-pool vectors against all existing ones.
-- **Explorer index**: rebuild from the merged graph + full chunk set. (Fast, <1s.)
-- **PageRank**: recompute on the merged doc graph. (Fast.)
-- **Topics**: merge new doc topics into existing vocabulary.
-- **Images index**: append new images.
-- **Documents**: only persist new docs. Existing docs don't change unless their citation edges update (new papers might cite old ones).
+- **Manifest**: diff source records by stable source id + content hash. New and
+  changed sources are processed; unchanged sources are reused; deleted sources
+  are tombstoned in `sync` mode.
+- **Source artifacts**: write markdown/chunks/doc JSON/images for new or
+  changed sources only. Remove or tombstone old artifacts for changed/deleted
+  sources after the replacement artifacts validate.
+- **Vectors**: load existing vectors, delete rows for changed/deleted sources,
+  embed new chunks, append/upsert by deterministic chunk id, and save the
+  merged store. Validate that vector ids exactly match active chunk ids.
+- **Documents**: after rebuilding doc-level edges, re-save any existing
+  document whose `similar_to`, `cites`, or `cites_same` fields changed. Do not
+  special-case inbound citations: `Document.cites` is an outgoing edge list.
+- **Derived artifacts**: rebuild graph, explorer index, PageRank, topics,
+  images index, and BibTeX from all active docs/chunks/vectors.
 
 The pipeline skeleton becomes:
 
 ```python
 def ingest(input_dir, store, ...):
-    existing_docs = store.list_documents()    # may be empty (full ingest)
-    existing_vectors = store.read_vectors()   # may be None
-    
-    sources = enumerate_and_dedupe(input_dir, existing_docs)
-    if not sources:
-        return  # nothing new
-    
-    new_bundles = parse_parallel(sources, parsers)
-    new_docs, new_chunks = persist_new(new_bundles, store, enrichers)
-    
-    # Merge vectors: append new embeddings to existing
-    all_vectors = merge_vectors(existing_vectors, new_chunks, embedder)
-    store.write_vectors(all_vectors)
-    
-    # Rebuild derived artifacts from ALL docs (existing + new)
-    all_docs = existing_docs + new_docs
-    all_chunks = store.read_all_chunks()  # or keep in memory
-    graph = build_graph(all_docs, all_chunks, all_vectors)
-    store.write_graph(graph)
+    manifest = store.read_manifest()
+    change_set = diff_sources(input_dir, manifest, mode="additive")
+    if change_set.is_empty:
+        return
+
+    with store.staging_ingest() as staged:
+        new_bundles = parse_parallel(change_set.to_parse, parsers)
+        staged.write_source_artifacts(new_bundles)
+
+        active_docs = staged.read_active_documents(manifest, change_set)
+        active_chunks = staged.read_active_chunks(active_docs)
+        vectors = staged.merge_vectors(
+            manifest=manifest,
+            changed=change_set.changed_or_deleted,
+            new_chunks=chunks_from(new_bundles),
+            embedder=embedder,
+        )
+
+        # Rebuild derived artifacts from the full active corpus.
+        populate_doc_edges(active_docs, active_chunks, vectors)
+        graph = build_graph(active_docs, active_chunks, vectors)
+        staged.write_derived_artifacts(active_docs, active_chunks, vectors, graph)
+        staged.validate_invariants()
+        staged.publish_atomically()
     ...
 ```
 
-The key insight: **parse + chunk + persist is incremental**, but **graph + index + pagerank must see the full corpus**. This is already implicit in the current code (it rebuilds them every time) -- making it explicit just means loading existing artifacts before the merge step.
+The key insight: **parse + chunk + media extraction + embedding are
+incremental**, but **global derived artifacts must see the full active
+corpus**. This is already implicit in the current code's rebuild order. The
+refactor should make it explicit and safe.
+
+### Atomicity and recovery
+
+Incremental ingest must not publish a half-updated corpus. Write changed source
+artifacts and all derived artifacts into a staging area, validate invariants,
+then atomically promote. If an ingest crashes, the next run should either resume
+or discard the incomplete staging directory before doing new work.
+
+Minimum invariants:
+- every active document has markdown, chunks, and doc JSON;
+- every chunk id appears exactly once;
+- vector ids exactly equal active chunk ids;
+- graph nodes cover every active document and chunk;
+- explorer/context indexes reference only active chunk ids;
+- image index records reference active docs/chunks;
+- `vectors.meta.json` matches the manifest embedder fingerprint.
 
 ---
 
@@ -415,28 +491,27 @@ The current enrichers assume scientific articles:
 
 For non-academic documents (notes, reports, emails, presentations, web captures), most of these return empty. The pipeline doesn't break -- it just produces a corpus with no citations, no coupling, no bibtex, and sparse metadata. But the derived artifacts (graph, explorer index) work less well because citation edges and doc-similarity edges are the only inter-document connections besides embedding similarity.
 
-### Required fix: enrichers must be optional and document-type-aware
+### Required fix: stages must be optional and document-type-aware
 
-The enricher protocol should declare what document types it applies to:
+Stage applicability should be explicit data, not hidden in a generic protocol.
 
-```python
-class Enricher(Protocol):
-    def enrich(self, doc: Document, chunks: list[Chunk], markdown: str) -> EnrichResult: ...
-    def applies_to(self, doc_kind: str) -> bool: ...
-```
+Default stage applicability:
 
-Default enrichers by document type:
+| Stage | pdf (academic) | pdf (report) | docx | pptx | html | md |
+|-------|---------------|--------------|------|------|------|-----|
+| Metadata | yes | yes | yes | yes | yes | yes |
+| Equations | yes | yes | no | no | no | yes |
+| Captions | yes | yes | no | yes | no | no |
+| Citations | yes | try if ambiguous | no | no | no | try if references |
+| Coupling | yes | if citations exist | no | no | no | if citations exist |
+| Topics | yes | yes | yes | yes | yes | yes |
 
-| Enricher | pdf (academic) | pdf (report) | docx | pptx | html | md |
-|----------|---------------|--------------|------|------|------|-----|
-| MetadataEnricher | yes | yes | yes | yes | yes | yes |
-| EquationEnricher | yes | yes | no | no | no | yes |
-| CaptionEnricher | yes | yes | no | yes | no | no |
-| CitationEnricher | yes | no | no | no | no | no |
-| CouplingEnricher | yes | no | no | no | no | no |
-| TopicEnricher | yes | yes | yes | yes | yes | yes |
-
-The pipeline checks `enricher.applies_to(doc.kind)` before calling. Non-academic documents skip citation/coupling enrichment and rely on embedding-based similarity for inter-document edges. The graph still works -- it just has fewer edge types.
+The pipeline checks applicability against both `doc.kind` and `doc.doc_type`.
+Ambiguous PDFs should prefer running academic enrichments and accepting empty
+outputs over silently skipping citations. Non-academic documents can skip
+citation/coupling when classification is confident and rely on embedding-based
+similarity for inter-document edges. The graph still works -- it just has fewer
+edge types.
 
 Additionally, the `Document` model should support a richer `kind` vocabulary beyond file extension:
 
@@ -445,9 +520,96 @@ DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
 DocType = Literal["academic", "report", "note", "presentation", "web", "email", "other"]
 ```
 
-`DocKind` is the file format (already exists). `DocType` is the semantic category, detected by a lightweight classifier (heuristic: presence of References section + DOI → academic; slide structure → presentation; email headers → email; otherwise → report/note). This classification feeds `applies_to()`.
+`DocKind` is the file format (already exists). `DocType` is the semantic
+category. It can be detected by a lightweight classifier (references section +
+DOI -> academic, slide structure -> presentation, email headers -> email,
+otherwise report/note), but it must be user-overridable via manifest or CLI.
+Store `doc_type`, `doc_type_confidence`, and `doc_type_source` so downstream
+quality issues can be traced.
 
 ---
+
+## Gap 3: Speed and scalability
+
+The refactor should improve correctness without accidentally making ingest
+slower at the 200-1000 paper target. The hot path is not the file manifest or
+JSON I/O. The hot path is parser CPU, image extraction, embedding, and graph
+construction.
+
+### Current scaling risks
+
+| Stage | Current / likely complexity | Risk |
+|-------|-----------------------------|------|
+| Parse + media extraction | O(docs), parallel | Usually CPU-bound; slow outlier PDFs dominate wall time |
+| Embedding | O(chunks), batched | Fine if unchanged chunks are skipped; expensive if every incremental run re-embeds everything |
+| Chunk similarity graph | O(chunks^2) dense cosine today | Major memory/time risk at tens of thousands of chunks |
+| Doc similarity | O(docs^2) | Fine through ~1000 docs |
+| Citation resolution | O(citations x same-year candidates) | Fine if indexed by year/title fingerprints |
+| Topics | Corpus-wide pass | Acceptable for v1; can be cached later |
+| Explorer index | O(edges + chunks) | Fine if the edge set stays sparse |
+
+The current `build_corpus_graph` materialises a dense `N x N` similarity matrix
+for chunk vectors. At 60k chunks this is billions of cosine scores. Even when
+the math is fast, the intermediate matrix is too large for a comfortable local
+workflow. This is the main scale bug to fix while preserving exact semantics.
+
+### Required fix: exact blockwise graph build
+
+Keep exact cosine similarity for v1, but compute it in blocks:
+
+```python
+def build_chunk_similarity_edges(vectors, *, block_size=1024):
+    for start in range(0, n_chunks, block_size):
+        block = matrix[start : start + block_size]
+        sims = block @ matrix.T
+        mask_self_scores(sims, start)
+        emit_top_k_edges(sims, ids, k=KNN_K)
+        emit_threshold_edges(sims, ids, threshold=STRONG_COS)
+```
+
+This keeps peak memory at roughly `block_size x n_chunks` instead of
+`n_chunks x n_chunks`, while producing the same `similar_knn` and
+`similar_strong` edges as the dense implementation. It also allows progress
+logging and deterministic chunking of the work.
+
+Approximate nearest-neighbor indexes (HNSW/IVF/Qdrant/LanceDB/Chroma) are a
+future optimization, not the v1 requirement. They are useful once exact
+blockwise cosine becomes too slow, but they introduce recall knobs, index build
+cost, and backend-specific behavior. The architecture should leave a clean
+`SimilarityIndex` boundary, but the first implementation should be exact and
+file-based.
+
+### Speed guardrails
+
+- **Do not re-embed unchanged chunks.** Embeddings are the main incremental
+  win. Reuse vectors by chunk id + embedder fingerprint.
+- **Batch embedding writes.** Write one merged vector store after validation,
+  not one write per document.
+- **Use deterministic ids.** Source id, doc id, chunk id, image id, and vector
+  id should be stable across runs when source bytes/parser/chunker are stable.
+- **Keep derived artifacts sparse.** Graph edges should be bounded by top-k or
+  meaningful thresholds. Avoid storing full similarity matrices.
+- **Preserve parallel parsing.** ProcessPool parsing remains the right default;
+  add per-stage timing and slow-source reporting to every refactored stage.
+- **Avoid model-based parser upgrades by default.** Tools like docling,
+  Unstructured, and LlamaParse can improve tables/layout/OCR, but they trade
+  speed and cost for quality. Add them behind parser configs and quality
+  benchmarks, not as a silent replacement.
+- **Add scale budgets to tests.** A 50-paper smoke corpus should validate
+  correctness; a 200-1000 paper timing run should validate graph memory and
+  wall time.
+
+### When to move beyond exact file-based v1
+
+Switch to an ANN/vector database backend only when one of these is true:
+
+- exact blockwise graph build exceeds the local wall-time target;
+- vector store files become too large to rewrite comfortably;
+- queries need low-latency online updates while ingest is running;
+- multiple processes need concurrent read/write access to the same corpus.
+
+Until then, a manifest + exact rebuild gives better reproducibility and simpler
+debugging than a partially-updated ANN graph.
 
 ---
 
@@ -485,7 +647,7 @@ preload_corpus() loads:
 
 ### What must be updated in distill if ingest changes
 
-**If enrichers become optional (non-academic docs):**
+**If enrichment stages become optional (non-academic docs):**
 - `author_context.py` already handles missing `doc.citations` -- no change needed
 - `pipeline.py:_equations_for_chunk()` already handles empty `doc.equations` -- no change needed
 - `pipeline.py:_figure_captions_for_chunk()` already handles empty `doc.figure_refs` -- no change needed
@@ -500,7 +662,7 @@ preload_corpus() loads:
 - Distill's `preload_corpus()` should validate `vectors.meta.json` dimensions match what the current embedder produces. **Add a check.**
 
 **If the Document model gains a `doc_type` field (academic/report/note/etc.):**
-- Distill doesn't need to change immediately. The field is informational for enricher dispatch.
+- Distill doesn't need to change immediately. The field is informational for ingest-stage dispatch.
 - Long-term: the writer could adapt its artifact template based on `doc_type` (e.g. less citation-heavy templates for notes), but that's a separate change.
 
 **If incremental ingest changes chunk IDs:**
@@ -509,7 +671,7 @@ preload_corpus() loads:
 
 ### Safe changes (no distill impact)
 
-- Adding new enrichers (topics, tables) -- distill ignores what it doesn't use
+- Adding new enrichment outputs (topics, tables) -- distill ignores what it doesn't use
 - Changing parser backends (docling) -- distill sees the same Document/Chunk shapes
 - Adding new graph edge types -- distill's explorer ignores unknown edge kinds
 - Changing image extraction policy -- distill reads whatever the image index contains
@@ -607,21 +769,103 @@ These signals let distill's explorer make better sampling decisions without runn
 
 1. **Type the raw image contract**: `RawImage` dataclass, replace `metadata["_raw_images"]` everywhere.
 2. **Define the Parser protocol + registry table**: formalize what parsers already do. Register existing parsers. No behavior change.
-3. **Define the Enricher protocol with `applies_to`**: formalize post-parse modules. Each enricher declares its applicable doc types. Wrap existing functions.
-4. **Add `DocType` classification**: lightweight heuristic detector (References section + DOI → academic, slide structure → presentation, etc.). Feed into enricher dispatch.
-5. **Slim refresh.py into pipeline.py**: extract stage logic into named functions. Separate "parse new" from "rebuild derived." Target ~200L orchestration.
-6. **Centralize config**: merge `SKIP_SECTION_TYPES` (currently duplicated in dossier.py and explorer_index.py) into `config.py`.
+3. **Extract explicit typed stages**: keep equations/captions/citations/media/metadata as named calls with typed signatures first. Do not force one generic enricher interface until the stage boundaries prove it helps.
+4. **Slim refresh.py into pipeline.py**: extract stage logic into named functions. Separate "process changed sources" from "rebuild derived." Target ~200L orchestration.
+5. **Centralize config**: merge `SKIP_SECTION_TYPES` (currently duplicated in dossier.py and explorer_index.py) into `config.py`.
+6. **Add per-stage timing + progress logs**: keep the current slow-paper report and add graph/embedding timing so scale regressions are visible.
 
 ### Phase B: Incremental ingest
 
-7. **Split pipeline into parse-new + merge-derived**: parse/chunk/persist only new sources; load existing artifacts; merge vectors (vstack); rebuild graph/index/pagerank from full corpus.
-8. **Test incremental**: ingest 10 docs, then add 5 more. Verify graph has 15 nodes, vectors have all chunks, explorer index covers everything.
+7. **Add corpus manifest / record manager**: track source ids, content hashes, parser/chunker/embedder fingerprints, active/deleted status, and chunk ids.
+8. **Add atomic staging/publish**: write changed source artifacts and derived artifacts to staging, validate invariants, then promote.
+9. **Split pipeline into changed-source processing + exact derived rebuild**: parse/chunk/persist/embed only new or changed sources; rebuild graph/index/pagerank/topics/images/bibtex from the full active corpus.
+10. **Test incremental and sync modes**: ingest 10 docs, add 5 more, modify 1, delete 1 in sync mode. Verify graph/vectors/index/doc edges reflect the active corpus.
 
-### Phase C: Extensions
+### Phase C: Scale hardening
 
-9. **Define CorpusWriter/CorpusReader protocols**: wrap `store/corpus.py` functions. Distill's `preload_corpus` accepts a reader.
-10. **Add docling parser**: implement `DocumentParser` for docling. Register alongside existing parsers.
-11. **(Optional) Alternative store**: SQLite or similar, implementing CorpusWriter/CorpusReader. Swap via config.
+11. **Replace dense chunk similarity with exact blockwise top-k/threshold graph build**: preserve graph semantics while bounding peak memory.
+12. **Add scale tests**: run a 50-paper correctness ingest and a 200-1000 paper timing/memory ingest. Record parser, embed, graph, index, and total timings.
+13. **Add embedding migration guards**: fail fast on embedder fingerprint mismatch unless `--rebuild-vectors` or `--rebuild` is requested.
+
+### Phase D: Extensions
+
+14. **Add `DocType` classification with overrides**: lightweight heuristic detector plus manifest/CLI overrides. Ambiguous academic PDFs should run citation enrichment rather than silently skip it.
+15. **Define CorpusReader first**: wrap `store/corpus.py` functions so distill's `preload_corpus` accepts a reader. Add CorpusWriter only after the file implementation stabilizes.
+16. **Add parser quality harness**: compare pymupdf4llm vs docling/other parsers on section recovery, references, equations, figures, tables, and downstream graph quality.
+17. **Add docling parser only behind config**: implement `DocumentParser` for docling and register alongside existing parsers after the quality harness justifies it.
+18. **(Optional) Alternative store / ANN backend**: SQLite, LanceDB, Qdrant, or similar only when exact file-based v1 misses scale targets.
+
+---
+
+## Success criteria
+
+The refactor is complete when the ingest pipeline is clearer, safer, and faster
+to update without changing the corpus contract consumed by distill.
+
+### Functional correctness
+
+- Fresh ingest of the reference corpus produces the same `Document`, `Chunk`,
+  vector, graph, image-index, topic, and BibTeX shapes consumed today.
+- Every active document has markdown, chunks, doc JSON, vectors, graph nodes,
+  and index entries.
+- Vector ids exactly equal active chunk ids.
+- Graph edges include `contains`, `similar_knn`, `similar_strong`,
+  `co_section`, `cites`, `doc_similar`, and `cites_same` where applicable.
+- PageRank, explorer index, topics, image index, and BibTeX are reproducible
+  derived artifacts from the active corpus.
+
+### Incremental correctness
+
+- Re-ingesting unchanged sources skips parsing, media extraction, chunking, and
+  embedding.
+- Adding sources preserves unchanged source artifacts and rebuilds all global
+  derived artifacts over the full active corpus.
+- Modifying a source replaces its old markdown, chunks, images, doc JSON, and
+  vectors, and removes stale references from derived artifacts.
+- `sync` mode tombstones or removes missing sources; `additive` mode leaves
+  them active.
+- Existing documents are re-saved when derived edge fields change.
+- The manifest records why each source was skipped, processed, replaced,
+  deleted, or rebuilt.
+
+### Scale and speed
+
+- Exact blockwise graph output matches dense graph output on a small corpus.
+- A 50-paper corpus ingests successfully in normal dev/CI conditions.
+- A 200-1000 paper corpus completes without dense-matrix memory blowup.
+- Per-stage timings are emitted for parse, persist, embed, graph, index,
+  topics, and total runtime.
+- Unchanged incremental ingest runtime is dominated by derived-artifact rebuild,
+  not parsing or embedding.
+- ANN/vector database backends remain optional until exact file-based ingest
+  misses a measured wall-time or memory target.
+
+### Compatibility
+
+- Existing distill smoke tests pass against a refactored corpus.
+- Existing eval, query, and html commands can read the corpus without schema
+  changes.
+- Older corpus bundles either load through compatibility paths or fail with a
+  clear re-ingest message.
+- Distill remains read-only with respect to corpus artifacts.
+
+### Operational safety
+
+- Crash during staging does not publish a mixed corpus state.
+- Embedder fingerprint mismatch fails fast unless vector rebuild or full
+  rebuild is requested.
+- Parser/chunker fingerprint mismatch fails fast unless full rebuild is
+  requested.
+- Ingest lock/staging recovery prevents concurrent writers from corrupting a
+  corpus.
+
+### Quality
+
+- Parser backend changes require a quality comparison before becoming default.
+- Citation, equation, figure-caption, image-linking, and topic extraction do not
+  regress on the reference corpus.
+- Ambiguous academic PDFs run citation enrichment rather than silently skipping
+  it.
 
 ---
 
@@ -632,3 +876,17 @@ After each step:
 - `uv run pytest tests/wikify -q`
 - Ingest the test corpus and verify identical output (diff `docs/`, `chunks/`, `graph.json`)
 - Run a distill smoke test to confirm the consumer contract is unbroken
+
+Incremental-specific checks:
+- unchanged source files are skipped by hash;
+- changed source files replace their old chunks/images/vectors;
+- deleted sources disappear in `sync` mode and stay in `additive` mode;
+- vector ids exactly match active chunk ids;
+- existing documents are re-saved when derived edge fields change;
+- crash during staging does not leave a mixed corpus state.
+
+Scale-specific checks:
+- blockwise graph output matches dense graph output on a small corpus;
+- peak graph-build memory stays bounded on a medium corpus;
+- per-stage timings are reported and tracked across refactors;
+- parser-backend comparisons include quality metrics, not just wall time.

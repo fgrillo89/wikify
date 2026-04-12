@@ -19,7 +19,7 @@ from wikify.distill.strategy import AdaptiveBudget
 from wikify.distill.strategy import StrategyConfig
 from wikify.cache import ExtractCache
 from wikify.meter import CostMeter
-from wikify.ingest.refresh import ingest_corpus
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.paths import BundlePaths, CorpusPaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"

@@ -16,7 +16,7 @@ from wikify.eval.metrics import (
 from wikify.cache import ExtractCache
 from wikify.meter import CostMeter
 from wikify.embedding import embedder_for
-from wikify.ingest.refresh import ingest_corpus
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.paths import BundlePaths
 from wikify.store.vectors import load_vectors
 from wikify.store.vectors_meta import read_meta

@@ -306,3 +306,120 @@ def test_vector_reuse_on_incremental(sources_dir, corpus_dir):
             assert (new_vs.matrix[idx] == old_vec).all(), (
                 f"Vector changed for unchanged chunk {cid}"
             )
+
+
+# --- Embedder change re-embeds everything (Finding #2) ---
+
+def test_embedder_change_reembeds_all(sources_dir, corpus_dir):
+    """Changing WIKIFY_EMBEDDER must re-embed all chunks, not reuse old."""
+
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    # Tamper with the vectors.meta.json to simulate a different backend
+    from wikify.store.vectors_meta import VectorsMeta, write_meta
+
+    write_meta(paths.vectors_path, VectorsMeta(
+        backend="fake_old_backend", dim=999, model="old-model",
+    ))
+
+    embed_call_count = [0]
+    real_embed = __import__(
+        "wikify.ingest.pipeline", fromlist=["embed_texts"]
+    ).embed_texts
+
+    def counting_embed(texts):
+        embed_call_count[0] += len(texts)
+        return real_embed(texts)
+
+    # Add beta to trigger an incremental run
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
+
+    with patch(
+        "wikify.ingest.pipeline.embed_texts",
+        side_effect=counting_embed,
+    ):
+        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    chunks = all_chunks(paths)
+    # ALL chunks should have been embedded (no reuse from wrong backend)
+    assert embed_call_count[0] == len(chunks), (
+        f"Expected {len(chunks)} embeddings, got {embed_call_count[0]}"
+    )
+
+
+# --- Same-stem sources get distinct image dirs (Finding #1) ---
+
+def test_same_stem_image_dirs_distinct(sources_dir, corpus_dir):
+    """set1/alpha.md and set2/alpha.md must not share an image folder."""
+    from wikify.ingest.pipeline import doc_id_for, image_slug
+
+    (sources_dir / "set1").mkdir()
+    (sources_dir / "set2").mkdir()
+
+    a1 = sources_dir / "set1" / "alpha.md"
+    a2 = sources_dir / "set2" / "alpha.md"
+    _write_md(a1, "Alpha Set1", "Set1 body.")
+    _write_md(a2, "Alpha Set2", "Set2 body.")
+
+    did1 = doc_id_for(a1)
+    did2 = doc_id_for(a2)
+    # Different content -> different doc_ids
+    assert did1 != did2
+
+    slug1 = image_slug(did1)
+    slug2 = image_slug(did2)
+    # Image slugs must be different
+    assert slug1 != slug2, (
+        f"Image slug collision: {slug1} for both doc_ids"
+    )
+
+    # Full ingest should produce two docs with distinct image dirs
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+    docs = list_documents(paths)
+    assert len(docs) == 2
+    image_dirs = {d.image_dir for d in docs}
+    assert len(image_dirs) == 2
+
+
+# --- Duplicate-content aliases: sync delete one keeps shared doc ---
+
+def test_duplicate_content_alias_sync(sources_dir, corpus_dir):
+    """Two sources with identical bytes: deleting one in sync mode
+    must NOT remove the shared physical doc."""
+    (sources_dir / "copy1").mkdir()
+    (sources_dir / "copy2").mkdir()
+    body = "Identical body."
+    _write_md(sources_dir / "copy1" / "paper.md", "Paper", body)
+    _write_md(sources_dir / "copy2" / "paper.md", "Paper", body)
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    assert len(active) == 2
+    # Both should reference the same doc_id (same content hash)
+    doc_ids = {s.doc_id for s in active}
+    assert len(doc_ids) == 1, (
+        f"Expected 1 shared doc_id, got {doc_ids}"
+    )
+    shared_did = doc_ids.pop()
+
+    # Remove one copy and sync
+    import shutil
+
+    shutil.rmtree(sources_dir / "copy2")
+    paths = ingest_corpus(
+        sources_dir, corpus_dir, max_workers=1, mode="sync",
+    )
+
+    # The shared doc should still exist (copy1 still references it)
+    docs = list_documents(paths)
+    assert len(docs) == 1
+    assert docs[0].id == shared_did
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    assert len(active) == 1

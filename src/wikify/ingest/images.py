@@ -364,7 +364,7 @@ def rewrite_sidecar_near_chunks(image_dir: Path, near: dict[str, list[str]]) -> 
 
     Reads every ``*.json`` in ``image_dir``, looks up its id in ``near``,
     and rewrites the file with the populated list. No-op for ids absent
-    from the map. Used by ``refresh.py`` after chunks are linked.
+    from the map. Used by ``pipeline.py`` after chunks are linked.
     """
     if not image_dir.exists() or not near:
         return

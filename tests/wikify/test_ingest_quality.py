@@ -15,7 +15,7 @@ from wikify.ingest.metadata import (
     extract_authors_from_markdown,
     extract_year_from_pdf_meta,
 )
-from wikify.ingest.refresh import _sections_from_chunks
+from wikify.ingest.pipeline import sections_from_chunks as _sections_from_chunks
 from wikify.ingest.topics import _is_valid_keyword
 from wikify.models import Chunk
 

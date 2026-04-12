@@ -86,6 +86,8 @@ def _lazy_html():
     return p
 
 
+ParserBackend = str  # "default" | "docling" | custom key
+
 _SUFFIX_TABLE: dict[str, callable] = {
     "md": _lazy_md,
     "markdown": _lazy_md,
@@ -108,10 +110,44 @@ _KIND_TABLE: dict[str, DocKind] = {
     "htm": "html",
 }
 
+# Per-backend override tables.  Each maps suffix -> lazy loader.
+# "default" is the built-in table above.
+_BACKEND_OVERRIDES: dict[str, dict[str, callable]] = {}
 
-def parse_file(path: Path) -> tuple[DocKind, ParseResult]:
+
+def register_parser_backend(
+    name: str, overrides: dict[str, callable],
+) -> None:
+    """Register a named parser backend that overrides specific formats.
+
+    Example::
+
+        register_parser_backend("docling", {"pdf": _lazy_docling_pdf})
+
+    Then ``parse_file(path, parser_backend="docling")`` uses the
+    docling parser for PDFs while falling back to the default table
+    for other formats.
+    """
+    _BACKEND_OVERRIDES[name] = overrides
+
+
+def parse_file(
+    path: Path,
+    *,
+    parser_backend: ParserBackend = "default",
+) -> tuple[DocKind, ParseResult]:
+    """Dispatch a source file to the right parser.
+
+    ``parser_backend`` selects an override table registered via
+    ``register_parser_backend``.  Unregistered backends raise
+    ``ValueError``.  ``"default"`` always works.
+    """
     suffix = path.suffix.lower().lstrip(".")
-    loader = _SUFFIX_TABLE.get(suffix)
+    overrides = _BACKEND_OVERRIDES.get(parser_backend, {})
+    loader = overrides.get(suffix) or _SUFFIX_TABLE.get(suffix)
     if loader is None:
         raise ValueError(f"unsupported file type: {path.suffix}")
-    return _KIND_TABLE[suffix], loader().parse(path)
+    kind = _KIND_TABLE.get(suffix)
+    if kind is None:
+        raise ValueError(f"unsupported file type: {path.suffix}")
+    return kind, loader().parse(path)

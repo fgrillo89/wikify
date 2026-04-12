@@ -59,12 +59,24 @@ def ingest(
         "--workers",
         help="Parse parallelism. 0 = 60%% of CPU cores (default), 1 = serial.",
     ),
+    mode: str = typer.Option(
+        "additive",
+        "--mode",
+        help="additive (default) or sync (removes absent sources).",
+    ),
+    parser: str = typer.Option(
+        "default",
+        "--parser",
+        help="Parser backend: 'default' or a registered name (e.g. 'docling').",
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
     paths = ingest_corpus(
         input_dir,
         output_dir,
         max_workers=None if workers == 0 else workers,
+        mode=mode,
+        parser_backend=parser,
     )
     typer.echo(f"corpus written to {paths.root}")
 

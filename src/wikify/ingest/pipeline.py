@@ -113,15 +113,19 @@ def content_hash(path: Path) -> str:
     return hashlib.sha1(path.read_bytes()).hexdigest()[:12]
 
 
-def image_slug(path: Path) -> str:
-    """Filesystem-safe folder name from a paper filename (<=80 chars)."""
-    stem = path.stem
-    slug = re.sub(r"[^\w\s-]", "", stem)
+def image_slug(doc_id: str) -> str:
+    """Filesystem-safe image folder name derived from doc_id.
+
+    Uses doc_id (which includes the content hash) so same-stem sources
+    in different directories get distinct image folders.  Truncated at
+    80 chars on a word boundary for Windows MAX_PATH.
+    """
+    slug = re.sub(r"[^\w\s-]", "", doc_id)
     slug = re.sub(r"\s+", "_", slug).strip("_")
     if len(slug) <= 80:
-        return slug or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+        return slug or doc_id[:12]
     cut = slug[:80].rsplit("_", 1)[0]
-    return cut or hashlib.sha1(stem.encode("utf-8")).hexdigest()[:12]
+    return cut or doc_id[:12]
 
 
 def _default_workers() -> int:
@@ -129,15 +133,19 @@ def _default_workers() -> int:
     return max(2, int(cpu * 0.6))
 
 
-def _parse_worker(src_str: str, images_root_str: str) -> _ParsedBundle:
+def _parse_worker(
+    src_str: str,
+    images_root_str: str,
+    parser_backend: str = "default",
+) -> _ParsedBundle:
     """Parse + chunk one source file. Runs in a worker process."""
     src = Path(src_str)
     images_root = Path(images_root_str)
     t_worker = time.monotonic()
-    kind, parsed = parse_file(src)
+    kind, parsed = parse_file(src, parser_backend=parser_backend)
     did = doc_id_for(src)
 
-    img_slug = image_slug(src)
+    img_slug = image_slug(did)
     image_dir_path = images_root / img_slug
     image_dir = str(image_dir_path)
 
@@ -257,6 +265,7 @@ def _parse_sources(
     sources: list[Path],
     paths: CorpusPaths,
     max_workers: int | None,
+    parser_backend: str = "default",
 ) -> list[_ParsedBundle]:
     """Parse and chunk all sources in parallel. Returns sorted bundles."""
     workers = max_workers if max_workers is not None else _default_workers()
@@ -269,7 +278,9 @@ def _parse_sources(
         )
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_parse_worker, str(src), images_root_str): src
+                pool.submit(
+                    _parse_worker, str(src), images_root_str, parser_backend,
+                ): src
                 for src in sources
             }
             for fut in as_completed(futures):
@@ -281,7 +292,9 @@ def _parse_sources(
     else:
         for src in sources:
             try:
-                bundles.append(_parse_worker(str(src), str(paths.images_dir)))
+                bundles.append(
+                    _parse_worker(str(src), str(paths.images_dir), parser_backend)
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[ingest] parse failed for {src.name}: {exc}", file=sys.stderr)
 
@@ -369,17 +382,46 @@ def _embed_chunks_incremental(
     active and not from stale docs, embeds only the new/changed chunks,
     and merges into one store. Validates that the result covers exactly
     the active chunk ids.
+
+    If the embedder backend changed since the last run, all existing
+    vectors are discarded and everything is re-embedded to prevent
+    mixing vectors from incompatible embedding spaces.
     """
     import numpy as np
 
+    from ..embedding import current_backend
     from ..store.vectors import load_vectors
+    from ..store.vectors_meta import read_meta
 
     target_ids = [c.id for c in all_chunks]
     target_set = set(target_ids)
 
+    # Check embedder fingerprint: skip reuse if backend changed.
+    backend = current_backend()
+    embedder_changed = False
+    if paths.vectors_path.exists():
+        old_meta = read_meta(paths.vectors_path)
+        if old_meta is not None:
+            cur_backend = str(backend["backend"])
+            cur_dim = int(backend.get("dim") or 0)
+            if old_meta.backend != cur_backend or (
+                cur_dim and old_meta.dim != cur_dim
+            ):
+                embedder_changed = True
+                print(
+                    f"[ingest] embedder changed "
+                    f"({old_meta.backend}/{old_meta.dim} -> "
+                    f"{cur_backend}/{cur_dim}), re-embedding all",
+                    file=sys.stderr,
+                )
+
     # Try to load existing vectors for reuse
     reusable: dict[str, np.ndarray] = {}
-    if paths.vectors_path.exists() and not stale_doc_ids == target_set:
+    if (
+        paths.vectors_path.exists()
+        and not embedder_changed
+        and not stale_doc_ids == target_set
+    ):
         try:
             old_store = load_vectors(paths.vectors_path)
             for i, cid in enumerate(old_store.ids):
@@ -422,13 +464,10 @@ def _embed_chunks_incremental(
 
     write_vector_store(paths, store)
 
-    from ..embedding import current_backend
-
-    backend = current_backend()
     meta = VectorsMeta(
         backend=str(backend["backend"]),
-        dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend["dim"] or 0),
-        model=backend["model"],  # type: ignore[arg-type]
+        dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend.get("dim") or 0),
+        model=backend.get("model"),  # type: ignore[arg-type]
     )
     write_vectors_meta(paths.vectors_path, meta)
     return store
@@ -657,6 +696,7 @@ def ingest_corpus(
     *,
     max_workers: int | None = None,
     mode: str = "additive",
+    parser_backend: str = "default",
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -690,9 +730,12 @@ def ingest_corpus(
             raw_sources, manifest, input_root=input_dir, mode=mode,
         )
 
-        # Intra-run dedup (two files with same content)
-        seen_hashes: set[str] = set()
+        # Intra-run dedup: two source paths with identical bytes share
+        # one doc_id.  Parse only the first; record the second as a
+        # manifest alias so sync-mode knows both reference the same doc.
+        seen_hashes: dict[str, str] = {}  # hash -> first source_id
         deduped: list[Path] = []
+        dedup_aliases: list[tuple[str, str, str]] = []  # (sid, h, did)
         for src in change_set.to_parse:
             try:
                 h = content_hash(src)
@@ -700,9 +743,17 @@ def ingest_corpus(
                 deduped.append(src)
                 continue
             if h in seen_hashes:
+                sid = change_set.path_to_sid.get(str(src))
+                if sid is None:
+                    sid = source_id_for(src, input_dir)
+                did = doc_id_for(src)
+                dedup_aliases.append((sid, h, did))
                 print(f"  [skip-intra] {src.name}", file=sys.stderr)
                 continue
-            seen_hashes.add(h)
+            first_sid = change_set.path_to_sid.get(str(src))
+            if first_sid is None:
+                first_sid = source_id_for(src, input_dir)
+            seen_hashes[h] = first_sid
             deduped.append(src)
         change_set.to_parse = deduped
 
@@ -731,7 +782,9 @@ def ingest_corpus(
 
     if change_set.to_parse:
         with _timed(timings, "parse+chunk"):
-            bundles = _parse_sources(change_set.to_parse, paths, max_workers)
+            bundles = _parse_sources(
+                change_set.to_parse, paths, max_workers, parser_backend,
+            )
 
         with _timed(timings, "per-doc persist"):
             _, _, _, declared, raw_md = _persist_bundles(bundles, paths)
@@ -739,9 +792,7 @@ def ingest_corpus(
         timings["parse+chunk"] = 0.0
         timings["per-doc persist"] = 0.0
 
-    # --- 2. Determine which replacements succeeded ---
-    # A replacement succeeded if a bundle was produced for that source_id.
-    # If parsing failed, the old doc stays active.
+    # --- 2. Collect stale doc_ids from successful replacements + deletes ---
 
     parsed_sids: set[str] = set()
     for bundle in bundles:
@@ -752,18 +803,17 @@ def ingest_corpus(
 
     stale_doc_ids: set[str] = set()
 
-    # Only remove old artifacts for replacements that produced a bundle
     for sid, old_doc_id in change_set.to_replace.items():
         if sid in parsed_sids:
             stale_doc_ids.add(old_doc_id)
             print(f"  [replace] {sid}: old {old_doc_id}", file=sys.stderr)
         else:
             print(
-                f"  [replace-skipped] {sid}: parse failed, keeping {old_doc_id}",
+                f"  [replace-skipped] {sid}: parse failed, "
+                f"keeping {old_doc_id}",
                 file=sys.stderr,
             )
 
-    # Sync deletes: remove absent sources
     for sid in change_set.to_delete:
         rec = manifest.sources.get(sid)
         if rec and rec.status == "active":
@@ -771,13 +821,8 @@ def ingest_corpus(
             manifest.sources[sid].status = "deleted"
             print(f"  [delete] {sid} ({rec.doc_id})", file=sys.stderr)
 
-    # --- 3. Remove stale artifacts ---
-
-    if stale_doc_ids:
-        with _timed(timings, "remove stale"):
-            _remove_doc_artifacts(paths, stale_doc_ids)
-
-    # --- 4. Update manifest with successfully parsed sources ---
+    # --- 3. Update manifest BEFORE removal so still_active_doc_ids ---
+    #     reflects the new records (replacements point at new doc_ids).
 
     for bundle in bundles:
         sid = change_set.path_to_sid.get(bundle.src_path)
@@ -794,6 +839,33 @@ def ingest_corpus(
             parsed_at=SourceRecord.now_iso(),
         )
         manifest.sources[sid] = rec
+
+    # Register intra-run dedup aliases so sync-mode delete checks all
+    # active references before removing shared physical artifacts.
+    for alias_sid, alias_h, alias_did in dedup_aliases:
+        if alias_sid not in manifest.sources:
+            manifest.sources[alias_sid] = SourceRecord(
+                source_id=alias_sid,
+                source_path="",
+                content_hash=alias_h,
+                doc_id=alias_did,
+                status="active",
+                parsed_at=SourceRecord.now_iso(),
+            )
+
+    # --- 4. Remove stale artifacts ---
+    # Only remove physical artifacts if no other active source still
+    # references the same doc_id (handles duplicate-content aliases).
+
+    still_active_doc_ids = {
+        s.doc_id for s in manifest.sources.values()
+        if s.status == "active"
+    }
+    safe_to_remove = stale_doc_ids - still_active_doc_ids
+
+    if safe_to_remove:
+        with _timed(timings, "remove stale"):
+            _remove_doc_artifacts(paths, safe_to_remove)
 
     # --- 5. Derived rebuild (full active corpus on disk) ---
 
@@ -857,9 +929,8 @@ def ingest_corpus(
 def _remove_doc_artifacts(paths: CorpusPaths, doc_ids: set[str]) -> None:
     """Physically delete corpus artifacts for the given doc_ids.
 
-    Removes doc JSON, chunks JSONL, markdown, and image directory so
-    they are not picked up by ``list_documents`` / ``all_chunks`` during
-    the derived rebuild.
+    Removes doc JSON, chunks JSONL, markdown, and image directories
+    whose sidecars belong exclusively to stale doc_ids.
     """
     import shutil
 
@@ -873,24 +944,35 @@ def _remove_doc_artifacts(paths: CorpusPaths, doc_ids: set[str]) -> None:
         md_file = paths.markdown_dir / f"{did}.md"
         if md_file.exists():
             md_file.unlink()
-    # Image dirs use slugified names, not doc_ids directly.  Walk the
-    # image folder and check sidecar JSON for matching doc_ids.
+        # Image dir uses image_slug(doc_id) -- try direct match first.
+        img_dir = paths.images_dir / image_slug(did)
+        if img_dir.is_dir():
+            shutil.rmtree(img_dir)
+    # Fallback: walk remaining image dirs and check sidecar doc_ids.
+    # Catches dirs created by older ingest runs that used stem-based slugs.
     if paths.images_dir.exists():
         for img_dir in paths.images_dir.iterdir():
             if not img_dir.is_dir():
                 continue
-            # Check if any sidecar in this dir belongs to a stale doc
             sidecars = list(img_dir.glob("*.json"))
             if not sidecars:
                 continue
-            try:
-                first = json.loads(sidecars[0].read_text(encoding="utf-8"))
-                img_id = first.get("id", "")
-                img_doc_id = img_id.split("/", 1)[0] if "/" in img_id else ""
-                if img_doc_id in doc_ids:
-                    shutil.rmtree(img_dir)
-            except Exception:  # noqa: BLE001
-                pass
+            # Check ALL sidecars: only remove if every image belongs
+            # to stale doc_ids (don't destroy a shared dir).
+            all_stale = True
+            for sc in sidecars:
+                try:
+                    data = json.loads(sc.read_text(encoding="utf-8"))
+                    img_id = data.get("id", "")
+                    img_did = img_id.split("/", 1)[0] if "/" in img_id else ""
+                    if img_did and img_did not in doc_ids:
+                        all_stale = False
+                        break
+                except Exception:  # noqa: BLE001
+                    all_stale = False
+                    break
+            if all_stale:
+                shutil.rmtree(img_dir)
 
 
 def _build_pairs(
@@ -901,19 +983,3 @@ def _build_pairs(
     for c in chunks:
         by_doc.setdefault(c.doc_id, []).append(c)
     return [(d.id, by_doc.get(d.id, [])) for d in docs]
-
-
-# ---------------------------------------------------------------------------
-# Backwards-compatible aliases for test imports
-# ---------------------------------------------------------------------------
-# These were private helpers in refresh.py that tests import directly.
-# Keep them available during migration.
-_sections_from_chunks = sections_from_chunks
-_bind_equations_to_chunks = bind_equations_to_chunks
-_doc_id_for = doc_id_for
-_content_hash = content_hash
-_image_slug = image_slug
-_iter_sources = iter_sources
-_write_pagerank = write_pagerank
-_populate_doc_edges = populate_doc_edges
-_dedupe_sources_compat = _dedupe_sources

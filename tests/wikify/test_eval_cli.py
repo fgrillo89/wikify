@@ -11,7 +11,7 @@ from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import build_strategy
 from wikify.cache import ExtractCache
 from wikify.meter import CostMeter
-from wikify.ingest.refresh import ingest_corpus
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.paths import BundlePaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"

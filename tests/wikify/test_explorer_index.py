@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from wikify.distill.pipeline import _build_explorer_state
-from wikify.ingest.refresh import ingest_corpus
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.ingest.explorer_index import (
     build_explorer_index,
     load_explorer_index,

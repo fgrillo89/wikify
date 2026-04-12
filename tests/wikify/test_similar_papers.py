@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from wikify.ingest.refresh import ingest_corpus
+from wikify.ingest.pipeline import ingest_corpus
 from wikify.store.corpus import list_documents
 
 

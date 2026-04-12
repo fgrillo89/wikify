@@ -1,7 +1,6 @@
 """Caption-first figure / table / scheme reference extractor.
 
-Ported from ``archive/wikify/ingest/extract/figure_refs.py``. Scans
-markdown body text for inline caption patterns like
+Scans markdown body text for inline caption patterns like
 ``Fig. 1. Schematic of …`` or ``Table 2. Summary of measured values …``
 and emits one record per unique key. The result is the *body-side*
 catalogue of figures: it covers cases where the binary figure extractor
@@ -43,7 +42,7 @@ _FIG_CAPTION_RE = re.compile(
 )
 _TABLE_CAPTION_RE = re.compile(
     r"(?im)^\s*\*{0,2}"
-    r"(?P<key>Table\.?\s*(?P<num>\d+)(?P<sub>[a-z])?)"
+    r"(?P<key>Tab(?:le)?\.?\s*(?P<num>\d+)(?P<sub>[a-z])?)"
     r"\*{0,2}"
     r"\s*[.:\-—\u2014]+\s*"
     r"(?P<caption>.+)"
@@ -54,6 +53,21 @@ _SCHEME_CAPTION_RE = re.compile(
     r"\*{0,2}"
     r"\s*[.:\-—\u2014]+\s*"
     r"(?P<caption>.+)"
+)
+_ILLUSTRATION_CAPTION_RE = re.compile(
+    r"(?im)^\s*\*{0,2}"
+    r"(?P<key>(?:Illustration|Schematic)\.?\s*(?P<num>\d+)(?P<sub>[a-z])?)"
+    r"\*{0,2}"
+    r"\s*[.:\-—\u2014]+\s*"
+    r"(?P<caption>.+)"
+)
+# "Graphical Abstract" is unnumbered -- matches with implicit num=0.
+_GRAPHICAL_ABSTRACT_RE = re.compile(
+    r"(?im)^\s*\*{0,2}"
+    r"(?P<key>Graphical\s+Abstract)"
+    r"\*{0,2}"
+    r"\s*[.:\-—\u2014]*\s*"
+    r"(?P<caption>.*)"
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -97,13 +111,15 @@ def extract_figure_refs(md_text: str) -> list[dict]:
     out: list[dict] = []
     seen: set[tuple[str, int, str]] = set()
 
-    patterns = [
+    # Numbered caption patterns: Fig/Table/Scheme/Illustration/Schematic
+    numbered_patterns = [
         ("figure", _FIG_CAPTION_RE),
         ("table", _TABLE_CAPTION_RE),
         ("scheme", _SCHEME_CAPTION_RE),
+        ("figure", _ILLUSTRATION_CAPTION_RE),
     ]
 
-    for kind, pattern in patterns:
+    for kind, pattern in numbered_patterns:
         for m in pattern.finditer(md_text):
             num = int(m.group("num"))
             sub = (m.group("sub") or "").lower()
@@ -113,7 +129,6 @@ def extract_figure_refs(md_text: str) -> list[dict]:
             seen.add(key_triple)
 
             caption = m.group("caption").strip()
-            # Strip trailing markdown emphasis closers and excess whitespace.
             caption = re.sub(r"\s+", " ", caption).strip().rstrip("*_ ")
             if not caption:
                 continue
@@ -129,6 +144,23 @@ def extract_figure_refs(md_text: str) -> list[dict]:
                     "char_offset": m.start(),
                 }
             )
+
+    # Unnumbered "Graphical Abstract" (at most one per paper)
+    ga = _GRAPHICAL_ABSTRACT_RE.search(md_text)
+    if ga and ("figure", 0, "") not in seen:
+        caption = (ga.group("caption") or "").strip()
+        caption = re.sub(r"\s+", " ", caption).strip().rstrip("*_ ")
+        out.append(
+            {
+                "key": ga.group("key").strip(),
+                "kind": "figure",
+                "num": 0,
+                "sub": "",
+                "caption": caption[:500] if caption else "Graphical Abstract",
+                "section_path": _section_path_at(md_text, ga.start()),
+                "char_offset": ga.start(),
+            }
+        )
 
     out.sort(key=lambda r: r["char_offset"])
     return out
