@@ -522,3 +522,79 @@ def test_same_stem_images_survive(sources_dir, corpus_dir):
         img_dir = Path(d.image_dir)
         sidecars = list(img_dir.glob("*.json")) if img_dir.exists() else []
         assert sidecars, f"No sidecars for doc {d.id} in {d.image_dir}"
+
+
+# --- Cross-run duplicate alias ---
+
+def test_cross_run_duplicate_becomes_alias(sources_dir, corpus_dir):
+    """Ingest foo.md, then add bar.md with identical bytes in a later run.
+    bar should become an alias, not a separate doc."""
+    body = "Shared content for cross-run dedup."
+    _write_md(sources_dir / "foo.md", "Paper", body)
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    docs_r1 = list_documents(paths)
+    assert len(docs_r1) == 1
+    foo_did = docs_r1[0].id
+
+    # Add bar with identical content in a second run
+    _write_md(sources_dir / "bar.md", "Paper", body)
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    # Should still be 1 doc on disk (bar is an alias, not a new doc)
+    docs_r2 = list_documents(paths)
+    assert len(docs_r2) == 1, (
+        f"Expected 1 doc, got {len(docs_r2)}: {[d.id for d in docs_r2]}"
+    )
+    assert docs_r2[0].id == foo_did
+
+    # Manifest has 2 active sources pointing at the same doc_id
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    assert len(active) == 2
+    doc_ids = {s.doc_id for s in active}
+    assert len(doc_ids) == 1
+    assert foo_did in doc_ids
+
+
+# --- Alias to failed parse does not register ---
+
+def test_alias_to_failed_parse_not_registered(sources_dir, corpus_dir):
+    """If canonical source fails to parse, its alias must not be
+    registered either."""
+    body = "Identical content for alias failure test."
+    (sources_dir / "set1").mkdir()
+    (sources_dir / "set2").mkdir()
+    _write_md(sources_dir / "set1" / "alpha.md", "A", body)
+    _write_md(sources_dir / "set2" / "alpha.md", "A", body)
+
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    call_count = [0]
+
+    def fail_first_alpha(path, **kw):
+        if "alpha" in path.name:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("simulated first-alpha failure")
+        return real_parse(path, **kw)
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=fail_first_alpha,
+    ):
+        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    # The canonical parse failed, so neither source should have an
+    # active manifest record pointing at a non-existent doc
+    for rec in active:
+        assert (paths.docs_dir / f"{rec.doc_id}.json").exists(), (
+            f"Active manifest record {rec.source_id} points at "
+            f"non-existent doc {rec.doc_id}"
+        )

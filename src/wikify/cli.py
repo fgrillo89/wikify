@@ -67,7 +67,7 @@ def ingest(
     parser: str = typer.Option(
         "default",
         "--parser",
-        help="Parser backend: 'default' or a registered name (e.g. 'docling').",
+        help="Parser backend: 'default' or a name registered via register_parser_backend().",
     ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""

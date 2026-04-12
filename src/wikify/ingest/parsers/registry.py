@@ -120,13 +120,14 @@ def register_parser_backend(
 ) -> None:
     """Register a named parser backend that overrides specific formats.
 
-    Example::
+    **Must be called at import time** (module top-level or package
+    ``__init__``), not dynamically at runtime.  On Windows,
+    ``ProcessPoolExecutor`` workers start fresh processes that only
+    see registrations made during module import.
+
+    Example (in a plugin module imported before ``ingest_corpus``)::
 
         register_parser_backend("docling", {"pdf": _lazy_docling_pdf})
-
-    Then ``parse_file(path, parser_backend="docling")`` uses the
-    docling parser for PDFs while falling back to the default table
-    for other formats.
     """
     _BACKEND_OVERRIDES[name] = overrides
 

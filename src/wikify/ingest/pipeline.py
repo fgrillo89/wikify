@@ -751,35 +751,42 @@ def ingest_corpus(
         # hash_to_doc tracks content_hash -> persisted doc_id. Seeded
         # from active manifest records so aliases from prior runs resolve
         # correctly. Updated from the first parsed source in this run.
+        # hash_to_doc: content_hash -> persisted doc_id.  Seeded from
+        # active manifest records so cross-run duplicates are caught.
         hash_to_doc: dict[str, str] = {
             s.content_hash: s.doc_id
             for s in manifest.sources.values()
             if s.status == "active"
         }
-        seen_hashes: dict[str, str] = {}  # hash -> first source_id
         deduped: list[Path] = []
         dedup_aliases: list[tuple[str, str, str]] = []  # (sid, h, did)
+        seen_this_run: set[str] = set()  # hashes seen in to_parse
         for src in change_set.to_parse:
             try:
                 h = content_hash(src)
             except OSError:
                 deduped.append(src)
                 continue
-            if h in seen_hashes:
-                sid = change_set.path_to_sid.get(str(src))
-                if sid is None:
-                    sid = source_id_for(src, input_dir)
-                # Use the persisted doc_id, not a recomputed one from
-                # the skipped path (different stem -> wrong doc_id).
+            sid = change_set.path_to_sid.get(str(src))
+            if sid is None:
+                sid = source_id_for(src, input_dir)
+
+            if h in seen_this_run:
+                # Intra-run duplicate: same bytes as another to_parse entry
                 persisted_did = hash_to_doc.get(h, doc_id_for(src))
                 dedup_aliases.append((sid, h, persisted_did))
                 print(f"  [skip-intra] {src.name}", file=sys.stderr)
                 continue
-            first_sid = change_set.path_to_sid.get(str(src))
-            if first_sid is None:
-                first_sid = source_id_for(src, input_dir)
-            seen_hashes[h] = first_sid
-            # Pre-register the doc_id that will be persisted for this hash
+
+            if h in hash_to_doc and sid not in change_set.to_replace:
+                # Cross-run duplicate: identical bytes already in corpus
+                # from a prior run under a different source_id. Register
+                # as alias instead of re-parsing.
+                dedup_aliases.append((sid, h, hash_to_doc[h]))
+                print(f"  [skip-cross] {src.name}", file=sys.stderr)
+                continue
+
+            seen_this_run.add(h)
             hash_to_doc[h] = doc_id_for(src)
             deduped.append(src)
         change_set.to_parse = deduped
@@ -794,7 +801,7 @@ def ingest_corpus(
         file=sys.stderr,
     )
 
-    if change_set.is_empty:
+    if change_set.is_empty and not dedup_aliases:
         print(
             "[ingest] nothing to do -- corpus already contains every source",
             file=sys.stderr,
@@ -867,18 +874,30 @@ def ingest_corpus(
         )
         manifest.sources[sid] = rec
 
-    # Register intra-run dedup aliases so sync-mode delete checks all
-    # active references before removing shared physical artifacts.
+    # Register dedup aliases only if the target doc_id actually exists.
+    # If the canonical source's parse failed, its doc_id was never
+    # persisted -- registering an alias to it would corrupt the manifest.
+    persisted_doc_ids = {b.doc_id for b in bundles}
     for alias_sid, alias_h, alias_did in dedup_aliases:
-        if alias_sid not in manifest.sources:
-            manifest.sources[alias_sid] = SourceRecord(
-                source_id=alias_sid,
-                source_path="",
-                content_hash=alias_h,
-                doc_id=alias_did,
-                status="active",
-                parsed_at=SourceRecord.now_iso(),
+        if alias_sid in manifest.sources:
+            continue
+        # Target must exist: either just persisted or already on disk.
+        target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
+        if alias_did not in persisted_doc_ids and not target_on_disk:
+            print(
+                f"  [alias-skipped] {alias_sid}: target {alias_did} "
+                f"not on disk (canonical parse may have failed)",
+                file=sys.stderr,
             )
+            continue
+        manifest.sources[alias_sid] = SourceRecord(
+            source_id=alias_sid,
+            source_path="",
+            content_hash=alias_h,
+            doc_id=alias_did,
+            status="active",
+            parsed_at=SourceRecord.now_iso(),
+        )
 
     # --- 4. Remove stale artifacts ---
     # Only remove physical artifacts if no other active source still
