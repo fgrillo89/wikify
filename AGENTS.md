@@ -7,11 +7,11 @@ Code. Product architecture must stay runtime-neutral.
 
 All docs live under `src/wikify/`. Read in this order:
 
-1. `src/wikify/architecture.md` -- system design
-2. `src/wikify/strategies.md` -- E/M/X strategy science
-3. `src/wikify/metrics.md` -- M1-M6, GT-P, GT-C
-4. `src/wikify/runbook.md` -- operational procedures
-5. `src/wikify/test-run-playbook.md` -- required before any test run
+1. `docs/architecture.md` -- system design
+2. `docs/strategies.md` -- E/M/X strategy science
+3. `docs/metrics.md` -- M1-M6, GT-P, GT-C
+4. `docs/runbook.md` -- operational procedures
+5. `docs/test-run-playbook.md` -- required before any test run
 
 ## Product Model
 

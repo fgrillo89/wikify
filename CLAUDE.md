@@ -137,18 +137,18 @@ When asked to assess the output of a pipeline run, a test run, or any generated 
 7. **Metrics are a supplement, never a substitute.** M1/M3/M6 can pass while the rendered output is visually broken; the converse is rarely true. A green metrics report with broken HTML means the metrics are wrong, not that the output is fine.
 8. **After pipeline changes, assume the output is broken until you have verified otherwise.** A "green" test suite proves the code compiles and tests pass; it does not prove the generated artifacts look right.
 
-If a test-run playbook exists (`src/wikify/test-run-playbook.md`), follow it step by step. Do not improvise the review.
+If a test-run playbook exists (`docs/test-run-playbook.md`), follow it step by step. Do not improvise the review.
 
 ## Read First
 
 For `wikify` work, read in this order:
 
-1. `src/wikify/architecture.md`
-2. `src/wikify/strategies.md`
-3. `src/wikify/metrics.md`
-4. `src/wikify/runbook.md`
-5. `src/wikify/test-run-playbook.md` (required before any test run)
-6. `src/wikify/plans/structural-improvements.md` (the current structural roadmap -- phases landed vs pending)
+1. `docs/architecture.md`
+2. `docs/strategies.md`
+3. `docs/metrics.md`
+4. `docs/runbook.md`
+5. `docs/test-run-playbook.md` (required before any test run)
+6. `docs/plans/structural-improvements.md` (the current structural roadmap -- phases landed vs pending)
 
 ## Wikify Ground Rules
 
