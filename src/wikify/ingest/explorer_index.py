@@ -101,7 +101,9 @@ def build_explorer_index(
 
 def save_explorer_index(path: Path, index: dict) -> None:
     """Persist the explorer index as JSON."""
-    path.write_text(json.dumps(index), encoding="utf-8")
+    from ..store.corpus import atomic_write_text
+
+    atomic_write_text(path, json.dumps(index))
 
 
 def load_explorer_index(path: Path) -> dict | None:

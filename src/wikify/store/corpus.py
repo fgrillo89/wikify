@@ -10,7 +10,7 @@ from ..paths import CorpusPaths
 from .vectors import VectorStore, load_vectors, save_vectors
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def atomic_write_text(path: Path, content: str) -> None:
     """Write *content* to *path* atomically via tempfile + os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".corpus-", dir=str(path.parent))
@@ -26,14 +26,14 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 def write_document(paths: CorpusPaths, doc: Document, markdown: str, chunks: list[Chunk]) -> None:
     paths.ensure()
-    _atomic_write_text(
+    atomic_write_text(
         paths.markdown_dir / f"{doc.id}.md", markdown,
     )
-    _atomic_write_text(
+    atomic_write_text(
         paths.chunks_dir / f"{doc.id}.jsonl",
         "\n".join(json.dumps(_chunk_to_dict(c)) for c in chunks),
     )
-    _atomic_write_text(
+    atomic_write_text(
         paths.docs_dir / f"{doc.id}.json", json.dumps(_doc_to_dict(doc)),
     )
 
@@ -66,7 +66,7 @@ def all_chunks(paths: CorpusPaths) -> list[Chunk]:
 
 
 def write_graph(paths: CorpusPaths, graph: CorpusGraph) -> None:
-    _atomic_write_text(
+    atomic_write_text(
         paths.graph_path,
         json.dumps({"nodes": graph.nodes, "edges": graph.edges}),
     )

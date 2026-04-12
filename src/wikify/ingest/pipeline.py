@@ -546,7 +546,9 @@ def write_pagerank(paths: CorpusPaths, docs: list[Document], graph) -> None:
         pagerank: dict[str, float] = {}
     else:
         pagerank = dict(nx.pagerank(g, weight="weight"))
-    paths.pagerank_path.write_text(json.dumps(pagerank), encoding="utf-8")
+    from ..store.corpus import atomic_write_text
+
+    atomic_write_text(paths.pagerank_path, json.dumps(pagerank))
 
 
 # ---------------------------------------------------------------------------
@@ -567,11 +569,12 @@ def _resave_docs(
     docs: list[Document],
     raw_markdown_by_id: dict[str, str],
 ) -> None:
-    from ..store.corpus import _doc_to_dict
+    from ..store.corpus import _doc_to_dict, atomic_write_text
 
     for doc in docs:
-        (paths.docs_dir / f"{doc.id}.json").write_text(
-            json.dumps(_doc_to_dict(doc)), encoding="utf-8"
+        atomic_write_text(
+            paths.docs_dir / f"{doc.id}.json",
+            json.dumps(_doc_to_dict(doc)),
         )
         body = raw_markdown_by_id.get(doc.id)
         if body is None:

@@ -98,8 +98,9 @@ def extract_topics(
 
 
 def write_topics(path: Path, vocab: TopicVocabulary) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(vocab.to_dict(), indent=2), encoding="utf-8")
+    from ..store.corpus import atomic_write_text
+
+    atomic_write_text(path, json.dumps(vocab.to_dict(), indent=2))
 
 
 # --- internals ------------------------------------------------------------

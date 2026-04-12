@@ -25,9 +25,10 @@ def write_doc_markdown(corpus: CorpusPaths, doc: Document, body: str) -> Path:
     (what ``write_document`` would otherwise put on disk). The output
     prepends YAML frontmatter and appends an ``## Edges`` block.
     """
+    from .corpus import atomic_write_text
+
     path = corpus.markdown_dir / f"{doc.id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_render(doc, body), encoding="utf-8")
+    atomic_write_text(path, _render(doc, body))
     return path
 
 
