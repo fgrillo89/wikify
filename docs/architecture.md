@@ -208,7 +208,8 @@ src/wikify/
     preload.py          # preloaded corpus state
 
   ingest/               # corpus build
-    parsers/            # one parser per kind
+    parsers/            # one parser per kind; backend selectable via
+                        # --parser <name> on CLI (enum + factory)
       pdf.py            # uses pymupdf4llm layout engine with
                         # header=False/footer=False; falls back to
                         # fitz blocks-mode for scanned PDFs;
@@ -217,7 +218,7 @@ src/wikify/
       pptx.py
       html.py
       markdown.py
-      registry.py
+      registry.py       # ParserBackend enum + factory dispatch
       _sections.py      # section_spans (markdown headings) +
                         # toc_spans (TOC-driven, used when >=3 entries)
       _clean.py         # parse-time markdown cleanup; protects

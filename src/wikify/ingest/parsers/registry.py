@@ -1,12 +1,31 @@
-"""Dispatch a source file to the right parser based on suffix."""
+"""Dispatch a source file to the right parser based on suffix.
+
+Parser selection uses an enum + factory pattern.  The built-in table
+covers all currently implemented formats (md, pdf, docx, pptx, html).
+To add a new backend (e.g. docling):
+
+1. Create a parser module in this package (``docling.py``) that exposes
+   ``parse(path) -> ParseResult`` and ``supported_extensions() -> set[str]``.
+2. Add a member to ``ParserBackend`` with a ``_overrides()`` method that
+   returns ``{suffix: (DocKind, lazy_loader)}``.
+3. Select it via ``--parser <name>`` on the CLI.
+
+``validate_backend()`` is called before ingest starts and raises if a
+backend's parser module cannot be imported -- no silent partial corpus.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
 from wikify.models import DocImage, DocKind
+
+# ---------------------------------------------------------------------------
+# Data types produced by parsers
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -51,109 +70,187 @@ class DocumentParser(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Parser table -- one entry per supported format.  Lazy imports keep
-# heavy dependencies (pymupdf, python-docx, ...) out of the module top.
+# Parser backend enum + factory
+#
+# Only implemented backends appear here.  Adding a future backend
+# (e.g. docling) means adding an enum member with an _overrides()
+# method that imports the parser module.  If the module is missing,
+# validate_backend() will raise before ingest starts.
+# ---------------------------------------------------------------------------
+
+
+class ParserBackend(str, Enum):
+    """Implemented parser backends.
+
+    Each member's ``_overrides()`` returns a suffix override table.
+    DEFAULT uses the built-in ``_PARSER_TABLE`` for all formats.
+    """
+
+    DEFAULT = "default"
+
+    def _overrides(self) -> dict[str, tuple[DocKind, callable]]:
+        """Return suffix override table for this backend.
+
+        DEFAULT returns empty (uses the built-in table).  Future
+        backends import their parser module here; ImportError
+        propagates immediately via ``validate_backend()``.
+        """
+        if self is ParserBackend.DEFAULT:
+            return {}
+        # Future backends: add branches here.
+        #   if self is ParserBackend.DOCLING:
+        #       from . import docling as p
+        #       return {"pdf": ("pdf", lambda: p)}
+        raise NotImplementedError(f"no override table for {self.value!r}")
+
+
+# ---------------------------------------------------------------------------
+# Default parser table
+#
+# One row per supported suffix.  Lazy imports keep heavy dependencies
+# (pymupdf, python-docx, ...) out of the module top level.
 # ---------------------------------------------------------------------------
 
 
 def _lazy_md():
     from . import markdown as p
-
     return p
 
 
 def _lazy_pdf():
     from . import pdf as p
-
     return p
 
 
 def _lazy_docx():
     from . import docx as p
-
     return p
 
 
 def _lazy_pptx():
     from . import pptx as p
-
     return p
 
 
 def _lazy_html():
     from . import html as p
-
     return p
 
 
-ParserBackend = str  # "default" | "docling" | custom key
-
-_SUFFIX_TABLE: dict[str, callable] = {
-    "md": _lazy_md,
-    "markdown": _lazy_md,
-    "txt": _lazy_md,
-    "pdf": _lazy_pdf,
-    "docx": _lazy_docx,
-    "pptx": _lazy_pptx,
-    "html": _lazy_html,
-    "htm": _lazy_html,
+# suffix -> (DocKind, lazy_loader)
+_PARSER_TABLE: dict[str, tuple[DocKind, callable]] = {
+    "md":       ("md",   _lazy_md),
+    "markdown": ("md",   _lazy_md),
+    "txt":      ("md",   _lazy_md),
+    "pdf":      ("pdf",  _lazy_pdf),
+    "docx":     ("docx", _lazy_docx),
+    "pptx":     ("pptx", _lazy_pptx),
+    "html":     ("html", _lazy_html),
+    "htm":      ("html", _lazy_html),
 }
 
-_KIND_TABLE: dict[str, DocKind] = {
-    "md": "md",
-    "markdown": "md",
-    "txt": "md",
-    "pdf": "pdf",
-    "docx": "docx",
-    "pptx": "pptx",
-    "html": "html",
-    "htm": "html",
-}
+# Custom backends registered by plugins at import time.
+_CUSTOM_BACKENDS: dict[str, dict[str, tuple[DocKind, callable]]] = {}
 
-# Per-backend override tables.  Each maps suffix -> lazy loader.
-# "default" is the built-in table above.
-_BACKEND_OVERRIDES: dict[str, dict[str, callable]] = {}
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def register_parser_backend(
-    name: str, overrides: dict[str, callable],
+    name: str, overrides: dict[str, tuple[DocKind, callable]],
 ) -> None:
-    """Register a named parser backend that overrides specific formats.
+    """Register a custom parser backend that overrides specific formats.
 
     **Must be called at import time** (module top-level or package
     ``__init__``), not dynamically at runtime.  On Windows,
     ``ProcessPoolExecutor`` workers start fresh processes that only
     see registrations made during module import.
 
-    Example (in a plugin module imported before ``ingest_corpus``)::
+    Example (adding docling as a custom backend)::
 
-        register_parser_backend("docling", {"pdf": _lazy_docling_pdf})
+        def _lazy_docling():
+            from . import docling as p
+            return p
+
+        register_parser_backend("docling", {"pdf": ("pdf", _lazy_docling)})
     """
-    _BACKEND_OVERRIDES[name] = overrides
+    _CUSTOM_BACKENDS[name] = overrides
+
+
+def available_backends() -> list[str]:
+    """Return all implemented backend names (enum + custom)."""
+    return sorted(
+        [b.value for b in ParserBackend]
+        + list(_CUSTOM_BACKENDS)
+    )
+
+
+def _resolve_backend(key: str) -> dict[str, tuple[DocKind, callable]]:
+    """Resolve a backend key to its suffix override table.
+
+    Raises ``ValueError`` if the backend is unknown.  For enum
+    backends, eagerly imports the parser module so missing deps
+    surface immediately.  Custom backends (registered via
+    ``register_parser_backend``) are trusted at registration time;
+    their loaders are invoked lazily during ``parse_file``.
+    """
+    # Custom backends are trusted at registration time.
+    if key in _CUSTOM_BACKENDS:
+        return _CUSTOM_BACKENDS[key]
+
+    # Resolve via enum.  This calls _overrides() which imports the
+    # parser module -- ImportError becomes a clear ValueError.
+    try:
+        backend = ParserBackend(key)
+    except ValueError:
+        raise ValueError(
+            f"unknown parser backend {key!r}; "
+            f"available: {available_backends()}"
+        ) from None
+
+    try:
+        return backend._overrides()
+    except (ImportError, NotImplementedError) as exc:
+        raise ValueError(
+            f"parser backend {key!r} is not installed: {exc}"
+        ) from exc
+
+
+def validate_backend(backend: str | ParserBackend) -> None:
+    """Raise ``ValueError`` if *backend* is unknown or not installed.
+
+    Call this before ingest starts so the user gets a clear error
+    before any files are parsed.  For non-default backends, eagerly
+    resolves the override table (importing parser modules) to surface
+    missing dependencies immediately.
+    """
+    key = backend.value if isinstance(backend, ParserBackend) else backend
+    if key == ParserBackend.DEFAULT.value:
+        return
+    _resolve_backend(key)  # raises on missing module or unknown key
 
 
 def parse_file(
     path: Path,
     *,
-    parser_backend: ParserBackend = "default",
+    parser_backend: str | ParserBackend = ParserBackend.DEFAULT,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
-    ``parser_backend`` selects an override table registered via
-    ``register_parser_backend``.  Unknown backends raise ``ValueError``.
-    ``"default"`` always works.
+    ``parser_backend`` selects an override table.  Unknown or
+    uninstalled backends raise ``ValueError``.
     """
-    if parser_backend != "default" and parser_backend not in _BACKEND_OVERRIDES:
-        raise ValueError(
-            f"unknown parser backend {parser_backend!r}; "
-            f"registered: {sorted(_BACKEND_OVERRIDES) or ['(none)']}"
-        )
+    key = parser_backend.value if isinstance(parser_backend, ParserBackend) else parser_backend
+    if key == ParserBackend.DEFAULT.value:
+        overrides: dict[str, tuple[DocKind, callable]] = {}
+    else:
+        overrides = _resolve_backend(key)
+
     suffix = path.suffix.lower().lstrip(".")
-    overrides = _BACKEND_OVERRIDES.get(parser_backend, {})
-    loader = overrides.get(suffix) or _SUFFIX_TABLE.get(suffix)
-    if loader is None:
+    entry = overrides.get(suffix) or _PARSER_TABLE.get(suffix)
+    if entry is None:
         raise ValueError(f"unsupported file type: {path.suffix}")
-    kind = _KIND_TABLE.get(suffix)
-    if kind is None:
-        raise ValueError(f"unsupported file type: {path.suffix}")
+    kind, loader = entry
     return kind, loader().parse(path)

@@ -1,5 +1,25 @@
 # Ingest Pipeline Refactoring -- Design Brief
 
+## Status (2026-04-12)
+
+Completed:
+- **P2 (parser abstraction)**: `RawImage` is typed (not `metadata["_raw_images"]`).
+  `ParserBackend` enum + factory + unified `_PARSER_TABLE` dispatch.  Adding a
+  new backend (e.g. docling) = one parser module + one enum member with
+  `_overrides()` + `--parser <name>` on CLI.  `validate_backend()` fails fast
+  before ingest if the backend module is missing.
+- **Incremental ingest**: manifest-based dedup, replacement-before-delete safety,
+  alias dedup, cross-run dedup. Old `_dedupe_sources` / `_existing_corpus_hashes`
+  removed.
+- **Pipeline renamed**: `refresh.py` -> `pipeline.py`.
+
+Remaining (not in scope for this pass):
+- P1 (god function): pipeline.py is ~650L, staged but still one function.
+- P3 (enrichment protocol): explicit typed calls, no shared protocol yet.
+- P4 (storage adapter): still file-based, not protocol-backed.
+- P5 (distill coupling): implicit shapes, no corpus reader protocol.
+- P6 (scattered config): partially addressed; SKIP_SECTION_TYPES still duped.
+
 ## Lessons from the distill consolidation
 
 The distill refactor eliminated 6 directories, ~1300 lines of dead code, and renamed concepts to match what they actually do. The principles that worked:

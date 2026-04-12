@@ -1,8 +1,6 @@
 """Structural quality guards for the ingest pipeline.
 
-Covers the regressions audited in ``src/wikify/ingest_audit.md``:
-
-- sections populated on Document from parsed.sections through refresh
+- sections populated on Document from parsed.sections through pipeline
 - year extractors return None on miss (no datetime.now fallback)
 - in-document authors win over a thin filename fallback
 - topic filter rejects noise phrases from the legacy noise list

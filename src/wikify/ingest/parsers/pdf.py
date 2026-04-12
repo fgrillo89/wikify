@@ -204,7 +204,7 @@ def _extract_metadata(doc, md_text: str, filename: str) -> dict:
     }
 
 
-# Image extraction now lives in ``ingest/images.py::extract_pdf_media``.
+# Image extraction now lives in ``ingest/figures.py::extract_pdf_media``.
 
 
 # --- pymupdf artifact scrubbing ------------------------------------------
