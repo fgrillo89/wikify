@@ -778,10 +778,10 @@ def ingest_corpus(
                 print(f"  [skip-intra] {src.name}", file=sys.stderr)
                 continue
 
-            if h in hash_to_doc and sid not in change_set.to_replace:
-                # Cross-run duplicate: identical bytes already in corpus
-                # from a prior run under a different source_id. Register
-                # as alias instead of re-parsing.
+            if h in hash_to_doc:
+                # Content already in corpus (cross-run duplicate or a
+                # replacement whose new bytes match an existing doc).
+                # Register as alias instead of re-parsing.
                 dedup_aliases.append((sid, h, hash_to_doc[h]))
                 print(f"  [skip-cross] {src.name}", file=sys.stderr)
                 continue
@@ -835,10 +835,14 @@ def ingest_corpus(
             sid = source_id_for(Path(bundle.src_path), input_dir)
         parsed_sids.add(sid)
 
+    aliased_sids = {sid for sid, _, _ in dedup_aliases}
+
     stale_doc_ids: set[str] = set()
 
     for sid, old_doc_id in change_set.to_replace.items():
-        if sid in parsed_sids:
+        if sid in parsed_sids or sid in aliased_sids:
+            # Replacement succeeded (parsed) or content now matches an
+            # existing doc (aliased). Either way the old doc is stale.
             stale_doc_ids.add(old_doc_id)
             print(f"  [replace] {sid}: old {old_doc_id}", file=sys.stderr)
         else:
@@ -877,10 +881,9 @@ def ingest_corpus(
     # Register dedup aliases only if the target doc_id actually exists.
     # If the canonical source's parse failed, its doc_id was never
     # persisted -- registering an alias to it would corrupt the manifest.
+    # For replacements that became aliases, update the existing record.
     persisted_doc_ids = {b.doc_id for b in bundles}
     for alias_sid, alias_h, alias_did in dedup_aliases:
-        if alias_sid in manifest.sources:
-            continue
         # Target must exist: either just persisted or already on disk.
         target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
         if alias_did not in persisted_doc_ids and not target_on_disk:
@@ -892,7 +895,11 @@ def ingest_corpus(
             continue
         manifest.sources[alias_sid] = SourceRecord(
             source_id=alias_sid,
-            source_path="",
+            source_path=(
+                manifest.sources[alias_sid].source_path
+                if alias_sid in manifest.sources
+                else ""
+            ),
             content_hash=alias_h,
             doc_id=alias_did,
             status="active",

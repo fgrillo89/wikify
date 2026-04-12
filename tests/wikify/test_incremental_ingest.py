@@ -598,3 +598,41 @@ def test_alias_to_failed_parse_not_registered(sources_dir, corpus_dir):
             f"Active manifest record {rec.source_id} points at "
             f"non-existent doc {rec.doc_id}"
         )
+
+
+# --- Replacement becomes alias when new content matches existing doc ---
+
+def test_replacement_becomes_alias_to_existing(sources_dir, corpus_dir):
+    """Edit bar.md so its bytes match foo.md. bar should become an alias
+    to foo's doc_id, and bar's old doc should be removed."""
+    _write_md(sources_dir / "foo.md", "Foo", "Shared content.")
+    _write_md(sources_dir / "bar.md", "Bar", "Original bar content.")
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    docs_r1 = list_documents(paths)
+    assert len(docs_r1) == 2
+    foo_did = next(d.id for d in docs_r1 if "foo" in d.id)
+    bar_old_did = next(d.id for d in docs_r1 if "bar" in d.id)
+
+    # Edit bar to match foo's content exactly
+    foo_bytes = (sources_dir / "foo.md").read_bytes()
+    (sources_dir / "bar.md").write_bytes(foo_bytes)
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    # Should be 1 doc on disk (bar is now an alias to foo)
+    docs_r2 = list_documents(paths)
+    assert len(docs_r2) == 1, (
+        f"Expected 1 doc, got {[d.id for d in docs_r2]}"
+    )
+    assert docs_r2[0].id == foo_did
+
+    # Old bar doc is gone
+    assert not (paths.docs_dir / f"{bar_old_did}.json").exists()
+
+    # Manifest has 2 active sources pointing at foo's doc_id
+    manifest = CorpusManifest.load(paths.manifest_path)
+    active = [s for s in manifest.sources.values()
+              if s.status == "active"]
+    assert len(active) == 2
+    assert all(s.doc_id == foo_did for s in active)
