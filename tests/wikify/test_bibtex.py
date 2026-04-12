@@ -256,3 +256,210 @@ def test_citation_index_links_reference_to_source_doc_when_doi_matches(tmp_path)
     assert index["doc_citations"]["citing_1"] == [source_key]
     assert not bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8")).entries
     assert index["entries"][source_key]["source_doc_ids"] == ["citing_1"]
+
+
+def test_low_confidence_raw_reference_fragments_are_not_exported(tmp_path):
+    doc = _doc("a_1", "Title A", ["Alice"], 2020)
+    doc.metadata["doi"] = "10.1000/a"
+    doc.citations = [
+        {
+            "ord": 1,
+            "raw_text": "The authors acknowledge funding from the Office of Naval Research.",
+            "authors": [],
+            "year": None,
+            "title": "The authors acknowledge funding from the Office of Naval Research.",
+            "venue": "",
+            "doi": None,
+        },
+        {
+            "ord": 2,
+            "raw_text": "M. Zhao; B. Gao; J. Tanget al.,",
+            "authors": [],
+            "year": None,
+            "title": "M. Zhao; B. Gao; J. Tanget al.,",
+            "venue": "",
+            "doi": None,
+        },
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [doc])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    bibliography = bibtexparser.loads(corpus.bibliography_bib_path.read_text(encoding="utf-8"))
+    assert references.entries == []
+    assert len(bibliography.entries) == 1
+
+
+def test_bad_structured_reference_fields_are_repaired_from_raw_text(tmp_path):
+    doc = _doc("a_1", "Title A", ["Alice"], 2020)
+    doc.metadata["doi"] = "10.1000/a"
+    doc.citations = [
+        {
+            "ord": 1,
+            "raw_text": (
+                "Kresse, G.; Furthmuller, J. Efficient Iterative Schemes for Ab "
+                "Initio Total-Energy Calculations Using a Plane-Wave Basis Set. "
+                "Phys. Rev. B: Condens. Matter Mater. Phys. 1996, 54 (16), "
+                "11169-11186."
+            ),
+            "authors": ["G. Kresse", "Furthmuller"],
+            "year": "1996",
+            "title": "54 (16), 11169-11186",
+            "venue": "",
+            "doi": None,
+        }
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [doc])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    assert len(references.entries) == 1
+    assert references.entries[0]["title"].startswith("Efficient Iterative Schemes")
+    assert references.entries[0]["author"] == "G. Kresse and J. Furthmuller"
+    assert references.entries[0]["journal"].startswith("Phys. Rev. B")
+
+
+def test_reference_without_real_title_is_not_exported(tmp_path):
+    doc = _doc("a_1", "Title A", ["Alice"], 2020)
+    doc.metadata["doi"] = "10.1000/a"
+    doc.citations = [
+        {
+            "ord": 1,
+            "raw_text": (
+                "C. Diorio, P. Hasler, A. Minch, C. A. Mead, IEEE Trans. "
+                "Electron Devices 1996, 43, 1972."
+            ),
+            "authors": [
+                "C. Diorio",
+                "P. Hasler",
+                "A. Minch",
+                "C. A. Mead",
+                "IEEE Trans. Electron Devices",
+            ],
+            "year": "1996",
+            "title": "43, 1972",
+            "venue": "",
+            "doi": None,
+        }
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [doc])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    assert references.entries == []
+
+
+def test_structured_reference_without_doi_is_exported(tmp_path):
+    doc = _doc("a_1", "Title A", ["Alice"], 2020)
+    doc.metadata["doi"] = "10.1000/a"
+    doc.citations = [
+        {
+            "ord": 1,
+            "raw_text": "J. Smith. Useful Memristor Study. Journal X 5, 10-12 (2019).",
+            "authors": ["J. Smith"],
+            "year": "2019",
+            "title": "Useful Memristor Study",
+            "venue": "Journal X",
+            "doi": None,
+        }
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [doc])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    assert len(references.entries) == 1
+    assert references.entries[0]["title"] == "Useful Memristor Study"
+
+
+def test_near_duplicate_references_are_deduplicated_and_upgraded(tmp_path):
+    first = _doc("a_1", "Title A", ["Alice"], 2020)
+    first.metadata["doi"] = "10.1000/a"
+    first.citations = [
+        {
+            "ord": 1,
+            "raw_text": (
+                "S. Kumar, A. Agarwal, S. Mukherjee. Electrical performance of "
+                "large-area Y2O3 memristive crossbar array with ultralow C2C "
+                "variability IEEE Trans. (2022)."
+            ),
+            "authors": ["Kumar S", "Agarwal A", "Mukherjee S"],
+            "year": "2022",
+            "title": (
+                "Electrical performance of large-area Y2O3 memristive crossbar array "
+                "with ultralow C2C variability IEEE Trans"
+            ),
+            "venue": "",
+            "doi": None,
+        }
+    ]
+    second = _doc("b_2", "Title B", ["Bob"], 2021)
+    second.metadata["doi"] = "10.1000/b"
+    second.citations = [
+        {
+            "ord": 2,
+            "raw_text": (
+                "S. Kumar, A. Agarwal and S. Mukherjee, 'Electrical Performance of "
+                "Large -area Y2O3 Memristive Crossbar Array with Ultralow C2C "
+                "Variability', IEEE Transactions on Electron Devices, 2022."
+            ),
+            "authors": ["S. Kumar", "A. Agarwal", "S Mukherjee"],
+            "year": "2022",
+            "title": (
+                "'Electrical Performance of Large -area Y2O3 Memristive Crossbar "
+                "Array with Ultralow C2C Variability', IEEE Transactions on "
+                "Electron Devices"
+            ),
+            "venue": "IEEE Transactions on Electron Devices",
+            "doi": "10.1109/TED.2022.3172400",
+        }
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [first, second])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    assert len(references.entries) == 1
+    assert references.entries[0]["doi"] == "10.1109/TED.2022.3172400"
+
+    index = json.loads(corpus.citation_index_path.read_text(encoding="utf-8"))
+    ref_key = references.entries[0]["ID"]
+    assert index["doc_citations"] == {"a_1": [ref_key], "b_2": [ref_key]}
+
+
+def test_short_reference_titles_are_not_aggressively_deduplicated(tmp_path):
+    first = _doc("a_1", "Title A", ["Alice"], 2020)
+    first.metadata["doi"] = "10.1000/a"
+    first.citations = [
+        {
+            "ord": 1,
+            "raw_text": "A. One. Memristor model. Journal A (2019).",
+            "authors": ["A. One"],
+            "year": "2019",
+            "title": "Memristor model",
+            "venue": "Journal A",
+            "doi": None,
+        }
+    ]
+    second = _doc("b_2", "Title B", ["Bob"], 2021)
+    second.metadata["doi"] = "10.1000/b"
+    second.citations = [
+        {
+            "ord": 2,
+            "raw_text": "B. Two. Memristor model. Journal B (2019).",
+            "authors": ["B. Two"],
+            "year": "2019",
+            "title": "Memristor model",
+            "venue": "Journal B",
+            "doi": None,
+        }
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [first, second])
+
+    references = bibtexparser.loads(corpus.references_bib_path.read_text(encoding="utf-8"))
+    assert len(references.entries) == 2
