@@ -256,7 +256,7 @@ No product logic should depend on one runtime vendor.
 
 Use `wikify` CLI workflows instead of ad hoc file mutation:
 
-- `uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default|docling]`
+- `uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default]`
 - `uv run python -m wikify.cli distill --strategy {E|M|X} --mode {scripted|guided} ...`
 - `uv run python -m wikify.cli distill --phase extract|write|all ...`
 - `uv run python -m wikify.cli campaign --strategy M --iterations 3 ...`

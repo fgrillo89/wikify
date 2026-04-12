@@ -4,8 +4,10 @@
 
 Completed:
 - **P2 (parser abstraction)**: `RawImage` is typed (not `metadata["_raw_images"]`).
-  `ParserBackend` enum + unified `_PARSER_TABLE` dispatch. Alternative parsers
-  (e.g. docling) register via one table row + one module. CLI: `--parser default|docling`.
+  `ParserBackend` enum + factory + unified `_PARSER_TABLE` dispatch.  Adding a
+  new backend (e.g. docling) = one parser module + one enum member with
+  `_overrides()` + `--parser <name>` on CLI.  `validate_backend()` fails fast
+  before ingest if the backend module is missing.
 - **Incremental ingest**: manifest-based dedup, replacement-before-delete safety,
   alias dedup, cross-run dedup. Old `_dedupe_sources` / `_existing_corpus_hashes`
   removed.

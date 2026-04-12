@@ -67,7 +67,7 @@ def ingest(
     parser: str = typer.Option(
         "default",
         "--parser",
-        help="Parser backend: 'default' (pymupdf) or 'docling'. See available_backends().",
+        help="Parser backend: 'default' (pymupdf). Extensible via registry.",
     ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""

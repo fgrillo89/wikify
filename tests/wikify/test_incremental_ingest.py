@@ -636,3 +636,18 @@ def test_replacement_becomes_alias_to_existing(sources_dir, corpus_dir):
               if s.status == "active"]
     assert len(active) == 2
     assert all(s.doc_id == foo_did for s in active)
+
+
+# --- Unregistered parser backend fails fast before any parsing ---
+
+def test_unregistered_backend_raises_before_ingest(sources_dir, corpus_dir):
+    """Selecting a backend not in the enum or custom registry must raise
+    ValueError before any corpus artifacts are written."""
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
+    with pytest.raises(ValueError, match="unknown parser backend"):
+        ingest_corpus(
+            sources_dir, corpus_dir,
+            max_workers=1, parser_backend="docling",
+        )
+    # No corpus artifacts should have been created.
+    assert not corpus_dir.exists() or not list(corpus_dir.iterdir())

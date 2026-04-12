@@ -209,7 +209,7 @@ src/wikify/
 
   ingest/               # corpus build
     parsers/            # one parser per kind; backend selectable via
-                        # --parser default|docling on CLI
+                        # --parser <name> on CLI (enum + factory)
       pdf.py            # uses pymupdf4llm layout engine with
                         # header=False/footer=False; falls back to
                         # fitz blocks-mode for scanned PDFs;
