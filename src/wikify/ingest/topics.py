@@ -183,31 +183,55 @@ _KEYWORD_BAD_STARTERS = frozenset(
 _KEYWORD_SINGLE_STOP = frozenset(
     {
         "abstract",
+        "accordingly",
         "additionally",
         "also",
         "although",
         "and",
+        "besides",
         "both",
+        "consequently",
+        "currently",
+        "especially",
+        "eventually",
+        "fig",
         "figure",
+        "finally",
+        "first",
+        "fortunately",
+        "further",
         "furthermore",
+        "generally",
         "here",
+        "hereafter",
         "however",
         "importantly",
         "initially",
+        "instead",
         "introduction",
         "journal",
         "keywords",
         "likewise",
+        "meanwhile",
         "moreover",
+        "nevertheless",
+        "next",
         "notably",
         "or",
+        "otherwise",
+        "particularly",
         "previously",
+        "quantitatively",
+        "recently",
         "references",
         "respectively",
+        "semicond",
         "similarly",
         "subsequently",
         "table",
+        "then",
         "therefore",
+        "traditionally",
         "thus",
         "vol",
     }
@@ -270,6 +294,16 @@ _METADATA_WORDS = frozenset(
         "issue",
         "pp",
         "pages",
+        "grant",
+        "e-mail",
+        "email",
+        "accepted",
+        "received",
+        "revised",
+        "published",
+        "publication",
+        "manuscript",
+        "corresponding",
     }
 )
 
@@ -318,6 +352,45 @@ def _is_valid_keyword(kw: str) -> bool:
     first = words[0].lower()
     if re.match(r"^(?:ibility|ility|tion|sion|ment|ness|ance|ence|ous|ive)$", first):
         return False
+    # Reject email addresses and URLs
+    if "@" in kw or "://" in kw:
+        return False
+    # Reject strings with 4+ digit sequences (postal codes, page numbers,
+    # grant numbers, years used as identifiers)
+    if re.search(r"\b\d{4,}\b", kw):
+        return False
+    # Reject author-initial patterns: "C J Wan", "D W Zhang", "A. B. Foo"
+    if re.match(r"^[A-Z]\.?\s+[A-Z]\.?\s+\w", kw):
+        return False
+    # Reject "Foo Et Al" (citation fragments)
+    if re.search(r"\bet\s+al\b", kw, re.IGNORECASE):
+        return False
+    # Reject institution/location names
+    if re.search(
+        r"(?i)\b(?:university|institut|academy|college)\b", kw,
+    ):
+        return False
+    # Reject "Figure N" / "Table N" references
+    if re.match(r"(?i)^(?:figure|fig|table)\s*\d", kw):
+        return False
+    # Reject label:number fragments like "B: 6 S", "D: 12 S"
+    if re.match(r"^[A-Z]:\s*\d", kw):
+        return False
+    # Multi-word structural checks (sentence fragments):
+    if len(words) > 2:
+        # Starts with a preposition/conjunction -> sentence fragment
+        if first in _KEYWORD_BAD_STARTERS:
+            return False
+        # Starts with a gerund, adverb, or past participle -> fragment
+        if re.match(r"(?i)^\w+(?:ing|ly|ed)$", words[0]):
+            return False
+        # Section-header prefix followed by body text
+        _section_re = (
+            r"(?i)^(?:introduction|results|discussion"
+            r"|conclusion|method|date)\b"
+        )
+        if re.match(_section_re, kw):
+            return False
     return True
 
 
@@ -330,25 +403,54 @@ def _sanitize_keyword(kw: str) -> str:
 
 
 def _extract_declared_keywords(text: str) -> list[str]:
+    """Extract keywords from a "Keywords:" or "Index Terms:" section.
+
+    Structural approach: find the header, then parse the comma/semicolon-
+    delimited list that follows. Stop when we hit evidence that the keyword
+    section has ended (a new section header, a sentence-length fragment,
+    a paragraph break, or too many consecutive rejects).
+    """
     pattern = re.compile(
-        r"(?:keywords?|index\s+terms|key\s+words)\s*[:\-—.]+\s*(.+?)(?:\n\s*\n|\n#+|\Z)",
+        r"(?:keywords?|index\s+terms|key\s+words)\s*[:\-\u2014.]+\s*"
+        r"(.+?)(?:\n\s*\n|\n#+|\n[A-Z0-9]+\.\s|\Z)",
         re.IGNORECASE | re.DOTALL,
     )
     match = pattern.search(text[:10000])
     if not match:
         return []
     raw = match.group(1).strip()
+    # Limit raw capture: real keyword sections are short (usually < 500 chars).
+    # If we captured more, the regex overshot into body text.
+    raw = raw[:600]
     raw = re.sub(r"[*_`]+", "", raw)
     raw = re.sub(r"\[+\]?", "", raw)
     raw = re.sub(r"\]+", "", raw)
-    parts = re.split(r"[,;]|\.\s+|\n\s*[-•]\s*", raw)
+    parts = re.split(r"[,;]|\.\s+|\n\s*[-\u2022]\s*", raw)
+
     keywords: list[str] = []
+    consecutive_rejects = 0
     for part in parts:
         kw = part.strip().rstrip(".")
         kw = re.sub(r"^\d+[.)]\s*", "", kw)
         kw = _sanitize_keyword(kw)
+        if not kw:
+            continue
+        # Structural signal: if a "keyword" is longer than 6 words or
+        # 60 chars, it's a sentence fragment -- we've left the keyword
+        # section. Stop immediately.
+        if len(kw.split()) > 6 or len(kw) > 60:
+            break
         if _is_valid_keyword(kw):
             keywords.append(kw.lower())
+            consecutive_rejects = 0
+        else:
+            consecutive_rejects += 1
+            # 3 consecutive rejects means we've left the keyword section
+            if consecutive_rejects >= 3:
+                break
+        # Real keyword sections rarely exceed 15 entries
+        if len(keywords) >= 15:
+            break
     return keywords
 
 
