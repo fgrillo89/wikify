@@ -77,7 +77,7 @@ def ingest(
     resolve_bibliography_doi: bool = typer.Option(
         False,
         "--resolve-bibliography-doi",
-        help="Use DOI content negotiation to fill missing bibliography metadata.",
+        help="Resolve citation metadata via OpenAlex API.",
     ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
@@ -96,12 +96,17 @@ def ingest(
 @app.command()
 def refresh(
     corpus_dir: Path = typer.Argument(..., help="Path to the corpus directory."),
+    resolve_bibliography_doi: bool = typer.Option(
+        False,
+        "--resolve-bibliography-doi",
+        help="Resolve citation metadata via OpenAlex API.",
+    ),
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.)."""
     from .paths import CorpusPaths
 
     paths = CorpusPaths(root=corpus_dir)
-    refresh_corpus(paths)
+    refresh_corpus(paths, resolve_bibliography_doi=resolve_bibliography_doi)
     typer.echo(f"refresh complete: {paths.root}")
 
 

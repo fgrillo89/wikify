@@ -1068,19 +1068,62 @@ def _refresh_images_index(ctx: dict) -> None:
 
 
 def _refresh_crossref(ctx: dict) -> None:
-    """Resolve citations via CrossRef API (DOI + fuzzy query)."""
+    """Resolve citations via OpenAlex API (DOI + fuzzy query)."""
     if not ctx.get("resolve_bibliography_doi", False):
         return
-    from .crossref import resolve_citations_batch
+    import asyncio
 
-    all_cits = []
+    from ..citestore import AsyncResolver, DatabaseManager
+
+    all_cits: list[dict] = []
     for doc in ctx["docs"]:
         all_cits.extend(doc.citations or [])
-    if all_cits:
-        resolve_citations_batch(
-            all_cits,
-            corpus_root=ctx["paths"].root,
-        )
+    if not all_cits:
+        return
+
+    db_path = ctx["paths"].root / ".citestore.db"
+
+    async def _run() -> None:
+        async with DatabaseManager(db_path) as db:
+            resolver = AsyncResolver(
+                db,
+                email="fgrillo89@gmail.com",
+                expand_references=True,
+            )
+            try:
+                results = await resolver.resolve_batch(all_cits)
+            finally:
+                await resolver.close()
+
+        # Map results back onto citation dicts in-place.
+        # Results arrive in completion order from as_completed, so match
+        # by (source_doi, source_text) back to the original citation.
+        result_by_text: dict[str, object] = {}
+        for r in results:
+            if r.source_text:
+                result_by_text[r.source_text] = r
+
+        for cit in all_cits:
+            r = result_by_text.get(cit.get("raw_text", ""))
+            if r is None or r.work is None:
+                cit["crossref_resolved"] = False
+                continue
+            w = r.work
+            cit["crossref_resolved"] = True
+            cit["title"] = w.title
+            cit["authors"] = w.authors
+            cit["year"] = w.year or cit.get("year")
+            cit["venue"] = w.journal
+            cit["volume"] = w.volume
+            cit["pages"] = (
+                f"{w.first_page}--{w.last_page}".strip("-")
+                if w.first_page or w.last_page
+                else ""
+            )
+            cit["publisher"] = w.publisher
+            cit["doi"] = w.doi or cit.get("doi", "")
+
+    asyncio.run(_run())
 
 
 def _refresh_bibliography(ctx: dict) -> None:
@@ -1126,10 +1169,10 @@ _REFRESH_STEPS: dict[str, callable] = {
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent -- only needs docs + store
-    ("wave A (edges+topics+images+crossref)", [
+    ("wave A (edges+topics+images+openalex)", [
         "doc_edges", "topics", "images_index", "crossref",
     ]),
-    # Wave A2: bibliography needs crossref to finish first
+    # Wave A2: bibliography needs citation resolution to finish first
     ("wave A2 (bibliography)", [
         "bibliography",
     ]),
