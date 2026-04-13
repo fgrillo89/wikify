@@ -140,7 +140,7 @@ def _split_author_block(block: str) -> list[str]:
         nxt = parts[i + 1] if i + 1 < len(parts) else ""
         # "Lastname, F." or "Lastname, F. M." -> merge
         if nxt and re.match(r"^[A-Z](?:\.\s*[A-Z]\.?)*\.?$", nxt):
-            names.append(f"{nxt} {part}")
+            names.append(f"{_format_initials(nxt)} {part}")
             i += 2
             continue
         names.append(part)
@@ -159,35 +159,167 @@ def _split_author_block(block: str) -> list[str]:
     return cleaned
 
 
-def _parse_structured(raw: str) -> tuple[list[str], int | None, str, str, str | None]:
+def _format_initials(value: str) -> str:
+    letters = re.findall(r"[A-Z]", value)
+    return " ".join(f"{letter}." for letter in letters)
+
+
+def parse_reference(raw: str) -> tuple[list[str], int | None, str, str, str | None]:
     """Best-effort: return (authors, year, title, venue, doi) from a raw
     reference string. Empty/None when a field is not detected.
     """
-    doi = _extract_doi(raw)
-    year = _extract_year(raw)
+    text = _clean_markdown(raw)
+    text = re.split(r"\n\s*\n\s*\[\s*\d+\s*\]|\s+\[\s*\d+\s*\]", text, maxsplit=1)[0]
+    text = re.sub(r"\s+", " ", text).strip()
+    doi = _extract_doi(text)
+    year = _extract_year(text)
     authors: list[str] = []
     title = ""
     venue = ""
 
-    # Split on the first year occurrence: text before is usually author block
     if year is not None:
-        m = _YEAR_RE.search(raw)
+        quoted = _parse_quoted_reference(text)
+        if quoted is not None:
+            authors, title, venue = quoted
+            return authors, year, title, venue, doi
+        m = _YEAR_RE.search(text)
         if m:
-            before = raw[: m.start()].strip().rstrip(".,()[]")
-            after = raw[m.end() :].strip().lstrip(".,)] ")
-            authors = _split_author_block(before)
-            # Title is usually the next sentence-like fragment
-            # Split on '.' but keep the first chunky piece as title.
-            tail_parts = re.split(r"(?<=[a-z])\.\s+|\.\s+(?=[A-Z])", after, maxsplit=2)
-            if tail_parts:
-                title = tail_parts[0].strip().rstrip(".")
-                if len(tail_parts) > 1:
-                    venue = tail_parts[1].strip().rstrip(".")
+            before_raw = text[: m.start()].strip()
+            year_in_parens = before_raw.rstrip().endswith("(")
+            before = before_raw.rstrip(".,()[]")
+            after = text[m.end() :].strip().lstrip(".,)] ")
+            if year_in_parens and _looks_like_reference_title(after):
+                authors = _split_author_block(before.rstrip("(").strip())
+                title, venue = _split_title_venue(after)
+            else:
+                # ACS/IEEE styles usually put title before the year:
+                # ``Authors. Title. Venue 2013, 24, 384009``.
+                authors, title, venue = _split_before_year_reference(before)
+                if not authors:
+                    authors = _split_author_block(before)
+                if not venue and after:
+                    venue = after
     else:
         # No year → assume the whole thing is a title-ish blob
-        title = raw.strip()
+        parts = _split_reference_sentences(text)
+        if len(parts) >= 2:
+            authors = _split_author_block(parts[0])
+            title = parts[1]
+            venue = " ".join(parts[2:])
+        else:
+            title = text
 
     return authors, year, title, venue, doi
+
+
+def _parse_structured(raw: str) -> tuple[list[str], int | None, str, str, str | None]:
+    return parse_reference(raw)
+
+
+def _split_reference_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[a-z0-9])\.\s+|\.\s+(?=[A-Z])", text)
+    return [part.strip().rstrip(".") for part in parts if part.strip().rstrip(".")]
+
+
+def _split_before_year_reference(before: str) -> tuple[list[str], str, str]:
+    for match in re.finditer(r"\.\s+", before):
+        author_block = before[: match.start()].strip()
+        rest = before[match.end() :].strip()
+        if _looks_like_venue_fragment(author_block):
+            continue
+        authors = _split_author_block(author_block)
+        if not authors or not _looks_like_reference_title(rest):
+            continue
+        title, venue = _split_title_venue(rest)
+        return authors, title, venue
+    comma_result = _split_comma_reference(before)
+    if comma_result[1]:
+        return comma_result
+    return [], "", ""
+
+
+def _parse_quoted_reference(text: str) -> tuple[list[str], str, str] | None:
+    match = re.search(
+        r"['\"]\s*(?P<title>[A-Z][^'\"]{20,}?)\s*['\"]\s*,?\s*"
+        r"(?P<venue>.*?)(?:\(|\b(?:19[5-9]\d|20[0-3]\d)\b)",
+        text,
+    )
+    if not match:
+        match = re.search(
+            r"['\"]\s*(?P<title>[A-Z][^'\"]{20,}?)(?:,\s+(?P<venue>.*?))?"
+            r"\s*(?:\(|\b(?:19[5-9]\d|20[0-3]\d)\b)",
+            text,
+        )
+    if not match:
+        return None
+    title = match.group("title").strip(" ,.;")
+    if not _looks_like_reference_title(title):
+        return None
+    authors = _split_author_block(text[: match.start()].strip(" ,.;"))
+    venue = (match.group("venue") or "").strip(" ,.;")
+    return authors, title, venue
+
+
+def _split_comma_reference(before: str) -> tuple[list[str], str, str]:
+    parts = [part.strip() for part in before.split(",") if part.strip()]
+    author_parts: list[str] = []
+    for idx, part in enumerate(parts):
+        if _looks_like_author_part(part):
+            author_parts.append(part)
+            continue
+        if _looks_like_venue_fragment(part):
+            return _split_author_block(", ".join(author_parts)), "", ", ".join(parts[idx:])
+        title = part
+        venue = ", ".join(parts[idx + 1 :])
+        return _split_author_block(", ".join(author_parts)), title, venue
+    return _split_author_block(", ".join(author_parts)), "", ""
+
+
+def _split_title_venue(text: str) -> tuple[str, str]:
+    for match in re.finditer(r"(?<=[a-z0-9])\.\s+", text):
+        title = text[: match.start()].strip().rstrip(".")
+        venue = text[match.end() :].strip().rstrip(".")
+        if _looks_like_reference_title(title):
+            return title, venue
+    return text.strip().rstrip("."), ""
+
+
+def _looks_like_reference_title(text: str) -> bool:
+    if re.match(r"^[a-z]", text.strip()):
+        return False
+    if re.match(r"^\d", text.strip()):
+        return False
+    if re.match(r"^[A-Z][A-Za-z' -]+,\s*[A-Z]\.?", text):
+        return False
+    if re.match(r"^[A-Z]\.?,\s*[A-Z][A-Za-z' -]+", text):
+        return False
+    if re.match(r"^[A-Z]\.\s+[A-Z][A-Za-z' -]+,", text):
+        return False
+    tokens = re.findall(r"[A-Za-z][A-Za-z-]{2,}", text)
+    if _looks_like_venue_fragment(text) and len(tokens) < 5:
+        return False
+    return len(tokens) >= 3
+
+
+def _looks_like_author_part(text: str) -> bool:
+    clean = text.strip()
+    if not clean or _looks_like_venue_fragment(clean):
+        return False
+    if len(clean.split()) > 5:
+        return False
+    return bool(re.search(r"\b[A-Z]\.(?:[A-Z]\.)*|\b[A-Z]\.\s*[A-Z]\.", clean))
+
+
+def _looks_like_venue_fragment(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:IEEE|ACM|Proc|Proceedings|Trans|Journal|Phys|Rev|"
+            r"Mater|Nano|Nature|Science|Circuits|Electron|Devices|"
+            r"Conference|Symp|Int\.?|Nat|Commun|Adv|Sci|Rep|ACS|Appl|Lett|"
+            r"Nanoscale|Horiz|Angew|Chem|Front|Neurosci)\b",
+            text,
+        )
+    )
 
 
 def extract_citations(md_text: str, doc_id: str) -> list[dict]:

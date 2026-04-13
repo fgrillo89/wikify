@@ -55,3 +55,65 @@ def test_dict_shape():
     expected_keys = {"ord", "raw_text", "authors", "year", "title", "venue", "doi"}
     for c in cits:
         assert expected_keys.issubset(c.keys())
+
+
+def test_acs_reference_parses_title_before_year():
+    md = "\n".join(
+        [
+            "# Paper",
+            "",
+            "## References",
+            "",
+            "[1] Kresse, G.; Furthmuller, J. Efficient Iterative Schemes for Ab "
+            "Initio Total-Energy Calculations Using a Plane-Wave Basis Set. "
+            "Phys. Rev. B: Condens. Matter Mater. Phys. 1996, 54 (16), "
+            "11169-11186.",
+        ]
+    )
+
+    cits = extract_citations(md, "doc-1")
+
+    assert cits[0]["authors"] == ["G. Kresse", "J. Furthmuller"]
+    assert cits[0]["year"] == 1996
+    assert cits[0]["title"].startswith("Efficient Iterative Schemes")
+    assert cits[0]["venue"].startswith("Phys. Rev. B")
+
+
+def test_reference_without_title_does_not_make_pages_the_title():
+    md = "\n".join(
+        [
+            "# Paper",
+            "",
+            "## References",
+            "",
+            "[1] C. Diorio, P. Hasler, A. Minch, C. A. Mead, IEEE Trans. "
+            "Electron Devices 1996, 43, 1972.",
+        ]
+    )
+
+    cits = extract_citations(md, "doc-1")
+
+    assert cits[0]["year"] == 1996
+    assert cits[0]["title"] == ""
+
+
+def test_quoted_comma_reference_parses_title_and_authors():
+    md = "\n".join(
+        [
+            "# Paper",
+            "",
+            "## References",
+            "",
+            "[1] Dahiya, A., Kumar, S., and Rani, S., 'Exploring Multilevel "
+            "Current and Impedance Spectroscopy Analysis of Atomic Layer "
+            "Deposited HfO2/Ta2O5 Memristive Device, IEEE Transactions on "
+            "Electron Devices (2025), https://doi.org/10.1109/TED.2025.3635115",
+        ]
+    )
+
+    cits = extract_citations(md, "doc-1")
+
+    assert cits[0]["authors"] == ["A. Dahiya", "S. Kumar", "S. Rani"]
+    assert cits[0]["title"].startswith("Exploring Multilevel Current")
+    assert cits[0]["venue"] == "IEEE Transactions on Electron Devices"
+    assert cits[0]["doi"] == "10.1109/TED.2025.3635115"

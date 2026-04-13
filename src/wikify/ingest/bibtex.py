@@ -20,6 +20,7 @@ from bibtexparser.bwriter import BibTexWriter
 
 from ..models import Document
 from ..paths import CorpusPaths
+from .citations import parse_reference
 from .metadata import (
     extract_authors_from_markdown,
     extract_document_doi,
@@ -30,7 +31,48 @@ from .metadata import (
 
 _ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
 _TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_VENUE_FRAGMENT_RE = re.compile(
+    r"\b(?:IEEE|ACM|Proc|Proceedings|Trans|Journal|Phys|Rev|Mater|Nano|"
+    r"Nature|Science|Circuits|Electron|Devices|Conference|Symp|Int\.?|Nat|"
+    r"Commun|Adv|Sci|Rep|ACS|Appl|Lett|Nanoscale|Horiz|Angew|Chem|"
+    r"Front|Neurosci)\b"
+)
 _CITATION_INDEX_VERSION = 1
+_TITLE_DEDUPE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "based",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "toward",
+    "towards",
+    "use",
+    "used",
+    "using",
+    "via",
+    "with",
+    "without",
+}
+_REFERENCE_SIGNATURE_MIN_TOKENS = 6
+_REFERENCE_SIGNATURE_PREFIX_TOKENS = 10
+_TITLE_KEY_MIN_TOKENS = 3
 
 
 def _sanitize_id(s: str) -> str:
@@ -235,10 +277,12 @@ def build_citation_index(
     source_entries: list[dict[str, str]] = []
     reference_entries: list[dict[str, str]] = []
     entries: dict[str, dict[str, object]] = {}
+    reference_by_bibkey: dict[str, dict[str, str]] = {}
     doc_bibkeys: dict[str, str] = {}
     doc_citations: dict[str, list[str]] = {}
     doi_bibkeys: dict[str, str] = {}
     title_bibkeys: dict[str, str] = {}
+    signature_bibkeys: dict[str, str] = {}
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
@@ -259,12 +303,13 @@ def build_citation_index(
         doc_bibkeys[doc.id] = entry["ID"]
         record = _index_record_from_entry(entry, kind="source", doc_id=doc.id)
         entries[entry["ID"]] = record
-        doi = _clean_doi(entry.get("doi"))
-        if doi:
-            doi_bibkeys[doi.casefold()] = entry["ID"]
-        title_key = _normalise_title_key(entry.get("title"))
-        if title_key:
-            title_bibkeys[title_key] = entry["ID"]
+        _remember_bibkey(
+            entry,
+            entry["ID"],
+            doi_bibkeys=doi_bibkeys,
+            title_bibkeys=title_bibkeys,
+            signature_bibkeys=signature_bibkeys,
+        )
 
     for doc in enriched_docs:
         cited_keys: list[str] = []
@@ -273,25 +318,62 @@ def build_citation_index(
                 citation,
                 doi_bibkeys=doi_bibkeys,
                 title_bibkeys=title_bibkeys,
+                signature_bibkeys=signature_bibkeys,
             )
+            if bibkey and bibkey in reference_by_bibkey:
+                entry = _reference_entry(
+                    citation,
+                    resolve_doi=resolve_doi,
+                    doi_lookup=doi_lookup,
+                )
+                if _is_exportable_reference_entry(entry, citation):
+                    _merge_reference_entry(reference_by_bibkey[bibkey], entry)
+                    _refresh_index_record(entries[bibkey], reference_by_bibkey[bibkey])
+                    _remember_bibkey(
+                        reference_by_bibkey[bibkey],
+                        bibkey,
+                        doi_bibkeys=doi_bibkeys,
+                        title_bibkeys=title_bibkeys,
+                        signature_bibkeys=signature_bibkeys,
+                    )
             if not bibkey:
                 entry = _reference_entry(
                     citation,
                     resolve_doi=resolve_doi,
                     doi_lookup=doi_lookup,
                 )
-                if not (entry.get("title") or entry.get("doi") or entry.get("author")):
+                if not _is_exportable_reference_entry(entry, citation):
                     continue
-                entry["ID"] = _unique_bibkey(_reference_key(entry, citation), ref_seen)
-                bibkey = entry["ID"]
-                reference_entries.append(entry)
-                entries[bibkey] = _index_record_from_entry(entry, kind="reference")
-                doi = _clean_doi(entry.get("doi"))
-                if doi:
-                    doi_bibkeys[doi.casefold()] = bibkey
-                title_key = _normalise_title_key(entry.get("title"))
-                if title_key:
-                    title_bibkeys[title_key] = bibkey
+                bibkey = _resolve_entry_bibkey(
+                    entry,
+                    doi_bibkeys=doi_bibkeys,
+                    title_bibkeys=title_bibkeys,
+                    signature_bibkeys=signature_bibkeys,
+                )
+                if bibkey:
+                    if bibkey in reference_by_bibkey:
+                        _merge_reference_entry(reference_by_bibkey[bibkey], entry)
+                        _refresh_index_record(entries[bibkey], reference_by_bibkey[bibkey])
+                    _remember_bibkey(
+                        reference_by_bibkey.get(bibkey, entry),
+                        bibkey,
+                        doi_bibkeys=doi_bibkeys,
+                        title_bibkeys=title_bibkeys,
+                        signature_bibkeys=signature_bibkeys,
+                    )
+                if not bibkey:
+                    entry["ID"] = _unique_bibkey(_reference_key(entry, citation), ref_seen)
+                    bibkey = entry["ID"]
+                    reference_entries.append(entry)
+                    reference_by_bibkey[bibkey] = entry
+                    entries[bibkey] = _index_record_from_entry(entry, kind="reference")
+                    _remember_bibkey(
+                        entry,
+                        bibkey,
+                        doi_bibkeys=doi_bibkeys,
+                        title_bibkeys=title_bibkeys,
+                        signature_bibkeys=signature_bibkeys,
+                    )
 
             if bibkey not in cited_keys:
                 cited_keys.append(bibkey)
@@ -317,6 +399,7 @@ def build_citation_index(
         "doc_citations": doc_citations,
         "doi_bibkeys": doi_bibkeys,
         "title_bibkeys": title_bibkeys,
+        "signature_bibkeys": signature_bibkeys,
     }
 
 
@@ -340,14 +423,111 @@ def _resolve_citation_bibkey(
     *,
     doi_bibkeys: dict[str, str],
     title_bibkeys: dict[str, str],
+    signature_bibkeys: dict[str, str],
 ) -> str:
     doi = _clean_doi(citation.get("doi"))
     if doi and doi.casefold() in doi_bibkeys:
         return doi_bibkeys[doi.casefold()]
-    title_key = _normalise_title_key(citation.get("title"))
+    title_key = _dedupe_title_key(citation.get("title"))
     if title_key and title_key in title_bibkeys:
         return title_bibkeys[title_key]
+    signature = _reference_signature(citation)
+    if signature and signature in signature_bibkeys:
+        return signature_bibkeys[signature]
     return ""
+
+
+def _resolve_entry_bibkey(
+    entry: dict[str, str],
+    *,
+    doi_bibkeys: dict[str, str],
+    title_bibkeys: dict[str, str],
+    signature_bibkeys: dict[str, str],
+) -> str:
+    doi = _clean_doi(entry.get("doi"))
+    if doi and doi.casefold() in doi_bibkeys:
+        return doi_bibkeys[doi.casefold()]
+    title_key = _dedupe_title_key(entry.get("title"))
+    if title_key and title_key in title_bibkeys:
+        return title_bibkeys[title_key]
+    signature = _reference_signature(entry)
+    if signature and signature in signature_bibkeys:
+        return signature_bibkeys[signature]
+    return ""
+
+
+def _remember_bibkey(
+    entry: dict[str, str],
+    bibkey: str,
+    *,
+    doi_bibkeys: dict[str, str],
+    title_bibkeys: dict[str, str],
+    signature_bibkeys: dict[str, str],
+) -> None:
+    doi = _clean_doi(entry.get("doi"))
+    if doi:
+        doi_bibkeys[doi.casefold()] = bibkey
+    title_key = _dedupe_title_key(entry.get("title"))
+    if title_key:
+        title_bibkeys[title_key] = bibkey
+    signature = _reference_signature(entry)
+    if signature:
+        signature_bibkeys[signature] = bibkey
+
+
+def _merge_reference_entry(target: dict[str, str], candidate: dict[str, str]) -> None:
+    for field in (
+        "title",
+        "author",
+        "year",
+        "journal",
+        "doi",
+        "url",
+        "volume",
+        "number",
+        "pages",
+        "publisher",
+    ):
+        if candidate.get(field) and not target.get(field):
+            target[field] = candidate[field]
+
+
+def _refresh_index_record(record: dict[str, object], entry: dict[str, str]) -> None:
+    record["title"] = _as_text(entry.get("title"))
+    record["authors"] = _as_list(entry.get("author"))
+    record["year"] = _as_text(entry.get("year"))
+    record["venue"] = _as_text(entry.get("journal"))
+    record["doi"] = _clean_doi(entry.get("doi"))
+    record["url"] = _as_text(entry.get("url"))
+    for key in ("volume", "number", "pages", "publisher", "issn"):
+        if entry.get(key):
+            record[key] = entry[key]
+
+
+def _reference_signature(entry_or_citation: dict) -> str:
+    year = _as_text(entry_or_citation.get("year"))
+    if not year:
+        return ""
+    title = _as_text(entry_or_citation.get("title"))
+    tokens = _significant_title_tokens(title)
+    if len(tokens) < _REFERENCE_SIGNATURE_MIN_TOKENS:
+        return ""
+    prefix = " ".join(tokens[:_REFERENCE_SIGNATURE_PREFIX_TOKENS])
+    return f"{year}|{prefix}"
+
+
+def _dedupe_title_key(value: object) -> str:
+    if len(_significant_title_tokens(value)) < _TITLE_KEY_MIN_TOKENS:
+        return ""
+    return _normalise_title_key(value)
+
+
+def _significant_title_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in _TITLE_TOKEN_RE.findall(_as_text(value).casefold())
+        if len(token) > 2 and token not in _TITLE_DEDUPE_STOPWORDS
+    ]
 
 
 def _reference_entry(
@@ -369,7 +549,17 @@ def _reference_entry(
         _first_text(external, "venue", "journal") or _as_text(citation.get("venue"))
     )
     doi = _clean_doi(external.get("doi") or doi)
+    authors, title, year, venue, doi = _repair_reference_fields_from_raw(
+        citation,
+        authors=authors,
+        title=title,
+        year=year,
+        venue=venue,
+        doi=doi,
+    )
     if _is_identifier_title(title, doi):
+        title = ""
+    if _reference_title_is_unusable(title):
         title = ""
     url = _first_text(external, "url")
     if not url and doi:
@@ -402,6 +592,35 @@ def _reference_entry(
     return entry
 
 
+def _repair_reference_fields_from_raw(
+    citation: dict,
+    *,
+    authors: list[str],
+    title: str,
+    year: str,
+    venue: str,
+    doi: str,
+) -> tuple[list[str], str, str, str, str]:
+    raw = _as_text(citation.get("raw_text"))
+    if not raw:
+        return authors, title, year, venue, doi
+    raw_authors, raw_year, raw_title, raw_venue, raw_doi = parse_reference(raw)
+    raw_title = _clean_title(raw_title)
+    raw_venue = _clean_venue(raw_venue)
+    title_was_unusable = _reference_title_is_unusable(title)
+    if raw_title and (title_was_unusable or len(raw_title) > len(title) + 20):
+        title = raw_title
+    if raw_authors and (not authors or title_was_unusable or _authors_look_polluted(authors)):
+        authors = raw_authors
+    if raw_year and not year:
+        year = str(raw_year)
+    if raw_venue and (not venue or venue == title):
+        venue = raw_venue
+    if raw_doi and not doi:
+        doi = _clean_doi(raw_doi)
+    return authors, title, year, venue, doi
+
+
 def _is_identifier_title(title: str, doi: str) -> bool:
     clean = _as_text(title).casefold()
     if not clean:
@@ -409,6 +628,73 @@ def _is_identifier_title(title: str, doi: str) -> bool:
     if clean.startswith(("doi:", "http://", "https://")):
         return True
     return bool(doi and _normalise_title_key(clean) == _normalise_title_key(doi))
+
+
+def _is_exportable_reference_entry(entry: dict[str, str], citation: dict) -> bool:
+    """Return whether a parsed cited work is structured enough for BibTeX.
+
+    Reference extraction is best-effort and parser output sometimes splits
+    bibliography lines into partial phrases, acknowledgements, or author-only
+    fragments. Those are useful as raw text in docs, but they should not become
+    fake BibTeX records. Keep entries with a DOI, or entries that have the
+    minimum scholarly shape: title + year + (author or venue).
+    """
+    if _clean_doi(entry.get("doi")):
+        return True
+    title = _as_text(entry.get("title"))
+    year = _as_text(entry.get("year"))
+    authors = _as_list(entry.get("author"))
+    venue = _as_text(entry.get("journal"))
+    if not title or not year or not (authors or venue):
+        return False
+    if _reference_title_is_unusable(title):
+        return False
+    if _title_looks_like_raw_reference(title, citation):
+        return False
+    return True
+
+
+def _reference_title_is_unusable(title: str) -> bool:
+    text = _as_text(title)
+    if not text:
+        return True
+    if not re.search(r"[A-Za-z]", text):
+        return True
+    if re.match(r"^\d", text) and (
+        len(_significant_title_tokens(text)) < 4
+        or re.search(r"(?:https?://|doi\.org|\bdoi\b)", text)
+    ):
+        return True
+    if len(_significant_title_tokens(text)) < 2:
+        return True
+    if _VENUE_FRAGMENT_RE.search(text) and len(_significant_title_tokens(text)) < 5:
+        return True
+    return bool(re.fullmatch(r"[\d\s,().:;\-]+", text))
+
+
+def _authors_look_polluted(authors: list[str]) -> bool:
+    joined = " ".join(authors)
+    if re.search(r"\b(?:IEEE|Phys|Mater|Nano|Journal|Proceedings|Trans)\b", joined):
+        return True
+    return any(len(author.split()) > 5 for author in authors)
+
+
+def _title_looks_like_raw_reference(title: str, citation: dict) -> bool:
+    title_key = _normalise_title_key(title)
+    raw_key = _normalise_title_key(citation.get("raw_text"))
+    if raw_key and title_key == raw_key:
+        return True
+    # Titles beginning with a dense author list usually mean parsing failed
+    # and the whole raw reference was copied into the title field.
+    if re.match(r"^(?:[A-Z]\.?\s*){1,4}[A-Z][A-Za-z'’.-]+[,;]\s+", title):
+        return True
+    if re.match(r"^[A-Z][A-Za-z'’.-]+,\s*(?:[A-Z]\.\s*){1,4}", title):
+        return True
+    if re.search(r"\bet\s*al\.?,?\s*$", title, flags=re.IGNORECASE):
+        return True
+    if len(title.split()) < 2:
+        return True
+    return False
 
 
 def _reference_key(entry: dict[str, str], citation: dict) -> str:
