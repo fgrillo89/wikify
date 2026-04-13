@@ -123,7 +123,11 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
                 except ValueError:
                     cit_year = None
             cit_title = (cit.get("title") or cit.get("raw_text", ""))[:120]
-            for raw in cit.get("authors") or []:
+            # Use structured authors if CrossRef-resolved, else last names
+            cit_authors = cit.get("authors") or [
+                n for n in cit.get("author_last_names", [])
+            ]
+            for raw in cit_authors:
                 name = _normalize_author_name(str(raw))
                 if not _is_valid_author(name):
                     continue

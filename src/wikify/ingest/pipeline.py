@@ -635,6 +635,7 @@ def _resolve_citations(docs: list[Document]) -> None:
         for cit in doc.citations or []:
             cit_year = _safe_int(cit.get("year"))
             raw = str(cit.get("raw_text") or cit.get("title") or "")
+            cit_last_names = cit.get("author_last_names") or []
             if cit_year is None or not raw:
                 continue
             candidates = doc_index_by_year.get(cit_year, [])
@@ -651,6 +652,12 @@ def _resolve_citations(docs: list[Document]) -> None:
                 for ln in cand_last_names:
                     if len(ln) >= 3 and ln in raw_norm:
                         score += 3
+                        break
+                # Boost for direct last-name match
+                for cln in cit_last_names:
+                    cln_norm = _normalize_title(cln)
+                    if cln_norm in {ln for ln in cand_last_names}:
+                        score += 2
                         break
                 score += len(cand_title_words & raw_words)
                 if score >= 3 and score > best_score:
@@ -1060,6 +1067,22 @@ def _refresh_images_index(ctx: dict) -> None:
     build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
 
 
+def _refresh_crossref(ctx: dict) -> None:
+    """Resolve citations via CrossRef API (DOI + fuzzy query)."""
+    if not ctx.get("resolve_bibliography_doi", False):
+        return
+    from .crossref import resolve_citations_batch
+
+    all_cits = []
+    for doc in ctx["docs"]:
+        all_cits.extend(doc.citations or [])
+    if all_cits:
+        resolve_citations_batch(
+            all_cits,
+            corpus_root=ctx["paths"].root,
+        )
+
+
 def _refresh_bibliography(ctx: dict) -> None:
     write_corpus_bibliography(
         ctx["paths"],
@@ -1093,6 +1116,7 @@ _REFRESH_STEPS: dict[str, callable] = {
     "doc_edges":      _refresh_doc_edges,
     "topics":         _refresh_topics,
     "images_index":   _refresh_images_index,
+    "crossref":       _refresh_crossref,
     "bibliography":   _refresh_bibliography,
     "corpus_graph":   _refresh_corpus_graph,
     "explorer_index": _refresh_explorer_index,
@@ -1102,8 +1126,12 @@ _REFRESH_STEPS: dict[str, callable] = {
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent -- only needs docs + store
-    ("wave A (edges+topics+images+bib)", [
-        "doc_edges", "topics", "images_index", "bibliography",
+    ("wave A (edges+topics+images+crossref)", [
+        "doc_edges", "topics", "images_index", "crossref",
+    ]),
+    # Wave A2: bibliography needs crossref to finish first
+    ("wave A2 (bibliography)", [
+        "bibliography",
     ]),
     # Wave B: needs doc_edges (populates doc.similar_to, .cites, .cites_same)
     ("wave B (corpus graph)", [

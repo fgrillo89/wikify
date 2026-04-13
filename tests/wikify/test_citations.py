@@ -1,6 +1,10 @@
 """Tests for ingest/citations.py."""
 
-from wikify.ingest.citations import _find_refs_section, extract_citations
+from wikify.ingest.citations import (
+    _extract_author_last_names,
+    _find_refs_section,
+    extract_citations,
+)
 
 SAMPLE_MD = "\n".join(
     [
@@ -37,8 +41,8 @@ def test_extract_three_entries():
     first = cits[0]
     assert first["ord"] == 0
     assert first["year"] == 2008
-    assert any("Strukov" in a for a in first["authors"])
-    assert "missing memristor" in first["title"].lower()
+    assert "raw_text" in first
+    assert "Strukov" in first["raw_text"]
 
 
 def test_doi_extracted():
@@ -51,13 +55,35 @@ def test_no_section_returns_empty():
 
 
 def test_dict_shape():
+    """New schema: ord, raw_text, year, doi, author_last_names."""
     cits = extract_citations(SAMPLE_MD, "doc-1")
-    expected_keys = {"ord", "raw_text", "authors", "year", "title", "venue", "doi"}
+    expected_keys = {"ord", "raw_text", "year", "doi", "author_last_names"}
     for c in cits:
         assert expected_keys.issubset(c.keys())
+    # Should NOT have structured fields (those come from CrossRef)
+    assert "title" not in cits[0]
+    assert "venue" not in cits[0]
+    assert "authors" not in cits[0]
 
 
-def test_acs_reference_parses_title_before_year():
+def test_author_last_names_extracted():
+    cits = extract_citations(SAMPLE_MD, "doc-1")
+    first = cits[0]
+    names = first["author_last_names"]
+    assert "Strukov" in names
+    assert "Snider" in names
+
+
+def test_extract_author_last_names_filters_venue_words():
+    raw = "G. Kresse; Furthmuller, J. Phys. Rev. B 1996, 54, 11169."
+    names = _extract_author_last_names(raw)
+    assert "Kresse" in names
+    assert "Furthmuller" in names
+    # Venue words should be filtered
+    assert "Rev" not in names
+
+
+def test_acs_reference_extracts_year_and_doi():
     md = "\n".join(
         [
             "# Paper",
@@ -70,50 +96,6 @@ def test_acs_reference_parses_title_before_year():
             "11169-11186.",
         ]
     )
-
     cits = extract_citations(md, "doc-1")
-
-    assert cits[0]["authors"] == ["G. Kresse", "J. Furthmuller"]
     assert cits[0]["year"] == 1996
-    assert cits[0]["title"].startswith("Efficient Iterative Schemes")
-    assert cits[0]["venue"].startswith("Phys. Rev. B")
-
-
-def test_reference_without_title_does_not_make_pages_the_title():
-    md = "\n".join(
-        [
-            "# Paper",
-            "",
-            "## References",
-            "",
-            "[1] C. Diorio, P. Hasler, A. Minch, C. A. Mead, IEEE Trans. "
-            "Electron Devices 1996, 43, 1972.",
-        ]
-    )
-
-    cits = extract_citations(md, "doc-1")
-
-    assert cits[0]["year"] == 1996
-    assert cits[0]["title"] == ""
-
-
-def test_quoted_comma_reference_parses_title_and_authors():
-    md = "\n".join(
-        [
-            "# Paper",
-            "",
-            "## References",
-            "",
-            "[1] Dahiya, A., Kumar, S., and Rani, S., 'Exploring Multilevel "
-            "Current and Impedance Spectroscopy Analysis of Atomic Layer "
-            "Deposited HfO2/Ta2O5 Memristive Device, IEEE Transactions on "
-            "Electron Devices (2025), https://doi.org/10.1109/TED.2025.3635115",
-        ]
-    )
-
-    cits = extract_citations(md, "doc-1")
-
-    assert cits[0]["authors"] == ["A. Dahiya", "S. Kumar", "S. Rani"]
-    assert cits[0]["title"].startswith("Exploring Multilevel Current")
-    assert cits[0]["venue"] == "IEEE Transactions on Electron Devices"
-    assert cits[0]["doi"] == "10.1109/TED.2025.3635115"
+    assert "Kresse" in cits[0]["author_last_names"]

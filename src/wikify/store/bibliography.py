@@ -6,17 +6,16 @@ from typing import Any
 from ..paths import CorpusPaths
 
 EMPTY_CITATION_INDEX: dict[str, Any] = {
-    "schema_version": 1,
+    "schema_version": 2,
     "entries": {},
     "doc_bibkeys": {},
     "doc_citations": {},
     "doi_bibkeys": {},
-    "title_bibkeys": {},
 }
 
 
 def load_citation_index(corpus: CorpusPaths) -> dict[str, Any]:
-    """Load ``citation_index.json`` without repairing corpus artifacts."""
+    """Load ``citations.json`` without repairing corpus artifacts."""
     if not corpus.citation_index_path.exists():
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in EMPTY_CITATION_INDEX.items()}
     return json.loads(corpus.citation_index_path.read_text(encoding="utf-8"))

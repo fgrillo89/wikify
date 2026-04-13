@@ -65,19 +65,15 @@ class CorpusPaths:
 
     @property
     def library_bib_path(self) -> Path:
-        return self.root / "library.bib"
+        return self.root / "corpus_papers.bib"
 
     @property
     def references_bib_path(self) -> Path:
-        return self.root / "references.bib"
-
-    @property
-    def bibliography_bib_path(self) -> Path:
-        return self.root / "bibliography.bib"
+        return self.root / "cited_works.bib"
 
     @property
     def citation_index_path(self) -> Path:
-        return self.root / "citation_index.json"
+        return self.root / "citations.json"
 
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):

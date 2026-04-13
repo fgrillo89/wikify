@@ -69,7 +69,6 @@ def test_fresh_ingest(sources_dir, corpus_dir):
     for artifact in (
         paths.library_bib_path,
         paths.references_bib_path,
-        paths.bibliography_bib_path,
         paths.citation_index_path,
     ):
         assert artifact.exists()

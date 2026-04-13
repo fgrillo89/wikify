@@ -35,7 +35,8 @@ def _citation_fingerprints(cit: dict) -> list[str]:
         if fp:
             out.append(fp)
         return out
-    authors = cit.get("authors") or []
+    # Fallback: build synthetic fingerprint from available fields
+    authors = cit.get("authors") or cit.get("author_last_names") or []
     first_author = str(authors[0]) if authors else ""
     year = str(cit.get("year") or "")
     title = str(cit.get("title") or "")
