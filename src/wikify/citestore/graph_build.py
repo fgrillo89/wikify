@@ -64,17 +64,6 @@ def build_knowledge_graph(
     # ------------------------------------------------------------------
     # 1. Source nodes (corpus docs + cited works)
     # ------------------------------------------------------------------
-
-    # Pre-build DOI/title indexes once for ord_refs resolution (O(D) not O(D^2))
-    doi_to_id: dict[str, str] = {}
-    title_to_id: dict[str, str] = {}
-    for d in docs:
-        doi = (d.metadata.get("doi") or "").lower().strip()
-        if doi:
-            doi_to_id[doi] = d.id
-        if d.title and len(d.title) > 15:
-            title_to_id[d.title.lower()[:50]] = d.id
-
     for doc in docs:
         meta = doc.metadata
         authors_raw = meta.get("authors") or []
@@ -94,6 +83,16 @@ def build_knowledge_graph(
         # ord_refs: [N] -> target source_id (from citation entries)
         ord_refs: dict[int, str] = {}
         if doc.citations and doc.cites:
+            # Build DOI -> corpus_id for matching
+            doi_to_id: dict[str, str] = {}
+            title_to_id: dict[str, str] = {}
+            for d2 in docs:
+                doi2 = (d2.metadata.get("doi") or "").lower().strip()
+                if doi2:
+                    doi_to_id[doi2] = d2.id
+                if d2.title and len(d2.title) > 15:
+                    title_to_id[d2.title.lower()[:50]] = d2.id
+
             for cit in doc.citations:
                 target = None
                 if cit.doi:
