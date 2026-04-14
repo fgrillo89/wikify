@@ -43,10 +43,28 @@ Reference: `src/wikify/schema.py::ExtractRequest`
 }
 ```
 
-`equations` and `figure_captions` are pre-filtered for THIS chunk:
+`equations`, `figure_captions`, and `citation_refs` are pre-filtered for THIS chunk:
 
 * `equations` lists every equation whose source position falls inside this chunk (computed at ingest time via `Document.equations` + `Chunk.equation_ids`). Use them to ground parameter and mechanism extraction — the equation `latex` and `context` are authoritative.
 * `figure_captions` lists figures the body discussion already mentions near this chunk. Each entry's `image_id` is set when a binary image was matched, otherwise `null` (caption-only). Use these to populate `evidence_figures` on concepts the figure clearly supports — see "Image awareness" below.
+* `citation_refs` lists resolved metadata for papers referenced by `[N]` markers in the chunk text. Each entry: `{ord, title, authors, year, doi, in_corpus, corpus_doc_id}`. Built from the Knowledge Graph's `ord_refs` index — see "Citation awareness" below.
+
+### Knowledge Graph context
+
+The pipeline resolves citation markers using the Knowledge Graph fluent API
+(see `.claude/skills/wikify/reference/knowledge-graph.md` for the full API).
+The `citation_refs` field on the request is the result of:
+
+```python
+ords = parse_citation_markers(chunk_text)       # [1,2,3] from "[1-3]"
+source_node = kg.source(doc_id).first()         # source with ord_refs
+for n in ords:
+    target_id = source_node["ord_refs"].get(n)  # -> target source_id
+    target = kg.source(target_id).first()       # -> {title, year, doi, ...}
+```
+
+The extractor does NOT call the KG directly. The pipeline pre-resolves
+everything and puts it in the request. The extractor just reads the fields.
 
 ## Response schema
 Reference: `src/wikify/schema.py::ExtractResponse`

@@ -65,14 +65,72 @@ Reference: `src/wikify/schema.py::MaintenanceAction`
 8. If validation passes, write `<rid>.response.json`.
 9. The Python maintenance orchestration layer (`distill/maintenance.py`) applies the action via the existing write pipeline and deletes the query log entry after the page is updated.
 
+## Knowledge Graph evidence discovery
+
+The maintenance handler has access to both corpus and wiki graphs.
+
+- Corpus KG API: `.claude/skills/wikify/reference/knowledge-graph.md`
+- Wiki KG API: `.claude/skills/wikify/reference/wiki-graph.md`
+
+### Wiki graph: diagnose wiki gaps
+
+```python
+wkg = preloaded.wiki_knowledge_graph
+
+# Is the question's topic covered at all?
+hits = wkg.search(query, top_k=3)
+if not hits or hits[0]["score"] < 0.5:
+    # No page covers this topic -> create_page
+
+# Is the page thin?
+page = wkg.page(target_page_id).first()
+if page and page["n_evidence"] < 3:
+    # Needs more evidence -> add_evidence or extend_page
+
+# Are two pages duplicating coverage?
+co = wkg.page(target_page_id).co_evidence()
+for neighbor in co.collect():
+    hits = wkg.search(neighbor["title"], top_k=1)
+    if hits and hits[0]["score"] > 0.85 and hits[0]["id"] != neighbor["id"]:
+        # Merge candidate
+        pass
+```
+
+### Corpus KG: find missing evidence
+
+Use the corpus KG to find evidence the wiki is missing:
+
+```python
+kg = preloaded.knowledge_graph
+
+# Find chunks about the query topic from the whole corpus
+kg.search("the query topic", top_k=10)
+
+# Find what foundation papers say about the topic
+kg.sources().top(5, by="pagerank").chunks().search("topic", top_k=5)
+
+# Find evidence from papers citing a specific source
+kg.source(doc_id).cited_by().chunks().search("missing aspect", top_k=5)
+
+# Find equations or figures that should be in the page
+kg.sources().equations().search("relevant model", top_k=3)
+kg.sources().figures().search("relevant diagram", top_k=3)
+
+# Check if a concept is covered across multiple sources
+kg.search("concept", top_k=20)  # -> count unique source_ids
+```
+
+Use KG results to populate `evidence_additions` with specific chunk IDs
+that the writer should incorporate.
+
 ## Decision heuristics
-- **escalation_events present**: prefer `add_evidence` with `evidence_additions = [chunk_id for ev in escalation_events for chunk_id in ev.chunk_ids][:5]`.
-- **pages_touched is non-empty and the page exists**: prefer `extend_page` with a brief that describes the missing section.
-- **pages_touched is empty**: prefer `create_page` with the query as the seed for the page title.
-- **Two related pages with `topic_overlap >= 0.80` and overlapping evidence**: prefer `merge_pages` with both page ids named in `target_page` (comma-separated).
+- **escalation_events present**: use KG to expand evidence beyond the escalated chunks. The escalation chunks are a starting point; use `kg.source(doc_id).cited_by().chunks().search(query)` to find corroborating evidence from related papers.
+- **pages_touched is non-empty and the page exists**: prefer `extend_page`. Use KG to identify which sections are missing by comparing the page's evidence sources against what the KG knows about the topic.
+- **pages_touched is empty**: prefer `create_page`. Use `kg.search(query)` to find the best evidence chunks for the new page.
+- **Two related pages with `topic_overlap >= 0.80` and overlapping evidence**: prefer `merge_pages`.
 
 ## What not to do
-- Do NOT invent chunk ids. Only use chunk ids from `escalation_events[i].chunk_ids`.
+- Do NOT invent chunk ids. Use chunk ids from `escalation_events[i].chunk_ids` or from KG traversal results.
 - Do NOT recommend actions for queries that are already well-answered (those are filtered out before dispatch).
 - Do NOT produce vague briefs. The writer that acts on this must have a specific, actionable instruction.
 - Do NOT escalate further (this handler IS the top-level editor for maintenance decisions).

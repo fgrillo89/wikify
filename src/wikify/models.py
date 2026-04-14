@@ -176,12 +176,6 @@ class WikiPage:
     provenance: dict = field(default_factory=dict)  # run_id, model, sampled
 
 
-@dataclass
-class WikiGraph:
-    nodes: dict[str, dict]  # page_id -> {kind, title}
-    edges: dict[str, list[tuple[str, str]]]  # links_to / co_evidence / ...
-
-
 # --- Run side ------------------------------------------------------------
 
 

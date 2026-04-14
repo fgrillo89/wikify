@@ -131,6 +131,20 @@ def read_vector_store(paths: CorpusPaths) -> VectorStore:
     return load_vectors(paths.vectors_path)
 
 
+def write_knowledge_graph(paths: CorpusPaths, kg: object) -> None:
+    """Persist a KnowledgeGraph to knowledge_graph.json."""
+    from ..citestore.graph_build import save_knowledge_graph
+
+    save_knowledge_graph(paths.knowledge_graph_path, kg)
+
+
+def read_knowledge_graph(paths: CorpusPaths, vectors: object | None = None) -> object:
+    """Load a KnowledgeGraph from knowledge_graph.json."""
+    from ..citestore.graph_build import load_knowledge_graph
+
+    return load_knowledge_graph(paths.knowledge_graph_path, vectors=vectors)
+
+
 def read_doc_images(doc: Document) -> list[DocImage]:
     """Return DocImage records for ``doc`` by loading sidecars from disk.
 

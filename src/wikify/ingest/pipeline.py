@@ -40,6 +40,7 @@ from .bibtex import write_corpus_bibliography
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
+from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
 from .corpus_graph import build_corpus_graph
 from .coupling import compute_coupling
 from .equations import extract_equations
@@ -1174,6 +1175,17 @@ def _refresh_corpus_graph(ctx: dict) -> None:
     ctx["graph"] = graph  # safe: wave B runs alone, wave C starts after barrier
 
 
+def _refresh_knowledge_graph(ctx: dict) -> None:
+    from ..store.bibliography import load_citation_index
+
+    citation_index = load_citation_index(ctx["paths"])
+    kg = build_knowledge_graph(
+        ctx["docs"], ctx["chunks"], ctx["store"], citation_index,
+    )
+    save_knowledge_graph(ctx["paths"].knowledge_graph_path, kg)
+    ctx["knowledge_graph"] = kg
+
+
 def _refresh_explorer_index(ctx: dict) -> None:
     idx = build_explorer_index(
         ctx["docs"], ctx["chunks"], ctx["graph"], ctx["store"],
@@ -1197,8 +1209,9 @@ _REFRESH_STEPS: dict[str, callable] = {
     "openalex":         _refresh_openalex,
     "citation_edges":   _refresh_citation_edges,
     "bibliography":     _refresh_bibliography,
-    "corpus_graph":   _refresh_corpus_graph,
-    "explorer_index": _refresh_explorer_index,
+    "corpus_graph":       _refresh_corpus_graph,
+    "knowledge_graph":    _refresh_knowledge_graph,
+    "explorer_index":     _refresh_explorer_index,
     "pagerank":       _refresh_pagerank,
     "doc_resave":     _refresh_doc_resave,
 }
@@ -1224,8 +1237,12 @@ REFRESH_DAG: list[tuple[str, list[str]]] = [
     ("wave E (corpus graph)", [
         "corpus_graph",
     ]),
-    # Wave F: derived artifacts (depend on graph)
-    ("wave F (explorer+pagerank+resave)", [
+    # Wave F: knowledge graph (depends on corpus graph + citation index)
+    ("wave F (knowledge graph)", [
+        "knowledge_graph",
+    ]),
+    # Wave G: derived artifacts (depend on graph)
+    ("wave G (explorer+pagerank+resave)", [
         "explorer_index", "pagerank", "doc_resave",
     ]),
 ]

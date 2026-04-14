@@ -9,6 +9,8 @@ functions usable by the query handler skill without a model call.
 Query results are optionally persisted to ``<bundle>/_meta/query_log/``.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -18,7 +20,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -32,12 +34,11 @@ from ..schema import (
     QueryLogEntry,
     QueryRequest,
 )
-from ..store.bundle_embeddings import load_or_compute
 from ..store.wiki_index import WikiIndex
 from ..types import ModelTier, Querier
 
 if TYPE_CHECKING:
-    from ..store.wiki_bundle import Bundle
+    from ..store.wiki_graph import WikiKnowledgeGraph
 from ..config import BODY_EXCERPT_CHARS, MAX_CANDIDATES
 
 QUERY_PROMPT = load_prompt("wikify/query").name
@@ -77,6 +78,22 @@ _STOP = frozenset(
         "about",
     }
 )
+
+
+def _load_wiki_graph(
+    bundle: BundlePaths,
+    embed_fn: Callable[[Sequence[str]], np.ndarray],
+) -> WikiKnowledgeGraph | None:
+    """Load the wiki knowledge graph from the bundle, or None if absent."""
+    if not bundle.graph_path.exists():
+        return None
+    from ..store.vectors import load_vectors
+    from ..store.wiki_graph import load_wiki_graph
+
+    vectors = None
+    if bundle.wiki_vectors_path.exists():
+        vectors = load_vectors(bundle.wiki_vectors_path)
+    return load_wiki_graph(bundle.graph_path, vectors=vectors, embed_fn=embed_fn)
 
 
 def read_wiki_page(bundle: BundlePaths, page_id: str) -> str | None:
@@ -219,40 +236,18 @@ def run(
         else:
             missed.append(p)
 
-    # 3. Embedding fallback for missed phrases. Loads pages via parse_page
-    #    and caches page-body embeddings beside the bundle index.
+    # 3. Embedding fallback for missed phrases via wiki graph vector search.
     from ..store.wiki_bundle import parse_page
 
     if missed and len(index) > 0:
-        pages_for_embed: list = []
-        ordered_ids: list[str] = []
-        for entry in index:
-            page_path = bundle.root / entry.path
-            if not page_path.exists():
-                continue
-            try:
-                pages_for_embed.append(parse_page(page_path))
-                ordered_ids.append(entry.id)
-            except Exception:
-                continue
-        if pages_for_embed:
-            # Cache page embeddings under the query cache dir so the bundle
-            # stays untouched (mtime invariance is part of the query contract).
-            embed_cache_dir = cache_root / "embeddings" / bundle.root.name
-            embed_cache_dir.mkdir(parents=True, exist_ok=True)
-            _ids, page_mat = load_or_compute(
-                cast("Bundle", _FakeBundleForEmbed(embed_cache_dir)),
-                pages_for_embed,
-                embed,
-            )
-            q_mat = embed(missed)
-            sims = q_mat @ page_mat.T
-            for row in sims:
-                order = np.argsort(-row)
-                for j in order[:3]:
-                    pid = ordered_ids[int(j)]
-                    if pid not in roots:
-                        roots.append(pid)
+        wkg = _load_wiki_graph(bundle, embed)
+        if wkg is not None:
+            query_text = " ".join(missed)
+            hits = wkg.search(query_text, top_k=5)
+            for h in hits:
+                pid = h["id"]
+                if pid not in roots:
+                    roots.append(pid)
 
     # 4. Expand.
     candidates: list[str] = list(roots)
@@ -356,13 +351,3 @@ def run(
     return answer
 
 
-class _FakeBundleForEmbed:
-    """Shim so ``load_or_compute`` sees a ``.root`` attribute.
-
-    ``load_or_compute`` only reads ``bundle.root`` for the cache path; the
-    pages iterable is passed separately. We want the cache file under the
-    wiki bundle so it stays beside ``_index.json``.
-    """
-
-    def __init__(self, root: Path) -> None:
-        self.root = root

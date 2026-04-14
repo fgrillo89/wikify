@@ -58,21 +58,76 @@ Reference: `src/wikify/schema.py::QueryResponse`
 
 ## Traversal helpers
 
-The query handler is authorized to use these **local Python helpers** (NOT subagents) to gather additional context before composing the answer:
+The query handler is authorized to use these **local Python helpers** (NOT subagents) to gather additional context before composing the answer.
 
-### `read_wiki_page(bundle, page_id) -> str | None`
+### Wiki page reads
+
+**`read_wiki_page(bundle, page_id) -> str | None`**
 Returns the full markdown of a page from the bundle. Use to read a page in full when the excerpt in the request evidence is insufficient.
 
-### `read_corpus_chunks(corpus, chunk_ids) -> list[dict]`
-Returns raw corpus chunk dicts `{id, doc_id, text}` for the given chunk ids. Use ONLY when the wiki pages do not answer the question. Each result is `{id, doc_id, text}`. Capped at 5 chunk ids per call.
+### Wiki graph: page discovery and navigation
+
+The query handler has access to the Wiki Knowledge Graph for finding
+relevant pages. See `.claude/skills/wikify/reference/wiki-graph.md`.
+
+```python
+wkg = preloaded.wiki_knowledge_graph
+
+# Find pages about the query topic
+wkg.search("the query topic", top_k=5)
+
+# Find pages related to a known page (co-evidence, links)
+wkg.page("Resistive Switching").co_evidence().collect()
+wkg.page("Resistive Switching").links().collect()
+
+# Check if any page covers a subtopic
+wkg.search("filament formation mechanism", top_k=3)
+```
+
+### Corpus KG: deep evidence retrieval
+
+The query handler has full access to the corpus Knowledge Graph for
+finding evidence the wiki pages missed.
+See `.claude/skills/wikify/reference/knowledge-graph.md` for the complete API.
+
+Use the corpus KG to discover evidence the wiki pages missed:
+
+```python
+kg = preloaded.knowledge_graph
+
+# Find chunks about a topic from the most-cited papers
+kg.sources().top(5, by="pagerank").chunks().search("the query topic", top_k=5)
+
+# Find what a specific paper says about a concept
+kg.source(doc_id).chunks().search("concept from the question", top_k=3)
+
+# Find related authors and their work
+kg.author("smith j").sources().chunks().search("topic", top_k=3)
+
+# Foundation check: if a paper is highly cited, get its full sections
+source = kg.source(doc_id)
+if source.cited_by().count() > 3:
+    context = source.sections(type="conclusions").chunks().collect()
+
+# Equation context: find equations related to the question
+kg.sources().equations().search("equation topic", top_k=3)
+
+# Figure context: find figures discussing a concept
+kg.sources().figures().search("IV curve characteristic", top_k=3)
+```
+
+**Prefer KG traversal over raw chunk reads.** The KG scopes vector search
+to graph neighborhoods, producing higher-precision results than global search.
+Use the Librarian decision pattern: foundation papers get full sections,
+specific references get targeted search.
 
 ### Traversal budget (per query)
-- Up to **3 additional page reads** via `read_wiki_page`. Each call counts as one of the 3.
-- You may follow links listed in a page's `## See also` section, ONE level at a time. One level means: read the linked page, do not then follow links from that page.
-- Up to **5 corpus chunks** via `read_corpus_chunks`. Only escalate to corpus chunks when wiki pages are insufficient. Log each escalation in `escalation_events`.
+- Up to **3 additional page reads** via `read_wiki_page`.
+- Up to **5 KG traversal chains** that produce chunks. Each `search()` or `collect()` that returns chunks counts as one traversal.
+- You may follow links listed in a page's `## See also` section, ONE level at a time.
 
 ### Escalation logging
-Every `read_corpus_chunks` call is an escalation event. Record it:
+Every KG traversal that retrieves corpus chunks is an escalation event. Record it:
 ```json
 {"reason": "wiki pages did not cover the mechanism", "chunk_ids": ["c1", "c2"]}
 ```
@@ -82,7 +137,12 @@ These events are stored in the query log and consumed by the maintenance verb.
 1. Read the request file.
 2. Inspect the supplied evidence packet. If the evidence is thin or clearly incomplete:
    a. Call `read_wiki_page` for pages cited in `evidence[i].citations` (follow-ups), up to the 3-read cap.
-   b. If still insufficient, call `read_corpus_chunks` with relevant chunk ids, recording the escalation.
+   b. If still insufficient, use the Knowledge Graph to discover relevant corpus chunks:
+      - Use `kg.search(question, top_k=5)` for broad topic search.
+      - Use `kg.source(doc_id).chunks().search(question, top_k=3)` for targeted source search.
+      - Use `kg.source(doc_id).cited_by().chunks().search(question, top_k=3)` for citation-chain discovery.
+      - Apply the Librarian foundation-vs-specific pattern: foundation papers (cited by >3) get full sections, others get targeted search.
+      - Record each KG traversal as an escalation event.
 3. Spawn one Task subagent at tier M with:
    - System prompt: "You are the wikify query responder. Answer the question using the supplied evidence. Cite pages by their `page_id`. Respond as strict JSON matching the QueryResponse schema. No commentary outside the JSON."
    - User prompt: the serialized request payload, any additional page content from step 2, and the answer rules below.

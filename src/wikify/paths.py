@@ -75,6 +75,10 @@ class CorpusPaths:
     def citation_index_path(self) -> Path:
         return self.root / "citations.json"
 
+    @property
+    def knowledge_graph_path(self) -> Path:
+        return self.root / "knowledge_graph.json"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)
@@ -94,7 +98,11 @@ class BundlePaths:
 
     @property
     def graph_path(self) -> Path:
-        return self.root / "_graph.json"
+        return self.root / "_wiki_graph.json"
+
+    @property
+    def wiki_vectors_path(self) -> Path:
+        return self.root / "_wiki_vectors.npz"
 
     @property
     def run_path(self) -> Path:

@@ -57,6 +57,41 @@ These are callable inside the orchestrator handler. They return data to inform t
 
 Python helper: `wikify.distill.sampler.semantic_query_chunks(state, query_vec, k, scope)`.
 
+### Knowledge Graph tools
+
+The orchestrator has full access to the Knowledge Graph fluent API.
+See `.claude/skills/wikify/reference/knowledge-graph.md` for the complete API reference.
+
+Key patterns for orchestration decisions:
+
+```python
+kg = preloaded.knowledge_graph
+
+# Corpus stats for budget decisions
+kg.corpus_stats()
+
+# Foundation papers (most cited) -- worth deep extraction
+kg.sources().top(5, by="pagerank").collect()
+
+# Coverage gaps: find unseen chunks in high-value papers
+kg.source(doc_id).chunks().search("underrepresented topic", top_k=10)
+
+# Author expertise: find who works on a topic
+kg.search("topic", top_k=20)  # -> group results by source_id -> authors
+
+# Citation chains: trace influence for deep extraction
+kg.source(foundation_id).cited_by().chunks().search("specific aspect", top_k=5)
+
+# Equation/figure coverage: find unextracted multimodal content
+kg.sources().equations().search("switching model", top_k=5)
+kg.sources().figures().search("IV curve", top_k=5)
+```
+
+Use KG traversal with `pick_chunks` for precise targeting instead of
+random sampling. The Librarian foundation-vs-specific pattern applies:
+highly-cited sources get full-section extraction, specific references
+get search-scoped chunk picking.
+
 ### Cheap fallback: deterministic sampling actions (cached for up to 8 batches)
 
 | Action | Args | Effect | Cost |
