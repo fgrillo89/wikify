@@ -57,31 +57,35 @@ def _add_semaphore(semaphore: Semaphore):
     return inner
 
 
-_limiter = AsyncLimiter(1, 1 / 50)  # 50 req/s
-_semaphore = Semaphore(value=20)
-
-
-async def _fetch_doi_metadata_raw(doi: str) -> dict[str, object]:
-    """Single async DOI content negotiation call."""
+async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
+    """Resolve all unique DOIs concurrently via content negotiation."""
     import httpx
-    url = f"https://doi.org/{doi}"
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"Accept": "application/x-bibtex"})
+
+    from .bibtex import _metadata_from_bibtex_entry
+
+    limiter = AsyncLimiter(1, 1 / 50)  # 50 req/s
+    semaphore = Semaphore(value=30)
+
+    @_add_limiter(limiter)
+    @_add_semaphore(semaphore)
+    async def fetch_one(client: httpx.AsyncClient, doi: str) -> dict:
+        resp = await client.get(
+            f"https://doi.org/{doi}",
+            headers={"Accept": "application/x-bibtex"},
+        )
         if resp.status_code != 200:
             return {}
-    from .bibtex import _metadata_from_bibtex_entry
-    return _metadata_from_bibtex_entry(resp.text)
+        return _metadata_from_bibtex_entry(resp.text)
 
+    async with httpx.AsyncClient(
+        timeout=15.0, follow_redirects=True,
+        limits=httpx.Limits(max_connections=30, max_keepalive_connections=20),
+    ) as client:
+        results = await asyncio.gather(
+            *(fetch_one(client, doi) for doi in dois),
+            return_exceptions=True,
+        )
 
-_fetch_doi = _add_limiter(_limiter)(_add_semaphore(_semaphore)(_fetch_doi_metadata_raw))
-
-
-async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
-    """Resolve all unique DOIs concurrently."""
-    results = await asyncio.gather(
-        *(_fetch_doi(doi) for doi in dois),
-        return_exceptions=True,
-    )
     out: dict[str, dict[str, object]] = {}
     for doi, result in zip(dois, results):
         if isinstance(result, BaseException):

@@ -1141,7 +1141,7 @@ def _refresh_bibliography(ctx: dict) -> None:
     write_corpus_bibliography(
         ctx["paths"],
         ctx["docs"],
-        resolve_doi=ctx.get("resolve_bibliography_doi", False),
+        resolve_doi=True,
     )
 
 
