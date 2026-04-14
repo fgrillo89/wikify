@@ -166,9 +166,20 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
+    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations)
+    title = re.sub(
+        r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
+    )
     # Collapse multiple spaces
     title = re.sub(r"\s{2,}", " ", title).strip()
     return title
+
+
+def _title_dedup_key(title: str) -> str:
+    """Normalize title for dedup: lowercase, strip punctuation/whitespace."""
+    key = title.lower()
+    key = re.sub(r"[^a-z0-9]", "", key)
+    return key
 
 
 _MONTH_NAMES = {
@@ -262,6 +273,9 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     # Reject conference-proceeding fragments ("In: 2023 International...")
     if re.match(r"^In:\s+\d{4}\s", title):
+        return None
+    # Reject conference locations/dates as titles
+    if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
         return None
 
     # For heuristic-only citations, validate strictly
@@ -388,6 +402,7 @@ def build_citation_index(
     doc_bibkeys: dict[str, str] = {}
     doc_citations: dict[str, list[str]] = {}
     doi_bibkeys: dict[str, str] = {}
+    title_bibkeys: dict[str, str] = {}  # normalized title -> bibkey (dedup)
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
@@ -426,7 +441,7 @@ def build_citation_index(
             if cit_doi and cit_doi in doi_bibkeys:
                 bibkey = doi_bibkeys[cit_doi]
 
-            # Build reference entry from CrossRef data
+            # Build reference entry from enriched citation data
             if bibkey is None:
                 ref_entry = _reference_entry_from_citation(cit)
                 if ref_entry is not None:
@@ -434,7 +449,13 @@ def build_citation_index(
                     ref_doi = _clean_doi(ref_entry.get("doi"))
                     if ref_doi and ref_doi in doi_bibkeys:
                         bibkey = doi_bibkeys[ref_doi]
-                    else:
+                    # Dedup by normalized title
+                    if bibkey is None:
+                        tkey = _title_dedup_key(ref_entry.get("title", ""))
+                        if tkey and tkey in title_bibkeys:
+                            bibkey = title_bibkeys[tkey]
+                    # New entry
+                    if bibkey is None:
                         ref_entry["ID"] = _unique_bibkey(
                             ref_entry["ID"], ref_seen,
                         )
@@ -445,6 +466,9 @@ def build_citation_index(
                         )
                         if ref_doi:
                             doi_bibkeys[ref_doi] = bibkey
+                        tkey = _title_dedup_key(ref_entry.get("title", ""))
+                        if tkey:
+                            title_bibkeys[tkey] = bibkey
 
             # Unresolved: no .bib entry, just index record for matching
             if bibkey is None:
