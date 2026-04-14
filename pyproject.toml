@@ -17,7 +17,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "chromadb>=0.5",
     # numerical / graph computation
-    "scipy>=1.13",  # used by networkx.pagerank inside ingest/pipeline.py
+    "scipy>=1.13", # used by networkx.pagerank inside ingest/pipeline.py
     # LLM interface
     "litellm>=1.40",
     "tiktoken>=0.7",
@@ -51,6 +51,12 @@ dependencies = [
     "pymdown-extensions>=10.21.2",
     "pyyaml>=6.0.3",
     "fastembed>=0.7.3",
+    "torch>=2.6.0,<2.7",
+    "torchvision>=0.21.0,<0.22",
+    "docling>=2.86.0",
+    "opencv-python-headless>=4.13.0.92",
+    "onnxruntime-directml>=1.24.4",
+    "hf-xet>=1.4.2",
 ]
 
 [project.optional-dependencies]
@@ -81,6 +87,22 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124" },
+]
+torchvision = [
+    { index = "pytorch-cu124" },
+]
 
 [dependency-groups]
 dev = [

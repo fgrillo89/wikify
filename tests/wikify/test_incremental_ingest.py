@@ -5,6 +5,7 @@ vector id invariants, parse-failure preservation, nested same-name
 files, vector reuse, and distill preload visibility.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,6 +66,13 @@ def test_fresh_ingest(sources_dir, corpus_dir):
     manifest = CorpusManifest.load(paths.manifest_path)
     assert len(manifest.sources) == 2
     assert all(s.status == "active" for s in manifest.sources.values())
+    for artifact in (
+        paths.library_bib_path,
+        paths.references_bib_path,
+        paths.bibliography_bib_path,
+        paths.citation_index_path,
+    ):
+        assert artifact.exists()
 
 
 # --- Add preserves existing markdown ---
@@ -84,6 +92,8 @@ def test_add_preserves_existing_markdown(sources_dir, corpus_dir):
 
     docs = list_documents(paths)
     assert len(docs) == 2
+    index = json.loads(paths.citation_index_path.read_text(encoding="utf-8"))
+    assert set(index["doc_bibkeys"]) == {doc.id for doc in docs}
 
     alpha_md_after = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(
         encoding="utf-8"
@@ -647,7 +657,7 @@ def test_unregistered_backend_raises_before_ingest(sources_dir, corpus_dir):
     with pytest.raises(ValueError, match="unknown parser backend"):
         ingest_corpus(
             sources_dir, corpus_dir,
-            max_workers=1, parser_backend="docling",
+            max_workers=1, parser_backend="nonexistent_parser",
         )
     # No corpus artifacts should have been created.
     assert not corpus_dir.exists() or not list(corpus_dir.iterdir())
