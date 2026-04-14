@@ -210,13 +210,79 @@ Document JSON (corpus/docs/*.json)
   - CitationEntry list -> Paper.ord_refs mapping
 ```
 
+### Embeddings, Images, and Equations
+
+**Embeddings stay outside the graph.** Chunk embeddings are 768-dim
+float vectors — too large to serialize in JSON. The VectorStore holds
+them in a numpy matrix indexed by chunk_id. The graph stores chunk_ids
+as nodes; the VectorStore is the companion index for similarity search.
+
+```
+Pattern: "find chunks about concept X from paper Y"
+  1. Graph: paper_Y -> contains -> [chunk_1, chunk_2, ...]  # node IDs
+  2. VectorStore: query(concept_X, filter=chunk_ids)          # similarity
+```
+
+Two structures, one query. The graph provides the topology (which chunks
+belong to which paper); the VectorStore provides the geometry (which
+chunks are semantically close). Neither replaces the other.
+
+**Images and equations are node attributes, not separate node types.**
+At this scale (50-1000 papers, ~50 images per paper), adding Image and
+Equation nodes would bloat the graph without adding traversal value.
+Instead, they live as attributes on Chunk and Paper nodes:
+
+```
+Chunk node attributes:
+  equation_ids: list[str]     # equations in this chunk
+  figure_refs: list[str]      # figures referenced by this chunk
+
+Paper node attributes:
+  images: list[ImageRef]      # all images from this paper
+  equations: list[EquationRef] # all equations from this paper
+```
+
+If a distill agent needs "the figure that shows the I-V curve from
+paper X", the traversal is:
+```
+paper_X -> contains -> chunks -> filter(figure_refs contains "fig3")
+  -> chunk.text (context around the figure reference)
+paper_X.images -> filter(id == "fig3") -> ImageRef.path
+```
+
+**When would images/equations become graph nodes?** If we needed to
+answer "which papers share similar figures?" or "which equations appear
+across multiple papers?" — cross-paper entity linking. At that point,
+Image and Equation become first-class nodes with their own edges. For
+now, attributes suffice.
+
+### What fits in one structure vs. two
+
+| Data | In the graph? | Why |
+|------|--------------|-----|
+| Paper metadata | Yes (node attrs) | Traversed constantly |
+| Author identity | Yes (node type) | Enables author queries |
+| Citation edges | Yes (edge type) | Core topology |
+| Chunk text | Yes (node attr, truncated) | Needed for context |
+| Chunk embeddings | No (VectorStore) | Too large, numpy-native |
+| Images | No (filesystem + node attr ref) | Binary blobs |
+| Equations | Yes (node attr on chunk) | Small, text-based |
+| BibTeX | No (generated from graph) | Derived artifact |
+| DOI cache | No (ingestion-time only) | Not needed at query time |
+
+The graph + VectorStore together form the complete query-time index.
+Everything else (JSON files, DOI cache, .bib files) is either a source
+(feeds into the graph at build time) or a derived artifact (generated
+from the graph at export time).
+
 ### Design Principle
 
 The graph is the **query-time interface**. Everything distill needs
 is reachable by traversing the graph. The graph is **built from**
 Documents, Citations, Chunks, and VectorStore at ingest time but
 **does not depend on them** at query time. Once built, the graph
-is self-contained.
+is self-contained (except for embeddings in VectorStore and images
+on disk).
 
 ### What This Enables
 
