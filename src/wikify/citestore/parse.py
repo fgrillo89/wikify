@@ -43,6 +43,33 @@ _AUTHOR_NOISE = {
 }
 
 
+def extract_doi(text: str) -> str:
+    """Extract a DOI from text, including from URLs with spaces.
+
+    Handles:
+    - Bare DOIs: ``10.1038/s41563-019-0291-x``
+    - Standard URLs: ``https://doi.org/10.1038/s41563-019-0291-x``
+    - URLs with spaces: ``https://doi.org/10.1002/ aelm.201900287``
+    - DOI prefix: ``doi: 10.1038/...``
+    """
+    # First try: extract from doi.org URL (handles spaces in URL path)
+    m = re.search(r"(?:https?://)?doi\.org/\s*(10\.\d{4,}[\s/][^\s,;)\]]*)", text)
+    if m:
+        doi = re.sub(r"\s+", "", m.group(1))  # collapse spaces
+        return doi.rstrip(".,;)]}>")
+    # Second try: bare DOI pattern
+    m = re.search(r"\b(10\.\d{4,}/[^\s,;)\]]+)", text)
+    if m:
+        doi = m.group(1)
+        return doi.rstrip(".,;)]}>")
+    # Third try: "doi:" prefix
+    m = re.search(r"doi:\s*(10\.\d{4,}/[^\s,;)\]]+)", text, re.I)
+    if m:
+        doi = m.group(1)
+        return doi.rstrip(".,;)]}>")
+    return ""
+
+
 def looks_like_journal(name: str) -> bool:
     """Return True if *name* looks like a journal title."""
     tokens = [w.lower().rstrip(".,;:") for w in name.split()]
@@ -136,6 +163,7 @@ def parse_authors(raw: str) -> list[str]:
 _FMT_QUOTED = "quoted"
 _FMT_APA = "apa"
 _FMT_ACS = "acs"
+_FMT_ELSEVIER = "elsevier"
 _FMT_PERIODED = "perioded"
 
 # Quoted title: double quotes, smart quotes, guillemets, mojibake
@@ -157,14 +185,25 @@ def detect_format(raw: str) -> str:
     # Quoted title is the strongest signal
     if _QUOTED_TITLE_RE.search(raw) or _SINGLE_QUOTED_RE.search(raw):
         return _FMT_QUOTED
-    # APA: year in parens early in string
+    # APA: year in parens early in string, followed by period
     if _APA_YEAR_RE.search(raw[:int(len(raw) * 0.5)]):
         return _FMT_APA
     # ACS: semicolons between authors (but not year;vol Vancouver pattern)
     first_80 = raw[:80]
     if ";" in first_80 and not re.search(r"\d{4};", first_80):
         return _FMT_ACS
-    # Default: period-delimited (Nature, Vancouver, Elsevier, etc.)
+    # Elsevier numbered: comma-delimited, no quotes, no vol./pp.
+    # Key distinguisher from Nature: no periods between title and journal
+    # (comma-separated throughout), and author initials lack periods
+    # (e.g., "J.J. Yang" not "J. J. Yang").
+    # Detect by: "- Authors, Title, J. Abbrev. Vol (Year) Pages, DOI."
+    # where there are NO ". " boundaries between authors and journal.
+    if (not re.search(r"\bvol\.\b|\bpp\.\b", raw, re.I)
+        and "&" not in raw[:80]
+        and re.search(r"https?://doi\.org/|doi\.org/", raw)
+        and not re.search(r"\.\s+[A-Z][a-z]{3,}", raw[:int(len(raw) * 0.4)])):
+        return _FMT_ELSEVIER
+    # Default: period-delimited (Nature, Vancouver, etc.)
     return _FMT_PERIODED
 
 
@@ -211,6 +250,35 @@ def _extract_title_acs(raw: str) -> str:
     title_rest = raw[title_start:]
     # Title ends at next period followed by venue-like text
     return _find_title_end(title_rest)
+
+
+def _extract_title_elsevier(raw: str) -> str:
+    """Extract title from Elsevier comma-delimited style.
+
+    Format: ``- Authors, Title, J. Abbrev. Vol (Year) Pages, DOI.``
+    All fields are comma-separated. The title is the longest comma-segment
+    that looks like a sentence (starts uppercase, has lowercase words).
+    """
+    # Strip leading dash/number markers
+    clean = re.sub(r"^[\s\-\[\d.\)]+", "", raw)
+    # Remove trailing DOI URL
+    clean = re.sub(r",?\s*https?://\S+\.?\s*$", "", clean)
+    # Split on commas
+    segments = [s.strip() for s in clean.split(",") if s.strip()]
+    # The title is typically the longest segment that:
+    # - starts with uppercase
+    # - has >= 4 words
+    # - contains lowercase words (not all-caps or initials)
+    best_title = ""
+    for seg in segments:
+        words = seg.split()
+        if (len(words) >= 4
+            and seg[0].isupper()
+            and any(w[0].islower() for w in words[1:] if len(w) > 2)
+            and not looks_like_journal(seg)
+            and len(seg) > len(best_title)):
+            best_title = seg
+    return best_title.rstrip(".")
 
 
 def _looks_like_author_context(text: str) -> bool:
@@ -278,17 +346,21 @@ def _find_title_end(text: str) -> str:
     return title
 
 
+_TITLE_EXTRACTORS = {
+    _FMT_QUOTED: _extract_title_quoted,
+    _FMT_APA: _extract_title_apa,
+    _FMT_ACS: _extract_title_acs,
+    _FMT_ELSEVIER: _extract_title_elsevier,
+    _FMT_PERIODED: _extract_title_perioded,
+}
+
+
 def extract_title(raw: str, fmt: str | None = None) -> str:
     """Extract a probable title from a raw citation string."""
     if fmt is None:
         fmt = detect_format(raw)
-    if fmt == _FMT_QUOTED:
-        return _extract_title_quoted(raw)
-    if fmt == _FMT_APA:
-        return _extract_title_apa(raw)
-    if fmt == _FMT_ACS:
-        return _extract_title_acs(raw)
-    return _extract_title_perioded(raw)
+    extractor = _TITLE_EXTRACTORS.get(fmt, _extract_title_perioded)
+    return extractor(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +482,11 @@ def parse_citation(raw: str, *, year: int | None = None) -> dict[str, object]:
 
     fmt = detect_format(raw)
     result: dict[str, object] = {}
+
+    # Extract DOI from URLs and bare patterns
+    doi = extract_doi(raw)
+    if doi:
+        result["doi"] = doi
 
     title = extract_title(raw, fmt)
     if title and _is_valid_title(title):

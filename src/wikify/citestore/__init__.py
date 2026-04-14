@@ -2,7 +2,7 @@
 
 from .db import DatabaseManager
 from .models import ResolutionResult, Work
-from .parse import parse_citation
+from .parse import extract_doi, parse_citation
 from .resolver import AsyncResolver
 
 __all__ = [
@@ -10,5 +10,6 @@ __all__ = [
     "DatabaseManager",
     "ResolutionResult",
     "Work",
+    "extract_doi",
     "parse_citation",
 ]
