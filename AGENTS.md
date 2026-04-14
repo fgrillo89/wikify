@@ -83,6 +83,17 @@ uv run python -m wikify.cli html --bundle ...
 - `ModelTier` is the single vocabulary for S/M/L. Use `tier.value` for strings.
 - Delete superseded modules/files in the same change. No dead versioning.
 
+## Basic Caveman Mode
+
+- Purpose: always-on, token-saving communication style for assistant replies.
+- Activation: default on for all replies in this repo; no opt-in phrase required.
+- Deactivation: only when user says `normal mode` or `stop caveman`.
+- Use short, direct sentences with normal grammar and clear ordering.
+- Drop filler, pleasantries, and soft hedging.
+- Keep technical terms, code, commands, errors, paths, schemas, and quoted text exact.
+- Prefer compact response shape: `Problem. Cause. Fix. Verify.`
+- Avoid heavy abbreviation, stylized dialects, fake primitive speech, or comic phrasing.
+
 ## Testing
 
 ```

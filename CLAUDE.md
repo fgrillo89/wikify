@@ -29,6 +29,19 @@ All comparisons must run under the same pipeline contract and telemetry.
 - If you wrote 200 lines and it could be 50, rewrite it.
 - **No dead versioning.** When iterating on a file (prompt, schema, template, plan), delete the old version and keep the new one under the canonical name. Do NOT leave `foo_v1.yaml` sitting next to `foo_v2.yaml` as a fallback "just in case." Do NOT rename the file by appending a version suffix -- the file system IS the version, git history IS the changelog. The only acceptable version-suffixed files are those where the OLD version is still actively reachable from production code during a real migration, and in that case the migration must be on a tracked task with a deadline.
 
+### Basic Caveman Mode
+- Purpose: always-on, token-saving communication style for assistant replies.
+- Activation: default on for all replies in this repo; no opt-in phrase required.
+- Deactivation: only when user says `normal mode` or `stop caveman`.
+- Scope: applies to assistant replies only, not generated code, commit messages, PR text, docs, or user-facing artifacts unless explicitly requested.
+- Persistence: stays active across turns until explicitly stopped.
+- Trigger policy: always enabled by default; brevity requests do not change mode state.
+- Style: concise and direct with normal grammar, clear ordering, and no filler, pleasantries, or soft hedging.
+- Fidelity: keep technical terms, code, commands, errors, paths, schemas, and quoted text exact.
+- Structure preference: `Problem. Cause. Fix. Verify.`
+- Temporary clarity override: use normal clarity for security warnings, destructive actions, multi-step instructions where terse phrasing risks mistakes, or visible user confusion, then resume caveman style.
+- Prohibited: heavy abbreviation, stylized dialects, fake primitive speech, or comic phrasing.
+
 ### Architectural Style
 Write code so the reader can understand the business behavior without jumping
 through a maze of tiny abstractions. Locality of behavior is the default.
