@@ -11,6 +11,7 @@ import logging
 from asyncio import Semaphore
 from collections.abc import Callable
 from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiolimiter import AsyncLimiter
@@ -249,28 +250,37 @@ def _fuse_citations(docs: list[Document]) -> None:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _default_cache_path() -> Path:
+    """Global DOI cache: ~/.wikify/doi_cache.db (shared across corpora)."""
+    cache_dir = Path.home() / ".wikify"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "doi_cache.db"
+
+
 def enrich_citations(
     docs: list[Document],
     *,
     use_doi: bool = True,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
+    cache_path: Path | None = None,
 ) -> None:
     """Enrich all citations across all documents in-place.
 
-    Three passes:
+    Four passes:
+    0. Re-extract DOIs from raw_text (fixes truncated DOIs)
     1. Heuristic extraction via citestore.parse (zero API calls)
-    2. DOI content negotiation (async, 50 req/s, free, no API key)
+    2. DOI resolution: check cache -> CrossRef batch -> doi.org fallback -> store in cache
     3. Cross-paper evidence fusion
     """
-    # Pass 0: re-extract DOIs from raw_text (fixes truncated DOIs from old ingests)
+    from ..citestore.db import DOICache
     from ..citestore.parse import _clean_doi
     from ..citestore.parse import extract_doi as _extract_doi_from_text
+
+    # Pass 0: re-extract DOIs from raw_text
     for doc in docs:
         for cit in doc.citations:
             if cit.doi and not _clean_doi(cit.doi):
-                # Stored DOI is truncated/invalid — try re-extracting
-                better = _extract_doi_from_text(cit.raw_text)
-                cit.doi = better
+                cit.doi = _extract_doi_from_text(cit.raw_text)
             elif not cit.doi:
                 cit.doi = _extract_doi_from_text(cit.raw_text)
 
@@ -287,42 +297,64 @@ def enrich_citations(
                 if not old or (isinstance(old, str) and len(old) < 10):
                     setattr(cit, key, val)
 
-    # Pass 2: DOI resolution (async batch via CrossRef + doi.org fallback)
+    # Pass 2: DOI resolution (cache-first, then API)
     if use_doi:
         unique_dois = sorted({
             cit.doi for doc in docs for cit in doc.citations if cit.doi
         })
-        if unique_dois:
-            if doi_lookup:
-                doi_meta = {doi: doi_lookup(doi) for doi in unique_dois}
-            else:
-                logger.info(
-                    "Resolving %d unique DOIs via CrossRef batch...",
-                    len(unique_dois),
-                )
-                doi_meta = asyncio.run(_resolve_dois_async(unique_dois))
-                # Fallback: doi.org content negotiation for misses
-                missed = [d for d in unique_dois if not doi_meta.get(d.lower())]
-                if missed:
-                    logger.info(
-                        "Falling back to doi.org for %d/%d unresolved DOIs...",
-                        len(missed), len(unique_dois),
-                    )
-                    fallback = asyncio.run(_resolve_dois_doiorg(missed))
-                    doi_meta.update(fallback)
+        if not unique_dois:
+            _fuse_citations(docs)
+            return
 
-            for doc in docs:
-                for cit in doc.citations:
-                    if not cit.doi:
-                        continue
-                    meta = doi_meta.get(cit.doi.lower())
-                    if not meta:
-                        continue
-                    for src, dst in _DOI_FIELD_MAP.items():
-                        val = meta.get(src)
-                        if val:
-                            setattr(cit, dst, val)
-                    cit.resolution = cit.resolution or "doi"
+        db_path = cache_path or _default_cache_path()
+        with DOICache(db_path) as cache:
+            # Check cache first
+            doi_meta = cache.get_many(unique_dois)
+            cached_count = len(doi_meta)
+
+            # Resolve uncached DOIs
+            uncached = [d for d in unique_dois if d.lower() not in doi_meta]
+            if uncached:
+                if doi_lookup:
+                    fresh = {d: doi_lookup(d) for d in uncached}
+                else:
+                    logger.info(
+                        "DOI resolution: %d cached, %d to fetch via CrossRef...",
+                        cached_count, len(uncached),
+                    )
+                    fresh = asyncio.run(_resolve_dois_async(uncached))
+                    # Fallback for CrossRef misses
+                    missed = [d for d in uncached if not fresh.get(d.lower())]
+                    if missed:
+                        logger.info(
+                            "Falling back to doi.org for %d unresolved...",
+                            len(missed),
+                        )
+                        fallback = asyncio.run(_resolve_dois_doiorg(missed))
+                        fresh.update(fallback)
+
+                # Store all fresh results in cache
+                cache.put_many(fresh, source="crossref")
+                doi_meta.update(fresh)
+
+            logger.info(
+                "DOI resolution: %d cached, %d fetched, %d total",
+                cached_count, len(uncached), len(doi_meta),
+            )
+
+        # Apply to citations
+        for doc in docs:
+            for cit in doc.citations:
+                if not cit.doi:
+                    continue
+                meta = doi_meta.get(cit.doi.lower())
+                if not meta:
+                    continue
+                for src, dst in _DOI_FIELD_MAP.items():
+                    val = meta.get(src)
+                    if val:
+                        setattr(cit, dst, val)
+                cit.resolution = cit.resolution or "doi"
 
     # Pass 3: cross-paper fusion
     _fuse_citations(docs)

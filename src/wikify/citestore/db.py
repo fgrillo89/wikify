@@ -1,8 +1,14 @@
-"""SQLite-backed storage for resolved citation metadata."""
+"""SQLite-backed storage for resolved citation metadata.
+
+Unified cache for all DOI resolution sources (CrossRef batch, doi.org
+content negotiation, OpenAlex). DOI is the primary key. Both sync and
+async interfaces are provided.
+"""
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -26,6 +32,7 @@ CREATE TABLE IF NOT EXISTS works (
     work_type      TEXT NOT NULL DEFAULT '',
     bibtex         TEXT NOT NULL DEFAULT '',
     raw_json       TEXT NOT NULL DEFAULT '{}',
+    source         TEXT NOT NULL DEFAULT '',
     resolved_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -45,6 +52,121 @@ CREATE TABLE IF NOT EXISTS citation_edges (
     PRIMARY KEY (parent_doi, child_doi)
 );
 """
+
+
+# ---------------------------------------------------------------------------
+# Sync DOI cache (used by cite_parse enrichment)
+# ---------------------------------------------------------------------------
+
+
+class DOICache:
+    """Sync SQLite cache for DOI-resolved metadata.
+
+    Shared DB with the async DatabaseManager. Both read/write the same
+    ``works`` table. Use this from sync code (cite_parse enrichment);
+    use DatabaseManager from async code (OpenAlex resolver).
+    """
+
+    def __init__(self, db_path: Path | str) -> None:
+        self._db_path = str(db_path)
+        self._conn: sqlite3.Connection | None = None
+
+    def open(self) -> None:
+        self._conn = sqlite3.connect(self._db_path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.executescript(_SCHEMA)
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> DOICache:
+        self.open()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def get(self, doi: str) -> dict[str, object] | None:
+        """Look up a DOI. Returns metadata dict or None."""
+        assert self._conn
+        row = self._conn.execute(
+            "SELECT * FROM works WHERE doi = ?", (doi.lower(),)
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "title": row["title"],
+            "authors": json.loads(row["authors_json"]),
+            "journal": row["journal"],
+            "venue": row["journal"],
+            "year": str(row["year"]) if row["year"] else "",
+            "volume": row["volume"],
+            "pages": (
+                f"{row['first_page']}--{row['last_page']}".strip("-")
+                if row["first_page"] or row["last_page"]
+                else ""
+            ),
+            "publisher": row["publisher"],
+        }
+
+    def put(self, doi: str, meta: dict[str, object], source: str = "crossref") -> None:
+        """Store resolved metadata for a DOI."""
+        assert self._conn
+        authors = meta.get("authors") or []
+        pages = str(meta.get("pages") or "")
+        first_page, last_page = "", ""
+        if "--" in pages:
+            parts = pages.split("--", 1)
+            first_page, last_page = parts[0], parts[1]
+        elif "-" in pages:
+            parts = pages.split("-", 1)
+            first_page, last_page = parts[0], parts[1]
+        else:
+            first_page = pages
+
+        year = meta.get("year")
+        if isinstance(year, str):
+            try:
+                year = int(year)
+            except ValueError:
+                year = None
+
+        self._conn.execute(
+            """INSERT OR IGNORE INTO works
+               (doi, title, year, journal, authors_json, volume,
+                first_page, last_page, publisher, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                doi.lower(),
+                meta.get("title") or "",
+                year,
+                meta.get("journal") or meta.get("venue") or "",
+                json.dumps(authors if isinstance(authors, list) else []),
+                meta.get("volume") or "",
+                first_page,
+                last_page,
+                meta.get("publisher") or "",
+                source,
+            ),
+        )
+        self._conn.commit()
+
+    def get_many(self, dois: list[str]) -> dict[str, dict[str, object]]:
+        """Look up multiple DOIs. Returns {doi: metadata} for found ones."""
+        out: dict[str, dict[str, object]] = {}
+        for doi in dois:
+            meta = self.get(doi)
+            if meta and meta.get("title"):
+                out[doi.lower()] = meta
+        return out
+
+    def put_many(self, items: dict[str, dict[str, object]], source: str = "crossref") -> None:
+        """Store multiple resolved DOIs."""
+        for doi, meta in items.items():
+            if meta and meta.get("title"):
+                self.put(doi, meta, source)
 
 
 class DatabaseManager:
