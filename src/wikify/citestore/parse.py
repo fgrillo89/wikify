@@ -4,6 +4,9 @@ Extracts structured metadata (title, authors, venue, volume, pages)
 from raw academic citation strings.  Zero external dependencies beyond
 stdlib -- can be applied to any text independently of wikify.
 
+Supports all major citation styles: IEEE, Nature/Science, ACS, APA,
+Vancouver, Chicago, MLA, Harvard, Elsevier, RSC, AIP/APS.
+
 Also provides cross-paper evidence fusion for combining metadata from
 multiple citation strings referencing the same work.
 """
@@ -14,13 +17,15 @@ import re
 from collections import Counter, defaultdict
 
 # ---------------------------------------------------------------------------
-# Vocabulary (self-contained, no wikify imports)
+# Vocabulary (self-contained, no external imports)
 # ---------------------------------------------------------------------------
 
 _JOURNAL_ABBREV_TOKENS = {
     "adv", "appl", "chem", "commun", "electron", "eng", "funct", "lett",
     "mater", "nanotechnol", "phys", "rev", "sci", "technol", "trans",
-    "proc", "int", "conf", "symp",
+    "proc", "int", "conf", "symp", "syst", "comput", "biol", "med",
+    "opt", "solid", "surf", "thin", "vac", "semicond", "supercond",
+    "magn", "microelectron", "nanolett", "acta", "annu",
 }
 
 _JOURNAL_FULL_WORDS = {
@@ -82,26 +87,19 @@ def is_valid_author(name: str) -> bool:
         return False
     if "&" in name:
         return False
-    # Reject strings that are entirely initials/uppercase ("D. M", "H.-S. P")
     stripped = re.sub(r"[.\-\s]", "", name)
     if stripped.isupper() and len(stripped) <= 4:
         return False
-    # Reject if every word is either a single char or an initial ("S. G")
     if all(len(w.rstrip(".")) <= 2 for w in words):
         return False
-    # Reject names containing a 4-digit year (Vancouver format artifact)
     if re.search(r"\b(19|20)\d{2}\b", name):
         return False
     return True
 
 
 def parse_authors(raw: str) -> list[str]:
-    """Parse an author string into a list of individual names.
-
-    Handles "Last, Initials" and "Initials Last" formats, including
-    comma-separated lists with initial reassembly.
-    """
-    raw = raw.replace(";", ",").replace(" and ", ",")
+    """Parse an author string into a list of individual names."""
+    raw = raw.replace(";", ",").replace(" and ", ",").replace(" & ", ",")
     parts = [a.strip() for a in raw.split(",") if a.strip()]
     assembled: list[str] = []
     i = 0
@@ -125,70 +123,110 @@ def parse_authors(raw: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Format detection
+# Format detection — discrimination tree
 # ---------------------------------------------------------------------------
+#
+# Strategy groups (not 1:1 with styles, grouped by extraction pattern):
+#   QUOTED   — title in quotes: IEEE, Chicago, MLA, Harvard(single)
+#   APA      — year in parens after authors: APA, Harvard
+#   ACS      — semicolons between authors, then title sentence
+#   PERIODED — title is a sentence between author block and venue:
+#              Nature, Vancouver, Elsevier, AIP/APS, RSC
 
-_FMT_IEEE = "ieee"
-_FMT_NATURE = "nature"
+_FMT_QUOTED = "quoted"
 _FMT_APA = "apa"
+_FMT_ACS = "acs"
+_FMT_PERIODED = "perioded"
 
+# Quoted title: double quotes, smart quotes, guillemets, mojibake
 _QUOTED_TITLE_RE = re.compile(
     r'[\u00ab\u201c"\u00e2\u0093]'
     r'((?:[^\u00bb\u201d"\u00e2\u0094]){10,})'
     r'[\u00bb\u201d"\u00e2\u0094,]'
 )
+# Single-quoted title (Harvard)
+_SINGLE_QUOTED_RE = re.compile(r"'([^']{10,})'")
+# APA: year in parens after author block
 _APA_YEAR_RE = re.compile(r"\(\d{4}[a-z]?\)\.\s+")
+# ACS: semicolons between authors (not year;vol)
+_ACS_SEMICOL_RE = re.compile(r"^[^;]{5,50};[^;]{5,50};")
 
 
 def detect_format(raw: str) -> str:
-    """Classify a citation string as ieee, nature, or apa."""
-    if _QUOTED_TITLE_RE.search(raw):
-        return _FMT_IEEE
-    if _APA_YEAR_RE.search(raw[:int(len(raw) * 0.6)]):
+    """Classify a citation string into an extraction strategy group."""
+    # Quoted title is the strongest signal
+    if _QUOTED_TITLE_RE.search(raw) or _SINGLE_QUOTED_RE.search(raw):
+        return _FMT_QUOTED
+    # APA: year in parens early in string
+    if _APA_YEAR_RE.search(raw[:int(len(raw) * 0.5)]):
         return _FMT_APA
-    return _FMT_NATURE
+    # ACS: semicolons between authors (but not year;vol Vancouver pattern)
+    first_80 = raw[:80]
+    if ";" in first_80 and not re.search(r"\d{4};", first_80):
+        return _FMT_ACS
+    # Default: period-delimited (Nature, Vancouver, Elsevier, etc.)
+    return _FMT_PERIODED
 
 
 # ---------------------------------------------------------------------------
 # Title extraction
 # ---------------------------------------------------------------------------
 
-def _extract_title_ieee(raw: str) -> str:
+def _extract_title_quoted(raw: str) -> str:
+    """Extract title from quoted text (IEEE, Chicago, MLA, Harvard)."""
     m = _QUOTED_TITLE_RE.search(raw)
+    if not m:
+        m = _SINGLE_QUOTED_RE.search(raw)
     if m:
         return m.group(1).strip().rstrip(",.")
     return ""
 
 
 def _extract_title_apa(raw: str) -> str:
+    """Extract title after '(YYYY). ' (APA, Harvard variant)."""
     m = _APA_YEAR_RE.search(raw)
     if not m:
         return ""
     rest = raw[m.end():]
+    # Title runs until period followed by space and uppercase (venue start)
     m2 = re.search(r"\.\s+(?=[A-Z])", rest)
     if m2:
         return rest[:m2.start()].strip().rstrip(".")
     return rest.strip().rstrip(".")
 
 
-def _looks_like_author_context(text: str) -> bool:
-    """Return True if text looks like it's inside an author list.
+def _extract_title_acs(raw: str) -> str:
+    """Extract title from ACS-style: authors; authors; ... Title. Journal."""
+    # Find the last semicolon in the author block
+    last_semi = raw.rfind(";")
+    if last_semi < 0:
+        return ""
+    # After the last semicolon, find the first period-space boundary
+    rest = raw[last_semi + 1:]
+    # Skip the last author name (text up to first ". ")
+    m = re.search(r"\.\s+", rest)
+    if not m:
+        return ""
+    title_start = last_semi + 1 + m.end()
+    title_rest = raw[title_start:]
+    # Title ends at next period followed by venue-like text
+    return _find_title_end(title_rest)
 
-    Catches patterns like "Meskers, S. C. J., Janssen, R. A. J."
-    where we have "Name, Initials," repeating.
-    """
-    # If the next 40 chars contain "., " followed by an initial pattern,
-    # we're likely still in an author block
+
+def _looks_like_author_context(text: str) -> bool:
+    """Return True if text looks like it's inside an author list."""
     snippet = text[:60]
-    # Count initial-like patterns (single uppercase letter followed by .)
     initials = len(re.findall(r"\b[A-Z]\.", snippet))
-    # Count commas (author separators)
     commas = snippet.count(",")
-    # Author blocks have many initials and commas relative to text length
     return initials >= 2 and commas >= 2
 
 
-def _extract_title_nature(raw: str) -> str:
+def _extract_title_perioded(raw: str) -> str:
+    """Extract title from period-delimited styles (Nature, Vancouver, etc.).
+
+    The title is the first multi-word sentence after the author block,
+    ending before a venue-like token.
+    """
     candidates: list[int] = []
     for m in re.finditer(r"\.\s+", raw):
         rest = raw[m.end():]
@@ -203,7 +241,7 @@ def _extract_title_nature(raw: str) -> str:
         # Skip "et al."
         if rest.startswith("et al"):
             continue
-        # Skip if we're still inside an author list
+        # Skip if still inside author list
         if _looks_like_author_context(rest):
             continue
         words = rest.split(None, 5)
@@ -217,12 +255,15 @@ def _extract_title_nature(raw: str) -> str:
         return ""
 
     rest = raw[candidates[0]:]
-    # Strip leading "et al." if it leaked through
     rest = re.sub(r"^et\s+al\.?\s*", "", rest)
+    return _find_title_end(rest)
 
-    best_end = len(rest)
-    for m in re.finditer(r"\.\s+", rest):
-        after = rest[m.end():]
+
+def _find_title_end(text: str) -> str:
+    """Find where a title ends — at the period before a venue-like token."""
+    best_end = len(text)
+    for m in re.finditer(r"\.\s+", text):
+        after = text[m.end():]
         if (re.match(r"[A-Z][a-z]*\.\s", after)  # abbreviated journal
             or re.match(r"[A-Z][a-z]+\s+\d", after)  # "Nature 433"
             or re.match(r"[A-Z][A-Z]", after)  # acronym "IEEE"
@@ -231,7 +272,7 @@ def _extract_title_nature(raw: str) -> str:
             best_end = m.start()
             break
 
-    title = rest[:best_end].strip().rstrip(".")
+    title = text[:best_end].strip().rstrip(".")
     if len(title) < 15 or len(title.split()) < 3:
         return ""
     return title
@@ -241,11 +282,13 @@ def extract_title(raw: str, fmt: str | None = None) -> str:
     """Extract a probable title from a raw citation string."""
     if fmt is None:
         fmt = detect_format(raw)
-    if fmt == _FMT_IEEE:
-        return _extract_title_ieee(raw)
+    if fmt == _FMT_QUOTED:
+        return _extract_title_quoted(raw)
     if fmt == _FMT_APA:
         return _extract_title_apa(raw)
-    return _extract_title_nature(raw)
+    if fmt == _FMT_ACS:
+        return _extract_title_acs(raw)
+    return _extract_title_perioded(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +303,7 @@ def extract_authors(raw: str, title: str, fmt: str | None = None) -> list[str]:
     if title_pos <= 0:
         return []
     block = raw[:title_pos]
+    # Clean leading list markers, trailing punctuation
     block = re.sub(r"^[\s\-\[\d.\)]+", "", block)
     block = block.rstrip(" .,;:&")
     block = re.sub(r"\bet\s+al\.?\s*", "", block)
@@ -286,7 +330,9 @@ def extract_venue_fields(raw: str, title: str) -> dict[str, str]:
     pos = raw.find(title_fragment)
     if pos < 0:
         return result
-    after = raw[pos + len(title):].lstrip(' .,;:"\u00ab\u00bb\u201c\u201d\u0093\u0094')
+    after = raw[pos + len(title):].lstrip(
+        ' .,;:"\u00ab\u00bb\u201c\u201d\u0093\u0094'
+    )
 
     vm = _VOLUME_RE.search(after)
     if vm:
@@ -306,12 +352,46 @@ def extract_venue_fields(raw: str, title: str) -> dict[str, str]:
         break
     venue = after[:venue_end].strip().rstrip(" .,;:")
     venue = re.sub(r"^\s*[,;:]\s*", "", venue)
-    # Strip leading quote/guillemet artifacts
     venue = venue.lstrip(' "\u00ab\u00bb\u201c\u201d\u0093\u0094')
     if venue and len(venue) >= 3 and not venue.isdigit():
         result["venue"] = venue
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+_BIB_NOISE = {"vol.", "pp.", "no.", "doi:", "issn", "isbn"}
+
+
+def _is_valid_title(title: str) -> bool:
+    """Reject garbage titles."""
+    if len(title) < 15 or len(title.split()) < 3:
+        return False
+    if looks_like_journal(title):
+        return False
+    if title[0].islower():
+        return False
+    tl = title.lower()
+    if any(marker in tl for marker in _BIB_NOISE):
+        return False
+    if title.count(",") > len(title.split()) // 2:
+        return False
+    return True
+
+
+def _is_valid_venue(venue: str) -> bool:
+    """Reject garbage venue strings."""
+    if len(venue) < 3 or len(venue) > 60:
+        return False
+    initials = len(re.findall(r"\b[A-Z]\.", venue))
+    if initials >= 2:
+        return False
+    if venue[0].islower():
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -349,42 +429,6 @@ def parse_citation(raw: str, *, year: int | None = None) -> dict[str, object]:
                 result[k] = fields[k]
 
     return result
-
-
-_BIB_NOISE = {"vol.", "pp.", "no.", "doi:", "issn", "isbn"}
-
-
-def _is_valid_title(title: str) -> bool:
-    """Reject garbage titles."""
-    if len(title) < 15 or len(title.split()) < 3:
-        return False
-    if looks_like_journal(title):
-        return False
-    # Must start with uppercase
-    if title[0].islower():
-        return False
-    # Must not contain bibliographic field markers
-    tl = title.lower()
-    if any(marker in tl for marker in _BIB_NOISE):
-        return False
-    # Must not be mostly commas (leaked author list)
-    if title.count(",") > len(title.split()) // 2:
-        return False
-    return True
-
-
-def _is_valid_venue(venue: str) -> bool:
-    """Reject garbage venue strings."""
-    if len(venue) < 3 or len(venue) > 60:
-        return False
-    # Venue should not contain initials patterns (leaked author block)
-    initials = len(re.findall(r"\b[A-Z]\.", venue))
-    if initials >= 2:
-        return False
-    # Should not start with lowercase
-    if venue[0].islower():
-        return False
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +487,6 @@ def fuse_cross_paper_evidence(all_citations: list[list[dict]]) -> None:
             continue
         merged: dict[str, object] = {}
         for field in ("title", "authors", "venue", "volume", "pages", "doi", "year"):
-            # Only include values that pass validation
             values = [c.get(field) for c in group if c.get(field)]
             if values:
                 best = _fuse_field(values, field)

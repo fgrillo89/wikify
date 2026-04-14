@@ -10,17 +10,17 @@ from wikify.citestore.parse import (
 # ---- Format detection ----
 
 
-def test_detect_ieee():
+def test_detect_quoted():
     raw = 'H. Wong et al., "Metal-oxide RRAM," Proc. IEEE, vol. 100, 2012.'
-    assert detect_format(raw) == "ieee"
+    assert detect_format(raw) == "quoted"
 
 
-def test_detect_nature():
+def test_detect_perioded():
     raw = (
         "Chua, L. O. Memristor - the missing circuit element."
         " IEEE Trans. 18, 507 (1971)."
     )
-    assert detect_format(raw) == "nature"
+    assert detect_format(raw) == "perioded"
 
 
 def test_detect_apa():
@@ -29,6 +29,14 @@ def test_detect_apa():
         " Journal of Testing, 42(3), 100-110."
     )
     assert detect_format(raw) == "apa"
+
+
+def test_detect_acs():
+    raw = (
+        "Grillo, F.; van Ommen, J. R. Title of Article."
+        " J. Name 2020, 12 (3), 45-67."
+    )
+    assert detect_format(raw) == "acs"
 
 
 # ---- Title extraction ----
