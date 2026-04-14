@@ -652,6 +652,7 @@ def run_with_preloaded(
                 write_req_cfg,
                 author_ctx,
                 citation_index,
+                ref_lookup=ref_lookup,
             )
             try:
                 resp = writer.write(req)

@@ -219,6 +219,43 @@ def is_writable_page(page: WikiPage) -> bool:
 
 
 _PAGE_FIGURES_TOP_K = 8
+_CITED_CHUNKS_PER_REF = 3
+
+
+def _build_cited_corpus_chunks(
+    page: WikiPage,
+    ref_lookup: object,
+    chunks_by_id: dict[str, Chunk],
+) -> dict[str, list[dict]]:
+    """Pre-compute relevant chunks from in-corpus cited works.
+
+    For each evidence chunk on the page, resolve its [N] markers and
+    find in-corpus cited works.  For each, retrieve the top chunks
+    relevant to the page concept.
+    Returns {corpus_doc_id: [{chunk_id, text}]}.
+    """
+    result: dict[str, list[dict]] = {}
+    if not hasattr(ref_lookup, "resolve_markers"):
+        return result
+
+    for ev in page.evidence:
+        ck = chunks_by_id.get(ev.chunk_id)
+        if not ck:
+            continue
+        refs = ref_lookup.resolve_markers(ck.text, ev.doc_id)
+        for ref in refs:
+            if ref.in_corpus and ref.corpus_doc_id not in result:
+                found = ref_lookup.find_corpus_chunks(
+                    ref.corpus_doc_id,
+                    page.id,  # concept = page title
+                    top_k=_CITED_CHUNKS_PER_REF,
+                )
+                if found:
+                    result[ref.corpus_doc_id] = [
+                        {"chunk_id": c.id, "text": c.text[:500]}
+                        for c in found
+                    ]
+    return result
 
 
 def build_write_request(
@@ -231,6 +268,7 @@ def build_write_request(
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
+    ref_lookup: object | None = None,
 ) -> WriteRequest:
     """Build a WriteRequest for a single page.
 
@@ -354,6 +392,9 @@ def build_write_request(
         citation_context=(
             citation_context_for_docs(citation_index, page_doc_ids) if citation_index else {}
         ),
+        cited_corpus_chunks=_build_cited_corpus_chunks(
+            page, ref_lookup, chunks_by_id,
+        ) if ref_lookup else {},
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
         verbalize=cfg.verbalize,
@@ -370,6 +411,7 @@ def save_write_requests(
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
+    ref_lookup: object | None = None,
 ) -> None:
     """Serialize WriteRequest JSONs to ``_write_requests/``."""
     out = bundle.write_requests_dir
@@ -387,6 +429,7 @@ def save_write_requests(
             cfg,
             author_ctx,
             citation_index,
+            ref_lookup=ref_lookup,
         )
         path = out / f"{page.id}.request.json"
         path.write_text(req.model_dump_json(indent=2), encoding="utf-8")
