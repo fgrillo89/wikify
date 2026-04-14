@@ -210,20 +210,28 @@ class QueryBuilder:
         self._ids = frozenset(node_ids)
         self._type = node_type
 
+    # ---- Traversal helpers ----
+
+    def _follow(self, index: dict, node_type: str, *, exclude_self: bool = False) -> QueryBuilder:
+        """Traverse an inverted index: union all values for current IDs."""
+        result: set[str] = set()
+        for nid in self._ids:
+            hit = index.get(nid)
+            if hit is not None:
+                result |= hit if isinstance(hit, set) else set(hit)
+        if exclude_self:
+            result -= self._ids
+        return QueryBuilder(self._kg, result, node_type)
+
     # ---- Traversal (returns new QueryBuilder) ----
 
     def cited_by(self) -> QueryBuilder:
         """Sources that cite these sources."""
-        result: set[str] = set()
-        idx = self._kg._backend._cited_by
-        for sid in self._ids:
-            result |= idx.get(sid, set())
-        return QueryBuilder(self._kg, result, SOURCE)
+        return self._follow(self._kg._backend._cited_by, SOURCE)
 
     def references(self, ords: list[int] | None = None) -> QueryBuilder:
         """Sources cited by these sources. Optionally filter by ordinal."""
         if ords is not None:
-            # Resolve specific ordinals via ord_refs
             result: set[str] = set()
             ord_idx = self._kg._backend._ord_refs
             for sid in self._ids:
@@ -233,11 +241,7 @@ class QueryBuilder:
                     if target:
                         result.add(target)
             return QueryBuilder(self._kg, result, SOURCE)
-        result = set()
-        idx = self._kg._backend._references
-        for sid in self._ids:
-            result |= idx.get(sid, set())
-        return QueryBuilder(self._kg, result, SOURCE)
+        return self._follow(self._kg._backend._references, SOURCE)
 
     def neighborhood(self, hops: int = 1) -> QueryBuilder:
         """N-hop undirected graph neighbors."""
@@ -248,42 +252,22 @@ class QueryBuilder:
 
     def authors(self) -> QueryBuilder:
         """Authors of these sources."""
-        result: set[str] = set()
-        idx = self._kg._backend._authors_of
-        for sid in self._ids:
-            result |= idx.get(sid, set())
-        return QueryBuilder(self._kg, result, AUTHOR)
+        return self._follow(self._kg._backend._authors_of, AUTHOR)
 
     def sources(self) -> QueryBuilder:
         """Sources by these authors."""
-        result: set[str] = set()
-        idx = self._kg._backend._sources_of
-        for aid in self._ids:
-            result |= idx.get(aid, set())
-        return QueryBuilder(self._kg, result, SOURCE)
+        return self._follow(self._kg._backend._sources_of, SOURCE)
 
     def coauthors(self) -> QueryBuilder:
         """Co-authors of these authors."""
-        result: set[str] = set()
-        idx = self._kg._backend._coauthors
-        for aid in self._ids:
-            result |= idx.get(aid, set())
-        result -= self._ids  # exclude self
-        return QueryBuilder(self._kg, result, AUTHOR)
+        return self._follow(self._kg._backend._coauthors, AUTHOR, exclude_self=True)
 
     def sections(self, type: str | None = None) -> QueryBuilder:
         """Sections of these sources. Optionally filter by section type."""
-        result: set[str] = set()
-        idx = self._kg._backend._sections_of
-        for sid in self._ids:
-            result.update(idx.get(sid, []))
+        qb = self._follow(self._kg._backend._sections_of, SECTION)
         if type is not None:
-            backend = self._kg._backend
-            result = {
-                sid for sid in result
-                if backend.G.nodes[sid].get("section_type") == type
-            }
-        return QueryBuilder(self._kg, result, SECTION)
+            qb = qb.where(section_type=type)
+        return qb
 
     def chunks(self) -> QueryBuilder:
         """Chunks of these sources or sections."""
@@ -294,32 +278,18 @@ class QueryBuilder:
             for sid in self._ids:
                 result.update(idx.get(sid, []))
         else:
-            # For sources, get chunks directly
-            idx = backend._chunks_of_source
             for sid in self._ids:
-                result.update(idx.get(sid, []))
-            # Also handle if current set contains sections mixed in
-            sec_idx = backend._chunks_of_section
-            for sid in self._ids:
-                if sid in sec_idx:
-                    result.update(sec_idx[sid])
+                result.update(backend._chunks_of_source.get(sid, []))
+                result.update(backend._chunks_of_section.get(sid, []))
         return QueryBuilder(self._kg, result, CHUNK)
 
     def figures(self) -> QueryBuilder:
         """Figures of these sources."""
-        result: set[str] = set()
-        idx = self._kg._backend._figures_of
-        for sid in self._ids:
-            result.update(idx.get(sid, []))
-        return QueryBuilder(self._kg, result, FIGURE)
+        return self._follow(self._kg._backend._figures_of, FIGURE)
 
     def equations(self) -> QueryBuilder:
         """Equations of these sources."""
-        result: set[str] = set()
-        idx = self._kg._backend._equations_of
-        for sid in self._ids:
-            result.update(idx.get(sid, []))
-        return QueryBuilder(self._kg, result, EQUATION)
+        return self._follow(self._kg._backend._equations_of, EQUATION)
 
     # ---- Filters (returns narrowed QueryBuilder) ----
 
