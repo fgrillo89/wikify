@@ -494,6 +494,15 @@ def _is_valid_title(title: str) -> bool:
     # (comma-delimited author list with initials)
     if re.match(r"^[A-Z][\w.-]+,\s*[A-Z][\w.]+,\s*[A-Z]", title):
         return False
+    # Reject "Name, and Name, Journal" pattern (author block leaked)
+    if re.match(r"^[A-Z][a-z]+,?\s+and\s+", title):
+        return False
+    # Reject all-caps short titles ("CASCADE", "EDITED BY")
+    if title.isupper() and len(title.split()) <= 3:
+        return False
+    # Reject titles containing URLs
+    if "https://" in title or "doi.org" in title:
+        return False
     return True
 
 

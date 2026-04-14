@@ -157,6 +157,29 @@ def _document_entry(doc: Document) -> dict[str, str]:
     return entry
 
 
+def _clean_bib_title(title: str) -> str:
+    """Clean a title for BibTeX output: strip HTML, newlines, artifacts."""
+    # Collapse newlines to spaces
+    title = title.replace("\n", " ").replace("\r", " ")
+    # Convert HTML subscript/superscript to LaTeX
+    title = re.sub(r"<sub>(.*?)</sub>", r"$_{\1}$", title, flags=re.I | re.S)
+    title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
+    # Strip remaining HTML tags
+    title = re.sub(r"<[^>]+>", "", title)
+    # Collapse multiple spaces
+    title = re.sub(r"\s{2,}", " ", title).strip()
+    return title
+
+
+def _clean_bib_journal(journal: str) -> str:
+    """Strip artifacts from journal field."""
+    # Remove trailing ", vol" or ", Vol."
+    journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
+    # Remove trailing comma
+    journal = journal.rstrip(",").strip()
+    return journal
+
+
 def _entries_to_bibtex(entries: list[dict[str, str]]) -> str:
     db = BibDatabase()
     db.entries = entries
@@ -196,11 +219,21 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     else:
         d = cit.to_dict()
 
-    title = _as_text(d.get("title"))
+    title = _clean_bib_title(_as_text(d.get("title")))
     authors = _as_list(d.get("authors"))
     if not title or not authors:
         return None
     year = d.get("year")
+
+    # Reject garbage titles regardless of source
+    if title.isupper() and len(title.split()) <= 2:
+        return None
+    # Reject titles that start with author names ("Hwang, and L. Pantisano")
+    if re.match(r"^[A-Z][a-z]+,\s+and\s", title):
+        return None
+    # Reject raw-text titles (contain URLs or excessive commas)
+    if "https://" in title or "doi.org" in title or title.count(",") > 5:
+        return None
 
     # For heuristic-only citations, validate strictly
     api_confirmed = (
@@ -243,7 +276,10 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         entry["year"] = str(year)
     if doi:
         entry["doi"] = doi
-    _add_optional(entry, "journal", d.get("venue"))
+    venue = d.get("venue") or ""
+    if venue:
+        venue = _clean_bib_journal(venue)
+    _add_optional(entry, "journal", venue)
     _add_optional(entry, "volume", d.get("volume"))
     _add_optional(entry, "pages", d.get("pages"))
     _add_optional(entry, "publisher", d.get("publisher"))
