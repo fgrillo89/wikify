@@ -251,8 +251,8 @@ def _fuse_citations(docs: list[Document]) -> None:
 # ---------------------------------------------------------------------------
 
 def _default_cache_path() -> Path:
-    """Global DOI cache: ~/.wikify/doi_cache.db (shared across corpora)."""
-    cache_dir = Path.home() / ".wikify"
+    """Global DOI cache: data/cache/doi_cache.db (shared across corpora)."""
+    cache_dir = Path("data/cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "doi_cache.db"
 
