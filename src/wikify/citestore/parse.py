@@ -320,6 +320,16 @@ def _extract_title_perioded(raw: str) -> str:
     The title is the first multi-word sentence after the author block,
     ending before a venue-like token.
     """
+    # Vancouver special case: "Author Year Title ..." (bare year before title)
+    # e.g., "Wu H et al 2017 Device and circuit optimization..."
+    m_van = re.search(r"\b(19|20)\d{2}\s+([A-Z][a-z])", raw)
+    if m_van and m_van.start() < len(raw) * 0.3:
+        # Check if this year is followed by a multi-word title phrase
+        rest = raw[m_van.start() + 5:]
+        title = _find_title_end(rest)
+        if title:
+            return title
+
     candidates: list[int] = []
     for m in re.finditer(r"\.\s+", raw):
         rest = raw[m.end():]
@@ -361,6 +371,7 @@ def _find_title_end(text: str) -> str:
             or re.match(r"[A-Z][a-z]+\s+\d", after)  # "Nature 433"
             or re.match(r"[A-Z][A-Z]", after)  # acronym "IEEE"
             or re.match(r"\d+\s*[,(]", after)  # bare volume
+            or re.match(r"In[:\s]+\d{4}", after)  # "In: 2023..." or "In 2023..."
             or looks_like_journal(after.split(".")[0].strip())):
             best_end = m.start()
             break

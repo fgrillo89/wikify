@@ -112,10 +112,37 @@ def _normalise_title_key(value: object) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_plausible_author(name: str) -> bool:
+    """Check if a string looks like an author name (not body text)."""
+    name = name.strip()
+    if not name or len(name) < 2:
+        return False
+    words = name.split()
+    if len(words) > 5:
+        return False
+    # Must start with uppercase
+    if not words[0][0].isupper():
+        return False
+    # Must not contain common non-name words
+    noise = {"particular", "variabilities", "abstract", "results", "however",
+             "therefore", "moreover", "furthermore", "respectively", "simultaneously"}
+    if any(w.lower() in noise for w in words):
+        return False
+    # Must not contain chemical formulas or numbers
+    if re.search(r"\d|[A-Z]{2,}\d", name):
+        return False
+    return True
+
+
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
-    authors_list = _as_list(metadata.get("authors"))
-    title = _clean_title(_as_text(doc.title))
+    authors_list = [a for a in _as_list(metadata.get("authors")) if _is_plausible_author(a)]
+    title = _clean_bib_title(_clean_title(_as_text(doc.title)))
+    # If title is garbage, recover from doc.id
+    if _title_needs_fallback(title):
+        m = re.match(r"^\[\d{4}\s+[^\]]+\]\s*(.+?)(?:_[0-9a-f]{6,})?$", doc.id)
+        if m:
+            title = _clean_bib_title(m.group(1).replace("_", " ").strip())
 
     year = metadata.get("year")
     year_str = str(year) if year else ""
@@ -158,11 +185,11 @@ def _document_entry(doc: Document) -> dict[str, str]:
 
 
 def _clean_bib_title(title: str) -> str:
-    """Clean a title for BibTeX output: strip HTML, newlines, artifacts."""
+    """Clean a title for BibTeX output: strip HTML, newlines, leaked metadata."""
     # Collapse newlines to spaces
     title = title.replace("\n", " ").replace("\r", " ")
-    # Convert HTML subscript/superscript to LaTeX
-    title = re.sub(r"<sub>(.*?)</sub>", r"$_{\1}$", title, flags=re.I | re.S)
+    # Convert HTML subscript/superscript to LaTeX (including <inf> variant)
+    title = re.sub(r"<(?:sub|inf)>(.*?)</(?:sub|inf)>", r"$_{\1}$", title, flags=re.I | re.S)
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
@@ -170,6 +197,20 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(
         r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
     )
+    # Strip URLs anywhere in title (including space-broken URLs from PDF)
+    title = re.sub(r"\s*https?://[\S\s]*$", "", title)
+    # Strip leading "Author et al., " prefix
+    title = re.sub(r"^[A-Z][\w.-]+\s+et\s+al\.\s*,?\s*", "", title)
+    # Strip leading "Surname, and Author, " (leaked last authors)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+and\s+[A-Z].*?,\s+", "", title)
+    # Strip leading "Surname, Initials" (leaked single author at start)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+[A-Z]\.\s*[A-Z]?\.\s*", "", title)
+    # Strip leading "Name, in YYYY" (conference)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+in\s+", "In ", title)
+    # Strip leading "Name, lowercase" (leaked author + venue)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
+    # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
+    title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
     # Collapse multiple spaces
     title = re.sub(r"\s{2,}", " ", title).strip()
     return title
@@ -245,40 +286,21 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     year = d.get("year")
 
-    # Reject garbage titles regardless of source
+    # Reject genuinely unrecoverable titles (after cleaning above)
+    # These catch text that _clean_bib_title couldn't fix.
     if title.isupper() and len(title.split()) <= 2:
         return None
-    # Reject titles that start with author names
-    if re.match(r"^[A-Z][a-z]+,\s+and\s", title):
-        return None
-    if re.match(r"^[A-Z][a-z]+ et al\.\s*,", title):
-        return None
-    # Reject titles starting with "Surname, Initials" (leaked author block)
-    if re.match(r"^[A-Z][a-z]+-?[A-Z]?[a-z]*,\s+[A-Z]\.\s", title):
-        return None
-    # Reject "Name, and" or "Name, in 20XX" (author + conference)
-    if re.match(r"^[A-Z][a-z]+,\s+(?:and|in\s+\d{4}|in\s+Handbook)", title):
-        return None
-    # Reject journal/venue name as title ("Nanoscale, 2016, 8: 1383")
+    # Journal+year fragment ("Nanoscale, 2016, 8: 1383")
     if re.match(r"^[A-Z][a-z]+,\s+\d{4}", title):
         return None
-    # Reject "Name, journal" ("Lee, npj Flexible Electron")
-    if re.match(r"^[A-Z][a-z]+,\s+[a-z]", title):
+    # Journal+vol+pages only ("Mater. 25 1774-9")
+    if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
         return None
-    # Reject arXiv-style ("Plank, arXiv:...")
-    if "arXiv" in title and title.count(",") >= 1 and len(title) < 40:
-        return None
-    # Reject raw-text titles (contain URLs or excessive commas)
-    if "https://" in title or "doi.org" in title or title.count(",") > 5:
-        return None
-    # Reject conference-proceeding fragments ("In: 2023 International...")
-    if re.match(r"^In:\s+\d{4}\s", title):
-        return None
-    # Reject conference locations/dates as titles
+    # Conference location/date only ("(ASP-DAC), Incheon, ...")
     if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
         return None
-    # Reject "Journal Vol Pages" masquerading as title
-    if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
+    # Still has doi.org or too many commas after cleaning
+    if "doi.org" in title or title.count(",") > 5:
         return None
 
     # For heuristic-only citations, validate strictly
@@ -727,9 +749,26 @@ def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
     return False
 
 
+_GARBAGE_TITLE_RE = re.compile(
+    r"^(\[\d{4}\s+[^\]]+\]"
+    r"|EDITED\s+BY"
+    r"|RESEARCH\s+ARTICLE"
+    r"|ORIGINAL\s+(ARTICLE|PAPER|RESEARCH)"
+    r"|MEETING[-\s]?REPORT"
+    r"|PAPER\b"
+    r"|ARTICLE\b"
+    r")",
+    re.I,
+)
+
+
 def _title_needs_fallback(title: str) -> bool:
     clean = title.strip()
-    return bool(re.match(r"^\[\d{4}\s+[^\]]+\]", clean))
+    if not clean or len(clean) < 10:
+        return True
+    if clean.isupper():
+        return True
+    return bool(_GARBAGE_TITLE_RE.match(clean))
 
 
 def _best_markdown_title(md_text: str, fallback_title: str) -> str:
