@@ -6,19 +6,21 @@ wikify's Document model and DOI content negotiation from bibtex.py.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from asyncio import Semaphore
 from collections.abc import Callable
+from functools import wraps
 from typing import TYPE_CHECKING
+
+from aiolimiter import AsyncLimiter
 
 from ..citestore.parse import parse_citation
 
 if TYPE_CHECKING:
     from ..models import Document
 
-
-def _default_doi_lookup(doi: str) -> dict[str, object]:
-    from .bibtex import resolve_doi_metadata
-    return resolve_doi_metadata(doi)
-
+logger = logging.getLogger(__name__)
 
 _DOI_FIELD_MAP = {
     "title": "title",
@@ -30,6 +32,69 @@ _DOI_FIELD_MAP = {
     "publisher": "publisher",
 }
 
+
+# ---------------------------------------------------------------------------
+# Async DOI content negotiation
+# ---------------------------------------------------------------------------
+
+def _add_limiter(limiter: AsyncLimiter):
+    def inner(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            async with limiter:
+                return await func(*args, **kwargs)
+        return wrapper
+    return inner
+
+
+def _add_semaphore(semaphore: Semaphore):
+    def inner(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            async with semaphore:
+                return await func(*args, **kwargs)
+        return wrapper
+    return inner
+
+
+_limiter = AsyncLimiter(1, 1 / 50)  # 50 req/s
+_semaphore = Semaphore(value=20)
+
+
+async def _fetch_doi_metadata_raw(doi: str) -> dict[str, object]:
+    """Single async DOI content negotiation call."""
+    import httpx
+    url = f"https://doi.org/{doi}"
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        resp = await client.get(url, headers={"Accept": "application/x-bibtex"})
+        if resp.status_code != 200:
+            return {}
+    from .bibtex import _metadata_from_bibtex_entry
+    return _metadata_from_bibtex_entry(resp.text)
+
+
+_fetch_doi = _add_limiter(_limiter)(_add_semaphore(_semaphore)(_fetch_doi_metadata_raw))
+
+
+async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
+    """Resolve all unique DOIs concurrently."""
+    results = await asyncio.gather(
+        *(_fetch_doi(doi) for doi in dois),
+        return_exceptions=True,
+    )
+    out: dict[str, dict[str, object]] = {}
+    for doi, result in zip(dois, results):
+        if isinstance(result, BaseException):
+            logger.debug("DOI negotiation failed for %s: %s", doi, result)
+            out[doi] = {}
+        else:
+            out[doi] = result
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Cross-paper evidence fusion
+# ---------------------------------------------------------------------------
 
 def _fuse_citations(docs: list[Document]) -> None:
     """Cross-paper evidence fusion: merge metadata for same-work citations."""
@@ -48,7 +113,6 @@ def _fuse_citations(docs: list[Document]) -> None:
     for _fp, group in buckets.items():
         if len(group) < 2:
             continue
-        # Build merged record from best values
         merged: dict[str, object] = {}
         for field in ("title", "authors", "venue", "volume", "pages", "doi", "year"):
             values = [getattr(c, field) for c in group if getattr(c, field)]
@@ -63,18 +127,20 @@ def _fuse_citations(docs: list[Document]) -> None:
             else:
                 hashable = [tuple(v) if isinstance(v, list) else v for v in values]
                 best = Counter(hashable).most_common(1)[0][0]
-            # Validate before propagating
             if field == "title" and not (isinstance(best, str) and _is_valid_title(best)):
                 continue
             if field == "venue" and not (isinstance(best, str) and _is_valid_venue(best)):
                 continue
             merged[field] = best
-        # Write back: fill empty fields only
         for cit in group:
             for key, value in merged.items():
                 if value and not getattr(cit, key, None):
                     setattr(cit, key, value)
 
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
 
 def enrich_citations(
     docs: list[Document],
@@ -86,7 +152,7 @@ def enrich_citations(
 
     Three passes:
     1. Heuristic extraction via citestore.parse (zero API calls)
-    2. DOI content negotiation (free, no API key)
+    2. DOI content negotiation (async, 50 req/s, free, no API key)
     3. Cross-paper evidence fusion
     """
     # Pass 1: heuristic parsing
@@ -102,24 +168,31 @@ def enrich_citations(
                 if not old or (isinstance(old, str) and len(old) < 10):
                     setattr(cit, key, val)
 
-    # Pass 2: DOI content negotiation
+    # Pass 2: DOI content negotiation (async)
     if use_doi:
-        lookup = doi_lookup or _default_doi_lookup
-        seen: dict[str, dict[str, object]] = {}
-        for doc in docs:
-            for cit in doc.citations:
-                if not cit.doi:
-                    continue
-                if cit.doi not in seen:
-                    seen[cit.doi] = lookup(cit.doi)
-                meta = seen[cit.doi]
-                if not meta:
-                    continue
-                for src, dst in _DOI_FIELD_MAP.items():
-                    val = meta.get(src)
-                    if val:
-                        setattr(cit, dst, val)
-                cit.resolution = cit.resolution or "doi"
+        unique_dois = sorted({
+            cit.doi for doc in docs for cit in doc.citations if cit.doi
+        })
+        if unique_dois:
+            if doi_lookup:
+                # Sync fallback for custom lookup
+                doi_meta = {doi: doi_lookup(doi) for doi in unique_dois}
+            else:
+                logger.info("Resolving %d unique DOIs via content negotiation...", len(unique_dois))
+                doi_meta = asyncio.run(_resolve_dois_async(unique_dois))
+
+            for doc in docs:
+                for cit in doc.citations:
+                    if not cit.doi:
+                        continue
+                    meta = doi_meta.get(cit.doi)
+                    if not meta:
+                        continue
+                    for src, dst in _DOI_FIELD_MAP.items():
+                        val = meta.get(src)
+                        if val:
+                            setattr(cit, dst, val)
+                    cit.resolution = cit.resolution or "doi"
 
     # Pass 3: cross-paper fusion
     _fuse_citations(docs)

@@ -200,6 +200,7 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     authors = _as_list(d.get("authors"))
     if not title or not authors:
         return None
+    year = d.get("year")
 
     # For heuristic-only citations, validate strictly
     api_confirmed = (
@@ -208,6 +209,8 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         or d.get("resolution") in ("openalex", "crossref", "doi")
     )
     if not api_confirmed:
+        if not year:
+            return None
         if len(title) < 15 or len(title.split()) < 3:
             return None
         if title[0].islower() or title[0].isdigit():
@@ -225,7 +228,6 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
             return None
         authors = clean_authors
 
-    year = d.get("year")
     doi = _clean_doi(d.get("doi"))
 
     first_author = authors[0].split()[-1] if authors else "unknown"
@@ -245,8 +247,6 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     _add_optional(entry, "volume", d.get("volume"))
     _add_optional(entry, "pages", d.get("pages"))
     _add_optional(entry, "publisher", d.get("publisher"))
-    if d.get("raw_text"):
-        entry["note"] = _as_text(d["raw_text"])[:500]
     return entry
 
 

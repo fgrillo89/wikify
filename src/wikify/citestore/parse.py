@@ -451,6 +451,24 @@ def _is_valid_title(title: str) -> bool:
         return False
     if title.count(",") > len(title.split()) // 2:
         return False
+    # Reject raw citation strings masquerading as titles:
+    # they have author-initial patterns like "S.Y." or "K.-H."
+    initials = len(re.findall(r"\b[A-Z]\.\s*[A-Z]?\.", title))
+    if initials >= 3:
+        return False
+    # Reject if it starts with "Author, Initials" pattern
+    if re.match(r"^[A-Z][a-z]+,\s*[A-Z]", title):
+        return False
+    # Reject if it starts with "- " (reference list marker leaked)
+    if title.startswith("- ") or title.startswith("> "):
+        return False
+    # Reject if it contains semicolons (ACS author-list leaked as title)
+    if title.count(";") >= 2:
+        return False
+    # Reject if it looks like "Author, Initials, Author, Initials, ..."
+    # (comma-delimited author list with initials)
+    if re.match(r"^[A-Z][\w.-]+,\s*[A-Z][\w.]+,\s*[A-Z]", title):
+        return False
     return True
 
 
