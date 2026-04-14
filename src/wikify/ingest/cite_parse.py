@@ -50,13 +50,20 @@ def enrich_citations(
     # Pass 1: heuristic parsing
     for doc in docs:
         for cit in doc.citations:
-            if cit.get("title") and cit.get("authors"):
-                continue  # already enriched
+            existing_title = cit.get("title") or ""
+            existing_authors = cit.get("authors") or []
+            # Skip if already has a real title (>= 15 chars) and authors
+            if len(existing_title) >= 15 and len(existing_authors) >= 1:
+                continue
             parsed = parse_citation(
                 cit.get("raw_text", ""), year=cit.get("year"),
             )
             for key, val in parsed.items():
-                if val and not cit.get(key):
+                if not val:
+                    continue
+                old = cit.get(key)
+                # Overwrite if empty, or if old value is short garbage
+                if not old or (isinstance(old, str) and len(old) < 10):
                     cit[key] = val
 
     # Pass 2: DOI content negotiation

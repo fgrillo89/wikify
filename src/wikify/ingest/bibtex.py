@@ -189,6 +189,31 @@ def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
     authors = _as_list(cit.get("authors"))
     if not title or not authors:
         return None
+    # For heuristic-only citations (no API confirmation), validate strictly
+    # to avoid garbage entries from regex false positives.
+    api_confirmed = cit.get("crossref_resolved") or cit.get("doi_resolved")
+    if not api_confirmed:
+        if len(title) < 15 or len(title.split()) < 3:
+            return None
+        if title[0].islower() or title[0].isdigit():
+            return None
+        # Reject if any "author" looks like a journal name or contains digits
+        from .metadata import _looks_like_journal
+
+        _journal_words = {
+            "trans", "ieee", "phys", "rev", "lett", "proc", "conf",
+            "journal", "vol", "acm", "acs", "rsc",
+        }
+        clean_authors = [
+            a for a in authors
+            if len(a.split()) >= 2
+            and not _looks_like_journal(a)
+            and not any(ch.isdigit() for ch in a)
+            and not any(w.lower().rstrip(".") in _journal_words for w in a.split())
+        ]
+        if not clean_authors:
+            return None
+        authors = clean_authors
 
     year = cit.get("year")
     doi = _clean_doi(cit.get("doi"))

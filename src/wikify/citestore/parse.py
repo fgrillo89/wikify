@@ -82,6 +82,16 @@ def is_valid_author(name: str) -> bool:
         return False
     if "&" in name:
         return False
+    # Reject strings that are entirely initials/uppercase ("D. M", "H.-S. P")
+    stripped = re.sub(r"[.\-\s]", "", name)
+    if stripped.isupper() and len(stripped) <= 4:
+        return False
+    # Reject if every word is either a single char or an initial ("S. G")
+    if all(len(w.rstrip(".")) <= 2 for w in words):
+        return False
+    # Reject names containing a 4-digit year (Vancouver format artifact)
+    if re.search(r"\b(19|20)\d{2}\b", name):
+        return False
     return True
 
 
@@ -161,15 +171,40 @@ def _extract_title_apa(raw: str) -> str:
     return rest.strip().rstrip(".")
 
 
+def _looks_like_author_context(text: str) -> bool:
+    """Return True if text looks like it's inside an author list.
+
+    Catches patterns like "Meskers, S. C. J., Janssen, R. A. J."
+    where we have "Name, Initials," repeating.
+    """
+    # If the next 40 chars contain "., " followed by an initial pattern,
+    # we're likely still in an author block
+    snippet = text[:60]
+    # Count initial-like patterns (single uppercase letter followed by .)
+    initials = len(re.findall(r"\b[A-Z]\.", snippet))
+    # Count commas (author separators)
+    commas = snippet.count(",")
+    # Author blocks have many initials and commas relative to text length
+    return initials >= 2 and commas >= 2
+
+
 def _extract_title_nature(raw: str) -> str:
     candidates: list[int] = []
     for m in re.finditer(r"\.\s+", raw):
         rest = raw[m.end():]
         if not rest:
             continue
+        # Skip single-letter initials
         if re.match(r"^[A-Z]\.\s", rest):
             continue
-        if rest[0] == "&":
+        # Skip author separators
+        if rest[0] in "&,":
+            continue
+        # Skip "et al."
+        if rest.startswith("et al"):
+            continue
+        # Skip if we're still inside an author list
+        if _looks_like_author_context(rest):
             continue
         words = rest.split(None, 5)
         if len(words) >= 3 and any(
@@ -182,19 +217,22 @@ def _extract_title_nature(raw: str) -> str:
         return ""
 
     rest = raw[candidates[0]:]
+    # Strip leading "et al." if it leaked through
+    rest = re.sub(r"^et\s+al\.?\s*", "", rest)
+
     best_end = len(rest)
     for m in re.finditer(r"\.\s+", rest):
         after = rest[m.end():]
-        if (re.match(r"[A-Z][a-z]*\.\s", after)
-            or re.match(r"[A-Z][a-z]+\s+\d", after)
-            or re.match(r"[A-Z][A-Z]", after)
-            or re.match(r"\d+\s*[,(]", after)
+        if (re.match(r"[A-Z][a-z]*\.\s", after)  # abbreviated journal
+            or re.match(r"[A-Z][a-z]+\s+\d", after)  # "Nature 433"
+            or re.match(r"[A-Z][A-Z]", after)  # acronym "IEEE"
+            or re.match(r"\d+\s*[,(]", after)  # bare volume
             or looks_like_journal(after.split(".")[0].strip())):
             best_end = m.start()
             break
 
     title = rest[:best_end].strip().rstrip(".")
-    if len(title) < 10 or len(title.split()) < 3:
+    if len(title) < 15 or len(title.split()) < 3:
         return ""
     return title
 
@@ -248,7 +286,7 @@ def extract_venue_fields(raw: str, title: str) -> dict[str, str]:
     pos = raw.find(title_fragment)
     if pos < 0:
         return result
-    after = raw[pos + len(title):].lstrip(" .,;:")
+    after = raw[pos + len(title):].lstrip(' .,;:"\u00ab\u00bb\u201c\u201d\u0093\u0094')
 
     vm = _VOLUME_RE.search(after)
     if vm:
@@ -268,6 +306,8 @@ def extract_venue_fields(raw: str, title: str) -> dict[str, str]:
         break
     venue = after[:venue_end].strip().rstrip(" .,;:")
     venue = re.sub(r"^\s*[,;:]\s*", "", venue)
+    # Strip leading quote/guillemet artifacts
+    venue = venue.lstrip(' "\u00ab\u00bb\u201c\u201d\u0093\u0094')
     if venue and len(venue) >= 3 and not venue.isdigit():
         result["venue"] = venue
 
@@ -292,18 +332,59 @@ def parse_citation(raw: str, *, year: int | None = None) -> dict[str, object]:
     result: dict[str, object] = {}
 
     title = extract_title(raw, fmt)
-    if title and len(title) >= 10 and len(title.split()) >= 3:
-        if not looks_like_journal(title):
-            result["title"] = title
+    if title and _is_valid_title(title):
+        result["title"] = title
 
     title = result.get("title", "")
     if title:
         authors = extract_authors(raw, title, fmt)
         if authors:
             result["authors"] = authors
-        result.update(extract_venue_fields(raw, title))
+        fields = extract_venue_fields(raw, title)
+        venue = fields.get("venue", "")
+        if venue and _is_valid_venue(venue):
+            result["venue"] = venue
+        for k in ("volume", "pages"):
+            if fields.get(k):
+                result[k] = fields[k]
 
     return result
+
+
+_BIB_NOISE = {"vol.", "pp.", "no.", "doi:", "issn", "isbn"}
+
+
+def _is_valid_title(title: str) -> bool:
+    """Reject garbage titles."""
+    if len(title) < 15 or len(title.split()) < 3:
+        return False
+    if looks_like_journal(title):
+        return False
+    # Must start with uppercase
+    if title[0].islower():
+        return False
+    # Must not contain bibliographic field markers
+    tl = title.lower()
+    if any(marker in tl for marker in _BIB_NOISE):
+        return False
+    # Must not be mostly commas (leaked author list)
+    if title.count(",") > len(title.split()) // 2:
+        return False
+    return True
+
+
+def _is_valid_venue(venue: str) -> bool:
+    """Reject garbage venue strings."""
+    if len(venue) < 3 or len(venue) > 60:
+        return False
+    # Venue should not contain initials patterns (leaked author block)
+    initials = len(re.findall(r"\b[A-Z]\.", venue))
+    if initials >= 2:
+        return False
+    # Should not start with lowercase
+    if venue[0].islower():
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +416,19 @@ def _fuse_field(values: list, field: str) -> object:
     return Counter(hashable).most_common(1)[0][0]
 
 
+def _validate_fused_value(field: str, value: object) -> bool:
+    """Validate a fused value before propagating it."""
+    if not value:
+        return False
+    if field == "title":
+        return isinstance(value, str) and _is_valid_title(value)
+    if field == "authors":
+        return isinstance(value, list) and len(value) > 0
+    if field == "venue":
+        return isinstance(value, str) and _is_valid_venue(value)
+    return True
+
+
 def fuse_cross_paper_evidence(all_citations: list[list[dict]]) -> None:
     """Merge evidence across multiple citation lists for the same works."""
     buckets: dict[str, list[dict]] = defaultdict(list)
@@ -349,9 +443,12 @@ def fuse_cross_paper_evidence(all_citations: list[list[dict]]) -> None:
             continue
         merged: dict[str, object] = {}
         for field in ("title", "authors", "venue", "volume", "pages", "doi", "year"):
+            # Only include values that pass validation
             values = [c.get(field) for c in group if c.get(field)]
             if values:
-                merged[field] = _fuse_field(values, field)
+                best = _fuse_field(values, field)
+                if _validate_fused_value(field, best):
+                    merged[field] = best
         for cit in group:
             for key, value in merged.items():
                 if value and not cit.get(key):
