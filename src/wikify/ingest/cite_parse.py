@@ -262,6 +262,18 @@ def enrich_citations(
     2. DOI content negotiation (async, 50 req/s, free, no API key)
     3. Cross-paper evidence fusion
     """
+    # Pass 0: re-extract DOIs from raw_text (fixes truncated DOIs from old ingests)
+    from ..citestore.parse import _clean_doi
+    from ..citestore.parse import extract_doi as _extract_doi_from_text
+    for doc in docs:
+        for cit in doc.citations:
+            if cit.doi and not _clean_doi(cit.doi):
+                # Stored DOI is truncated/invalid — try re-extracting
+                better = _extract_doi_from_text(cit.raw_text)
+                cit.doi = better
+            elif not cit.doi:
+                cit.doi = _extract_doi_from_text(cit.raw_text)
+
     # Pass 1: heuristic parsing
     for doc in docs:
         for cit in doc.citations:
