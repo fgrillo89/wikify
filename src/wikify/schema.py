@@ -154,6 +154,9 @@ class ExtractRequest(BaseModel):
     # `reasoning` field in its response explaining what it kept, skipped,
     # and why. Feeds <bundle>/_meta/verbalize.jsonl for post-hoc review.
     verbalize: bool = False
+    # Resolved citation markers from the chunk text.
+    # Each dict: {ord, title, authors, year, doi, in_corpus, corpus_doc_id}.
+    citation_refs: list[dict] = Field(default_factory=list)
 
 
 ConfidenceLabel = Literal["extracted", "inferred", "ambiguous"]
@@ -234,6 +237,8 @@ class ExtractedConcept(BaseModel):
     mechanisms: list[str] = Field(default_factory=list)  # how it works
     relationships: list[Relationship] = Field(default_factory=list)
     equations: list[Equation] = Field(default_factory=list)
+    # Citation references relevant to this concept (bibkeys or ordinals).
+    cited_refs: list[str] = Field(default_factory=list)
 
     @field_validator("score")
     @classmethod

@@ -208,6 +208,10 @@ def run_with_preloaded(
     images_index = preloaded.images_index
     citation_index = preloaded.citation_index
 
+    # Build citation ref lookup for extraction and writing
+    from ..citestore.ref_lookup import RefLookup
+    ref_lookup = RefLookup(docs, chunks=chunks, vector_store=preloaded.vectors)
+
     # ---- write-only phase: skip extraction entirely ---------------------
     if phase == "write":
         pages = load_pages_manifest(bundle)
@@ -386,6 +390,18 @@ def run_with_preloaded(
                         ck, docs_by_id, images_index
                     ),
                     verbalize=verbalize,
+                    citation_refs=[
+                        {
+                            "ord": r.entry.ord,
+                            "title": r.entry.title,
+                            "authors": r.entry.authors[:3],
+                            "year": r.entry.year,
+                            "doi": r.entry.doi,
+                            "in_corpus": r.in_corpus,
+                            "corpus_doc_id": r.corpus_doc_id,
+                        }
+                        for r in ref_lookup.resolve_markers(ck.text, ck.doc_id)
+                    ],
                 )
                 for cid, ck in batch_chunks
             ]
