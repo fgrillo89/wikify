@@ -127,36 +127,41 @@ def _extract_author_last_names(text: str) -> list[str]:
 # --- public API -----------------------------------------------------------
 
 
-def extract_citations(md_text: str, doc_id: str) -> list[dict]:
+def extract_citations(md_text: str, doc_id: str) -> list:
     """Extract bibliography entries from academic paper markdown text.
 
-    Returns a list of plain dicts with keys:
-    ``ord``, ``raw_text``, ``year`` (int|None), ``doi`` (str|None),
-    ``author_last_names`` (list[str]).
+    Returns a list of ``CitationEntry`` objects with ``ord``, ``raw_text``,
+    ``year``, ``doi``, and ``author_last_names`` populated.
 
     Structured fields (``title``, ``authors``, ``venue``) are NOT
-    populated here -- they are filled later by CrossRef resolution.
+    populated here -- they are filled later by heuristic parsing and/or
+    API resolution.
     Returns ``[]`` if no references section is detected.
     """
+    from ..citestore.models import CitationEntry
+    from ..citestore.parse import extract_doi as extract_doi_from_url
+
     section = _find_refs_section(md_text)
     if section is None:
         return []
 
     raw_entries = _split_entries(section)
 
-    out: list[dict] = []
+    out: list[CitationEntry] = []
     for idx, raw in enumerate(raw_entries):
         cleaned = _clean_markdown(raw)
         if len(cleaned) < 20:
             continue
         truncated = cleaned[:1000]
+        # Try both the local regex and URL-aware DOI extraction
+        doi = _extract_doi(truncated) or extract_doi_from_url(truncated)
         out.append(
-            {
-                "ord": idx,
-                "raw_text": truncated,
-                "year": _extract_year(truncated),
-                "doi": _extract_doi(truncated),
-                "author_last_names": _extract_author_last_names(truncated),
-            }
+            CitationEntry(
+                ord=idx,
+                raw_text=truncated,
+                year=_extract_year(truncated),
+                doi=doi or "",
+                author_last_names=_extract_author_last_names(truncated),
+            )
         )
     return out

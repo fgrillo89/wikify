@@ -178,47 +178,56 @@ def paper_to_bibtex(
 # ---------------------------------------------------------------------------
 
 
-def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
-    """Build a BibTeX entry from a resolved or heuristic-enriched citation.
+_JOURNAL_FILTER_WORDS = {
+    "trans", "ieee", "phys", "rev", "lett", "proc", "conf",
+    "journal", "vol", "acm", "acs", "rsc",
+}
+
+
+def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
+    """Build a BibTeX entry from a CitationEntry or legacy dict.
 
     Returns None if the citation lacks essential fields (title + authors).
-    Accepts citations resolved via CrossRef, OpenAlex, DOI content
-    negotiation, or heuristic parsing.
     """
-    title = _as_text(cit.get("title"))
-    authors = _as_list(cit.get("authors"))
+    # Support both CitationEntry (attr access) and legacy dict
+    _g = getattr(cit, "__getitem__", None)
+    if _g:  # dict-like
+        d = cit
+    else:
+        d = cit.to_dict()
+
+    title = _as_text(d.get("title"))
+    authors = _as_list(d.get("authors"))
     if not title or not authors:
         return None
-    # For heuristic-only citations (no API confirmation), validate strictly
-    # to avoid garbage entries from regex false positives.
-    api_confirmed = cit.get("crossref_resolved") or cit.get("doi_resolved")
+
+    # For heuristic-only citations, validate strictly
+    api_confirmed = (
+        d.get("crossref_resolved")
+        or d.get("doi_resolved")
+        or d.get("resolution") in ("openalex", "crossref", "doi")
+    )
     if not api_confirmed:
         if len(title) < 15 or len(title.split()) < 3:
             return None
         if title[0].islower() or title[0].isdigit():
             return None
-        # Reject if any "author" looks like a journal name or contains digits
         from .metadata import _looks_like_journal
 
-        _journal_words = {
-            "trans", "ieee", "phys", "rev", "lett", "proc", "conf",
-            "journal", "vol", "acm", "acs", "rsc",
-        }
         clean_authors = [
             a for a in authors
             if len(a.split()) >= 2
             and not _looks_like_journal(a)
             and not any(ch.isdigit() for ch in a)
-            and not any(w.lower().rstrip(".") in _journal_words for w in a.split())
+            and not any(w.lower().rstrip(".") in _JOURNAL_FILTER_WORDS for w in a.split())
         ]
         if not clean_authors:
             return None
         authors = clean_authors
 
-    year = cit.get("year")
-    doi = _clean_doi(cit.get("doi"))
+    year = d.get("year")
+    doi = _clean_doi(d.get("doi"))
 
-    # Build bibkey from first author + year
     first_author = authors[0].split()[-1] if authors else "unknown"
     base = _sanitize_id(f"ref_{year}_{first_author}_{title[:30]}")
 
@@ -232,12 +241,12 @@ def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
         entry["year"] = str(year)
     if doi:
         entry["doi"] = doi
-    _add_optional(entry, "journal", cit.get("venue"))
-    _add_optional(entry, "volume", cit.get("volume"))
-    _add_optional(entry, "pages", cit.get("pages"))
-    _add_optional(entry, "publisher", cit.get("publisher"))
-    if cit.get("raw_text"):
-        entry["note"] = _as_text(cit["raw_text"])[:500]
+    _add_optional(entry, "journal", d.get("venue"))
+    _add_optional(entry, "volume", d.get("volume"))
+    _add_optional(entry, "pages", d.get("pages"))
+    _add_optional(entry, "publisher", d.get("publisher"))
+    if d.get("raw_text"):
+        entry["note"] = _as_text(d["raw_text"])[:500]
     return entry
 
 
@@ -342,7 +351,8 @@ def build_citation_index(
     # Phase 2: process citations from each doc
     for doc in enriched_docs:
         cited_keys: list[str] = []
-        for cit in doc.citations:
+        for cit_obj in doc.citations:
+            cit = cit_obj.to_dict() if hasattr(cit_obj, "to_dict") else cit_obj
             bibkey = None
 
             # Try to match to an existing source doc by DOI

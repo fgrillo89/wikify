@@ -116,17 +116,18 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
                     entry["collaborators"].add(other)
 
         for cit in doc.citations or []:
-            cit_year = cit.get("year")
+            cit_year = cit.year if hasattr(cit, "year") else cit.get("year")
             if isinstance(cit_year, str):
                 try:
                     cit_year = int(cit_year)
                 except ValueError:
                     cit_year = None
-            cit_title = (cit.get("title") or cit.get("raw_text", ""))[:120]
-            # Use structured authors if CrossRef-resolved, else last names
-            cit_authors = cit.get("authors") or [
-                n for n in cit.get("author_last_names", [])
-            ]
+            if hasattr(cit, "title"):
+                cit_title = (cit.title or cit.raw_text or "")[:120]
+                cit_authors = cit.authors or list(cit.author_last_names)
+            else:
+                cit_title = (cit.get("title") or cit.get("raw_text", ""))[:120]
+                cit_authors = cit.get("authors") or list(cit.get("author_last_names", []))
             for raw in cit_authors:
                 name = _normalize_author_name(str(raw))
                 if not _is_valid_author(name):

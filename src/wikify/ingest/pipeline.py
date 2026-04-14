@@ -633,9 +633,14 @@ def _resolve_citations(docs: list[Document]) -> None:
         resolved: list[str] = []
         seen: set[str] = set()
         for cit in doc.citations or []:
-            cit_year = _safe_int(cit.get("year"))
-            raw = str(cit.get("raw_text") or cit.get("title") or "")
-            cit_last_names = cit.get("author_last_names") or []
+            if hasattr(cit, "year"):
+                cit_year = _safe_int(cit.year)
+                raw = str(cit.raw_text or cit.title or "")
+                cit_last_names = cit.author_last_names or []
+            else:
+                cit_year = _safe_int(cit.get("year"))
+                raw = str(cit.get("raw_text") or cit.get("title") or "")
+                cit_last_names = cit.get("author_last_names") or []
             if cit_year is None or not raw:
                 continue
             candidates = doc_index_by_year.get(cit_year, [])
@@ -1075,7 +1080,7 @@ def _refresh_openalex(ctx: dict) -> None:
 
     from ..citestore import AsyncResolver, DatabaseManager
 
-    all_cits: list[dict] = []
+    all_cits = []
     for doc in ctx["docs"]:
         all_cits.extend(doc.citations or [])
     if not all_cits:
@@ -1091,37 +1096,37 @@ def _refresh_openalex(ctx: dict) -> None:
                 expand_references=True,
             )
             try:
-                results = await resolver.resolve_batch(all_cits)
+                # Convert to dicts for the resolver API
+                cit_dicts = [c.to_dict() if hasattr(c, "to_dict") else c for c in all_cits]
+                results = await resolver.resolve_batch(cit_dicts)
             finally:
                 await resolver.close()
 
-        # Map results back onto citation dicts in-place.
-        # Results arrive in completion order from as_completed, so match
-        # by (source_doi, source_text) back to the original citation.
+        # Map results back onto CitationEntry objects
         result_by_text: dict[str, object] = {}
         for r in results:
             if r.source_text:
                 result_by_text[r.source_text] = r
 
         for cit in all_cits:
-            r = result_by_text.get(cit.get("raw_text", ""))
+            raw = cit.raw_text if hasattr(cit, "raw_text") else cit.get("raw_text", "")
+            r = result_by_text.get(raw)
             if r is None or r.work is None:
-                cit["crossref_resolved"] = False
                 continue
             w = r.work
-            cit["crossref_resolved"] = True
-            cit["title"] = w.title
-            cit["authors"] = w.authors
-            cit["year"] = w.year or cit.get("year")
-            cit["venue"] = w.journal
-            cit["volume"] = w.volume
-            cit["pages"] = (
+            cit.resolution = "openalex"
+            cit.title = w.title
+            cit.authors = w.authors
+            cit.year = w.year or cit.year
+            cit.venue = w.journal
+            cit.volume = w.volume
+            cit.pages = (
                 f"{w.first_page}--{w.last_page}".strip("-")
                 if w.first_page or w.last_page
                 else ""
             )
-            cit["publisher"] = w.publisher
-            cit["doi"] = w.doi or cit.get("doi", "")
+            cit.publisher = w.publisher
+            cit.doi = w.doi or cit.doi
 
     asyncio.run(_run())
 

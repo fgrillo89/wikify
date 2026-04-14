@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..citestore.models import CitationEntry
 from ..models import Chunk, CorpusGraph, DocImage, Document
 from ..paths import CorpusPaths
 from .vectors import VectorStore, load_vectors, save_vectors
@@ -188,7 +189,7 @@ def _doc_to_dict(doc: Document) -> dict:
         "tldr": doc.tldr,
         "n_chunks": doc.n_chunks,
         "n_tokens": doc.n_tokens,
-        "citations": list(doc.citations or []),
+        "citations": [c.to_dict() for c in doc.citations] if doc.citations else [],
         "equations": list(doc.equations or []),
         "figure_refs": list(doc.figure_refs or []),
         "similar_to": list(doc.similar_to or []),
@@ -238,7 +239,7 @@ def _doc_from_dict(d: dict) -> Document:
         tldr=d.get("tldr", ""),
         n_chunks=d.get("n_chunks", 0),
         n_tokens=d.get("n_tokens", 0),
-        citations=list(d.get("citations") or []),
+        citations=[CitationEntry.from_dict(c) for c in (d.get("citations") or [])],
         equations=list(d.get("equations") or []),
         figure_refs=list(d.get("figure_refs") or []),
         similar_to=list(d.get("similar_to") or []),
