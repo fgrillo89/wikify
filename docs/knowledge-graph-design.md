@@ -124,11 +124,107 @@ For 50-1000 papers, simple name normalization:
 - ORCID matching when available (from CrossRef/OpenAlex metadata)
 - No ML disambiguation needed at this scale
 
+### Traversal Patterns
+
+The graph must support multi-hop traversals in any direction.
+Every query below should be a one-liner against the API.
+
+**Author -> Papers -> Chunks (and back):**
+```
+author("Smith")
+  -> papers_by_author("Smith")           # [Paper nodes]
+  -> for each paper: G.successors(p, "contains")  # [Chunk nodes]
+  -> chunk.text, chunk.embedding          # actual content
+
+chunk("c_123")
+  -> G.predecessors(c, "contains")        # Paper node
+  -> G.predecessors(p, "authored_by")     # Author nodes
+```
+
+**"Authors who write similar papers to target author":**
+```
+papers_by_author("Smith")
+  -> for each paper: G.neighbors(p, "doc_similar")  # similar papers
+  -> for each similar: G.predecessors(p, "authored_by")  # their authors
+  -> rank by frequency (authors who appear most = most similar)
+```
+
+**"What papers cite this author's work?":**
+```
+papers_by_author("Smith")
+  -> for each paper: G.predecessors(p, "cites")    # papers that cite it
+  -> unique set of citing papers
+  -> their authors = "who builds on Smith's work"
+```
+
+**"Find evidence chunks about concept X from papers that cite paper Y":**
+```
+cited_by("paper_Y")
+  -> for each citing paper: G.successors(p, "contains")  # chunks
+  -> similarity_search(chunks, concept_X)                 # vector search
+```
+
+**"Research community around topic Z":**
+```
+search_chunks(topic_Z)
+  -> unique papers (via "contains" edges)
+  -> their authors (via "authored_by" edges)
+  -> author collaboration subgraph
+  -> community detection on that subgraph
+```
+
+### Relationship to Existing Data Structures
+
+```
+KnowledgeGraph (nx.MultiDiGraph)
+  |
+  +-- Paper nodes
+  |     carries: CitationEntry metadata (title, doi, authors, venue)
+  |     links to: Author nodes (authored_by), Chunk nodes (contains)
+  |     links to: other Paper nodes (cites, doc_similar, cites_same)
+  |
+  +-- Author nodes
+  |     carries: display_name, orcid, metrics (h_index, citation_count)
+  |     links to: Paper nodes (authored_by, reverse)
+  |     links to: other Author nodes (collaborated)
+  |
+  +-- Chunk nodes
+        carries: doc_id, ord, section_path
+        links to: Paper node (contains, reverse)
+        links to: other Chunk nodes (similar_knn, similar_strong, co_section)
+        embeddings: via VectorStore (separate, indexed by chunk_id)
+
+VectorStore (existing)
+  - chunk embeddings for similarity search
+  - accessed via chunk_id from graph traversal
+  - NOT inside the graph (too large), but reachable via node ID
+
+DOI Cache (data/doi_cache.db)
+  - ingestion-time cache only
+  - NOT a query-time store
+  - resolved metadata flows into Paper nodes at build time
+
+Document JSON (corpus/docs/*.json)
+  - source of truth for parsed content
+  - feeds into Paper + Chunk nodes at graph build time
+  - CitationEntry list -> Paper.ord_refs mapping
+```
+
+### Design Principle
+
+The graph is the **query-time interface**. Everything distill needs
+is reachable by traversing the graph. The graph is **built from**
+Documents, Citations, Chunks, and VectorStore at ingest time but
+**does not depend on them** at query time. Once built, the graph
+is self-contained.
+
 ### What This Enables
 
 1. Writer can cite bibliography entries with context from the graph
 2. Extractor knows which references a chunk makes and where they lead
-3. Query engine can follow citation chains
-4. Person pages grounded in actual publication/citation data
+3. Query engine can follow citation chains across papers and authors
+4. Person pages grounded in actual publication/citation/collaboration data
 5. Corpus-level analytics: most influential papers, key authors,
    research communities, citation flow
+6. "Similar authors" via paper similarity transitivity
+7. Multi-hop reasoning: concept -> chunks -> papers -> authors -> collaborators
