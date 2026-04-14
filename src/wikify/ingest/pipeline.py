@@ -1126,6 +1126,12 @@ def _refresh_crossref(ctx: dict) -> None:
     asyncio.run(_run())
 
 
+def _refresh_cite_heuristics(ctx: dict) -> None:
+    """Enrich citations with heuristic parsing + DOI content negotiation."""
+    from .cite_parse import enrich_citations
+    enrich_citations(ctx["docs"])
+
+
 def _refresh_bibliography(ctx: dict) -> None:
     write_corpus_bibliography(
         ctx["paths"],
@@ -1156,11 +1162,12 @@ def _refresh_doc_resave(ctx: dict) -> None:
 
 
 _REFRESH_STEPS: dict[str, callable] = {
-    "doc_edges":      _refresh_doc_edges,
-    "topics":         _refresh_topics,
-    "images_index":   _refresh_images_index,
-    "crossref":       _refresh_crossref,
-    "bibliography":   _refresh_bibliography,
+    "doc_edges":        _refresh_doc_edges,
+    "topics":           _refresh_topics,
+    "images_index":     _refresh_images_index,
+    "cite_heuristics":  _refresh_cite_heuristics,
+    "crossref":         _refresh_crossref,
+    "bibliography":     _refresh_bibliography,
     "corpus_graph":   _refresh_corpus_graph,
     "explorer_index": _refresh_explorer_index,
     "pagerank":       _refresh_pagerank,
@@ -1169,10 +1176,10 @@ _REFRESH_STEPS: dict[str, callable] = {
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent -- only needs docs + store
-    ("wave A (edges+topics+images+openalex)", [
-        "doc_edges", "topics", "images_index", "crossref",
+    ("wave A (edges+topics+images+heuristics+openalex)", [
+        "doc_edges", "topics", "images_index", "cite_heuristics", "crossref",
     ]),
-    # Wave A2: bibliography needs citation resolution to finish first
+    # Wave A2: bibliography needs citation enrichment to finish first
     ("wave A2 (bibliography)", [
         "bibliography",
     ]),

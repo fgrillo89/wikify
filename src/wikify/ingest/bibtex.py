@@ -179,12 +179,12 @@ def paper_to_bibtex(
 
 
 def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
-    """Build a BibTeX entry from a CrossRef-resolved citation.
+    """Build a BibTeX entry from a resolved or heuristic-enriched citation.
 
-    Returns None if the citation was not resolved or lacks essential fields.
+    Returns None if the citation lacks essential fields (title + authors).
+    Accepts citations resolved via CrossRef, OpenAlex, DOI content
+    negotiation, or heuristic parsing.
     """
-    if not cit.get("crossref_resolved"):
-        return None
     title = _as_text(cit.get("title"))
     authors = _as_list(cit.get("authors"))
     if not title or not authors:
