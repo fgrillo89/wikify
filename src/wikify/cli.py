@@ -74,10 +74,10 @@ def ingest(
         "--no-refresh",
         help="Skip derived-artifact rebuild (embeddings, graph, topics, etc.).",
     ),
-    resolve_bibliography_doi: bool = typer.Option(
+    openalex: bool = typer.Option(
         False,
-        "--resolve-bibliography-doi",
-        help="Use DOI content negotiation to fill missing bibliography metadata.",
+        "--openalex",
+        help="Enable OpenAlex bulk resolution + depth-1 reference expansion.",
     ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
@@ -88,7 +88,7 @@ def ingest(
         mode=mode,
         parser_backend=parser,
         refresh=not no_refresh,
-        resolve_bibliography_doi=resolve_bibliography_doi,
+        resolve_bibliography_doi=openalex,
     )
     typer.echo(f"corpus written to {paths.root}")
 
@@ -96,12 +96,17 @@ def ingest(
 @app.command()
 def refresh(
     corpus_dir: Path = typer.Argument(..., help="Path to the corpus directory."),
+    openalex: bool = typer.Option(
+        False,
+        "--openalex",
+        help="Enable OpenAlex bulk resolution + depth-1 reference expansion.",
+    ),
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.)."""
     from .paths import CorpusPaths
 
     paths = CorpusPaths(root=corpus_dir)
-    refresh_corpus(paths)
+    refresh_corpus(paths, resolve_bibliography_doi=openalex)
     typer.echo(f"refresh complete: {paths.root}")
 
 

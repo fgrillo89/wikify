@@ -566,15 +566,14 @@ def _embed_chunks_incremental(
 # Stage: doc-level edges
 # ---------------------------------------------------------------------------
 
-def populate_doc_edges(
+def _compute_doc_similarity(
     docs: list[Document],
     docs_chunks_pairs: list[tuple[str, list[Chunk]]],
     store: VectorStore,
 ) -> None:
-    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc."""
+    """Fill in ``similar_to`` for every doc using embedding cosine."""
     import numpy as np
 
-    # 1. similar_to: mean-pooled chunk cosine, top-K above threshold.
     chunk_by_id = {cid: i for i, cid in enumerate(store.ids)}
     matrix = store.matrix
     doc_vecs: dict[str, np.ndarray] = {}
@@ -605,10 +604,20 @@ def populate_doc_edges(
                     doc.similar_to = top
                     break
 
-    # 2. cites: year-bucketed fuzzy citation matching.
-    _resolve_citations(docs)
 
-    # 3. cites_same: bibliographic coupling on shared references.
+def populate_doc_edges(
+    docs: list[Document],
+    docs_chunks_pairs: list[tuple[str, list[Chunk]]],
+    store: VectorStore,
+) -> None:
+    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc.
+
+    Legacy entry point that runs all three steps. Prefer the split
+    steps (_refresh_doc_similarity, _refresh_citation_edges) in the DAG
+    for correct dependency ordering.
+    """
+    _compute_doc_similarity(docs, docs_chunks_pairs, store)
+    _resolve_citations(docs)
     coupling = compute_coupling(docs, min_strength=3, top_k=5)
     for doc in docs:
         doc.cites_same = coupling.get(doc.id, [])
@@ -633,9 +642,14 @@ def _resolve_citations(docs: list[Document]) -> None:
         resolved: list[str] = []
         seen: set[str] = set()
         for cit in doc.citations or []:
-            cit_year = _safe_int(cit.get("year"))
-            raw = str(cit.get("raw_text") or cit.get("title") or "")
-            cit_last_names = cit.get("author_last_names") or []
+            if hasattr(cit, "year"):
+                cit_year = _safe_int(cit.year)
+                raw = str(cit.raw_text or cit.title or "")
+                cit_last_names = cit.author_last_names or []
+            else:
+                cit_year = _safe_int(cit.get("year"))
+                raw = str(cit.get("raw_text") or cit.get("title") or "")
+                cit_last_names = cit.get("author_last_names") or []
             if cit_year is None or not raw:
                 continue
             candidates = doc_index_by_year.get(cit_year, [])
@@ -1054,8 +1068,17 @@ def refresh_corpus(
 # To add a step: define ``_refresh_<name>(ctx)`` and register it in
 # ``_REFRESH_STEPS``, then place the key in the right wave.
 
-def _refresh_doc_edges(ctx: dict) -> None:
-    populate_doc_edges(ctx["docs"], ctx["pairs"], ctx["store"])
+def _refresh_doc_similarity(ctx: dict) -> None:
+    """Compute doc-level embedding similarity (independent of citations)."""
+    _compute_doc_similarity(ctx["docs"], ctx["pairs"], ctx["store"])
+
+
+def _refresh_citation_edges(ctx: dict) -> None:
+    """Compute citation links + bibliographic coupling (needs enriched citations)."""
+    _resolve_citations(ctx["docs"])
+    coupling = compute_coupling(ctx["docs"], min_strength=3, top_k=5)
+    for doc in ctx["docs"]:
+        doc.cites_same = coupling.get(doc.id, [])
 
 
 def _refresh_topics(ctx: dict) -> None:
@@ -1067,27 +1090,81 @@ def _refresh_images_index(ctx: dict) -> None:
     build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
 
 
-def _refresh_crossref(ctx: dict) -> None:
-    """Resolve citations via CrossRef API (DOI + fuzzy query)."""
+def _refresh_openalex(ctx: dict) -> None:
+    """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
     if not ctx.get("resolve_bibliography_doi", False):
         return
-    from .crossref import resolve_citations_batch
+    import asyncio
+
+    from ..citestore import AsyncResolver, DatabaseManager
 
     all_cits = []
     for doc in ctx["docs"]:
         all_cits.extend(doc.citations or [])
-    if all_cits:
-        resolve_citations_batch(
-            all_cits,
-            corpus_root=ctx["paths"].root,
-        )
+    if not all_cits:
+        return
+
+    db_path = ctx["paths"].root / ".citestore.db"
+
+    async def _run() -> None:
+        async with DatabaseManager(db_path) as db:
+            import os
+            email = os.environ.get("OPENALEX_EMAIL", "wikify@example.com")
+            resolver = AsyncResolver(
+                db,
+                email=email,
+                expand_references=True,
+            )
+            try:
+                # Convert to dicts for the resolver API
+                cit_dicts = [c.to_dict() if hasattr(c, "to_dict") else c for c in all_cits]
+                results = await resolver.resolve_batch(cit_dicts)
+            finally:
+                await resolver.close()
+
+        # Map results back onto CitationEntry objects
+        result_by_text: dict[str, object] = {}
+        for r in results:
+            if r.source_text:
+                result_by_text[r.source_text] = r
+
+        for cit in all_cits:
+            raw = cit.raw_text if hasattr(cit, "raw_text") else cit.get("raw_text", "")
+            r = result_by_text.get(raw)
+            if r is None or r.work is None:
+                continue
+            w = r.work
+            cit.resolution = "openalex"
+            cit.title = w.title
+            cit.authors = w.authors
+            cit.year = w.year or cit.year
+            cit.venue = w.journal
+            cit.volume = w.volume
+            cit.pages = (
+                f"{w.first_page}--{w.last_page}".strip("-")
+                if w.first_page or w.last_page
+                else ""
+            )
+            cit.publisher = w.publisher
+            cit.doi = w.doi or cit.doi
+
+    asyncio.run(_run())
+
+
+def _refresh_cite_heuristics(ctx: dict) -> None:
+    """Enrich citations with heuristic parsing + DOI content negotiation."""
+    from .cite_parse import enrich_citations
+    enrich_citations(ctx["docs"], use_doi=True)
 
 
 def _refresh_bibliography(ctx: dict) -> None:
+    # DOI enrichment for source papers always runs (free, no API key).
+    # OpenAlex is the optional step gated by --resolve-bibliography-doi.
+    resolve_doi = True
     write_corpus_bibliography(
         ctx["paths"],
         ctx["docs"],
-        resolve_doi=ctx.get("resolve_bibliography_doi", False),
+        resolve_doi=resolve_doi,
     )
 
 
@@ -1113,11 +1190,13 @@ def _refresh_doc_resave(ctx: dict) -> None:
 
 
 _REFRESH_STEPS: dict[str, callable] = {
-    "doc_edges":      _refresh_doc_edges,
-    "topics":         _refresh_topics,
-    "images_index":   _refresh_images_index,
-    "crossref":       _refresh_crossref,
-    "bibliography":   _refresh_bibliography,
+    "doc_similarity":   _refresh_doc_similarity,
+    "topics":           _refresh_topics,
+    "images_index":     _refresh_images_index,
+    "cite_heuristics":  _refresh_cite_heuristics,
+    "openalex":         _refresh_openalex,
+    "citation_edges":   _refresh_citation_edges,
+    "bibliography":     _refresh_bibliography,
     "corpus_graph":   _refresh_corpus_graph,
     "explorer_index": _refresh_explorer_index,
     "pagerank":       _refresh_pagerank,
@@ -1125,20 +1204,28 @@ _REFRESH_STEPS: dict[str, callable] = {
 }
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
-    # Wave A: independent -- only needs docs + store
-    ("wave A (edges+topics+images+crossref)", [
-        "doc_edges", "topics", "images_index", "crossref",
+    # Wave A: independent steps (no citation dependency)
+    ("wave A (similarity+topics+images)", [
+        "doc_similarity", "topics", "images_index",
     ]),
-    # Wave A2: bibliography needs crossref to finish first
-    ("wave A2 (bibliography)", [
-        "bibliography",
+    # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
+    ("wave B (heuristic enrichment)", [
+        "cite_heuristics",
     ]),
-    # Wave B: needs doc_edges (populates doc.similar_to, .cites, .cites_same)
-    ("wave B (corpus graph)", [
+    # Wave C: OpenAlex enrichment (optional, overwrites heuristics with authoritative data)
+    ("wave C (openalex enrichment)", [
+        "openalex",
+    ]),
+    # Wave D: citation graph + bibliography (depend on enriched citations)
+    ("wave D (edges+bibliography)", [
+        "citation_edges", "bibliography",
+    ]),
+    # Wave E: corpus graph (depends on edges)
+    ("wave E (corpus graph)", [
         "corpus_graph",
     ]),
-    # Wave C: needs graph
-    ("wave C (explorer+pagerank+resave)", [
+    # Wave F: derived artifacts (depend on graph)
+    ("wave F (explorer+pagerank+resave)", [
         "explorer_index", "pagerank", "doc_resave",
     ]),
 ]

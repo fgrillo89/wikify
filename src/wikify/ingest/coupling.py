@@ -66,7 +66,8 @@ def compute_coupling(
     fp_to_docs: dict[str, set[str]] = defaultdict(set)
     for d in docs:
         for cit in d.citations or []:
-            for fp in _citation_fingerprints(cit):
+            cit_d = cit.to_dict() if hasattr(cit, "to_dict") else cit
+            for fp in _citation_fingerprints(cit_d):
                 fp_to_docs[fp].add(d.id)
 
     pair_strength: dict[tuple[str, str], int] = defaultdict(int)

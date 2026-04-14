@@ -50,6 +50,22 @@ prompt_template: |
 
   {evidence_v2}
 
+  ## Citation context
+
+  The source papers cite these works (bibliographic references).
+  Use these to add proper bibliography entries when the evidence
+  explicitly references them.
+
+  {citation_context}
+
+  ## Cited corpus chunks
+
+  Some cited works are also in our corpus. Below are relevant chunks
+  from those papers. Use them to deepen your synthesis -- they provide
+  additional grounding from the cited work's own text.
+
+  {cited_corpus_chunks}
+
   ## Neighbor articles (for cross-referencing, do NOT duplicate their content)
 
   {neighbor_summaries}
@@ -65,8 +81,10 @@ prompt_template: |
   - Include quantitative parameters the editor specified, with units.
   - Embed figures where the editor specified: mention "Figure N" in prose,
     then on the next line: ![Figure N](path)
-  - End with ## References containing [^eN]: doc_id > "quote" for each
-    cited evidence item.
+  - For bibliographic references from citation_context, use [N] markers
+    (e.g., [1], [2]) and list them in a ## Bibliography section at the end.
+  - For evidence quotes, continue using [^eN] markers and list them in
+    ## References at the end.
   - No [[wikilinks]], no em-dashes, no meta-commentary.
   - Minimum 1200 characters.
   - Respond as strict JSON. No commentary.

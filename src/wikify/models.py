@@ -4,9 +4,14 @@ Everything in the package operates on these. If a piece of code needs a new
 shape, add it here first and justify it in the README.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from .citestore.models import CitationEntry
 
 DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
 PageKind = Literal["article", "person"]
@@ -78,7 +83,7 @@ class Document:
     tldr: str = ""  # one-paragraph small-model summary, optional
     n_chunks: int = 0
     n_tokens: int = 0
-    citations: list[dict] = field(default_factory=list)
+    citations: list[CitationEntry] = field(default_factory=list)
     equations: list[dict] = field(default_factory=list)
     # Inline figure / table / scheme references parsed from body prose.
     # Each entry: ``{key, caption, section_path, char_offset}``. Used by

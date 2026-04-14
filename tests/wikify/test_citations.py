@@ -39,37 +39,40 @@ def test_extract_three_entries():
     cits = extract_citations(SAMPLE_MD, "doc-1")
     assert len(cits) == 3
     first = cits[0]
-    assert first["ord"] == 0
-    assert first["year"] == 2008
-    assert "raw_text" in first
-    assert "Strukov" in first["raw_text"]
+    assert first.ord == 0
+    assert first.year == 2008
+    assert first.raw_text
+    assert "Strukov" in first.raw_text
 
 
 def test_doi_extracted():
     cits = extract_citations(SAMPLE_MD, "doc-1")
-    assert cits[0]["doi"] == "10.1038/nature06932"
+    assert cits[0].doi == "10.1038/nature06932"
 
 
 def test_no_section_returns_empty():
     assert extract_citations("# title\n\nbody only", "doc-x") == []
 
 
-def test_dict_shape():
-    """New schema: ord, raw_text, year, doi, author_last_names."""
+def test_citation_entry_shape():
+    """CitationEntry has all expected fields populated."""
     cits = extract_citations(SAMPLE_MD, "doc-1")
-    expected_keys = {"ord", "raw_text", "year", "doi", "author_last_names"}
-    for c in cits:
-        assert expected_keys.issubset(c.keys())
-    # Should NOT have structured fields (those come from CrossRef)
-    assert "title" not in cits[0]
-    assert "venue" not in cits[0]
-    assert "authors" not in cits[0]
+    first = cits[0]
+    assert hasattr(first, "ord")
+    assert hasattr(first, "raw_text")
+    assert hasattr(first, "year")
+    assert hasattr(first, "doi")
+    assert hasattr(first, "author_last_names")
+    # Title/venue/authors not populated by extract_citations (filled later)
+    assert first.title == ""
+    assert first.venue == ""
+    assert first.authors == []
 
 
 def test_author_last_names_extracted():
     cits = extract_citations(SAMPLE_MD, "doc-1")
     first = cits[0]
-    names = first["author_last_names"]
+    names = first.author_last_names
     assert "Strukov" in names
     assert "Snider" in names
 
@@ -97,5 +100,5 @@ def test_acs_reference_extracts_year_and_doi():
         ]
     )
     cits = extract_citations(md, "doc-1")
-    assert cits[0]["year"] == 1996
-    assert "Kresse" in cits[0]["author_last_names"]
+    assert cits[0].year == 1996
+    assert "Kresse" in cits[0].author_last_names

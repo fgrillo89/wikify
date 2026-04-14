@@ -248,6 +248,9 @@ def _render_article(
     # Clean up evidence footnote lines: format as bibliographic references.
     body_md = _clean_evidence_lines(body_md)
 
+    # Format bibliography section: convert [N] markers to superscript links
+    body_md = _format_bibliography_section(body_md)
+
     # Normalize the section heading: "Evidence" -> "References"
     body_md = body_md.replace("## Evidence\n", "## References\n")
 
@@ -411,6 +414,67 @@ def _format_evidence_as_reference(line: str) -> str:
     if quote:
         return f'{marker} {formatted} -- "{quote}"'
     return f"{marker} {formatted}"
+
+
+# Bibliography: inline [N] markers and ## Bibliography section
+_BIB_INLINE_RE = re.compile(r"\[(\d{1,3})\]")
+_BIB_SECTION_RE = re.compile(r"^## Bibliography\s*$", re.MULTILINE)
+
+
+def _format_bibliography_section(body: str) -> str:
+    """Format ## Bibliography as a numbered list and [N] as superscripts.
+
+    If the body contains a ``## Bibliography`` section, convert inline
+    ``[N]`` markers to superscript anchors and format the bibliography
+    entries as a numbered list.  If no bibliography section exists,
+    returns the body unchanged.
+    """
+    m = _BIB_SECTION_RE.search(body)
+    if not m:
+        return body
+
+    # Split into body before bibliography and the bibliography entries
+    before_bib = body[:m.start()]
+    bib_text = body[m.end():]
+
+    # Parse bibliography entries: "[N]: Author (Year). Title." or "N. Author..."
+    bib_entries: dict[int, str] = {}
+    bib_lines: list[str] = []
+    other_lines: list[str] = []
+    for line in bib_text.split("\n"):
+        stripped = line.strip()
+        # Pattern: "[N]: ..." or "N. ..."
+        bm = re.match(r"\[(\d+)\]:\s*(.*)", stripped)
+        if not bm:
+            bm = re.match(r"(\d+)\.\s+(.*)", stripped)
+        if bm:
+            num = int(bm.group(1))
+            text = bm.group(2).strip()
+            bib_entries[num] = text
+            bib_lines.append(f'<li id="bib-{num}" value="{num}">{text}</li>')
+        elif stripped:
+            other_lines.append(line)
+
+    if not bib_entries:
+        return body
+
+    # Convert inline [N] to superscript links in the body text
+    def _replace_inline(match: re.Match) -> str:
+        n = int(match.group(1))
+        if n in bib_entries:
+            return f'<sup><a href="#bib-{n}">[{n}]</a></sup>'
+        return match.group(0)
+
+    before_bib = _BIB_INLINE_RE.sub(_replace_inline, before_bib)
+
+    # Rebuild with formatted bibliography
+    bib_html = "\n## Bibliography\n\n<ol class=\"bibliography\">\n"
+    bib_html += "\n".join(bib_lines)
+    bib_html += "\n</ol>\n"
+    if other_lines:
+        bib_html += "\n".join(other_lines)
+
+    return before_bib + bib_html
 
 
 # Trailing content hash: _hexstring at end of doc_id (5+ hex chars)

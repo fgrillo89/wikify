@@ -154,6 +154,9 @@ class ExtractRequest(BaseModel):
     # `reasoning` field in its response explaining what it kept, skipped,
     # and why. Feeds <bundle>/_meta/verbalize.jsonl for post-hoc review.
     verbalize: bool = False
+    # Resolved citation markers from the chunk text.
+    # Each dict: {ord, title, authors, year, doi, in_corpus, corpus_doc_id}.
+    citation_refs: list[dict] = Field(default_factory=list)
 
 
 ConfidenceLabel = Literal["extracted", "inferred", "ambiguous"]
@@ -234,6 +237,8 @@ class ExtractedConcept(BaseModel):
     mechanisms: list[str] = Field(default_factory=list)  # how it works
     relationships: list[Relationship] = Field(default_factory=list)
     equations: list[Equation] = Field(default_factory=list)
+    # Citation references relevant to this concept (bibkeys or ordinals).
+    cited_refs: list[str] = Field(default_factory=list)
 
     @field_validator("score")
     @classmethod
@@ -530,6 +535,9 @@ class WriteRequest(BaseModel):
     # source-paper BibTeX keys and a capped list of references cited by the
     # evidence sources, so writers can cite consistently without parsing BibTeX.
     citation_context: dict = Field(default_factory=dict)
+    # Chunks from in-corpus cited works, pre-retrieved for deeper synthesis.
+    # {corpus_doc_id: [{chunk_id, text}]}
+    cited_corpus_chunks: dict = Field(default_factory=dict)
     # YAML-serialised dossier context for the writer. Compact alternative to
     # repeating the same definition/summary across each evidence_v2 entry.
     # Empty string when no dossier exists for this page.

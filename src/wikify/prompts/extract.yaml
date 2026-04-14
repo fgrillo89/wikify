@@ -8,9 +8,10 @@ input_schema:
   equations: "list[{id, latex, type, label, context}]"
   figure_captions: "list[{key, kind, num, sub, caption, image_id}]"
   images_for_doc: "list[{id, label, caption, page, path, near_chunk_ids}]"
+  citation_refs: "list[{ord, title, authors, year, doi, in_corpus, corpus_doc_id}]"
 output_schema:
   chunk_id: str
-  concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, equations, evidence_figures, confidence, score}]"
+  concepts: "list[{title, aliases, kind, quote, category, definition, summary, parameters, mechanisms, relationships, equations, evidence_figures, cited_refs, confidence, score}]"
   tokens_in: int
   tokens_out: int
 sampler_hint: haiku
@@ -77,6 +78,16 @@ prompt_template: |
   - Fall back to scanning `images_for_doc` only when `figure_captions` is
     empty AND a concept clearly matches an image caption there.
 
+  Citation context (from `citation_refs`):
+  - When the chunk references papers via markers like [1], [3-5], the
+    `citation_refs` array lists the resolved metadata for each referenced
+    work: {ord, title, authors, year, doi, in_corpus, corpus_doc_id}.
+  - For each concept, include a `cited_refs` field listing the ordinals
+    of references that directly support or discuss it. Example:
+    `cited_refs: [3, 5, 7]` means refs [3], [5], [7] are relevant.
+  - Only include references that are DIRECTLY relevant to the concept,
+    not every reference the chunk cites.
+
   Rules:
   - If a title is in canonical_titles, reuse that exact title.
   - quote MUST be a verbatim substring of chunk_text.
@@ -90,6 +101,7 @@ prompt_template: |
   equations: {equations}
   figure_captions: {figure_captions}
   images_for_doc: {images_for_doc}
+  citation_refs: {citation_refs}
 
   chunk_text:
   ---

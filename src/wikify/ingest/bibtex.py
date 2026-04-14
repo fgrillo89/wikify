@@ -112,10 +112,37 @@ def _normalise_title_key(value: object) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_plausible_author(name: str) -> bool:
+    """Check if a string looks like an author name (not body text)."""
+    name = name.strip()
+    if not name or len(name) < 2:
+        return False
+    words = name.split()
+    if len(words) > 5:
+        return False
+    # Must start with uppercase
+    if not words[0][0].isupper():
+        return False
+    # Must not contain common non-name words
+    noise = {"particular", "variabilities", "abstract", "results", "however",
+             "therefore", "moreover", "furthermore", "respectively", "simultaneously"}
+    if any(w.lower() in noise for w in words):
+        return False
+    # Must not contain chemical formulas or numbers
+    if re.search(r"\d|[A-Z]{2,}\d", name):
+        return False
+    return True
+
+
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
-    authors_list = _as_list(metadata.get("authors"))
-    title = _clean_title(_as_text(doc.title))
+    authors_list = [a for a in _as_list(metadata.get("authors")) if _is_plausible_author(a)]
+    title = _clean_bib_title(_clean_title(_as_text(doc.title)))
+    # If title is garbage, recover from doc.id
+    if _title_needs_fallback(title):
+        m = re.match(r"^\[\d{4}\s+[^\]]+\]\s*(.+?)(?:_[0-9a-f]{6,})?$", doc.id)
+        if m:
+            title = _clean_bib_title(m.group(1).replace("_", " ").strip())
 
     year = metadata.get("year")
     year_str = str(year) if year else ""
@@ -157,6 +184,63 @@ def _document_entry(doc: Document) -> dict[str, str]:
     return entry
 
 
+def _clean_bib_title(title: str) -> str:
+    """Clean a title for BibTeX output: strip HTML, newlines, leaked metadata."""
+    # Collapse newlines to spaces
+    title = title.replace("\n", " ").replace("\r", " ")
+    # Convert HTML subscript/superscript to LaTeX (including <inf> variant)
+    title = re.sub(r"<(?:sub|inf)>(.*?)</(?:sub|inf)>", r"$_{\1}$", title, flags=re.I | re.S)
+    title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
+    # Strip remaining HTML tags
+    title = re.sub(r"<[^>]+>", "", title)
+    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations)
+    title = re.sub(
+        r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
+    )
+    # Strip URLs anywhere in title (including space-broken URLs from PDF)
+    title = re.sub(r"\s*https?://[\S\s]*$", "", title)
+    # Strip leading "Author et al., " prefix
+    title = re.sub(r"^[A-Z][\w.-]+\s+et\s+al\.\s*,?\s*", "", title)
+    # Strip leading "Surname, and Author, " (leaked last authors)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+and\s+[A-Z].*?,\s+", "", title)
+    # Strip leading "Surname, Initials" (leaked single author at start)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+[A-Z]\.\s*[A-Z]?\.\s*", "", title)
+    # Strip leading "Name, in YYYY" (conference)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+in\s+", "In ", title)
+    # Strip leading "Name, lowercase" (leaked author + venue)
+    title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
+    # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
+    title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
+    # Collapse multiple spaces
+    title = re.sub(r"\s{2,}", " ", title).strip()
+    return title
+
+
+def _title_dedup_key(title: str) -> str:
+    """Normalize title for dedup: lowercase, strip punctuation/whitespace."""
+    key = title.lower()
+    key = re.sub(r"[^a-z0-9]", "", key)
+    return key
+
+
+_MONTH_NAMES = {
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+}
+
+
+def _clean_bib_journal(journal: str) -> str:
+    """Strip artifacts from journal field."""
+    # Remove trailing ", vol" or ", Vol."
+    journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
+    # Remove trailing comma
+    journal = journal.rstrip(",").strip()
+    # Reject month names as journal ("July", "December", "May")
+    if journal.lower() in _MONTH_NAMES:
+        return ""
+    return journal
+
+
 def _entries_to_bibtex(entries: list[dict[str, str]]) -> str:
     db = BibDatabase()
     db.entries = entries
@@ -178,22 +262,75 @@ def paper_to_bibtex(
 # ---------------------------------------------------------------------------
 
 
-def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
-    """Build a BibTeX entry from a CrossRef-resolved citation.
+_JOURNAL_FILTER_WORDS = {
+    "trans", "ieee", "phys", "rev", "lett", "proc", "conf",
+    "journal", "vol", "acm", "acs", "rsc",
+}
 
-    Returns None if the citation was not resolved or lacks essential fields.
+
+def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
+    """Build a BibTeX entry from a CitationEntry or legacy dict.
+
+    Returns None if the citation lacks essential fields (title + authors).
     """
-    if not cit.get("crossref_resolved"):
-        return None
-    title = _as_text(cit.get("title"))
-    authors = _as_list(cit.get("authors"))
+    # Support both CitationEntry (attr access) and legacy dict
+    _g = getattr(cit, "__getitem__", None)
+    if _g:  # dict-like
+        d = cit
+    else:
+        d = cit.to_dict()
+
+    title = _clean_bib_title(_as_text(d.get("title")))
+    authors = _as_list(d.get("authors"))
     if not title or not authors:
         return None
+    year = d.get("year")
 
-    year = cit.get("year")
-    doi = _clean_doi(cit.get("doi"))
+    # Reject genuinely unrecoverable titles (after cleaning above)
+    # These catch text that _clean_bib_title couldn't fix.
+    if title.isupper() and len(title.split()) <= 2:
+        return None
+    # Journal+year fragment ("Nanoscale, 2016, 8: 1383")
+    if re.match(r"^[A-Z][a-z]+,\s+\d{4}", title):
+        return None
+    # Journal+vol+pages only ("Mater. 25 1774-9")
+    if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
+        return None
+    # Conference location/date only ("(ASP-DAC), Incheon, ...")
+    if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
+        return None
+    # Still has doi.org or too many commas after cleaning
+    if "doi.org" in title or title.count(",") > 5:
+        return None
 
-    # Build bibkey from first author + year
+    # For heuristic-only citations, validate strictly
+    api_confirmed = (
+        d.get("crossref_resolved")
+        or d.get("doi_resolved")
+        or d.get("resolution") in ("openalex", "crossref", "doi")
+    )
+    if not api_confirmed:
+        if not year:
+            return None
+        if len(title) < 15 or len(title.split()) < 3:
+            return None
+        if title[0].islower() or title[0].isdigit():
+            return None
+        from .metadata import _looks_like_journal
+
+        clean_authors = [
+            a for a in authors
+            if len(a.split()) >= 2
+            and not _looks_like_journal(a)
+            and not any(ch.isdigit() for ch in a)
+            and not any(w.lower().rstrip(".") in _JOURNAL_FILTER_WORDS for w in a.split())
+        ]
+        if not clean_authors:
+            return None
+        authors = clean_authors
+
+    doi = _clean_doi(d.get("doi"))
+
     first_author = authors[0].split()[-1] if authors else "unknown"
     base = _sanitize_id(f"ref_{year}_{first_author}_{title[:30]}")
 
@@ -207,12 +344,14 @@ def _reference_entry_from_citation(cit: dict) -> dict[str, str] | None:
         entry["year"] = str(year)
     if doi:
         entry["doi"] = doi
-    _add_optional(entry, "journal", cit.get("venue"))
-    _add_optional(entry, "volume", cit.get("volume"))
-    _add_optional(entry, "pages", cit.get("pages"))
-    _add_optional(entry, "publisher", cit.get("publisher"))
-    if cit.get("raw_text"):
-        entry["note"] = _as_text(cit["raw_text"])[:500]
+    venue = d.get("venue") or ""
+    if venue:
+        venue = _clean_bib_journal(venue)
+    if venue and len(venue) >= 3:
+        _add_optional(entry, "journal", venue)
+    _add_optional(entry, "volume", d.get("volume"))
+    _add_optional(entry, "pages", d.get("pages"))
+    _add_optional(entry, "publisher", d.get("publisher"))
     return entry
 
 
@@ -288,6 +427,7 @@ def build_citation_index(
     doc_bibkeys: dict[str, str] = {}
     doc_citations: dict[str, list[str]] = {}
     doi_bibkeys: dict[str, str] = {}
+    title_bibkeys: dict[str, str] = {}  # normalized title -> bibkey (dedup)
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
@@ -317,7 +457,8 @@ def build_citation_index(
     # Phase 2: process citations from each doc
     for doc in enriched_docs:
         cited_keys: list[str] = []
-        for cit in doc.citations:
+        for cit_obj in doc.citations:
+            cit = cit_obj.to_dict() if hasattr(cit_obj, "to_dict") else cit_obj
             bibkey = None
 
             # Try to match to an existing source doc by DOI
@@ -325,7 +466,7 @@ def build_citation_index(
             if cit_doi and cit_doi in doi_bibkeys:
                 bibkey = doi_bibkeys[cit_doi]
 
-            # Build reference entry from CrossRef data
+            # Build reference entry from enriched citation data
             if bibkey is None:
                 ref_entry = _reference_entry_from_citation(cit)
                 if ref_entry is not None:
@@ -333,7 +474,13 @@ def build_citation_index(
                     ref_doi = _clean_doi(ref_entry.get("doi"))
                     if ref_doi and ref_doi in doi_bibkeys:
                         bibkey = doi_bibkeys[ref_doi]
-                    else:
+                    # Dedup by normalized title
+                    if bibkey is None:
+                        tkey = _title_dedup_key(ref_entry.get("title", ""))
+                        if tkey and tkey in title_bibkeys:
+                            bibkey = title_bibkeys[tkey]
+                    # New entry
+                    if bibkey is None:
                         ref_entry["ID"] = _unique_bibkey(
                             ref_entry["ID"], ref_seen,
                         )
@@ -344,6 +491,9 @@ def build_citation_index(
                         )
                         if ref_doi:
                             doi_bibkeys[ref_doi] = bibkey
+                        tkey = _title_dedup_key(ref_entry.get("title", ""))
+                        if tkey:
+                            title_bibkeys[tkey] = bibkey
 
             # Unresolved: no .bib entry, just index record for matching
             if bibkey is None:
@@ -599,9 +749,26 @@ def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
     return False
 
 
+_GARBAGE_TITLE_RE = re.compile(
+    r"^(\[\d{4}\s+[^\]]+\]"
+    r"|EDITED\s+BY"
+    r"|RESEARCH\s+ARTICLE"
+    r"|ORIGINAL\s+(ARTICLE|PAPER|RESEARCH)"
+    r"|MEETING[-\s]?REPORT"
+    r"|PAPER\b"
+    r"|ARTICLE\b"
+    r")",
+    re.I,
+)
+
+
 def _title_needs_fallback(title: str) -> bool:
     clean = title.strip()
-    return bool(re.match(r"^\[\d{4}\s+[^\]]+\]", clean))
+    if not clean or len(clean) < 10:
+        return True
+    if clean.isupper():
+        return True
+    return bool(_GARBAGE_TITLE_RE.match(clean))
 
 
 def _best_markdown_title(md_text: str, fallback_title: str) -> str:
