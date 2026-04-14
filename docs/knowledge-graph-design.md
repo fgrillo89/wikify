@@ -71,26 +71,61 @@ Edges:          ~15,000 (citations + authorship + collaboration)
 Embeddings:     ~50,000 vectors (768-dim, in VectorStore)
 ```
 
-### Decision: NetworkX + ChromaDB
+### Decision: Redis-Inspired Indexes + ChromaDB
 
-**Graph (topology): NetworkX `nx.MultiDiGraph`**
-- 15K edges loads in <10ms, PageRank in <50ms
-- JSON persistence via `nx.node_link_data()` (~2MB for 1000 papers)
-- All graph algorithms built-in (PageRank, community, shortest path)
-- No server, no binary, no Windows issues
-- Real graph DBs (Kuzu, Neo4j, Memgraph) solve problems at 10M+ edges
+Inspired by Redis's design philosophy: build fast, flexible queries
+from simple primitives (sets, sorted sets, hashes) rather than a
+monolithic graph object.
+
+**Topology: typed Python dicts and sets (Redis-style indexes)**
+
+Instead of one `nx.MultiDiGraph`, maintain explicit inverted indexes:
+
+```python
+@dataclass
+class AcademicIndex:
+    """Redis-style inverted indexes over the knowledge graph."""
+    
+    # Entity stores (Redis HASH analog)
+    papers: dict[str, PaperNode]        # paper_id -> metadata
+    authors: dict[str, AuthorNode]      # author_key -> metadata
+    
+    # Relationship indexes (Redis SET analog)
+    cites: dict[str, set[str]]          # paper -> papers it cites
+    cited_by: dict[str, set[str]]       # paper -> papers that cite it
+    authored_by: dict[str, set[str]]    # paper -> author_keys
+    papers_of: dict[str, set[str]]      # author -> paper_ids
+    coauthors: dict[str, set[str]]      # author -> co-author_keys
+    
+    # Lookup indexes (Redis SET for secondary index)
+    papers_by_year: dict[int, set[str]]
+    papers_by_venue: dict[str, set[str]]
+    ord_refs: dict[str, dict[int, str]] # (paper_id, ord) -> target paper_id
+    
+    # Ranked indexes (Redis SORTED SET analog)
+    pagerank: dict[str, float]          # paper_id -> score
+    citation_count: dict[str, int]      # paper_id -> count
+    h_index: dict[str, int]             # author_key -> h-index
+```
+
+Why this over NetworkX:
+- **5-10x faster** for attribute lookups and set queries
+- **3-5x less memory** (no nested-dict-of-dict overhead)
+- **Debuggable** with `print()` — plain dicts, not opaque graph objects
+- Compound queries are one-liners: `papers_of[A] & cited_by[B]`
+- NetworkX kept **only for batch algorithms** (PageRank, community
+  detection) — run once at build time, dump results into sorted dicts
 
 **Vectors (similarity): ChromaDB** (already in project)
 - Embedded, works on Windows
 - 50K chunks with HNSW index
 - Filter by metadata (paper_id, section_type, author)
-- Shared IDs with graph nodes for bridging
+- Shared IDs with indexes for bridging
 
 **Why not a single system?**
-- DuckDB+VSS: graph traversal via recursive CTEs is awkward, VSS is experimental
-- Kuzu: acquired by Apple, repo archived, fork immature
-- LanceDB: great vectors, no graph traversal
-- At this scale, two simple tools > one complex tool
+- DuckDB+VSS: graph traversal via recursive CTEs is awkward
+- Kuzu: acquired by Apple, repo archived
+- At this scale, simple primitives > complex query engines
 
 ### Bridging Pattern: Traverse Then Rank
 
@@ -191,39 +226,70 @@ resolves chunk_ids against the VectorStore for content.
 
 ```python
 class KnowledgeGraph:
-    """Query interface for distill agents."""
+    """Query interface for distill agents.
     
-    def __init__(self, G: nx.MultiDiGraph, vector_store): ...
+    Backed by AcademicIndex (Redis-style dicts/sets) for topology
+    and ChromaDB for vector similarity. NetworkX used only for
+    batch metric computation at build time.
+    """
     
-    # Paper queries
-    def paper(self, paper_id: str) -> dict
-    def references(self, paper_id: str, ords: list[int] | None = None) -> list[dict]
-    def cited_by(self, paper_id: str, corpus_only: bool = False) -> list[dict]
-    def similar_papers(self, paper_id: str, top_k: int = 5) -> list[dict]
+    def __init__(self, index: AcademicIndex, vector_store): ...
     
-    # Author queries
-    def author(self, name: str) -> dict
-    def papers_by_author(self, name: str) -> list[dict]
-    def coauthors(self, name: str) -> list[dict]
-    def similar_authors(self, name: str, top_k: int = 5) -> list[dict]
+    # Paper queries — direct dict/set lookups, O(1) or O(k)
+    def paper(self, paper_id: str) -> PaperNode
+    def references(self, paper_id: str, ords: list[int] | None = None) -> list[PaperNode]
+        # index.ord_refs[paper_id][n] for each n in ords
+    def cited_by(self, paper_id: str) -> list[PaperNode]
+        # [index.papers[p] for p in index.cited_by[paper_id]]
+    def similar_papers(self, paper_id: str, top_k: int = 5) -> list[PaperNode]
+        # vector_store.query(paper_embedding, n=top_k)
     
-    # Semantic search (delegates to VectorStore)
+    # Author queries — set operations
+    def author(self, name: str) -> AuthorNode
+    def papers_by_author(self, name: str) -> list[PaperNode]
+        # [index.papers[p] for p in index.papers_of[name]]
+    def coauthors(self, name: str) -> list[AuthorNode]
+        # [index.authors[a] for a in index.coauthors[name]]
+    def similar_authors(self, name: str, top_k: int = 5) -> list[AuthorNode]
+        # mean_pool(author's papers) -> vector_search -> result authors
+    
+    # Compound queries — set intersection + vector ranking
+    def papers_by_author_cited_by(self, author: str, paper: str) -> list[PaperNode]
+        # index.papers_of[author] & index.cited_by[paper]  <- one line
+    def chunks_from_citing_papers(self, paper_id: str, query: str,
+                                  top_k: int = 5) -> list[dict]
+        # citing = index.cited_by[paper_id]
+        # vector_store.query(query, where={"paper_id": {"$in": citing}})
+    
+    # Semantic search — delegates to VectorStore with optional filters
     def search_chunks(self, query: str, top_k: int = 10,
                       paper_ids: list[str] | None = None,
                       section: str | None = None) -> list[dict]
-    def search_papers(self, query: str, top_k: int = 5) -> list[dict]
+    def search_papers(self, query: str, top_k: int = 5) -> list[PaperNode]
     
-    # Combined graph + vector
-    def chunks_from_citing_papers(self, paper_id: str, query: str,
-                                  top_k: int = 5) -> list[dict]
-    def authors_similar_to(self, author: str, top_k: int = 5) -> list[dict]
-    
-    # Metrics (computed once at build time, cached on nodes)
-    def pagerank(self) -> dict[str, float]
-    def communities(self) -> dict[str, int]
-    def h_index(self, author: str) -> int
+    # Metrics — pre-computed at build time, O(1) lookup
+    def paper_pagerank(self, paper_id: str) -> float
+        # index.pagerank[paper_id]
+    def author_h_index(self, author: str) -> int
+        # index.h_index[author]
     def corpus_stats(self) -> dict
 ```
+
+**Why this is better than NetworkX for queries:**
+
+```python
+# NetworkX: manual traversal, scans all edges
+a_papers = {n for n in G.neighbors("A") if G.nodes[n]["kind"] == "paper"}
+b_citing = {src for src, _ in G.in_edges("B") if G[src]["B"]["type"] == "cites"}
+result = a_papers & b_citing
+
+# AcademicIndex: pre-computed sets, one set intersection
+result = index.papers_of["A"] & index.cited_by["B"]
+```
+
+NetworkX is kept ONLY for batch algorithm computation (PageRank,
+Louvain community detection) at build time. Results are dumped
+into the index dicts. At query time, NetworkX is never touched.
 
 ## Build Pipeline
 
