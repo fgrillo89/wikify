@@ -58,38 +58,58 @@ def _add_semaphore(semaphore: Semaphore):
 
 
 async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
-    """Resolve all unique DOIs concurrently via content negotiation."""
+    """Resolve DOIs to BibTeX metadata via CrossRef transform endpoint.
+
+    Uses CrossRef's ``/works/{doi}/transform/application/x-bibtex``
+    which returns BibTeX directly without doi.org redirect overhead.
+    ~14 DOIs/s with retries.  For 350 DOIs: ~25s.
+    """
+    import random
+
     import httpx
 
     from .bibtex import _metadata_from_bibtex_entry
 
-    limiter = AsyncLimiter(1, 1 / 50)  # 50 req/s
-    semaphore = Semaphore(value=30)
+    limiter = AsyncLimiter(1, 1 / 20)  # 20 req/s (CrossRef polite pool)
+    semaphore = Semaphore(value=10)
 
     @_add_limiter(limiter)
     @_add_semaphore(semaphore)
-    async def fetch_one(client: httpx.AsyncClient, doi: str) -> dict:
-        resp = await client.get(
-            f"https://doi.org/{doi}",
-            headers={"Accept": "application/x-bibtex"},
+    async def fetch_once(client: httpx.AsyncClient, doi: str) -> httpx.Response:
+        return await client.get(
+            f"https://api.crossref.org/works/{doi}/transform/application/x-bibtex",
         )
-        if resp.status_code != 200:
-            return {}
-        return _metadata_from_bibtex_entry(resp.text)
+
+    async def fetch_with_retry(
+        client: httpx.AsyncClient, doi: str, max_retries: int = 3,
+    ) -> dict:
+        for attempt in range(max_retries):
+            try:
+                resp = await fetch_once(client, doi)
+                if resp.status_code == 200:
+                    return _metadata_from_bibtex_entry(resp.text)
+                if resp.status_code == 429:
+                    await asyncio.sleep(0.3 + random.uniform(0, 0.3))
+                    continue
+                return {}
+            except httpx.HTTPError:
+                await asyncio.sleep(0.5)
+        return {}
 
     async with httpx.AsyncClient(
-        timeout=15.0, follow_redirects=True,
-        limits=httpx.Limits(max_connections=30, max_keepalive_connections=20),
+        timeout=10.0,
+        headers={"User-Agent": "wikify/1.0 (mailto:wikify@example.com)"},
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=10),
     ) as client:
         results = await asyncio.gather(
-            *(fetch_one(client, doi) for doi in dois),
+            *(fetch_with_retry(client, doi) for doi in dois),
             return_exceptions=True,
         )
 
     out: dict[str, dict[str, object]] = {}
     for doi, result in zip(dois, results):
         if isinstance(result, BaseException):
-            logger.debug("DOI negotiation failed for %s: %s", doi, result)
+            logger.debug("DOI resolution failed for %s: %s", doi, result)
             out[doi] = {}
         else:
             out[doi] = result
