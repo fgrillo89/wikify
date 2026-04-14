@@ -306,7 +306,7 @@ def build_citation_index(
     corpus: CorpusPaths,
     docs: list[Document],
     *,
-    resolve_doi: bool = True,
+    resolve_doi: bool = False,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], dict[str, object]]:
     """Build BibTeX entries plus the structured citation index.
@@ -453,7 +453,7 @@ def write_corpus_bibliography(
     corpus: CorpusPaths,
     docs: list[Document],
     *,
-    resolve_doi: bool = True,
+    resolve_doi: bool = False,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
 ) -> dict[str, Path]:
     """Write corpus_papers.bib, cited_works.bib, and citations.json."""

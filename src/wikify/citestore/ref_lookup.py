@@ -41,12 +41,16 @@ class RefLookup:
         vector_store: object | None = None,
     ) -> None:
         # Build doc_id -> {ord -> CitationEntry}
+        # Also detect whether ordinals are 0-based or 1-based per doc.
         self._ord_maps: dict[str, dict[int, CitationEntry]] = {}
+        self._ord_base: dict[str, int] = {}  # doc_id -> min ordinal (0 or 1)
         for doc in docs:
             om: dict[int, CitationEntry] = {}
             for cit in doc.citations:
                 om[cit.ord] = cit
             self._ord_maps[doc.id] = om
+            if om:
+                self._ord_base[doc.id] = min(om.keys())
 
         # Build DOI -> corpus doc_id
         self._doi_to_doc: dict[str, str] = {}
@@ -112,8 +116,17 @@ class RefLookup:
         cited_corpus_ids = self._doc_cites.get(doc_id, set())
         results: list[ResolvedRef] = []
 
+        # Markers are 1-based ([1] = first ref). Ordinals may be 0-based
+        # (ord=0 = first ref) or 1-based depending on extract_citations.
+        # Compute the offset: if min ordinal is 0, subtract 1 from marker.
+        base = self._ord_base.get(doc_id, 0)
+        offset = 0 if base >= 1 else -1  # 0-based ords need [N] -> N-1
+
         for n in ords:
-            entry = ord_map.get(n) or ord_map.get(n - 1)
+            entry = ord_map.get(n + offset)
+            if not entry:
+                # Try the other convention as fallback
+                entry = ord_map.get(n) or ord_map.get(n - 1)
             if not entry:
                 continue
 

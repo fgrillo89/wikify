@@ -247,7 +247,7 @@ def _build_cited_corpus_chunks(
             if ref.in_corpus and ref.corpus_doc_id not in result:
                 found = ref_lookup.find_corpus_chunks(
                     ref.corpus_doc_id,
-                    page.id,  # concept = page title
+                    page.title,
                     top_k=_CITED_CHUNKS_PER_REF,
                 )
                 if found:

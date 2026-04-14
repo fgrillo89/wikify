@@ -1108,9 +1108,11 @@ def _refresh_openalex(ctx: dict) -> None:
 
     async def _run() -> None:
         async with DatabaseManager(db_path) as db:
+            import os
+            email = os.environ.get("OPENALEX_EMAIL", "wikify@example.com")
             resolver = AsyncResolver(
                 db,
-                email="fgrillo89@gmail.com",
+                email=email,
                 expand_references=True,
             )
             try:
@@ -1150,16 +1152,18 @@ def _refresh_openalex(ctx: dict) -> None:
 
 
 def _refresh_cite_heuristics(ctx: dict) -> None:
-    """Enrich citations with heuristic parsing + DOI content negotiation."""
+    """Enrich citations with heuristic parsing + optional DOI negotiation."""
     from .cite_parse import enrich_citations
-    enrich_citations(ctx["docs"])
+    use_doi = ctx.get("resolve_bibliography_doi", False)
+    enrich_citations(ctx["docs"], use_doi=use_doi)
 
 
 def _refresh_bibliography(ctx: dict) -> None:
+    resolve_doi = ctx.get("resolve_bibliography_doi", False)
     write_corpus_bibliography(
         ctx["paths"],
         ctx["docs"],
-        resolve_doi=True,
+        resolve_doi=resolve_doi,
     )
 
 
@@ -1203,20 +1207,24 @@ REFRESH_DAG: list[tuple[str, list[str]]] = [
     ("wave A (similarity+topics+images)", [
         "doc_similarity", "topics", "images_index",
     ]),
-    # Wave B: citation enrichment (heuristics + optional OpenAlex)
-    ("wave B (citation enrichment)", [
-        "cite_heuristics", "openalex",
+    # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
+    ("wave B (heuristic enrichment)", [
+        "cite_heuristics",
     ]),
-    # Wave C: citation graph + bibliography (depend on enriched citations)
-    ("wave C (edges+bibliography)", [
+    # Wave C: OpenAlex enrichment (optional, overwrites heuristics with authoritative data)
+    ("wave C (openalex enrichment)", [
+        "openalex",
+    ]),
+    # Wave D: citation graph + bibliography (depend on enriched citations)
+    ("wave D (edges+bibliography)", [
         "citation_edges", "bibliography",
     ]),
-    # Wave D: corpus graph (depends on edges)
-    ("wave D (corpus graph)", [
+    # Wave E: corpus graph (depends on edges)
+    ("wave E (corpus graph)", [
         "corpus_graph",
     ]),
-    # Wave E: derived artifacts (depend on graph)
-    ("wave E (explorer+pagerank+resave)", [
+    # Wave F: derived artifacts (depend on graph)
+    ("wave F (explorer+pagerank+resave)", [
         "explorer_index", "pagerank", "doc_resave",
     ]),
 ]
