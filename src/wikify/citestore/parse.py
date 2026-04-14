@@ -43,6 +43,31 @@ _AUTHOR_NOISE = {
 }
 
 
+def _clean_doi(raw: str) -> str:
+    """Validate and clean a raw DOI string."""
+    doi = re.sub(r"\s+", "", raw)  # collapse any whitespace
+    doi = doi.rstrip(".,;)]}>")
+    # Must have a suffix after the registrant prefix (10.XXXX/)
+    # Reject truncated DOIs: "10.1016/j", "10.1109/LED", "10.1109/LED.2017"
+    m = re.match(r"^10\.\d{4,}/(.+)$", doi)
+    if not m:
+        return ""
+    suffix = m.group(1)
+    # Minimum suffix length
+    if len(suffix) < 5:
+        return ""
+    # Suffix must contain a digit (rejects pure alpha like "aelm", "annurev")
+    if not re.search(r"\d", suffix):
+        return ""
+    # Reject "ABBREV.YEAR" pattern (truncated IEEE DOIs like "LED.2017")
+    if re.match(r"^[A-Z]{2,6}\.\d{4}$", suffix):
+        return ""
+    # Reject journal-prefix-only: suffix is all alpha (no digits past the slash)
+    if re.match(r"^[a-z]+$", suffix, re.I):
+        return ""
+    return doi
+
+
 def extract_doi(text: str) -> str:
     """Extract a DOI from text, including from URLs with spaces.
 
@@ -53,20 +78,20 @@ def extract_doi(text: str) -> str:
     - DOI prefix: ``doi: 10.1038/...``
     """
     # First try: extract from doi.org URL (handles spaces in URL path)
-    m = re.search(r"(?:https?://)?doi\.org/\s*(10\.\d{4,}[\s/][^\s,;)\]]*)", text)
+    m = re.search(
+        r"(?:https?://)?doi\.org/\s*(10\.\d{4,}[^\s,;)\]]*(?:\s[^\s,;)\]]+)*)",
+        text,
+    )
     if m:
-        doi = re.sub(r"\s+", "", m.group(1))  # collapse spaces
-        return doi.rstrip(".,;)]}>")
-    # Second try: bare DOI pattern
+        return _clean_doi(m.group(1))
+    # Second try: bare DOI pattern (greedy, then validate)
     m = re.search(r"\b(10\.\d{4,}/[^\s,;)\]]+)", text)
     if m:
-        doi = m.group(1)
-        return doi.rstrip(".,;)]}>")
+        return _clean_doi(m.group(1))
     # Third try: "doi:" prefix
     m = re.search(r"doi:\s*(10\.\d{4,}/[^\s,;)\]]+)", text, re.I)
     if m:
-        doi = m.group(1)
-        return doi.rstrip(".,;)]}>")
+        return _clean_doi(m.group(1))
     return ""
 
 
