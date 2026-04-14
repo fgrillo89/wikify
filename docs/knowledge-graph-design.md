@@ -8,289 +8,260 @@ and no way for distill agents to query "who cites paper X?" or "what did
 author Y write?". Metrics are computed ad-hoc by rebuilding nx.Graph
 from flat edge lists each time.
 
-## Design: Typed Property Graph on NetworkX
+## Use Cases (what the agent must be able to do)
 
-Promote `CorpusGraph` from flat edge lists to a single `nx.MultiDiGraph`
-with typed nodes and edges. This is the canonical graph structure that
-ingest builds and distill queries.
+### Paper queries
+```
+UC1: "Give me the conclusions of papers citing paper X"
+  -> cited_by(X) -> [paper IDs] -> chunks(section="conclusions") -> text
+
+UC2: "Give me refs [1-4] from paper X, formatted as BibTeX"
+  -> paper(X).ord_refs[1:4] -> [target paper IDs] -> metadata -> format
+
+UC3: "Give me all papers citing paper X so I can fetch them"
+  -> cited_by(X) -> [paper nodes with metadata]
+
+UC4: "Find chunks most closely related to semantic query Q"
+  -> vector_search(Q, top_k=10) -> chunk IDs -> chunk text + paper context
+```
+
+### Author queries
+```
+UC5: "Give me all papers by author A"
+  -> papers_by_author(A) -> [paper nodes]
+
+UC6: "Give me authors who write papers semantically similar to author A"
+  -> papers_by_author(A)
+  -> vector_search(mean_embedding, filter=NOT_author_A)
+  -> result papers -> their authors -> rank by frequency
+
+UC7: "Give me authors whose papers are cited by author A's papers"
+  -> papers_by_author(A) -> for each: references -> target papers
+  -> their authors -> rank = who does A build on most
+
+UC8: "Who collaborates with author A?"
+  -> coauthors(A) -> [author nodes with paper count]
+```
+
+### Cross-cutting queries
+```
+UC9: "Find evidence chunks about concept X from papers that cite paper Y"
+  -> cited_by(Y) -> [paper IDs]
+  -> vector_search(X, filter=paper_ids) -> chunks with text
+
+UC10: "Research community around topic Z"
+  -> vector_search(Z) -> chunks -> unique papers -> their authors
+  -> collaboration subgraph -> community detection
+
+UC11: "Most influential papers in the corpus"
+  -> PageRank on citation graph -> top N papers
+
+UC12: "Author impact metrics"
+  -> h_index(A), citation_count(A), paper_count(A), PageRank(A)
+```
+
+## Technology Choice
+
+### Scale estimate (1000 papers)
+```
+Paper nodes:    ~1,500 (1000 corpus + 500 cited-only)
+Author nodes:   ~500
+Chunk nodes:    NOT in graph (too many, 50K; stay in VectorStore)
+Edges:          ~15,000 (citations + authorship + collaboration)
+Embeddings:     ~50,000 vectors (768-dim, in VectorStore)
+```
+
+### Decision: NetworkX + ChromaDB
+
+**Graph (topology): NetworkX `nx.MultiDiGraph`**
+- 15K edges loads in <10ms, PageRank in <50ms
+- JSON persistence via `nx.node_link_data()` (~2MB for 1000 papers)
+- All graph algorithms built-in (PageRank, community, shortest path)
+- No server, no binary, no Windows issues
+- Real graph DBs (Kuzu, Neo4j, Memgraph) solve problems at 10M+ edges
+
+**Vectors (similarity): ChromaDB** (already in project)
+- Embedded, works on Windows
+- 50K chunks with HNSW index
+- Filter by metadata (paper_id, section_type, author)
+- Shared IDs with graph nodes for bridging
+
+**Why not a single system?**
+- DuckDB+VSS: graph traversal via recursive CTEs is awkward, VSS is experimental
+- Kuzu: acquired by Apple, repo archived, fork immature
+- LanceDB: great vectors, no graph traversal
+- At this scale, two simple tools > one complex tool
+
+### Bridging Pattern: Traverse Then Rank
+
+Inspired by FalkorDB's graph+vector query model and Redis's
+filter-then-KNN composition: every combined query follows the
+**traverse-then-rank** pattern:
+
+1. **Traverse** the graph to get a candidate set (IDs)
+2. **Rank** candidates by vector similarity (scoped search)
+
+```python
+# UC9: "chunks about concept X from papers citing Y"
+citing_papers = kg.cited_by("paper_Y")           # 1. traverse
+paper_ids = [p.id for p in citing_papers]
+chunks = vector_store.query(                       # 2. rank
+    query_text="concept X",
+    where={"paper_id": {"$in": paper_ids}},
+    n_results=10,
+)
+
+# UC6: "authors who write papers similar to author A"
+a_papers = kg.papers_by_author("A")              # 1. traverse
+a_embedding = mean_pool(a_papers)                 # aggregate
+similar = vector_store.query(                      # 2. rank
+    query_embedding=a_embedding,
+    where={"paper_id": {"$nin": [p.id for p in a_papers]}},
+)
+authors = kg.papers_to_authors(similar.paper_ids) # back to graph
+```
+
+This pattern works for any combined query:
+- Graph narrows the search space (topology)
+- VectorStore ranks within that space (semantics)
+- Graph resolves results back to entities (context)
+
+The two systems share string IDs — no ORM, no joins, no coupling.
+
+## Graph Schema
 
 ### Node Types
 
 ```
-Paper (doc_id)
-  - title, year, doi, venue, authors: list[str]
-  - kind: "corpus" | "cited"    # in corpus or only referenced
-  - citation_count: int         # how many corpus papers cite this
-  - ord_refs: dict[int, str]    # ordinal [N] -> target paper_id
+Paper (paper_id: str)
+  - title: str
+  - year: int
+  - doi: str
+  - venue: str
+  - authors: list[str]          # display names
+  - kind: "corpus" | "cited"    # in corpus or referenced only
+  - citation_count: int         # papers in corpus that cite this
+  - sections: list[str]         # section headings (pointers to chunks)
+  - images: list[str]           # image IDs (pointers to files)
+  - equations: list[str]        # equation IDs
+  - ord_refs: dict[int, str]    # [N] -> target paper_id
+  - chunk_ids: list[str]        # pointers to VectorStore entries
+  - markdown_path: str          # pointer to full text on disk
+  - bibtex_key: str             # for bibliography formatting
 
-Author (name_key)
-  - display_name, orcid (optional)
-  - h_index, paper_count, citation_count
-
-Chunk (chunk_id)
-  - doc_id, ord, section_path
+Author (author_key: str)        # normalized: "lastname_firstinit"
+  - display_name: str
+  - orcid: str (optional)
+  - paper_count: int
+  - citation_count: int         # sum of citations across papers
+  - h_index: int
+  - pagerank: float
 ```
 
 ### Edge Types
 
 ```
 Paper -> Paper
-  cites           : directed, A cites B
-  cites_same      : undirected, bibliographic coupling
+  CITES             directed, A references B
+  SIMILAR           undirected, embedding cosine above threshold
+  COUPLES           undirected, bibliographic coupling (shared refs)
 
 Paper -> Author
-  authored_by     : with position (first, middle, last)
+  AUTHORED_BY       with position: "first" | "middle" | "last"
 
 Author -> Author
-  collaborated    : undirected, co-authored at least one paper
-
-Chunk -> Chunk
-  similar_knn     : embedding cosine top-K
-  similar_strong  : cosine >= threshold
-
-Paper -> Chunk
-  contains        : doc contains chunk
+  COLLABORATED      undirected, co-authored at least one paper
 ```
 
-### Storage
+### What is NOT a graph node
 
-- `graph.json` via `nx.node_link_data()` / `nx.node_link_graph()`
-- Same file, richer structure. Backward compatible (old edge kinds
-  preserved, new node types added).
-- DOI cache (`data/doi_cache.db`) remains the ingestion-time cache for
-  CrossRef/OpenAlex results. Not a graph store.
+| Data | Why not a node | Where it lives |
+|------|---------------|----------------|
+| Chunks | 50K at 1000 papers, too many for JSON graph | VectorStore (ChromaDB), indexed by chunk_id |
+| Images | Binary files | Filesystem, referenced by paper.images |
+| Equations | Small text | Paper node attribute (equation IDs -> lookup in doc JSON) |
+| Full text | Large | Filesystem (markdown_path on Paper node) |
+| Embeddings | 768-dim float vectors | VectorStore |
 
-### API for Distill Agents
+Chunks are the bridge: the graph points to them (paper.chunk_ids),
+and the VectorStore holds their embeddings and text. The agent
+resolves chunk_ids against the VectorStore for content.
+
+## Query API
 
 ```python
 class KnowledgeGraph:
-    """Query interface over the academic knowledge graph."""
+    """Query interface for distill agents."""
     
-    def __init__(self, G: nx.MultiDiGraph): ...
+    def __init__(self, G: nx.MultiDiGraph, vector_store): ...
     
     # Paper queries
-    def paper(self, doc_id: str) -> dict           # node attributes
-    def references(self, doc_id: str, ords: list[int] = None) -> list[dict]
-        # Get refs [1-4] or all
-    def cited_by(self, doc_id: str, corpus_only: bool = False) -> list[dict]
-        # Reverse citation lookup
-    def papers_by_author(self, author: str) -> list[dict]
+    def paper(self, paper_id: str) -> dict
+    def references(self, paper_id: str, ords: list[int] | None = None) -> list[dict]
+    def cited_by(self, paper_id: str, corpus_only: bool = False) -> list[dict]
+    def similar_papers(self, paper_id: str, top_k: int = 5) -> list[dict]
     
     # Author queries
-    def author(self, name: str) -> dict             # node attributes + metrics
+    def author(self, name: str) -> dict
+    def papers_by_author(self, name: str) -> list[dict]
     def coauthors(self, name: str) -> list[dict]
-    def author_citations(self, name: str) -> int    # total citations
+    def similar_authors(self, name: str, top_k: int = 5) -> list[dict]
     
-    # Graph metrics (computed once, cached on nodes)
+    # Semantic search (delegates to VectorStore)
+    def search_chunks(self, query: str, top_k: int = 10,
+                      paper_ids: list[str] | None = None,
+                      section: str | None = None) -> list[dict]
+    def search_papers(self, query: str, top_k: int = 5) -> list[dict]
+    
+    # Combined graph + vector
+    def chunks_from_citing_papers(self, paper_id: str, query: str,
+                                  top_k: int = 5) -> list[dict]
+    def authors_similar_to(self, author: str, top_k: int = 5) -> list[dict]
+    
+    # Metrics (computed once at build time, cached on nodes)
     def pagerank(self) -> dict[str, float]
     def communities(self) -> dict[str, int]
     def h_index(self, author: str) -> int
-    
-    # Chunk retrieval (for distill)
-    def similar_chunks(self, chunk_id: str, top_k: int = 5) -> list[str]
-    def chunks_from_cited_paper(self, doc_id: str, concept: str) -> list[str]
+    def corpus_stats(self) -> dict
 ```
 
-### Build Pipeline
+## Build Pipeline
 
 ```
 Wave A: similarity + topics + images         (independent)
 Wave B: heuristic enrichment + DOI resolution (citation metadata)
 Wave C: citation edges + bibliography         (uses enriched data)
-Wave D: build_knowledge_graph()               (NEW: unified graph)
-         - Paper nodes from docs + cited works
-         - Author nodes extracted from metadata
-         - Citation edges from doc.cites
-         - Authorship edges from metadata.authors
-         - Collaboration edges from co-authorship
-         - Chunk edges from embeddings
-         - Compute metrics: PageRank, h-index, communities
+Wave D: build_knowledge_graph()               (NEW)
+         1. Paper nodes from docs + cited works (CitationEntry)
+         2. Author nodes from paper metadata
+         3. Citation edges from doc.cites
+         4. Authorship edges from metadata.authors
+         5. Collaboration edges from co-authorship
+         6. Paper similarity edges from doc embeddings
+         7. Compute: PageRank, h-index, communities, citation_count
+         8. Serialize: nx.node_link_data() -> graph.json
 Wave E: derived artifacts (explorer, resave)
 ```
 
-### Migration from Current CorpusGraph
+## Author Identity Resolution
 
-1. `CorpusGraph` dataclass replaced by `KnowledgeGraph` wrapper
-2. All existing edge kinds preserved (contains, similar_knn, etc.)
-3. New node types (Author) and edge types (authored_by, collaborated) added
-4. `build_corpus_graph()` becomes `build_knowledge_graph()`
+For 50-1000 papers, simple normalization suffices:
+```python
+def author_key(name: str) -> str:
+    parts = name.strip().split()
+    last = parts[-1].lower()
+    first_init = parts[0][0].lower() if parts else ""
+    return f"{last}_{first_init}"
+```
+- "J. Smith" and "John Smith" -> "smith_j"
+- ORCID matching when available from CrossRef/OpenAlex metadata
+- No ML disambiguation (overkill at this scale)
+
+## Migration from Current CorpusGraph
+
+1. `CorpusGraph` dataclass -> `KnowledgeGraph` wrapper around `nx.MultiDiGraph`
+2. All existing edge kinds preserved (contains -> chunk_ids on Paper node)
+3. `build_corpus_graph()` -> `build_knowledge_graph()`
+4. `graph.json` format: `nx.node_link_data()` (backward compatible for edges)
 5. Consumers updated: explorer, community, metrics, distill preload
-
-### Author Identity Resolution
-
-For 50-1000 papers, simple name normalization:
-- Normalize: "J. Smith" and "John Smith" -> same author node
-- Key: lowercase last name + first initial (covers 95% of cases)
-- ORCID matching when available (from CrossRef/OpenAlex metadata)
-- No ML disambiguation needed at this scale
-
-### Traversal Patterns
-
-The graph must support multi-hop traversals in any direction.
-Every query below should be a one-liner against the API.
-
-**Author -> Papers -> Chunks (and back):**
-```
-author("Smith")
-  -> papers_by_author("Smith")           # [Paper nodes]
-  -> for each paper: G.successors(p, "contains")  # [Chunk nodes]
-  -> chunk.text, chunk.embedding          # actual content
-
-chunk("c_123")
-  -> G.predecessors(c, "contains")        # Paper node
-  -> G.predecessors(p, "authored_by")     # Author nodes
-```
-
-**"Authors who write similar papers to target author":**
-```
-papers_by_author("Smith")
-  -> for each paper: G.neighbors(p, "doc_similar")  # similar papers
-  -> for each similar: G.predecessors(p, "authored_by")  # their authors
-  -> rank by frequency (authors who appear most = most similar)
-```
-
-**"What papers cite this author's work?":**
-```
-papers_by_author("Smith")
-  -> for each paper: G.predecessors(p, "cites")    # papers that cite it
-  -> unique set of citing papers
-  -> their authors = "who builds on Smith's work"
-```
-
-**"Find evidence chunks about concept X from papers that cite paper Y":**
-```
-cited_by("paper_Y")
-  -> for each citing paper: G.successors(p, "contains")  # chunks
-  -> similarity_search(chunks, concept_X)                 # vector search
-```
-
-**"Research community around topic Z":**
-```
-search_chunks(topic_Z)
-  -> unique papers (via "contains" edges)
-  -> their authors (via "authored_by" edges)
-  -> author collaboration subgraph
-  -> community detection on that subgraph
-```
-
-### Relationship to Existing Data Structures
-
-```
-KnowledgeGraph (nx.MultiDiGraph)
-  |
-  +-- Paper nodes
-  |     carries: CitationEntry metadata (title, doi, authors, venue)
-  |     links to: Author nodes (authored_by), Chunk nodes (contains)
-  |     links to: other Paper nodes (cites, doc_similar, cites_same)
-  |
-  +-- Author nodes
-  |     carries: display_name, orcid, metrics (h_index, citation_count)
-  |     links to: Paper nodes (authored_by, reverse)
-  |     links to: other Author nodes (collaborated)
-  |
-  +-- Chunk nodes
-        carries: doc_id, ord, section_path
-        links to: Paper node (contains, reverse)
-        links to: other Chunk nodes (similar_knn, similar_strong, co_section)
-        embeddings: via VectorStore (separate, indexed by chunk_id)
-
-VectorStore (existing)
-  - chunk embeddings for similarity search
-  - accessed via chunk_id from graph traversal
-  - NOT inside the graph (too large), but reachable via node ID
-
-DOI Cache (data/doi_cache.db)
-  - ingestion-time cache only
-  - NOT a query-time store
-  - resolved metadata flows into Paper nodes at build time
-
-Document JSON (corpus/docs/*.json)
-  - source of truth for parsed content
-  - feeds into Paper + Chunk nodes at graph build time
-  - CitationEntry list -> Paper.ord_refs mapping
-```
-
-### Embeddings, Images, and Equations
-
-**Embeddings stay outside the graph.** Chunk embeddings are 768-dim
-float vectors — too large to serialize in JSON. The VectorStore holds
-them in a numpy matrix indexed by chunk_id. The graph stores chunk_ids
-as nodes; the VectorStore is the companion index for similarity search.
-
-```
-Pattern: "find chunks about concept X from paper Y"
-  1. Graph: paper_Y -> contains -> [chunk_1, chunk_2, ...]  # node IDs
-  2. VectorStore: query(concept_X, filter=chunk_ids)          # similarity
-```
-
-Two structures, one query. The graph provides the topology (which chunks
-belong to which paper); the VectorStore provides the geometry (which
-chunks are semantically close). Neither replaces the other.
-
-**Images and equations are node attributes, not separate node types.**
-At this scale (50-1000 papers, ~50 images per paper), adding Image and
-Equation nodes would bloat the graph without adding traversal value.
-Instead, they live as attributes on Chunk and Paper nodes:
-
-```
-Chunk node attributes:
-  equation_ids: list[str]     # equations in this chunk
-  figure_refs: list[str]      # figures referenced by this chunk
-
-Paper node attributes:
-  images: list[ImageRef]      # all images from this paper
-  equations: list[EquationRef] # all equations from this paper
-```
-
-If a distill agent needs "the figure that shows the I-V curve from
-paper X", the traversal is:
-```
-paper_X -> contains -> chunks -> filter(figure_refs contains "fig3")
-  -> chunk.text (context around the figure reference)
-paper_X.images -> filter(id == "fig3") -> ImageRef.path
-```
-
-**When would images/equations become graph nodes?** If we needed to
-answer "which papers share similar figures?" or "which equations appear
-across multiple papers?" — cross-paper entity linking. At that point,
-Image and Equation become first-class nodes with their own edges. For
-now, attributes suffice.
-
-### What fits in one structure vs. two
-
-| Data | In the graph? | Why |
-|------|--------------|-----|
-| Paper metadata | Yes (node attrs) | Traversed constantly |
-| Author identity | Yes (node type) | Enables author queries |
-| Citation edges | Yes (edge type) | Core topology |
-| Chunk text | Yes (node attr, truncated) | Needed for context |
-| Chunk embeddings | No (VectorStore) | Too large, numpy-native |
-| Images | No (filesystem + node attr ref) | Binary blobs |
-| Equations | Yes (node attr on chunk) | Small, text-based |
-| BibTeX | No (generated from graph) | Derived artifact |
-| DOI cache | No (ingestion-time only) | Not needed at query time |
-
-The graph + VectorStore together form the complete query-time index.
-Everything else (JSON files, DOI cache, .bib files) is either a source
-(feeds into the graph at build time) or a derived artifact (generated
-from the graph at export time).
-
-### Design Principle
-
-The graph is the **query-time interface**. Everything distill needs
-is reachable by traversing the graph. The graph is **built from**
-Documents, Citations, Chunks, and VectorStore at ingest time but
-**does not depend on them** at query time. Once built, the graph
-is self-contained (except for embeddings in VectorStore and images
-on disk).
-
-### What This Enables
-
-1. Writer can cite bibliography entries with context from the graph
-2. Extractor knows which references a chunk makes and where they lead
-3. Query engine can follow citation chains across papers and authors
-4. Person pages grounded in actual publication/citation/collaboration data
-5. Corpus-level analytics: most influential papers, key authors,
-   research communities, citation flow
-6. "Similar authors" via paper similarity transitivity
-7. Multi-hop reasoning: concept -> chunks -> papers -> authors -> collaborators
+6. `citations.json` becomes redundant (graph has all the data)
