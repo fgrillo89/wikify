@@ -77,7 +77,8 @@ def ingest(
     resolve_bibliography_doi: bool = typer.Option(
         False,
         "--resolve-bibliography-doi",
-        help="Resolve citation metadata via OpenAlex API.",
+        help="Enable OpenAlex bulk resolution + reference expansion (optional). "
+        "Heuristic parsing and DOI content negotiation always run.",
     ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
@@ -99,7 +100,7 @@ def refresh(
     resolve_bibliography_doi: bool = typer.Option(
         False,
         "--resolve-bibliography-doi",
-        help="Resolve citation metadata via OpenAlex API.",
+        help="Enable OpenAlex bulk resolution + reference expansion (optional).",
     ),
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.)."""

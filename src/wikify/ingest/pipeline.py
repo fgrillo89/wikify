@@ -1152,14 +1152,15 @@ def _refresh_openalex(ctx: dict) -> None:
 
 
 def _refresh_cite_heuristics(ctx: dict) -> None:
-    """Enrich citations with heuristic parsing + optional DOI negotiation."""
+    """Enrich citations with heuristic parsing + DOI content negotiation."""
     from .cite_parse import enrich_citations
-    use_doi = ctx.get("resolve_bibliography_doi", False)
-    enrich_citations(ctx["docs"], use_doi=use_doi)
+    enrich_citations(ctx["docs"], use_doi=True)
 
 
 def _refresh_bibliography(ctx: dict) -> None:
-    resolve_doi = ctx.get("resolve_bibliography_doi", False)
+    # DOI enrichment for source papers always runs (free, no API key).
+    # OpenAlex is the optional step gated by --resolve-bibliography-doi.
+    resolve_doi = True
     write_corpus_bibliography(
         ctx["paths"],
         ctx["docs"],
