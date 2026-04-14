@@ -139,7 +139,14 @@ def write_knowledge_graph(paths: CorpusPaths, kg: object) -> None:
 
 
 def read_knowledge_graph(paths: CorpusPaths, vectors: object | None = None) -> object:
-    """Load a KnowledgeGraph from knowledge_graph.json."""
+    """Load a KnowledgeGraph, or return an empty one if file is missing."""
+    if not paths.knowledge_graph_path.exists():
+        import networkx as nx
+
+        from ..citestore.graph import KnowledgeGraph, NetworkXBackend
+
+        backend = NetworkXBackend(G=nx.MultiDiGraph())
+        return KnowledgeGraph(backend=backend, vectors=vectors)
     from ..citestore.graph_build import load_knowledge_graph
 
     return load_knowledge_graph(paths.knowledge_graph_path, vectors=vectors)

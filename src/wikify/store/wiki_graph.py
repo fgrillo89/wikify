@@ -121,40 +121,38 @@ class WikiQueryBuilder:
         self._ids = frozenset(node_ids)
         self._type = node_type
 
+    # ---- Traversal helpers ----
+
+    def _follow(
+        self, index: dict, node_type: str, *, exclude_self: bool = False,
+    ) -> WikiQueryBuilder:
+        """Traverse an inverted index: union all values for current IDs."""
+        result: set[str] = set()
+        for nid in self._ids:
+            hit = index.get(nid)
+            if hit is not None:
+                result |= hit if isinstance(hit, set) else set(hit)
+        if exclude_self:
+            result -= self._ids
+        return WikiQueryBuilder(self._wkg, result, node_type)
+
     # ---- Traversals ----
 
     def links(self) -> WikiQueryBuilder:
         """Pages this page links to."""
-        result: set[str] = set()
-        idx = self._wkg._backend._links_to
-        for pid in self._ids:
-            result |= idx.get(pid, set())
-        return WikiQueryBuilder(self._wkg, result, PAGE)
+        return self._follow(self._wkg._backend._links_to, PAGE)
 
     def linked_by(self) -> WikiQueryBuilder:
         """Pages that link to this page."""
-        result: set[str] = set()
-        idx = self._wkg._backend._linked_by
-        for pid in self._ids:
-            result |= idx.get(pid, set())
-        return WikiQueryBuilder(self._wkg, result, PAGE)
+        return self._follow(self._wkg._backend._linked_by, PAGE)
 
     def co_evidence(self) -> WikiQueryBuilder:
         """Pages sharing at least one evidence source document."""
-        result: set[str] = set()
-        idx = self._wkg._backend._co_evidence
-        for pid in self._ids:
-            result |= idx.get(pid, set())
-        result -= self._ids
-        return WikiQueryBuilder(self._wkg, result, PAGE)
+        return self._follow(self._wkg._backend._co_evidence, PAGE, exclude_self=True)
 
     def evidence(self) -> WikiQueryBuilder:
         """Evidence entries for these pages."""
-        result: set[str] = set()
-        idx = self._wkg._backend._evidence_of
-        for pid in self._ids:
-            result.update(idx.get(pid, []))
-        return WikiQueryBuilder(self._wkg, result, EVIDENCE)
+        return self._follow(self._wkg._backend._evidence_of, EVIDENCE)
 
     # ---- Filters ----
 
