@@ -277,6 +277,9 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     # Reject conference locations/dates as titles
     if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
         return None
+    # Reject "Journal Vol Pages" masquerading as title
+    if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
+        return None
 
     # For heuristic-only citations, validate strictly
     api_confirmed = (
