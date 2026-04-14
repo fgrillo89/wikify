@@ -566,15 +566,14 @@ def _embed_chunks_incremental(
 # Stage: doc-level edges
 # ---------------------------------------------------------------------------
 
-def populate_doc_edges(
+def _compute_doc_similarity(
     docs: list[Document],
     docs_chunks_pairs: list[tuple[str, list[Chunk]]],
     store: VectorStore,
 ) -> None:
-    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc."""
+    """Fill in ``similar_to`` for every doc using embedding cosine."""
     import numpy as np
 
-    # 1. similar_to: mean-pooled chunk cosine, top-K above threshold.
     chunk_by_id = {cid: i for i, cid in enumerate(store.ids)}
     matrix = store.matrix
     doc_vecs: dict[str, np.ndarray] = {}
@@ -605,10 +604,20 @@ def populate_doc_edges(
                     doc.similar_to = top
                     break
 
-    # 2. cites: year-bucketed fuzzy citation matching.
-    _resolve_citations(docs)
 
-    # 3. cites_same: bibliographic coupling on shared references.
+def populate_doc_edges(
+    docs: list[Document],
+    docs_chunks_pairs: list[tuple[str, list[Chunk]]],
+    store: VectorStore,
+) -> None:
+    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc.
+
+    Legacy entry point that runs all three steps. Prefer the split
+    steps (_refresh_doc_similarity, _refresh_citation_edges) in the DAG
+    for correct dependency ordering.
+    """
+    _compute_doc_similarity(docs, docs_chunks_pairs, store)
+    _resolve_citations(docs)
     coupling = compute_coupling(docs, min_strength=3, top_k=5)
     for doc in docs:
         doc.cites_same = coupling.get(doc.id, [])
@@ -1059,8 +1068,17 @@ def refresh_corpus(
 # To add a step: define ``_refresh_<name>(ctx)`` and register it in
 # ``_REFRESH_STEPS``, then place the key in the right wave.
 
-def _refresh_doc_edges(ctx: dict) -> None:
-    populate_doc_edges(ctx["docs"], ctx["pairs"], ctx["store"])
+def _refresh_doc_similarity(ctx: dict) -> None:
+    """Compute doc-level embedding similarity (independent of citations)."""
+    _compute_doc_similarity(ctx["docs"], ctx["pairs"], ctx["store"])
+
+
+def _refresh_citation_edges(ctx: dict) -> None:
+    """Compute citation links + bibliographic coupling (needs enriched citations)."""
+    _resolve_citations(ctx["docs"])
+    coupling = compute_coupling(ctx["docs"], min_strength=3, top_k=5)
+    for doc in ctx["docs"]:
+        doc.cites_same = coupling.get(doc.id, [])
 
 
 def _refresh_topics(ctx: dict) -> None:
@@ -1167,11 +1185,12 @@ def _refresh_doc_resave(ctx: dict) -> None:
 
 
 _REFRESH_STEPS: dict[str, callable] = {
-    "doc_edges":        _refresh_doc_edges,
+    "doc_similarity":   _refresh_doc_similarity,
     "topics":           _refresh_topics,
     "images_index":     _refresh_images_index,
     "cite_heuristics":  _refresh_cite_heuristics,
     "openalex":         _refresh_openalex,
+    "citation_edges":   _refresh_citation_edges,
     "bibliography":     _refresh_bibliography,
     "corpus_graph":   _refresh_corpus_graph,
     "explorer_index": _refresh_explorer_index,
@@ -1180,20 +1199,24 @@ _REFRESH_STEPS: dict[str, callable] = {
 }
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
-    # Wave A: independent -- only needs docs + store
-    ("wave A (edges+topics+images+heuristics+openalex)", [
-        "doc_edges", "topics", "images_index", "cite_heuristics", "openalex",
+    # Wave A: independent steps (no citation dependency)
+    ("wave A (similarity+topics+images)", [
+        "doc_similarity", "topics", "images_index",
     ]),
-    # Wave A2: bibliography needs citation enrichment to finish first
-    ("wave A2 (bibliography)", [
-        "bibliography",
+    # Wave B: citation enrichment (heuristics + optional OpenAlex)
+    ("wave B (citation enrichment)", [
+        "cite_heuristics", "openalex",
     ]),
-    # Wave B: needs doc_edges (populates doc.similar_to, .cites, .cites_same)
-    ("wave B (corpus graph)", [
+    # Wave C: citation graph + bibliography (depend on enriched citations)
+    ("wave C (edges+bibliography)", [
+        "citation_edges", "bibliography",
+    ]),
+    # Wave D: corpus graph (depends on edges)
+    ("wave D (corpus graph)", [
         "corpus_graph",
     ]),
-    # Wave C: needs graph
-    ("wave C (explorer+pagerank+resave)", [
+    # Wave E: derived artifacts (depend on graph)
+    ("wave E (explorer+pagerank+resave)", [
         "explorer_index", "pagerank", "doc_resave",
     ]),
 ]
