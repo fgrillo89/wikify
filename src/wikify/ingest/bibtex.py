@@ -171,12 +171,21 @@ def _clean_bib_title(title: str) -> str:
     return title
 
 
+_MONTH_NAMES = {
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+}
+
+
 def _clean_bib_journal(journal: str) -> str:
     """Strip artifacts from journal field."""
     # Remove trailing ", vol" or ", Vol."
     journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
     # Remove trailing comma
     journal = journal.rstrip(",").strip()
+    # Reject month names as journal ("July", "December", "May")
+    if journal.lower() in _MONTH_NAMES:
+        return ""
     return journal
 
 
@@ -228,11 +237,31 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     # Reject garbage titles regardless of source
     if title.isupper() and len(title.split()) <= 2:
         return None
-    # Reject titles that start with author names ("Hwang, and L. Pantisano")
+    # Reject titles that start with author names
     if re.match(r"^[A-Z][a-z]+,\s+and\s", title):
+        return None
+    if re.match(r"^[A-Z][a-z]+ et al\.\s*,", title):
+        return None
+    # Reject titles starting with "Surname, Initials" (leaked author block)
+    if re.match(r"^[A-Z][a-z]+-?[A-Z]?[a-z]*,\s+[A-Z]\.\s", title):
+        return None
+    # Reject "Name, and" or "Name, in 20XX" (author + conference)
+    if re.match(r"^[A-Z][a-z]+,\s+(?:and|in\s+\d{4}|in\s+Handbook)", title):
+        return None
+    # Reject journal/venue name as title ("Nanoscale, 2016, 8: 1383")
+    if re.match(r"^[A-Z][a-z]+,\s+\d{4}", title):
+        return None
+    # Reject "Name, journal" ("Lee, npj Flexible Electron")
+    if re.match(r"^[A-Z][a-z]+,\s+[a-z]", title):
+        return None
+    # Reject arXiv-style ("Plank, arXiv:...")
+    if "arXiv" in title and title.count(",") >= 1 and len(title) < 40:
         return None
     # Reject raw-text titles (contain URLs or excessive commas)
     if "https://" in title or "doi.org" in title or title.count(",") > 5:
+        return None
+    # Reject conference-proceeding fragments ("In: 2023 International...")
+    if re.match(r"^In:\s+\d{4}\s", title):
         return None
 
     # For heuristic-only citations, validate strictly
@@ -279,7 +308,8 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     venue = d.get("venue") or ""
     if venue:
         venue = _clean_bib_journal(venue)
-    _add_optional(entry, "journal", venue)
+    if venue and len(venue) >= 3:
+        _add_optional(entry, "journal", venue)
     _add_optional(entry, "volume", d.get("volume"))
     _add_optional(entry, "pages", d.get("pages"))
     _add_optional(entry, "publisher", d.get("publisher"))
