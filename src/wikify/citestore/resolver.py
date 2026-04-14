@@ -1,4 +1,9 @@
-"""Async citation resolver backed by the OpenAlex API."""
+"""Async citation resolver backed by the OpenAlex API.
+
+Strategy: resolve corpus papers by DOI in bulk, then bulk-fetch their
+referenced_works. Citation texts are matched locally to resolved works
+-- no per-citation API calls needed.
+"""
 
 from __future__ import annotations
 
@@ -22,24 +27,13 @@ logger = logging.getLogger(__name__)
 
 OPENALEX_BASE = "https://api.openalex.org"
 
-# Fields to request from OpenAlex (keeps responses small)
 _SELECT = ",".join([
-    "id",
-    "doi",
-    "title",
-    "publication_year",
-    "authorships",
-    "biblio",
-    "primary_location",
-    "cited_by_count",
-    "referenced_works",
-    "type",
+    "id", "doi", "title", "publication_year", "authorships", "biblio",
+    "primary_location", "cited_by_count", "referenced_works", "type",
 ])
 
-# Max OpenAlex IDs per bulk-fetch call (~8KB URL limit, ~100-150 safe)
-_BULK_BATCH_SIZE = 100
-
-# Backoff settings
+_DOI_BATCH_SIZE = 50
+_OA_BATCH_SIZE = 100
 _MAX_RETRIES = 5
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
@@ -50,13 +44,7 @@ def _sha256(text: str) -> str:
 
 
 def _extract_openalex_id(url: str) -> str:
-    """Extract bare ID like 'W1234' from 'https://openalex.org/W1234'."""
     return url.rsplit("/", 1)[-1] if "/" in url else url
-
-
-# ---------------------------------------------------------------------------
-# Decorators for rate limiting and concurrency control
-# ---------------------------------------------------------------------------
 
 
 def add_limiter(limiter: AsyncLimiter):
@@ -79,11 +67,6 @@ def add_semaphore(semaphore: Semaphore):
     return inner
 
 
-# ---------------------------------------------------------------------------
-# OpenAlex response parser
-# ---------------------------------------------------------------------------
-
-
 def parse_openalex_work(item: dict) -> Work:
     """Parse an OpenAlex API response item into a Work."""
     authorships = item.get("authorships") or []
@@ -92,20 +75,15 @@ def parse_openalex_work(item: dict) -> Work:
         for a in authorships
         if a.get("author", {}).get("display_name")
     ]
-
     location = item.get("primary_location") or {}
     source = location.get("source") or {}
     biblio = item.get("biblio") or {}
-
     doi_raw = item.get("doi") or ""
     doi = doi_raw.replace("https://doi.org/", "")
-
-    oa_id_raw = item.get("id") or ""
-    oa_id = _extract_openalex_id(oa_id_raw)
+    oa_id = _extract_openalex_id(item.get("id") or "")
 
     return Work(
-        doi=doi,
-        openalex_id=oa_id,
+        doi=doi, openalex_id=oa_id,
         title=item.get("title") or "",
         year=item.get("publication_year"),
         journal=source.get("display_name") or "",
@@ -123,14 +101,14 @@ def parse_openalex_work(item: dict) -> Work:
 
 
 class AsyncResolver:
-    """Resolve citations against the OpenAlex API with local SQLite caching.
+    """Resolve citations via OpenAlex with batch-first strategy.
 
-    Resolution waterfall per citation:
-      Level A -- DOI direct lookup
-      Level B -- Fielded query (author names + year)
-      Level C -- Fuzzy full-text search (rapidfuzz > 85)
+    1. Bulk-resolve corpus paper DOIs (1 call per 50 DOIs)
+    2. Collect referenced_works from responses (free, no extra calls)
+    3. Bulk-fetch referenced work metadata (1 call per 100 IDs)
+    4. Match citation texts to resolved works locally
 
-    After resolving a batch, auto-expands depth-1 referenced_works.
+    ~20 papers resolves in ~30 API calls total.
     """
 
     def __init__(
@@ -138,8 +116,8 @@ class AsyncResolver:
         db: DatabaseManager,
         *,
         email: str,
-        max_concurrent: int = 3,
-        requests_per_second: float = 3.0,
+        max_concurrent: int = 5,
+        requests_per_second: float = 5.0,
         expand_references: bool = True,
         confidence_threshold: float = 85.0,
     ) -> None:
@@ -149,9 +127,6 @@ class AsyncResolver:
         self.confidence_threshold = confidence_threshold
         self._client: httpx.AsyncClient | None = None
 
-        # Rate control: decorators wrap the single-attempt _fetch_raw into
-        # _fetch_once. The retrying _fetch method calls _fetch_once per attempt,
-        # so the semaphore is released between retries.
         limiter = AsyncLimiter(1, round(1 / requests_per_second, 3))
         semaphore = Semaphore(value=max_concurrent)
         self._fetch_once = add_limiter(limiter)(add_semaphore(semaphore)(self._fetch_raw))
@@ -175,13 +150,11 @@ class AsyncResolver:
     # ---- HTTP layer ----
 
     async def _fetch_raw(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
-        """Single HTTP GET — called through the decorated self._fetch_once."""
         client = await self._ensure_client()
         return await client.get(url, params=params)
 
     async def _fetch(self, url: str, params: dict[str, Any] | None = None) -> dict | None:
-        """GET with retries. Each attempt goes through the decorated _fetch_once
-        so the semaphore is released between retries."""
+        """GET with retries. Semaphore released between attempts."""
         for attempt in range(_MAX_RETRIES):
             try:
                 resp = await self._fetch_once(url, params)
@@ -212,157 +185,34 @@ class AsyncResolver:
                 await asyncio.sleep(wait)
         return None
 
-    # ---- Single-work resolution ----
+    # ---- Bulk fetch primitives ----
 
-    async def _resolve_by_doi(self, doi: str) -> Work | None:
-        """Level A: direct DOI lookup."""
+    async def _bulk_fetch_by_dois(self, dois: list[str]) -> dict[str, Work]:
+        """Fetch works by pipe-separated DOI filter. Returns doi -> Work."""
+        if not dois:
+            return {}
         data = await self._fetch(
             f"{OPENALEX_BASE}/works",
-            {"filter": f"doi:{doi}", "select": _SELECT, "per_page": "1"},
+            {"filter": f"doi:{"|".join(dois)}", "select": _SELECT, "per_page": "200"},
         )
         if not data:
-            return None
-        results = data.get("results") or []
-        if not results:
-            return None
-        return parse_openalex_work(results[0])
+            return {}
+        return {w.doi: w for item in data.get("results") or []
+                if (w := parse_openalex_work(item)) and w.doi}
 
-    async def _resolve_by_query(
-        self, author_names: list[str], year: int | None
-    ) -> Work | None:
-        """Level B: fielded search by author + year."""
-        if not author_names:
-            return None
-        search_text = " ".join(author_names[:3])
-        params: dict[str, str] = {
-            "search": search_text,
-            "select": _SELECT,
-            "per_page": "5",
-        }
-        if year:
-            params["filter"] = f"publication_year:{year}"
-        data = await self._fetch(f"{OPENALEX_BASE}/works", params)
-        if not data:
-            return None
-        results = data.get("results") or []
-        if not results:
-            return None
-        return parse_openalex_work(results[0])
-
-    async def _resolve_by_fuzzy(self, raw_text: str) -> tuple[Work | None, float]:
-        """Level C: fuzzy full-text search with confidence scoring."""
-        query = raw_text[:200]
+    async def _bulk_fetch_by_openalex_ids(self, oa_ids: list[str]) -> list[Work]:
+        """Fetch works by pipe-separated OpenAlex ID filter."""
+        if not oa_ids:
+            return []
         data = await self._fetch(
             f"{OPENALEX_BASE}/works",
-            {"search": query, "select": _SELECT, "per_page": "5"},
+            {"filter": f"openalex:{"|".join(oa_ids)}", "select": _SELECT, "per_page": "200"},
         )
         if not data:
-            return None, 0.0
-        results = data.get("results") or []
-        if not results:
-            return None, 0.0
+            return []
+        return [parse_openalex_work(item) for item in data.get("results") or []]
 
-        best_work = None
-        best_score = 0.0
-        for item in results:
-            candidate_title = item.get("title") or ""
-            score = fuzz.token_sort_ratio(raw_text[:300], candidate_title)
-            if score > best_score:
-                best_score = score
-                best_work = item
-
-        if best_work and best_score >= self.confidence_threshold:
-            return parse_openalex_work(best_work), best_score
-        return None, best_score
-
-    # ---- Waterfall resolution ----
-
-    async def _resolve_one(self, cit: dict) -> ResolutionResult:
-        """Run the A/B/C waterfall for a single citation dict."""
-        raw_text = cit.get("raw_text") or ""
-        doi = cit.get("doi") or ""
-        year = cit.get("year")
-        author_last_names = cit.get("author_last_names") or []
-
-        text_hash = _sha256(raw_text) if raw_text else ""
-
-        # Check string_cache
-        if text_hash:
-            cached = await self.db.get_cached_resolution(text_hash)
-            if cached is not None:
-                resolved_doi, level = cached
-                work = None
-                if resolved_doi:
-                    work = await self.db.get_work(resolved_doi)
-                return ResolutionResult(
-                    work=work, level=level,
-                    source_doi=doi, source_text=raw_text,
-                )
-
-        # Check works table by DOI
-        if doi:
-            existing = await self.db.get_work(doi)
-            if existing:
-                if text_hash:
-                    await self.db.cache_resolution(text_hash, raw_text, doi, "A")
-                return ResolutionResult(
-                    work=existing, level="A",
-                    source_doi=doi, source_text=raw_text,
-                )
-
-        # Level A: DOI direct
-        if doi:
-            work = await self._resolve_by_doi(doi)
-            if work:
-                await self.db.upsert_work(work)
-                if text_hash:
-                    await self.db.cache_resolution(text_hash, raw_text, work.doi, "A")
-                return ResolutionResult(
-                    work=work, level="A",
-                    source_doi=doi, source_text=raw_text,
-                )
-
-        # Level B: fielded query
-        if author_last_names and year:
-            work = await self._resolve_by_query(author_last_names, year)
-            if work:
-                # Validate with fuzzy match if we have raw_text
-                if raw_text:
-                    score = fuzz.token_sort_ratio(raw_text[:300], work.title)
-                    if score < self.confidence_threshold:
-                        work = None
-                if work:
-                    await self.db.upsert_work(work)
-                    if text_hash:
-                        await self.db.cache_resolution(
-                            text_hash, raw_text, work.doi, "B"
-                        )
-                    return ResolutionResult(
-                        work=work, level="B",
-                        source_doi=doi, source_text=raw_text,
-                    )
-
-        # Level C: fuzzy search
-        if raw_text:
-            work, _score = await self._resolve_by_fuzzy(raw_text)
-            if work:
-                await self.db.upsert_work(work)
-                if text_hash:
-                    await self.db.cache_resolution(text_hash, raw_text, work.doi, "C")
-                return ResolutionResult(
-                    work=work, level="C",
-                    source_doi=doi, source_text=raw_text,
-                )
-
-        # Miss
-        if text_hash:
-            await self.db.cache_resolution(text_hash, raw_text, None, "miss")
-        return ResolutionResult(
-            work=None, level="miss",
-            source_doi=doi, source_text=raw_text,
-        )
-
-    # ---- Batch resolution ----
+    # ---- Main resolution entry point ----
 
     async def resolve_batch(
         self,
@@ -370,57 +220,163 @@ class AsyncResolver:
         *,
         progress_callback: Any | None = None,
     ) -> list[ResolutionResult]:
-        """Resolve a batch of citation dicts through the waterfall.
+        """Resolve citations using batch-first strategy.
 
-        Each dict should have: raw_text, doi (optional), year (optional),
-        author_last_names (optional). This matches the output of
-        wikify.ingest.citations.extract_citations().
-
-        Uses asyncio.gather with semaphore + rate limiter decorators on
-        the HTTP layer to control concurrency and throughput.
+        Phase 1: Check local cache
+        Phase 2: Bulk DOI resolution (50 DOIs per API call)
+        Phase 3: Bulk-fetch referenced_works (100 IDs per call) -- depth-1
+        Phase 4: Match remaining citation texts locally against all resolved works
         """
-        raw_results = await asyncio.gather(
-            *(self._resolve_one(c) for c in citations),
-            return_exceptions=True,
+        results: list[ResolutionResult | None] = [None] * len(citations)
+        need_api: list[tuple[int, dict]] = []
+
+        # ---- Phase 1: local cache ----
+        for i, cit in enumerate(citations):
+            raw_text = cit.get("raw_text") or ""
+            doi = cit.get("doi") or ""
+            text_hash = _sha256(raw_text) if raw_text else ""
+
+            if text_hash:
+                cached = await self.db.get_cached_resolution(text_hash)
+                if cached is not None:
+                    resolved_doi, level = cached
+                    work = await self.db.get_work(resolved_doi) if resolved_doi else None
+                    results[i] = ResolutionResult(
+                        work=work, level=level, source_doi=doi, source_text=raw_text)
+                    continue
+
+            if doi:
+                existing = await self.db.get_work(doi)
+                if existing:
+                    if text_hash:
+                        await self.db.cache_resolution(text_hash, raw_text, doi, "A")
+                    results[i] = ResolutionResult(
+                        work=existing, level="A", source_doi=doi, source_text=raw_text)
+                    continue
+
+            need_api.append((i, cit))
+
+        if not need_api:
+            logger.info("All %d citations resolved from cache", len(citations))
+            return [r for r in results if r is not None]
+
+        logger.info(
+            "Cache: %d/%d hits, %d need API",
+            len(citations) - len(need_api), len(citations), len(need_api),
         )
-        results: list[ResolutionResult] = []
-        for i, r in enumerate(raw_results):
-            if isinstance(r, BaseException):
-                logger.warning("Resolution failed for citation %d: %s", i, r)
-                results.append(ResolutionResult(
-                    work=None, level="miss",
-                    source_doi=citations[i].get("doi", ""),
-                    source_text=citations[i].get("raw_text", ""),
-                ))
+
+        # ---- Phase 2: bulk DOI resolution ----
+        unique_dois: dict[str, list[int]] = {}  # doi -> [citation indices]
+        no_doi_indices: list[int] = []
+        for idx, cit in need_api:
+            doi = cit.get("doi") or ""
+            if doi:
+                unique_dois.setdefault(doi, []).append(idx)
             else:
-                results.append(r)
-            if progress_callback:
-                progress_callback(i + 1, len(citations), results[-1])
+                no_doi_indices.append(idx)
 
-        if self.expand_references:
-            await self._expand_references(results)
+        doi_to_work: dict[str, Work] = {}
+        doi_list = list(unique_dois.keys())
+        # Batch DOI lookups concurrently
+        doi_tasks = []
+        for batch_start in range(0, len(doi_list), _DOI_BATCH_SIZE):
+            batch = doi_list[batch_start:batch_start + _DOI_BATCH_SIZE]
+            doi_tasks.append(self._bulk_fetch_by_dois(batch))
+        if doi_tasks:
+            doi_results = await asyncio.gather(*doi_tasks, return_exceptions=True)
+            for dr in doi_results:
+                if isinstance(dr, BaseException):
+                    logger.warning("DOI batch fetch failed: %s", dr)
+                else:
+                    doi_to_work.update(dr)
 
-        return results
+        if doi_to_work:
+            await self.db.upsert_works(list(doi_to_work.values()))
 
-    # ---- Depth-1 reference expansion ----
+        # Map DOI results to citations
+        unresolved_indices: list[int] = list(no_doi_indices)
+        for doi, indices in unique_dois.items():
+            work = doi_to_work.get(doi)
+            for idx in indices:
+                cit = citations[idx]
+                raw_text = cit.get("raw_text") or ""
+                text_hash = _sha256(raw_text) if raw_text else ""
+                if work:
+                    if text_hash:
+                        await self.db.cache_resolution(text_hash, raw_text, work.doi, "A")
+                    results[idx] = ResolutionResult(
+                        work=work, level="A", source_doi=doi, source_text=raw_text)
+                else:
+                    unresolved_indices.append(idx)
 
-    async def _expand_references(self, results: list[ResolutionResult]) -> None:
-        """Bulk-fetch metadata for all referenced_works of resolved papers."""
-        # Collect all referenced OpenAlex IDs
-        parent_refs: dict[str, list[str]] = {}  # parent_doi -> [child oa_ids]
-        for r in results:
-            if not r.work or not r.work.raw:
-                continue
-            ref_urls = r.work.raw.get("referenced_works") or []
+        logger.info(
+            "DOI batch: %d unique DOIs, %d resolved, %d unresolved",
+            len(unique_dois), len(doi_to_work),
+            len(unresolved_indices),
+        )
+
+        # ---- Phase 3: expand referenced_works (depth-1) ----
+        all_resolved_works = list(doi_to_work.values())
+        ref_works: dict[str, Work] = {}
+        if self.expand_references and all_resolved_works:
+            ref_works = await self._expand_references_bulk(all_resolved_works)
+
+        # ---- Phase 4: match remaining citations locally ----
+        # Build a title index from all resolved works for fuzzy matching
+        all_works = {**doi_to_work, **{w.doi: w for w in ref_works.values() if w.doi}}
+        title_index: list[tuple[str, Work]] = [
+            (w.title.lower(), w) for w in all_works.values() if w.title
+        ]
+
+        for idx in unresolved_indices:
+            cit = citations[idx]
+            raw_text = cit.get("raw_text") or ""
+            text_hash = _sha256(raw_text) if raw_text else ""
+
+            # Try local fuzzy match against all known works
+            best_work = None
+            best_score = 0.0
+            for title_lower, w in title_index:
+                score = fuzz.token_sort_ratio(raw_text[:300].lower(), title_lower)
+                if score > best_score:
+                    best_score = score
+                    best_work = w
+
+            if best_work and best_score >= self.confidence_threshold:
+                if text_hash:
+                    await self.db.cache_resolution(
+                        text_hash, raw_text, best_work.doi, "C")
+                results[idx] = ResolutionResult(
+                    work=best_work, level="C",
+                    source_doi=cit.get("doi", ""), source_text=raw_text)
+            else:
+                if text_hash:
+                    await self.db.cache_resolution(text_hash, raw_text, None, "miss")
+                results[idx] = ResolutionResult(
+                    work=None, level="miss",
+                    source_doi=cit.get("doi", ""), source_text=raw_text)
+
+        final = [r if r is not None else ResolutionResult(work=None, level="miss")
+                 for r in results]
+
+        if progress_callback:
+            for i, r in enumerate(final):
+                progress_callback(i + 1, len(citations), r)
+
+        return final
+
+    async def _expand_references_bulk(self, parent_works: list[Work]) -> dict[str, Work]:
+        """Bulk-fetch metadata for all referenced_works and store edges."""
+        parent_refs: dict[str, list[str]] = {}
+        for w in parent_works:
+            ref_urls = w.raw.get("referenced_works") or []
             if ref_urls:
-                oa_ids = [_extract_openalex_id(u) for u in ref_urls]
-                parent_refs[r.work.doi] = oa_ids
+                parent_refs[w.doi] = [_extract_openalex_id(u) for u in ref_urls]
 
         if not parent_refs:
-            return
+            return {}
 
-        # Collect all unique OA IDs, filter already-known
-        all_oa_ids = set()
+        all_oa_ids: set[str] = set()
         for ids in parent_refs.values():
             all_oa_ids.update(ids)
 
@@ -428,51 +384,38 @@ class AsyncResolver:
         to_fetch = [oa for oa in all_oa_ids if oa not in known]
 
         logger.info(
-            "Expanding references: %d unique IDs, %d to fetch (%d already cached)",
+            "Expanding references: %d unique IDs, %d to fetch (%d cached)",
             len(all_oa_ids), len(to_fetch), len(all_oa_ids) - len(to_fetch),
         )
 
-        # Bulk-fetch in batches
-        fetched_works: dict[str, Work] = {}
-        for batch_start in range(0, len(to_fetch), _BULK_BATCH_SIZE):
-            batch = to_fetch[batch_start : batch_start + _BULK_BATCH_SIZE]
-            works = await self._bulk_fetch_by_openalex_ids(batch)
-            for w in works:
-                fetched_works[w.openalex_id] = w
+        fetched: dict[str, Work] = {}
+        fetch_tasks = []
+        for batch_start in range(0, len(to_fetch), _OA_BATCH_SIZE):
+            batch = to_fetch[batch_start:batch_start + _OA_BATCH_SIZE]
+            fetch_tasks.append(self._bulk_fetch_by_openalex_ids(batch))
 
-        # Store all fetched works
-        if fetched_works:
-            await self.db.upsert_works(list(fetched_works.values()))
+        if fetch_tasks:
+            batch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+            for br in batch_results:
+                if isinstance(br, BaseException):
+                    logger.warning("Reference expansion failed: %s", br)
+                    continue
+                for w in br:
+                    fetched[w.openalex_id] = w
 
-        # Build edges: map OA IDs to DOIs for already-known works too
-        oa_to_doi: dict[str, str] = {w.openalex_id: w.doi for w in fetched_works.values()}
-        # Also map known works
+        if fetched:
+            await self.db.upsert_works(list(fetched.values()))
+
+        # Build edges
+        oa_to_doi = {w.openalex_id: w.doi for w in fetched.values()}
         for oa_id in all_oa_ids - set(to_fetch):
             existing = await self.db.get_work_by_openalex(oa_id)
             if existing:
                 oa_to_doi[existing.openalex_id] = existing.doi
 
         for parent_doi, child_oa_ids in parent_refs.items():
-            child_dois = [
-                oa_to_doi[oa] for oa in child_oa_ids if oa in oa_to_doi
-            ]
+            child_dois = [oa_to_doi[oa] for oa in child_oa_ids if oa in oa_to_doi]
             if child_dois:
                 await self.db.add_edges(parent_doi, child_dois)
 
-    async def _bulk_fetch_by_openalex_ids(self, oa_ids: list[str]) -> list[Work]:
-        """Fetch multiple works in one API call using pipe-separated IDs."""
-        if not oa_ids:
-            return []
-        filter_val = "|".join(oa_ids)
-        data = await self._fetch(
-            f"{OPENALEX_BASE}/works",
-            {
-                "filter": f"openalex:{filter_val}",
-                "select": _SELECT,
-                "per_page": "200",
-            },
-        )
-        if not data:
-            return []
-        results = data.get("results") or []
-        return [parse_openalex_work(item) for item in results]
+        return fetched

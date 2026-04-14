@@ -67,12 +67,14 @@ async def test_resolve_by_doi(tmp_path):
     assert results[0].work.title == "Array programming with NumPy"
 
 
-# ---- Level C: fuzzy resolution ----
+# ---- Local fuzzy matching (Phase 4) ----
 
 @pytest.mark.asyncio
-async def test_resolve_fuzzy_match(tmp_path):
+async def test_local_fuzzy_match(tmp_path):
+    """Citation without DOI should match locally against DOI-resolved works."""
     transport = _make_transport({
-        "search=": {"results": [SAMPLE_OPENALEX_WORK]},
+        "filter=doi": {"results": [SAMPLE_OPENALEX_WORK]},
+        "filter=openalex": {"results": []},
     })
 
     async with DatabaseManager(tmp_path / "test.db") as db:
@@ -82,21 +84,26 @@ async def test_resolve_fuzzy_match(tmp_path):
         resolver._client = httpx.AsyncClient(transport=transport)
         try:
             results = await resolver.resolve_batch([
+                # First citation has DOI -- resolved via bulk fetch
+                {"doi": "10.1038/s41586-020-2649-2", "raw_text": "Harris et al 2020"},
+                # Second citation has no DOI -- should match locally
                 {"raw_text": "Array programming with NumPy"},
             ])
         finally:
             await resolver.close()
 
-    assert len(results) == 1
-    assert results[0].work is not None
-    assert results[0].level == "C"
+    assert len(results) == 2
+    assert results[0].level == "A"
+    assert results[1].work is not None
+    assert results[1].level == "C"
 
 
 @pytest.mark.asyncio
-async def test_resolve_fuzzy_below_threshold(tmp_path):
-    """Low similarity should produce a miss."""
+async def test_local_fuzzy_below_threshold(tmp_path):
+    """Low similarity against resolved works should produce a miss."""
     transport = _make_transport({
-        "search=": {"results": [SAMPLE_OPENALEX_WORK]},
+        "filter=doi": {"results": [SAMPLE_OPENALEX_WORK]},
+        "filter=openalex": {"results": []},
     })
 
     async with DatabaseManager(tmp_path / "test.db") as db:
@@ -106,14 +113,14 @@ async def test_resolve_fuzzy_below_threshold(tmp_path):
         resolver._client = httpx.AsyncClient(transport=transport)
         try:
             results = await resolver.resolve_batch([
+                {"doi": "10.1038/s41586-020-2649-2", "raw_text": "Harris 2020"},
                 {"raw_text": "Completely unrelated text about cooking recipes"},
             ])
         finally:
             await resolver.close()
 
-    assert len(results) == 1
-    assert results[0].level == "miss"
-    assert results[0].work is None
+    assert results[1].level == "miss"
+    assert results[1].work is None
 
 
 # ---- Resumability ----
