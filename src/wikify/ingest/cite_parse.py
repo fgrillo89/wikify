@@ -57,12 +57,99 @@ def _add_semaphore(semaphore: Semaphore):
     return inner
 
 
-async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
-    """Resolve DOIs to BibTeX metadata via CrossRef transform endpoint.
+_CROSSREF_BATCH_SIZE = 75
 
-    Uses CrossRef's ``/works/{doi}/transform/application/x-bibtex``
-    which returns BibTeX directly without doi.org redirect overhead.
-    ~14 DOIs/s with retries.  For 350 DOIs: ~25s.
+
+def _parse_crossref_item(item: dict) -> dict[str, object]:
+    """Convert a CrossRef API work item to our standard metadata dict."""
+    titles = item.get("title") or []
+    title = titles[0] if titles else ""
+    authors = [
+        f"{a.get('given', '')} {a.get('family', '')}".strip()
+        for a in item.get("author") or []
+    ]
+    journals = item.get("container-title") or []
+    journal = journals[0] if journals else ""
+    # Year: try published-print, then published-online, then issued
+    year = ""
+    for date_key in ("published-print", "published-online", "issued"):
+        parts = (item.get(date_key) or {}).get("date-parts") or []
+        if parts and parts[0] and parts[0][0]:
+            year = str(parts[0][0])
+            break
+    biblio = {
+        "title": title,
+        "authors": authors,
+        "journal": journal,
+        "venue": journal,
+        "year": year,
+        "volume": item.get("volume") or "",
+        "pages": item.get("page") or "",
+        "publisher": item.get("publisher") or "",
+    }
+    return {k: v for k, v in biblio.items() if v}
+
+
+async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
+    """Resolve DOIs via CrossRef batch JSON API.
+
+    Uses ``/works?filter=doi:x,doi:y,...`` to fetch up to 75 DOIs per
+    call. ~200 DOIs/s.  For 350 DOIs: ~1.5s in 5 API calls.
+    """
+    import httpx
+
+    limiter = AsyncLimiter(1, 1 / 5)
+    semaphore = Semaphore(value=3)
+
+    @_add_limiter(limiter)
+    @_add_semaphore(semaphore)
+    async def fetch_batch(
+        client: httpx.AsyncClient, batch: list[str],
+    ) -> list[dict]:
+        filter_val = ",".join(f"doi:{d}" for d in batch)
+        resp = await client.get(
+            "https://api.crossref.org/works",
+            params={
+                "filter": filter_val,
+                "rows": str(len(batch)),
+                "select": "DOI,title,author,container-title,volume,page,"
+                "published-print,published-online,issued,publisher",
+            },
+        )
+        if resp.status_code != 200:
+            return []
+        return (resp.json().get("message") or {}).get("items") or []
+
+    batches = [
+        dois[i : i + _CROSSREF_BATCH_SIZE]
+        for i in range(0, len(dois), _CROSSREF_BATCH_SIZE)
+    ]
+
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        headers={"User-Agent": "wikify/1.0 (mailto:wikify@example.com)"},
+    ) as client:
+        results = await asyncio.gather(
+            *(fetch_batch(client, b) for b in batches),
+            return_exceptions=True,
+        )
+
+    out: dict[str, dict[str, object]] = {}
+    for batch_result in results:
+        if isinstance(batch_result, BaseException):
+            logger.debug("CrossRef batch failed: %s", batch_result)
+            continue
+        for item in batch_result:
+            doi = (item.get("DOI") or "").lower()
+            if doi:
+                out[doi] = _parse_crossref_item(item)
+    return out
+
+
+async def _resolve_dois_doiorg(dois: list[str]) -> dict[str, dict[str, object]]:
+    """Fallback: resolve DOIs via doi.org content negotiation (BibTeX).
+
+    Slower than CrossRef batch (~5 DOIs/s) but catches DOIs not in CrossRef.
     """
     import random
 
@@ -70,26 +157,25 @@ async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
 
     from .bibtex import _metadata_from_bibtex_entry
 
-    limiter = AsyncLimiter(1, 1 / 20)  # 20 req/s (CrossRef polite pool)
-    semaphore = Semaphore(value=10)
+    limiter = AsyncLimiter(1, 1 / 8)
+    semaphore = Semaphore(value=5)
 
     @_add_limiter(limiter)
     @_add_semaphore(semaphore)
     async def fetch_once(client: httpx.AsyncClient, doi: str) -> httpx.Response:
         return await client.get(
-            f"https://api.crossref.org/works/{doi}/transform/application/x-bibtex",
+            f"https://doi.org/{doi}",
+            headers={"Accept": "application/x-bibtex"},
         )
 
-    async def fetch_with_retry(
-        client: httpx.AsyncClient, doi: str, max_retries: int = 3,
-    ) -> dict:
-        for attempt in range(max_retries):
+    async def fetch(client: httpx.AsyncClient, doi: str) -> dict:
+        for _attempt in range(3):
             try:
                 resp = await fetch_once(client, doi)
                 if resp.status_code == 200:
                     return _metadata_from_bibtex_entry(resp.text)
                 if resp.status_code == 429:
-                    await asyncio.sleep(0.3 + random.uniform(0, 0.3))
+                    await asyncio.sleep(0.5 + random.uniform(0, 0.5))
                     continue
                 return {}
             except httpx.HTTPError:
@@ -97,22 +183,19 @@ async def _resolve_dois_async(dois: list[str]) -> dict[str, dict[str, object]]:
         return {}
 
     async with httpx.AsyncClient(
-        timeout=10.0,
-        headers={"User-Agent": "wikify/1.0 (mailto:wikify@example.com)"},
-        limits=httpx.Limits(max_connections=10, max_keepalive_connections=10),
+        timeout=15.0, follow_redirects=True,
+        limits=httpx.Limits(max_connections=5, max_keepalive_connections=5),
     ) as client:
         results = await asyncio.gather(
-            *(fetch_with_retry(client, doi) for doi in dois),
-            return_exceptions=True,
+            *(fetch(client, d) for d in dois), return_exceptions=True,
         )
 
     out: dict[str, dict[str, object]] = {}
     for doi, result in zip(dois, results):
         if isinstance(result, BaseException):
-            logger.debug("DOI resolution failed for %s: %s", doi, result)
-            out[doi] = {}
-        else:
-            out[doi] = result
+            continue
+        if result:
+            out[doi.lower()] = result
     return out
 
 
@@ -192,24 +275,35 @@ def enrich_citations(
                 if not old or (isinstance(old, str) and len(old) < 10):
                     setattr(cit, key, val)
 
-    # Pass 2: DOI content negotiation (async)
+    # Pass 2: DOI resolution (async batch via CrossRef + doi.org fallback)
     if use_doi:
         unique_dois = sorted({
             cit.doi for doc in docs for cit in doc.citations if cit.doi
         })
         if unique_dois:
             if doi_lookup:
-                # Sync fallback for custom lookup
                 doi_meta = {doi: doi_lookup(doi) for doi in unique_dois}
             else:
-                logger.info("Resolving %d unique DOIs via content negotiation...", len(unique_dois))
+                logger.info(
+                    "Resolving %d unique DOIs via CrossRef batch...",
+                    len(unique_dois),
+                )
                 doi_meta = asyncio.run(_resolve_dois_async(unique_dois))
+                # Fallback: doi.org content negotiation for misses
+                missed = [d for d in unique_dois if not doi_meta.get(d.lower())]
+                if missed:
+                    logger.info(
+                        "Falling back to doi.org for %d/%d unresolved DOIs...",
+                        len(missed), len(unique_dois),
+                    )
+                    fallback = asyncio.run(_resolve_dois_doiorg(missed))
+                    doi_meta.update(fallback)
 
             for doc in docs:
                 for cit in doc.citations:
                     if not cit.doi:
                         continue
-                    meta = doi_meta.get(cit.doi)
+                    meta = doi_meta.get(cit.doi.lower())
                     if not meta:
                         continue
                     for src, dst in _DOI_FIELD_MAP.items():
