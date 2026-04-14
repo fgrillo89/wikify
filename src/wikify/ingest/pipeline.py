@@ -1067,8 +1067,8 @@ def _refresh_images_index(ctx: dict) -> None:
     build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
 
 
-def _refresh_crossref(ctx: dict) -> None:
-    """Resolve citations via OpenAlex API (DOI + fuzzy query)."""
+def _refresh_openalex(ctx: dict) -> None:
+    """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
     if not ctx.get("resolve_bibliography_doi", False):
         return
     import asyncio
@@ -1166,7 +1166,7 @@ _REFRESH_STEPS: dict[str, callable] = {
     "topics":           _refresh_topics,
     "images_index":     _refresh_images_index,
     "cite_heuristics":  _refresh_cite_heuristics,
-    "crossref":         _refresh_crossref,
+    "openalex":         _refresh_openalex,
     "bibliography":     _refresh_bibliography,
     "corpus_graph":   _refresh_corpus_graph,
     "explorer_index": _refresh_explorer_index,
@@ -1177,7 +1177,7 @@ _REFRESH_STEPS: dict[str, callable] = {
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent -- only needs docs + store
     ("wave A (edges+topics+images+heuristics+openalex)", [
-        "doc_edges", "topics", "images_index", "cite_heuristics", "crossref",
+        "doc_edges", "topics", "images_index", "cite_heuristics", "openalex",
     ]),
     # Wave A2: bibliography needs citation enrichment to finish first
     ("wave A2 (bibliography)", [
