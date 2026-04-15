@@ -131,26 +131,26 @@ Live status to stderr every 10 calls or 5 seconds, whichever comes first.
 
 An explorer is a parameter triple (implemented as `LevyExplorer` in
 `distill/explorer.py`). Every old A1-A8 falls out as a special case. The
-`Explorer` protocol, `ExplorerState`, and `build_explorer_index` live in
-the same module.
+`Explorer` protocol and `ExplorerState` live in the same module.
+The sampler uses the `KnowledgeGraph` directly for navigation.
 
 | Variable | Domain | Granularity | Meaning |
 |---|---|---|---|
-| `local_op` | `none` / `similarity_walk` / `refine_uncertain` | chunk | What "step locally" means: walk `similar_strong`/`co_section` from the current concept's evidence chunks (`similarity_walk`), or pick chunks adjacent to high-entropy cached extractions (`refine_uncertain`). |
+| `local_op` | `none` / `similarity_walk` / `refine_uncertain` | chunk | What "step locally" means: walk similar chunks (via vector search) / `co_section` from the current concept's evidence chunks (`similarity_walk`), or pick chunks adjacent to high-entropy cached extractions (`refine_uncertain`). |
 | `global_op` | `uniform` / `pagerank` / `coverage_gap` / `figures` | doc-then-chunk *or* chunk | What "jump globally" means. |
 | `jump_rate` | `[0, 1]` | - | Per step, probability of a global jump instead of a local step. The Levy mixing parameter. |
 
 ### Granularity rules (chunk vs doc)
 
-The corpus graph has both chunk-level edges (`similar_strong`,
-`co_section`) and doc-level edges (`cites`, `doc_similar`). Each operator
-lives at exactly one level:
+The knowledge graph has chunk-level edges (`co_section`) and doc-level
+edges (`cites`, `doc_similar`). Chunk similarity is via vector search,
+not materialized edges. Each operator lives at exactly one level:
 
 | Operator | Level | Why |
 |---|---|---|
-| `similarity_walk` | chunk | walks `similar_strong` / `co_section` |
+| `similarity_walk` | chunk | walks similar chunks (vector search) / `co_section` |
 | `refine_uncertain` | chunk | uncertainty is per-chunk |
-| `uniform` (global) | **doc-then-chunk** | pick a doc, then read 3 chunks (abstract + top-2 by `similar_strong` degree). Pure chunk-uniform is dominated by long documents. |
+| `uniform` (global) | **doc-then-chunk** | pick a doc, then read 3 chunks (abstract + top-2 by vector similarity). Pure chunk-uniform is dominated by long documents. |
 | `pagerank` (global) | **doc-then-chunk** | PageRank lives on `cites` / `doc_similar`; once a doc is picked, the same per-doc rule applies. |
 | `coverage_gap` (global) | chunk | the M1 residual is per-chunk; doc-level averages destroy the gradient. |
 | `figures` (global) | chunk | targets high-residual caption chunks from the caption heap. |
@@ -168,7 +168,7 @@ selected per strategy as a sub-flag of `local_op` / `global_op`:
 
 - **`images = caption_only` (default).** The image's caption + alt text
   are embedded at ingest and indexed *as if they were chunks*. The
-  explorer treats them as ordinary candidates for `similar_strong` walks,
+  explorer treats them as ordinary candidates for similarity walks,
   `coverage_gap`, and `pagerank`. Picking an "image chunk" feeds the
   caption text to the extractor; the image binary itself is never
   loaded by a model. Cheap, deterministic, no vision tier needed.

@@ -209,6 +209,11 @@ def distill(
             " for post-hoc review. Adds a small token overhead per call."
         ),
     ),
+    evidence_mode: str = typer.Option(
+        "full",
+        "--evidence-mode",
+        help="full (chunk+quote) | doc (doc-level only) | off (no markers)",
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
     from .prompts import available_artifact_templates, available_field_guides
@@ -225,6 +230,9 @@ def distill(
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
         raise typer.BadParameter("--iteration merge only supports --phase all")
+    if evidence_mode not in ("full", "doc", "off"):
+        raise typer.BadParameter(f"unknown evidence-mode: {evidence_mode}; must be full|doc|off")
+
     if strategy not in STRATEGY_CONFIGS:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if field is None:
@@ -315,6 +323,7 @@ def distill(
         artifact_name=artifact,
         phase=phase,
         verbalize=verbalize,
+        evidence_mode=evidence_mode,
     )
     snap_path = bundle.run_path
     if snap_path.exists():
@@ -449,6 +458,192 @@ def campaign(
     typer.echo(f"campaign complete: {bundle.root}")
 
 
+def _run_baseline(
+    baseline: str,
+    preloaded: object,
+    bundle: BundlePaths,
+    meter: CostMeter,
+    corpus_dir: Path,
+    seed: int,
+) -> None:
+    """Execute a B1 or B2 baseline run."""
+    from .baselines.retrieve_summarise import B1Config, build_b1_pages, load_topics
+
+    topics = load_topics(corpus_dir)
+    if not topics:
+        typer.echo(f"  {baseline}: no topics.json found, skipping")
+        return
+
+    kg = preloaded.kg  # type: ignore[attr-defined]
+    pages = build_b1_pages(topics, kg, B1Config(model_id="M"))
+
+    if baseline == "B2":
+        from .baselines.post_hoc_cite import add_post_hoc_citations
+
+        pages = add_post_hoc_citations(pages, kg)
+
+    # Write pages to bundle
+    index = {p.id: p.model_dump() for p in pages}
+    index_path = bundle.root / "_index.json"
+    index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+
+@app.command()
+def study(
+    strategies: str = typer.Option("M", "--strategies", help="Comma-separated: E,M,X"),
+    modes: str = typer.Option("scripted", "--modes", help="Comma-separated: scripted,guided"),
+    evidence_modes: str = typer.Option(
+        "full", "--evidence-modes", help="Comma-separated: full,doc,off"
+    ),
+    baselines: str | None = typer.Option(
+        None, "--baselines", help="Comma-separated: B1,B2. Run separately from main pipeline."
+    ),
+    budgets: str = typer.Option("1x", "--budgets", help="Comma-separated: 0.5x,1x,2x"),
+    seeds: str = typer.Option("0", "--seeds", help="Comma-separated: 0,1,2"),
+    corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
+    out_dir: Path = typer.Option(Path("data/study"), "--out"),
+    cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
+    field: str | None = typer.Option(None, "--field"),
+    artifact: str = typer.Option("wiki_article", "--artifact"),
+    verbalize: bool = typer.Option(False, "--verbalize/--no-verbalize"),
+) -> None:
+    """Run a multi-factor study: strategies x modes x evidence_modes x budgets x seeds.
+
+    Two independent axes:
+      Exploration: --strategies (E/M/X) x --modes (scripted/guided)
+      Provenance: --evidence-modes (full/doc/off)
+
+    Baselines (B1/B2) are separate pipelines, not modes of the main pipeline.
+    """
+    strat_list = [s.strip() for s in strategies.split(",")]
+    mode_list = [m.strip() for m in modes.split(",")]
+    ev_list = [e.strip() for e in evidence_modes.split(",")]
+    budget_list = [b.strip() for b in budgets.split(",")]
+    seed_list = [int(s.strip()) for s in seeds.split(",")]
+    baseline_list = [b.strip() for b in baselines.split(",")] if baselines else []
+
+    for s in strat_list:
+        if s not in STRATEGY_CONFIGS:
+            raise typer.BadParameter(f"unknown strategy: {s}")
+    for m in mode_list:
+        if m not in ("scripted", "guided"):
+            raise typer.BadParameter(f"unknown mode: {m}")
+    for e in ev_list:
+        if e not in ("full", "doc", "off"):
+            raise typer.BadParameter(f"unknown evidence-mode: {e}")
+    for bl in baseline_list:
+        if bl not in ("B1", "B2"):
+            raise typer.BadParameter(f"unknown baseline: {bl}")
+
+    # Main pipeline runs: strategies x modes x evidence_modes x budgets x seeds
+    n_strat, n_mode, n_ev = len(strat_list), len(mode_list), len(ev_list)
+    n_bud, n_seed = len(budget_list), len(seed_list)
+    pipeline_runs = n_strat * n_mode * n_ev * n_bud * n_seed
+    baseline_runs = len(baseline_list) * len(budget_list) * len(seed_list)
+    total = pipeline_runs + baseline_runs
+
+    typer.echo(
+        f"study: {len(strat_list)} strategies x {len(mode_list)} modes "
+        f"x {len(ev_list)} evidence x {len(budget_list)} budgets "
+        f"x {len(seed_list)} seeds = {pipeline_runs} pipeline runs"
+        + (f" + {baseline_runs} baseline runs" if baseline_runs else "")
+        + f" = {total} total"
+    )
+
+    corpus = CorpusPaths(root=corpus_dir)
+    preloaded = preload_corpus(corpus)
+
+    if field is None:
+        from .distill.extract.field_detect import detect_field
+
+        field = detect_field(corpus)
+
+    cache = ExtractCache(root=cache_dir)
+    run_n = 0
+
+    # --- Main pipeline runs ---
+    for strat in strat_list:
+        for mode_name in mode_list:
+            for ev_mode in ev_list:
+                for bud in budget_list:
+                    for seed in seed_list:
+                        run_n += 1
+                        bundle_name = f"{strat}_{mode_name}_{ev_mode}_{bud}_seed{seed}"
+                        bundle = BundlePaths(root=out_dir / bundle_name)
+                        bundle.ensure()
+                        budget_haiku_eq = _parse_budget(bud)
+                        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                        run_id = f"study_{bundle_name}_{ts}"
+
+                        meter = CostMeter(
+                            budget_haiku_eq=budget_haiku_eq,
+                            run_id=run_id,
+                            events_path=bundle.calls_path,
+                        )
+
+                        from .dispatch import Dispatch
+
+                        dispatch = Dispatch(meter, cache)
+                        cfg = build_strategy(strat, seed=seed)
+
+                        run_with_preloaded(
+                            preloaded=preloaded,
+                            bundle=bundle,
+                            strategy=cfg,
+                            extractor=dispatch,
+                            writer=dispatch,
+                            meter=meter,
+                            budget_haiku_eq=budget_haiku_eq,
+                            iteration="create",
+                            editor=dispatch,
+                            compactor=dispatch,
+                            orchestrator=dispatch,
+                            mode_name=mode_name,
+                            field_name=field,
+                            artifact_name=artifact,
+                            verbalize=verbalize,
+                            evidence_mode=ev_mode,
+                        )
+
+                        typer.echo(
+                            f"[{run_n}/{total}] {strat}/{mode_name}/{ev_mode} "
+                            f"{bud} seed{seed}: done -> {bundle.root}"
+                        )
+
+    # --- Baseline runs ---
+    for bl in baseline_list:
+        for bud in budget_list:
+            for seed in seed_list:
+                run_n += 1
+                bundle_name = f"{bl}_{bud}_seed{seed}"
+                bundle = BundlePaths(root=out_dir / bundle_name)
+                bundle.ensure()
+                budget_haiku_eq = _parse_budget(bud)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                run_id = f"study_{bundle_name}_{ts}"
+
+                meter = CostMeter(
+                    budget_haiku_eq=budget_haiku_eq,
+                    run_id=run_id,
+                    events_path=bundle.calls_path,
+                )
+
+                _run_baseline(
+                    baseline=bl,
+                    preloaded=preloaded,
+                    bundle=bundle,
+                    meter=meter,
+                    corpus_dir=corpus_dir,
+                    seed=seed,
+                )
+
+                typer.echo(
+                    f"[{run_n}/{total}] {bl} {bud} seed{seed}: done -> {bundle.root}"
+                )
+
+    typer.echo(f"study complete: {total} runs in {out_dir}")
+
+
 @app.command("persona-generate")
 def persona_generate(
     corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
@@ -566,6 +761,63 @@ def query(
     typer.echo(f"answer written to {out_path}")
 
 
+@app.command("trace")
+def trace(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    format: str = typer.Option("stats", "--format", help="stats | json | timeline"),
+) -> None:
+    """Analyse KG exploration trace from a distill run."""
+    from .eval.trace_replay import exploration_timeline, load_trace, replay_stats
+
+    bundle = BundlePaths(root=bundle_dir)
+    trace_path = bundle.meta_dir / "kg_trace.jsonl"
+    if not trace_path.exists():
+        typer.echo(f"no trace file at {trace_path}")
+        raise typer.Exit(1)
+
+    entries = load_trace(trace_path)
+    if format == "json":
+        typer.echo(json.dumps([{
+            "timestamp": e.timestamp, "caller": e.caller,
+            "method": e.method, "args": e.args,
+            "input_count": e.input_count, "output_count": e.output_count,
+        } for e in entries], indent=2))
+    elif format == "timeline":
+        for step in exploration_timeline(entries):
+            typer.echo(
+                f"[{step['step']:4d}] {step['caller']:12s} "
+                f"{step['method']:20s} {step['in']:>5d} -> {step['out']:>5d}  "
+                f"{', '.join(step['sample'][:3])}"
+            )
+    else:
+        stats = replay_stats(entries)
+        typer.echo(f"total calls: {stats['total_calls']}")
+        for caller, n in sorted(stats["calls_by_caller"].items()):
+            methods = stats["methods_by_caller"].get(caller, [])
+            typer.echo(f"  {caller}: {n} calls ({', '.join(methods)})")
+        typer.echo(f"unique nodes visited: {stats['unique_nodes_visited']}")
+        typer.echo(f"unique queries: {stats['unique_queries']}")
+        if stats["queries"]:
+            typer.echo("top queries:")
+            for q in stats["queries"][:10]:
+                typer.echo(f"  - {q}")
+
+
+@app.command("sample-claims")
+def sample_claims_cmd(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    n: int = typer.Option(100, "--n", help="Number of claims to sample"),
+    out: Path | None = typer.Option(None, "--out", help="Output JSON path"),
+) -> None:
+    """Sample factual claims from a bundle for human evaluation."""
+    from .eval.claim_sampler import sample_claims, save_sample
+
+    claims = sample_claims(bundle_dir, n=n)
+    target = out or (bundle_dir / "_meta" / "claim_sample.json")
+    save_sample(claims, target)
+    typer.echo(f"sampled {len(claims)} claims -> {target}")
+
+
 @app.command("html")
 def html(
     bundle_dir: Path = typer.Option(..., "--bundle"),
@@ -621,10 +873,10 @@ def eval_bundle(
     # M1_image: image coverage and figure reference rate.
     import numpy as _np
 
-    from .ingest.explorer_index import load_explorer_index
-
-    sampler_idx = load_explorer_index(corpus.explorer_index_path)
-    caption_ids: list[str] = sampler_idx["caption_chunk_ids"] if sampler_idx else []
+    caption_ids: list[str] = [
+        c.id for c in chunks
+        if c.section_path and c.section_path[0] == "__image__"
+    ]
     _empty_cap = _np.empty((0, vs.matrix.shape[1]), dtype="float32")
     if caption_ids:
         caption_chunks = [chunks_by_id[cid] for cid in caption_ids if cid in chunks_by_id]

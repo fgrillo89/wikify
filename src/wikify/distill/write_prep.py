@@ -206,6 +206,7 @@ class WriteRequestConfig:
     artifact_template_hash: str | None = None
     person_artifact_hash: str | None = None
     corpus_persona_hash: str | None = None
+    evidence_mode: str = "full"  # "full" | "doc" | "off"
     verbalize: bool = False
 
 
@@ -359,13 +360,17 @@ def build_write_request(
                 "affiliations": ctx.affiliations,
             }
 
-    return WriteRequest(
-        page_id=page.id,
-        page_kind=page.kind,
-        title=page.title,
-        aliases=page.aliases,
-        skeleton=page.body_markdown,
-        evidence=[
+    # Evidence filtering based on ablation mode.
+    mode = cfg.evidence_mode
+    if mode == "off":
+        evidence_refs: list[WriteEvidenceRef] = []
+    elif mode == "doc":
+        evidence_refs = [
+            WriteEvidenceRef(chunk_id="", doc_id=ev.doc_id, quote="", locator="")
+            for ev in page.evidence
+        ]
+    else:
+        evidence_refs = [
             WriteEvidenceRef(
                 chunk_id=ev.chunk_id,
                 doc_id=ev.doc_id,
@@ -373,7 +378,15 @@ def build_write_request(
                 locator=ev.locator,
             )
             for ev in page.evidence
-        ],
+        ]
+
+    return WriteRequest(
+        page_id=page.id,
+        page_kind=page.kind,
+        title=page.title,
+        aliases=page.aliases,
+        skeleton=page.body_markdown,
+        evidence=evidence_refs,
         prompt_template=cfg.prompt_name,
         model_id=cfg.model_id,
         tier=cfg.writer_tier,
@@ -399,6 +412,7 @@ def build_write_request(
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
         verbalize=cfg.verbalize,
+        evidence_mode=cfg.evidence_mode,
     )
 
 

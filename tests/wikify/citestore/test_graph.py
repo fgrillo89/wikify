@@ -434,6 +434,122 @@ class TestScopedSearch:
 
 
 # ---------------------------------------------------------------------------
+# Nearby traversals (chunk -> figure/equation)
+# ---------------------------------------------------------------------------
+
+
+class TestNearbyTraversals:
+    def test_nearby_figures(self, kg: KnowledgeGraph):
+        """Chunks near figure should find it via nearby_figures."""
+        # paper_A_c1 is near fig_01 (near_chunk_ids includes it)
+        # Use chunks() then filter to just c1's neighbors
+        all_figs = kg.source("paper_A").chunks().nearby_figures()
+        assert all_figs.exists()
+        # The figure linked to paper_A_c1 should be in the results
+        fig_ids = set(all_figs.ids())
+        assert "paper_A/fig_01" in fig_ids
+
+    def test_nearby_equations(self, kg: KnowledgeGraph):
+        """Chunks containing equations should find them via nearby_equations."""
+        all_eqs = kg.source("paper_A").chunks().nearby_equations()
+        assert all_eqs.exists()
+        eq_ids = set(all_eqs.ids())
+        assert "paper_A_eq1" in eq_ids
+
+    def test_figures_scoped_search(self, kg_with_search: KnowledgeGraph):
+        """Searching from figures resolves to their nearby chunks."""
+        results = kg_with_search.source("paper_A").figures().search(
+            "methods fabrication", top_k=3,
+        )
+        # Figure paper_A/fig_01 is near chunk paper_A_c1 -> search should scope to that
+        assert len(results) > 0
+
+    def test_equations_scoped_search(self, kg_with_search: KnowledgeGraph):
+        """Searching from equations resolves to their chunks."""
+        results = kg_with_search.source("paper_A").equations().search(
+            "methods fabrication", top_k=3,
+        )
+        assert len(results) > 0
+
+    def test_nearby_figures_from_search(self, kg_with_search: KnowledgeGraph):
+        """Search for chunks, then find nearby figures."""
+        hits = kg_with_search.source("paper_A").chunks().search("methods ALD", top_k=3)
+        if hits:
+            chunk_ids = {h["id"] for h in hits}
+            qb = kg_with_search.chunks().where(id=hits[0]["id"]) if hits else kg_with_search.chunks()
+            # Just verify the chain doesn't crash
+            figs = qb.nearby_figures()
+            assert isinstance(figs.count(), int)
+
+
+# ---------------------------------------------------------------------------
+# Match filter (keyword search on node attributes)
+# ---------------------------------------------------------------------------
+
+
+class TestMatchFilter:
+    def test_match_figure_caption(self, kg: KnowledgeGraph):
+        """Find figures by caption keyword."""
+        figs = kg.sources().figures().match("caption", "IV curve")
+        assert figs.count() == 1
+        assert figs.first()["caption"] == "IV curve"
+
+    def test_match_equation_label(self, kg: KnowledgeGraph):
+        """Find equations by label."""
+        eqs = kg.sources().equations().match("label", "Eq. 1")
+        assert eqs.count() == 1
+
+    def test_match_case_insensitive(self, kg: KnowledgeGraph):
+        """Match is case-insensitive."""
+        figs = kg.sources().figures().match("caption", "iv curve")
+        assert figs.count() == 1
+
+    def test_match_no_results(self, kg: KnowledgeGraph):
+        """Match with no hits returns empty."""
+        figs = kg.sources().figures().match("caption", "nonexistent xyz")
+        assert figs.count() == 0
+
+    def test_match_source_title(self, kg: KnowledgeGraph):
+        """Match on source titles."""
+        sources = kg.sources().match("title", "Foundations")
+        assert sources.count() == 1
+        assert sources.first()["id"] == "paper_A"
+
+
+# ---------------------------------------------------------------------------
+# Similar_to (chunk-to-chunk cosine via existing vectors)
+# ---------------------------------------------------------------------------
+
+
+class TestSimilarTo:
+    def test_similar_to_returns_results(self, kg_with_search: KnowledgeGraph):
+        """similar_to finds chunks similar to a given chunk."""
+        results = kg_with_search.chunks().similar_to("paper_A_c0", top_k=3)
+        assert len(results) > 0
+        assert all("score" in r for r in results)
+        # Should not include the seed chunk itself
+        assert all(r["id"] != "paper_A_c0" for r in results)
+
+    def test_similar_to_scoped(self, kg_with_search: KnowledgeGraph):
+        """similar_to scoped to one source returns only that source's chunks."""
+        results = kg_with_search.source("paper_A").chunks().similar_to(
+            "paper_A_c0", top_k=3,
+        )
+        for r in results:
+            assert r["source_id"] == "paper_A"
+
+    def test_similar_to_no_vectors(self, fixture_data):
+        """similar_to returns empty when no vectors attached."""
+        docs, chunks, _ = fixture_data
+        kg_no_vec = build_knowledge_graph(docs, chunks, vectors=None)
+        assert kg_no_vec.chunks().similar_to("paper_A_c0") == []
+
+    def test_similar_to_missing_chunk(self, kg_with_search: KnowledgeGraph):
+        """similar_to with nonexistent chunk returns empty."""
+        assert kg_with_search.chunks().similar_to("nonexistent") == []
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
@@ -467,6 +583,59 @@ class TestPersistence:
         loaded = load_knowledge_graph(path, vectors=vectors, embed_fn=_hash_embed)
         results = loaded.search("memristor", top_k=2)
         assert len(results) > 0
+
+
+# ---------------------------------------------------------------------------
+# build_knowledge_graph unit tests
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Tracing
+# ---------------------------------------------------------------------------
+
+
+class TestTracing:
+    def test_trace_disabled_by_default(self, kg_with_search: KnowledgeGraph):
+        """No trace entries when tracing is disabled."""
+        kg_with_search.search("test", top_k=2)
+        assert len(kg_with_search._trace.entries) == 0
+
+    def test_trace_logs_search(self, kg_with_search: KnowledgeGraph):
+        """Trace logs search calls when enabled."""
+        kg_with_search.enable_trace(caller="test")
+        kg_with_search.search("memristor", top_k=2)
+        assert len(kg_with_search._trace.entries) == 1
+        entry = kg_with_search._trace.entries[0]
+        assert entry.method == "search"
+        assert entry.caller == "test"
+        assert entry.output_count > 0
+        kg_with_search.disable_trace()
+
+    def test_trace_logs_collect(self, kg_with_search: KnowledgeGraph):
+        """Trace logs collect calls."""
+        kg_with_search.enable_trace(caller="sampler")
+        kg_with_search.sources().collect()
+        assert any(e.method == "collect" for e in kg_with_search._trace.entries)
+        kg_with_search.disable_trace()
+
+    def test_trace_save_load(self, kg_with_search: KnowledgeGraph, tmp_path: Path):
+        """Trace saves to JSONL and can be loaded."""
+        kg_with_search.enable_trace(caller="test")
+        kg_with_search.search("topic", top_k=3)
+        kg_with_search.sources().collect()
+        path = tmp_path / "trace.jsonl"
+        kg_with_search.save_trace(path)
+        assert path.exists()
+
+        from wikify.eval.trace_replay import load_trace, replay_stats
+
+        entries = load_trace(path)
+        assert len(entries) == 2
+        stats = replay_stats(entries)
+        assert stats["total_calls"] == 2
+        assert stats["calls_by_caller"]["test"] == 2
+        kg_with_search.disable_trace()
 
 
 # ---------------------------------------------------------------------------

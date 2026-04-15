@@ -72,7 +72,18 @@ qb.sections(type="conclusions")  # filtered by section_type
 qb.chunks()                   # chunks of these sources or sections
 qb.figures()                  # figures of these sources
 qb.equations()                # equations of these sources
+qb.nearby_figures()           # figures linked to these chunks (FIGURE_NEAR_CHUNK)
+qb.nearby_equations()         # equations in these chunks (EQUATION_IN_CHUNK)
 ```
+
+### Chunk-to-chunk similarity
+
+```python
+qb.similar_to(chunk_id, top_k=10)  # chunks similar by vector cosine (uses existing embedding)
+```
+
+Uses the chunk's existing vector -- no re-embedding, no text needed.
+Scoped to the current set. Excludes the seed chunk itself.
 
 ### Filters
 
@@ -81,6 +92,7 @@ qb.where(kind="corpus")       # filter by any node attribute
 qb.of_type("source")          # filter to specific node type
 qb.since(2020)                # year >= N
 qb.top(10, by="pagerank")     # top N by metric (pagerank, year, citation_count, h_index)
+qb.match("caption", "IV curve")  # case-insensitive substring match on a field
 ```
 
 ## Terminal methods (execute and return)
@@ -158,10 +170,46 @@ kg.author("smith j").sources().cited_by().count()
 kg.source("X").cited_by().figures().collect()
 ```
 
-### UC8: Equations related to a topic
+### UC8: Equations related to a topic (via chunk proximity)
 
 ```python
-kg.sources().equations().search("memristor switching model", top_k=5)
+kg.search("memristor switching model", top_k=5).nearby_equations()
+```
+
+### UC9: Figures by caption keyword
+
+```python
+# Global: find all figures with "IV" in caption
+kg.sources().figures().match("caption", "IV curve")
+
+# Local: figures in one source matching keyword
+kg.source(doc_id).figures().match("caption", "schematic")
+```
+
+### UC10: Figures near chunks about a topic
+
+```python
+# Find figures discussed near chunks about a topic
+kg.source(doc_id).chunks().search("IV curve", top_k=3).nearby_figures()
+
+# Global: figures near topic-relevant chunks
+kg.search("resistive switching", top_k=10).nearby_figures()
+```
+
+### UC11: Equations by label
+
+```python
+kg.source(doc_id).equations().match("label", "Eq. 1")
+```
+
+### UC12: Similar chunks (local and global)
+
+```python
+# Local: chunks similar to seed within same source
+kg.source(doc_id).chunks().similar_to(chunk_id, top_k=5)
+
+# Global: chunks similar to seed across entire corpus
+kg.chunks().similar_to(chunk_id, top_k=10)
 ```
 
 ## Librarian decision patterns
@@ -338,4 +386,36 @@ Chunk text and embeddings live in the VectorStore, not the graph.
     "label": "Eq. 1",
     "kind": "inline",
 }
+```
+
+## Tracing
+
+Enable exploration logging to diagnose sampling decisions and compare
+strategy behavior.
+
+```python
+# Enable tracing
+kg.enable_trace(caller="sampler")
+
+# All terminal operations (collect, search, similar_to) are logged
+kg.source("X").cited_by().chunks().search("topic", top_k=5)
+kg.sources().top(5, by="pagerank").collect()
+
+# Save trace to JSONL and clear buffer
+kg.save_trace(bundle.meta_dir / "kg_trace.jsonl")
+
+# Disable
+kg.disable_trace()
+```
+
+Each trace entry records: timestamp, caller, method, args, input/output
+counts, and a 5-ID sample. JSONL format, append-only.
+
+Replay via CLI: `wikify trace --bundle ... --format stats|json|timeline`
+
+Or programmatically:
+```python
+from wikify.eval.trace_replay import load_trace, replay_stats
+entries = load_trace(path)
+stats = replay_stats(entries)  # per-caller breakdown, queries, visited nodes
 ```

@@ -1,5 +1,10 @@
 # Ingest Pipeline Refactoring -- Design Brief
 
+> **Status (2026-04-15): Complete.** Phases A-C are done. `CorpusGraph`,
+> `explorer_index.py`, and `corpus_profile.py` were deleted and replaced
+> by `KnowledgeGraph` (`citestore/graph.py`). References to those modules
+> below are historical -- they no longer exist in the codebase.
+
 ## Status (2026-04-12)
 
 ### Phase A: Consolidation -- Done

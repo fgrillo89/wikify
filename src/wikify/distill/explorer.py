@@ -9,6 +9,11 @@ dispatch is via small dispatch tables, not if/elif chains.
 The module also owns the full action vocabulary (walk_local, jump_*,
 pick_chunks, set_allocation, set_tier, done) via ``execute_action``.
 Run modes (scripted/guided) decide WHICH action; this function executes HOW.
+
+All corpus data access goes through the KnowledgeGraph fluent API. No
+direct CorpusGraph, VectorStore, or flat-dict access. Similarity walks
+use the KG's scoped similar_to() method (vector cosine via existing
+embeddings).
 """
 
 from __future__ import annotations
@@ -21,11 +26,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..config import CHUNKS_PER_LANDED_DOC
-from ..models import CorpusGraph
-from ..store.vectors import VectorStore
 from ..types import ModelTier
 
 if TYPE_CHECKING:
+    from ..citestore.graph import KnowledgeGraph
     from .strategy import RuntimeOverrides
 
 
@@ -45,22 +49,21 @@ class GlobalOp(str, Enum):
 @dataclass
 class ExplorerState:
     rng: random.Random
-    graph: CorpusGraph
-    vectors: VectorStore
-    chunks_by_doc: dict[str, list[str]]
-    abstract_chunk_by_doc: dict[str, str]
-    pagerank_doc: dict[str, float]
-    neighbors_by_chunk: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    chunk_degree: dict[str, int] = field(default_factory=dict)
+    kg: KnowledgeGraph
+    # Cached lookups (built once from KG at init, not updated)
+    chunks_by_doc: dict[str, list[str]] = field(default_factory=dict)
+    abstract_chunk_by_doc: dict[str, str] = field(default_factory=dict)
+    pagerank_doc: dict[str, float] = field(default_factory=dict)
     chunk_to_doc: dict[str, str] = field(default_factory=dict)
-    wiki_chunk_ids: set[str] = field(default_factory=set)  # chunks already in any page
+    caption_chunk_ids: set[str] = field(default_factory=set)
+    # Mutable runtime state
+    wiki_chunk_ids: set[str] = field(default_factory=set)
     pages_concept_evidence_chunks: list[str] = field(default_factory=list)
     seen_chunks: set[str] = field(default_factory=set)
-    caption_chunk_ids: set[str] = field(default_factory=set)
     coverage_residuals: dict[str, float] = field(default_factory=dict)
     coverage_versions: dict[str, int] = field(default_factory=dict)
-    coverage_heap: list[tuple[float, int, str]] = field(default_factory=list)  # (-residual, v, cid)
-    caption_heap: list[tuple[float, int, str]] = field(default_factory=list)  # (-residual, v, cid)
+    coverage_heap: list[tuple[float, int, str]] = field(default_factory=list)
+    caption_heap: list[tuple[float, int, str]] = field(default_factory=list)
     caption_versions: dict[str, int] = field(default_factory=dict)
     doc_seen_counts: dict[str, int] = field(default_factory=dict)
 
@@ -97,8 +100,6 @@ class LevyExplorer:
             do_global = state.wiki_is_empty or state.rng.random() < self.jump_rate
             picks = self._global(state) if do_global else [self._local(state)]
             if not picks or all(c is None for c in picks):
-                # local couldn't produce -- fall back to a global jump so we
-                # don't infinite-loop on a wiki with no walk seeds yet.
                 picks = self._global(state)
             for c in picks:
                 if c is None:
@@ -141,14 +142,9 @@ def init_coverage_state(
 ) -> None:
     """Initialise the coverage residual map and heap.
 
-    ``coverage_gap`` ranks chunks by residual descending; higher means less
-    covered by the current wiki evidence set. The residual model is
-    graph-local and cheap: unseen chunks start at ``default_residual`` and
-    are progressively discounted as nearby chunks are read/anchored.
-
-    Caption chunks (those in ``state.caption_chunk_ids``) are seeded at
-    ``_CAPTION_DEFAULT_RESIDUAL`` (0.8) so text chunks surface first; they
-    also get their own dedicated ``caption_heap`` for ``jump_figures``.
+    Caption chunks are seeded at ``_CAPTION_DEFAULT_RESIDUAL`` (0.8) so
+    text chunks surface first; they also get their own ``caption_heap``
+    for ``jump_figures``.
     """
     residuals: dict[str, float] = {}
     for cid in chunk_ids:
@@ -156,11 +152,18 @@ def init_coverage_state(
             residuals[cid] = _CAPTION_DEFAULT_RESIDUAL
         else:
             residuals[cid] = float(default_residual)
+
+    # Boost residuals for chunks in highly-cited (foundation) papers.
+    for source in state.kg.sources(kind="corpus").collect():
+        if source.get("citation_count", 0) > 3:
+            for cid in state.chunks_by_doc.get(source["id"], []):
+                if cid in residuals:
+                    residuals[cid] = min(residuals[cid] * 1.2, 1.0)
+
     state.coverage_residuals = residuals
     state.coverage_versions = {cid: 0 for cid in chunk_ids}
     state.coverage_heap = [(-r, 0, cid) for cid, r in residuals.items()]
     heapq.heapify(state.coverage_heap)
-    # Dedicated caption heap for jump_figures.
     caption_ids = [cid for cid in chunk_ids if cid in state.caption_chunk_ids]
     state.caption_versions = {cid: 0 for cid in caption_ids}
     state.caption_heap = [(-_CAPTION_DEFAULT_RESIDUAL, 0, cid) for cid in caption_ids]
@@ -181,11 +184,9 @@ def restore_coverage_state(
         state.seen_chunks = set(seen_chunks)
     if doc_seen_counts:
         state.doc_seen_counts = {k: int(v) for k, v in doc_seen_counts.items()}
-    # Rebuild heap and versions from the restored residual map.
     state.coverage_versions = {cid: 0 for cid in state.coverage_residuals}
     state.coverage_heap = [(-float(r), 0, cid) for cid, r in state.coverage_residuals.items()]
     heapq.heapify(state.coverage_heap)
-    # Rebuild caption heap from restored residuals.
     caption_items = [
         (cid, r) for cid, r in state.coverage_residuals.items() if cid in state.caption_chunk_ids
     ]
@@ -197,22 +198,23 @@ def restore_coverage_state(
 def apply_coverage_feedback(state: ExplorerState, chunk_id: str, *, as_evidence: bool) -> None:
     """Update residuals after reading or anchoring a chunk.
 
-    - seen chunk residual -> 0.0
-    - neighbour residuals discounted (stronger discount when chunk became evidence)
-    - same-document chunk residuals discounted progressively with repeated reads
+    Uses KG scoped similar_to for neighbor discount instead of pre-computed
+    neighbor edges. Discounts same-document chunks progressively.
     """
     state.seen_chunks.add(chunk_id)
     _set_residual(state, chunk_id, 0.0)
 
+    # Neighbor discount via vector similarity (top-5 similar chunks).
     text_near_floor = 0.2 if as_evidence else 0.35
-    for nb in state.neighbors_by_chunk.get(chunk_id, ()):
+    doc_id = state.chunk_to_doc.get(chunk_id)
+    similar = state.kg.chunks().similar_to(chunk_id, top_k=5)
+    for hit in similar:
+        nb = hit["id"]
         cur = state.coverage_residuals.get(nb, 1.0)
-        # Caption neighbors are discounted less aggressively than text-to-text.
         floor = _CAPTION_NEAR_FLOOR if nb in state.caption_chunk_ids else text_near_floor
         if cur > floor:
             _set_residual(state, nb, floor)
 
-    doc_id = state.chunk_to_doc.get(chunk_id)
     if not doc_id:
         return
     count = state.doc_seen_counts.get(doc_id, 0) + 1
@@ -250,15 +252,30 @@ def _local_none(state: ExplorerState) -> str | None:
 
 
 def _local_similarity_walk(state: ExplorerState) -> str | None:
+    """Walk to a chunk similar to an existing evidence chunk.
+
+    Uses KG scoped similar_to (vector cosine on existing embeddings).
+    First tries local (same source), then global.
+    """
     if not state.pages_concept_evidence_chunks:
         return None
     seed = state.rng.choice(state.pages_concept_evidence_chunks)
-    neighbours = [b for b in state.neighbors_by_chunk.get(seed, ()) if b not in state.seen_chunks]
-    return state.rng.choice(neighbours) if neighbours else None
+    doc_id = state.chunk_to_doc.get(seed)
+
+    # Local: similar within same source
+    if doc_id:
+        hits = state.kg.source(doc_id).chunks().similar_to(seed, top_k=8)
+        unseen = [h["id"] for h in hits if h["id"] not in state.seen_chunks]
+        if unseen:
+            return state.rng.choice(unseen)
+
+    # Global fallback
+    hits = state.kg.chunks().similar_to(seed, top_k=8)
+    unseen = [h["id"] for h in hits if h["id"] not in state.seen_chunks]
+    return state.rng.choice(unseen) if unseen else None
 
 
 def _local_refine_uncertain(state: ExplorerState) -> str | None:
-    # Approximation: pick from highest residuals
     if not state.coverage_residuals:
         return None
     items = sorted(state.coverage_residuals.items(), key=lambda kv: -kv[1])
@@ -279,7 +296,7 @@ _LOCAL_DISPATCH: dict[LocalOp, Callable[[ExplorerState], str | None]] = {
 
 
 def _doc_chunks_or_empty(state: ExplorerState, doc_id: str, k: int) -> list[str]:
-    """Return up to k chunks for the doc: abstract first, then highest-degree."""
+    """Return up to k chunks for the doc: abstract first, then by ord."""
     chunks = list(state.chunks_by_doc.get(doc_id, []))
     if not chunks:
         return []
@@ -288,7 +305,6 @@ def _doc_chunks_or_empty(state: ExplorerState, doc_id: str, k: int) -> list[str]
     if abs_id and abs_id in chunks:
         out.append(abs_id)
         chunks = [c for c in chunks if c != abs_id]
-    chunks.sort(key=lambda c: -state.chunk_degree.get(c, 0))
     out.extend(chunks[: max(0, k - len(out))])
     return out
 
@@ -318,8 +334,6 @@ def _global_coverage_gap(state: ExplorerState, _k_per_doc: int) -> list[str]:
             continue
         if cid in state.seen_chunks:
             continue
-        # Keep the selected candidate in the heap with the same score so
-        # repeated calls remain stable if the caller skips it.
         heapq.heappush(state.coverage_heap, (neg, v, cid))
         return [cid]
     return []
@@ -376,18 +390,13 @@ def execute_action(
     explorer: Explorer,
     runtime: RuntimeOverrides | None = None,
 ) -> ExtractDecision:
-    """Execute a named exploration action against the explorer state.
-
-    The explorer owns the full action vocabulary. Modes (scripted/guided)
-    decide WHICH action; this function executes HOW.
-    """
+    """Execute a named exploration action against the explorer state."""
     match name:
         case "done":
             return ExtractDecision(action=name, batch=(), stop=True)
         case "pick_chunks":
             raw_ids = args.get("chunk_ids") or []
             reason = str(args.get("reason", ""))
-            # Deduplicate against already-seen chunks.
             novel = [cid for cid in raw_ids if cid not in state.seen_chunks]
             return ExtractDecision(
                 action=name,
@@ -421,24 +430,18 @@ def execute_action(
             picks = explorer.next_batch(state, min(n, k))
             return ExtractDecision(action=name, batch=tuple(picks), stop=not bool(picks))
         case "set_allocation":
-            # Mutate the runtime and return a no-op decision so the
-            # extract loop consumes no chunks for this action. The
-            # pipeline picks up the new exploit_fraction on the next
-            # iteration via ``runtime.allocation_epoch``.
             frac = _float_arg(args, "exploit_fraction", -1.0)
             if runtime is not None and 0.0 <= frac <= 1.0:
                 runtime.exploit_fraction = frac
                 runtime.allocation_epoch += 1
             return ExtractDecision(action=name, batch=(), meta={"exploit_fraction": frac})
         case "set_tier":
-            # Mutate the per-role tier. Orchestrate tier is locked.
             role = str(args.get("role", "")).strip()
             tier = str(args.get("tier", "")).strip().upper()
             if runtime is not None and role in _MUTABLE_ROLES and tier in _VALID_TIERS:
                 setattr(runtime, f"{role}_tier", ModelTier(tier))
             return ExtractDecision(action=name, batch=(), meta={"role": role, "tier": tier})
         case _:
-            # Unknown action -> deterministic fallback.
             batch = explorer.next_batch(state, k)
             return ExtractDecision(
                 action="fallback_sample_batch",
@@ -451,17 +454,7 @@ def execute_action(
 
 
 def build_snapshot(state: ExplorerState) -> dict:
-    """Build the compact explorer snapshot for the orchestrator.
-
-    Caps:
-    - top_gap_chunks: top-20 by coverage residual
-    - page_index: top-50 pages by evidence count (derived from seen_chunks count per page)
-    - doc_coverage: all docs with any seen chunks
-    - content_stats: aggregate counts
-
-    Total payload is ~2-4 kB of JSON.
-    """
-    # top_gap_chunks: top-20 unseen chunks by coverage residual descending.
+    """Build the compact explorer snapshot for the orchestrator."""
     residuals = getattr(state, "coverage_residuals", {})
     seen = getattr(state, "seen_chunks", set())
     doc_seen_counts = getattr(state, "doc_seen_counts", {})
@@ -487,14 +480,12 @@ def build_snapshot(state: ExplorerState) -> dict:
         for cid, r in top_by_residual
     ]
 
-    # doc_coverage: {doc_id: n_chunks_seen} for docs with at least one seen chunk.
     doc_coverage = {
         doc_id: count
         for doc_id, count in doc_seen_counts.items()
         if count > 0
     }
 
-    # content_stats: aggregate counts from ExplorerState.
     n_seen = len(seen)
     content_stats = {
         "n_chunks": len(chunk_to_doc),
@@ -517,48 +508,36 @@ def semantic_query_chunks(
     k: int,
     scope: str = "all",
 ) -> list[dict]:
-    """Return top-k chunks by cosine similarity against query_vec.
+    """Return top-k chunks by cosine similarity via the KG.
 
     Args:
-        state: current ExplorerState (provides vector store + seen_chunks +
-               chunk_to_doc).
+        state: current ExplorerState.
         query_vec: unit-norm float32 query embedding.
         k: number of results to return.
-        scope: "all" (no filter), "unseen" (skip seen_chunks), or
-               "page:<id>" (skip chunks NOT belonging to the given doc_id).
-               "page:<id>" is intended for deepening a specific page's
-               evidence; it filters to chunks whose doc_id appears in the
-               page's existing evidence (not implemented here -- the caller
-               must pass a query_vec derived from that page).
-
-    Returns:
-        List of dicts with keys: chunk_id, doc_id, score, is_seen.
-        Sorted descending by score. Length <= k.
+        scope: "all", "unseen", or "page:<id>".
     """
-    import numpy as np  # noqa: PLC0415 -- local to avoid hard dep in module header
-
-    vs = state.vectors
-    if vs is None or not vs.ids:
+    vectors = state.kg._vectors
+    if vectors is None or not vectors.ids:
         return []
 
-    sims: np.ndarray = vs.cosine_to_all(query_vec)
+    sims = vectors.cosine_to_all(query_vec)
 
     candidates: list[tuple[float, str]]
     if scope == "unseen":
         candidates = [
             (float(sims[i]), cid)
-            for i, cid in enumerate(vs.ids)
+            for i, cid in enumerate(vectors.ids)
             if cid not in state.seen_chunks
         ]
     elif scope.startswith("page:"):
         page_id = scope[len("page:"):]
         candidates = [
             (float(sims[i]), cid)
-            for i, cid in enumerate(vs.ids)
+            for i, cid in enumerate(vectors.ids)
             if state.chunk_to_doc.get(cid) == page_id
         ]
     else:
-        candidates = [(float(sims[i]), cid) for i, cid in enumerate(vs.ids)]
+        candidates = [(float(sims[i]), cid) for i, cid in enumerate(vectors.ids)]
 
     candidates.sort(key=lambda x: -x[0])
     top = candidates[:k]

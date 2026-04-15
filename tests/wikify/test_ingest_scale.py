@@ -12,7 +12,7 @@ import pytest
 
 from wikify.ingest.manifest import CorpusManifest
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.store.corpus import all_chunks, list_documents, read_graph, read_vector_store
+from wikify.store.corpus import all_chunks, list_documents, read_knowledge_graph, read_vector_store
 
 _FILLER = " ".join(["word"] * 20)
 
@@ -53,10 +53,10 @@ def test_50_paper_correctness(scale_dirs):
     assert len(vs.ids) == len(chunks)
     assert set(vs.ids) == {c.id for c in chunks}
 
-    graph = read_graph(paths)
+    kg = read_knowledge_graph(paths, vectors=vs)
     doc_ids = {d.id for d in docs}
-    graph_doc_nodes = {n for n, v in graph.nodes.items() if v.get("kind") == "doc"}
-    assert graph_doc_nodes == doc_ids
+    kg_sources = {s["id"] for s in kg.sources(kind="corpus").collect()}
+    assert kg_sources == doc_ids
 
     manifest = CorpusManifest.load(paths.manifest_path)
     active = [s for s in manifest.sources.values() if s.status == "active"]
@@ -93,10 +93,10 @@ def test_incremental_scale(scale_dirs):
     vs = read_vector_store(paths)
     assert set(vs.ids) == {c.id for c in chunks}
 
-    graph = read_graph(paths)
+    kg = read_knowledge_graph(paths, vectors=vs)
     doc_ids = {d.id for d in docs}
-    graph_doc_nodes = {n for n, v in graph.nodes.items() if v.get("kind") == "doc"}
-    assert graph_doc_nodes == doc_ids
+    kg_sources = {s["id"] for s in kg.sources(kind="corpus").collect()}
+    assert kg_sources == doc_ids
 
     manifest = CorpusManifest.load(paths.manifest_path)
     assert len(manifest.active_doc_ids()) == 57

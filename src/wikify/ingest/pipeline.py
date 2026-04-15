@@ -21,14 +21,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-import networkx as nx
-
+from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
 from ..embedding import embed_texts
 from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
 from ..store.corpus import (
     write_document,
-    write_graph,
     write_vector_store,
 )
 from ..store.doc_markdown import write_doc_markdown
@@ -40,11 +38,8 @@ from .bibtex import write_corpus_bibliography
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
-from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
-from .corpus_graph import build_corpus_graph
 from .coupling import compute_coupling
 from .equations import extract_equations
-from .explorer_index import build_explorer_index, save_explorer_index
 from .figure_refs import extract_figure_refs
 from .images import (
     caption_chunks_for,
@@ -297,7 +292,7 @@ def _derived_artifacts_missing(paths: CorpusPaths) -> bool:
     # Check the three cheapest-to-verify derived artifacts.
     return (
         not paths.vectors_path.exists()
-        or not (paths.root / "graph.json").exists()
+        or not paths.knowledge_graph_path.exists()
         or not (paths.root / "topics.json").exists()
     )
 
@@ -688,28 +683,6 @@ def _resolve_citations(docs: list[Document]) -> None:
 # Stage: pagerank
 # ---------------------------------------------------------------------------
 
-def write_pagerank(paths: CorpusPaths, docs: list[Document], graph) -> None:
-    """Compute PageRank on the doc graph and persist to pagerank.json."""
-    doc_ids = [d.id for d in docs]
-    g = nx.Graph()
-    g.add_nodes_from(doc_ids)
-    if graph is not None:
-        node_set = set(doc_ids)
-        for etype in ("cites", "doc_similar", "cites_same"):
-            for src, dst in graph.edges.get(etype, []):
-                if src not in node_set or dst not in node_set or src == dst:
-                    continue
-                if g.has_edge(src, dst):
-                    g[src][dst]["weight"] += 1.0
-                else:
-                    g.add_edge(src, dst, weight=1.0)
-    if g.number_of_nodes() == 0:
-        pagerank: dict[str, float] = {}
-    else:
-        pagerank = dict(nx.pagerank(g, weight="weight"))
-    from ..store.corpus import atomic_write_text
-
-    atomic_write_text(paths.pagerank_path, json.dumps(pagerank))
 
 
 # ---------------------------------------------------------------------------
@@ -1169,12 +1142,6 @@ def _refresh_bibliography(ctx: dict) -> None:
     )
 
 
-def _refresh_corpus_graph(ctx: dict) -> None:
-    graph = build_corpus_graph(ctx["docs"], ctx["chunks"], ctx["store"])
-    write_graph(ctx["paths"], graph)
-    ctx["graph"] = graph  # safe: wave B runs alone, wave C starts after barrier
-
-
 def _refresh_knowledge_graph(ctx: dict) -> None:
     from ..store.bibliography import load_citation_index
 
@@ -1184,17 +1151,6 @@ def _refresh_knowledge_graph(ctx: dict) -> None:
     )
     save_knowledge_graph(ctx["paths"].knowledge_graph_path, kg)
     ctx["knowledge_graph"] = kg
-
-
-def _refresh_explorer_index(ctx: dict) -> None:
-    idx = build_explorer_index(
-        ctx["docs"], ctx["chunks"], ctx["graph"], ctx["store"],
-    )
-    save_explorer_index(ctx["paths"].explorer_index_path, idx)
-
-
-def _refresh_pagerank(ctx: dict) -> None:
-    write_pagerank(ctx["paths"], ctx["docs"], ctx["graph"])
 
 
 def _refresh_doc_resave(ctx: dict) -> None:
@@ -1209,10 +1165,7 @@ _REFRESH_STEPS: dict[str, callable] = {
     "openalex":         _refresh_openalex,
     "citation_edges":   _refresh_citation_edges,
     "bibliography":     _refresh_bibliography,
-    "corpus_graph":       _refresh_corpus_graph,
     "knowledge_graph":    _refresh_knowledge_graph,
-    "explorer_index":     _refresh_explorer_index,
-    "pagerank":       _refresh_pagerank,
     "doc_resave":     _refresh_doc_resave,
 }
 
@@ -1233,17 +1186,13 @@ REFRESH_DAG: list[tuple[str, list[str]]] = [
     ("wave D (edges+bibliography)", [
         "citation_edges", "bibliography",
     ]),
-    # Wave E: corpus graph (depends on edges)
-    ("wave E (corpus graph)", [
-        "corpus_graph",
-    ]),
-    # Wave F: knowledge graph (depends on corpus graph + citation index)
-    ("wave F (knowledge graph)", [
+    # Wave E: knowledge graph (depends on citation edges)
+    ("wave E (knowledge graph)", [
         "knowledge_graph",
     ]),
-    # Wave G: derived artifacts (depend on graph)
-    ("wave G (explorer+pagerank+resave)", [
-        "explorer_index", "pagerank", "doc_resave",
+    # Wave F: derived artifacts (depend on KG)
+    ("wave F (resave)", [
+        "doc_resave",
     ]),
 ]
 

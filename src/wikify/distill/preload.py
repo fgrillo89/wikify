@@ -1,8 +1,9 @@
 """Pre-load all heavy corpus state once so multiple iterations can reuse it.
 
-The corpus files (chunks, vectors, graph) are immutable between ingest runs.
-``preload_corpus`` reads them all once and returns a ``PreloadedCorpus``
-that the pipeline can accept directly via ``run_with_preloaded``.
+The corpus files (chunks, vectors, knowledge graph) are immutable between
+ingest runs. ``preload_corpus`` reads them all once and returns a
+``PreloadedCorpus`` that the pipeline can accept directly via
+``run_with_preloaded``.
 """
 
 from dataclasses import dataclass
@@ -13,7 +14,6 @@ from ..store.bibliography import load_citation_index
 from ..store.corpus import (
     all_chunks,
     list_documents,
-    read_graph,
     read_knowledge_graph,
     read_vector_store,
 )
@@ -30,8 +30,7 @@ class PreloadedCorpus:
     chunks: list[Chunk]
     chunks_by_id: dict[str, Chunk]
     images_index: ImageIndex
-    vectors: object  # VectorStore — typed as object to avoid circular import
-    graph: object  # CorpusGraph
+    vectors: object  # VectorStore
     knowledge_graph: object  # KnowledgeGraph
     persona_text: str  # contents of corpus/persona.txt, or "" if absent
     citation_index: dict
@@ -45,7 +44,6 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
     images_index = ImageIndex.load(corpus)
     vectors = read_vector_store(corpus)
-    graph = read_graph(corpus)
     knowledge_graph = read_knowledge_graph(corpus, vectors=vectors)
     citation_index = load_citation_index(corpus)
     persona_text = ""
@@ -59,7 +57,6 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
         chunks_by_id=chunks_by_id,
         images_index=images_index,
         vectors=vectors,
-        graph=graph,
         knowledge_graph=knowledge_graph,
         persona_text=persona_text,
         citation_index=citation_index,

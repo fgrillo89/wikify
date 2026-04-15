@@ -14,8 +14,26 @@ from wikify.distill.explorer import (
     init_coverage_state,
 )
 from wikify.distill.write_prep import crosslink
-from wikify.models import CorpusGraph, Evidence, WikiPage
+from wikify.models import Evidence, WikiPage
 from wikify.store.vectors import VectorStore
+
+
+def _empty_kg(vectors=None):
+    import networkx as nx
+    from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
+    backend = NetworkXBackend(G=nx.MultiDiGraph())
+    return KnowledgeGraph(backend=backend, vectors=vectors)
+
+
+def _kg_with_chunks(chunk_ids, vectors=None):
+    """KG with actual chunk nodes so chunks().similar_to() works."""
+    import networkx as nx
+    from wikify.citestore.graph import CHUNK, KnowledgeGraph, NetworkXBackend
+    G = nx.MultiDiGraph()
+    for cid in chunk_ids:
+        G.add_node(cid, type=CHUNK)
+    backend = NetworkXBackend(G=G)
+    return KnowledgeGraph(backend=backend, vectors=vectors)
 
 
 def _sampler_state(n_docs: int, chunks_per_doc: int) -> ExplorerState:
@@ -30,30 +48,17 @@ def _sampler_state(n_docs: int, chunks_per_doc: int) -> ExplorerState:
         chunk_ids.extend(cids)
         for cid in cids:
             chunk_to_doc[cid] = did
-    edges: list[tuple[str, str]] = []
-    for did, cids in chunks_by_doc.items():
-        for i in range(len(cids) - 1):
-            edges.append((cids[i], cids[i + 1]))
-    # sparse cross-doc links
-    for i in range(0, len(chunk_ids) - 10, 10):
-        edges.append((chunk_ids[i], chunk_ids[i + 10]))
-    neighbors: dict[str, set[str]] = {cid: set() for cid in chunk_ids}
-    for a, b in edges:
-        neighbors[a].add(b)
-        neighbors[b].add(a)
     rnd = np.random.default_rng(0)
     matrix = rnd.standard_normal((len(chunk_ids), 16), dtype=np.float32)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     matrix = matrix / np.where(norms > 0, norms, 1.0)
+    vectors = VectorStore(ids=chunk_ids, matrix=matrix)
     state = ExplorerState(
         rng=rng,
-        graph=CorpusGraph(nodes={}, edges={"similar_strong": edges, "co_section": []}),
-        vectors=VectorStore(ids=chunk_ids, matrix=matrix),
+        kg=_kg_with_chunks(chunk_ids, vectors=vectors),
         chunks_by_doc=chunks_by_doc,
         abstract_chunk_by_doc={d: cids[0] for d, cids in chunks_by_doc.items()},
         pagerank_doc={d: 1.0 / n_docs for d in chunks_by_doc},
-        neighbors_by_chunk={cid: tuple(sorted(ns)) for cid, ns in neighbors.items()},
-        chunk_degree={cid: len(ns) for cid, ns in neighbors.items()},
         chunk_to_doc=chunk_to_doc,
         pages_concept_evidence_chunks=[chunk_ids[0]],
     )

@@ -17,24 +17,39 @@ from wikify.distill.explorer import (
     init_coverage_state,
 )
 from wikify.eval.metrics import image_coverage_residual
-from wikify.models import CorpusGraph
 from wikify.store.vectors import VectorStore
+
+
+def _empty_kg(vectors=None):
+    import networkx as nx
+    from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
+    backend = NetworkXBackend(G=nx.MultiDiGraph())
+    return KnowledgeGraph(backend=backend, vectors=vectors)
+
+
+def _kg_with_chunks(chunk_ids, vectors=None):
+    """KG with actual chunk nodes so chunks().similar_to() works."""
+    import networkx as nx
+    from wikify.citestore.graph import CHUNK, KnowledgeGraph, NetworkXBackend
+    G = nx.MultiDiGraph()
+    for cid in chunk_ids:
+        G.add_node(cid, type=CHUNK)
+    backend = NetworkXBackend(G=G)
+    return KnowledgeGraph(backend=backend, vectors=vectors)
 
 
 def _make_state(caption_ids: set[str], all_ids: list[str]) -> ExplorerState:
     doc_map = {cid: "d1" for cid in all_ids}
+    vectors = VectorStore(
+        ids=all_ids,
+        matrix=np.eye(len(all_ids), dtype=np.float32),
+    )
     state = ExplorerState(
         rng=random.Random(42),
-        graph=CorpusGraph(nodes={}, edges={"similar_strong": [], "co_section": []}),
-        vectors=VectorStore(
-            ids=all_ids,
-            matrix=np.eye(len(all_ids), dtype=np.float32),
-        ),
+        kg=_empty_kg(vectors=vectors),
         chunks_by_doc={"d1": all_ids},
         abstract_chunk_by_doc={"d1": all_ids[0]},
         pagerank_doc={"d1": 1.0},
-        neighbors_by_chunk={},
-        chunk_degree={cid: 0 for cid in all_ids},
         chunk_to_doc=doc_map,
         caption_chunk_ids=caption_ids,
     )
@@ -65,19 +80,31 @@ class TestCaptionTagging:
         assert cap_heap_ids == caps
 
     def test_caption_near_floor_applied_to_caption_neighbors(self):
-        """Reading a text chunk should discount caption neighbors less than text neighbors."""
+        """Reading a text chunk should discount caption neighbors less than text neighbors.
+
+        Neighbors are now discovered via KG similar_to (vector cosine).
+        We build a KG with chunk nodes and a VectorStore where txt1 is
+        close to both txt2 and cap1 so similar_to returns them as neighbors.
+        """
         caps = {"cap1"}
         all_ids = ["txt1", "txt2", "cap1"]
-        # txt1 neighbors: txt2 (text) and cap1 (caption)
+        # Make txt1 close to both txt2 and cap1 (high cosine similarity)
+        matrix = np.array([
+            [1.0, 0.5, 0.5],   # txt1
+            [0.5, 1.0, 0.0],   # txt2
+            [0.5, 0.0, 1.0],   # cap1
+        ], dtype=np.float32)
+        # Normalize rows
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = matrix / norms
+        vectors = VectorStore(ids=all_ids, matrix=matrix)
+        kg = _kg_with_chunks(all_ids, vectors)
         state = ExplorerState(
             rng=random.Random(0),
-            graph=CorpusGraph(nodes={}, edges={"similar_strong": [], "co_section": []}),
-            vectors=VectorStore(ids=all_ids, matrix=np.eye(3, dtype=np.float32)),
+            kg=kg,
             chunks_by_doc={"d1": all_ids},
             abstract_chunk_by_doc={"d1": "txt1"},
             pagerank_doc={"d1": 1.0},
-            neighbors_by_chunk={"txt1": ("txt2", "cap1")},
-            chunk_degree={cid: 0 for cid in all_ids},
             chunk_to_doc={cid: "d1" for cid in all_ids},
             caption_chunk_ids=caps,
         )

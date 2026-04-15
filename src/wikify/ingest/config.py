@@ -35,7 +35,5 @@ MIN_IMG_HEIGHT = 100  # minimum image height in pixels
 MIN_IMG_BYTES = 2000  # minimum raw image size in bytes
 SCAN_THRESHOLD = 15  # images-per-page above which page is treated as scanned
 
-# -- corpus graph ------------------------------------------------------------
-KNN_K = 10  # neighbours per chunk in kNN similarity edges
-STRONG_COS = 0.75  # cosine threshold for strong similarity edges
+# -- document similarity ---------------------------------------------------
 DOC_SIM_COS = 0.75  # cosine threshold for doc-level similarity edges

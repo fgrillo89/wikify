@@ -1,5 +1,9 @@
 # Streaming Ingest Pipeline Refactor
 
+> **Status (2026-04-15): Partially superseded.** `corpus_graph` and
+> `explorer_index` referenced below were deleted and replaced by
+> `KnowledgeGraph`. The wave structure described here is historical.
+
 Branch: `streaming-pipeline` (off `docling-parsers`)
 
 ## Problem

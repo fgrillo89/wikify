@@ -85,9 +85,7 @@ After `cli ingest` finishes, the corpus directory contains:
 | `images/{doc_slug}/{stem}.{ext}.json` | Image sidecar: caption, label, page, near_chunk_ids, content_hash, ... |
 | `images.json` | Per-corpus image index (model-facing surface for figure lookup). |
 | `vectors.npz` + `vectors.ids.json` + `vectors.meta.json` | Embeddings for every chunk. |
-| `graph.json` | Typed corpus graph: contains, similar_knn/strong, co_section, cites, doc_similar, cites_same. |
-| `sampler_index.json` | Pre-computed sampler state (chunks_by_doc, neighbours, abstract proxies, content vs caption ids). Loaded by distill. |
-| `pagerank.json` | Real PageRank on the doc graph (cites + doc_similar + cites_same). Replaces the prior uniform fallback. |
+| `graph.json` | Knowledge graph: Paper + Author + Chunk nodes, citation + authorship + collaboration + co_section edges. PageRank computed at build time. |
 | `topics.json` | Topic vocabulary (declared + inferred), used by GT-C in eval. |
 | `library.bib` | One BibTeX entry per Document for citation export. |
 
@@ -114,8 +112,8 @@ After `cli ingest` finishes, the corpus directory contains:
 | `ingest/parsers/_sections.py` | `section_spans` (markdown headings) + `toc_spans` (PDF TOC bookmarks) |
 | `ingest/parsers/pdf.py` | pymupdf4llm layout engine + fitz blocks fallback + TOC integration |
 | `ingest/citations.py` | Reference section detection (heading + author-anchored fallback) + structured parse |
-| `ingest/corpus_graph.py` | Builds CorpusGraph after `_populate_doc_edges` (cites + cites_same now real) |
-| `store/corpus_profile.py` | PageRank, Louvain, betweenness |
+| `citestore/graph.py` | KnowledgeGraph query API |
+| `citestore/graph_build.py` | Builds KnowledgeGraph (Paper + Author + Chunk nodes, PageRank) |
 | `render/html/render.py` | HTML renderer |
 | `prompts/*.yaml` | Prompt templates (`extract`, `write`, `compact`, `edit`, `query`) |
 
@@ -205,7 +203,7 @@ uv run python -m wikify.cli distill \
 
 What happens during the run:
 
-1. The harness loads the corpus, vectors, graph, image index, and sampler.
+1. The harness loads the corpus, vectors, knowledge graph, and image index.
 2. For each sampled chunk it writes
    `data/dispatch/extract/<rid>.request.json` and blocks polling for
    `data/dispatch/extract/<rid>.response.json` (timeout 600s, poll 0.25s).
@@ -303,7 +301,7 @@ fresh path-too-long error, check what new field is being written to disk.
 
 At 200-1000 papers (12k-60k chunks):
 
-- **Explorer index**: pre-computed at ingest time (`explorer_index.json`), loads in <50ms
+- **Knowledge graph**: built at ingest time (`graph.json`), loads in <50ms
 - **Vector store**: numpy, fast at 60k
 - **Metrics**: M1 takes 10-30s at 60k chunks (once per run)
 - **HTML rendering**: I/O bound, 2-8 min for 500 pages

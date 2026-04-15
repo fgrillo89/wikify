@@ -13,9 +13,12 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -93,6 +96,8 @@ class NetworkXBackend:
     _equations_of: dict[str, list[str]] = field(default_factory=dict)
     _equations_in_chunk: dict[str, list[str]] = field(default_factory=dict)
     _figures_near_chunk: dict[str, list[str]] = field(default_factory=dict)
+    _chunks_near_figure: dict[str, list[str]] = field(default_factory=dict)
+    _chunks_with_equation: dict[str, list[str]] = field(default_factory=dict)
     _pagerank: dict[str, float] = field(default_factory=dict)
     _h_index: dict[str, int] = field(default_factory=dict)
     _ord_refs: dict[str, dict[int, str]] = field(default_factory=dict)
@@ -112,6 +117,8 @@ class NetworkXBackend:
         self._equations_of.clear()
         self._equations_in_chunk.clear()
         self._figures_near_chunk.clear()
+        self._chunks_near_figure.clear()
+        self._chunks_with_equation.clear()
         self._pagerank.clear()
         self._h_index.clear()
         self._ord_refs.clear()
@@ -139,8 +146,10 @@ class NetworkXBackend:
                 self._equations_of.setdefault(u, []).append(v)
             elif kind == "EQUATION_IN_CHUNK":
                 self._equations_in_chunk.setdefault(v, []).append(u)
+                self._chunks_with_equation.setdefault(u, []).append(v)
             elif kind == "FIGURE_NEAR_CHUNK":
                 self._figures_near_chunk.setdefault(v, []).append(u)
+                self._chunks_near_figure.setdefault(u, []).append(v)
 
         # Node-level metrics
         for nid, ndata in g.nodes(data=True):
@@ -291,6 +300,14 @@ class QueryBuilder:
         """Equations of these sources."""
         return self._follow(self._kg._backend._equations_of, EQUATION)
 
+    def nearby_figures(self) -> QueryBuilder:
+        """Figures linked to these chunks via FIGURE_NEAR_CHUNK edges."""
+        return self._follow(self._kg._backend._figures_near_chunk, FIGURE)
+
+    def nearby_equations(self) -> QueryBuilder:
+        """Equations in these chunks via EQUATION_IN_CHUNK edges."""
+        return self._follow(self._kg._backend._equations_in_chunk, EQUATION)
+
     # ---- Filters (returns narrowed QueryBuilder) ----
 
     def where(self, **kwargs: object) -> QueryBuilder:
@@ -318,6 +335,17 @@ class QueryBuilder:
             if nid in backend.G and backend.G.nodes[nid].get("type") == kind
         }
         return QueryBuilder(self._kg, result, kind)
+
+    def match(self, field: str, query: str) -> QueryBuilder:
+        """Filter nodes where `field` contains `query` (case-insensitive substring)."""
+        backend = self._kg._backend
+        q = query.lower()
+        result = {
+            nid for nid in self._ids
+            if nid in backend.G
+            and q in str(backend.G.nodes[nid].get(field, "")).lower()
+        }
+        return QueryBuilder(self._kg, result, self._type)
 
     def since(self, year: int) -> QueryBuilder:
         """Filter sources by year >= N."""
@@ -394,6 +422,51 @@ class QueryBuilder:
             node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}
             node_data["score"] = float(score)
             results.append(node_data)
+        self._kg._trace.log(
+            "search", {"query": query[:80], "top_k": top_k},
+            len(scope_ids), len(results),
+            [r["id"] for r in results[:5]],
+        )
+        return results
+
+    def similar_to(self, chunk_id: str, top_k: int = 10) -> list[dict]:
+        """Find chunks similar to an existing chunk by vector cosine.
+
+        Uses the chunk's existing embedding -- no re-embedding needed.
+        Scoped to the current set (if current set is sources/sections,
+        resolves to their chunks first). Excludes the seed chunk itself.
+        """
+        vectors = self._kg._vectors
+        if vectors is None:
+            return []
+        try:
+            seed_vec = vectors.vector(chunk_id)
+        except (KeyError, IndexError):
+            return []
+
+        scope_ids = self._resolve_chunk_scope()
+        scope_ids.discard(chunk_id)
+        if not scope_ids:
+            return []
+
+        sims = vectors.cosine_to_all(seed_vec)
+        valid_idx = [i for i, cid in enumerate(vectors.ids) if cid in scope_ids]
+        if not valid_idx:
+            return []
+
+        scored = sorted([(sims[i], i) for i in valid_idx], key=lambda t: -t[0])
+        backend = self._kg._backend
+        results: list[dict] = []
+        for score, idx in scored[:top_k]:
+            cid = vectors.ids[idx]
+            node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}
+            node_data["score"] = float(score)
+            results.append(node_data)
+        self._kg._trace.log(
+            "similar_to", {"chunk_id": chunk_id, "top_k": top_k},
+            len(scope_ids), len(results),
+            [r["id"] for r in results[:5]],
+        )
         return results
 
     def _resolve_chunk_scope(self) -> set[str]:
@@ -414,9 +487,9 @@ class QueryBuilder:
             elif ntype == SECTION:
                 chunk_ids.update(backend._chunks_of_section.get(nid, []))
             elif ntype == FIGURE:
-                chunk_ids.update(backend._figures_near_chunk.get(nid, []))
+                chunk_ids.update(backend._chunks_near_figure.get(nid, []))
             elif ntype == EQUATION:
-                chunk_ids.update(backend._equations_in_chunk.get(nid, []))
+                chunk_ids.update(backend._chunks_with_equation.get(nid, []))
         return chunk_ids
 
     # ---- Terminals (execute and return) ----
@@ -424,10 +497,15 @@ class QueryBuilder:
     def collect(self) -> list[dict]:
         """Materialize all nodes as dicts."""
         backend = self._kg._backend
-        return [
+        result = [
             backend.node(nid) for nid in sorted(self._ids)
             if backend.has_node(nid)
         ]
+        self._kg._trace.log(
+            "collect", {}, len(self._ids), len(result),
+            [r["id"] for r in result[:5]],
+        )
+        return result
 
     def ids(self) -> list[str]:
         """Return just the node IDs."""
@@ -463,6 +541,71 @@ class QueryBuilder:
 
 
 # ---------------------------------------------------------------------------
+# Trace context -- lightweight exploration logging
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TraceEntry:
+    """One logged KG operation (terminal or search call)."""
+
+    timestamp: str
+    caller: str
+    method: str
+    args: dict = field(default_factory=dict)
+    input_count: int = 0
+    output_count: int = 0
+    output_sample: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TraceContext:
+    """Append-only log of KG operations. Enabled per-run."""
+
+    entries: list[TraceEntry] = field(default_factory=list)
+    enabled: bool = False
+    caller: str = ""
+
+    def log(
+        self,
+        method: str,
+        args: dict,
+        input_count: int,
+        output_count: int,
+        output_sample: list[str],
+    ) -> None:
+        if not self.enabled:
+            return
+        self.entries.append(TraceEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            caller=self.caller,
+            method=method,
+            args=args,
+            input_count=input_count,
+            output_count=output_count,
+            output_sample=output_sample[:5],
+        ))
+
+    def save(self, path: Path) -> None:
+        """Append entries to a JSONL file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for e in self.entries:
+                f.write(json.dumps({
+                    "timestamp": e.timestamp,
+                    "caller": e.caller,
+                    "method": e.method,
+                    "args": e.args,
+                    "input_count": e.input_count,
+                    "output_count": e.output_count,
+                    "output_sample": e.output_sample,
+                }) + "\n")
+
+    def clear(self) -> None:
+        self.entries.clear()
+
+
+# ---------------------------------------------------------------------------
 # KnowledgeGraph -- entry point
 # ---------------------------------------------------------------------------
 
@@ -482,6 +625,21 @@ class KnowledgeGraph:
         self._backend = backend
         self._vectors = vectors
         self._embed_fn = embed_fn
+        self._trace = TraceContext()
+
+    def enable_trace(self, caller: str = "") -> None:
+        """Start logging KG operations."""
+        self._trace.enabled = True
+        self._trace.caller = caller
+
+    def disable_trace(self) -> None:
+        """Stop logging KG operations."""
+        self._trace.enabled = False
+
+    def save_trace(self, path: Path) -> None:
+        """Append trace entries to JSONL file and clear buffer."""
+        self._trace.save(path)
+        self._trace.clear()
 
     # ---- Entry points returning QueryBuilder ----
 

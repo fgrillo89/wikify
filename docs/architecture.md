@@ -4,8 +4,8 @@
 
 1. **Ingest** raw documents (pdf, docx, pptx, html, md) into a normalized
    corpus on disk: markdown text + extracted images + chunks + embeddings.
-2. **Build a corpus graph** over the corpus (documents, chunks, similarity,
-   optional citations) for navigation and sampling.
+2. **Build a knowledge graph** over the corpus (documents, authors, chunks,
+   citations) for navigation, sampling, and author queries.
 3. **Distill wikis** (concept pages + people pages) from the corpus by letting
    an agent sample a *fraction* of the corpus, guided by the corpus graph and
    small models. Wikis cross-link each other.
@@ -19,7 +19,7 @@
 raw files
    |
    v
-[ Corpus ]            files on disk + vector store + corpus graph
+[ Corpus ]            files on disk + vector store + knowledge graph
    |
    v
 [ Wikis ]             markdown files on disk (the source of truth)
@@ -46,8 +46,8 @@ form possible:
 | Document text    | `corpus/markdown/{doc_id}.md`         | chunks, embeddings             |
 | Document images  | `corpus/images/{doc_id}/`             | (none)                         |
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
-| Embeddings       | vector store (chroma / lancedb / ...) | similarity edges               |
-| Corpus graph     | `corpus/graph.json` (or .parquet)     | sampling decisions             |
+| Embeddings       | vector store (chroma / lancedb / ...) | vector search results          |
+| Knowledge graph  | `corpus/graph.json`                   | sampling decisions, author queries |
 | **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
 | Runs / telemetry | `runs/{run_id}/...`                   | reports                        |
@@ -87,17 +87,18 @@ These are the contracts. Everything else is implementation.
   equation whose source `char_offset` falls inside the chunk's
   `char_span`; the chunker binds them after extraction.
   Embedding lives in the vector store, keyed by `chunk.id`.
-- `CorpusGraph` -- nodes are `Document` and `Chunk` ids; edges are typed:
-  - `contains`: doc -> chunk
-  - `similar_knn` / `similar_strong`: chunk <-> chunk (kNN over
-    embeddings; `similar_strong` is the cosine >= `STRONG_COS` filter)
+- `KnowledgeGraph` (in `citestore/graph.py`) -- typed property graph
+  (`nx.MultiDiGraph`) with Paper, Author, and Chunk nodes. Edge types:
+  - `contains`: paper -> chunk
+  - `cites`: paper -> paper (directed)
+  - `cites_same`: paper <-> paper (bibliographic coupling)
+  - `doc_similar`: paper <-> paper (embedding cosine)
+  - `authored_by`: paper -> author (with position)
+  - `collaborated`: author <-> author (co-authorship)
   - `co_section`: chunk <-> chunk (same doc + same section path)
-  - `cites`: doc -> doc (directed; resolved against the corpus by the
-    year-bucketed fuzzy matcher in `pipeline.py::_populate_doc_edges`)
-  - `cites_same`: doc <-> doc (undirected bibliographic coupling, top-k
-    per doc by shared-reference count)
-  - `doc_similar`: doc <-> doc (mean-pooled embedding cosine >=
-    `DOC_SIM_COS`, currently 0.75 — same threshold as `doc.similar_to`)
+  Chunk similarity edges (`similar_knn`, `similar_strong`) are removed;
+  vector search via VectorStore replaces them. PageRank is computed at
+  graph build time. See `knowledge-graph-design.md` for full schema.
 
 ### Wiki side
 
@@ -113,7 +114,8 @@ These are the contracts. Everything else is implementation.
   - `doc_id`: redundant but convenient for display
   - `quote`: the exact span of text from the chunk that supports the claim
   - `locator`: optional human-readable locator (page, section, slide)
-- `WikiGraph` -- nodes are wiki page ids; edges:
+- `WikiKnowledgeGraph` (in `store/wiki_graph.py`) -- nodes are wiki page
+  ids; edges:
   - `links_to` (explicit cross-links from `links`)
   - `co_evidence` (two pages cite the same chunk)
   - `same_domain` (clustering over page bodies)
@@ -142,16 +144,10 @@ because the corpus graph depends on populated doc-level edges:
    `Document.similar_to`, `Document.cites_same`. Must run BEFORE the
    corpus graph builder, otherwise the saved `graph.json` has empty
    citation edges (long-standing bug, fixed in this pass).
-5. **`build_corpus_graph`** — reads `Document.cites` and
-   `Document.cites_same` directly to populate the graph's `cites` and
-   `cites_same` edge sets, then writes `graph.json`.
-6. **`build_explorer_index`** — pre-computes the corpus-side explorer
-   state (chunks_by_doc, neighbours, abstract proxy, content vs caption
-   chunks). Skips chunks whose `section_type` is in
-   `{references, acknowledgments, appendix}` so the explorer never
-   dispatches reference entries to the extractor.
-7. **`_write_pagerank`** — real PageRank on the doc graph using
-   `cites + doc_similar + cites_same` as edges (not uniform).
+5. **`build_knowledge_graph`** — builds the unified `KnowledgeGraph`
+   (Paper + Author + Chunk nodes, citation + authorship + collaboration
+   edges), computes PageRank, and writes `graph.json`. The sampler
+   uses the KG directly; no separate explorer index is built.
 8. **Topics, image index, library.bib**.
 9. **Re-save documents** with fully-populated edges + figure metadata.
 
@@ -188,8 +184,8 @@ src/wikify/
   cache.py              # ExtractCache: deterministic per-chunk cache
   embedding.py          # switchable embedding backend
   dispatch.py           # single Dispatch class (file-based)
-  models.py             # Document, Chunk, CorpusGraph, Evidence,
-                        # WikiPage, WikiGraph, Stage, Run
+  models.py             # Document, Chunk, Evidence,
+                        # WikiPage, Stage, Run
   paths.py              # CorpusPaths, BundlePaths
 
   distill/              # strategies and their primitives
@@ -234,8 +230,6 @@ src/wikify/
     equations.py        # display/inline/chemical/unicode/named/image
     citations.py        # references section detection + structured parse;
                         # author-anchored fallback for landing-page papers
-    corpus_graph.py     # builds CorpusGraph (cites + cites_same too)
-    explorer_index.py   # pre-computed explorer state, written by ingest
     topics.py           # topic extraction (used by GT-C in eval)
     pipeline.py         # incremental ingest entry point;
                         # parallel parsing, manifest-based dedup,
@@ -243,14 +237,18 @@ src/wikify/
     manifest.py         # CorpusManifest, SourceRecord, ChangeSet,
                         # diff_sources for incremental ingest
 
+  citestore/            # knowledge graph
+    graph.py            # KnowledgeGraph query API
+    graph_build.py      # build_knowledge_graph (Paper + Author + Chunk nodes)
+
   store/                # disk I/O for corpus and wikis
     corpus.py           # read documents/chunks/embeddings
     vectors.py          # thin vector-db wrapper
     wiki_files.py       # read/write wiki page .md files
     wiki_index.py       # bundle index (_index.json, _index.md)
+    wiki_graph.py       # WikiKnowledgeGraph
     images_index.py     # per-corpus image index
     bundle_embeddings.py  # cached page-body embeddings for eval
-    corpus_profile.py   # PageRank, Louvain, betweenness
 
   eval/                 # metrics and audit
     bundle.py

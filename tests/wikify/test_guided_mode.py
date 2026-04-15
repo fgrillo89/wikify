@@ -19,9 +19,15 @@ from wikify.distill.strategy import (
     ModeContext,
     RuntimeOverrides,
 )
-from wikify.models import CorpusGraph
 from wikify.schema import OrchAction
 from wikify.store.vectors import VectorStore
+
+
+def _empty_kg(vectors=None):
+    import networkx as nx
+    from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
+    backend = NetworkXBackend(G=nx.MultiDiGraph())
+    return KnowledgeGraph(backend=backend, vectors=vectors)
 
 
 class _ScriptedOrchestrator:
@@ -112,10 +118,10 @@ def test_set_allocation_rejects_out_of_range():
 def _explorer_state_with_seen() -> ExplorerState:
     """Tiny ExplorerState with 4 chunks; c1/c2 already seen."""
     ids = ["c1", "c2", "c3", "c4"]
+    vectors = VectorStore(ids=ids, matrix=np.eye(4, dtype=np.float32))
     state = ExplorerState(
         rng=random.Random(0),
-        graph=CorpusGraph(nodes={}, edges={}),
-        vectors=VectorStore(ids=ids, matrix=np.eye(4, dtype=np.float32)),
+        kg=_empty_kg(vectors=vectors),
         chunks_by_doc={"d1": ["c1", "c2"], "d2": ["c3", "c4"]},
         abstract_chunk_by_doc={},
         pagerank_doc={},
@@ -232,10 +238,10 @@ def test_sampler_snapshot_content_stats():
 def test_sampler_snapshot_capped_at_20():
     """top_gap_chunks must contain at most 20 entries."""
     ids = [f"c{i}" for i in range(50)]
+    vectors = VectorStore(ids=ids, matrix=np.eye(50, dtype=np.float32))
     state = ExplorerState(
         rng=random.Random(0),
-        graph=CorpusGraph(nodes={}, edges={}),
-        vectors=VectorStore(ids=ids, matrix=np.eye(50, dtype=np.float32)),
+        kg=_empty_kg(vectors=vectors),
         chunks_by_doc={"d1": ids},
         abstract_chunk_by_doc={},
         pagerank_doc={},
@@ -253,10 +259,10 @@ def _four_chunk_state() -> ExplorerState:
     """4 chunks with orthogonal unit vectors for deterministic cosine tests."""
     ids = ["c1", "c2", "c3", "c4"]
     matrix = np.eye(4, dtype=np.float32)
+    vectors = VectorStore(ids=ids, matrix=matrix)
     state = ExplorerState(
         rng=random.Random(0),
-        graph=CorpusGraph(nodes={}, edges={}),
-        vectors=VectorStore(ids=ids, matrix=matrix),
+        kg=_empty_kg(vectors=vectors),
         chunks_by_doc={"d1": ["c1", "c2"], "d2": ["c3", "c4"]},
         abstract_chunk_by_doc={},
         pagerank_doc={},
@@ -297,8 +303,7 @@ def test_semantic_query_page_scope_filters_by_doc():
 def test_semantic_query_empty_store_returns_empty():
     state = ExplorerState(
         rng=random.Random(0),
-        graph=CorpusGraph(nodes={}, edges={}),
-        vectors=VectorStore(ids=[], matrix=np.zeros((0, 4), dtype=np.float32)),
+        kg=_empty_kg(),
         chunks_by_doc={},
         abstract_chunk_by_doc={},
         pagerank_doc={},
