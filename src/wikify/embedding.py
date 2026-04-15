@@ -1,19 +1,23 @@
 """Shared text embedder used by ingest, eval, and query.
 
-Backend selected by env var ``WIKIFY_EMBEDDER``:
+Configuration (env vars, checked at ingest time):
 
-- ``fastembed`` (default): serves ``sentence-transformers/all-MiniLM-L6-v2``
-  through ONNX Runtime via the ``fastembed`` library. 384-d output, ~75
-  chunks/sec on commodity CPU (~1.6x the legacy PyTorch path on the same
-  model, same dimensionality, same MTEB score). No PyTorch dependency.
+- ``WIKIFY_EMBEDDER``: backend name. ``fastembed`` (default) or ``hash``.
+- ``WIKIFY_EMBED_MODEL``: HuggingFace model name for the fastembed backend.
+  Default: ``sentence-transformers/all-MiniLM-L6-v2`` (384-d, ONNX).
+
+Backends:
+
+- ``fastembed``: ONNX-served sentence-transformer. ~75 chunks/sec on
+  commodity CPU. No PyTorch dependency. Model is configurable.
 - ``hash``: deterministic hashed bag-of-words projection. Offline, no
-  model dependency, adequate for CI/smoke. 128-d.
+  model dependency, adequate for CI/smoke. 128-d. Ignores model setting.
 
 Returns row-unit-norm float32 ``np.ndarray`` with shape ``(len(texts), dim)``.
 
 Use ``embedder_for(backend, model)`` when you need an *explicit* embedder
-(no env var dependency) --- eval and query call this to construct the same
-embedder that ingest used, based on ``vectors.meta.json``.
+(no env var dependency) --- eval, query, and preload call this to
+reconstruct the same embedder that ingest used, based on ``vectors.meta.json``.
 """
 
 import hashlib
@@ -69,22 +73,24 @@ def _fe_embed_with(model: str | None, texts: Sequence[str]) -> np.ndarray:
     _load_fe(model)
     assert _fe_model is not None, "_load_fe must initialise _fe_model"
     if not texts:
-        return np.zeros((0, FE_DIM), dtype=np.float32)
+        dim = getattr(_fe_model, "embedding_size", FE_DIM) or FE_DIM
+        return np.zeros((0, dim), dtype=np.float32)
     # ``embed`` returns a generator of np.ndarray rows; materialise once.
     arr = np.asarray(list(_fe_model.embed(list(texts))), dtype=np.float32)
     return arr
 
 
 def embed_texts(texts: Sequence[str]) -> np.ndarray:
-    """Embed texts to row-unit-norm float32 vectors. Backend via env var.
+    """Embed texts to row-unit-norm float32 vectors. Backend via env vars.
 
-    Kept for back-compat with code paths that don't have a corpus handle.
+    Reads ``WIKIFY_EMBEDDER`` (backend) and ``WIKIFY_EMBED_MODEL`` (model).
     Eval/query should prefer ``embedder_for(meta.backend, meta.model)``.
     """
     backend = os.environ.get("WIKIFY_EMBEDDER", "fastembed").lower()
     if backend == "hash":
         return _hash_embed(texts)
-    return _fe_embed_with(None, texts)
+    model = os.environ.get("WIKIFY_EMBED_MODEL") or None
+    return _fe_embed_with(model, texts)
 
 
 def embedder_for(backend: str, model: str | None = None) -> Callable[[Sequence[str]], np.ndarray]:
@@ -114,4 +120,5 @@ def current_backend() -> dict[str, str | int | None]:
     backend = os.environ.get("WIKIFY_EMBEDDER", "fastembed").lower()
     if backend == "hash":
         return {"backend": "hash", "dim": HASH_DIM, "model": None}
-    return {"backend": "fastembed", "dim": FE_DIM, "model": FE_MODEL_DEFAULT}
+    model = os.environ.get("WIKIFY_EMBED_MODEL") or FE_MODEL_DEFAULT
+    return {"backend": "fastembed", "dim": FE_DIM, "model": model}

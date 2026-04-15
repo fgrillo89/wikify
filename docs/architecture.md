@@ -46,7 +46,7 @@ form possible:
 | Document text    | `corpus/markdown/{doc_id}.md`         | chunks, embeddings             |
 | Document images  | `corpus/images/{doc_id}/`             | (none)                         |
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
-| Embeddings       | vector store (chroma / lancedb / ...) | vector search results          |
+| Embeddings       | `corpus/vectors.npz` (numpy)          | vector search results          |
 | Knowledge graph  | `corpus/graph.json`                   | sampling decisions, author queries |
 | **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
