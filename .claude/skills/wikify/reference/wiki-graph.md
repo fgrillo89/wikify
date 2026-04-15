@@ -57,6 +57,7 @@ qb.top(5, by="n_evidence")     # top N by metric
 ```python
 qb.collect()     # -> list[dict]     materialize all nodes
 qb.ids()         # -> list[str]      just node IDs
+qb.titles()      # -> list[str]      title of each page
 qb.count()       # -> int
 qb.first()       # -> dict | None
 qb.exists()      # -> bool

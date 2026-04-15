@@ -251,6 +251,17 @@ class WikiQueryBuilder:
     def exists(self) -> bool:
         return len(self._ids) > 0
 
+    def titles(self) -> list[str]:
+        """Return the title of each page as a flat list."""
+        backend = self._wkg._backend
+        out: list[str] = []
+        for nid in sorted(self._ids):
+            if not backend.has_node(nid):
+                continue
+            attrs = backend.G.nodes[nid]
+            out.append(str(attrs.get("title", nid)))
+        return out
+
 
 # ---------------------------------------------------------------------------
 # WikiKnowledgeGraph entry point

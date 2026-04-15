@@ -121,6 +121,17 @@ class TestEntryPoints:
         assert persons.count() == 1
         assert persons.first()["id"] == "Stuart Parkin"
 
+    def test_titles(self, wkg):
+        titles = wkg.pages().titles()
+        assert len(titles) == 5
+        assert "Atomic Layer Deposition" in titles
+        assert "Stuart Parkin" in titles
+
+    def test_titles_filtered(self, wkg):
+        titles = wkg.pages(kind="article").titles()
+        assert "Stuart Parkin" not in titles
+        assert "Atomic Layer Deposition" in titles
+
     def test_stats(self, wkg):
         s = wkg.stats()
         assert s["pages"] == 5
