@@ -527,6 +527,23 @@ class QueryBuilder:
         """Any matches?"""
         return len(self._ids) > 0
 
+    def titles(self) -> list[str]:
+        """Return the title (or id) of each node as a flat list.
+
+        For sources: returns the ``title`` attribute.
+        For authors: returns the node id (which is the author name).
+        For other types: returns whatever ``title`` is set to, falling
+        back to the node id.
+        """
+        backend = self._kg._backend
+        out: list[str] = []
+        for nid in sorted(self._ids):
+            if not backend.has_node(nid):
+                continue
+            attrs = backend.G.nodes[nid]
+            out.append(str(attrs.get("title", nid)))
+        return out
+
     # ---- Metrics on current set ----
 
     def pagerank(self) -> dict[str, float]:

@@ -180,6 +180,16 @@ class TestKnowledgeGraphEntryPoints:
     def test_chunks_all(self, kg: KnowledgeGraph):
         assert kg.chunks().count() == 7
 
+    def test_titles_sources(self, kg: KnowledgeGraph):
+        titles = kg.sources(kind="corpus").titles()
+        assert len(titles) == 3
+        assert "Paper A: Foundations" in titles
+
+    def test_titles_authors(self, kg: KnowledgeGraph):
+        titles = kg.authors().titles()
+        # Authors have no 'title' attr, so titles() returns the node id (name)
+        assert "smith j" in titles
+
     def test_corpus_stats(self, kg: KnowledgeGraph):
         stats = kg.corpus_stats()
         assert stats["sources"] >= 3

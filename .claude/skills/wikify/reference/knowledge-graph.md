@@ -100,6 +100,7 @@ qb.match("caption", "IV curve")  # case-insensitive substring match on a field
 ```python
 qb.collect()     # -> list[dict]     materialize all nodes
 qb.ids()         # -> list[str]      just node IDs
+qb.titles()      # -> list[str]      title (or id) of each node
 qb.count()       # -> int            count matches
 qb.first()       # -> dict | None    first result or None
 qb.exists()      # -> bool           any matches?
