@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..citestore.models import CitationEntry
-from ..models import Chunk, CorpusGraph, DocImage, Document
+from ..models import Chunk, DocImage, Document
 from ..paths import CorpusPaths
 from .vectors import VectorStore, load_vectors, save_vectors
 
@@ -108,19 +108,6 @@ def read_chunks_by_id(
             if len(result) >= cap:
                 break
     return result
-
-
-def write_graph(paths: CorpusPaths, graph: CorpusGraph) -> None:
-    atomic_write_text(
-        paths.graph_path,
-        json.dumps({"nodes": graph.nodes, "edges": graph.edges}),
-    )
-
-
-def read_graph(paths: CorpusPaths) -> CorpusGraph:
-    data = json.loads(paths.graph_path.read_text(encoding="utf-8"))
-    edges = {k: [tuple(e) for e in v] for k, v in data["edges"].items()}
-    return CorpusGraph(nodes=data["nodes"], edges=edges)
 
 
 def write_vector_store(paths: CorpusPaths, store: VectorStore) -> None:

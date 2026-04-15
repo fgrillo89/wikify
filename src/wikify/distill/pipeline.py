@@ -35,7 +35,6 @@ from typing import Literal, cast
 
 from pydantic import ValidationError
 
-from ..ingest.explorer_index import load_explorer_index
 from ..meter import BudgetExceededError, CostMeter
 from ..models import Chunk, Document, WikiPage
 from ..paths import BundlePaths, CorpusPaths
@@ -230,8 +229,6 @@ def run_with_preloaded(
     cache_hits_start = getattr(getattr(extractor, "_cache", None), "hits", 0)
     cache_misses_start = getattr(getattr(extractor, "_cache", None), "misses", 0)
     rng = random.Random(strategy.seed)
-    vectors = preloaded.vectors
-    graph = preloaded.graph
 
     style_text = load_style_guide()
     field_text = load_field_guide(field_name)
@@ -272,9 +269,7 @@ def run_with_preloaded(
         verbalize=verbalize,
     )
 
-    state = _build_explorer_state(
-        rng, docs, chunks, graph, vectors, corpus=preloaded.corpus_paths
-    )
+    state = _build_explorer_state(rng, chunks, knowledge_graph)
     use_coverage_memory = iteration == "refine" and not feed
     if use_coverage_memory:
         mem = load_coverage_memory(bundle)
@@ -757,90 +752,48 @@ def _normalize_title(t: str) -> str:
 
 def _build_explorer_state(
     rng: random.Random,
-    docs: list[Document],
     chunks: list[Chunk],
-    graph,
-    vectors,
-    corpus: CorpusPaths | None = None,
+    knowledge_graph: object,
 ) -> ExplorerState:
-    import sys
+    """Build ExplorerState from the KnowledgeGraph.
 
-    # Try to load the pre-computed index written by ingest.
-    idx = load_explorer_index(corpus.explorer_index_path) if corpus is not None else None
-    if idx is not None and corpus is not None:
-        # Assemble ExplorerState from the persisted index.
-        neighbour_map = {cid: tuple(ns) for cid, ns in idx["neighbors_by_chunk"].items()}
-        # Load real pagerank if available, fall back to uniform.
-        pagerank = _load_pagerank(corpus)
-        if not pagerank:
-            pagerank = _uniform_pagerank(idx["doc_ids_sorted"])
-        all_chunk_ids = idx["content_chunk_ids"] + idx["caption_chunk_ids"]
-        caption_ids: set[str] = set(idx["caption_chunk_ids"])
-        state = ExplorerState(
-            rng=rng,
-            graph=graph,
-            vectors=vectors,
-            chunks_by_doc=idx["chunks_by_doc"],
-            abstract_chunk_by_doc=idx["abstract_chunk_by_doc"],
-            pagerank_doc=pagerank,
-            neighbors_by_chunk=neighbour_map,
-            chunk_degree=idx["chunk_degree"],
-            chunk_to_doc=idx["chunk_to_doc"],
-            caption_chunk_ids=caption_ids,
-        )
-        init_coverage_state(state, all_chunk_ids)
-        return state
-
-    # Older corpus without sampler_index.json: fall back to in-memory build.
-    sys.stderr.write(
-        "[pipeline] sampler_index.json not found; rebuilding in memory (re-ingest to pre-compute)\n"
-    )
+    All corpus data comes from the KG. No CorpusGraph, no explorer_index,
+    no flat-dict fallback.
+    """
     chunks_by_doc: dict[str, list[str]] = defaultdict(list)
     abstract_by_doc: dict[str, str] = {}
     chunk_to_doc: dict[str, str] = {}
-    all_chunk_ids_fb: list[str] = []
-    caption_ids_fb: set[str] = set()
+    all_chunk_ids: list[str] = []
+    caption_ids: set[str] = set()
+
     for c in chunks:
-        # Skip references/acknowledgments/appendix sections — they contain
-        # citation lists and boilerplate, not extractable knowledge.
         if c.section_type in SKIP_SECTION_TYPES:
             continue
         chunks_by_doc[c.doc_id].append(c.id)
         chunk_to_doc[c.id] = c.doc_id
-        all_chunk_ids_fb.append(c.id)
+        all_chunk_ids.append(c.id)
         sp = list(c.section_path or [])
         if sp and sp[0] == "__image__":
-            caption_ids_fb.add(c.id)
-        # First chunk per doc is the abstract proxy. The previous version
-        # checked ``c.id not in abstract_by_doc`` (chunk id) but the dict
-        # is keyed by ``doc_id`` — the wrong-key typo meant every chunk
-        # overwrote and the last chunk of each doc was reported as the
-        # abstract. Now matched against the in-ingest sampler_index path.
+            caption_ids.add(c.id)
         if c.doc_id not in abstract_by_doc:
             abstract_by_doc[c.doc_id] = c.id
-    pagerank = _uniform_pagerank(list(chunks_by_doc.keys()))
-    neighbours: dict[str, set[str]] = defaultdict(set)
-    for a, b in graph.edges.get("similar_strong", []):
-        neighbours[a].add(b)
-        neighbours[b].add(a)
-    for a, b in graph.edges.get("co_section", []):
-        neighbours[a].add(b)
-        neighbours[b].add(a)
-    neighbour_map_fb = {cid: tuple(sorted(ns)) for cid, ns in neighbours.items()}
-    degree = {cid: len(neighbour_map_fb.get(cid, ())) for cid in all_chunk_ids_fb}
+
+    # PageRank from KG source nodes (computed at ingest by graph_build)
+    pagerank: dict[str, float] = {}
+    for source in knowledge_graph.sources(kind="corpus").collect():
+        pr = source.get("pagerank", 0.0)
+        pagerank[source["id"]] = pr if pr else 1.0 / max(len(chunks_by_doc), 1)
+
     state = ExplorerState(
         rng=rng,
-        graph=graph,
-        vectors=vectors,
+        kg=knowledge_graph,
         chunks_by_doc=dict(chunks_by_doc),
         abstract_chunk_by_doc=abstract_by_doc,
         pagerank_doc=pagerank,
-        neighbors_by_chunk=neighbour_map_fb,
-        chunk_degree=degree,
         chunk_to_doc=chunk_to_doc,
-        caption_chunk_ids=caption_ids_fb,
+        caption_chunk_ids=caption_ids,
     )
-    init_coverage_state(state, all_chunk_ids_fb)
+    init_coverage_state(state, all_chunk_ids)
     return state
 
 
@@ -1043,24 +996,6 @@ def _parse_figure_label(s: str) -> tuple[str, int | None, str]:
 def _format_figure_key(kind: str, num: int, sub: str) -> str:
     label = "Fig." if kind == "figure" else kind.capitalize()
     return f"{label} {num}{sub}"
-
-
-def _uniform_pagerank(doc_ids: list[str]) -> dict[str, float]:
-    if not doc_ids:
-        return {}
-    w = 1.0 / len(doc_ids)
-    return {d: w for d in doc_ids}
-
-
-def _load_pagerank(corpus: CorpusPaths) -> dict[str, float]:
-    """Load pre-computed pagerank from disk, or return empty dict if absent."""
-    p = corpus.pagerank_path
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
 
 
 def _rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:

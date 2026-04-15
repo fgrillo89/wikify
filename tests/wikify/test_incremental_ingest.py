@@ -16,7 +16,7 @@ from wikify.ingest.pipeline import ingest_corpus
 from wikify.store.corpus import (
     all_chunks,
     list_documents,
-    read_graph,
+    read_knowledge_graph,
     read_vector_store,
 )
 
@@ -57,11 +57,11 @@ def test_fresh_ingest(sources_dir, corpus_dir):
     vs = read_vector_store(paths)
     assert set(vs.ids) == {c.id for c in chunks}
 
-    graph = read_graph(paths)
+    kg = read_knowledge_graph(paths, vectors=vs)
     for d in docs:
-        assert d.id in graph.nodes
+        assert kg.source(d.id).exists()
     for c in chunks:
-        assert c.id in graph.nodes
+        assert kg._backend.has_node(c.id)
 
     manifest = CorpusManifest.load(paths.manifest_path)
     assert len(manifest.sources) == 2
@@ -152,8 +152,8 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
 
     assert not (paths.docs_dir / f"{beta_id}.json").exists()
 
-    graph = read_graph(paths)
-    assert beta_id not in graph.nodes
+    kg = read_knowledge_graph(paths)
+    assert not kg.source(beta_id).exists()
 
     vs = read_vector_store(paths)
     chunks = all_chunks(paths)

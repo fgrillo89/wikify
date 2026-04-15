@@ -21,32 +21,50 @@ from wikify.distill.pipeline import run as pipeline_run
 from wikify.distill.strategy import StaticBudget, StrategyConfig
 from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
-from wikify.models import CorpusGraph
 from wikify.paths import BundlePaths, CorpusPaths
 from wikify.store.vectors import VectorStore
 
 from .fakes import FakeExtractor, FakeOrchestrator, FakeWriter
+
+
+def _empty_kg(vectors=None):
+    import networkx as nx
+    from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
+    backend = NetworkXBackend(G=nx.MultiDiGraph())
+    return KnowledgeGraph(backend=backend, vectors=vectors)
+
+
+def _kg_with_chunks(chunk_ids, vectors=None):
+    """KG with actual chunk nodes so chunks().similar_to() works."""
+    import networkx as nx
+    from wikify.citestore.graph import CHUNK, KnowledgeGraph, NetworkXBackend
+    G = nx.MultiDiGraph()
+    for cid in chunk_ids:
+        G.add_node(cid, type=CHUNK)
+    backend = NetworkXBackend(G=G)
+    return KnowledgeGraph(backend=backend, vectors=vectors)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
 
 def _synthetic_state() -> ExplorerState:
     ids = ["c1", "c2", "c3", "c4"]
+    # Build vectors so c1<->c2 and c3<->c4 are similar (neighbors via similar_to)
+    matrix = np.array([
+        [1.0, 0.9, 0.0, 0.0],   # c1 - close to c2
+        [0.9, 1.0, 0.0, 0.0],   # c2 - close to c1
+        [0.0, 0.0, 1.0, 0.9],   # c3 - close to c4
+        [0.0, 0.0, 0.9, 1.0],   # c4 - close to c3
+    ], dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    matrix = matrix / norms
+    vectors = VectorStore(ids=ids, matrix=matrix)
     state = ExplorerState(
         rng=random.Random(0),
-        graph=CorpusGraph(
-            nodes={},
-            edges={
-                "similar_strong": [("c1", "c2"), ("c3", "c4")],
-                "co_section": [],
-            },
-        ),
-        vectors=VectorStore(ids=ids, matrix=np.eye(4, dtype=np.float32)),
+        kg=_kg_with_chunks(ids, vectors=vectors),
         chunks_by_doc={"d1": ["c1", "c2"], "d2": ["c3", "c4"]},
         abstract_chunk_by_doc={"d1": "c1", "d2": "c3"},
         pagerank_doc={"d1": 0.5, "d2": 0.5},
-        neighbors_by_chunk={"c1": ("c2",), "c2": ("c1",), "c3": ("c4",), "c4": ("c3",)},
-        chunk_degree={"c1": 1, "c2": 1, "c3": 1, "c4": 1},
         chunk_to_doc={"c1": "d1", "c2": "d1", "c3": "d2", "c4": "d2"},
     )
     init_coverage_state(state, ids)

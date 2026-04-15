@@ -29,10 +29,6 @@ class CorpusPaths:
         return self.root / "vectors.npz"
 
     @property
-    def graph_path(self) -> Path:
-        return self.root / "graph.json"
-
-    @property
     def topics_path(self) -> Path:
         return self.root / "topics.json"
 
@@ -50,14 +46,6 @@ class CorpusPaths:
         baked into ``prompts.registry.compose_writer_prompt``.
         """
         return self.root / "persona.txt"
-
-    @property
-    def explorer_index_path(self) -> Path:
-        return self.root / "explorer_index.json"
-
-    @property
-    def pagerank_path(self) -> Path:
-        return self.root / "pagerank.json"
 
     @property
     def manifest_path(self) -> Path:

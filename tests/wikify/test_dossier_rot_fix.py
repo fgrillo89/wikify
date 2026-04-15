@@ -12,7 +12,6 @@ Covers:
 import json
 import random
 
-import numpy as np
 import yaml  # noqa: I001
 
 from wikify.distill.dossier import (
@@ -29,8 +28,13 @@ from wikify.distill.explorer import (
     LocalOp,
     init_coverage_state,
 )
-from wikify.models import CorpusGraph
-from wikify.store.vectors import VectorStore
+
+
+def _empty_kg():
+    import networkx as nx
+    from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
+    backend = NetworkXBackend(G=nx.MultiDiGraph())
+    return KnowledgeGraph(backend=backend)
 
 # ---------------------------------------------------------------------------
 # 1. SKIP_SECTION_TYPES constant and sampler-level filtering
@@ -50,13 +54,10 @@ def _make_sampler_state(chunks_by_doc: dict[str, list[str]]) -> ExplorerState:
     all_ids = [cid for ids in chunks_by_doc.values() for cid in ids]
     state = ExplorerState(
         rng=random.Random(42),
-        graph=CorpusGraph(nodes={}, edges={}),
-        vectors=VectorStore(ids=all_ids, matrix=np.eye(len(all_ids), dtype=np.float32)),
+        kg=_empty_kg(),
         chunks_by_doc=chunks_by_doc,
         abstract_chunk_by_doc={doc: ids[0] for doc, ids in chunks_by_doc.items()},
         pagerank_doc={doc: 1.0 / len(chunks_by_doc) for doc in chunks_by_doc},
-        neighbors_by_chunk={},
-        chunk_degree={cid: 0 for cid in all_ids},
         chunk_to_doc={cid: doc for doc, ids in chunks_by_doc.items() for cid in ids},
     )
     init_coverage_state(state, all_ids)

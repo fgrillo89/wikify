@@ -621,10 +621,10 @@ def eval_bundle(
     # M1_image: image coverage and figure reference rate.
     import numpy as _np
 
-    from .ingest.explorer_index import load_explorer_index
-
-    sampler_idx = load_explorer_index(corpus.explorer_index_path)
-    caption_ids: list[str] = sampler_idx["caption_chunk_ids"] if sampler_idx else []
+    caption_ids: list[str] = [
+        c.id for c in chunks
+        if c.section_path and c.section_path[0] == "__image__"
+    ]
     _empty_cap = _np.empty((0, vs.matrix.shape[1]), dtype="float32")
     if caption_ids:
         caption_chunks = [chunks_by_id[cid] for cid in caption_ids if cid in chunks_by_id]

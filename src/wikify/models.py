@@ -114,29 +114,6 @@ class Chunk:
     # embedding lives in the vector store, keyed by id
 
 
-@dataclass
-class CorpusGraph:
-    """Typed multi-edge graph over Documents and Chunks.
-
-    Edge kinds materialised at ingest time:
-      - "contains"       : doc   -> chunk
-      - "similar_knn"    : chunk <-> chunk (kNN over embeddings, k=10)
-      - "similar_strong" : chunk <-> chunk (cosine >= 0.75; sparse, "real"
-                            similarity, used by walk strategies)
-      - "co_section"     : chunk <-> chunk (same section in same doc)
-      - "cites"          : doc   -> doc (only if citations were parsed)
-      - "doc_similar"    : doc   <-> doc (mean-pooled embedding cosine
-                            >= threshold; the paper-level analogue of
-                            similar_strong, used for cross-document hops)
-
-    The graph is rebuildable from the vector store + chunk metadata, so it
-    is a convenience index, not an independent source of truth.
-    """
-
-    nodes: dict[str, dict]  # id -> {kind: "doc"|"chunk", ...}
-    edges: dict[str, list[tuple[str, str]]]  # edge_kind -> [(src, dst)]
-
-
 # --- Wiki side -----------------------------------------------------------
 
 
