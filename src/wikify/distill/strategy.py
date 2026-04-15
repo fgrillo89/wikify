@@ -29,6 +29,25 @@ from .explorer import (
 if TYPE_CHECKING:
     from ..models import WikiPage
 
+GuidedTools = Literal["navigate", "full"]
+
+# Tool-set constants for guided mode (study-design.md §Tool filtering).
+# Includes both the explorer action vocabulary (pick_chunks, walk_local,
+# jump_*) used by the current single-turn orchestrator AND the KG tool
+# names (search_chunks, get_citations, etc.) for the future multi-turn
+# dispatch. Terminal actions: sample_chunks/pick_chunks, write_now.
+NAVIGATE_TOOLS: frozenset[str] = frozenset({
+    # Explorer actions (current orchestrator vocabulary)
+    "walk_local", "jump_uniform", "jump_pagerank", "jump_gap",
+    "jump_figures", "pick_chunks", "sample_chunks", "write_now",
+    # KG tools (future multi-turn dispatch)
+    "search_chunks", "get_source_info", "list_sources",
+    "get_citations", "get_coverage", "get_pages", "get_budget",
+})
+FULL_TOOLS: frozenset[str] = NAVIGATE_TOOLS | {
+    "done", "set_allocation", "set_tier",
+}
+
 
 # ---- Section 1: Budget allocation (was schedule.py) ----------------------
 
@@ -143,6 +162,37 @@ def build_strategy(strategy_id: StrategyId | str, *, seed: int = 0) -> StrategyC
     return StrategyConfig(**STRATEGY_CONFIGS[key], seed=seed)
 
 
+@dataclass(frozen=True)
+class PresetConfig:
+    """Resolved preset: strategy + mode + tool filtering."""
+
+    strategy: StrategyConfig
+    mode: ModeName
+    allowed_tools: frozenset[str] | None  # None for scripted modes
+
+
+PRESET_CONFIGS: dict[str, dict[str, Any]] = {
+    "scripted-explore": dict(strategy_id="E", mode="scripted", guided_tools=None),
+    "scripted-mixed": dict(strategy_id="M", mode="scripted", guided_tools=None),
+    "scripted-exploit": dict(strategy_id="X", mode="scripted", guided_tools=None),
+    "guided-navigate": dict(strategy_id="M", mode="guided", guided_tools="navigate"),
+    "guided-full": dict(strategy_id="M", mode="guided", guided_tools="full"),
+}
+
+
+def build_preset(preset_id: str, *, seed: int = 0) -> PresetConfig:
+    """Resolve a named preset to (strategy, mode, allowed_tools)."""
+    cfg = PRESET_CONFIGS[preset_id]
+    strategy = build_strategy(cfg["strategy_id"], seed=seed)
+    gt = cfg["guided_tools"]
+    allowed = NAVIGATE_TOOLS if gt == "navigate" else FULL_TOOLS if gt == "full" else None
+    return PresetConfig(
+        strategy=strategy,
+        mode=cfg["mode"],
+        allowed_tools=allowed,
+    )
+
+
 # ---- Section 3: Run mode (was policy.py) ---------------------------------
 
 ModeName = Literal["scripted", "guided"]
@@ -190,6 +240,8 @@ class ModeContext:
     n_people: int
     docs_covered: int
     docs_total: int
+    budget_spent: float = 0.0
+    budget_remaining: float = 0.0
 
 
 class RunMode(Protocol):
@@ -267,10 +319,12 @@ class GuidedMode:
         fallback_explorer: Explorer,
         runtime: RuntimeOverrides | None = None,
         persist_batches: int = 8,
+        allowed_tools: frozenset[str] | None = None,
     ) -> None:
         self._orchestrator = orchestrator
         self._fallback_explorer = fallback_explorer
         self._runtime = runtime or RuntimeOverrides()
+        self._allowed_tools = allowed_tools
         self._last_actions: list[str] = []
         self._events: list[dict] = []
         # Persist the last active action (jump_*, walk_local) for this
@@ -302,11 +356,26 @@ class GuidedMode:
                 docs_covered=ctx.docs_covered,
                 docs_total=ctx.docs_total,
                 last_actions=self._last_actions[-16:],
-                sampler_snapshot=build_snapshot(state),
+                sampler_snapshot=build_snapshot(
+                    state,
+                    budget_spent=ctx.budget_spent,
+                    budget_remaining=ctx.budget_remaining,
+                ),
+                budget_spent=ctx.budget_spent,
+                budget_remaining=ctx.budget_remaining,
             )
             action = self._orchestrator.step(orch_state)
             action_name = action.name
             action_args = dict(action.args or {})
+            # Filter: reject actions outside the allowed tool set.
+            if self._allowed_tools is not None and action_name not in self._allowed_tools:
+                batch = self._fallback_explorer.next_batch(state, k)
+                return ExtractDecision(
+                    action="fallback_filtered",
+                    batch=tuple(batch),
+                    stop=not bool(batch),
+                    meta={"blocked_action": action_name},
+                )
             # Cache active exploration actions so we don't pay a tier-L call
             # per batch. Control actions (set_*, done) and pick_chunks are
             # never cached (pick_chunks is already targeted; no reason to repeat).
@@ -367,6 +436,7 @@ def build_mode(
     explorer: Explorer,
     orchestrator: Orchestrator | None,
     runtime: RuntimeOverrides | None = None,
+    allowed_tools: frozenset[str] | None = None,
 ) -> RunMode:
     match name:
         case "scripted":
@@ -374,6 +444,6 @@ def build_mode(
         case "guided":
             if orchestrator is None:
                 raise ValueError("guided mode requires an orchestrator binding")
-            return GuidedMode(orchestrator, explorer, runtime=runtime)
+            return GuidedMode(orchestrator, explorer, runtime=runtime, allowed_tools=allowed_tools)
         case _:
             raise ValueError(f"unknown mode: {name}")

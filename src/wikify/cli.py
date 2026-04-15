@@ -11,7 +11,7 @@ from .cache import ExtractCache
 from .distill.pipeline import run as pipeline_run
 from .distill.pipeline import run_with_preloaded
 from .distill.preload import preload_corpus
-from .distill.strategy import STRATEGY_CONFIGS, build_strategy
+from .distill.strategy import PRESET_CONFIGS, STRATEGY_CONFIGS, build_preset, build_strategy
 from .ingest.pipeline import ingest_corpus, refresh_corpus
 from .meter import CostMeter
 from .paths import BundlePaths, CorpusPaths
@@ -112,11 +112,25 @@ def refresh(
 
 @app.command()
 def distill(
-    strategy: str = typer.Option(..., "--strategy", help="E | M | X"),
+    strategy: str = typer.Option("", "--strategy", help="E | M | X"),
     mode: str = typer.Option(
         "scripted",
         "--mode",
         help="scripted | guided",
+    ),
+    preset: str | None = typer.Option(
+        None,
+        "--preset",
+        help=(
+            "Named study condition. Resolves to strategy + mode + guided-tools. "
+            f"Available: {', '.join(PRESET_CONFIGS)}. "
+            "Mutually exclusive with --strategy + --mode."
+        ),
+    ),
+    guided_tools: str | None = typer.Option(
+        None,
+        "--guided-tools",
+        help="navigate | full. Only with --mode guided or guided presets.",
     ),
     budget: str = typer.Option(
         "1x",
@@ -209,19 +223,13 @@ def distill(
             " for post-hoc review. Adds a small token overhead per call."
         ),
     ),
-    evidence_mode: str = typer.Option(
-        "full",
-        "--evidence-mode",
-        help="full (chunk+quote) | doc (doc-level only) | off (no markers)",
-    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
+    from .distill.strategy import FULL_TOOLS, NAVIGATE_TOOLS
     from .prompts import available_artifact_templates, available_field_guides
 
     if phase not in ("all", "extract", "write"):
         raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
-    if mode not in ("scripted", "guided"):
-        raise typer.BadParameter(f"unknown mode: {mode}")
     if iteration not in ("create", "refine", "merge"):
         raise typer.BadParameter(f"unknown iteration: {iteration}")
     if feed and iteration == "create":
@@ -230,11 +238,45 @@ def distill(
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
         raise typer.BadParameter("--iteration merge only supports --phase all")
-    if evidence_mode not in ("full", "doc", "off"):
-        raise typer.BadParameter(f"unknown evidence-mode: {evidence_mode}; must be full|doc|off")
 
-    if strategy not in STRATEGY_CONFIGS:
-        raise typer.BadParameter(f"unknown strategy: {strategy}")
+    # Resolve preset or strategy+mode
+    allowed_tools: frozenset[str] | None = None
+    if preset is not None:
+        if preset not in PRESET_CONFIGS:
+            raise typer.BadParameter(
+                f"unknown preset: {preset}; available: {', '.join(PRESET_CONFIGS)}"
+            )
+        if strategy:
+            raise typer.BadParameter("--preset is mutually exclusive with --strategy")
+        if mode != "scripted":
+            raise typer.BadParameter("--preset is mutually exclusive with --mode")
+        resolved = build_preset(preset, seed=seed)
+        cfg = resolved.strategy
+        mode = resolved.mode
+        allowed_tools = resolved.allowed_tools
+        strategy = cfg.name
+        typer.echo(f"preset {preset}: strategy={strategy} mode={mode}")
+    else:
+        if not strategy:
+            raise typer.BadParameter("--strategy is required (or use --preset)")
+        if strategy not in STRATEGY_CONFIGS:
+            raise typer.BadParameter(f"unknown strategy: {strategy}")
+        if mode not in ("scripted", "guided"):
+            raise typer.BadParameter(f"unknown mode: {mode}")
+        cfg = build_strategy(strategy, seed=seed)
+
+    # Resolve guided-tools
+    if guided_tools is not None:
+        if mode != "guided":
+            raise typer.BadParameter("--guided-tools only applies to --mode guided")
+        if guided_tools == "navigate":
+            allowed_tools = NAVIGATE_TOOLS
+        elif guided_tools == "full":
+            allowed_tools = FULL_TOOLS
+        else:
+            raise typer.BadParameter(
+                f"--guided-tools must be navigate or full; got {guided_tools!r}"
+            )
     if field is None:
         from .distill.extract.field_detect import detect_field
 
@@ -291,7 +333,6 @@ def distill(
 
     dispatch = Dispatch(meter, cache)
 
-    cfg = build_strategy(strategy, seed=seed)
     # Apply per-role tier overrides if the user supplied them.
     if extract_tier is not None:
         cfg.extract_tier = ModelTier(extract_tier)
@@ -323,7 +364,7 @@ def distill(
         artifact_name=artifact,
         phase=phase,
         verbalize=verbalize,
-        evidence_mode=evidence_mode,
+        allowed_tools=allowed_tools,
     )
     snap_path = bundle.run_path
     if snap_path.exists():
@@ -490,13 +531,15 @@ def _run_baseline(
 
 @app.command()
 def study(
-    strategies: str = typer.Option("M", "--strategies", help="Comma-separated: E,M,X"),
-    modes: str = typer.Option("scripted", "--modes", help="Comma-separated: scripted,guided"),
-    evidence_modes: str = typer.Option(
-        "full", "--evidence-modes", help="Comma-separated: full,doc,off"
+    presets: str = typer.Option(
+        "scripted-mixed",
+        "--presets",
+        help=f"Comma-separated presets: {', '.join(PRESET_CONFIGS)}",
     ),
-    baselines: str | None = typer.Option(
-        None, "--baselines", help="Comma-separated: B1,B2. Run separately from main pipeline."
+    include_baseline: bool = typer.Option(
+        False,
+        "--include-baseline",
+        help="Run the baseline (retrieve-and-summarise) for each budget x seed.",
     ),
     budgets: str = typer.Option("1x", "--budgets", help="Comma-separated: 0.5x,1x,2x"),
     seeds: str = typer.Option("0", "--seeds", help="Comma-separated: 0,1,2"),
@@ -507,44 +550,27 @@ def study(
     artifact: str = typer.Option("wiki_article", "--artifact"),
     verbalize: bool = typer.Option(False, "--verbalize/--no-verbalize"),
 ) -> None:
-    """Run a multi-factor study: strategies x modes x evidence_modes x budgets x seeds.
+    """Run a multi-factor study: presets x budgets x seeds.
 
-    Two independent axes:
-      Exploration: --strategies (E/M/X) x --modes (scripted/guided)
-      Provenance: --evidence-modes (full/doc/off)
-
-    Baselines (B1/B2) are separate pipelines, not modes of the main pipeline.
+    Each preset is a named study condition (strategy + mode + guided-tools).
+    See docs/study-design.md for the full design.
     """
-    strat_list = [s.strip() for s in strategies.split(",")]
-    mode_list = [m.strip() for m in modes.split(",")]
-    ev_list = [e.strip() for e in evidence_modes.split(",")]
+    preset_list = [p.strip() for p in presets.split(",")]
     budget_list = [b.strip() for b in budgets.split(",")]
     seed_list = [int(s.strip()) for s in seeds.split(",")]
-    baseline_list = [b.strip() for b in baselines.split(",")] if baselines else []
 
-    for s in strat_list:
-        if s not in STRATEGY_CONFIGS:
-            raise typer.BadParameter(f"unknown strategy: {s}")
-    for m in mode_list:
-        if m not in ("scripted", "guided"):
-            raise typer.BadParameter(f"unknown mode: {m}")
-    for e in ev_list:
-        if e not in ("full", "doc", "off"):
-            raise typer.BadParameter(f"unknown evidence-mode: {e}")
-    for bl in baseline_list:
-        if bl not in ("B1", "B2"):
-            raise typer.BadParameter(f"unknown baseline: {bl}")
+    for p in preset_list:
+        if p not in PRESET_CONFIGS:
+            raise typer.BadParameter(
+                f"unknown preset: {p}; available: {', '.join(PRESET_CONFIGS)}"
+            )
 
-    # Main pipeline runs: strategies x modes x evidence_modes x budgets x seeds
-    n_strat, n_mode, n_ev = len(strat_list), len(mode_list), len(ev_list)
-    n_bud, n_seed = len(budget_list), len(seed_list)
-    pipeline_runs = n_strat * n_mode * n_ev * n_bud * n_seed
-    baseline_runs = len(baseline_list) * len(budget_list) * len(seed_list)
+    pipeline_runs = len(preset_list) * len(budget_list) * len(seed_list)
+    baseline_runs = len(budget_list) * len(seed_list) if include_baseline else 0
     total = pipeline_runs + baseline_runs
 
     typer.echo(
-        f"study: {len(strat_list)} strategies x {len(mode_list)} modes "
-        f"x {len(ev_list)} evidence x {len(budget_list)} budgets "
+        f"study: {len(preset_list)} presets x {len(budget_list)} budgets "
         f"x {len(seed_list)} seeds = {pipeline_runs} pipeline runs"
         + (f" + {baseline_runs} baseline runs" if baseline_runs else "")
         + f" = {total} total"
@@ -561,61 +587,59 @@ def study(
     cache = ExtractCache(root=cache_dir)
     run_n = 0
 
-    # --- Main pipeline runs ---
-    for strat in strat_list:
-        for mode_name in mode_list:
-            for ev_mode in ev_list:
-                for bud in budget_list:
-                    for seed in seed_list:
-                        run_n += 1
-                        bundle_name = f"{strat}_{mode_name}_{ev_mode}_{bud}_seed{seed}"
-                        bundle = BundlePaths(root=out_dir / bundle_name)
-                        bundle.ensure()
-                        budget_haiku_eq = _parse_budget(bud)
-                        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                        run_id = f"study_{bundle_name}_{ts}"
-
-                        meter = CostMeter(
-                            budget_haiku_eq=budget_haiku_eq,
-                            run_id=run_id,
-                            events_path=bundle.calls_path,
-                        )
-
-                        from .dispatch import Dispatch
-
-                        dispatch = Dispatch(meter, cache)
-                        cfg = build_strategy(strat, seed=seed)
-
-                        run_with_preloaded(
-                            preloaded=preloaded,
-                            bundle=bundle,
-                            strategy=cfg,
-                            extractor=dispatch,
-                            writer=dispatch,
-                            meter=meter,
-                            budget_haiku_eq=budget_haiku_eq,
-                            iteration="create",
-                            editor=dispatch,
-                            compactor=dispatch,
-                            orchestrator=dispatch,
-                            mode_name=mode_name,
-                            field_name=field,
-                            artifact_name=artifact,
-                            verbalize=verbalize,
-                            evidence_mode=ev_mode,
-                        )
-
-                        typer.echo(
-                            f"[{run_n}/{total}] {strat}/{mode_name}/{ev_mode} "
-                            f"{bud} seed{seed}: done -> {bundle.root}"
-                        )
-
-    # --- Baseline runs ---
-    for bl in baseline_list:
+    # --- Preset pipeline runs ---
+    for preset_name in preset_list:
         for bud in budget_list:
             for seed in seed_list:
                 run_n += 1
-                bundle_name = f"{bl}_{bud}_seed{seed}"
+                resolved = build_preset(preset_name, seed=seed)
+                bundle_name = f"{preset_name}_{bud}_seed{seed}"
+                bundle = BundlePaths(root=out_dir / bundle_name)
+                bundle.ensure()
+                budget_haiku_eq = _parse_budget(bud)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                run_id = f"study_{bundle_name}_{ts}"
+
+                meter = CostMeter(
+                    budget_haiku_eq=budget_haiku_eq,
+                    run_id=run_id,
+                    events_path=bundle.calls_path,
+                )
+
+                from .dispatch import Dispatch
+
+                dispatch = Dispatch(meter, cache)
+
+                run_with_preloaded(
+                    preloaded=preloaded,
+                    bundle=bundle,
+                    strategy=resolved.strategy,
+                    extractor=dispatch,
+                    writer=dispatch,
+                    meter=meter,
+                    budget_haiku_eq=budget_haiku_eq,
+                    iteration="create",
+                    editor=dispatch,
+                    compactor=dispatch,
+                    orchestrator=dispatch,
+                    mode_name=resolved.mode,
+                    field_name=field,
+                    artifact_name=artifact,
+                    verbalize=verbalize,
+                    allowed_tools=resolved.allowed_tools,
+                )
+
+                typer.echo(
+                    f"[{run_n}/{total}] {preset_name} "
+                    f"{bud} seed{seed}: done -> {bundle.root}"
+                )
+
+    # --- Baseline runs ---
+    if include_baseline:
+        for bud in budget_list:
+            for seed in seed_list:
+                run_n += 1
+                bundle_name = f"baseline_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
                 budget_haiku_eq = _parse_budget(bud)
@@ -629,7 +653,7 @@ def study(
                 )
 
                 _run_baseline(
-                    baseline=bl,
+                    baseline="B2",
                     preloaded=preloaded,
                     bundle=bundle,
                     meter=meter,
@@ -638,7 +662,7 @@ def study(
                 )
 
                 typer.echo(
-                    f"[{run_n}/{total}] {bl} {bud} seed{seed}: done -> {bundle.root}"
+                    f"[{run_n}/{total}] baseline {bud} seed{seed}: done -> {bundle.root}"
                 )
 
     typer.echo(f"study complete: {total} runs in {out_dir}")

@@ -394,7 +394,9 @@ def execute_action(
     match name:
         case "done":
             return ExtractDecision(action=name, batch=(), stop=True)
-        case "pick_chunks":
+        case "write_now":
+            return ExtractDecision(action=name, batch=(), stop=True)
+        case "sample_chunks" | "pick_chunks":
             raw_ids = args.get("chunk_ids") or []
             reason = str(args.get("reason", ""))
             novel = [cid for cid in raw_ids if cid not in state.seen_chunks]
@@ -453,7 +455,14 @@ def execute_action(
 # --- snapshot for orchestrator -------------------------------------------
 
 
-def build_snapshot(state: ExplorerState) -> dict:
+def build_snapshot(
+    state: ExplorerState,
+    *,
+    budget_spent: float = 0.0,
+    budget_remaining: float = 0.0,
+    novelty_rate: float = 0.0,
+    pages: list[dict] | None = None,
+) -> dict:
     """Build the compact explorer snapshot for the orchestrator."""
     residuals = getattr(state, "coverage_residuals", {})
     seen = getattr(state, "seen_chunks", set())
@@ -492,10 +501,35 @@ def build_snapshot(state: ExplorerState) -> dict:
         "n_seen": n_seen,
     }
 
+    # Budget context for guided mode
+    budget = {
+        "spent": round(budget_spent, 1),
+        "remaining": round(budget_remaining, 1),
+    }
+
+    # Residual histogram: bin coverage residuals into 5 buckets
+    bins = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    hist = [0] * (len(bins) - 1)
+    for r in residuals.values():
+        for i in range(len(bins) - 1):
+            if bins[i] <= r < bins[i + 1] or (i == len(bins) - 2 and r == bins[i + 1]):
+                hist[i] += 1
+                break
+
+    # Page summaries (compact)
+    page_summaries = pages or []
+
     return {
         "top_gap_chunks": top_gap_chunks,
         "doc_coverage": doc_coverage,
         "content_stats": content_stats,
+        "budget": budget,
+        "novelty_rate": round(novelty_rate, 4),
+        "residual_histogram": dict(zip(
+            ["0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"],
+            hist,
+        )),
+        "page_summaries": page_summaries,
     }
 
 

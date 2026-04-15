@@ -551,11 +551,6 @@ class WriteRequest(BaseModel):
     # (why this structure, which evidence was foregrounded, what was
     # deferred). Feeds <bundle>/_meta/verbalize.jsonl.
     verbalize: bool = False
-    # Controls evidence granularity in the writer output.
-    # "full": chunk_id + quote, G2 gate enforced.
-    # "doc": evidence carries doc_id only, no chunk_id or quote.
-    # "off": no evidence markers in output.
-    evidence_mode: str = "full"  # "full" | "doc" | "off"
 
 
 class WriteResponse(BaseModel):
@@ -668,6 +663,10 @@ class OrchState(BaseModel):
     # Contains top_gap_chunks, doc_coverage, page_index, content_stats.
     # ~2-4 kB of JSON; built in LlmPolicy.next_extract before each orch call.
     sampler_snapshot: dict = Field(default_factory=dict)
+    budget_spent: float = 0.0
+    budget_remaining: float = 0.0
+    novelty_rate: float = 0.0
+    page_summaries: list[dict] = Field(default_factory=list)
     # Verbalization: see ExtractRequest.verbalize.
     verbalize: bool = False
 

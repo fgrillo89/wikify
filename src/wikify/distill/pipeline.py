@@ -134,7 +134,7 @@ def run(
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
-    evidence_mode: str = "full",
+    allowed_tools: frozenset[str] | None = None,
 ) -> None:
     """Thin wrapper: load corpus once then delegate to run_with_preloaded."""
     preloaded = preload_corpus(corpus)
@@ -160,7 +160,7 @@ def run(
         compact_threshold=compact_threshold,
         phase=phase,
         verbalize=verbalize,
-        evidence_mode=evidence_mode,
+        allowed_tools=allowed_tools,
     )
 
 
@@ -187,7 +187,7 @@ def run_with_preloaded(
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
-    evidence_mode: str = "full",
+    allowed_tools: frozenset[str] | None = None,
 ) -> None:
     effective_mode_name = mode_name or "scripted"
     if feed and iteration == "create":
@@ -270,7 +270,6 @@ def run_with_preloaded(
         person_artifact_hash=person_artifact_hash,
         corpus_persona_hash=corpus_persona_hash,
         verbalize=verbalize,
-        evidence_mode=evidence_mode,
     )
 
     state = _build_explorer_state(rng, chunks, knowledge_graph)
@@ -300,6 +299,7 @@ def run_with_preloaded(
         explorer=strategy.explorer,
         orchestrator=orchestrator,
         runtime=runtime,
+        allowed_tools=allowed_tools,
     )
 
     if runtime.exploit_fraction is not None:
@@ -350,6 +350,8 @@ def run_with_preloaded(
                 pages=existing_pages,
                 candidates=candidates,
                 docs_total=len(docs),
+                budget_spent=meter.spent_haiku_eq,
+                budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
             )
             decision = policy.next_extract(state, extract_batch_size, ctx)
             policy_events.extend(policy.drain_events())
@@ -565,6 +567,8 @@ def run_with_preloaded(
         pages=pages,
         candidates=candidates,
         docs_total=len(docs),
+        budget_spent=meter.spent_haiku_eq,
+        budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
     )
     write_pages = policy.order_write_pages(pages, max_concepts, write_ctx)
     policy_events.extend(policy.drain_events())
@@ -1170,6 +1174,8 @@ def _policy_context(
     pages: list[WikiPage],
     candidates: list[Candidate],
     docs_total: int,
+    budget_spent: float = 0.0,
+    budget_remaining: float = 0.0,
 ) -> ModeContext:
     page_ids = {p.id for p in pages}
     n_concepts = sum(1 for p in pages if p.kind == "article")
@@ -1183,6 +1189,8 @@ def _policy_context(
         n_people=n_people,
         docs_covered=docs_covered,
         docs_total=docs_total,
+        budget_spent=budget_spent,
+        budget_remaining=budget_remaining,
     )
 
 

@@ -649,6 +649,11 @@ class Dispatch:
                 "n_pages": state.n_pages,
                 "n_candidates": state.n_candidates,
                 "last_actions": state.last_actions,
+                "budget_spent": state.budget_spent,
+                "budget_remaining": state.budget_remaining,
+                "novelty_rate": state.novelty_rate,
+                "page_summaries": state.page_summaries,
+                "sampler_snapshot": state.sampler_snapshot,
             },
             OrchAction,
         )

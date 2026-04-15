@@ -15,6 +15,8 @@ from wikify.distill.explorer import (
     semantic_query_chunks,
 )
 from wikify.distill.strategy import (
+    FULL_TOOLS,
+    NAVIGATE_TOOLS,
     GuidedMode,
     ModeContext,
     RuntimeOverrides,
@@ -311,3 +313,128 @@ def test_semantic_query_empty_store_returns_empty():
     query = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     results = semantic_query_chunks(state, query, k=5, scope="all")
     assert results == []
+
+
+# --- write_now action tests -----------------------------------------------
+
+
+def test_write_now_signals_stop():
+    """write_now must return stop=True with empty batch."""
+    from wikify.distill.explorer import execute_action
+
+    state = _explorer_state_with_seen()
+    decision = execute_action("write_now", {}, state, 4, _explorer(), None)
+    assert decision.action == "write_now"
+    assert decision.stop is True
+    assert decision.batch == ()
+
+
+# --- allowed_tools filtering tests ----------------------------------------
+
+
+def test_allowed_tools_blocks_disallowed_action():
+    """GuidedMode with NAVIGATE_TOOLS rejects 'done' and falls back."""
+    state = _explorer_state_with_seen()
+    orch = _ScriptedOrchestrator([OrchAction(name="done")])
+    policy = GuidedMode(
+        orch, _explorer(), allowed_tools=NAVIGATE_TOOLS,
+    )
+    decision = policy.next_extract(state=state, k=4, ctx=_ctx())
+    assert decision.action == "fallback_filtered"
+    assert decision.meta["blocked_action"] == "done"
+
+
+def test_allowed_tools_permits_pick_chunks():
+    """NAVIGATE_TOOLS allows pick_chunks."""
+    state = _explorer_state_with_seen()
+    orch = _ScriptedOrchestrator(
+        [OrchAction(name="pick_chunks", args={"chunk_ids": ["c3"]})]
+    )
+    policy = GuidedMode(
+        orch, _explorer(), allowed_tools=NAVIGATE_TOOLS,
+    )
+    decision = policy.next_extract(state=state, k=4, ctx=_ctx())
+    assert decision.action == "pick_chunks"
+    assert decision.batch == ("c3",)
+
+
+def test_sample_chunks_executes_like_pick_chunks():
+    """sample_chunks is the KG-facing alias for pick_chunks."""
+    state = _explorer_state_with_seen()
+    orch = _ScriptedOrchestrator(
+        [OrchAction(name="sample_chunks", args={"chunk_ids": ["c3", "c4"]})]
+    )
+    policy = GuidedMode(
+        orch, _explorer(), allowed_tools=NAVIGATE_TOOLS,
+    )
+    decision = policy.next_extract(state=state, k=4, ctx=_ctx())
+    assert decision.action == "sample_chunks"
+    assert set(decision.batch) == {"c3", "c4"}
+
+
+def test_navigate_tools_blocks_set_tier():
+    """set_tier is a control action excluded from NAVIGATE_TOOLS."""
+    state = _explorer_state_with_seen()
+    orch = _ScriptedOrchestrator(
+        [OrchAction(name="set_tier", args={"role": "write", "tier": "L"})]
+    )
+    policy = GuidedMode(
+        orch, _explorer(), allowed_tools=NAVIGATE_TOOLS,
+    )
+    decision = policy.next_extract(state=state, k=4, ctx=_ctx())
+    assert decision.action == "fallback_filtered"
+    assert decision.meta["blocked_action"] == "set_tier"
+
+
+def test_full_tools_permits_done():
+    """FULL_TOOLS allows done."""
+    orch = _ScriptedOrchestrator([OrchAction(name="done")])
+    policy = GuidedMode(
+        orch, _explorer(), allowed_tools=FULL_TOOLS,
+    )
+    decision = policy.next_extract(state=object(), k=4, ctx=_ctx())
+    assert decision.action == "done"
+    assert decision.stop is True
+
+
+def test_full_tools_permits_set_tier():
+    """FULL_TOOLS allows set_tier."""
+    rt = RuntimeOverrides()
+    orch = _ScriptedOrchestrator(
+        [OrchAction(name="set_tier", args={"role": "write", "tier": "L"})]
+    )
+    policy = GuidedMode(
+        orch, _explorer(), runtime=rt, allowed_tools=FULL_TOOLS,
+    )
+    decision = policy.next_extract(state=object(), k=4, ctx=_ctx())
+    assert decision.action == "set_tier"
+    assert rt.write_tier == "L"
+
+
+def test_no_allowed_tools_permits_everything():
+    """When allowed_tools is None, all actions pass through."""
+    orch = _ScriptedOrchestrator([OrchAction(name="done")])
+    policy = GuidedMode(orch, _explorer(), allowed_tools=None)
+    decision = policy.next_extract(state=object(), k=4, ctx=_ctx())
+    assert decision.action == "done"
+
+
+# --- enriched snapshot tests -----------------------------------------------
+
+
+def test_build_snapshot_includes_budget_and_histogram():
+    state = _explorer_state_with_seen()
+    snap = build_snapshot(
+        state,
+        budget_spent=1000.0,
+        budget_remaining=4000.0,
+        novelty_rate=0.42,
+        pages=[{"id": "p1", "title": "Test Page"}],
+    )
+    assert snap["budget"]["spent"] == 1000.0
+    assert snap["budget"]["remaining"] == 4000.0
+    assert snap["novelty_rate"] == 0.42
+    assert "residual_histogram" in snap
+    assert snap["page_summaries"] == [{"id": "p1", "title": "Test Page"}]
+    # Histogram has 5 bins
+    assert len(snap["residual_histogram"]) == 5
