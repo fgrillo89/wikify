@@ -499,6 +499,22 @@ def campaign(
     typer.echo(f"campaign complete: {bundle.root}")
 
 
+def _quick_convergence_metric(bundle: BundlePaths) -> float:
+    """Cheap convergence proxy: M5 hit rate from the run snapshot.
+
+    M5 = |chunks used in evidence| / |chunks read|. Available from the
+    run snapshot without an embedder. Returns 0.0 if unavailable.
+    """
+    try:
+        from .eval import metrics
+        from .store.wiki_bundle import load_bundle
+
+        b = load_bundle(bundle.root)
+        return metrics.hit_rate(b)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _run_baseline(
     baseline: str,
     preloaded: object,
@@ -507,26 +523,16 @@ def _run_baseline(
     corpus_dir: Path,
     seed: int,
 ) -> None:
-    """Execute a B1 or B2 baseline run."""
-    from .baselines.retrieve_summarise import B1Config, build_b1_pages, load_topics
-
-    topics = load_topics(corpus_dir)
-    if not topics:
-        typer.echo(f"  {baseline}: no topics.json found, skipping")
-        return
+    """Execute a baseline run using the consolidated pipeline."""
+    from .baselines.pipeline import BaselineConfig, run_baseline
 
     kg = preloaded.kg  # type: ignore[attr-defined]
-    pages = build_b1_pages(topics, kg, B1Config(model_id="M"))
-
-    if baseline == "B2":
-        from .baselines.post_hoc_cite import add_post_hoc_citations
-
-        pages = add_post_hoc_citations(pages, kg)
-
-    # Write pages to bundle
-    index = {p.id: p.model_dump() for p in pages}
-    index_path = bundle.root / "_index.json"
-    index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    run_baseline(
+        kg=kg,
+        bundle=bundle,
+        meter=meter,
+        config=BaselineConfig(seed=seed),
+    )
 
 
 @app.command()
@@ -549,11 +555,22 @@ def study(
     field: str | None = typer.Option(None, "--field"),
     artifact: str = typer.Option("wiki_article", "--artifact"),
     verbalize: bool = typer.Option(False, "--verbalize/--no-verbalize"),
+    max_rounds: int = typer.Option(
+        1,
+        "--max-rounds",
+        help="Max convergence rounds per condition. Each round gets budget / max_rounds.",
+    ),
+    convergence_threshold: float = typer.Option(
+        0.0,
+        "--convergence-threshold",
+        help="Stop early when metrics delta < threshold. 0 = no convergence check.",
+    ),
 ) -> None:
     """Run a multi-factor study: presets x budgets x seeds.
 
     Each preset is a named study condition (strategy + mode + guided-tools).
-    See docs/study-design.md for the full design.
+    With --max-rounds > 1, each condition runs up to max_rounds rounds of
+    extract+write, checking convergence after each. See docs/study-design.md.
     """
     preset_list = [p.strip() for p in presets.split(",")]
     budget_list = [b.strip() for b in budgets.split(",")]
@@ -588,6 +605,9 @@ def study(
     run_n = 0
 
     # --- Preset pipeline runs ---
+    sub_budget_fraction = 1.0 / max(1, max_rounds)
+    min_useful_budget = 5_000.0  # ~one extract+write cycle
+
     for preset_name in preset_list:
         for bud in budget_list:
             for seed in seed_list:
@@ -596,38 +616,73 @@ def study(
                 bundle_name = f"{preset_name}_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
-                budget_haiku_eq = _parse_budget(bud)
-                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                run_id = f"study_{bundle_name}_{ts}"
+                total_budget = _parse_budget(bud)
+                budget_remaining = total_budget
+                prev_m5: float | None = None
 
-                meter = CostMeter(
-                    budget_haiku_eq=budget_haiku_eq,
-                    run_id=run_id,
-                    events_path=bundle.calls_path,
-                )
+                for rnd in range(1, max_rounds + 1):
+                    sub_budget = total_budget * sub_budget_fraction
+                    if budget_remaining < min_useful_budget:
+                        break
+                    sub_budget = min(sub_budget, budget_remaining)
+                    ts = datetime.now(timezone.utc).strftime(
+                        "%Y%m%dT%H%M%S"
+                    )
+                    run_id = (
+                        f"study_{bundle_name}_r{rnd}_{ts}"
+                    )
 
-                from .dispatch import Dispatch
+                    meter = CostMeter(
+                        budget_haiku_eq=sub_budget,
+                        run_id=run_id,
+                        events_path=bundle.calls_path,
+                    )
 
-                dispatch = Dispatch(meter, cache)
+                    from .dispatch import Dispatch
 
-                run_with_preloaded(
-                    preloaded=preloaded,
-                    bundle=bundle,
-                    strategy=resolved.strategy,
-                    extractor=dispatch,
-                    writer=dispatch,
-                    meter=meter,
-                    budget_haiku_eq=budget_haiku_eq,
-                    iteration="create",
-                    editor=dispatch,
-                    compactor=dispatch,
-                    orchestrator=dispatch,
-                    mode_name=resolved.mode,
-                    field_name=field,
-                    artifact_name=artifact,
-                    verbalize=verbalize,
-                    allowed_tools=resolved.allowed_tools,
-                )
+                    dispatch = Dispatch(meter, cache)
+                    iteration_op = "create" if rnd == 1 else "refine"
+
+                    run_with_preloaded(
+                        preloaded=preloaded,
+                        bundle=bundle,
+                        strategy=resolved.strategy,
+                        extractor=dispatch,
+                        writer=dispatch,
+                        meter=meter,
+                        budget_haiku_eq=sub_budget,
+                        iteration=iteration_op,
+                        editor=dispatch,
+                        compactor=dispatch,
+                        orchestrator=dispatch,
+                        mode_name=resolved.mode,
+                        field_name=field,
+                        artifact_name=artifact,
+                        verbalize=verbalize,
+                        allowed_tools=resolved.allowed_tools,
+                    )
+
+                    budget_remaining -= meter.spent_haiku_eq
+
+                    # Convergence check via M5 (hit rate) — cheap, no
+                    # embedder needed. Full M1/M3/G metrics require the
+                    # embedder which may not be available.
+                    if (
+                        convergence_threshold > 0
+                        and max_rounds > 1
+                        and rnd < max_rounds
+                    ):
+                        m5 = _quick_convergence_metric(bundle)
+                        if (
+                            prev_m5 is not None
+                            and abs(m5 - prev_m5) < convergence_threshold
+                        ):
+                            typer.echo(
+                                f"  converged at round {rnd} "
+                                f"(delta={abs(m5 - prev_m5):.4f})"
+                            )
+                            break
+                        prev_m5 = m5
 
                 typer.echo(
                     f"[{run_n}/{total}] {preset_name} "

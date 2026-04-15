@@ -442,6 +442,38 @@ class Dispatch:
         self._meter = meter
         self._cache = cache
         self._dir = resolve_dispatch_dir(dispatch_dir)
+        # Guided-mode context (populated via attach_guided_context)
+        self._kg: object | None = None
+        self._guided_pages: list = []
+        self._budget_target: float = 0.0
+        self._tool_schemas: dict | None = None
+        self._max_tool_turns: int = 8
+        self._snapshot: dict = {}
+
+    def attach_guided_context(
+        self,
+        *,
+        kg: object,
+        pages: list,
+        budget_target: float,
+        tool_schemas: dict | None = None,
+        max_tool_turns: int = 8,
+    ) -> None:
+        """Attach KG and runtime context for guided-mode tool execution."""
+        self._kg = kg
+        self._guided_pages = pages
+        self._budget_target = budget_target
+        self._tool_schemas = tool_schemas
+        self._max_tool_turns = max_tool_turns
+
+    def update_guided_state(
+        self, *, snapshot: dict | None = None, pages: list | None = None
+    ) -> None:
+        """Update mutable guided-mode state before each orchestrator step."""
+        if snapshot is not None:
+            self._snapshot = snapshot
+        if pages is not None:
+            self._guided_pages = pages
 
     # --- extract -----------------------------------------------------------
 
@@ -640,6 +672,11 @@ class Dispatch:
     # --- orchestrate -------------------------------------------------------
 
     def orchestrate(self, state: OrchState) -> OrchAction:
+        if self._tool_schemas and self._kg is not None:
+            return self._orchestrate_with_tools(state)
+        return self._orchestrate_single_turn(state)
+
+    def _orchestrate_single_turn(self, state: OrchState) -> OrchAction:
         t0 = time.monotonic()
         action = _dispatch_model(
             self._dir,
@@ -667,6 +704,119 @@ class Dispatch:
             prompt_hash_value="orchestrator",
         )
         return action
+
+    def _orchestrate_with_tools(self, state: OrchState) -> OrchAction:
+        """Multi-turn orchestrator dispatch with local KG tool execution.
+
+        The orchestrator can call free KG tools (search_chunks, get_citations,
+        etc.) before committing to a terminal action. Each tool call is
+        executed locally; only the orchestrator LLM calls cost tokens.
+        """
+        from .distill.kg_tools import KG_TOOL_NAMES
+
+        t0 = time.monotonic()
+        total_in = 0
+        total_out = 0
+
+        payload: dict = {
+            "run_id": state.run_id,
+            "n_pages": state.n_pages,
+            "n_candidates": state.n_candidates,
+            "last_actions": state.last_actions,
+            "budget_spent": state.budget_spent,
+            "budget_remaining": state.budget_remaining,
+            "novelty_rate": state.novelty_rate,
+            "page_summaries": state.page_summaries,
+            "sampler_snapshot": state.sampler_snapshot,
+            "tool_definitions": self._tool_schemas,
+        }
+
+        for turn in range(self._max_tool_turns):
+            role = f"orchestrate_t{turn}" if turn > 0 else "orchestrate"
+            req_path, res_path = _write_request(self._dir, role, payload)
+            raw = _await_response(res_path)
+            # Clean up request/response files
+            with contextlib.suppress(OSError):
+                req_path.unlink()
+            with contextlib.suppress(OSError):
+                res_path.unlink()
+
+            total_in += raw.get("tokens_in", 0)
+            total_out += raw.get("tokens_out", 0)
+            action_name = raw.get("name", "")
+
+            # Terminal action: anything that's not a KG tool
+            if action_name not in KG_TOOL_NAMES:
+                action = OrchAction(
+                    name=action_name,
+                    args=raw.get("args", {}),
+                    tokens_in=total_in,
+                    tokens_out=total_out,
+                )
+                _record_call(
+                    self._meter,
+                    role=Role.ORCHESTRATOR,
+                    tier="L",
+                    input_tokens=total_in,
+                    output_tokens=total_out,
+                    wall_seconds=time.monotonic() - t0,
+                    prompt_hash_value="orchestrator_tools",
+                )
+                return action
+
+            # KG tool: execute locally and feed result back
+            tool_result = self._execute_kg_tool(
+                action_name, raw.get("args", {})
+            )
+            payload = {
+                "tool_call": {
+                    "name": action_name,
+                    "args": raw.get("args", {}),
+                },
+                "tool_result": tool_result,
+                "turn": turn + 1,
+            }
+
+        # Max turns exceeded: fall back to explorer
+        _record_call(
+            self._meter,
+            role=Role.ORCHESTRATOR,
+            tier="L",
+            input_tokens=total_in,
+            output_tokens=total_out,
+            wall_seconds=time.monotonic() - t0,
+            prompt_hash_value="orchestrator_tools",
+        )
+        return OrchAction(
+            name="walk_local",
+            args={},
+            tokens_in=total_in,
+            tokens_out=total_out,
+        )
+
+    def _execute_kg_tool(self, name: str, args: dict) -> object:
+        """Execute a KG tool locally and return JSON-serializable result."""
+        from .distill import kg_tools
+
+        match name:
+            case "search_chunks":
+                return kg_tools.search_chunks(self._kg, **args)
+            case "get_source_info":
+                return kg_tools.get_source_info(self._kg, **args)
+            case "list_sources":
+                return kg_tools.list_sources(self._kg, **args)
+            case "get_citations":
+                return kg_tools.get_citations(self._kg, **args)
+            case "get_coverage":
+                return kg_tools.get_coverage(self._snapshot)
+            case "get_pages":
+                return kg_tools.get_pages(self._guided_pages)
+            case "get_budget":
+                return kg_tools.get_budget(
+                    self._meter, self._budget_target
+                )
+            case _:
+                return {"error": f"unknown tool: {name}"}
 
     # --- query -------------------------------------------------------------
 

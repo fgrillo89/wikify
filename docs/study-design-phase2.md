@@ -1,8 +1,10 @@
-# Study design phase 2: open items
+# Study design phase 2: implemented
 
-Tracks the deferred items from the study-design implementation.
+All 4 deferred items from phase 1 are now implemented.
 Phase 1 (#12) shipped: named presets, tool filtering, evidence_mode removal,
 enriched snapshot, write_now action, CLI rework.
+Phase 2: KG tools, multi-turn dispatch, continuous session, convergence,
+baseline pipeline.
 
 ## 1. Multi-turn KG tool-calling dispatch
 

@@ -111,6 +111,71 @@ EXTRACT_PROMPT = load_prompt("wikify/extract").name
 WRITE_PROMPT = load_prompt("wikify/write").name
 
 
+def _run_write_pass(
+    pages: list,
+    max_concepts: int,
+    writer: Writer,
+    meter: CostMeter,
+    strategy: StrategyConfig,
+    bundle: BundlePaths,
+    briefs: dict,
+    dossier_store: DossierStore,
+    chunks_by_id: dict,
+    images_index: object,
+    write_req_cfg: WriteRequestConfig,
+    author_ctx: dict,
+    citation_index: dict,
+    knowledge_graph: object,
+    budget_haiku_eq: float,
+    verbalize: bool,
+    write_rejections: list[dict],
+) -> None:
+    """Run a write pass over pages. Used both at end-of-extraction and mid-session."""
+    avg_write_cost = 30_000.0
+    n_writes_completed = 0
+    try:
+        for page in pages[:max_concepts]:
+            if not is_writable_page(page):
+                continue
+            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
+                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
+                continue
+            spent_before = meter.spent_haiku_eq
+            req = build_write_request(
+                page,
+                pages,
+                briefs,
+                dossier_store,
+                chunks_by_id,
+                images_index,
+                write_req_cfg,
+                author_ctx,
+                citation_index,
+                knowledge_graph=knowledge_graph,
+            )
+            try:
+                resp = writer.write(req)
+            except ValidationError as exc:
+                sys.stderr.write(
+                    f"[{meter._run_id}] writer REJECTED page={page.id!r}: "  # noqa: SLF001
+                    f"{type(exc).__name__}: {str(exc)[:200]}\n"
+                )
+                write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
+                continue
+            page.body_markdown = resp.body_markdown
+            if verbalize:
+                _append_verbalize(
+                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
+                )
+            call_cost = meter.spent_haiku_eq - spent_before
+            n_writes_completed += 1
+            avg_write_cost = (
+                avg_write_cost * (n_writes_completed - 1) + call_cost
+            ) / n_writes_completed
+    except BudgetExceededError:
+        pass
+
+
 def run(
     *,
     corpus: CorpusPaths,
@@ -322,6 +387,10 @@ def run_with_preloaded(
     extract_completed_normally = False
     split_initial = split
     policy_events: list[dict] = []
+    # Pre-initialize write-pass dependencies so write_now can use them.
+    dossier_store = DossierStore(bundle.root)
+    author_ctx = build_author_context(docs)
+    briefs: dict[str, EditorBrief] = {}
     write_rejections: list[dict] = []
     vision_requests: list[dict] = []
 
@@ -357,6 +426,28 @@ def run_with_preloaded(
             policy_events.extend(policy.drain_events())
             batch = list(decision.batch)
             if decision.stop:
+                if decision.action == "write_now" and candidates:
+                    # Mid-session write: flush current candidates then resume.
+                    mid_pages = canonicalize(candidates, existing=existing_pages)
+                    for p in mid_pages:
+                        for ev in p.evidence:
+                            state.pages_concept_evidence_chunks.append(ev.chunk_id)
+                            apply_coverage_feedback(state, ev.chunk_id, as_evidence=True)
+                    existing_pages = mid_pages
+                    _run_write_pass(
+                        mid_pages, max_concepts, writer, meter, strategy,
+                        bundle, briefs, dossier_store, chunks_by_id,
+                        images_index, write_req_cfg, author_ctx,
+                        citation_index, knowledge_graph, budget_haiku_eq,
+                        verbalize, write_rejections,
+                    )
+                    candidates.clear()
+                    policy_events.append({
+                        "stage": "write_now",
+                        "mode": effective_mode_name,
+                        "n_pages": len(mid_pages),
+                    })
+                    continue
                 break
             if not batch:
                 # Control actions (set_allocation, set_tier) legitimately
@@ -623,54 +714,13 @@ def run_with_preloaded(
         model_id=runtime.write_tier.value,
         writer_tier=runtime.write_tier,
     )
-    avg_write_cost = 30_000.0
-    n_writes_completed = 0
-    try:
-        for page in write_pages:
-            if not is_writable_page(page):
-                continue
-            # Pre-check: stop before issuing a write that would push spend
-            # past the 1.05x hard ceiling.
-            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
-                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
-                continue
-            _spent_before_call = meter.spent_haiku_eq
-            req = build_write_request(
-                page,
-                pages,
-                briefs,
-                dossier_store,
-                chunks_by_id,
-                images_index,
-                write_req_cfg,
-                author_ctx,
-                citation_index,
-                knowledge_graph=knowledge_graph,
-            )
-            try:
-                resp = writer.write(req)
-            except ValidationError as exc:
-                import sys as _sys
-
-                _sys.stderr.write(
-                    f"[{meter._run_id}] writer REJECTED page={page.id!r}: "  # noqa: SLF001
-                    f"{type(exc).__name__}: {str(exc)[:200]}\n"
-                )
-                write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
-                continue
-            page.body_markdown = resp.body_markdown
-            if verbalize:
-                _append_verbalize(
-                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
-                )
-            # Update running mean of observed write costs.
-            call_cost = meter.spent_haiku_eq - _spent_before_call
-            n_writes_completed += 1
-            avg_write_cost = (
-                avg_write_cost * (n_writes_completed - 1) + call_cost
-            ) / n_writes_completed
-    except BudgetExceededError:
-        pass
+    _run_write_pass(
+        write_pages, max_concepts, writer, meter, strategy,
+        bundle, briefs, dossier_store, chunks_by_id,
+        images_index, write_req_cfg, author_ctx,
+        citation_index, knowledge_graph, budget_haiku_eq,
+        verbalize, write_rejections,
+    )
 
     _finalize_pages(bundle, pages, docs, meter, strategy, iteration)
     snapshot = json.loads(bundle.run_path.read_text(encoding="utf-8"))
