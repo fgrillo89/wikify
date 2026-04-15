@@ -208,9 +208,7 @@ def run_with_preloaded(
     images_index = preloaded.images_index
     citation_index = preloaded.citation_index
 
-    # Build citation ref lookup for extraction and writing
-    from ..citestore.ref_lookup import RefLookup
-    ref_lookup = RefLookup(docs, chunks=chunks, vector_store=preloaded.vectors)
+    knowledge_graph = preloaded.knowledge_graph
 
     # ---- write-only phase: skip extraction entirely ---------------------
     if phase == "write":
@@ -390,18 +388,9 @@ def run_with_preloaded(
                         ck, docs_by_id, images_index
                     ),
                     verbalize=verbalize,
-                    citation_refs=[
-                        {
-                            "ord": r.entry.ord,
-                            "title": r.entry.title,
-                            "authors": r.entry.authors[:3],
-                            "year": r.entry.year,
-                            "doi": r.entry.doi,
-                            "in_corpus": r.in_corpus,
-                            "corpus_doc_id": r.corpus_doc_id,
-                        }
-                        for r in ref_lookup.resolve_markers(ck.text, ck.doc_id)
-                    ],
+                    citation_refs=_resolve_citation_refs(
+                        ck.text, ck.doc_id, knowledge_graph,
+                    ),
                 )
                 for cid, ck in batch_chunks
             ]
@@ -593,6 +582,7 @@ def run_with_preloaded(
         write_req_cfg,
         author_ctx,
         citation_index,
+        knowledge_graph=knowledge_graph,
     )
     if phase == "extract":
         save_pages_manifest(bundle, pages)
@@ -652,7 +642,7 @@ def run_with_preloaded(
                 write_req_cfg,
                 author_ctx,
                 citation_index,
-                ref_lookup=ref_lookup,
+                knowledge_graph=knowledge_graph,
             )
             try:
                 resp = writer.write(req)
@@ -865,6 +855,50 @@ def _to_imageref(rec: ImageRecord) -> ImageRef:
     )
 
 
+def _resolve_citation_refs(
+    chunk_text: str,
+    doc_id: str,
+    knowledge_graph: object | None,
+) -> list[dict]:
+    """Build citation_refs for an ExtractRequest from the KnowledgeGraph.
+
+    Parses [N] markers from chunk text, then resolves each ordinal to a
+    target source via the KG's ord_refs index. Returns dicts compatible
+    with the ExtractRequest.citation_refs schema.
+    """
+    if knowledge_graph is None:
+        return []
+    from ..citestore.graph import parse_citation_markers
+
+    ords = parse_citation_markers(chunk_text)
+    if not ords:
+        return []
+
+    source_node = knowledge_graph.source(doc_id).first()
+    if not source_node:
+        return []
+
+    ord_refs = source_node.get("ord_refs", {})
+    results: list[dict] = []
+    for n in ords:
+        target_id = ord_refs.get(n)
+        if not target_id:
+            continue
+        target = knowledge_graph.source(target_id).first()
+        if not target:
+            continue
+        results.append({
+            "ord": n,
+            "title": target.get("title", ""),
+            "authors": (target.get("authors") or [])[:3],
+            "year": target.get("year"),
+            "doi": target.get("doi", ""),
+            "in_corpus": target.get("kind") == "corpus",
+            "corpus_doc_id": target_id if target.get("kind") == "corpus" else "",
+        })
+    return results
+
+
 def _equations_for_chunk(chunk: Chunk, docs_by_id: dict[str, Document]) -> list[EquationRef]:
     """Build the EquationRef list for one chunk's ExtractRequest.
 
@@ -1029,6 +1063,23 @@ def _load_pagerank(corpus: CorpusPaths) -> dict[str, float]:
         return {}
 
 
+def _rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
+    """Build and persist the wiki knowledge graph + page vectors."""
+    from ..embedding import embed_texts
+    from ..store.vectors import save_vectors
+    from ..store.wiki_graph import (
+        build_wiki_graph,
+        build_wiki_vectors,
+        save_wiki_graph,
+    )
+
+    wiki_vectors = build_wiki_vectors(pages, embed_texts)
+    wkg = build_wiki_graph(pages, vectors=wiki_vectors, embed_fn=embed_texts)
+    save_wiki_graph(bundle.graph_path, wkg)
+    if wiki_vectors.ids:
+        save_vectors(bundle.wiki_vectors_path, wiki_vectors)
+
+
 def _finalize_pages(
     bundle: BundlePaths,
     pages: list[WikiPage],
@@ -1055,6 +1106,7 @@ def _finalize_pages(
         )
         write_page_file(bundle, page)
     build_index(bundle, pages).save()
+    _rebuild_wiki_graph(bundle, pages)
     meter.write_snapshot(bundle.run_path)
 
 

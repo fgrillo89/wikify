@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from ..models import Chunk, Document
 from ..paths import CorpusPaths
 from ..store.bibliography import load_citation_index
-from ..store.corpus import all_chunks, list_documents, read_graph, read_vector_store
+from ..store.corpus import (
+    all_chunks,
+    list_documents,
+    read_graph,
+    read_knowledge_graph,
+    read_vector_store,
+)
 from ..store.images_index import ImageIndex
 
 
@@ -26,6 +32,7 @@ class PreloadedCorpus:
     images_index: ImageIndex
     vectors: object  # VectorStore — typed as object to avoid circular import
     graph: object  # CorpusGraph
+    knowledge_graph: object  # KnowledgeGraph
     persona_text: str  # contents of corpus/persona.txt, or "" if absent
     citation_index: dict
 
@@ -39,6 +46,7 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     images_index = ImageIndex.load(corpus)
     vectors = read_vector_store(corpus)
     graph = read_graph(corpus)
+    knowledge_graph = read_knowledge_graph(corpus, vectors=vectors)
     citation_index = load_citation_index(corpus)
     persona_text = ""
     if corpus.persona_path.exists():
@@ -52,6 +60,7 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
         images_index=images_index,
         vectors=vectors,
         graph=graph,
+        knowledge_graph=knowledge_graph,
         persona_text=persona_text,
         citation_index=citation_index,
     )

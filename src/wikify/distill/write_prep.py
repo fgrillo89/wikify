@@ -224,37 +224,38 @@ _CITED_CHUNKS_PER_REF = 3
 
 def _build_cited_corpus_chunks(
     page: WikiPage,
-    ref_lookup: object,
     chunks_by_id: dict[str, Chunk],
+    knowledge_graph: object,
 ) -> dict[str, list[dict]]:
     """Pre-compute relevant chunks from in-corpus cited works.
 
-    For each evidence chunk on the page, resolve its [N] markers and
-    find in-corpus cited works.  For each, retrieve the top chunks
-    relevant to the page concept.
+    For each evidence source on the page, use the knowledge graph to find
+    sources it cites and retrieve top chunks relevant to the page concept
+    via scoped vector search.
+
     Returns {corpus_doc_id: [{chunk_id, text}]}.
     """
     result: dict[str, list[dict]] = {}
-    if not hasattr(ref_lookup, "resolve_markers"):
-        return result
+    page_doc_ids = {ev.doc_id for ev in page.evidence}
 
-    for ev in page.evidence:
-        ck = chunks_by_id.get(ev.chunk_id)
-        if not ck:
-            continue
-        refs = ref_lookup.resolve_markers(ck.text, ev.doc_id)
-        for ref in refs:
-            if ref.in_corpus and ref.corpus_doc_id not in result:
-                found = ref_lookup.find_corpus_chunks(
-                    ref.corpus_doc_id,
-                    page.title,
-                    top_k=_CITED_CHUNKS_PER_REF,
-                )
-                if found:
-                    result[ref.corpus_doc_id] = [
-                        {"chunk_id": c.id, "text": c.text[:500]}
-                        for c in found
-                    ]
+    for doc_id in sorted(page_doc_ids):
+        cited = knowledge_graph.source(doc_id).references()
+        for cited_id in cited.ids():
+            if cited_id in page_doc_ids or cited_id in result:
+                continue
+            hits = knowledge_graph.source(cited_id).chunks().search(
+                page.title, top_k=_CITED_CHUNKS_PER_REF,
+            )
+            if hits:
+                result[cited_id] = [
+                    {
+                        "chunk_id": h["id"],
+                        "text": chunks_by_id[h["id"]].text[:500]
+                        if h["id"] in chunks_by_id else "",
+                    }
+                    for h in hits
+                    if h.get("id") in chunks_by_id
+                ]
     return result
 
 
@@ -268,7 +269,7 @@ def build_write_request(
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
-    ref_lookup: object | None = None,
+    knowledge_graph: object | None = None,
 ) -> WriteRequest:
     """Build a WriteRequest for a single page.
 
@@ -393,8 +394,8 @@ def build_write_request(
             citation_context_for_docs(citation_index, page_doc_ids) if citation_index else {}
         ),
         cited_corpus_chunks=_build_cited_corpus_chunks(
-            page, ref_lookup, chunks_by_id,
-        ) if ref_lookup else {},
+            page, chunks_by_id, knowledge_graph,
+        ) if knowledge_graph else {},
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
         verbalize=cfg.verbalize,
@@ -411,7 +412,7 @@ def save_write_requests(
     cfg: WriteRequestConfig,
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
-    ref_lookup: object | None = None,
+    knowledge_graph: object | None = None,
 ) -> None:
     """Serialize WriteRequest JSONs to ``_write_requests/``."""
     out = bundle.write_requests_dir
@@ -429,7 +430,7 @@ def save_write_requests(
             cfg,
             author_ctx,
             citation_index,
-            ref_lookup=ref_lookup,
+            knowledge_graph=knowledge_graph,
         )
         path = out / f"{page.id}.request.json"
         path.write_text(req.model_dump_json(indent=2), encoding="utf-8")

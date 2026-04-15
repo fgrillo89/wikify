@@ -106,6 +106,80 @@ The schema uses `extra="forbid"` — no extra fields allowed.
 
 Choose sections based on the ACTUAL material, not a fixed template. A concept with rich mechanisms needs `## Mechanism`. A concept with performance data needs `## Performance`. A concept with competing models needs `## Alternative Explanations`. Do not invent sections the evidence does not support.
 
+## Knowledge Graph context
+
+The editor has access to both the corpus Knowledge Graph and the Wiki
+Knowledge Graph for informed section planning.
+
+- Corpus KG API: `.claude/skills/wikify/reference/knowledge-graph.md`
+- Wiki KG API: `.claude/skills/wikify/reference/wiki-graph.md`
+
+### Wiki graph: assess page state and gaps
+
+```python
+wkg = preloaded.wiki_knowledge_graph
+
+# How connected is this page? More connections -> longer, richer article
+co_ev = wkg.page(page_id).co_evidence().count()
+n_links = wkg.page(page_id).links().count()
+# Well-connected: 6000+ chars, 4+ sections. Isolated: 2000 chars, 2 sections.
+
+# Does a related page already cover a subsection topic?
+hits = wkg.search("specific subtopic", top_k=3)
+if hits and hits[0]["score"] > 0.7:
+    # Subtopic covered elsewhere -- reference it in See Also, don't duplicate
+
+# Find pages that share evidence with this one
+related = wkg.page(page_id).co_evidence().collect()
+# -> use in comparative_notes to differentiate from neighbors
+
+# Check if this page is thin compared to its neighbors
+page = wkg.page(page_id).first()
+neighbor_evidence = [
+    wkg.page(nid).first()["n_evidence"]
+    for nid in wkg.page(page_id).co_evidence().ids()
+]
+# If this page has much less evidence than neighbors, flag for more extraction
+```
+
+### Corpus KG: enrich with what the corpus knows
+
+Use the corpus KG to enrich editorial decisions:
+
+```python
+kg = preloaded.knowledge_graph
+
+# How important is this concept in the corpus?
+# Check citation count of evidence sources
+for doc_id in evidence_doc_ids:
+    source = kg.source(doc_id).first()
+    # source["citation_count"], source["pagerank"]
+    # High-PageRank sources -> deeper sections, longer max_length
+
+# Are there equations the dossier missed?
+kg.sources().equations().search(page_title, top_k=3)
+# -> if found, add a parameters/theory section to the brief
+
+# Are there figures the dossier missed?
+kg.sources().figures().search(page_title, top_k=3)
+# -> if found, add to figures_to_embed
+
+# What do citing papers say? (for contested zones)
+for doc_id in evidence_doc_ids:
+    citing = kg.source(doc_id).cited_by()
+    if citing.count() > 0:
+        # Multiple citing sources -> potential for "contested" or "frontier" zones
+        pass
+
+# Author impact: inform biographical sections for person pages
+kg.author(author_key).sources().count()
+kg.author(author_key).coauthors().collect()
+```
+
+Use KG insights to set `max_length_chars` (foundation topics get 6000+,
+peripheral concepts get 2000), choose `zone` labels (established vs
+contested based on citation patterns), and identify missing figures/equations.
+
 ## Escalation
 Not supported. The editor IS the escalation target for lower-tier handlers — it does not escalate further.
 

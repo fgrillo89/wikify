@@ -275,6 +275,49 @@ The escalation happens INSIDE the skill invocation. It does NOT write a separate
 - **Subagent refusal**: one retry with a clearer prompt, then error.json.
 - **Timeout**: the Python harness has a 600s timeout on polling. You have roughly that window.
 
+## Knowledge Graph context
+
+Both corpus and wiki graphs are available for writing decisions.
+
+- Corpus KG API: `.claude/skills/wikify/reference/knowledge-graph.md`
+- Wiki KG API: `.claude/skills/wikify/reference/wiki-graph.md`
+
+### Wiki graph: dedup and extend decisions
+
+The `related_pages` field on the WriteRequest is informed by the wiki graph.
+Use it to decide create-vs-extend:
+
+```python
+# Check if a similar page already exists
+hits = wkg.search(page_title, top_k=3)
+if hits and hits[0]["score"] > 0.8:
+    # Extend existing page instead of creating new
+    pass
+
+# Check how well-connected the page topic is
+co_ev = wkg.page(page_id).co_evidence().count()
+# Well-connected -> richer article with more cross-references
+```
+
+### Corpus graph: cited corpus chunks
+
+The `cited_corpus_chunks` field on the WriteRequest is pre-computed by the
+pipeline using the corpus Knowledge Graph fluent API:
+
+```python
+for doc_id in page_doc_ids:
+    cited = kg.source(doc_id).references()
+    for cited_id in cited.ids():
+        hits = kg.source(cited_id).chunks().search(page.title, top_k=3)
+```
+
+This gives the writer chunks from papers cited by the page's evidence sources,
+scoped by vector similarity to the page topic. Use these to strengthen claims
+with cross-references ("Smith et al. [^e1] corroborated the findings of
+Jones [^e3]").
+
+See `.claude/skills/wikify/reference/knowledge-graph.md` for the full API.
+
 ## What not to do
 - Do NOT read other bundle files (use only what's in the request).
 - Do NOT make multiple dispatches (one request -> one response).

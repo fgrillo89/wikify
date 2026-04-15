@@ -61,27 +61,124 @@ Reference: `src/wikify/schema.py::OrchAction`
 
 Anything outside this table falls through to a deterministic fallback batch.
 
-## Related-page inspection tool
+## Knowledge Graph tools
 
-Before picking a sampling action, you may call `inspect_related_pages(page_id, k=5)` to retrieve pages related to a given concept by token-overlap + evidence doc Jaccard. This is the same function used by the write handler; it is a local Python call (NOT a subagent) and returns:
+The orchestrator has full access to both the corpus Knowledge Graph and the
+Wiki Knowledge Graph. Use the wiki graph to understand what the wiki already
+covers; use the corpus graph to find what it should cover next.
 
-```json
-[
-  {
-    "id": "Hafnium Oxide",
-    "title": "Hafnium Oxide",
-    "topic_overlap": 0.72,
-    "body_excerpt": "Hafnium oxide (HfO2) is a high-k dielectric ...",
-    "see_also": ["Memristor", "Resistive Switching"],
-    "evidence_doc_ids": ["doc_07", "doc_12"]
-  }
-]
+- Corpus KG API: `.claude/skills/wikify/reference/knowledge-graph.md`
+- Wiki KG API: `.claude/skills/wikify/reference/wiki-graph.md`
+
+### Wiki graph: coverage assessment before sampling
+
+```python
+wkg = preloaded.wiki_knowledge_graph
+
+# What does the wiki already cover?
+wkg.stats()  # {pages, evidence, edges}
+
+# Is a concept already in the wiki?
+hits = wkg.search("hafnium oxide switching", top_k=3)
+if hits and hits[0]["score"] > 0.7:
+    # Covered -- walk_local from existing evidence, don't jump_gap
+    pass
+else:
+    # Gap -- prioritize extraction for this topic
+    pass
+
+# Which pages are thin (need more evidence)?
+for p in wkg.pages(kind="article").collect():
+    if p["n_evidence"] < 3 and p["has_body"]:
+        # Thin page -- corpus KG search can find more evidence
+        kg.search(p["title"], top_k=10)
+
+# Which pages are orphans (no links, no co-evidence)?
+for p in wkg.pages().collect():
+    if wkg.page(p["id"]).links().count() == 0:
+        # Orphan -- needs crosslinks or evidence from related papers
+
+# Check if a corpus paper's content is already wikified
+source = kg.source(doc_id).first()
+wiki_hits = wkg.search(source["title"], top_k=3)
+# Low score -> new content, worth extracting
+# High score -> already covered, skip or deepen
 ```
 
-Use `inspect_related_pages` when deciding whether to `pick_chunks` for a particular concept:
-- If `topic_overlap >= 0.80` for an existing page, the concept is likely already covered. Prefer `walk_local` from that page's evidence instead of spawning fresh extraction.
-- If no related page has `topic_overlap >= 0.40`, the concept is genuinely novel. Prefer `jump_gap` or `jump_uniform` to bring in new evidence.
-- The `see_also` list lets you trace concept clusters without re-reading page bodies.
+### Corpus KG: find what to extract next
+
+See `.claude/skills/wikify/reference/knowledge-graph.md` for the full API.
+
+### Corpus understanding
+
+```python
+kg = preloaded.knowledge_graph
+
+# Corpus overview
+kg.corpus_stats()  # {sources, authors, chunks, sections, figures, equations, edges}
+
+# Most influential papers (PageRank)
+kg.sources().top(10, by="pagerank").collect()
+
+# Most-cited authors
+kg.authors().top(5, by="citation_count").collect()
+
+# Coverage: which papers have been sampled vs not
+all_sources = kg.sources(kind="corpus").ids()
+# compare with sampler_snapshot.doc_coverage to find unsampled papers
+```
+
+### Targeted chunk discovery (for `pick_chunks`)
+
+```python
+# Semantic search scoped to unseen chunks of high-PageRank papers
+kg.sources().top(10, by="pagerank").chunks().search("target topic", top_k=10)
+
+# Find what a foundation paper says about a thin concept
+kg.source(doc_id).sections(type="results").chunks().search("topic", top_k=5)
+
+# Find equations across corpus related to a concept
+kg.sources().equations().search("switching model", top_k=5)
+
+# Trace citation chains: who cites the most-cited paper?
+foundation = kg.sources().top(1, by="citation_count").first()
+citers = kg.source(foundation["id"]).cited_by()
+# -> sample chunks from citers to deepen evidence
+```
+
+### Librarian decision pattern
+
+Use the foundation-vs-specific pattern to decide sampling depth:
+
+```python
+source = kg.source(source_id)
+if source.cited_by().count() > 3:
+    # Foundation paper: worth full-section extraction
+    # -> walk_local from this paper's chunks
+    pass
+else:
+    # Specific reference: targeted search only
+    # -> pick_chunks with search-scoped results
+    pass
+```
+
+### Related-page inspection
+
+```python
+inspect_related_pages(page_id, k=5)
+```
+
+Returns pages related by token-overlap + evidence doc Jaccard:
+
+```json
+[{"id": "Hafnium Oxide", "title": "Hafnium Oxide", "topic_overlap": 0.72,
+  "body_excerpt": "...", "see_also": [...], "evidence_doc_ids": [...]}]
+```
+
+Decision rules:
+- `topic_overlap >= 0.80`: concept already covered. Prefer `walk_local` from existing evidence.
+- `topic_overlap < 0.40`: genuinely novel. Prefer `jump_gap` or `jump_uniform`.
+- Use `see_also` to trace concept clusters without re-reading pages.
 
 ## Steps
 1. Read the request file.
