@@ -166,8 +166,7 @@ For `wikify` work, read in this order:
 2. `docs/study-design.md`
 3. `docs/strategies.md`
 4. `docs/metrics.md`
-5. `docs/runbook.md`
-6. `docs/test-run-playbook.md` (required before any test run)
+5. `docs/test-run-playbook.md` (required before any test run)
 
 ## Wikify Ground Rules
 

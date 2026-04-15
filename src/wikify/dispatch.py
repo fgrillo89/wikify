@@ -732,8 +732,7 @@ class Dispatch:
         }
 
         for turn in range(self._max_tool_turns):
-            role = f"orchestrate_t{turn}" if turn > 0 else "orchestrate"
-            req_path, res_path = _write_request(self._dir, role, payload)
+            req_path, res_path = _write_request(self._dir, "orchestrate", payload)
             raw = _await_response(res_path)
             # Clean up request/response files
             with contextlib.suppress(OSError):

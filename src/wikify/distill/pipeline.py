@@ -367,6 +367,18 @@ def run_with_preloaded(
         allowed_tools=allowed_tools,
     )
 
+    # Wire KG tool context for multi-turn guided dispatch.
+    _attach = getattr(orchestrator, "attach_guided_context", None)
+    if _attach is not None and effective_mode_name == "guided":
+        from .kg_tools import TOOL_SCHEMAS
+
+        _attach(
+            kg=knowledge_graph,
+            pages=existing_pages,
+            budget_target=budget_haiku_eq,
+            tool_schemas=TOOL_SCHEMAS if allowed_tools else None,
+        )
+
     if runtime.exploit_fraction is not None:
         # Apply a user-supplied or LLM-supplied override by constructing
         # a one-shot StaticBudget split. The strategy's own schedule is
@@ -426,16 +438,25 @@ def run_with_preloaded(
             policy_events.extend(policy.drain_events())
             batch = list(decision.batch)
             if decision.stop:
-                if decision.action == "write_now" and candidates:
+                if decision.action == "write_now":
+                    if not candidates:
+                        # No candidates to write; resume extraction.
+                        continue
                     # Mid-session write: flush current candidates then resume.
+                    # Only write pages that are new or unwritten to avoid
+                    # re-writing already-completed pages on each write_now.
                     mid_pages = canonicalize(candidates, existing=existing_pages)
+                    already_written = {
+                        p.id for p in existing_pages if p.body_markdown.strip()
+                    }
+                    new_pages = [p for p in mid_pages if p.id not in already_written]
                     for p in mid_pages:
                         for ev in p.evidence:
                             state.pages_concept_evidence_chunks.append(ev.chunk_id)
                             apply_coverage_feedback(state, ev.chunk_id, as_evidence=True)
                     existing_pages = mid_pages
                     _run_write_pass(
-                        mid_pages, max_concepts, writer, meter, strategy,
+                        new_pages, max_concepts, writer, meter, strategy,
                         bundle, briefs, dossier_store, chunks_by_id,
                         images_index, write_req_cfg, author_ctx,
                         citation_index, knowledge_graph, budget_haiku_eq,
