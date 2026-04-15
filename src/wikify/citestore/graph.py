@@ -13,9 +13,12 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -413,6 +416,11 @@ class QueryBuilder:
             node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}
             node_data["score"] = float(score)
             results.append(node_data)
+        self._kg._trace.log(
+            "search", {"query": query[:80], "top_k": top_k},
+            len(scope_ids), len(results),
+            [r["id"] for r in results[:5]],
+        )
         return results
 
     def similar_to(self, chunk_id: str, top_k: int = 10) -> list[dict]:
@@ -448,6 +456,11 @@ class QueryBuilder:
             node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}
             node_data["score"] = float(score)
             results.append(node_data)
+        self._kg._trace.log(
+            "similar_to", {"chunk_id": chunk_id, "top_k": top_k},
+            len(scope_ids), len(results),
+            [r["id"] for r in results[:5]],
+        )
         return results
 
     def _resolve_chunk_scope(self) -> set[str]:
@@ -478,10 +491,15 @@ class QueryBuilder:
     def collect(self) -> list[dict]:
         """Materialize all nodes as dicts."""
         backend = self._kg._backend
-        return [
+        result = [
             backend.node(nid) for nid in sorted(self._ids)
             if backend.has_node(nid)
         ]
+        self._kg._trace.log(
+            "collect", {}, len(self._ids), len(result),
+            [r["id"] for r in result[:5]],
+        )
+        return result
 
     def ids(self) -> list[str]:
         """Return just the node IDs."""
@@ -517,6 +535,71 @@ class QueryBuilder:
 
 
 # ---------------------------------------------------------------------------
+# Trace context -- lightweight exploration logging
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TraceEntry:
+    """One logged KG operation (terminal or search call)."""
+
+    timestamp: str
+    caller: str
+    method: str
+    args: dict = field(default_factory=dict)
+    input_count: int = 0
+    output_count: int = 0
+    output_sample: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TraceContext:
+    """Append-only log of KG operations. Enabled per-run."""
+
+    entries: list[TraceEntry] = field(default_factory=list)
+    enabled: bool = False
+    caller: str = ""
+
+    def log(
+        self,
+        method: str,
+        args: dict,
+        input_count: int,
+        output_count: int,
+        output_sample: list[str],
+    ) -> None:
+        if not self.enabled:
+            return
+        self.entries.append(TraceEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            caller=self.caller,
+            method=method,
+            args=args,
+            input_count=input_count,
+            output_count=output_count,
+            output_sample=output_sample[:5],
+        ))
+
+    def save(self, path: Path) -> None:
+        """Append entries to a JSONL file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for e in self.entries:
+                f.write(json.dumps({
+                    "timestamp": e.timestamp,
+                    "caller": e.caller,
+                    "method": e.method,
+                    "args": e.args,
+                    "input_count": e.input_count,
+                    "output_count": e.output_count,
+                    "output_sample": e.output_sample,
+                }) + "\n")
+
+    def clear(self) -> None:
+        self.entries.clear()
+
+
+# ---------------------------------------------------------------------------
 # KnowledgeGraph -- entry point
 # ---------------------------------------------------------------------------
 
@@ -536,6 +619,21 @@ class KnowledgeGraph:
         self._backend = backend
         self._vectors = vectors
         self._embed_fn = embed_fn
+        self._trace = TraceContext()
+
+    def enable_trace(self, caller: str = "") -> None:
+        """Start logging KG operations."""
+        self._trace.enabled = True
+        self._trace.caller = caller
+
+    def disable_trace(self) -> None:
+        """Stop logging KG operations."""
+        self._trace.enabled = False
+
+    def save_trace(self, path: Path) -> None:
+        """Append trace entries to JSONL file and clear buffer."""
+        self._trace.save(path)
+        self._trace.clear()
 
     # ---- Entry points returning QueryBuilder ----
 

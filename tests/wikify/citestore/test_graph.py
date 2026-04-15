@@ -575,6 +575,59 @@ class TestPersistence:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Tracing
+# ---------------------------------------------------------------------------
+
+
+class TestTracing:
+    def test_trace_disabled_by_default(self, kg_with_search: KnowledgeGraph):
+        """No trace entries when tracing is disabled."""
+        kg_with_search.search("test", top_k=2)
+        assert len(kg_with_search._trace.entries) == 0
+
+    def test_trace_logs_search(self, kg_with_search: KnowledgeGraph):
+        """Trace logs search calls when enabled."""
+        kg_with_search.enable_trace(caller="test")
+        kg_with_search.search("memristor", top_k=2)
+        assert len(kg_with_search._trace.entries) == 1
+        entry = kg_with_search._trace.entries[0]
+        assert entry.method == "search"
+        assert entry.caller == "test"
+        assert entry.output_count > 0
+        kg_with_search.disable_trace()
+
+    def test_trace_logs_collect(self, kg_with_search: KnowledgeGraph):
+        """Trace logs collect calls."""
+        kg_with_search.enable_trace(caller="sampler")
+        kg_with_search.sources().collect()
+        assert any(e.method == "collect" for e in kg_with_search._trace.entries)
+        kg_with_search.disable_trace()
+
+    def test_trace_save_load(self, kg_with_search: KnowledgeGraph, tmp_path: Path):
+        """Trace saves to JSONL and can be loaded."""
+        kg_with_search.enable_trace(caller="test")
+        kg_with_search.search("topic", top_k=3)
+        kg_with_search.sources().collect()
+        path = tmp_path / "trace.jsonl"
+        kg_with_search.save_trace(path)
+        assert path.exists()
+
+        from wikify.eval.trace_replay import load_trace, replay_stats
+
+        entries = load_trace(path)
+        assert len(entries) == 2
+        stats = replay_stats(entries)
+        assert stats["total_calls"] == 2
+        assert stats["calls_by_caller"]["test"] == 2
+        kg_with_search.disable_trace()
+
+
+# ---------------------------------------------------------------------------
+# build_knowledge_graph unit tests
+# ---------------------------------------------------------------------------
+
+
 class TestBuildKnowledgeGraph:
     def test_source_nodes_created(self, kg: KnowledgeGraph):
         """All 3 corpus papers become source nodes."""
