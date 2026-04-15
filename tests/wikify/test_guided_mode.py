@@ -438,3 +438,59 @@ def test_build_snapshot_includes_budget_and_histogram():
     assert snap["page_summaries"] == [{"id": "p1", "title": "Test Page"}]
     # Histogram has 5 bins
     assert len(snap["residual_histogram"]) == 5
+
+
+# --- dispatch guided context tests ----------------------------------------
+
+
+def test_dispatch_attach_guided_context():
+    """attach_guided_context sets tool state on Dispatch."""
+    from unittest.mock import MagicMock
+
+    from wikify.dispatch import Dispatch
+
+    meter = MagicMock()
+    cache = MagicMock()
+    d = Dispatch(meter, cache)
+    assert d._tool_schemas is None
+    assert d._kg is None
+
+    fake_kg = object()
+    d.attach_guided_context(
+        kg=fake_kg,
+        pages=[],
+        budget_target=50_000.0,
+        tool_schemas={"search_chunks": {}},
+    )
+    assert d._kg is fake_kg
+    assert d._tool_schemas == {"search_chunks": {}}
+    assert d._budget_target == 50_000.0
+
+
+def test_dispatch_update_guided_state():
+    """update_guided_state updates snapshot and pages."""
+    from unittest.mock import MagicMock
+
+    from wikify.dispatch import Dispatch
+
+    d = Dispatch(MagicMock(), MagicMock())
+    d.update_guided_state(snapshot={"test": 1}, pages=["p1"])
+    assert d._snapshot == {"test": 1}
+    assert d._guided_pages == ["p1"]
+
+
+# --- write_now edge-case tests --------------------------------------------
+
+
+def test_write_now_empty_candidates_is_noop():
+    """write_now with stop=True should be a no-op continue, not break."""
+    from wikify.distill.explorer import execute_action
+
+    state = _explorer_state_with_seen()
+    decision = execute_action("write_now", {}, state, 4, _explorer(), None)
+    # write_now returns stop=True and empty batch
+    assert decision.stop is True
+    assert decision.batch == ()
+    # The pipeline checks: if write_now and no candidates -> continue
+    # This test verifies the action itself is correct; pipeline behavior
+    # is tested via the extract loop.

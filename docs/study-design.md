@@ -28,7 +28,7 @@ Same prompt stack as the normal pipeline (field guide + artifact template
 + style guide) so output format is comparable.
 
 ```bash
-wikify baseline --budget 1x --seed 0
+wikify study --presets scripted-mixed --include-baseline --budgets 1x --seeds 0
 ```
 
 ### Normal mode (parametric)
@@ -219,9 +219,9 @@ Multi-turn file-based dispatch for tool-calling:
 wikify study \
   --presets scripted-mixed,guided-navigate,guided-full \
   --include-baseline \
-  --total-budget 3x \
-  --sub-budget 1x \
+  --budgets 3x \
   --seeds 0,1,2 \
+  --max-rounds 3 \
   --convergence-threshold 0.02
 ```
 
@@ -257,8 +257,7 @@ wikify study \
 2. `uv run pytest tests/wikify -q`
 3. Grep for evidence_mode -- verify clean
 4. Unit test: tool-calling dispatch with mock orchestrator
-5. Unit test: write_now mid-session
+5. Unit test: write_now mid-session (empty + non-empty candidates)
 6. Unit test: convergence detection
 7. Smoke: `wikify distill --preset scripted-mixed --budget 0.1x --seed 0`
-8. Smoke: `wikify baseline --budget 0.1x --seed 0`
-9. Smoke: `wikify study --presets scripted-mixed,guided-navigate --include-baseline --total-budget 0.2x --sub-budget 0.1x --seeds 0`
+8. Smoke: `wikify study --presets scripted-mixed,guided-navigate --include-baseline --budgets 0.1x --seeds 0`

@@ -72,6 +72,7 @@ from .dossier import (
 from .explorer import (
     ExplorerState,
     apply_coverage_feedback,
+    build_snapshot,
     init_coverage_state,
     restore_coverage_state,
 )
@@ -187,7 +188,6 @@ def run(
     budget_haiku_eq: float,
     extract_batch_size: int = 4,
     max_concepts: int = 60,
-    feed: bool = False,
     iteration: Iteration = "create",
     merge_from_bundle: BundlePaths | None = None,
     editor: Editor | None = None,
@@ -213,7 +213,6 @@ def run(
         budget_haiku_eq=budget_haiku_eq,
         extract_batch_size=extract_batch_size,
         max_concepts=max_concepts,
-        feed=feed,
         iteration=iteration,
         merge_from_bundle=merge_from_bundle,
         editor=editor,
@@ -240,7 +239,6 @@ def run_with_preloaded(
     budget_haiku_eq: float,
     extract_batch_size: int = 4,
     max_concepts: int = 60,
-    feed: bool = False,
     iteration: Iteration = "create",
     merge_from_bundle: BundlePaths | None = None,
     editor: Editor | None = None,
@@ -255,8 +253,6 @@ def run_with_preloaded(
     allowed_tools: frozenset[str] | None = None,
 ) -> None:
     effective_mode_name = mode_name or "scripted"
-    if feed and iteration == "create":
-        iteration = "refine"
     bundle.ensure()
     if iteration == "merge":
         run_merge_iteration(
@@ -338,7 +334,7 @@ def run_with_preloaded(
     )
 
     state = _build_explorer_state(rng, chunks, knowledge_graph)
-    use_coverage_memory = iteration == "refine" and not feed
+    use_coverage_memory = iteration == "refine"
     if use_coverage_memory:
         mem = load_coverage_memory(bundle)
         restore_coverage_state(
@@ -376,7 +372,7 @@ def run_with_preloaded(
             kg=knowledge_graph,
             pages=existing_pages,
             budget_target=budget_haiku_eq,
-            tool_schemas=TOOL_SCHEMAS if allowed_tools else None,
+            tool_schemas=TOOL_SCHEMAS,
         )
 
     if runtime.exploit_fraction is not None:
@@ -434,6 +430,18 @@ def run_with_preloaded(
                 budget_spent=meter.spent_haiku_eq,
                 budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
             )
+            # Push latest state to the orchestrator before each step
+            # so KG tools (get_coverage, get_pages, get_budget) are fresh.
+            _update = getattr(orchestrator, "update_guided_state", None)
+            if _update is not None:
+                _update(
+                    snapshot=build_snapshot(
+                        state,
+                        budget_spent=meter.spent_haiku_eq,
+                        budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
+                    ),
+                    pages=existing_pages,
+                )
             decision = policy.next_extract(state, extract_batch_size, ctx)
             policy_events.extend(policy.drain_events())
             batch = list(decision.batch)
@@ -590,7 +598,7 @@ def run_with_preloaded(
 
     # ---- build dossiers ---------------------------------------------------
     # Populate structured dossiers from extraction candidates. Dossiers
-    # persist to disk so incremental runs (--feed) accumulate material.
+    # persist to disk so incremental runs (refine) accumulate material.
     dossier_store = DossierStore(bundle.root)
     alias_to_page: dict[str, WikiPage] = {}
     for p in pages:

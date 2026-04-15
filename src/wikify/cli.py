@@ -186,11 +186,6 @@ def distill(
         help="Second bundle to merge when --iteration merge",
     ),
     cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
-    feed: bool = typer.Option(
-        False,
-        "--feed",
-        help="Deprecated alias for --iteration refine",
-    ),
     iteration: str = typer.Option(
         "create",
         "--iteration",
@@ -232,8 +227,6 @@ def distill(
         raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
     if iteration not in ("create", "refine", "merge"):
         raise typer.BadParameter(f"unknown iteration: {iteration}")
-    if feed and iteration == "create":
-        iteration = "refine"
     if iteration == "merge" and merge_from is None:
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
@@ -353,7 +346,6 @@ def distill(
         writer=dispatch,
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
-        feed=feed,
         iteration=iteration,
         merge_from_bundle=(BundlePaths(root=merge_from) if merge_from is not None else None),
         editor=dispatch,
@@ -515,24 +507,12 @@ def _quick_convergence_metric(bundle: BundlePaths) -> float:
         return 0.0
 
 
-def _run_baseline(
-    baseline: str,
-    preloaded: object,
-    bundle: BundlePaths,
-    meter: CostMeter,
-    corpus_dir: Path,
-    seed: int,
-) -> None:
+def _run_baseline(preloaded: object, bundle: BundlePaths) -> None:
     """Execute a baseline run using the consolidated pipeline."""
-    from .baselines.pipeline import BaselineConfig, run_baseline
+    from .baselines.pipeline import run_baseline
 
     kg = preloaded.kg  # type: ignore[attr-defined]
-    run_baseline(
-        kg=kg,
-        bundle=bundle,
-        meter=meter,
-        config=BaselineConfig(seed=seed),
-    )
+    run_baseline(kg=kg, bundle=bundle)
 
 
 @app.command()
@@ -707,14 +687,7 @@ def study(
                     events_path=bundle.calls_path,
                 )
 
-                _run_baseline(
-                    baseline="B2",
-                    preloaded=preloaded,
-                    bundle=bundle,
-                    meter=meter,
-                    corpus_dir=corpus_dir,
-                    seed=seed,
-                )
+                _run_baseline(preloaded=preloaded, bundle=bundle)
 
                 typer.echo(
                     f"[{run_n}/{total}] baseline {bud} seed{seed}: done -> {bundle.root}"

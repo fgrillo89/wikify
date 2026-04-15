@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..citestore.graph import KnowledgeGraph
-    from ..meter import CostMeter
     from ..models import WikiPage
     from ..paths import BundlePaths
 
@@ -28,7 +27,6 @@ class BaselineConfig:
 
     top_k: int = 20
     max_topics: int = 40
-    seed: int = 0
 
 
 def discover_topics(kg: KnowledgeGraph) -> list[str]:
@@ -53,7 +51,6 @@ def run_baseline(
     *,
     kg: KnowledgeGraph,
     bundle: BundlePaths,
-    meter: CostMeter,
     config: BaselineConfig | None = None,
 ) -> list[WikiPage]:
     """Run the full baseline pipeline.
