@@ -8,6 +8,7 @@ ingest runs. ``preload_corpus`` reads them all once and returns a
 
 from dataclasses import dataclass
 
+from ..embedding import embedder_for
 from ..models import Chunk, Document
 from ..paths import CorpusPaths
 from ..store.bibliography import load_citation_index
@@ -44,7 +45,13 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
     images_index = ImageIndex.load(corpus)
     vectors = read_vector_store(corpus)
-    knowledge_graph = read_knowledge_graph(corpus, vectors=vectors)
+    # Resolve the embedder so KG vector search (search_chunks, similar_to)
+    # works during guided-mode tool-calling. Without this, search() returns [].
+    from ..store.vectors_meta import read_meta
+
+    vmeta = read_meta(corpus.vectors_path)
+    embed_fn = embedder_for(vmeta.backend, vmeta.model) if vmeta else None
+    knowledge_graph = read_knowledge_graph(corpus, vectors=vectors, embed_fn=embed_fn)
     citation_index = load_citation_index(corpus)
     persona_text = ""
     if corpus.persona_path.exists():
