@@ -209,6 +209,14 @@ def distill(
             " for post-hoc review. Adds a small token overhead per call."
         ),
     ),
+    condition: str | None = typer.Option(
+        None,
+        "--condition",
+        help=(
+            "NeurIPS study condition. B1=retrieve-summarise, B2=post-hoc-cite, "
+            "W1=no-markers, W2=doc-level, W3=full (default). Sets evidence_mode."
+        ),
+    ),
 ) -> None:
     """Run a distillation strategy on an ingested corpus."""
     from .prompts import available_artifact_templates, available_field_guides
@@ -225,6 +233,21 @@ def distill(
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
         raise typer.BadParameter("--iteration merge only supports --phase all")
+    # Map --condition to evidence_mode.
+    evidence_mode = "full"
+    if condition is not None:
+        cond = condition.upper()
+        if cond in ("B1", "B2"):
+            typer.echo(f"condition {cond}: baseline mode (not yet wired to distill pipeline)")
+        elif cond == "W1":
+            evidence_mode = "off"
+        elif cond == "W2":
+            evidence_mode = "doc"
+        elif cond == "W3":
+            evidence_mode = "full"
+        else:
+            raise typer.BadParameter(f"unknown condition: {condition}; expected B1|B2|W1|W2|W3")
+
     if strategy not in STRATEGY_CONFIGS:
         raise typer.BadParameter(f"unknown strategy: {strategy}")
     if field is None:
@@ -315,6 +338,7 @@ def distill(
         artifact_name=artifact,
         phase=phase,
         verbalize=verbalize,
+        evidence_mode=evidence_mode,
     )
     snap_path = bundle.run_path
     if snap_path.exists():

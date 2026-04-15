@@ -134,6 +134,7 @@ def run(
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
+    evidence_mode: str = "full",
 ) -> None:
     """Thin wrapper: load corpus once then delegate to run_with_preloaded."""
     preloaded = preload_corpus(corpus)
@@ -159,6 +160,7 @@ def run(
         compact_threshold=compact_threshold,
         phase=phase,
         verbalize=verbalize,
+        evidence_mode=evidence_mode,
     )
 
 
@@ -185,6 +187,7 @@ def run_with_preloaded(
     compact_threshold: int = 10,
     phase: Phase = "all",
     verbalize: bool = False,
+    evidence_mode: str = "full",
 ) -> None:
     effective_mode_name = mode_name or "scripted"
     if feed and iteration == "create":
@@ -267,6 +270,7 @@ def run_with_preloaded(
         person_artifact_hash=person_artifact_hash,
         corpus_persona_hash=corpus_persona_hash,
         verbalize=verbalize,
+        evidence_mode=evidence_mode,
     )
 
     state = _build_explorer_state(rng, chunks, knowledge_graph)
