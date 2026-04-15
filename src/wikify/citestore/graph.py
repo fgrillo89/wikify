@@ -291,6 +291,14 @@ class QueryBuilder:
         """Equations of these sources."""
         return self._follow(self._kg._backend._equations_of, EQUATION)
 
+    def nearby_figures(self) -> QueryBuilder:
+        """Figures linked to these chunks via FIGURE_NEAR_CHUNK edges."""
+        return self._follow(self._kg._backend._figures_near_chunk, FIGURE)
+
+    def nearby_equations(self) -> QueryBuilder:
+        """Equations in these chunks via EQUATION_IN_CHUNK edges."""
+        return self._follow(self._kg._backend._equations_in_chunk, EQUATION)
+
     # ---- Filters (returns narrowed QueryBuilder) ----
 
     def where(self, **kwargs: object) -> QueryBuilder:
@@ -318,6 +326,17 @@ class QueryBuilder:
             if nid in backend.G and backend.G.nodes[nid].get("type") == kind
         }
         return QueryBuilder(self._kg, result, kind)
+
+    def match(self, field: str, query: str) -> QueryBuilder:
+        """Filter nodes where `field` contains `query` (case-insensitive substring)."""
+        backend = self._kg._backend
+        q = query.lower()
+        result = {
+            nid for nid in self._ids
+            if nid in backend.G
+            and q in str(backend.G.nodes[nid].get(field, "")).lower()
+        }
+        return QueryBuilder(self._kg, result, self._type)
 
     def since(self, year: int) -> QueryBuilder:
         """Filter sources by year >= N."""
@@ -389,6 +408,41 @@ class QueryBuilder:
 
         results: list[dict] = []
         backend = self._kg._backend
+        for score, idx in scored[:top_k]:
+            cid = vectors.ids[idx]
+            node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}
+            node_data["score"] = float(score)
+            results.append(node_data)
+        return results
+
+    def similar_to(self, chunk_id: str, top_k: int = 10) -> list[dict]:
+        """Find chunks similar to an existing chunk by vector cosine.
+
+        Uses the chunk's existing embedding -- no re-embedding needed.
+        Scoped to the current set (if current set is sources/sections,
+        resolves to their chunks first). Excludes the seed chunk itself.
+        """
+        vectors = self._kg._vectors
+        if vectors is None:
+            return []
+        try:
+            seed_vec = vectors.vector(chunk_id)
+        except (KeyError, IndexError):
+            return []
+
+        scope_ids = self._resolve_chunk_scope()
+        scope_ids.discard(chunk_id)
+        if not scope_ids:
+            return []
+
+        sims = vectors.cosine_to_all(seed_vec)
+        valid_idx = [i for i, cid in enumerate(vectors.ids) if cid in scope_ids]
+        if not valid_idx:
+            return []
+
+        scored = sorted([(sims[i], i) for i in valid_idx], key=lambda t: -t[0])
+        backend = self._kg._backend
+        results: list[dict] = []
         for score, idx in scored[:top_k]:
             cid = vectors.ids[idx]
             node_data = backend.node(cid) if backend.has_node(cid) else {"id": cid}

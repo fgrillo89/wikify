@@ -434,6 +434,107 @@ class TestScopedSearch:
 
 
 # ---------------------------------------------------------------------------
+# Nearby traversals (chunk -> figure/equation)
+# ---------------------------------------------------------------------------
+
+
+class TestNearbyTraversals:
+    def test_nearby_figures(self, kg: KnowledgeGraph):
+        """Chunks near figure should find it via nearby_figures."""
+        # paper_A_c1 is near fig_01 (near_chunk_ids includes it)
+        # Use chunks() then filter to just c1's neighbors
+        all_figs = kg.source("paper_A").chunks().nearby_figures()
+        assert all_figs.exists()
+        # The figure linked to paper_A_c1 should be in the results
+        fig_ids = set(all_figs.ids())
+        assert "paper_A/fig_01" in fig_ids
+
+    def test_nearby_equations(self, kg: KnowledgeGraph):
+        """Chunks containing equations should find them via nearby_equations."""
+        all_eqs = kg.source("paper_A").chunks().nearby_equations()
+        assert all_eqs.exists()
+        eq_ids = set(all_eqs.ids())
+        assert "paper_A_eq1" in eq_ids
+
+    def test_nearby_figures_from_search(self, kg_with_search: KnowledgeGraph):
+        """Search for chunks, then find nearby figures."""
+        hits = kg_with_search.source("paper_A").chunks().search("methods ALD", top_k=3)
+        if hits:
+            chunk_ids = {h["id"] for h in hits}
+            qb = kg_with_search.chunks().where(id=hits[0]["id"]) if hits else kg_with_search.chunks()
+            # Just verify the chain doesn't crash
+            figs = qb.nearby_figures()
+            assert isinstance(figs.count(), int)
+
+
+# ---------------------------------------------------------------------------
+# Match filter (keyword search on node attributes)
+# ---------------------------------------------------------------------------
+
+
+class TestMatchFilter:
+    def test_match_figure_caption(self, kg: KnowledgeGraph):
+        """Find figures by caption keyword."""
+        figs = kg.sources().figures().match("caption", "IV curve")
+        assert figs.count() == 1
+        assert figs.first()["caption"] == "IV curve"
+
+    def test_match_equation_label(self, kg: KnowledgeGraph):
+        """Find equations by label."""
+        eqs = kg.sources().equations().match("label", "Eq. 1")
+        assert eqs.count() == 1
+
+    def test_match_case_insensitive(self, kg: KnowledgeGraph):
+        """Match is case-insensitive."""
+        figs = kg.sources().figures().match("caption", "iv curve")
+        assert figs.count() == 1
+
+    def test_match_no_results(self, kg: KnowledgeGraph):
+        """Match with no hits returns empty."""
+        figs = kg.sources().figures().match("caption", "nonexistent xyz")
+        assert figs.count() == 0
+
+    def test_match_source_title(self, kg: KnowledgeGraph):
+        """Match on source titles."""
+        sources = kg.sources().match("title", "Foundations")
+        assert sources.count() == 1
+        assert sources.first()["id"] == "paper_A"
+
+
+# ---------------------------------------------------------------------------
+# Similar_to (chunk-to-chunk cosine via existing vectors)
+# ---------------------------------------------------------------------------
+
+
+class TestSimilarTo:
+    def test_similar_to_returns_results(self, kg_with_search: KnowledgeGraph):
+        """similar_to finds chunks similar to a given chunk."""
+        results = kg_with_search.chunks().similar_to("paper_A_c0", top_k=3)
+        assert len(results) > 0
+        assert all("score" in r for r in results)
+        # Should not include the seed chunk itself
+        assert all(r["id"] != "paper_A_c0" for r in results)
+
+    def test_similar_to_scoped(self, kg_with_search: KnowledgeGraph):
+        """similar_to scoped to one source returns only that source's chunks."""
+        results = kg_with_search.source("paper_A").chunks().similar_to(
+            "paper_A_c0", top_k=3,
+        )
+        for r in results:
+            assert r["source_id"] == "paper_A"
+
+    def test_similar_to_no_vectors(self, fixture_data):
+        """similar_to returns empty when no vectors attached."""
+        docs, chunks, _ = fixture_data
+        kg_no_vec = build_knowledge_graph(docs, chunks, vectors=None)
+        assert kg_no_vec.chunks().similar_to("paper_A_c0") == []
+
+    def test_similar_to_missing_chunk(self, kg_with_search: KnowledgeGraph):
+        """similar_to with nonexistent chunk returns empty."""
+        assert kg_with_search.chunks().similar_to("nonexistent") == []
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
