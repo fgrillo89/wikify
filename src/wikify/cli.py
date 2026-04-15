@@ -186,11 +186,6 @@ def distill(
         help="Second bundle to merge when --iteration merge",
     ),
     cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
-    feed: bool = typer.Option(
-        False,
-        "--feed",
-        help="Deprecated alias for --iteration refine",
-    ),
     iteration: str = typer.Option(
         "create",
         "--iteration",
@@ -232,8 +227,6 @@ def distill(
         raise typer.BadParameter(f"unknown phase: {phase}; must be all, extract, or write")
     if iteration not in ("create", "refine", "merge"):
         raise typer.BadParameter(f"unknown iteration: {iteration}")
-    if feed and iteration == "create":
-        iteration = "refine"
     if iteration == "merge" and merge_from is None:
         raise typer.BadParameter("--iteration merge requires --merge-from")
     if iteration == "merge" and phase != "all":
@@ -278,7 +271,7 @@ def distill(
                 f"--guided-tools must be navigate or full; got {guided_tools!r}"
             )
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(CorpusPaths(root=corpus_dir))
         typer.echo(f"auto-detected field: {field}")
@@ -353,7 +346,6 @@ def distill(
         writer=dispatch,
         meter=meter,
         budget_haiku_eq=budget_haiku_eq,
-        feed=feed,
         iteration=iteration,
         merge_from_bundle=(BundlePaths(root=merge_from) if merge_from is not None else None),
         editor=dispatch,
@@ -425,7 +417,7 @@ def campaign(
         raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
 
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(CorpusPaths(root=corpus_dir))
         typer.echo(f"auto-detected field: {field}")
@@ -499,34 +491,28 @@ def campaign(
     typer.echo(f"campaign complete: {bundle.root}")
 
 
-def _run_baseline(
-    baseline: str,
-    preloaded: object,
-    bundle: BundlePaths,
-    meter: CostMeter,
-    corpus_dir: Path,
-    seed: int,
-) -> None:
-    """Execute a B1 or B2 baseline run."""
-    from .baselines.retrieve_summarise import B1Config, build_b1_pages, load_topics
+def _quick_convergence_metric(bundle: BundlePaths) -> float:
+    """Cheap convergence proxy: M5 hit rate from the run snapshot.
 
-    topics = load_topics(corpus_dir)
-    if not topics:
-        typer.echo(f"  {baseline}: no topics.json found, skipping")
-        return
+    M5 = |chunks used in evidence| / |chunks read|. Available from the
+    run snapshot without an embedder. Returns 0.0 if unavailable.
+    """
+    try:
+        from .eval import metrics
+        from .store.wiki_bundle import load_bundle
+
+        b = load_bundle(bundle.root)
+        return metrics.hit_rate(b)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _run_baseline(preloaded: object, bundle: BundlePaths) -> None:
+    """Execute a baseline run using the consolidated pipeline."""
+    from .baselines.pipeline import run_baseline
 
     kg = preloaded.kg  # type: ignore[attr-defined]
-    pages = build_b1_pages(topics, kg, B1Config(model_id="M"))
-
-    if baseline == "B2":
-        from .baselines.post_hoc_cite import add_post_hoc_citations
-
-        pages = add_post_hoc_citations(pages, kg)
-
-    # Write pages to bundle
-    index = {p.id: p.model_dump() for p in pages}
-    index_path = bundle.root / "_index.json"
-    index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    run_baseline(kg=kg, bundle=bundle)
 
 
 @app.command()
@@ -549,11 +535,22 @@ def study(
     field: str | None = typer.Option(None, "--field"),
     artifact: str = typer.Option("wiki_article", "--artifact"),
     verbalize: bool = typer.Option(False, "--verbalize/--no-verbalize"),
+    max_rounds: int = typer.Option(
+        1,
+        "--max-rounds",
+        help="Max convergence rounds per condition. Each round gets budget / max_rounds.",
+    ),
+    convergence_threshold: float = typer.Option(
+        0.0,
+        "--convergence-threshold",
+        help="Stop early when metrics delta < threshold. 0 = no convergence check.",
+    ),
 ) -> None:
     """Run a multi-factor study: presets x budgets x seeds.
 
     Each preset is a named study condition (strategy + mode + guided-tools).
-    See docs/study-design.md for the full design.
+    With --max-rounds > 1, each condition runs up to max_rounds rounds of
+    extract+write, checking convergence after each. See docs/study-design.md.
     """
     preset_list = [p.strip() for p in presets.split(",")]
     budget_list = [b.strip() for b in budgets.split(",")]
@@ -580,7 +577,7 @@ def study(
     preloaded = preload_corpus(corpus)
 
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(corpus)
 
@@ -588,6 +585,9 @@ def study(
     run_n = 0
 
     # --- Preset pipeline runs ---
+    sub_budget_fraction = 1.0 / max(1, max_rounds)
+    min_useful_budget = 5_000.0  # ~one extract+write cycle
+
     for preset_name in preset_list:
         for bud in budget_list:
             for seed in seed_list:
@@ -596,38 +596,73 @@ def study(
                 bundle_name = f"{preset_name}_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
-                budget_haiku_eq = _parse_budget(bud)
-                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                run_id = f"study_{bundle_name}_{ts}"
+                total_budget = _parse_budget(bud)
+                budget_remaining = total_budget
+                prev_m5: float | None = None
 
-                meter = CostMeter(
-                    budget_haiku_eq=budget_haiku_eq,
-                    run_id=run_id,
-                    events_path=bundle.calls_path,
-                )
+                for rnd in range(1, max_rounds + 1):
+                    sub_budget = total_budget * sub_budget_fraction
+                    if budget_remaining < min_useful_budget:
+                        break
+                    sub_budget = min(sub_budget, budget_remaining)
+                    ts = datetime.now(timezone.utc).strftime(
+                        "%Y%m%dT%H%M%S"
+                    )
+                    run_id = (
+                        f"study_{bundle_name}_r{rnd}_{ts}"
+                    )
 
-                from .dispatch import Dispatch
+                    meter = CostMeter(
+                        budget_haiku_eq=sub_budget,
+                        run_id=run_id,
+                        events_path=bundle.calls_path,
+                    )
 
-                dispatch = Dispatch(meter, cache)
+                    from .dispatch import Dispatch
 
-                run_with_preloaded(
-                    preloaded=preloaded,
-                    bundle=bundle,
-                    strategy=resolved.strategy,
-                    extractor=dispatch,
-                    writer=dispatch,
-                    meter=meter,
-                    budget_haiku_eq=budget_haiku_eq,
-                    iteration="create",
-                    editor=dispatch,
-                    compactor=dispatch,
-                    orchestrator=dispatch,
-                    mode_name=resolved.mode,
-                    field_name=field,
-                    artifact_name=artifact,
-                    verbalize=verbalize,
-                    allowed_tools=resolved.allowed_tools,
-                )
+                    dispatch = Dispatch(meter, cache)
+                    iteration_op = "create" if rnd == 1 else "refine"
+
+                    run_with_preloaded(
+                        preloaded=preloaded,
+                        bundle=bundle,
+                        strategy=resolved.strategy,
+                        extractor=dispatch,
+                        writer=dispatch,
+                        meter=meter,
+                        budget_haiku_eq=sub_budget,
+                        iteration=iteration_op,
+                        editor=dispatch,
+                        compactor=dispatch,
+                        orchestrator=dispatch,
+                        mode_name=resolved.mode,
+                        field_name=field,
+                        artifact_name=artifact,
+                        verbalize=verbalize,
+                        allowed_tools=resolved.allowed_tools,
+                    )
+
+                    budget_remaining -= meter.spent_haiku_eq
+
+                    # Convergence check via M5 (hit rate) — cheap, no
+                    # embedder needed. Full M1/M3/G metrics require the
+                    # embedder which may not be available.
+                    if (
+                        convergence_threshold > 0
+                        and max_rounds > 1
+                        and rnd < max_rounds
+                    ):
+                        m5 = _quick_convergence_metric(bundle)
+                        if (
+                            prev_m5 is not None
+                            and abs(m5 - prev_m5) < convergence_threshold
+                        ):
+                            typer.echo(
+                                f"  converged at round {rnd} "
+                                f"(delta={abs(m5 - prev_m5):.4f})"
+                            )
+                            break
+                        prev_m5 = m5
 
                 typer.echo(
                     f"[{run_n}/{total}] {preset_name} "
@@ -642,24 +677,7 @@ def study(
                 bundle_name = f"baseline_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
-                budget_haiku_eq = _parse_budget(bud)
-                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                run_id = f"study_{bundle_name}_{ts}"
-
-                meter = CostMeter(
-                    budget_haiku_eq=budget_haiku_eq,
-                    run_id=run_id,
-                    events_path=bundle.calls_path,
-                )
-
-                _run_baseline(
-                    baseline="B2",
-                    preloaded=preloaded,
-                    bundle=bundle,
-                    meter=meter,
-                    corpus_dir=corpus_dir,
-                    seed=seed,
-                )
+                _run_baseline(preloaded=preloaded, bundle=bundle)
 
                 typer.echo(
                     f"[{run_n}/{total}] baseline {bud} seed{seed}: done -> {bundle.root}"
@@ -675,7 +693,7 @@ def persona_generate(
 ) -> None:
     """Generate and persist the corpus persona at <corpus>/persona.txt."""
     from .dispatch import make_persona_complete
-    from .distill.write.persona import generate_corpus_persona
+    from .distill.persona import generate_corpus_persona
     from .store.corpus import list_documents
 
 
@@ -696,7 +714,7 @@ def field_detect_cmd(
     corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
 ) -> None:
     """Auto-detect the most likely field for a corpus and print the top scores."""
-    from .distill.extract.field_detect import detect_field, detect_field_scores
+    from .distill.field_detect import detect_field, detect_field_scores
 
     corpus = CorpusPaths(root=corpus_dir)
     chosen = detect_field(corpus)

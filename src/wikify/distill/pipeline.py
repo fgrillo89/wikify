@@ -72,6 +72,7 @@ from .dossier import (
 from .explorer import (
     ExplorerState,
     apply_coverage_feedback,
+    build_snapshot,
     init_coverage_state,
     restore_coverage_state,
 )
@@ -111,6 +112,71 @@ EXTRACT_PROMPT = load_prompt("wikify/extract").name
 WRITE_PROMPT = load_prompt("wikify/write").name
 
 
+def _run_write_pass(
+    pages: list,
+    max_concepts: int,
+    writer: Writer,
+    meter: CostMeter,
+    strategy: StrategyConfig,
+    bundle: BundlePaths,
+    briefs: dict,
+    dossier_store: DossierStore,
+    chunks_by_id: dict,
+    images_index: object,
+    write_req_cfg: WriteRequestConfig,
+    author_ctx: dict,
+    citation_index: dict,
+    knowledge_graph: object,
+    budget_haiku_eq: float,
+    verbalize: bool,
+    write_rejections: list[dict],
+) -> None:
+    """Run a write pass over pages. Used both at end-of-extraction and mid-session."""
+    avg_write_cost = 30_000.0
+    n_writes_completed = 0
+    try:
+        for page in pages[:max_concepts]:
+            if not is_writable_page(page):
+                continue
+            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
+                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
+                continue
+            spent_before = meter.spent_haiku_eq
+            req = build_write_request(
+                page,
+                pages,
+                briefs,
+                dossier_store,
+                chunks_by_id,
+                images_index,
+                write_req_cfg,
+                author_ctx,
+                citation_index,
+                knowledge_graph=knowledge_graph,
+            )
+            try:
+                resp = writer.write(req)
+            except ValidationError as exc:
+                sys.stderr.write(
+                    f"[{meter._run_id}] writer REJECTED page={page.id!r}: "  # noqa: SLF001
+                    f"{type(exc).__name__}: {str(exc)[:200]}\n"
+                )
+                write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
+                continue
+            page.body_markdown = resp.body_markdown
+            if verbalize:
+                _append_verbalize(
+                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
+                )
+            call_cost = meter.spent_haiku_eq - spent_before
+            n_writes_completed += 1
+            avg_write_cost = (
+                avg_write_cost * (n_writes_completed - 1) + call_cost
+            ) / n_writes_completed
+    except BudgetExceededError:
+        pass
+
+
 def run(
     *,
     corpus: CorpusPaths,
@@ -122,7 +188,6 @@ def run(
     budget_haiku_eq: float,
     extract_batch_size: int = 4,
     max_concepts: int = 60,
-    feed: bool = False,
     iteration: Iteration = "create",
     merge_from_bundle: BundlePaths | None = None,
     editor: Editor | None = None,
@@ -148,7 +213,6 @@ def run(
         budget_haiku_eq=budget_haiku_eq,
         extract_batch_size=extract_batch_size,
         max_concepts=max_concepts,
-        feed=feed,
         iteration=iteration,
         merge_from_bundle=merge_from_bundle,
         editor=editor,
@@ -175,7 +239,6 @@ def run_with_preloaded(
     budget_haiku_eq: float,
     extract_batch_size: int = 4,
     max_concepts: int = 60,
-    feed: bool = False,
     iteration: Iteration = "create",
     merge_from_bundle: BundlePaths | None = None,
     editor: Editor | None = None,
@@ -190,8 +253,6 @@ def run_with_preloaded(
     allowed_tools: frozenset[str] | None = None,
 ) -> None:
     effective_mode_name = mode_name or "scripted"
-    if feed and iteration == "create":
-        iteration = "refine"
     bundle.ensure()
     if iteration == "merge":
         run_merge_iteration(
@@ -273,7 +334,7 @@ def run_with_preloaded(
     )
 
     state = _build_explorer_state(rng, chunks, knowledge_graph)
-    use_coverage_memory = iteration == "refine" and not feed
+    use_coverage_memory = iteration == "refine"
     if use_coverage_memory:
         mem = load_coverage_memory(bundle)
         restore_coverage_state(
@@ -302,6 +363,18 @@ def run_with_preloaded(
         allowed_tools=allowed_tools,
     )
 
+    # Wire KG tool context for multi-turn guided dispatch.
+    _attach = getattr(orchestrator, "attach_guided_context", None)
+    if _attach is not None and effective_mode_name == "guided":
+        from .kg_tools import TOOL_SCHEMAS
+
+        _attach(
+            kg=knowledge_graph,
+            pages=existing_pages,
+            budget_target=budget_haiku_eq,
+            tool_schemas=TOOL_SCHEMAS,
+        )
+
     if runtime.exploit_fraction is not None:
         # Apply a user-supplied or LLM-supplied override by constructing
         # a one-shot StaticBudget split. The strategy's own schedule is
@@ -322,6 +395,10 @@ def run_with_preloaded(
     extract_completed_normally = False
     split_initial = split
     policy_events: list[dict] = []
+    # Pre-initialize write-pass dependencies so write_now can use them.
+    dossier_store = DossierStore(bundle.root)
+    author_ctx = build_author_context(docs)
+    briefs: dict[str, EditorBrief] = {}
     write_rejections: list[dict] = []
     vision_requests: list[dict] = []
 
@@ -353,10 +430,53 @@ def run_with_preloaded(
                 budget_spent=meter.spent_haiku_eq,
                 budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
             )
+            # Push latest state to the orchestrator before each step
+            # so KG tools (get_coverage, get_pages, get_budget) are fresh.
+            _update = getattr(orchestrator, "update_guided_state", None)
+            if _update is not None:
+                _update(
+                    snapshot=build_snapshot(
+                        state,
+                        budget_spent=meter.spent_haiku_eq,
+                        budget_remaining=max(0.0, budget_haiku_eq - meter.spent_haiku_eq),
+                    ),
+                    pages=existing_pages,
+                )
             decision = policy.next_extract(state, extract_batch_size, ctx)
             policy_events.extend(policy.drain_events())
             batch = list(decision.batch)
             if decision.stop:
+                if decision.action == "write_now":
+                    if not candidates:
+                        # No candidates to write; resume extraction.
+                        continue
+                    # Mid-session write: flush current candidates then resume.
+                    # Only write pages that are new or unwritten to avoid
+                    # re-writing already-completed pages on each write_now.
+                    mid_pages = canonicalize(candidates, existing=existing_pages)
+                    already_written = {
+                        p.id for p in existing_pages if p.body_markdown.strip()
+                    }
+                    new_pages = [p for p in mid_pages if p.id not in already_written]
+                    for p in mid_pages:
+                        for ev in p.evidence:
+                            state.pages_concept_evidence_chunks.append(ev.chunk_id)
+                            apply_coverage_feedback(state, ev.chunk_id, as_evidence=True)
+                    existing_pages = mid_pages
+                    _run_write_pass(
+                        new_pages, max_concepts, writer, meter, strategy,
+                        bundle, briefs, dossier_store, chunks_by_id,
+                        images_index, write_req_cfg, author_ctx,
+                        citation_index, knowledge_graph, budget_haiku_eq,
+                        verbalize, write_rejections,
+                    )
+                    candidates.clear()
+                    policy_events.append({
+                        "stage": "write_now",
+                        "mode": effective_mode_name,
+                        "n_pages": len(mid_pages),
+                    })
+                    continue
                 break
             if not batch:
                 # Control actions (set_allocation, set_tier) legitimately
@@ -478,7 +598,7 @@ def run_with_preloaded(
 
     # ---- build dossiers ---------------------------------------------------
     # Populate structured dossiers from extraction candidates. Dossiers
-    # persist to disk so incremental runs (--feed) accumulate material.
+    # persist to disk so incremental runs (refine) accumulate material.
     dossier_store = DossierStore(bundle.root)
     alias_to_page: dict[str, WikiPage] = {}
     for p in pages:
@@ -623,54 +743,13 @@ def run_with_preloaded(
         model_id=runtime.write_tier.value,
         writer_tier=runtime.write_tier,
     )
-    avg_write_cost = 30_000.0
-    n_writes_completed = 0
-    try:
-        for page in write_pages:
-            if not is_writable_page(page):
-                continue
-            # Pre-check: stop before issuing a write that would push spend
-            # past the 1.05x hard ceiling.
-            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
-                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
-                continue
-            _spent_before_call = meter.spent_haiku_eq
-            req = build_write_request(
-                page,
-                pages,
-                briefs,
-                dossier_store,
-                chunks_by_id,
-                images_index,
-                write_req_cfg,
-                author_ctx,
-                citation_index,
-                knowledge_graph=knowledge_graph,
-            )
-            try:
-                resp = writer.write(req)
-            except ValidationError as exc:
-                import sys as _sys
-
-                _sys.stderr.write(
-                    f"[{meter._run_id}] writer REJECTED page={page.id!r}: "  # noqa: SLF001
-                    f"{type(exc).__name__}: {str(exc)[:200]}\n"
-                )
-                write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
-                continue
-            page.body_markdown = resp.body_markdown
-            if verbalize:
-                _append_verbalize(
-                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
-                )
-            # Update running mean of observed write costs.
-            call_cost = meter.spent_haiku_eq - _spent_before_call
-            n_writes_completed += 1
-            avg_write_cost = (
-                avg_write_cost * (n_writes_completed - 1) + call_cost
-            ) / n_writes_completed
-    except BudgetExceededError:
-        pass
+    _run_write_pass(
+        write_pages, max_concepts, writer, meter, strategy,
+        bundle, briefs, dossier_store, chunks_by_id,
+        images_index, write_req_cfg, author_ctx,
+        citation_index, knowledge_graph, budget_haiku_eq,
+        verbalize, write_rejections,
+    )
 
     _finalize_pages(bundle, pages, docs, meter, strategy, iteration)
     snapshot = json.loads(bundle.run_path.read_text(encoding="utf-8"))
@@ -683,7 +762,6 @@ def run_with_preloaded(
     misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
     snapshot["n_cached_skipped"] = hits_delta
     snapshot["n_new_extracted"] = misses_delta
-    snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
     snapshot["mode"] = effective_mode_name
     snapshot["policy_actions"] = policy_events
@@ -1145,7 +1223,6 @@ def _write_extract_snapshot(
     misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
     snapshot["n_cached_skipped"] = hits_delta
     snapshot["n_new_extracted"] = misses_delta
-    snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
     snapshot["mode"] = mode_name
     snapshot["policy_actions"] = policy_events

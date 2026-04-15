@@ -37,3 +37,6 @@ archive/
 
 # Benchmark results (generated)
 benchmarks/results/
+
+# Notebooks (local exploration, not versioned)
+notebooks/

@@ -2,7 +2,7 @@
 
 Deliberately minimal — one numpy file. No vendor lock-in. Embeddings are
 unit-norm float32 vectors. Adequate for the corpora wikify targets
-(<= 10^4 chunks); swap for lancedb/chroma when it stops being adequate.
+(<= 10^4 chunks); swap for lancedb when it stops being adequate.
 """
 
 import json

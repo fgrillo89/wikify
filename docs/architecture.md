@@ -46,7 +46,7 @@ form possible:
 | Document text    | `corpus/markdown/{doc_id}.md`         | chunks, embeddings             |
 | Document images  | `corpus/images/{doc_id}/`             | (none)                         |
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
-| Embeddings       | vector store (chroma / lancedb / ...) | vector search results          |
+| Embeddings       | `corpus/vectors.npz` (numpy)          | vector search results          |
 | Knowledge graph  | `corpus/graph.json`                   | sampling decisions, author queries |
 | **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
@@ -98,7 +98,7 @@ These are the contracts. Everything else is implementation.
   - `co_section`: chunk <-> chunk (same doc + same section path)
   Chunk similarity edges (`similar_knn`, `similar_strong`) are removed;
   vector search via VectorStore replaces them. PageRank is computed at
-  graph build time. See `knowledge-graph-design.md` for full schema.
+  graph build time. Full schema is in `citestore/graph.py`.
 
 ### Wiki side
 
@@ -275,8 +275,8 @@ Documentation lives alongside the code in `docs/`:
 docs/
   architecture.md       # this file
   strategies.md         # explorer / schedule / tiering cube
+  study-design.md       # study design: baseline / scripted / guided conditions
   metrics.md            # M1-M6 + GT-C + GT-P
-  runbook.md            # operator runbook: CLI flags, environment, workflows
   test-run-playbook.md  # reproducible test-run procedure + quality review
 ```
 
@@ -382,3 +382,62 @@ class LevyExplorer:
                 out.append(self._local(state))
         return out
 ```
+
+## Operator quick reference
+
+### Environment
+
+```bash
+export WIKIFY_EMBEDDER=fastembed
+export WIKIFY_DISPATCH_DIR=data/dispatch   # default
+```
+
+### What ingest produces
+
+| Path | Content |
+|------|---------|
+| `markdown/{doc_id}.md` | Cleaned markdown (YAML frontmatter + edges block) |
+| `chunks/{doc_id}.jsonl` | One chunk per line |
+| `docs/{doc_id}.json` | Document record (sections, images, citations, equations) |
+| `images/{doc_slug}/` | Binary figures (caption-only by default) |
+| `vectors.npz` + `.ids.json` + `.meta.json` | Chunk embeddings |
+| `graph.json` | Knowledge graph (Paper + Author + Chunk nodes, PageRank) |
+| `topics.json` | Topic vocabulary |
+| `library.bib` | BibTeX export |
+
+### CLI workflows
+
+```bash
+# Ingest
+uv run python -m wikify.cli ingest <input_dir> --out <corpus_dir>
+
+# Distill (preset)
+uv run python -m wikify.cli distill --preset scripted-mixed --budget 1x --seed 0 \
+  --corpus <corpus_dir> --bundle <bundle_dir>
+
+# Distill (manual)
+uv run python -m wikify.cli distill --strategy M --mode guided --guided-tools navigate \
+  --budget 1x --seed 0 --corpus <corpus_dir> --bundle <bundle_dir>
+
+# Study
+uv run python -m wikify.cli study \
+  --presets scripted-mixed,guided-navigate,guided-full \
+  --include-baseline --budgets 1x --seeds 0,1,2
+
+# Eval
+uv run python -m wikify.cli eval --bundle <bundle_dir> --corpus <corpus_dir>
+
+# HTML
+uv run python -m wikify.cli html --bundle <bundle_dir>
+```
+
+### Troubleshooting
+
+- **Dispatcher hang**: Check skill is enabled, request file exists,
+  response file lands next to it.
+- **Schema validation**: `extra="forbid"` — any unexpected key rejects.
+  Read `schema.py` for canonical shapes.
+- **Budget exhaustion mid-write**: Raise `--budget` or shift
+  `--exploit-fraction`.
+- **Cache miss explosion**: Prompt template or model changed, invalidating
+  cache keys. Check `prompt_hash` stability.

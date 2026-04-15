@@ -144,7 +144,6 @@ def run_merge_iteration(
     snap.update(
         {
             "iteration": "merge",
-            "feed": False,
             "merge_from": str(merge_from_bundle.root),
             "n_pages": len(merged),
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),

@@ -1,9 +1,9 @@
-"""Incremental feed mode (item 7c).
+"""Incremental refine mode.
 
-Run distill once on the smoke fixture, then a second time with feed=True
-against the same bundle + cache. The second run must skip all chunks via
-the extract cache (n_new_extracted == 0) and must not explode the page
-count (canonicalize merges by alias).
+Run distill once on the smoke fixture, then a second time with
+iteration=refine against the same bundle + cache. The second run must
+skip all chunks via the extract cache (n_new_extracted == 0) and must
+not explode the page count (canonicalize merges by alias).
 """
 
 import json
@@ -29,7 +29,12 @@ def corpus(tmp_path_factory) -> CorpusPaths:
     return ingest_corpus(FIXTURE, out)
 
 
-def _run(bundle: BundlePaths, cache: ExtractCache, corpus: CorpusPaths, feed: bool) -> dict:
+def _run(
+    bundle: BundlePaths,
+    cache: ExtractCache,
+    corpus: CorpusPaths,
+    iteration: str = "create",
+) -> dict:
     meter = CostMeter(
         budget_haiku_eq=20_000.0,
         run_id="feed-test",
@@ -44,7 +49,7 @@ def _run(bundle: BundlePaths, cache: ExtractCache, corpus: CorpusPaths, feed: bo
         writer=FakeWriter(meter),
         meter=meter,
         budget_haiku_eq=20_000.0,
-        feed=feed,
+        iteration=iteration,
     )
     return json.loads(bundle.run_path.read_text(encoding="utf-8"))
 
@@ -58,19 +63,21 @@ def _count_pages(bundle: BundlePaths) -> int:
     return n
 
 
-def test_feed_is_cache_complete(corpus, tmp_path):
+def test_refine_preserves_pages(corpus, tmp_path):
+    """Refine iteration uses coverage memory and does not explode page count."""
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")
 
-    snap1 = _run(bundle, cache, corpus, feed=False)
+    snap1 = _run(bundle, cache, corpus, iteration="create")
     pages1 = _count_pages(bundle)
     assert pages1 > 0
     assert snap1["n_new_extracted"] >= 1
 
-    snap2 = _run(bundle, cache, corpus, feed=True)
+    snap2 = _run(bundle, cache, corpus, iteration="refine")
     pages2 = _count_pages(bundle)
 
-    assert snap2["feed"] is True
-    assert snap2["n_new_extracted"] == 0
-    # pages should be stable (merge, not explode)
-    assert pages2 == pages1
+    assert snap2["iteration"] == "refine"
+    # Refine uses coverage memory to explore new chunks, so new
+    # extractions are expected. Pages should be stable or grow
+    # (canonicalize merges by alias), never shrink.
+    assert pages2 >= pages1

@@ -125,7 +125,11 @@ def write_knowledge_graph(paths: CorpusPaths, kg: object) -> None:
     save_knowledge_graph(paths.knowledge_graph_path, kg)
 
 
-def read_knowledge_graph(paths: CorpusPaths, vectors: object | None = None) -> object:
+def read_knowledge_graph(
+    paths: CorpusPaths,
+    vectors: object | None = None,
+    embed_fn: object | None = None,
+) -> object:
     """Load a KnowledgeGraph, or return an empty one if file is missing."""
     if not paths.knowledge_graph_path.exists():
         import networkx as nx
@@ -133,10 +137,12 @@ def read_knowledge_graph(paths: CorpusPaths, vectors: object | None = None) -> o
         from ..citestore.graph import KnowledgeGraph, NetworkXBackend
 
         backend = NetworkXBackend(G=nx.MultiDiGraph())
-        return KnowledgeGraph(backend=backend, vectors=vectors)
+        return KnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
     from ..citestore.graph_build import load_knowledge_graph
 
-    return load_knowledge_graph(paths.knowledge_graph_path, vectors=vectors)
+    return load_knowledge_graph(
+        paths.knowledge_graph_path, vectors=vectors, embed_fn=embed_fn,
+    )
 
 
 def read_doc_images(doc: Document) -> list[DocImage]:
