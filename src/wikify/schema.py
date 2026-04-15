@@ -551,6 +551,11 @@ class WriteRequest(BaseModel):
     # (why this structure, which evidence was foregrounded, what was
     # deferred). Feeds <bundle>/_meta/verbalize.jsonl.
     verbalize: bool = False
+    # NeurIPS ablation: controls evidence granularity.
+    # "full" (W3): chunk_id + quote, G2 gate enforced.
+    # "doc" (W2): evidence carries doc_id only, no chunk_id or quote.
+    # "off" (W1): no evidence markers in output.
+    evidence_mode: str = "full"  # "full" | "doc" | "off"
 
 
 class WriteResponse(BaseModel):
