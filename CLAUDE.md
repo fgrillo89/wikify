@@ -6,10 +6,16 @@ This file is not the architecture source of truth.
 ## Current Focus
 
 `wikify` is the active track for strategy science.
-The core question is strategy quality vs token cost vs wall-clock time:
+The core question is exploration autonomy: does giving the model control
+over corpus navigation produce better wikis than rule-based strategies,
+and does any of it beat simple retrieve-and-summarise?
 
-- scripted exploration and budget allocation (`scripted` mode)
-- model-driven exploration and budget allocation (`guided` mode)
+- baseline mode: retrieve-and-summarise (no iterative exploration)
+- scripted mode: deterministic LevyExplorer (E/M/X strategies)
+- guided mode: model navigates via interactive KG tool-calling
+
+The pipeline is parametric from fully deterministic to fully agentic.
+Named presets capture key study conditions. See `docs/study-design.md`.
 
 All comparisons must run under the same pipeline contract and telemetry.
 
@@ -157,10 +163,11 @@ If a test-run playbook exists (`docs/test-run-playbook.md`), follow it step by s
 For `wikify` work, read in this order:
 
 1. `docs/architecture.md`
-2. `docs/strategies.md`
-3. `docs/metrics.md`
-4. `docs/runbook.md`
-5. `docs/test-run-playbook.md` (required before any test run)
+2. `docs/study-design.md`
+3. `docs/strategies.md`
+4. `docs/metrics.md`
+5. `docs/runbook.md`
+6. `docs/test-run-playbook.md` (required before any test run)
 
 ## Wikify Ground Rules
 
