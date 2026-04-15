@@ -96,6 +96,8 @@ class NetworkXBackend:
     _equations_of: dict[str, list[str]] = field(default_factory=dict)
     _equations_in_chunk: dict[str, list[str]] = field(default_factory=dict)
     _figures_near_chunk: dict[str, list[str]] = field(default_factory=dict)
+    _chunks_near_figure: dict[str, list[str]] = field(default_factory=dict)
+    _chunks_with_equation: dict[str, list[str]] = field(default_factory=dict)
     _pagerank: dict[str, float] = field(default_factory=dict)
     _h_index: dict[str, int] = field(default_factory=dict)
     _ord_refs: dict[str, dict[int, str]] = field(default_factory=dict)
@@ -115,6 +117,8 @@ class NetworkXBackend:
         self._equations_of.clear()
         self._equations_in_chunk.clear()
         self._figures_near_chunk.clear()
+        self._chunks_near_figure.clear()
+        self._chunks_with_equation.clear()
         self._pagerank.clear()
         self._h_index.clear()
         self._ord_refs.clear()
@@ -142,8 +146,10 @@ class NetworkXBackend:
                 self._equations_of.setdefault(u, []).append(v)
             elif kind == "EQUATION_IN_CHUNK":
                 self._equations_in_chunk.setdefault(v, []).append(u)
+                self._chunks_with_equation.setdefault(u, []).append(v)
             elif kind == "FIGURE_NEAR_CHUNK":
                 self._figures_near_chunk.setdefault(v, []).append(u)
+                self._chunks_near_figure.setdefault(u, []).append(v)
 
         # Node-level metrics
         for nid, ndata in g.nodes(data=True):
@@ -481,9 +487,9 @@ class QueryBuilder:
             elif ntype == SECTION:
                 chunk_ids.update(backend._chunks_of_section.get(nid, []))
             elif ntype == FIGURE:
-                chunk_ids.update(backend._figures_near_chunk.get(nid, []))
+                chunk_ids.update(backend._chunks_near_figure.get(nid, []))
             elif ntype == EQUATION:
-                chunk_ids.update(backend._equations_in_chunk.get(nid, []))
+                chunk_ids.update(backend._chunks_with_equation.get(nid, []))
         return chunk_ids
 
     # ---- Terminals (execute and return) ----

@@ -387,3 +387,35 @@ Chunk text and embeddings live in the VectorStore, not the graph.
     "kind": "inline",
 }
 ```
+
+## Tracing
+
+Enable exploration logging to diagnose sampling decisions and compare
+strategy behavior.
+
+```python
+# Enable tracing
+kg.enable_trace(caller="sampler")
+
+# All terminal operations (collect, search, similar_to) are logged
+kg.source("X").cited_by().chunks().search("topic", top_k=5)
+kg.sources().top(5, by="pagerank").collect()
+
+# Save trace to JSONL and clear buffer
+kg.save_trace(bundle.meta_dir / "kg_trace.jsonl")
+
+# Disable
+kg.disable_trace()
+```
+
+Each trace entry records: timestamp, caller, method, args, input/output
+counts, and a 5-ID sample. JSONL format, append-only.
+
+Replay via CLI: `wikify trace --bundle ... --format stats|json|timeline`
+
+Or programmatically:
+```python
+from wikify.eval.trace_replay import load_trace, replay_stats
+entries = load_trace(path)
+stats = replay_stats(entries)  # per-caller breakdown, queries, visited nodes
+```

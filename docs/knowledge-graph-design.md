@@ -1,5 +1,12 @@
 # Knowledge Graph Design: Unified Academic Graph
 
+> **Status (2026-04-15): Migration complete.** `CorpusGraph` is deleted.
+> `KnowledgeGraph` (`citestore/graph.py`) and `build_knowledge_graph`
+> (`citestore/graph_build.py`) are the live implementations. Chunk
+> similarity edges (`similar_knn`, `similar_strong`, `STRONG_COS`) are
+> removed; vector search via VectorStore replaces them. This document is
+> retained as a historical design record.
+
 ## Problem
 
 Citation data is scattered across 3 stores (docs JSON, citations.json,

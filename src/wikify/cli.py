@@ -733,8 +733,7 @@ def sample_claims_cmd(
     """Sample factual claims from a bundle for human evaluation."""
     from .eval.claim_sampler import sample_claims, save_sample
 
-    bundle = BundlePaths(root=bundle_dir)
-    claims = sample_claims(bundle, n=n)
+    claims = sample_claims(bundle_dir, n=n)
     target = out or (bundle_dir / "_meta" / "claim_sample.json")
     save_sample(claims, target)
     typer.echo(f"sampled {len(claims)} claims -> {target}")

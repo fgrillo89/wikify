@@ -456,6 +456,21 @@ class TestNearbyTraversals:
         eq_ids = set(all_eqs.ids())
         assert "paper_A_eq1" in eq_ids
 
+    def test_figures_scoped_search(self, kg_with_search: KnowledgeGraph):
+        """Searching from figures resolves to their nearby chunks."""
+        results = kg_with_search.source("paper_A").figures().search(
+            "methods fabrication", top_k=3,
+        )
+        # Figure paper_A/fig_01 is near chunk paper_A_c1 -> search should scope to that
+        assert len(results) > 0
+
+    def test_equations_scoped_search(self, kg_with_search: KnowledgeGraph):
+        """Searching from equations resolves to their chunks."""
+        results = kg_with_search.source("paper_A").equations().search(
+            "methods fabrication", top_k=3,
+        )
+        assert len(results) > 0
+
     def test_nearby_figures_from_search(self, kg_with_search: KnowledgeGraph):
         """Search for chunks, then find nearby figures."""
         hits = kg_with_search.source("paper_A").chunks().search("methods ALD", top_k=3)

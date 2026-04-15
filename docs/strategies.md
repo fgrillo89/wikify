@@ -131,24 +131,24 @@ Live status to stderr every 10 calls or 5 seconds, whichever comes first.
 
 An explorer is a parameter triple (implemented as `LevyExplorer` in
 `distill/explorer.py`). Every old A1-A8 falls out as a special case. The
-`Explorer` protocol, `ExplorerState`, and `build_explorer_index` live in
-the same module.
+`Explorer` protocol and `ExplorerState` live in the same module.
+The sampler uses the `KnowledgeGraph` directly for navigation.
 
 | Variable | Domain | Granularity | Meaning |
 |---|---|---|---|
-| `local_op` | `none` / `similarity_walk` / `refine_uncertain` | chunk | What "step locally" means: walk `similar_strong`/`co_section` from the current concept's evidence chunks (`similarity_walk`), or pick chunks adjacent to high-entropy cached extractions (`refine_uncertain`). |
+| `local_op` | `none` / `similarity_walk` / `refine_uncertain` | chunk | What "step locally" means: walk similar chunks (via vector search) / `co_section` from the current concept's evidence chunks (`similarity_walk`), or pick chunks adjacent to high-entropy cached extractions (`refine_uncertain`). |
 | `global_op` | `uniform` / `pagerank` / `coverage_gap` / `figures` | doc-then-chunk *or* chunk | What "jump globally" means. |
 | `jump_rate` | `[0, 1]` | - | Per step, probability of a global jump instead of a local step. The Levy mixing parameter. |
 
 ### Granularity rules (chunk vs doc)
 
-The corpus graph has both chunk-level edges (`similar_strong`,
-`co_section`) and doc-level edges (`cites`, `doc_similar`). Each operator
-lives at exactly one level:
+The knowledge graph has chunk-level edges (`co_section`) and doc-level
+edges (`cites`, `doc_similar`). Chunk similarity is via vector search,
+not materialized edges. Each operator lives at exactly one level:
 
 | Operator | Level | Why |
 |---|---|---|
-| `similarity_walk` | chunk | walks `similar_strong` / `co_section` |
+| `similarity_walk` | chunk | walks similar chunks (vector search) / `co_section` |
 | `refine_uncertain` | chunk | uncertainty is per-chunk |
 | `uniform` (global) | **doc-then-chunk** | pick a doc, then read 3 chunks (abstract + top-2 by `similar_strong` degree). Pure chunk-uniform is dominated by long documents. |
 | `pagerank` (global) | **doc-then-chunk** | PageRank lives on `cites` / `doc_similar`; once a doc is picked, the same per-doc rule applies. |
