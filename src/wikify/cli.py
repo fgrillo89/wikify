@@ -473,6 +473,98 @@ def campaign(
     typer.echo(f"campaign complete: {bundle.root}")
 
 
+@app.command()
+def study(
+    strategy: str = typer.Option("M", "--strategy", help="E | M | X"),
+    conditions: str = typer.Option("W3", "--conditions", help="Comma-separated: B1,B2,W1,W2,W3"),
+    budgets: str = typer.Option("1x", "--budgets", help="Comma-separated: 0.5x,1x,2x"),
+    seeds: str = typer.Option("0", "--seeds", help="Comma-separated: 0,1,2"),
+    corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
+    out_dir: Path = typer.Option(Path("data/study"), "--out"),
+    cache_dir: Path = typer.Option(Path("data/cache/extract"), "--cache"),
+    field: str | None = typer.Option(None, "--field"),
+    artifact: str = typer.Option("wiki_article", "--artifact"),
+    verbalize: bool = typer.Option(False, "--verbalize/--no-verbalize"),
+) -> None:
+    """Run a NeurIPS-style study: conditions x budgets x seeds."""
+    cond_list = [c.strip() for c in conditions.split(",")]
+    budget_list = [b.strip() for b in budgets.split(",")]
+    seed_list = [int(s.strip()) for s in seeds.split(",")]
+    total = len(cond_list) * len(budget_list) * len(seed_list)
+
+    evidence_modes = {"W1": "off", "W2": "doc", "W3": "full", "B1": "off", "B2": "off"}
+    for c in cond_list:
+        if c not in evidence_modes:
+            raise typer.BadParameter(f"unknown condition: {c}")
+
+    typer.echo(
+        f"study: {len(cond_list)} conditions x {len(budget_list)} budgets "
+        f"x {len(seed_list)} seeds = {total} runs"
+    )
+
+    corpus = CorpusPaths(root=corpus_dir)
+    preloaded = preload_corpus(corpus)
+
+    if field is None:
+        from .distill.extract.field_detect import detect_field
+
+        field = detect_field(corpus)
+
+    cache = ExtractCache(root=cache_dir)
+    run_n = 0
+
+    for cond in cond_list:
+        for bud in budget_list:
+            for seed in seed_list:
+                run_n += 1
+                bundle_name = f"{cond}_{bud}_seed{seed}"
+                bundle = BundlePaths(root=out_dir / bundle_name)
+                bundle.ensure()
+                budget_haiku_eq = _parse_budget(bud)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                run_id = f"study_{cond}_{bud}_seed{seed}_{ts}"
+
+                meter = CostMeter(
+                    budget_haiku_eq=budget_haiku_eq,
+                    run_id=run_id,
+                    events_path=bundle.calls_path,
+                )
+
+                from .dispatch import Dispatch
+
+                dispatch = Dispatch(meter, cache)
+
+                cfg = build_strategy(strategy, seed=seed)
+                mode = evidence_modes[cond]
+
+                if cond in ("B1", "B2"):
+                    typer.echo(f"[{run_n}/{total}] {cond} {bud} seed{seed}: baseline")
+                    continue
+
+                run_with_preloaded(
+                    preloaded=preloaded,
+                    bundle=bundle,
+                    strategy=cfg,
+                    extractor=dispatch,
+                    writer=dispatch,
+                    meter=meter,
+                    budget_haiku_eq=budget_haiku_eq,
+                    iteration="create",
+                    editor=dispatch,
+                    compactor=dispatch,
+                    orchestrator=dispatch,
+                    mode_name="scripted",
+                    field_name=field,
+                    artifact_name=artifact,
+                    verbalize=verbalize,
+                    evidence_mode=mode,
+                )
+
+                typer.echo(f"[{run_n}/{total}] {cond} {bud} seed{seed}: done -> {bundle.root}")
+
+    typer.echo(f"study complete: {total} runs in {out_dir}")
+
+
 @app.command("persona-generate")
 def persona_generate(
     corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
@@ -588,6 +680,64 @@ def query(
     ]
     out_path.write_text("\n".join(fm_lines), encoding="utf-8")
     typer.echo(f"answer written to {out_path}")
+
+
+@app.command("trace")
+def trace(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    format: str = typer.Option("stats", "--format", help="stats | json | timeline"),
+) -> None:
+    """Analyse KG exploration trace from a distill run."""
+    from .eval.trace_replay import exploration_timeline, load_trace, replay_stats
+
+    bundle = BundlePaths(root=bundle_dir)
+    trace_path = bundle.meta_dir / "kg_trace.jsonl"
+    if not trace_path.exists():
+        typer.echo(f"no trace file at {trace_path}")
+        raise typer.Exit(1)
+
+    entries = load_trace(trace_path)
+    if format == "json":
+        typer.echo(json.dumps([{
+            "timestamp": e.timestamp, "caller": e.caller,
+            "method": e.method, "args": e.args,
+            "input_count": e.input_count, "output_count": e.output_count,
+        } for e in entries], indent=2))
+    elif format == "timeline":
+        for step in exploration_timeline(entries):
+            typer.echo(
+                f"[{step['step']:4d}] {step['caller']:12s} "
+                f"{step['method']:20s} {step['in']:>5d} -> {step['out']:>5d}  "
+                f"{', '.join(step['sample'][:3])}"
+            )
+    else:
+        stats = replay_stats(entries)
+        typer.echo(f"total calls: {stats['total_calls']}")
+        for caller, n in sorted(stats["calls_by_caller"].items()):
+            methods = stats["methods_by_caller"].get(caller, [])
+            typer.echo(f"  {caller}: {n} calls ({', '.join(methods)})")
+        typer.echo(f"unique nodes visited: {stats['unique_nodes_visited']}")
+        typer.echo(f"unique queries: {stats['unique_queries']}")
+        if stats["queries"]:
+            typer.echo("top queries:")
+            for q in stats["queries"][:10]:
+                typer.echo(f"  - {q}")
+
+
+@app.command("sample-claims")
+def sample_claims_cmd(
+    bundle_dir: Path = typer.Option(..., "--bundle"),
+    n: int = typer.Option(100, "--n", help="Number of claims to sample"),
+    out: Path | None = typer.Option(None, "--out", help="Output JSON path"),
+) -> None:
+    """Sample factual claims from a bundle for human evaluation."""
+    from .eval.claim_sampler import sample_claims, save_sample
+
+    bundle = BundlePaths(root=bundle_dir)
+    claims = sample_claims(bundle, n=n)
+    target = out or (bundle_dir / "_meta" / "claim_sample.json")
+    save_sample(claims, target)
+    typer.echo(f"sampled {len(claims)} claims -> {target}")
 
 
 @app.command("html")
