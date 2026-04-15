@@ -271,7 +271,7 @@ def distill(
                 f"--guided-tools must be navigate or full; got {guided_tools!r}"
             )
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(CorpusPaths(root=corpus_dir))
         typer.echo(f"auto-detected field: {field}")
@@ -417,7 +417,7 @@ def campaign(
         raise typer.BadParameter(f"--exploit-fraction must be in [0, 1]; got {exploit_fraction!r}")
 
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(CorpusPaths(root=corpus_dir))
         typer.echo(f"auto-detected field: {field}")
@@ -577,7 +577,7 @@ def study(
     preloaded = preload_corpus(corpus)
 
     if field is None:
-        from .distill.extract.field_detect import detect_field
+        from .distill.field_detect import detect_field
 
         field = detect_field(corpus)
 
@@ -693,7 +693,7 @@ def persona_generate(
 ) -> None:
     """Generate and persist the corpus persona at <corpus>/persona.txt."""
     from .dispatch import make_persona_complete
-    from .distill.write.persona import generate_corpus_persona
+    from .distill.persona import generate_corpus_persona
     from .store.corpus import list_documents
 
 
@@ -714,7 +714,7 @@ def field_detect_cmd(
     corpus_dir: Path = typer.Option(Path("data/corpora"), "--corpus"),
 ) -> None:
     """Auto-detect the most likely field for a corpus and print the top scores."""
-    from .distill.extract.field_detect import detect_field, detect_field_scores
+    from .distill.field_detect import detect_field, detect_field_scores
 
     corpus = CorpusPaths(root=corpus_dir)
     chosen = detect_field(corpus)

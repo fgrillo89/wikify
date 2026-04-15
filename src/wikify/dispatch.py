@@ -1,8 +1,8 @@
 """File-dispatch binding: writes request JSON, polls for response JSON.
 
-Strategies never import this module. The CLI wires it into a run when
-``--binding file_dispatch`` is passed. The binding writes a request file at
-a well-known path, blocks for a matching response file, validates the
+Strategies never import this module. The CLI wires a ``Dispatch`` instance
+into the pipeline at run time. The binding writes a request file at a
+well-known path, blocks for a matching response file, validates the
 JSON against ``schema.py``, deducts from the cost meter, and consults the
 extraction cache for extract calls so cache hits are zero-token and never
 spawn a subagent.

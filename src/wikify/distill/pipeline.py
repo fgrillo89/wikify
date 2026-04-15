@@ -762,7 +762,6 @@ def run_with_preloaded(
     misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
     snapshot["n_cached_skipped"] = hits_delta
     snapshot["n_new_extracted"] = misses_delta
-    snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
     snapshot["mode"] = effective_mode_name
     snapshot["policy_actions"] = policy_events
@@ -1224,7 +1223,6 @@ def _write_extract_snapshot(
     misses_delta = (cache.misses - cache_misses_start) if cache is not None else 0
     snapshot["n_cached_skipped"] = hits_delta
     snapshot["n_new_extracted"] = misses_delta
-    snapshot["feed"] = bool(iteration == "refine")
     snapshot["iteration"] = iteration
     snapshot["mode"] = mode_name
     snapshot["policy_actions"] = policy_events
