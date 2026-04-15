@@ -203,7 +203,7 @@ uv run python -m wikify.cli distill \
 
 What happens during the run:
 
-1. The harness loads the corpus, vectors, graph, image index, and sampler.
+1. The harness loads the corpus, vectors, knowledge graph, and image index.
 2. For each sampled chunk it writes
    `data/dispatch/extract/<rid>.request.json` and blocks polling for
    `data/dispatch/extract/<rid>.response.json` (timeout 600s, poll 0.25s).

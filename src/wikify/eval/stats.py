@@ -1,6 +1,6 @@
-"""Statistical tests for NeurIPS condition comparisons.
+"""Statistical tests for study condition comparisons.
 
-Implements the tests specified in the workplan:
+Implements hypothesis tests for comparing conditions:
 - H1/H2: Two-proportion z-test on supported-claim rate
 - H3: Paired t-test on log(verification time)
 - H4: Mann-Whitney U on Likert scores

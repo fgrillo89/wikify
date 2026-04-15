@@ -1,8 +1,7 @@
 """Claim and page sampling for human evaluation.
 
 Extracts factual sentences from wiki pages and creates stratified samples
-for the NeurIPS faithfulness audit (Task 1) and verifiability/utility
-evaluation (Task 2).
+for the faithfulness audit and verifiability/utility evaluation.
 """
 
 from __future__ import annotations
