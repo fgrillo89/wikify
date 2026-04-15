@@ -85,8 +85,8 @@ Presets are convenience shortcuts. All parameters can be overridden:
 # Use a preset
 wikify distill --preset guided-navigate --budget 1x
 
-# Override specific parameters
-wikify distill --preset scripted-mixed --jump-rate 0.3 --budget 1x
+# Override tiers on a preset
+wikify distill --preset scripted-mixed --extract-tier M --budget 1x
 ```
 
 ## Budget and convergence

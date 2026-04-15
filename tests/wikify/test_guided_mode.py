@@ -26,7 +26,8 @@ from wikify.store.vectors import VectorStore
 
 
 def _empty_kg(vectors=None):
-    import networkx as nx
+    import networkx as nx  # noqa: I001
+
     from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
     backend = NetworkXBackend(G=nx.MultiDiGraph())
     return KnowledgeGraph(backend=backend, vectors=vectors)

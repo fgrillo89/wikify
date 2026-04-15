@@ -677,16 +677,6 @@ def study(
                 bundle_name = f"baseline_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
-                budget_haiku_eq = _parse_budget(bud)
-                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                run_id = f"study_{bundle_name}_{ts}"
-
-                meter = CostMeter(
-                    budget_haiku_eq=budget_haiku_eq,
-                    run_id=run_id,
-                    events_path=bundle.calls_path,
-                )
-
                 _run_baseline(preloaded=preloaded, bundle=bundle)
 
                 typer.echo(
