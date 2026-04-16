@@ -158,8 +158,16 @@ _CUSTOM_BACKENDS: dict[str, dict[str, tuple[DocKind, callable]]] = {}
 # ---------------------------------------------------------------------------
 
 
+# Backends that use GPU models and must not be parallelized across
+# worker processes (each worker would load its own GPU model copy).
+_GPU_BACKENDS: set[str] = set()
+
+
 def register_parser_backend(
-    name: str, overrides: dict[str, tuple[DocKind, callable]],
+    name: str,
+    overrides: dict[str, tuple[DocKind, callable]],
+    *,
+    gpu: bool = False,
 ) -> None:
     """Register a custom parser backend that overrides specific formats.
 
@@ -168,15 +176,17 @@ def register_parser_backend(
     ``ProcessPoolExecutor`` workers start fresh processes that only
     see registrations made during module import.
 
-    Example (adding docling as a custom backend)::
-
-        def _lazy_docling():
-            from . import docling as p
-            return p
-
-        register_parser_backend("docling", {"pdf": ("pdf", _lazy_docling)})
+    Set ``gpu=True`` for backends that load GPU models (forces
+    single-worker mode in the ingest pipeline).
     """
     _CUSTOM_BACKENDS[name] = overrides
+    if gpu:
+        _GPU_BACKENDS.add(name)
+
+
+def backend_requires_single_worker(name: str) -> bool:
+    """True if this backend uses GPU models and needs single-threaded ingest."""
+    return name in _GPU_BACKENDS
 
 
 def available_backends() -> list[str]:

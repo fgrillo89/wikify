@@ -412,8 +412,9 @@ def _stream_parse_and_persist(
     corpus_root_str = str(paths.root)
     failed = 0
 
-    # Docling uses a GPU model -- don't duplicate across processes.
-    if parser_backend == "docling":
+    from .parsers.registry import backend_requires_single_worker
+
+    if backend_requires_single_worker(parser_backend):
         workers = 1
 
     bar = tqdm(
