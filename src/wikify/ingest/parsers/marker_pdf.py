@@ -28,9 +28,9 @@ from pathlib import Path
 
 from ._citations import (
     bracketize_bare_refs,
+    bracketize_concat_refs,
     bracketize_sup_refs,
     count_ref_list_items_from_md,
-    split_adjacent_refs,
 )
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
@@ -144,11 +144,13 @@ def parse(path: Path) -> ParseResult:
     md_text = rendered.markdown
 
     # Restore bracketed citation markers so the graph can resolve them.
-    # Must run BEFORE image-link stripping, otherwise any <sup>N</sup>
-    # swallowed by light_clean would be lost.
+    # Order matters: sup first (covers ``<sup>N</sup>`` markup), then
+    # concat (brackets word-stuck ranges like ``switches20-22`` even
+    # when followed by a lowercase continuation), then the general
+    # bare-ref pass for everything else.
     md_text = bracketize_sup_refs(md_text)
-    md_text = split_adjacent_refs(md_text)
     ref_count = count_ref_list_items_from_md(md_text)
+    md_text = bracketize_concat_refs(md_text, ref_count=ref_count)
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
     # Extract images against the raw rendered markdown so caption

@@ -2,7 +2,8 @@
 
 Covers the fixes from the PR #14 follow-up review:
 - ``<sup>N</sup>`` superscript citations become ``[N]``
-- ``word20-22`` concatenated refs get split so bracketize can match them
+- ``word20-22`` concatenated refs are bracketed even mid-sentence
+- Bullet-style bibliography entries (``- 1. Chua...``) are counted
 - Marker image links are stripped from persisted markdown
 - Caption-derived figure labels, not block-id labels
 - HTML ``<sup>`` affiliation markup does not leak into author metadata
@@ -11,10 +12,9 @@ Covers the fixes from the PR #14 follow-up review:
 from __future__ import annotations
 
 from wikify.ingest.parsers._citations import (
-    bracketize_bare_refs,
+    bracketize_concat_refs,
     bracketize_sup_refs,
     count_ref_list_items_from_md,
-    split_adjacent_refs,
 )
 from wikify.ingest.parsers.marker_pdf import (
     _label_from_caption,
@@ -51,31 +51,48 @@ class TestBracketizeSupRefs:
 
 
 # ---------------------------------------------------------------------------
-# Adjacent-ref splitting
+# Concat-ref bracketing
 # ---------------------------------------------------------------------------
 
 
-class TestSplitAdjacentRefs:
-    def test_range_split(self):
-        assert split_adjacent_refs("switches20-22.") == "switches 20-22."
+class TestBracketizeConcatRefs:
+    def test_range_bracketed(self):
+        assert (
+            bracketize_concat_refs("switches20-22.", ref_count=30)
+            == "switches [20-22]."
+        )
 
-    def test_comma_list_split(self):
-        assert split_adjacent_refs("devices2,3,4.") == "devices 2,3,4."
+    def test_comma_list_bracketed(self):
+        assert (
+            bracketize_concat_refs("devices2,3,4.", ref_count=30)
+            == "devices [2,3,4]."
+        )
 
-    def test_single_number_not_split(self):
+    def test_mid_sentence_range_bracketed(self):
+        # Regression: reviewer flagged "devices2-19 involve..." staying bare
+        # because the bare-refs pass skips lowercase continuation words.
+        md = "devices2-19 involve motion, switches20-22."
+        out = bracketize_concat_refs(md, ref_count=30)
+        assert "devices [2-19]" in out
+        assert "switches [20-22]" in out
+
+    def test_single_number_not_bracketed(self):
         # "version5" could be a product name; require a list/range.
-        assert split_adjacent_refs("version5.") == "version5."
+        assert bracketize_concat_refs("version5.", ref_count=30) == "version5."
 
-    def test_short_word_not_split(self):
-        # "CO2" / "H2O" style must not be split.
-        assert split_adjacent_refs("CO2-3.") == "CO2-3."
+    def test_short_word_not_bracketed(self):
+        # "CO2-3" must not be treated as a citation.
+        assert bracketize_concat_refs("CO2-3.", ref_count=30) == "CO2-3."
 
-    def test_bracketize_bare_refs_integration(self):
-        # Full Marker flow: split, then bracketize with a ref count.
-        md = "switches20-22."
-        split = split_adjacent_refs(md)
-        result = bracketize_bare_refs(split, ref_count=30)
-        assert "[20-22]" in result
+    def test_out_of_range_not_bracketed(self):
+        # 100-200 with only 30 refs: stays untouched.
+        assert (
+            bracketize_concat_refs("switches100-200.", ref_count=30)
+            == "switches100-200."
+        )
+
+    def test_no_refs_section_skips(self):
+        assert bracketize_concat_refs("switches20-22.", ref_count=0) == "switches20-22."
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +120,42 @@ class TestCountRefsFromMd:
         )
         assert count_ref_list_items_from_md(md) == 2
 
+    def test_bullet_numbered_counted(self):
+        # Marker emits bibliography as "- 1. Author..." bullet entries.
+        md = (
+            "## References\n\n"
+            "- 1. Chua, L. Memristor.\n"
+            "- 2. Strukov, D. Missing memristor.\n"
+            "- 3. Williams, R.\n"
+        )
+        assert count_ref_list_items_from_md(md) == 3
+
     def test_no_refs_section(self):
         assert count_ref_list_items_from_md("# Body\n\nNo refs.") == 0
+
+    def test_fallback_cluster_without_heading(self):
+        # No "References" heading, but a dense trailing numbered cluster.
+        md = (
+            "# Intro\n\nBody text.\n\n"
+            "1. Chua, L. Memristor.\n"
+            "2. Strukov, D. Missing memristor.\n"
+            "3. Williams, R. HP memristor.\n"
+            "4. Yang, J. Synaptic.\n"
+            "5. Kim, S. ALD memristor.\n"
+            "6. Lee, C. TiN/HfO2.\n"
+        )
+        assert count_ref_list_items_from_md(md) == 6
+
+    def test_fallback_short_cluster_rejected(self):
+        # Three trailing numbered items is below the cluster threshold
+        # and must not be mistaken for a bibliography.
+        md = (
+            "# Methods\n\nSteps:\n\n"
+            "1. Do thing.\n"
+            "2. Do other thing.\n"
+            "3. Done.\n"
+        )
+        assert count_ref_list_items_from_md(md) == 0
 
     def test_uses_last_references_heading(self):
         # Multiple "References" headings: use the last.
