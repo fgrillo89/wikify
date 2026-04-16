@@ -564,7 +564,7 @@ def _hybrid_chunk(doc) -> list[dict]:
     """Use Docling's HybridChunker to produce structure-aware chunks."""
     from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 
-    chunker = HybridChunker(max_tokens=400, merge_peers=True)
+    chunker = HybridChunker(max_tokens=2000, merge_peers=True)
     chunks: list[dict] = []
     for chunk in chunker.chunk(doc):
         text = chunker.contextualize(chunk)

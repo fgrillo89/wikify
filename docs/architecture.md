@@ -410,6 +410,35 @@ export WIKIFY_EMBEDDER=fastembed
 export WIKIFY_DISPATCH_DIR=data/dispatch   # default
 ```
 
+### Embedder selection
+
+Default is `jinaai/jina-embeddings-v2-small-en` (512-d, 8192-tok, 33M
+params, MTEB ~47). The 8192-tok window is what makes Phase 2 section-level
+chunking actually activate — on shorter-context models the chunker falls
+back to paragraph splitting with overlap. Swap via env var; re-ingest is
+automatic because `vectors.meta.json` fingerprints the model.
+
+```bash
+# Fast (~5x) but short context (512 tok) — chunker paragraph-splits.
+export WIKIFY_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# Same 512-tok ceiling, higher MTEB than MiniLM.
+export WIKIFY_EMBED_MODEL=BAAI/bge-small-en-v1.5
+
+# Highest MTEB (~49) in this set. ~8x slower than MiniLM.
+export WIKIFY_EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5-Q
+
+# Override per-model default batch_size (see _MODEL_CONFIGS in embedding.py)
+export WIKIFY_EMBED_BATCH_SIZE=32
+```
+
+Benchmark on mvp20 (886 chunks, DirectML RTX 3070 Laptop):
+| model | rate | slowdown | section-as-chunk? |
+|---|---|---|---|
+| MiniLM-L6 | 175 chunks/s | 1x | no (paragraph-split) |
+| **jina-v2-small (default)** | **33 chunks/s** | **~5x** | **yes** |
+| nomic-Q | 23 chunks/s | ~8x | yes |
+
 ### What ingest produces
 
 | Path | Content |

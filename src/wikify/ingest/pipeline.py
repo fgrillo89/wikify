@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
-from ..embedding import embed_texts
+from ..embedding import embed_passages
 from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
 from ..store.corpus import (
@@ -560,7 +560,7 @@ def _embed_chunks_incremental(
     to_embed = [c for c in all_chunks if c.id not in reusable]
 
     if to_embed:
-        new_matrix = embed_texts([c.text for c in to_embed])
+        new_matrix = embed_passages([c.text for c in to_embed])
         for i, c in enumerate(to_embed):
             reusable[c.id] = new_matrix[i]
 
@@ -579,7 +579,7 @@ def _embed_chunks_incremental(
 
         matrix = _np.stack(rows, axis=0)
     else:
-        matrix = embed_texts([])
+        matrix = embed_passages([])
     store = VectorStore(ids=target_ids, matrix=matrix)
 
     # Validate: vector ids == active chunk ids

@@ -1,12 +1,16 @@
-"""Markdown -> [Chunk]. Section-aware, target ~400 tokens per chunk.
+"""Markdown -> [Chunk]. Embedder-adaptive section/paragraph chunking.
 
 Key behaviours:
   - Never split across section boundaries
+  - Emit a whole section as a single chunk when its length fits the embedder
+  - Only split sections that exceed ``max_chunk_chars()``; split at paragraph
+    boundaries greedily into ``min(TARGET_CHUNK_CHARS, cap)`` pieces
+  - Inter-chunk overlap is adaptive (``overlap_chars()``): zero on long-context
+    embedders (section chunks self-contain), ~200 chars on short-context
+    embedders so paragraph splits keep sentence continuity
   - Section type classification (abstract, methods, results, etc.)
   - Conclusion fallback: if no section is typed "conclusion", promote the
     last substantive (non-references/acks/appendix) section
-  - Paragraph-level overlap between consecutive chunks within a section
-  - Token estimate uses the 4-char rule (consistent with infra/tokens.py)
 """
 
 import hashlib
@@ -15,11 +19,11 @@ from collections.abc import Iterable
 
 from ..models import Chunk
 from .config import (
-    MAX_CHUNK_CHARS,
     MIN_CHUNK_ALNUM,
     MIN_CHUNK_CHARS,
-    OVERLAP_CHARS,
     TARGET_CHUNK_CHARS,
+    max_chunk_chars,
+    overlap_chars,
 )
 from .section_classifier import SectionType, classify_section_path
 
@@ -61,10 +65,9 @@ def chunk_document(
             # but valid chunks like equations or single sentences.
             if _alnum_count(text) < MIN_CHUNK_ALNUM:
                 continue
-            # Hard cap on chunk size: split anything above the embedder's
-            # 512-token window into sentence-bounded pieces. Without this
-            # ~13% of chunks on a typical paper exceed the model max and
-            # silently lose information past token 512.
+            # Hard cap on chunk size: split anything above the active
+            # embedder's context window into sentence-bounded pieces so the
+            # tokenizer never silently truncates a chunk.
             for piece_start, piece_end in _split_oversize(text):
                 piece = text[piece_start:piece_end].strip()
                 if not piece or _alnum_count(piece) < MIN_CHUNK_ALNUM:
@@ -102,32 +105,29 @@ _SENT_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[0-9])")
 
 
 def _split_oversize(text: str) -> list[tuple[int, int]]:
-    """Split a chunk text whose length exceeds ``MAX_CHUNK_CHARS``.
+    """Split a chunk text whose length exceeds ``max_chunk_chars()``.
 
     Returns ``[(0, len(text))]`` for normal-sized chunks (the common
     path). Oversized chunks are sliced at sentence boundaries; if no
     sentence boundary is available the slice falls back to the nearest
     word boundary so we never produce mid-word truncation.
     """
-    if len(text) <= MAX_CHUNK_CHARS:
+    cap = max_chunk_chars()
+    if len(text) <= cap:
         return [(0, len(text))]
     out: list[tuple[int, int]] = []
     cursor = 0
     n = len(text)
     while cursor < n:
-        target = min(cursor + MAX_CHUNK_CHARS, n)
+        target = min(cursor + cap, n)
         if target == n:
             out.append((cursor, n))
             break
-        # Search backwards from target for the latest sentence boundary
-        # that still gives us a non-trivial first piece.
         window = text[cursor:target]
         boundaries = list(_SENT_BOUNDARY_RE.finditer(window))
         if boundaries and boundaries[-1].end() >= MIN_CHUNK_CHARS:
             cut = cursor + boundaries[-1].end()
         else:
-            # No sentence boundary in the window — fall back to the
-            # nearest space so we never split mid-word.
             space = text.rfind(" ", cursor + MIN_CHUNK_CHARS, target)
             cut = space + 1 if space > cursor else target
         out.append((cursor, cut))
@@ -178,9 +178,19 @@ def _apply_conclusion_fallback(chunks: list[Chunk]) -> None:
 
 
 def _split_section(text: str) -> list[tuple[int, int]]:
-    """Greedy paragraph-aware split into ~_TARGET_CHARS chunks with overlap."""
-    if len(text) <= TARGET_CHUNK_CHARS:
+    """Emit the whole section as one chunk when it fits; split only if oversize.
+
+    With a long-context embedder (jina-v2-small / nomic v1.5 at 8192 tokens)
+    most sections fit in a single chunk — the common case hits the fast
+    return. For short-context embedders the section gets paragraph-split
+    into ``target``-sized pieces with ``overlap_chars()`` overlap between
+    neighbours, preserving sentence continuity across the cut.
+    """
+    cap = max_chunk_chars()
+    if len(text) <= cap:
         return [(0, len(text))]
+    target = min(TARGET_CHUNK_CHARS, cap)
+    overlap = overlap_chars()
     out: list[tuple[int, int]] = []
     paragraphs = list(_paragraph_spans(text))
     cur_start = 0
@@ -189,11 +199,9 @@ def _split_section(text: str) -> list[tuple[int, int]]:
 
     for ps, pe in paragraphs:
         plen = pe - ps
-        if cur_len + plen > TARGET_CHUNK_CHARS and cur_len >= MIN_CHUNK_CHARS:
+        if cur_len + plen > target and cur_len >= MIN_CHUNK_CHARS:
             out.append((cur_start, ps))
-            # Overlap: include the last paragraph of the previous chunk
-            # in the next chunk, if it fits within the overlap budget.
-            if last_para is not None and (last_para[1] - last_para[0]) <= OVERLAP_CHARS:
+            if overlap and last_para is not None and (last_para[1] - last_para[0]) <= overlap:
                 cur_start = last_para[0]
                 cur_len = (ps - last_para[0]) + plen
             else:
