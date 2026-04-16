@@ -62,6 +62,7 @@ class EquationIndex:
 
     records: list[EquationRecord] = field(default_factory=list)
     _by_doc: dict[str, list[EquationRecord]] = field(default_factory=dict)
+    _by_norm: dict[str, EquationRecord] = field(default_factory=dict)
 
     def for_doc(self, doc_id: str) -> list[EquationRecord]:
         return list(self._by_doc.get(doc_id, []))
@@ -69,8 +70,13 @@ class EquationIndex:
     def by_kind(self, kind: str) -> list[EquationRecord]:
         return [r for r in self.records if r.kind == kind]
 
+    def find_exact(self, normalized_latex: str) -> EquationRecord | None:
+        """Exact lookup by normalized LaTeX. Use for provenance annotation."""
+        return self._by_norm.get(normalized_latex)
+
     def search_latex(self, substring: str) -> list[EquationRecord]:
-        needle = substring.lower()
+        """Substring match on normalized LaTeX. Use for exploration queries."""
+        needle = _normalize_latex(substring)
         return [r for r in self.records if needle in r.normalized_latex]
 
     @classmethod
@@ -96,9 +102,11 @@ class EquationIndex:
 
     def _rebuild_by_doc(self) -> None:
         self._by_doc.clear()
+        self._by_norm.clear()
         for rec in self.records:
             for did in rec.source_doc_ids:
                 self._by_doc.setdefault(did, []).append(rec)
+            self._by_norm[rec.normalized_latex] = rec
 
 
 def build_equations_index(

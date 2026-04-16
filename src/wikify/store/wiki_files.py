@@ -19,9 +19,11 @@ def write_page(bundle: BundlePaths, page: WikiPage) -> Path:
     if page.provenance:
         sidecar = path.with_suffix(".provenance.json")
         sidecar.write_text(json.dumps(page.provenance, indent=2, default=str), encoding="utf-8")
+    eq_sidecar = path.with_suffix(".equations.json")
     if page.equations:
-        eq_sidecar = path.with_suffix(".equations.json")
         eq_sidecar.write_text(json.dumps(page.equations, indent=2), encoding="utf-8")
+    elif eq_sidecar.exists():
+        eq_sidecar.unlink()
     return path
 
 

@@ -355,9 +355,9 @@ def build_write_request(
                     "context": eq.get("context", ""),
                 }
                 if equations_index is not None:
-                    hits = equations_index.search_latex(latex)
-                    if hits:
-                        entry["source_doc_ids"] = list(hits[0].source_doc_ids)
+                    hit = equations_index.find_exact(norm)
+                    if hit is not None:
+                        entry["source_doc_ids"] = list(hit.source_doc_ids)
                 equations_context.append(entry)
 
     is_person = page.kind == "person"
