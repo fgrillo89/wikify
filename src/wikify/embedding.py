@@ -77,9 +77,12 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
         batch_size=256,
     ),
     # Jina v2-small: 33M params, 8192-tok window, 512-d, MTEB ~47.
-    # The only small model that keeps the long-context story.
+    # The only small model that keeps the long-context story. batch_size=32
+    # because real section-level chunks fill the 8k window; larger batches
+    # OOM DirectML on 8 GB cards (observed on RTX 3070 Laptop with mvp-ish
+    # corpora: batch 128 × 4k-tok chunks trips FusedMatMul 80070057).
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=8192, batch_size=128,
+        dim=512, max_tokens=8192, batch_size=32,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
