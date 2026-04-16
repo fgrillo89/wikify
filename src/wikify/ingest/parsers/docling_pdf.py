@@ -29,6 +29,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._citations import bracketize_bare_refs
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
 
@@ -195,7 +196,7 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
 
     # Count bibliography entries for bracketize_refs range validation.
     ref_count = _count_ref_list_items(doc)
-    md_text = _bracketize_refs(md_text, ref_count=ref_count)
+    md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
     metadata = _extract_metadata(doc, path)
     images = _extract_images(doc)
@@ -388,92 +389,6 @@ def _is_likely_noise_title(title: str) -> bool:
     if title.isupper():
         return True
     return False
-
-
-def _bracketize_refs(md: str, ref_count: int = 0) -> str:
-    """Wrap bare inline reference numbers in [N] brackets.
-
-    Docling strips bracket formatting from superscript citations,
-    leaving bare ``20-22`` instead of ``[20-22]``. This post-processor
-    restores brackets so the citation ordinal resolver can match them.
-
-    Conservative heuristics to avoid corrupting normal numbers:
-    - Only runs when the document has a detectable references section
-      (``ref_count > 0``), so we know what range is valid
-    - Numbers must be in [1, ref_count] range
-    - Must appear as comma/hyphen-separated groups immediately before
-      sentence-ending punctuation (``.``, ``,``, ``;``)
-    - Must NOT be followed by a unit (nm, K, V, mA, etc.)
-    - Must NOT be preceded by common measurement words
-    """
-    if not md or ref_count < 2:
-        return md
-
-    # Common unit suffixes that follow numbers (not citations).
-    units = frozenset({
-        "nm", "um", "mm", "cm", "m", "km",
-        "mv", "kv", "ma", "ka", "mhz", "ghz", "thz",
-        "ev", "mev", "kev",
-        "k", "c", "v", "a", "w", "s", "ms", "ns", "ps",
-        "hz", "ohm", "db",
-        "at", "wt", "mol", "torr", "pa", "mpa", "gpa",
-        "min", "max",
-    })
-    # Words before a number that indicate a measurement, not a citation.
-    meas_words = frozenset({
-        "is", "was", "are", "of", "about", "approximately", "nearly",
-        "over", "under", "than", "to", "from", "between", "at",
-        "x", "by", "or", "and", "only",
-    })
-
-    ref_re = re.compile(
-        r"(?P<pre>\w+) (?P<nums>\d{1,3}(?:[,\u2013-]\d{1,3})*)(?P<post>[.,;) ])"
-    )
-
-    def _replace(m: re.Match) -> str:
-        pre_word = m.group("pre").lower()
-        nums_str = m.group("nums")
-        post = m.group("post")
-
-        # Skip if preceded by a measurement word
-        if pre_word in meas_words:
-            return m.group(0)
-
-        # Parse numbers and validate range
-        parts = re.split(r"[,\u2013-]", nums_str)
-        try:
-            nums = [int(p.strip()) for p in parts if p.strip()]
-        except ValueError:
-            return m.group(0)
-        if not nums or any(n < 1 or n > ref_count for n in nums):
-            return m.group(0)
-
-        # Check immediate context for math operators -- skip if this
-        # looks like a mathematical expression (e.g. "x 2 + y 3.").
-        # Only check 3 chars before to avoid matching hyphens in
-        # compound words like "cross-point switches 20-22."
-        context_before = md[max(0, m.start() - 3):m.start()]
-        if re.search(r"[+*/=<>^]", context_before):
-            return m.group(0)
-
-        # Check what follows: if it's a unit or a common word, skip.
-        # Real citations are followed by punctuation then a new sentence
-        # or another citation, NOT by a lowercase word continuing the
-        # same sentence.
-        rest_after = md[m.end():]
-        next_word_match = re.match(r"\s*([a-zA-Z]+)", rest_after)
-        if next_word_match:
-            nw = next_word_match.group(1).lower()
-            if nw in units:
-                return m.group(0)
-            # If followed by a lowercase word (not starting a sentence),
-            # this number is likely part of prose, not a citation.
-            if post in (" ", "") and nw[0].islower():
-                return m.group(0)
-
-        return f"{m.group('pre')} [{nums_str}]{post}"
-
-    return ref_re.sub(_replace, md)
 
 
 def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:

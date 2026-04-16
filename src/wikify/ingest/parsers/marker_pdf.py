@@ -26,6 +26,12 @@ import re
 import sys
 from pathlib import Path
 
+from ._citations import (
+    bracketize_bare_refs,
+    bracketize_concat_refs,
+    bracketize_sup_refs,
+    count_ref_list_items_from_md,
+)
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
 
@@ -136,10 +142,29 @@ def parse(path: Path) -> ParseResult:
         raise
 
     md_text = rendered.markdown
+
+    # Restore bracketed citation markers so the graph can resolve them.
+    # Order matters: sup first (covers ``<sup>N</sup>`` markup), then
+    # concat (brackets word-stuck ranges like ``switches20-22`` even
+    # when followed by a lowercase continuation), then the general
+    # bare-ref pass for everything else.
+    md_text = bracketize_sup_refs(md_text)
+    ref_count = count_ref_list_items_from_md(md_text)
+    md_text = bracketize_concat_refs(md_text, ref_count=ref_count)
+    md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
+
+    # Extract images against the raw rendered markdown so caption
+    # matching sees the original ``![...](name)`` placement.
+    images = _extract_images(rendered)
+
     md_text = _light_clean(md_text)
+    # Marker emits links to internal block ids (_page_0_Figure_18.jpeg)
+    # that do not match the pipeline-saved filenames. Drop the links;
+    # images are persisted via RawImage sidecars and DocImage caption
+    # chunks, matching Docling's behavior.
+    md_text = _strip_image_links(md_text)
 
     metadata = _extract_metadata(md_text, path)
-    images = _extract_images(rendered)
     sections = section_spans(md_text)
     title = metadata.get("title") or path.stem
 
@@ -166,6 +191,38 @@ def _light_clean(md: str) -> str:
     # Strip trailing whitespace per line
     md = re.sub(r"[ \t]+\n", "\n", md)
     return md.strip() + "\n"
+
+
+_IMAGE_LINK_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+
+# Remaining <sup>...</sup> after bracketize_sup_refs are non-numeric
+# affiliation markers (``<sup>b</sup>``) that should never reach author
+# metadata or the persisted bib file.
+_SUP_TAG_RE = re.compile(r"<sup>[^<]*</sup>", re.IGNORECASE)
+
+
+def _sanitize_author(name: str) -> str:
+    """Drop affiliation sup tags and tidy trailing punctuation from a name."""
+    name = _SUP_TAG_RE.sub("", name)
+    name = re.sub(r"\s+", " ", name).strip(" ,.;")
+    return name
+
+
+def _strip_image_links(md: str) -> str:
+    """Remove ``![alt](name)`` markdown image links.
+
+    Marker emits links that point at internal block-id filenames
+    (``_page_0_Figure_18.jpeg``) which never match the sanitized names
+    written by ``save_doc_images``. Stripping them prevents dead
+    references in the persisted corpus markdown; the images are still
+    available via sidecars and caption chunks.
+    """
+    if not md:
+        return md
+    md = _IMAGE_LINK_RE.sub("", md)
+    # Strip leftover blank lines that were only holding an image.
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    return md
 
 
 def _extract_metadata(md_text: str, path: Path) -> dict:
@@ -195,6 +252,7 @@ def _extract_metadata(md_text: str, path: Path) -> dict:
         title = fn_title
 
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
+    authors = [a for a in (_sanitize_author(a) for a in authors) if a]
     if not authors and fn_author:
         authors = [fn_author]
 
@@ -226,11 +284,11 @@ _IMAGE_KEY_RE = re.compile(
     r"_page_(\d+)_([A-Za-z]+)_(\d+)\.\w+$"
 )
 
-# Map marker block type names to human-readable figure labels.
-_BLOCK_TYPE_LABELS = {
-    "Picture": "Figure",
-    "Figure": "Figure",
-}
+# Extracts the figure/table number from a caption prefix.
+_CAPTION_LABEL_RE = re.compile(
+    r"^(?P<kind>Fig(?:ure)?|Table|Scheme)\.?\s*(?P<num>\d+)(?P<sub>[a-z])?",
+    re.IGNORECASE,
+)
 
 
 def _extract_images(rendered) -> list[RawImage]:
@@ -264,23 +322,23 @@ def _extract_images(rendered) -> list[RawImage]:
         if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
             continue
 
-        # Parse page and label from key
+        # Parse page from block-id key. Do not derive a label from the
+        # block index -- it has no relationship to the caption's real
+        # figure number and was producing labels like "Figure 19" for
+        # captions reading "Figure 1".
         page = None
-        label = None
         key_match = _IMAGE_KEY_RE.search(name_str)
         if key_match:
             page = int(key_match.group(1))
-            block_type = key_match.group(2)
-            block_idx = int(key_match.group(3))
-            readable = _BLOCK_TYPE_LABELS.get(block_type, block_type)
-            label = f"{readable} {block_idx + 1}"
+
+        caption = caption_map.get(name_str, "")
+        label = _label_from_caption(caption)
 
         buf = io.BytesIO()
         pil_img.save(buf, format="PNG")
         data = buf.getvalue()
 
         content_hash = hashlib.sha1(data).hexdigest()[:12]
-        caption = caption_map.get(name_str, "")
         images.append(
             RawImage(
                 data=data,
@@ -294,3 +352,22 @@ def _extract_images(rendered) -> list[RawImage]:
             )
         )
     return images
+
+
+def _label_from_caption(caption: str) -> str | None:
+    """Return a normalized ``Figure 1`` / ``Table 2a`` label from a caption.
+
+    ``save_doc_images`` parses this label into the final ``Figure_01``
+    filename stem. When no recognizable prefix is present we return
+    ``None`` and let the image fall back to ``fig_{index:03d}``.
+    """
+    if not caption:
+        return None
+    m = _CAPTION_LABEL_RE.match(caption.lstrip())
+    if not m:
+        return None
+    kind_raw = m.group("kind").lower()
+    kind = "Figure" if kind_raw.startswith("fig") else kind_raw.capitalize()
+    num = int(m.group("num"))
+    sub = (m.group("sub") or "").lower()
+    return f"{kind} {num}{sub}"
