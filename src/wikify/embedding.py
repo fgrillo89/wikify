@@ -64,6 +64,19 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
     "sentence-transformers/all-MiniLM-L6-v2": ModelConfig(
         dim=384, max_tokens=512, batch_size=256,
     ),
+    # BGE-small-v1.5: 33M params, MTEB ~49. Query instruction is the
+    # v1.5-recommended prefix; passages use no prefix.
+    "BAAI/bge-small-en-v1.5": ModelConfig(
+        dim=384,
+        max_tokens=512,
+        query_prefix="Represent this sentence for searching relevant passages: ",
+        batch_size=256,
+    ),
+    # Jina v2-small: 33M params, 8192-tok window, 512-d, MTEB ~47.
+    # The only small model that keeps the long-context story.
+    "jinaai/jina-embeddings-v2-small-en": ModelConfig(
+        dim=512, max_tokens=8192, batch_size=128,
+    ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
         max_tokens=8192,

@@ -410,6 +410,33 @@ export WIKIFY_EMBEDDER=fastembed
 export WIKIFY_DISPATCH_DIR=data/dispatch   # default
 ```
 
+### Embedder selection
+
+Default is `sentence-transformers/all-MiniLM-L6-v2` (384-d, 512-tok, 22M
+params, MTEB ~41). Swap via env var — re-ingest is automatic because
+`vectors.meta.json` fingerprints the model.
+
+```bash
+# Better quality at same context window (33M, MTEB ~49)
+export WIKIFY_EMBED_MODEL=BAAI/bge-small-en-v1.5
+
+# Long-context (8192 tok). ~5x slower on DirectML RTX 3070.
+export WIKIFY_EMBED_MODEL=jinaai/jina-embeddings-v2-small-en
+
+# Highest MTEB (~49) but ~23x slower than MiniLM. Needs a real GPU.
+export WIKIFY_EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5-Q
+
+# Override per-model default batch_size (see _MODEL_CONFIGS in embedding.py)
+export WIKIFY_EMBED_BATCH_SIZE=32
+```
+
+Benchmark on mvp20 (886 chunks, DirectML RTX 3070 Laptop):
+| model | rate | slowdown |
+|---|---|---|
+| MiniLM-L6 | 175 chunks/s | 1x |
+| jina-v2-small | 33 chunks/s | ~5x |
+| nomic-Q | 23 chunks/s | ~8x |
+
 ### What ingest produces
 
 | Path | Content |
