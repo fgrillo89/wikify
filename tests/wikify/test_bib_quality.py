@@ -150,44 +150,58 @@ class TestBracketizeRefs:
     """_bracketize_refs should not corrupt normal prose numbers."""
 
     def test_measurement_not_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "The film is 100 nm thick."
         assert _bracketize_refs(md, ref_count=200) == md
 
     def test_unit_suffix_not_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "At 300 K the value rose."
         assert _bracketize_refs(md, ref_count=500) == md
 
     def test_mid_sentence_number_not_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "The devices 3 were measured."
         assert "[3]" not in _bracketize_refs(md, ref_count=50)
 
     def test_out_of_range_not_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "references 200."
         assert "[200]" not in _bracketize_refs(md, ref_count=30)
 
     def test_real_citation_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "cross-point switches 20-22."
         result = _bracketize_refs(md, ref_count=30)
         assert "[20-22]" in result
 
     def test_math_context_not_bracketed(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "Equation x 2 + y 3."
         assert "[3]" not in _bracketize_refs(md, ref_count=50)
 
     def test_no_refs_section_skips(self):
-        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+        from wikify.ingest.parsers._citations import (
+            bracketize_bare_refs as _bracketize_refs,
+        )
 
         md = "some text 5."
         assert _bracketize_refs(md, ref_count=0) == md
