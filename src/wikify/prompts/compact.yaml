@@ -12,6 +12,7 @@ output_schema:
   parameters: list
   mechanisms: list
   relationships: list
+  equations: "list[{latex, label, kind, context}]"
   top_evidence: list
   tokens_in: int
   tokens_out: int
@@ -47,7 +48,14 @@ prompt_template: |
      Each: {{target, relation, evidence}}.
      Merge duplicates. Keep at most 8.
 
-  6. **top_evidence**: The 5-8 most informative entries from the input,
+  6. **equations**: Deduplicated list of equations and chemical formulas.
+     Each: {{latex, label, kind, context}}.
+     kind is "mathematical" or "chemical".
+     Merge equations identical up to whitespace or variable naming.
+     Separate chemical formulas (HfO2, Al2O3) from mathematical equations
+     (R = V/I). Keep at most 10.
+
+  7. **top_evidence**: The 5-8 most informative entries from the input,
      ranked by information value. Each: {{chunk_id, doc_id, quote, summary}}.
      Prefer entries from different source documents for breadth.
      Drop entries that add no new information beyond what others already cover.

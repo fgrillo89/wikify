@@ -275,7 +275,7 @@ No product logic should depend on one runtime vendor.
 
 Use `wikify` CLI workflows instead of ad hoc file mutation:
 
-- `uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default]`
+- `uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default|docling]`
 - `uv run python -m wikify.cli distill --strategy {E|M|X} --mode {scripted|guided} ...`
 - `uv run python -m wikify.cli distill --phase extract|write|all ...`
 - `uv run python -m wikify.cli campaign --strategy M --iterations 3 ...`
@@ -330,3 +330,8 @@ Format:
 - **Coverage gap must be stateful**: Strategy experiments require real `coverage_gap` updates and persistence across refine epochs; static coverage scores invalidate comparisons.
 - **Mode comparability**: `scripted` and `guided` modes must emit actions through one shared interface with common telemetry fields.
 - **Locality of behavior**: Prefer a clear local data table plus one factory over scattered one-line modules, parallel preset/config layers, or `__init__.py` behavior. Classify knobs before adding them: domain/strategy, runtime, mode, or adapter. Runtime choices should be explicit parameters, not fields smuggled into domain config.
+- **Docling parser**: Default: formulas ON (granite-docling-258M), OCR off, images_scale=3.0. Converter is cached at module level. `DOCLING_FORMULAS=0` to disable for fast iteration. `DOCLING_OCR=1` for scanned PDFs. Docling strips inline `[N]` citation brackets; `_bracketize_refs` restores them using bibliography entry count as the valid range.
+- **Equation-chunk binding**: Default parser uses `char_span` overlap. Docling HybridChunker uses whitespace-normalized text containment (`use_text_match=True`) because HybridChunker char_spans don't match markdown offsets.
+- **Citation ordinals**: `CitationEntry.ord` is zero-based from extraction. KG `ord_refs` stores as `cit.ord + 1` (one-based) to match `[N]` markers in text.
+- **Embeddings GPU**: `embedding.py` auto-detects CUDA > DirectML > CPU via onnxruntime providers. No config needed.
+- **BibTeX author names**: `_clean_author_name` strips affiliation symbols (Oriya, asterisks, daggers, PUA glyphs) and title-cases all-caps/all-lowercase names. Preserves particles (van, de, von) and mixed case (McMaster).

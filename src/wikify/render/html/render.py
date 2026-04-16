@@ -41,7 +41,14 @@ _MD_EXTENSIONS = [
     "footnotes",
     "sane_lists",
     "pymdownx.superfences",
+    "pymdownx.arithmatex",
 ]
+
+_MD_EXTENSION_CONFIGS = {
+    "pymdownx.arithmatex": {
+        "generic": True,  # emit raw $/$$ for KaTeX auto-render
+    },
+}
 
 SKELETON_MIN_BODY_LEN = 200
 
@@ -263,7 +270,10 @@ def _render_article(
         root=root,
     )
 
-    md = markdown.Markdown(extensions=_MD_EXTENSIONS)
+    md = markdown.Markdown(
+        extensions=_MD_EXTENSIONS,
+        extension_configs=_MD_EXTENSION_CONFIGS,
+    )
     body_html = md.convert(body_md)
 
     toc = _build_toc(body_html)

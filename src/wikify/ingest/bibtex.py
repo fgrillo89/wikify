@@ -87,6 +87,50 @@ def _clean_title(value: str) -> str:
     return text.strip()
 
 
+# Unicode ranges for affiliation/footnote symbols that appear next to
+# author names in PDFs (Oriya digits, asterisks, private-use glyphs).
+_AFFILIATION_RE = re.compile(
+    r"[\u0B00-\u0B7F"  # Oriya script (used as superscript markers)
+    r"\u204E"           # ⁎ low asterisk
+    r"\u2020-\u2021"    # † ‡ daggers
+    r"\u00B9\u00B2\u00B3"  # ¹ ² ³ superscript digits
+    r"\u2070-\u209F"    # superscript/subscript block
+    r"\uE000-\uF8FF"   # private use area (font-specific symbols)
+    r"\*]+"
+)
+
+
+# Lowercase name particles preserved during capitalization.
+_NAME_PARTICLES = frozenset({
+    "van", "von", "der", "de", "da", "di", "la", "le", "du",
+    "del", "den", "dos", "el", "al", "bin", "ibn",
+})
+
+
+def _clean_author_name(name: str) -> str:
+    """Normalize an author name: strip affiliation symbols, fix casing."""
+    # Strip affiliation/footnote markers
+    name = _AFFILIATION_RE.sub("", name).strip()
+    # Only apply casing fixes when the entire name is all-caps or all-lower.
+    # Mixed-case names (van der Waals, McMaster) are left as-is.
+    all_upper = name == name.upper() and any(c.isalpha() for c in name)
+    all_lower = name == name.lower() and any(c.isalpha() for c in name)
+    if not (all_upper or all_lower):
+        return name
+    parts = name.split()
+    cleaned = []
+    for i, part in enumerate(parts):
+        low = part.lower()
+        # Preserve particles (van, de, von) unless they start the name
+        if i > 0 and low in _NAME_PARTICLES:
+            cleaned.append(low)
+        elif "-" in part:
+            cleaned.append("-".join(w.capitalize() for w in part.split("-")))
+        else:
+            cleaned.append(part.capitalize())
+    return " ".join(cleaned)
+
+
 def _clean_venue(value: str) -> str:
     text = _as_text(value)
     return re.sub(r"\s+", " ", text).strip()
@@ -136,7 +180,10 @@ def _is_plausible_author(name: str) -> bool:
 
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
-    authors_list = [a for a in _as_list(metadata.get("authors")) if _is_plausible_author(a)]
+    authors_list = [
+        _clean_author_name(a) for a in _as_list(metadata.get("authors"))
+        if _is_plausible_author(a)
+    ]
     title = _clean_bib_title(_clean_title(_as_text(doc.title)))
     # If title is garbage, recover from doc.id
     if _title_needs_fallback(title):
@@ -209,8 +256,28 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+in\s+", "In ", title)
     # Strip leading "Name, lowercase" (leaked author + venue)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
+    # Strip leading multi-author prefix: "A. Name, B. Name, Title"
+    # or "First Last, F. Last, Title" (comma-separated author names)
+    # Each name: optional initials + surname, followed by comma.
+    _author_name = r"(?:[A-Z]\.?\s*){0,2}[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+    title = re.sub(
+        rf"^(?:{_author_name},\s*){{{2},}}",
+        "", title,
+    )
+    # Strip trailing citation fragment: ", Small Sci 2, 2100049"
+    # Requires volume + pages/article-number after journal name.
+    title = re.sub(
+        r",\s+[A-Z][a-z]+\.?\s+\d{1,4}\s*[,:]\s*\d+.*$", "", title,
+    )
     # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
     title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
+    # Strip trailing IEEE journal citation fragments:
+    # "..., IEEE Trans. Circuit Theory 18 (1971) 507-519"
+    # Only when IEEE is followed by a journal abbreviation (Trans., J., Proc.)
+    # and volume/year numbers. Preserves "IEEE 802.11" and "IEEE Access" in titles.
+    title = re.sub(
+        r",?\s*IEEE\s+(?:Trans|J|Proc)\b.*$", "", title,
+    )
     # Collapse multiple spaces
     title = re.sub(r"\s{2,}", " ", title).strip()
     return title
@@ -231,10 +298,17 @@ _MONTH_NAMES = {
 
 def _clean_bib_journal(journal: str) -> str:
     """Strip artifacts from journal field."""
-    # Remove trailing ", vol" or ", Vol."
-    journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
+    # Strip leading quotes and brackets (OCR artifacts from scanned PDFs)
+    journal = journal.lstrip("'\"[{( ")
+    # Collapse multiple spaces (OCR word spacing artifacts)
+    journal = re.sub(r"\s{2,}", " ", journal)
+    # Remove trailing ", vol. X-" or ", Vol." patterns
+    journal = re.sub(r",?\s*[Vv]ol\.?\s*[A-Z0-9\-]*\s*$", "", journal).strip()
     # Remove trailing comma
     journal = journal.rstrip(",").strip()
+    # Strip trailing month + year fragments (", Sept. 1969")
+    _month_tail = r",?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s*\d*\s*$"
+    journal = re.sub(_month_tail, "", journal, flags=re.IGNORECASE).strip()
     # Reject month names as journal ("July", "December", "May")
     if journal.lower() in _MONTH_NAMES:
         return ""
@@ -331,6 +405,7 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
 
     doi = _clean_doi(d.get("doi"))
 
+    authors = [_clean_author_name(a) for a in authors]
     first_author = authors[0].split()[-1] if authors else "unknown"
     base = _sanitize_id(f"ref_{year}_{first_author}_{title[:30]}")
 
@@ -349,7 +424,11 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         venue = _clean_bib_journal(venue)
     if venue and len(venue) >= 3:
         _add_optional(entry, "journal", venue)
-    _add_optional(entry, "volume", d.get("volume"))
+    # Suppress volume when it equals year (common heuristic-parse error:
+    # "Manage. Sci 1960, 324-342" -> volume=1960, year=1960).
+    volume = d.get("volume")
+    if volume and str(volume) != str(year):
+        _add_optional(entry, "volume", volume)
     _add_optional(entry, "pages", d.get("pages"))
     _add_optional(entry, "publisher", d.get("publisher"))
     return entry

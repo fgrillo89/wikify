@@ -270,6 +270,7 @@ def build_write_request(
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
     knowledge_graph: object | None = None,
+    equations_index: object | None = None,
 ) -> WriteRequest:
     """Build a WriteRequest for a single page.
 
@@ -334,6 +335,30 @@ def build_write_request(
             break
 
     related_pages = compute_related_pages(page, all_pages, k=5)
+
+    # Collect equations from dossier, deduplicate by normalized LaTeX.
+    # Annotate with source_doc_ids from the corpus equation index when
+    # available, so the writer can describe cross-paper provenance.
+    equations_context: list[dict] = []
+    if dossier:
+        seen_latex: set[str] = set()
+        raw_eqs = dossier.for_editor().get("equations", [])
+        for eq in raw_eqs:
+            latex = eq.get("latex", "")
+            norm = " ".join(latex.split()).lower()
+            if norm and norm not in seen_latex:
+                seen_latex.add(norm)
+                entry: dict = {
+                    "latex": latex,
+                    "label": eq.get("label", ""),
+                    "kind": eq.get("kind", "mathematical"),
+                    "context": eq.get("context", ""),
+                }
+                if equations_index is not None:
+                    hit = equations_index.find_exact(norm)
+                    if hit is not None:
+                        entry["source_doc_ids"] = list(hit.source_doc_ids)
+                equations_context.append(entry)
 
     is_person = page.kind == "person"
     artifact_text = cfg.person_artifact_text if is_person else cfg.artifact_text
@@ -400,6 +425,7 @@ def build_write_request(
         ) if knowledge_graph else {},
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
+        equations_context=equations_context,
         verbalize=cfg.verbalize,
     )
 
@@ -415,6 +441,7 @@ def save_write_requests(
     author_ctx: dict[str, AuthorContext] | None = None,
     citation_index: dict | None = None,
     knowledge_graph: object | None = None,
+    equations_index: object | None = None,
 ) -> None:
     """Serialize WriteRequest JSONs to ``_write_requests/``."""
     out = bundle.write_requests_dir
@@ -433,6 +460,7 @@ def save_write_requests(
             author_ctx,
             citation_index,
             knowledge_graph=knowledge_graph,
+            equations_index=equations_index,
         )
         path = out / f"{page.id}.request.json"
         path.write_text(req.model_dump_json(indent=2), encoding="utf-8")
@@ -463,6 +491,7 @@ def load_pages_manifest(bundle: BundlePaths) -> list[WikiPage]:
             body_markdown=d.get("body_markdown", ""),
             evidence=[Evidence(**e) for e in d.get("evidence", [])],
             links=d.get("links", []),
+            equations=d.get("equations", []),
             provenance=d.get("provenance", {}),
         )
         for d in raw

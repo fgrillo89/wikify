@@ -39,14 +39,35 @@ _HF_PATCHED = False
 class DoclingOptions:
     """Configurable options for the Docling parser.
 
-    Controlled via environment variables or passed directly.
+    All options are controllable via ``DOCLING_*`` environment variables.
+
+    Key options and their performance impact:
+
+    +-----------------+----------+--------------------------------------+
+    | Option          | Default  | Impact                               |
+    +-----------------+----------+--------------------------------------+
+    | formulas        | ON       | +10-20s/paper (granite-docling-258M) |
+    | formula_model   | granite  | granite=258M (fast), v2=larger (slow)|
+    | ocr             | off      | +5-150s/paper (depends on page count)|
+    | images_scale    | 3.0      | native-like resolution (~216 DPI)     |
+    | pic_classify    | off      | minor overhead                       |
+    | pic_describe    | off      | +5-10s/paper (SmolVLM captioning)    |
+    +-----------------+----------+--------------------------------------+
+
+    Formula enrichment uses granite-docling-258M by default. Produces
+    proper LaTeX in ``$$...$$`` blocks. Set ``DOCLING_FORMULAS=0`` to
+    disable for faster iteration. Formula-heavy papers (>20 regions)
+    may take 100s+ even with the granite model.
     """
 
     hybrid_chunks: bool = True
-    formulas: bool = False
+    formulas: bool = True
+    formula_model: str = "granite_docling"  # "granite_docling" or "codeformulav2"
+    ocr: bool = False
     pic_classify: bool = False
     pic_describe: bool = False
     vlm: bool = False
+    images_scale: float = 3.0
     # Batch sizes for GPU inference (ignored on CPU).
     layout_batch_size: int = 64
     ocr_batch_size: int = 64
@@ -55,10 +76,13 @@ class DoclingOptions:
     def from_env(cls) -> DoclingOptions:
         """Build options from DOCLING_* environment variables."""
         return cls(
-            formulas=os.environ.get("DOCLING_FORMULAS", "") == "1",
+            formulas=os.environ.get("DOCLING_FORMULAS", "1") != "0",
+            formula_model=os.environ.get("DOCLING_FORMULA_MODEL", "granite_docling"),
+            ocr=os.environ.get("DOCLING_OCR", "") == "1",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
+            images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "3.0")),
         )
 
 
@@ -119,6 +143,22 @@ def _disable_torch_compile_on_windows() -> None:
         pass
 
 
+_CACHED_CONVERTER = None
+_CACHED_OPTS_KEY = None
+
+
+def _get_converter(opts: DoclingOptions):
+    """Return a cached converter, rebuilding only if options changed."""
+    global _CACHED_CONVERTER, _CACHED_OPTS_KEY
+    key = (opts.formulas, opts.formula_model, opts.ocr, opts.pic_classify,
+           opts.pic_describe, opts.vlm, opts.images_scale,
+           opts.layout_batch_size, opts.ocr_batch_size)
+    if _CACHED_CONVERTER is None or _CACHED_OPTS_KEY != key:
+        _CACHED_CONVERTER = _build_converter(opts)
+        _CACHED_OPTS_KEY = key
+    return _CACHED_CONVERTER
+
+
 def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
@@ -126,13 +166,36 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     opts = DoclingOptions.from_env()
     opts.hybrid_chunks = hybrid_chunks
 
-    converter = _build_converter(opts)
+    effective_opts = opts
+    converter = _get_converter(opts)
 
-    result = converter.convert(str(path.resolve()))
+    try:
+        result = converter.convert(str(path.resolve()))
+    except RuntimeError as exc:
+        if "out of memory" in str(exc).lower() or "CUDA" in str(exc):
+            # VRAM exhausted on large PDF -- retry without GPU-heavy
+            # enrichments (formulas, pic_describe) to fit in memory.
+            import copy
+
+            effective_opts = copy.copy(opts)
+            effective_opts.formulas = False
+            effective_opts.pic_describe = False
+            sys.stderr.write(
+                f"[docling] CUDA OOM on {path.name}, "
+                f"retrying without formula enrichment\n"
+            )
+            converter = _get_converter(effective_opts)
+            result = converter.convert(str(path.resolve()))
+        else:
+            raise
     doc = result.document
 
     md_text = doc.export_to_markdown()
-    md_text = _light_clean(md_text, formulas_enabled=opts.formulas)
+    md_text = _light_clean(md_text, formulas_enabled=effective_opts.formulas)
+
+    # Count bibliography entries for bracketize_refs range validation.
+    ref_count = _count_ref_list_items(doc)
+    md_text = _bracketize_refs(md_text, ref_count=ref_count)
 
     metadata = _extract_metadata(doc, path)
     images = _extract_images(doc)
@@ -208,11 +271,24 @@ def _make_standard_options(accel, opts: DoclingOptions):
     kwargs: dict = {
         "accelerator_options": accel,
         "generate_picture_images": True,
-        "images_scale": 2.0,
+        "images_scale": opts.images_scale,
+        "do_ocr": opts.ocr,
         "do_formula_enrichment": opts.formulas,
         "do_picture_classification": opts.pic_classify,
         "do_picture_description": opts.pic_describe,
     }
+
+    if opts.formulas:
+        try:
+            from docling.datamodel.pipeline_options import (
+                CodeFormulaVlmOptions,
+            )
+        except ImportError:
+            pass  # docling version without formula support
+        else:
+            kwargs["code_formula_options"] = (
+                CodeFormulaVlmOptions.from_preset(opts.formula_model)
+            )
 
     if _has_cuda():
         kwargs["layout_batch_size"] = opts.layout_batch_size
@@ -273,6 +349,133 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
+def _count_ref_list_items(doc) -> int:
+    """Count bibliography entries in the DoclingDocument.
+
+    Only counts ListItems that appear after the last section header
+    containing 'reference' or 'bibliography'. This avoids counting
+    bullet lists in the body as bibliography entries.
+    """
+    try:
+        from docling.datamodel.document import ListItem, SectionHeaderItem
+
+        items = list(doc.iterate_items())
+        # Find the last references/bibliography header
+        last_ref_idx = -1
+        for i, (item, _) in enumerate(items):
+            if isinstance(item, SectionHeaderItem):
+                text = getattr(item, "text", "").lower()
+                if "reference" in text or "bibliography" in text:
+                    last_ref_idx = i
+        if last_ref_idx < 0:
+            return 0
+        # Count ListItems after that header
+        return sum(
+            1 for item, _ in items[last_ref_idx:]
+            if isinstance(item, ListItem)
+        )
+    except Exception:
+        return 0
+
+
+def _is_likely_noise_title(title: str) -> bool:
+    """True if title looks like a section header, not a paper title."""
+    from wikify.ingest.metadata import _is_heading_noise
+
+    if _is_heading_noise(title):
+        return True
+    # All-caps titles are usually section headers or OCR artifacts
+    if title.isupper():
+        return True
+    return False
+
+
+def _bracketize_refs(md: str, ref_count: int = 0) -> str:
+    """Wrap bare inline reference numbers in [N] brackets.
+
+    Docling strips bracket formatting from superscript citations,
+    leaving bare ``20-22`` instead of ``[20-22]``. This post-processor
+    restores brackets so the citation ordinal resolver can match them.
+
+    Conservative heuristics to avoid corrupting normal numbers:
+    - Only runs when the document has a detectable references section
+      (``ref_count > 0``), so we know what range is valid
+    - Numbers must be in [1, ref_count] range
+    - Must appear as comma/hyphen-separated groups immediately before
+      sentence-ending punctuation (``.``, ``,``, ``;``)
+    - Must NOT be followed by a unit (nm, K, V, mA, etc.)
+    - Must NOT be preceded by common measurement words
+    """
+    if not md or ref_count < 2:
+        return md
+
+    # Common unit suffixes that follow numbers (not citations).
+    units = frozenset({
+        "nm", "um", "mm", "cm", "m", "km",
+        "mv", "kv", "ma", "ka", "mhz", "ghz", "thz",
+        "ev", "mev", "kev",
+        "k", "c", "v", "a", "w", "s", "ms", "ns", "ps",
+        "hz", "ohm", "db",
+        "at", "wt", "mol", "torr", "pa", "mpa", "gpa",
+        "min", "max",
+    })
+    # Words before a number that indicate a measurement, not a citation.
+    meas_words = frozenset({
+        "is", "was", "are", "of", "about", "approximately", "nearly",
+        "over", "under", "than", "to", "from", "between", "at",
+        "x", "by", "or", "and", "only",
+    })
+
+    ref_re = re.compile(
+        r"(?P<pre>\w+) (?P<nums>\d{1,3}(?:[,\u2013-]\d{1,3})*)(?P<post>[.,;) ])"
+    )
+
+    def _replace(m: re.Match) -> str:
+        pre_word = m.group("pre").lower()
+        nums_str = m.group("nums")
+        post = m.group("post")
+
+        # Skip if preceded by a measurement word
+        if pre_word in meas_words:
+            return m.group(0)
+
+        # Parse numbers and validate range
+        parts = re.split(r"[,\u2013-]", nums_str)
+        try:
+            nums = [int(p.strip()) for p in parts if p.strip()]
+        except ValueError:
+            return m.group(0)
+        if not nums or any(n < 1 or n > ref_count for n in nums):
+            return m.group(0)
+
+        # Check immediate context for math operators -- skip if this
+        # looks like a mathematical expression (e.g. "x 2 + y 3.").
+        # Only check 3 chars before to avoid matching hyphens in
+        # compound words like "cross-point switches 20-22."
+        context_before = md[max(0, m.start() - 3):m.start()]
+        if re.search(r"[+*/=<>^]", context_before):
+            return m.group(0)
+
+        # Check what follows: if it's a unit or a common word, skip.
+        # Real citations are followed by punctuation then a new sentence
+        # or another citation, NOT by a lowercase word continuing the
+        # same sentence.
+        rest_after = md[m.end():]
+        next_word_match = re.match(r"\s*([a-zA-Z]+)", rest_after)
+        if next_word_match:
+            nw = next_word_match.group(1).lower()
+            if nw in units:
+                return m.group(0)
+            # If followed by a lowercase word (not starting a sentence),
+            # this number is likely part of prose, not a citation.
+            if post in (" ", "") and nw[0].islower():
+                return m.group(0)
+
+        return f"{m.group('pre')} [{nums_str}]{post}"
+
+    return ref_re.sub(_replace, md)
+
+
 def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     """Minimal cleanup -- Docling output is already cleaner than pymupdf."""
     if not md:
@@ -316,6 +519,11 @@ def _extract_metadata(doc, path: Path) -> dict:
         title = fn_title or path.stem
     title = clean_markdown(title)
 
+    # Prefer filename-derived title when docling extraction looks wrong
+    # (section headers, journal names, numbered headings).
+    if fn_title and _is_likely_noise_title(title):
+        title = fn_title
+
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     if not authors and fn_author:
         authors = [fn_author]
@@ -336,13 +544,24 @@ def _extract_metadata(doc, path: Path) -> dict:
     return metadata
 
 
+# Minimum pixel dimension for a real figure. Images smaller than this
+# in both width and height are logos, decorative elements, or equation
+# glyphs and are dropped at extraction time (zero-cost filter).
+_MIN_IMAGE_DIM = 150
+
+
 def _extract_images(doc) -> list[RawImage]:
     """Extract images from DoclingDocument.
 
     Requires ``generate_picture_images=True`` in pipeline options so
     Docling renders each PictureItem's bounding-box crop into an
     ``ImageRef`` with a PIL image or URI.
+
+    Images smaller than ``_MIN_IMAGE_DIM`` in both dimensions are
+    dropped as logos or decorative elements.
     """
+    import io as _io
+
     images: list[RawImage] = []
     try:
         from docling.datamodel.document import PictureItem
@@ -362,6 +581,17 @@ def _extract_images(doc) -> list[RawImage]:
             data = _image_bytes_from_item(item)
             if data is None:
                 continue
+
+            # Drop tiny images (logos, decorative elements).
+            try:
+                from PIL import Image as PilImage  # noqa: N813
+
+                pil = PilImage.open(_io.BytesIO(data))
+                w, h = pil.size
+                if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
+                    continue
+            except Exception:
+                pass
 
             content_hash = hashlib.sha1(data).hexdigest()[:12]
             images.append(

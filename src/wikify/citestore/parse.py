@@ -444,7 +444,11 @@ def extract_venue_fields(raw: str, title: str) -> dict[str, str]:
 
     vm = _VOLUME_RE.search(after)
     if vm:
-        result["volume"] = vm.group(1)
+        vol = vm.group(1)
+        # Suppress volume when it looks like a year (1900-2099).
+        # Common parse error: "Manage. Sci 1960, 324" -> volume=1960.
+        if not (1900 <= int(vol) <= 2099):
+            result["volume"] = vol
 
     pm = _PAGES_RE.search(after)
     if pm:

@@ -300,6 +300,14 @@ class QueryBuilder:
         """Equations of these sources."""
         return self._follow(self._kg._backend._equations_of, EQUATION)
 
+    def math_equations(self) -> QueryBuilder:
+        """Mathematical equations (excluding chemical formulas)."""
+        return self.equations().where(is_chemical=False)
+
+    def chemical_formulas(self) -> QueryBuilder:
+        """Chemical formulas only."""
+        return self.equations().where(is_chemical=True)
+
     def nearby_figures(self) -> QueryBuilder:
         """Figures linked to these chunks via FIGURE_NEAR_CHUNK edges."""
         return self._follow(self._kg._backend._figures_near_chunk, FIGURE)

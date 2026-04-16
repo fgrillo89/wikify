@@ -47,7 +47,7 @@ form possible:
 | Document images  | `corpus/images/{doc_id}/`             | (none)                         |
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
 | Embeddings       | `corpus/vectors.npz` (numpy)          | vector search results          |
-| Knowledge graph  | `corpus/graph.json`                   | sampling decisions, author queries |
+| Knowledge graph  | `corpus/knowledge_graph.json`         | sampling decisions, author queries |
 | **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
 | Runs / telemetry | `runs/{run_id}/...`                   | reports                        |
@@ -84,11 +84,15 @@ These are the contracts. Everything else is implementation.
     `_populate_doc_edges` after embedding (see Pipeline order below)
 - `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`,
   `section_type`, `equation_ids`. The `equation_ids` field lists every
-  equation whose source `char_offset` falls inside the chunk's
-  `char_span`; the chunker binds them after extraction.
+  equation bound to this chunk. Binding method depends on the parser:
+  default parser uses `char_offset` / `char_span` overlap; docling
+  HybridChunker uses whitespace-normalized text containment
+  (`use_text_match=True`) because its char_spans don't match
+  markdown offsets.
   Embedding lives in the vector store, keyed by `chunk.id`.
 - `KnowledgeGraph` (in `citestore/graph.py`) -- typed property graph
-  (`nx.MultiDiGraph`) with Paper, Author, and Chunk nodes. Edge types:
+  (`nx.MultiDiGraph`) with Paper, Author, Chunk, Figure, and Equation
+  nodes. Edge types:
   - `contains`: paper -> chunk
   - `cites`: paper -> paper (directed)
   - `cites_same`: paper <-> paper (bibliographic coupling)
@@ -96,17 +100,25 @@ These are the contracts. Everything else is implementation.
   - `authored_by`: paper -> author (with position)
   - `collaborated`: author <-> author (co-authorship)
   - `co_section`: chunk <-> chunk (same doc + same section path)
+  - `CONTAINS_FIGURE`: paper -> figure
+  - `FIGURE_NEAR_CHUNK`: figure -> chunk (inline `Fig. N` references)
+  - `CONTAINS_EQUATION`: paper -> equation
+  - `EQUATION_IN_CHUNK`: equation -> chunk (char_span overlap or text match)
   Chunk similarity edges (`similar_knn`, `similar_strong`) are removed;
   vector search via VectorStore replaces them. PageRank is computed at
   graph build time. Full schema is in `citestore/graph.py`.
+  Equation nodes carry `is_chemical: bool` for filtering:
+  `kg.source(id).math_equations()` / `kg.source(id).chemical_formulas()`.
 
 ### Wiki side
 
 - `WikiPage` (in-memory representation of a `.md` file)
   - `id`, `kind` (`article` | `person`), `title`, `aliases`
-  - `body_markdown` (the human prose)
+  - `body_markdown` (the human prose, equations as `$$`/`$` LaTeX)
   - `evidence: list[Evidence]`
   - `links: list[str]` (other wiki page ids)
+  - `equations: list[dict]` (`{latex, label, kind, context}`,
+    persisted to `.equations.json` sidecar)
   - `provenance: dict` (run_id, model, sampled_chunks)
 - `Evidence`
   - `marker`: the footnote label used in the body, e.g. `e1`
@@ -131,25 +143,30 @@ These are the contracts. Everything else is implementation.
 `ingest/pipeline.py::ingest_corpus` runs in this order — order matters
 because the corpus graph depends on populated doc-level edges:
 
-1. **Parse + chunk per source in parallel** (`ProcessPoolExecutor`,
-   60 % of CPU cores by default; `--workers` overrides). Each worker
-   produces a `_ParsedBundle` with `parsed`, `chunks`, `equations`,
-   `figure_refs`. Equations are bound to chunks via `char_span` overlap
-   inside the worker.
+1. **Parse + chunk per source** (single-threaded for docling due to
+   GPU model; parallel for default parser). Each source produces
+   `parsed`, `chunks`, `equations`, `figure_refs`. Equations are
+   bound to chunks via `char_span` overlap (default parser) or
+   whitespace-normalized text containment (docling HybridChunker).
+   For docling, bare inline reference numbers are bracketized using
+   the bibliography entry count as the valid range.
 2. **Per-doc persist** in the main process: write markdown + chunks +
    sidecar JSONs, populate `DocImage.near_chunk_ids` from inline
    figure references found in chunk prose.
 3. **Embed everything** in one batch through the embedder.
+   GPU-accelerated via DirectML/CUDA when available (auto-detected).
 4. **`_populate_doc_edges`** — fills `Document.cites`,
    `Document.similar_to`, `Document.cites_same`. Must run BEFORE the
-   corpus graph builder, otherwise the saved `graph.json` has empty
+   corpus graph builder, otherwise the saved `knowledge_graph.json` has empty
    citation edges (long-standing bug, fixed in this pass).
 5. **`build_knowledge_graph`** — builds the unified `KnowledgeGraph`
-   (Paper + Author + Chunk nodes, citation + authorship + collaboration
-   edges), computes PageRank, and writes `graph.json`. The sampler
-   uses the KG directly; no separate explorer index is built.
-8. **Topics, image index, library.bib**.
-9. **Re-save documents** with fully-populated edges + figure metadata.
+   (Paper + Author + Chunk + Figure + Equation nodes, citation +
+   authorship + collaboration + figure-near-chunk + equation-in-chunk
+   edges), computes PageRank, and writes `knowledge_graph.json`. Citation
+   ordinals are stored one-based (`ord_refs[cit.ord + 1]`) to match
+   `[N]` markers in text.
+6. **Topics, image index, equations index, bibliography**.
+7. **Re-save documents** with fully-populated edges + figure metadata.
 
 ## People and articles are separate kinds
 
@@ -248,6 +265,7 @@ src/wikify/
     wiki_index.py       # bundle index (_index.json, _index.md)
     wiki_graph.py       # WikiKnowledgeGraph
     images_index.py     # per-corpus image index
+    equations_index.py  # per-corpus equation index (deduplicated)
     bundle_embeddings.py  # cached page-body embeddings for eval
 
   eval/                 # metrics and audit
@@ -401,9 +419,12 @@ export WIKIFY_DISPATCH_DIR=data/dispatch   # default
 | `docs/{doc_id}.json` | Document record (sections, images, citations, equations) |
 | `images/{doc_slug}/` | Binary figures (caption-only by default) |
 | `vectors.npz` + `.ids.json` + `.meta.json` | Chunk embeddings |
-| `graph.json` | Knowledge graph (Paper + Author + Chunk nodes, PageRank) |
+| `knowledge_graph.json` | Knowledge graph (Paper + Author + Chunk + Figure + Equation nodes) |
 | `topics.json` | Topic vocabulary |
-| `library.bib` | BibTeX export |
+| `equations.json` | Corpus-wide equation index (deduplicated by normalized LaTeX) |
+| `corpus_papers.bib` | BibTeX for corpus source papers |
+| `cited_works.bib` | BibTeX for referenced works |
+| `citations.json` | Structured citation index |
 
 ### CLI workflows
 

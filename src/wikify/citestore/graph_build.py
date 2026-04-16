@@ -101,7 +101,9 @@ def build_knowledge_graph(
                 if not target and cit.title and len(cit.title) > 15:
                     target = title_to_id.get(cit.title.lower()[:50])
                 if target:
-                    ord_refs[cit.ord] = target
+                    # cit.ord is zero-based from extraction; [N] markers
+                    # in text are one-based, so store as ord + 1.
+                    ord_refs[cit.ord + 1] = target
         if ord_refs:
             g.nodes[doc.id]["ord_refs"] = ord_refs
 
@@ -186,24 +188,29 @@ def build_knowledge_graph(
                     g.add_edge(img.id, cid, kind="FIGURE_NEAR_CHUNK")
 
     # ------------------------------------------------------------------
-    # 6. Equation nodes
+    # 6. Equation nodes + equation-chunk edges
     # ------------------------------------------------------------------
     for doc in docs:
         for eq in doc.equations:
             eq_id = eq.get("id", "")
             if not eq_id:
                 continue
+            eq_type = eq.get("type", "")
             g.add_node(eq_id, **{
                 "type": EQUATION,
                 "source_id": doc.id,
                 "latex": eq.get("latex", ""),
                 "label": eq.get("label", ""),
-                "kind": eq.get("kind", ""),
+                "kind": eq_type,
+                "is_chemical": eq_type == "chemical",
             })
             g.add_edge(doc.id, eq_id, kind="CONTAINS_EQUATION")
-            chunk_id = eq.get("chunk_id", "")
-            if chunk_id and chunk_id in g:
-                g.add_edge(eq_id, chunk_id, kind="EQUATION_IN_CHUNK")
+
+    # Build EQUATION_IN_CHUNK edges from chunk.equation_ids
+    for ck in chunks:
+        for eq_id in ck.equation_ids:
+            if eq_id in g:
+                g.add_edge(eq_id, ck.id, kind="EQUATION_IN_CHUNK")
 
     # ------------------------------------------------------------------
     # 7. Citation edges (CITES)

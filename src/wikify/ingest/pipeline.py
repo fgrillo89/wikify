@@ -95,9 +95,16 @@ def iter_sources(root: Path):
 
 
 def doc_id_for(path: Path) -> str:
-    """Stable doc id from source content: ``{stem}_{sha1[:12]}``."""
+    """Stable doc id from source content: ``{stem}_{sha1[:12]}``.
+
+    The stem is truncated to 120 chars on a word boundary to avoid
+    Windows MAX_PATH (260) issues with long paper titles.
+    """
     h = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
-    return f"{path.stem}_{h}"
+    stem = path.stem
+    if len(stem) > 120:
+        stem = stem[:120].rsplit(" ", 1)[0]
+    return f"{stem}_{h}"
 
 
 def content_hash(path: Path) -> str:
@@ -151,7 +158,8 @@ def _parse_and_persist_worker(
 
     # Chunks
     docling_chunks = parsed.metadata.pop("_docling_chunks", None)
-    if docling_chunks:
+    is_docling = docling_chunks is not None
+    if is_docling:
         chunks = _chunks_from_docling(did, docling_chunks)
     else:
         chunks = chunk_document(did, parsed.markdown, parsed.sections)
@@ -160,7 +168,7 @@ def _parse_and_persist_worker(
     # Equations + figure refs
     equations = extract_equations(parsed.markdown)
     figure_refs = extract_figure_refs(parsed.markdown)
-    bind_equations_to_chunks(chunks, equations)
+    bind_equations_to_chunks(chunks, equations, use_text_match=is_docling)
 
     # Citations + image linking + sections
     citations = extract_citations(parsed.markdown, did)
@@ -205,8 +213,6 @@ def _parse_and_persist_worker(
 
 def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]:
     """Build Chunk objects from Docling's HybridChunker output."""
-    import hashlib
-
     from .config import MIN_CHUNK_ALNUM
     from .section_classifier import classify_section_path
 
@@ -239,21 +245,55 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
     return chunks
 
 
-def bind_equations_to_chunks(chunks: list[Chunk], equations: list[dict]) -> None:
-    """Attach equation ids to the chunks whose char_span contains them."""
+def bind_equations_to_chunks(
+    chunks: list[Chunk],
+    equations: list[dict],
+    *,
+    use_text_match: bool = False,
+) -> None:
+    """Attach equation ids to the chunks whose char_span contains them.
+
+    When ``use_text_match=True`` (docling HybridChunker path), falls back
+    to substring matching of the equation's latex/context in chunk text,
+    because HybridChunker char_spans don't correspond to the markdown
+    coordinate system used by equation char_offsets.
+    """
     if not equations:
         return
     body_chunks = [c for c in chunks if not (c.section_path and c.section_path[0] == "__image__")]
-    body_chunks.sort(key=lambda c: c.char_span[0])
     if not body_chunks:
         return
-    for eq in equations:
-        offset = int(eq.get("char_offset") or 0)
-        for c in body_chunks:
-            start, end = c.char_span
-            if start <= offset < end:
-                c.equation_ids.append(eq["id"])
-                break
+
+    if use_text_match:
+        # Docling path: bind by text containment with normalization.
+        # HybridChunker can alter whitespace, line breaks, and math
+        # delimiters, so we strip all whitespace for comparison.
+        def _compact(s: str) -> str:
+            return re.sub(r"\s+", "", s.lower())
+
+        for eq in equations:
+            latex = eq.get("latex", "")
+            context = eq.get("context", "")
+            # Try compact latex first, then context fragment
+            needle = _compact(latex) if len(latex) >= 3 else ""
+            if not needle or len(needle) < 3:
+                needle = _compact(context[:40])
+            if not needle:
+                continue
+            for c in body_chunks:
+                if needle in _compact(c.text):
+                    c.equation_ids.append(eq["id"])
+                    break
+    else:
+        # Default path: bind by char_span overlap
+        body_chunks.sort(key=lambda c: c.char_span[0])
+        for eq in equations:
+            offset = int(eq.get("char_offset") or 0)
+            for c in body_chunks:
+                start, end = c.char_span
+                if start <= offset < end:
+                    c.equation_ids.append(eq["id"])
+                    break
 
 
 def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
@@ -1064,6 +1104,13 @@ def _refresh_images_index(ctx: dict) -> None:
     build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
 
 
+def _refresh_equations_index(ctx: dict) -> None:
+    from ..store.equations_index import build_equations_index, save_equations_index
+
+    idx = build_equations_index(ctx["docs"], ctx["chunks"])
+    save_equations_index(ctx["paths"].equations_index_path, idx)
+
+
 def _refresh_openalex(ctx: dict) -> None:
     """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
     if not ctx.get("resolve_bibliography_doi", False):
@@ -1133,7 +1180,7 @@ def _refresh_cite_heuristics(ctx: dict) -> None:
 
 def _refresh_bibliography(ctx: dict) -> None:
     # DOI enrichment for source papers always runs (free, no API key).
-    # OpenAlex is the optional step gated by --resolve-bibliography-doi.
+    # OpenAlex is the optional step gated by --openalex.
     resolve_doi = True
     write_corpus_bibliography(
         ctx["paths"],
@@ -1161,6 +1208,7 @@ _REFRESH_STEPS: dict[str, callable] = {
     "doc_similarity":   _refresh_doc_similarity,
     "topics":           _refresh_topics,
     "images_index":     _refresh_images_index,
+    "equations_index":  _refresh_equations_index,
     "cite_heuristics":  _refresh_cite_heuristics,
     "openalex":         _refresh_openalex,
     "citation_edges":   _refresh_citation_edges,
@@ -1171,8 +1219,8 @@ _REFRESH_STEPS: dict[str, callable] = {
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent steps (no citation dependency)
-    ("wave A (similarity+topics+images)", [
-        "doc_similarity", "topics", "images_index",
+    ("wave A (similarity+topics+images+equations)", [
+        "doc_similarity", "topics", "images_index", "equations_index",
     ]),
     # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
     ("wave B (heuristic enrichment)", [
