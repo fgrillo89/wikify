@@ -300,8 +300,8 @@ def _is_likely_noise_title(title: str) -> bool:
 
     if _is_heading_noise(title):
         return True
-    # Numbered section headers (e.g. "1. Introduction")
-    if re.match(r"^\d+\.\s", title):
+    # All-caps short titles are usually section headers
+    if title.isupper() and len(title.split()) <= 5:
         return True
     return False
 

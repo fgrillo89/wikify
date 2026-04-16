@@ -530,10 +530,20 @@ def _is_heading_noise(heading: str) -> bool:
         "supporting information",
         "author information",
         "data availability",
+        "article open",
+        "highlights",
+        "citation",
+        "reviewed by",
+        "iscience",
+        "applied sciences and engineering",
     }:
         return True
     # Numbered section headers (e.g. "1. Introduction")
     if re.match(r"^\d+\.\s", heading):
+        return True
+    # "PAPER - OPEN ACCESS", ". RESEARCH PAPER .", etc.
+    stripped = lower.strip(". -")
+    if stripped in {"research paper", "paper", "open access", "research article"}:
         return True
     return False
 
