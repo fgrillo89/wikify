@@ -209,8 +209,20 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+in\s+", "In ", title)
     # Strip leading "Name, lowercase" (leaked author + venue)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
+    # Strip leading multi-author prefix: "A. Name, B. Name, C. Name, Title"
+    # Matches sequences of "Initial(s). Surname, " at the start
+    title = re.sub(
+        r"^(?:[A-Z]\.?\s*(?:[A-Z]\.?\s*)?[A-Z][a-z]+[-\w]*,?\s+){2,}",
+        "", title,
+    )
+    # Strip trailing journal + venue fragment: ", Small Sci" / ", Nature 433"
+    title = re.sub(
+        r",\s+(?:[A-Z][a-z]+\.?\s*){1,3}(?:\d{1,4}\s*)?$", "", title,
+    )
     # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
     title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
+    # Strip trailing "IEEE Trans. Circuit Theory 18 (1971) 507-519" patterns
+    title = re.sub(r",?\s*IEEE\s.*$", "", title)
     # Collapse multiple spaces
     title = re.sub(r"\s{2,}", " ", title).strip()
     return title
@@ -231,10 +243,17 @@ _MONTH_NAMES = {
 
 def _clean_bib_journal(journal: str) -> str:
     """Strip artifacts from journal field."""
+    # Strip leading quotes and brackets (OCR artifacts from scanned PDFs)
+    journal = journal.lstrip("'\"[{( ")
+    # Collapse multiple spaces (OCR word spacing artifacts)
+    journal = re.sub(r"\s{2,}", " ", journal)
     # Remove trailing ", vol" or ", Vol."
     journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
     # Remove trailing comma
     journal = journal.rstrip(",").strip()
+    # Strip trailing month + year fragments (", Sept. 1969")
+    _month_tail = r",?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s*\d*\s*$"
+    journal = re.sub(_month_tail, "", journal, flags=re.IGNORECASE).strip()
     # Reject month names as journal ("July", "December", "May")
     if journal.lower() in _MONTH_NAMES:
         return ""
@@ -349,7 +368,11 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         venue = _clean_bib_journal(venue)
     if venue and len(venue) >= 3:
         _add_optional(entry, "journal", venue)
-    _add_optional(entry, "volume", d.get("volume"))
+    # Suppress volume when it equals year (common heuristic-parse error:
+    # "Manage. Sci 1960, 324-342" -> volume=1960, year=1960).
+    volume = d.get("volume")
+    if volume and str(volume) != str(year):
+        _add_optional(entry, "volume", volume)
     _add_optional(entry, "pages", d.get("pages"))
     _add_optional(entry, "publisher", d.get("publisher"))
     return entry
