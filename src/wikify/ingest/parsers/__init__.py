@@ -9,7 +9,7 @@ def _lazy_docling():
     return p
 
 
-register_parser_backend("docling", {"pdf": ("pdf", _lazy_docling)})
+register_parser_backend("docling", {"pdf": ("pdf", _lazy_docling)}, gpu=True)
 
 
 # -- dots.ocr backend (PDF only) ------------------------------------------
@@ -29,4 +29,4 @@ def _lazy_marker():
     return p
 
 
-register_parser_backend("marker", {"pdf": ("pdf", _lazy_marker)})
+register_parser_backend("marker", {"pdf": ("pdf", _lazy_marker)}, gpu=True)
