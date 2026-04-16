@@ -209,10 +209,12 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+in\s+", "In ", title)
     # Strip leading "Name, lowercase" (leaked author + venue)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
-    # Strip leading multi-author prefix: "A. Name, B. Name, C. Name, Title"
-    # Matches sequences of "Initial(s). Surname, " at the start
+    # Strip leading multi-author prefix: "A. Name, B. Name, Title"
+    # or "First Last, F. Last, Title" (comma-separated author names)
+    # Each name: optional initials + surname, followed by comma.
+    _author_name = r"(?:[A-Z]\.?\s*){0,2}[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
     title = re.sub(
-        r"^(?:[A-Z]\.?\s*(?:[A-Z]\.?\s*)?[A-Z][a-z]+[-\w]*,?\s+){2,}",
+        rf"^(?:{_author_name},\s*){{{2},}}",
         "", title,
     )
     # Strip trailing journal + venue fragment: ", Small Sci" / ", Nature 433"
@@ -247,8 +249,8 @@ def _clean_bib_journal(journal: str) -> str:
     journal = journal.lstrip("'\"[{( ")
     # Collapse multiple spaces (OCR word spacing artifacts)
     journal = re.sub(r"\s{2,}", " ", journal)
-    # Remove trailing ", vol" or ", Vol."
-    journal = re.sub(r",?\s*[Vv]ol\.?\s*$", "", journal).strip()
+    # Remove trailing ", vol. X-" or ", Vol." patterns
+    journal = re.sub(r",?\s*[Vv]ol\.?\s*[A-Z0-9\-]*\s*$", "", journal).strip()
     # Remove trailing comma
     journal = journal.rstrip(",").strip()
     # Strip trailing month + year fragments (", Sept. 1969")

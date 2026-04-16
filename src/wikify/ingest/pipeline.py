@@ -95,9 +95,16 @@ def iter_sources(root: Path):
 
 
 def doc_id_for(path: Path) -> str:
-    """Stable doc id from source content: ``{stem}_{sha1[:12]}``."""
+    """Stable doc id from source content: ``{stem}_{sha1[:12]}``.
+
+    The stem is truncated to 120 chars on a word boundary to avoid
+    Windows MAX_PATH (260) issues with long paper titles.
+    """
     h = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
-    return f"{path.stem}_{h}"
+    stem = path.stem
+    if len(stem) > 120:
+        stem = stem[:120].rsplit(" ", 1)[0]
+    return f"{stem}_{h}"
 
 
 def content_hash(path: Path) -> str:

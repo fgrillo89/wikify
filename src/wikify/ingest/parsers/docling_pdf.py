@@ -168,7 +168,25 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
 
     converter = _get_converter(opts)
 
-    result = converter.convert(str(path.resolve()))
+    try:
+        result = converter.convert(str(path.resolve()))
+    except RuntimeError as exc:
+        if "out of memory" in str(exc).lower() or "CUDA" in str(exc):
+            # VRAM exhausted on large PDF -- retry without GPU-heavy
+            # enrichments (formulas, pic_describe) to fit in memory.
+            import copy
+
+            fallback = copy.copy(opts)
+            fallback.formulas = False
+            fallback.pic_describe = False
+            sys.stderr.write(
+                f"[docling] CUDA OOM on {path.name}, "
+                f"retrying without formula enrichment\n"
+            )
+            converter = _get_converter(fallback)
+            result = converter.convert(str(path.resolve()))
+        else:
+            raise
     doc = result.document
 
     md_text = doc.export_to_markdown()
