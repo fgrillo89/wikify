@@ -536,6 +536,7 @@ def _is_heading_noise(heading: str) -> bool:
         "reviewed by",
         "iscience",
         "applied sciences and engineering",
+        "nanoscale",
     }:
         return True
     # Numbered section headers (e.g. "1. Introduction")
