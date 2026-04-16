@@ -12,6 +12,7 @@ output_schema:
   page_id: str
   body_markdown: str
   used_markers: list[str]
+  equations: "list[{latex, label, kind, context}]"
   tokens_in: int
   tokens_out: int
 sampler_hint: sonnet
@@ -65,6 +66,19 @@ prompt_template: |
   additional grounding from the cited work's own text.
 
   {cited_corpus_chunks}
+
+  ## Equations
+
+  These equations and chemical formulas were extracted from the evidence
+  sources. Use them in the article body where relevant:
+  - Display equations: use `$$...$$` delimiters (own paragraph)
+  - Inline equations: use `$...$` delimiters
+  - Chemical formulas: use subscripts in text (HfO2, Al2O3) without delimiters
+  - COPY the LaTeX exactly as given; do NOT re-derive or invent equations
+  - In the JSON response, return an `equations` array listing every equation
+    you used in the body, with {latex, label, kind, context}
+
+  {equations_context}
 
   ## Neighbor articles (for cross-referencing, do NOT duplicate their content)
 

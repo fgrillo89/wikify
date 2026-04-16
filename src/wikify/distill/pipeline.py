@@ -164,6 +164,8 @@ def _run_write_pass(
                 write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
                 continue
             page.body_markdown = resp.body_markdown
+            if resp.equations:
+                page.equations = [eq.model_dump() for eq in resp.equations]
             if verbalize:
                 _append_verbalize(
                     bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
@@ -1166,6 +1168,8 @@ def _run_write_phase(
                     _write_staged_response_error(resp_path, raw, exc)
                 else:
                     page.body_markdown = staged.body_markdown
+                    if staged.equations:
+                        page.equations = [eq.model_dump() for eq in staged.equations]
                     continue
             # Load saved request and call writer binding
             req_path = write_dir / f"{page.id}.request.json"
@@ -1183,6 +1187,8 @@ def _run_write_phase(
                 )
                 continue
             page.body_markdown = resp.body_markdown
+            if resp.equations:
+                page.equations = [eq.model_dump() for eq in resp.equations]
     except BudgetExceededError:
         pass
 

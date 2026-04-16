@@ -150,6 +150,7 @@ class WikiPage:
     body_markdown: str
     evidence: list[Evidence]
     links: list[str] = field(default_factory=list)  # other WikiPage ids
+    equations: list[dict] = field(default_factory=list)  # {latex, label, kind, context}
     provenance: dict = field(default_factory=dict)  # run_id, model, sampled
 
 

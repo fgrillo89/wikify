@@ -335,6 +335,23 @@ def build_write_request(
 
     related_pages = compute_related_pages(page, all_pages, k=5)
 
+    # Collect equations from dossier, deduplicate by normalized LaTeX.
+    equations_context: list[dict] = []
+    if dossier:
+        seen_latex: set[str] = set()
+        raw_eqs = dossier.for_editor().get("equations", [])
+        for eq in raw_eqs:
+            latex = eq.get("latex", "")
+            norm = " ".join(latex.split()).lower()
+            if norm and norm not in seen_latex:
+                seen_latex.add(norm)
+                equations_context.append({
+                    "latex": latex,
+                    "label": eq.get("label", ""),
+                    "kind": eq.get("kind", "mathematical"),
+                    "context": eq.get("context", ""),
+                })
+
     is_person = page.kind == "person"
     artifact_text = cfg.person_artifact_text if is_person else cfg.artifact_text
     artifact_hash = cfg.person_artifact_hash if is_person else cfg.artifact_template_hash
@@ -400,6 +417,7 @@ def build_write_request(
         ) if knowledge_graph else {},
         dossier_context_yaml=dossier_context,
         related_pages=related_pages,
+        equations_context=equations_context,
         verbalize=cfg.verbalize,
     )
 
@@ -463,6 +481,7 @@ def load_pages_manifest(bundle: BundlePaths) -> list[WikiPage]:
             body_markdown=d.get("body_markdown", ""),
             evidence=[Evidence(**e) for e in d.get("evidence", [])],
             links=d.get("links", []),
+            equations=d.get("equations", []),
             provenance=d.get("provenance", {}),
         )
         for d in raw

@@ -546,6 +546,10 @@ class WriteRequest(BaseModel):
     # ids). Each entry: {id, title, topic_overlap, body_excerpt, see_also,
     # evidence_doc_ids}. Capped at 500 chars per excerpt.
     related_pages: list[dict] = Field(default_factory=list)
+    # Structured equations from the dossier, deduplicated by normalized
+    # LaTeX. Each: {latex, label, kind, context, source_doc_ids}.
+    # The writer should use $$ / $ delimiters and return equations it used.
+    equations_context: list[dict] = Field(default_factory=list)
     # Verbalization: when true, the handler must include a 1-3 sentence
     # `reasoning` field in its response explaining its editorial choices
     # (why this structure, which evidence was foregrounded, what was
@@ -565,6 +569,9 @@ class WriteResponse(BaseModel):
     # Non-null when the writer extended an existing article rather than
     # creating a fresh one. The value is the page_id that was extended.
     extends_page_id: str | None = None
+    # Equations the writer used in the article body. Each: {latex, label,
+    # kind, context}. Populated from the writer's structured output.
+    equations: list[Equation] = Field(default_factory=list)
     # Populated only when WriteRequest.verbalize is true. Empty otherwise.
     reasoning: str = ""
 

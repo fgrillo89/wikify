@@ -19,6 +19,9 @@ def write_page(bundle: BundlePaths, page: WikiPage) -> Path:
     if page.provenance:
         sidecar = path.with_suffix(".provenance.json")
         sidecar.write_text(json.dumps(page.provenance, indent=2, default=str), encoding="utf-8")
+    if page.equations:
+        eq_sidecar = path.with_suffix(".equations.json")
+        eq_sidecar.write_text(json.dumps(page.equations, indent=2), encoding="utf-8")
     return path
 
 
@@ -29,6 +32,8 @@ def _render_page(page: WikiPage) -> str:
     lines.append(f"title: {page.title}")
     lines.append(f"aliases: [{', '.join(page.aliases)}]")
     lines.append(f"links: [{', '.join(page.links)}]")
+    if page.equations:
+        lines.append(f"equation_count: {len(page.equations)}")
     if page.kind == "person":
         lines.append("tags: [author]")
     if page.provenance:
