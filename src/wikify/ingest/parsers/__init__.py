@@ -20,3 +20,13 @@ def _lazy_dots_ocr():
 
 
 register_parser_backend("dots_ocr", {"pdf": ("pdf", _lazy_dots_ocr)})
+
+
+# -- Marker backend (PDF only) --------------------------------------------
+
+def _lazy_marker():
+    from . import marker_pdf as p
+    return p
+
+
+register_parser_backend("marker", {"pdf": ("pdf", _lazy_marker)})
