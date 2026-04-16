@@ -4,7 +4,12 @@ Configuration (env vars, checked at ingest time):
 
 - ``WIKIFY_EMBEDDER``: backend name. ``fastembed`` (default) or ``hash``.
 - ``WIKIFY_EMBED_MODEL``: HuggingFace model name for the fastembed backend.
-  Default: ``nomic-ai/nomic-embed-text-v1.5-Q`` (768-d, 8192-token, ONNX-Q).
+  Default: ``sentence-transformers/all-MiniLM-L6-v2`` (384-d, 512-tok, 22M
+  params, MTEB ~41 NDCG@10). Long-context alternative: set to
+  ``nomic-ai/nomic-embed-text-v1.5-Q`` (768-d, 8192-tok, 137M params,
+  MTEB ~49). Nomic is ~20x slower than MiniLM and wants a GPU.
+- ``WIKIFY_EMBED_BATCH_SIZE``: override the per-model batch size. Nomic
+  defaults to 32 (safe on 8 GB DirectML); MiniLM defaults to 256.
 
 Backends:
 
@@ -32,32 +37,46 @@ import numpy as np
 
 HASH_DIM = 128
 # Fastembed uses the fully-qualified HuggingFace name for the model.
-FE_MODEL_DEFAULT = "nomic-ai/nomic-embed-text-v1.5-Q"
+# MiniLM-L6-v2 is the default: tiny, fast, sufficient quality for small
+# corpora. Switch to nomic v1.5-Q when you need the 8192-token window and
+# can afford ~20x slower embed on GPU.
+FE_MODEL_DEFAULT = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Static per-model metadata: dimensionality, window, task prefixes."""
+    """Static per-model metadata: dimensionality, window, task prefixes.
+
+    ``batch_size`` is the safe default for this model on a commodity laptop
+    GPU (6-8 GB VRAM via DirectML / CUDA). Small models (MiniLM) tolerate
+    fastembed's 256 default; large long-context models (nomic-base) crash
+    DirectML around batch 64 and should stay at 32.
+    """
 
     dim: int
     max_tokens: int
     passage_prefix: str = ""
     query_prefix: str = ""
+    batch_size: int = 256
 
 
 _MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "sentence-transformers/all-MiniLM-L6-v2": ModelConfig(dim=384, max_tokens=512),
+    "sentence-transformers/all-MiniLM-L6-v2": ModelConfig(
+        dim=384, max_tokens=512, batch_size=256,
+    ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
         max_tokens=8192,
         passage_prefix="search_document: ",
         query_prefix="search_query: ",
+        batch_size=32,
     ),
     "nomic-ai/nomic-embed-text-v1.5-Q": ModelConfig(
         dim=768,
         max_tokens=8192,
         passage_prefix="search_document: ",
         query_prefix="search_query: ",
+        batch_size=32,
     ),
 }
 
@@ -128,14 +147,33 @@ def _load_fe(model: str | None) -> None:
     _fe_model_id = name
 
 
-def _fe_embed_with(model: str | None, texts: Sequence[str]) -> np.ndarray:
+def _resolve_batch_size(model: str | None, override: int | None) -> int:
+    """Batch size precedence: explicit arg > env var > model config default."""
+    if override is not None:
+        return override
+    env = os.environ.get("WIKIFY_EMBED_BATCH_SIZE")
+    if env:
+        return int(env)
+    return model_config(model or FE_MODEL_DEFAULT).batch_size
+
+
+def _fe_embed_with(
+    model: str | None,
+    texts: Sequence[str],
+    *,
+    batch_size: int | None = None,
+) -> np.ndarray:
     _load_fe(model)
     assert _fe_model is not None, "_load_fe must initialise _fe_model"
     if not texts:
         cfg = model_config(model or FE_MODEL_DEFAULT)
         dim = getattr(_fe_model, "embedding_size", cfg.dim) or cfg.dim
         return np.zeros((0, dim), dtype=np.float32)
-    arr = np.asarray(list(_fe_model.embed(list(texts))), dtype=np.float32)
+    bs = _resolve_batch_size(model, batch_size)
+    arr = np.asarray(
+        list(_fe_model.embed(list(texts), batch_size=bs)),
+        dtype=np.float32,
+    )
     return arr
 
 
@@ -145,24 +183,28 @@ def _apply_prefix(texts: Sequence[str], prefix: str) -> list[str]:
     return [f"{prefix}{t}" for t in texts]
 
 
-def embed_passages(texts: Sequence[str]) -> np.ndarray:
+def embed_passages(
+    texts: Sequence[str], *, batch_size: int | None = None,
+) -> np.ndarray:
     """Embed passage / document texts. Prepends the model's passage prefix."""
     backend = os.environ.get("WIKIFY_EMBEDDER", "fastembed").lower()
     if backend == "hash":
         return _hash_embed(texts)
     model = os.environ.get("WIKIFY_EMBED_MODEL") or FE_MODEL_DEFAULT
     prefixed = _apply_prefix(texts, model_config(model).passage_prefix)
-    return _fe_embed_with(model, prefixed)
+    return _fe_embed_with(model, prefixed, batch_size=batch_size)
 
 
-def embed_queries(texts: Sequence[str]) -> np.ndarray:
+def embed_queries(
+    texts: Sequence[str], *, batch_size: int | None = None,
+) -> np.ndarray:
     """Embed query texts. Prepends the model's query prefix."""
     backend = os.environ.get("WIKIFY_EMBEDDER", "fastembed").lower()
     if backend == "hash":
         return _hash_embed(texts)
     model = os.environ.get("WIKIFY_EMBED_MODEL") or FE_MODEL_DEFAULT
     prefixed = _apply_prefix(texts, model_config(model).query_prefix)
-    return _fe_embed_with(model, prefixed)
+    return _fe_embed_with(model, prefixed, batch_size=batch_size)
 
 
 # Backward-compat alias: historical callers treat ``embed_texts`` as
@@ -175,6 +217,7 @@ def embedder_for(
     model: str | None = None,
     *,
     mode: str = "passage",
+    batch_size: int | None = None,
 ) -> Callable[[Sequence[str]], np.ndarray]:
     """Return an explicit embed callable for the named backend.
 
@@ -186,7 +229,8 @@ def embedder_for(
     drop-in ONNX backend on the same model + same dimensionality.
 
     ``mode`` selects the task prefix: ``"passage"`` for indexing
-    documents, ``"query"`` for search-time queries.
+    documents, ``"query"`` for search-time queries. ``batch_size``
+    overrides the per-model default (see ``ModelConfig``).
     """
     b = (backend or "").lower()
     if b == "hash":
@@ -196,7 +240,9 @@ def embedder_for(
         prefix = cfg.query_prefix if mode == "query" else cfg.passage_prefix
 
         def _call_fe(texts: Sequence[str]) -> np.ndarray:
-            return _fe_embed_with(model, _apply_prefix(texts, prefix))
+            return _fe_embed_with(
+                model, _apply_prefix(texts, prefix), batch_size=batch_size,
+            )
 
         return _call_fe
     raise ValueError(f"unknown embedder backend: {backend!r}")
