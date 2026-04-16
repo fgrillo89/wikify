@@ -1,11 +1,13 @@
-"""Markdown -> [Chunk]. Section-as-chunk for long-context embedders.
+"""Markdown -> [Chunk]. Embedder-adaptive section/paragraph chunking.
 
 Key behaviours:
   - Never split across section boundaries
   - Emit a whole section as a single chunk when its length fits the embedder
   - Only split sections that exceed ``max_chunk_chars()``; split at paragraph
-    boundaries greedily into ``TARGET_CHUNK_CHARS`` pieces
-  - No inter-chunk overlap: section-level chunks carry their own local context
+    boundaries greedily into ``min(TARGET_CHUNK_CHARS, cap)`` pieces
+  - Inter-chunk overlap is adaptive (``overlap_chars()``): zero on long-context
+    embedders (section chunks self-contain), ~200 chars on short-context
+    embedders so paragraph splits keep sentence continuity
   - Section type classification (abstract, methods, results, etc.)
   - Conclusion fallback: if no section is typed "conclusion", promote the
     last substantive (non-references/acks/appendix) section
@@ -21,6 +23,7 @@ from .config import (
     MIN_CHUNK_CHARS,
     TARGET_CHUNK_CHARS,
     max_chunk_chars,
+    overlap_chars,
 )
 from .section_classifier import SectionType, classify_section_path
 
@@ -177,28 +180,36 @@ def _apply_conclusion_fallback(chunks: list[Chunk]) -> None:
 def _split_section(text: str) -> list[tuple[int, int]]:
     """Emit the whole section as one chunk when it fits; split only if oversize.
 
-    With a long-context embedder (e.g. nomic v1.5 at 8192 tokens) most sections
-    fit in a single chunk. Only split when the section exceeds the embedder's
-    window; split at paragraph boundaries greedily into ``TARGET_CHUNK_CHARS``
-    pieces. No overlap — section chunks carry enough local context on their
-    own, and the pipeline's neighbour retrieval gives callers the rest.
+    With a long-context embedder (jina-v2-small / nomic v1.5 at 8192 tokens)
+    most sections fit in a single chunk — the common case hits the fast
+    return. For short-context embedders the section gets paragraph-split
+    into ``target``-sized pieces with ``overlap_chars()`` overlap between
+    neighbours, preserving sentence continuity across the cut.
     """
     cap = max_chunk_chars()
     if len(text) <= cap:
         return [(0, len(text))]
+    target = min(TARGET_CHUNK_CHARS, cap)
+    overlap = overlap_chars()
     out: list[tuple[int, int]] = []
     paragraphs = list(_paragraph_spans(text))
     cur_start = 0
     cur_len = 0
+    last_para: tuple[int, int] | None = None
 
     for ps, pe in paragraphs:
         plen = pe - ps
-        if cur_len + plen > TARGET_CHUNK_CHARS and cur_len >= MIN_CHUNK_CHARS:
+        if cur_len + plen > target and cur_len >= MIN_CHUNK_CHARS:
             out.append((cur_start, ps))
-            cur_start = ps
-            cur_len = plen
+            if overlap and last_para is not None and (last_para[1] - last_para[0]) <= overlap:
+                cur_start = last_para[0]
+                cur_len = (ps - last_para[0]) + plen
+            else:
+                cur_start = ps
+                cur_len = plen
         else:
             cur_len += plen
+        last_para = (ps, pe)
     if cur_start < len(text):
         out.append((cur_start, len(text)))
     return out

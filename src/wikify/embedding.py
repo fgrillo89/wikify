@@ -4,10 +4,11 @@ Configuration (env vars, checked at ingest time):
 
 - ``WIKIFY_EMBEDDER``: backend name. ``fastembed`` (default) or ``hash``.
 - ``WIKIFY_EMBED_MODEL``: HuggingFace model name for the fastembed backend.
-  Default: ``sentence-transformers/all-MiniLM-L6-v2`` (384-d, 512-tok, 22M
-  params, MTEB ~41 NDCG@10). Long-context alternative: set to
-  ``nomic-ai/nomic-embed-text-v1.5-Q`` (768-d, 8192-tok, 137M params,
-  MTEB ~49). Nomic is ~20x slower than MiniLM and wants a GPU.
+  Default: ``jinaai/jina-embeddings-v2-small-en`` (512-d, 8192-tok, 33M
+  params, MTEB ~47). The 8192-tok window is what lets the chunker emit
+  whole sections (see ``ingest/chunker.py``). Fast alternative:
+  ``sentence-transformers/all-MiniLM-L6-v2`` (384-d, 512-tok, 22M, MTEB
+  ~41) — ~5x faster but the chunker falls back to paragraph splitting.
 - ``WIKIFY_EMBED_BATCH_SIZE``: override the per-model batch size. Nomic
   defaults to 32 (safe on 8 GB DirectML); MiniLM defaults to 256.
 
@@ -37,10 +38,13 @@ import numpy as np
 
 HASH_DIM = 128
 # Fastembed uses the fully-qualified HuggingFace name for the model.
-# MiniLM-L6-v2 is the default: tiny, fast, sufficient quality for small
-# corpora. Switch to nomic v1.5-Q when you need the 8192-token window and
-# can afford ~20x slower embed on GPU.
-FE_MODEL_DEFAULT = "sentence-transformers/all-MiniLM-L6-v2"
+# jina-v2-small-en is the default: 33M params, 8192-token window, 512-d.
+# Long context is the whole point of Phase 2 section-level chunking; with
+# MiniLM (512-tok window) the chunker falls back to paragraph-splitting.
+# ~5x slower than MiniLM on DirectML RTX 3070 (27s vs 5s on mvp20's 886
+# chunks) — acceptable on a laptop, and still a small model class. Swap to
+# MiniLM for speed or nomic-Q for higher MTEB via WIKIFY_EMBED_MODEL.
+FE_MODEL_DEFAULT = "jinaai/jina-embeddings-v2-small-en"
 
 
 @dataclass(frozen=True)

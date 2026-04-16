@@ -10,13 +10,15 @@ SKIP_SECTION_TYPES: frozenset[str] = frozenset(
 
 # -- chunking ----------------------------------------------------------------
 # Section-level strategy: emit each section as a single chunk when it fits the
-# embedder's context window. Long-context embedders (nomic v1.5 has an 8192-
-# token window) make the old 400-token paragraph-level chunks counterproductive
-# -- arguments get split across neighbours and retrieval has to stitch them
-# back together. With section-as-chunk, one hit = one coherent section.
+# embedder's context window. Long-context embedders (jina-v2-small, nomic v1.5)
+# make the old 400-token paragraph-level chunks counterproductive -- arguments
+# get split across neighbours and retrieval has to stitch them back together.
+# With section-as-chunk, one hit = one coherent section.
+#
+# Short-context embedders (MiniLM, 512 tok) fall back to paragraph-level
+# splitting with overlap; see ``max_chunk_chars()`` and ``overlap_chars()``.
 TARGET_CHUNK_CHARS = 8000  # ~2000 tokens — keep whole sections when possible
 MIN_CHUNK_CHARS = 200  # minimum chunk size before flush
-OVERLAP_CHARS = 0  # section chunks carry their own context; no overlap needed
 
 
 def max_chunk_chars() -> int:
@@ -32,6 +34,19 @@ def max_chunk_chars() -> int:
     backend = current_backend()
     cfg = model_config(backend.get("model"))
     return int(min(cfg.max_tokens, 6000) * 2.5)
+
+
+def overlap_chars() -> int:
+    """Inter-chunk overlap within a section, adapted to the active embedder.
+
+    Zero for long-context models (section-as-chunk carries its own context).
+    200 chars for short-context models, where big sections still get
+    paragraph-split to fit the window and a bit of overlap preserves
+    sentence continuity across the cut.
+    """
+    return 0 if max_chunk_chars() >= 2000 else 200
+
+
 # Drop chunks whose stripped text has fewer than this many alphanumeric
 # characters. Catches markdown-format-noise chunks like ``"##"`` or
 # ``"**\n\n## _"`` that survive the parse but carry zero information.
