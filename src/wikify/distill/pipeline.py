@@ -130,6 +130,7 @@ def _run_write_pass(
     budget_haiku_eq: float,
     verbalize: bool,
     write_rejections: list[dict],
+    equations_index: object | None = None,
 ) -> None:
     """Run a write pass over pages. Used both at end-of-extraction and mid-session."""
     avg_write_cost = 30_000.0
@@ -153,6 +154,7 @@ def _run_write_pass(
                 author_ctx,
                 citation_index,
                 knowledge_graph=knowledge_graph,
+                equations_index=equations_index,
             )
             try:
                 resp = writer.write(req)
@@ -271,6 +273,7 @@ def run_with_preloaded(
     chunks = preloaded.chunks
     chunks_by_id = preloaded.chunks_by_id
     images_index = preloaded.images_index
+    equations_index = preloaded.equations_index
     citation_index = preloaded.citation_index
 
     knowledge_graph = preloaded.knowledge_graph
@@ -471,6 +474,7 @@ def run_with_preloaded(
                         images_index, write_req_cfg, author_ctx,
                         citation_index, knowledge_graph, budget_haiku_eq,
                         verbalize, write_rejections,
+                        equations_index=equations_index,
                     )
                     candidates.clear()
                     policy_events.append({
@@ -708,6 +712,7 @@ def run_with_preloaded(
         author_ctx,
         citation_index,
         knowledge_graph=knowledge_graph,
+        equations_index=equations_index,
     )
     if phase == "extract":
         save_pages_manifest(bundle, pages)
@@ -751,6 +756,7 @@ def run_with_preloaded(
         images_index, write_req_cfg, author_ctx,
         citation_index, knowledge_graph, budget_haiku_eq,
         verbalize, write_rejections,
+        equations_index=equations_index,
     )
 
     _finalize_pages(bundle, pages, docs, meter, strategy, iteration)

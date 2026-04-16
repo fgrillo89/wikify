@@ -18,6 +18,7 @@ from ..store.corpus import (
     read_knowledge_graph,
     read_vector_store,
 )
+from ..store.equations_index import EquationIndex
 from ..store.images_index import ImageIndex
 
 
@@ -31,6 +32,7 @@ class PreloadedCorpus:
     chunks: list[Chunk]
     chunks_by_id: dict[str, Chunk]
     images_index: ImageIndex
+    equations_index: EquationIndex
     vectors: object  # VectorStore
     knowledge_graph: object  # KnowledgeGraph
     persona_text: str  # contents of corpus/persona.txt, or "" if absent
@@ -44,6 +46,7 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     chunks = all_chunks(corpus)
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
     images_index = ImageIndex.load(corpus)
+    equations_index = EquationIndex.load(corpus.equations_index_path)
     vectors = read_vector_store(corpus)
     # Resolve the embedder so KG vector search (search_chunks, similar_to)
     # works during guided-mode tool-calling. Without this, search() returns [].
@@ -63,6 +66,7 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
         chunks=chunks,
         chunks_by_id=chunks_by_id,
         images_index=images_index,
+        equations_index=equations_index,
         vectors=vectors,
         knowledge_graph=knowledge_graph,
         persona_text=persona_text,

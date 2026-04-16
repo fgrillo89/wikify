@@ -205,8 +205,6 @@ def _parse_and_persist_worker(
 
 def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]:
     """Build Chunk objects from Docling's HybridChunker output."""
-    import hashlib
-
     from .config import MIN_CHUNK_ALNUM
     from .section_classifier import classify_section_path
 
