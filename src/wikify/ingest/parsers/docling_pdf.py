@@ -46,17 +46,22 @@ class DoclingOptions:
     +-----------------+----------+--------------------------------------+
     | Option          | Default  | Impact                               |
     +-----------------+----------+--------------------------------------+
-    | formulas        | off      | +10-20s/paper (granite-docling-258M) |
-    | ocr             | off      | +5-150s/paper (depends on page count)|
+    | formulas        | ON       | +10-20s/paper (granite-docling-258M) |
     | formula_model   | granite  | granite=258M (fast), v2=larger (slow)|
+    | ocr             | off      | +5-150s/paper (depends on page count)|
     | images_scale    | 1.0      | 2.0 doubles image resolution         |
     | pic_classify    | off      | minor overhead                       |
     | pic_describe    | off      | +5-10s/paper (SmolVLM captioning)    |
     +-----------------+----------+--------------------------------------+
+
+    Formula enrichment uses granite-docling-258M by default. Produces
+    proper LaTeX in ``$$...$$`` blocks. Set ``DOCLING_FORMULAS=0`` to
+    disable for faster iteration. Formula-heavy papers (>20 regions)
+    may take 100s+ even with the granite model.
     """
 
     hybrid_chunks: bool = True
-    formulas: bool = False
+    formulas: bool = True
     formula_model: str = "granite_docling"  # "granite_docling" or "codeformulav2"
     ocr: bool = False
     pic_classify: bool = False
@@ -71,7 +76,7 @@ class DoclingOptions:
     def from_env(cls) -> DoclingOptions:
         """Build options from DOCLING_* environment variables."""
         return cls(
-            formulas=os.environ.get("DOCLING_FORMULAS", "") == "1",
+            formulas=os.environ.get("DOCLING_FORMULAS", "1") != "0",
             formula_model=os.environ.get("DOCLING_FORMULA_MODEL", "granite_docling"),
             ocr=os.environ.get("DOCLING_OCR", "") == "1",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
