@@ -39,11 +39,25 @@ _HF_PATCHED = False
 class DoclingOptions:
     """Configurable options for the Docling parser.
 
-    Controlled via environment variables or passed directly.
+    All options are controllable via ``DOCLING_*`` environment variables.
+
+    Key options and their performance impact:
+
+    +-----------------+----------+--------------------------------------+
+    | Option          | Default  | Impact                               |
+    +-----------------+----------+--------------------------------------+
+    | formulas        | off      | +10-20s/paper (granite-docling-258M) |
+    | ocr             | off      | +5-150s/paper (depends on page count)|
+    | formula_model   | granite  | granite=258M (fast), v2=larger (slow)|
+    | images_scale    | 1.0      | 2.0 doubles image resolution         |
+    | pic_classify    | off      | minor overhead                       |
+    | pic_describe    | off      | +5-10s/paper (SmolVLM captioning)    |
+    +-----------------+----------+--------------------------------------+
     """
 
     hybrid_chunks: bool = True
     formulas: bool = False
+    formula_model: str = "granite_docling"  # "granite_docling" or "codeformulav2"
     ocr: bool = False
     pic_classify: bool = False
     pic_describe: bool = False
@@ -58,6 +72,7 @@ class DoclingOptions:
         """Build options from DOCLING_* environment variables."""
         return cls(
             formulas=os.environ.get("DOCLING_FORMULAS", "") == "1",
+            formula_model=os.environ.get("DOCLING_FORMULA_MODEL", "granite_docling"),
             ocr=os.environ.get("DOCLING_OCR", "") == "1",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
@@ -130,9 +145,9 @@ _CACHED_OPTS_KEY = None
 def _get_converter(opts: DoclingOptions):
     """Return a cached converter, rebuilding only if options changed."""
     global _CACHED_CONVERTER, _CACHED_OPTS_KEY
-    key = (opts.formulas, opts.ocr, opts.pic_classify, opts.pic_describe,
-           opts.vlm, opts.images_scale, opts.layout_batch_size,
-           opts.ocr_batch_size)
+    key = (opts.formulas, opts.formula_model, opts.ocr, opts.pic_classify,
+           opts.pic_describe, opts.vlm, opts.images_scale,
+           opts.layout_batch_size, opts.ocr_batch_size)
     if _CACHED_CONVERTER is None or _CACHED_OPTS_KEY != key:
         _CACHED_CONVERTER = _build_converter(opts)
         _CACHED_OPTS_KEY = key
@@ -235,6 +250,18 @@ def _make_standard_options(accel, opts: DoclingOptions):
         "do_picture_classification": opts.pic_classify,
         "do_picture_description": opts.pic_describe,
     }
+
+    if opts.formulas:
+        try:
+            from docling.datamodel.pipeline_options import (
+                CodeFormulaVlmOptions,
+            )
+
+            kwargs["code_formula_options"] = (
+                CodeFormulaVlmOptions.from_preset(opts.formula_model)
+            )
+        except (ImportError, Exception):
+            pass  # fall back to default model
 
     if _has_cuda():
         kwargs["layout_batch_size"] = opts.layout_batch_size
