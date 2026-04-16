@@ -28,7 +28,8 @@ After ingest, verify:
 ```bash
 ls data/corpora/<name>/docs/ | wc -l
 cat data/corpora/<name>/vectors.meta.json
-# expect: {"backend":"fastembed","dim":384,"model":"sentence-transformers/all-MiniLM-L6-v2"}
+# expect: {"backend":"fastembed","dim":512,"model":"jinaai/jina-embeddings-v2-small-en"}
+# (or whichever model WIKIFY_EMBED_MODEL points to; jina-v2-small is the default)
 ```
 
 ### 1.2 Clean run directories

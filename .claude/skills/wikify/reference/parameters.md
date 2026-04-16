@@ -65,7 +65,9 @@ Strategy defaults: E=0.2, M=0.65 (adaptive), X=0.6.
 | Var | Default | Description |
 |---|---|---|
 | `WIKIFY_DISPATCH_DIR` | `data/dispatch` | Base directory for file-dispatch requests. |
-| `WIKIFY_EMBEDDER` | `hash` | Embedder backend: `hash` (fast, 128d) or `sentence_transformers` (all-MiniLM-L6-v2, 384d). |
+| `WIKIFY_EMBEDDER` | `fastembed` | Embedder backend: `fastembed` (ONNX, default) or `hash` (offline, 128d, CI only). |
+| `WIKIFY_EMBED_MODEL` | `jinaai/jina-embeddings-v2-small-en` | HF model name. See `_MODEL_CONFIGS` in `src/wikify/embedding.py`: MiniLM (fast, 512-tok), bge-small-v1.5, jina-v2-small (default, 8192-tok), nomic-v1.5-Q (8192-tok, slow). |
+| `WIKIFY_EMBED_BATCH_SIZE` | per-model | Override per-model batch size (nomic defaults to 32, MiniLM/bge to 256, jina to 128). |
 | `WIKIFY_SKIP_PAGE_ID_MIGRATION` | unset | Skip the `concept-*.md` → natural-title migration pass. |
 
 ## What the user CANNOT set directly
