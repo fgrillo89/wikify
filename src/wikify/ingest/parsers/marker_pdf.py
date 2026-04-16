@@ -105,6 +105,12 @@ def _extract_metadata(md_text: str, path: Path) -> dict:
         title = fn_title or path.stem
     title = clean_markdown(title)
 
+    # Prefer filename title when extraction picks up a section header
+    from wikify.ingest.metadata import _is_heading_noise
+
+    if fn_title and (_is_heading_noise(title) or (title.isupper() and fn_title)):
+        title = fn_title
+
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     if not authors and fn_author:
         authors = [fn_author]
@@ -129,7 +135,29 @@ _MIN_IMAGE_DIM = 150
 
 
 def _extract_images(rendered) -> list[RawImage]:
-    """Extract images from Marker's rendered output."""
+    """Extract images from Marker's rendered output.
+
+    Attempts to match each image to a Figure/Table caption in the
+    markdown by finding ``![...](image_name)`` references near
+    ``Fig(ure)? N`` or ``Table N`` text.
+    """
+    # Build caption map from markdown: image_name -> caption
+    caption_map: dict[str, str] = {}
+    if rendered.markdown:
+        # Find ![alt](path) and look for nearby captions
+        for m in re.finditer(
+            r"!\[([^\]]*)\]\(([^)]+)\)", rendered.markdown,
+        ):
+            img_name = m.group(2).rsplit("/", 1)[-1]
+            # Search surrounding text for a caption
+            after = rendered.markdown[m.end():m.end() + 500]
+            cap_match = re.search(
+                r"((?:Fig(?:ure)?|Table|Scheme)\.?\s*\d+[^.\n]*\.)",
+                after, re.IGNORECASE,
+            )
+            if cap_match:
+                caption_map[img_name] = cap_match.group(1).strip()
+
     images: list[RawImage] = []
     for name, pil_img in (rendered.images or {}).items():
         w, h = pil_img.size
@@ -141,11 +169,12 @@ def _extract_images(rendered) -> list[RawImage]:
         data = buf.getvalue()
 
         content_hash = hashlib.sha1(data).hexdigest()[:12]
+        caption = caption_map.get(name, "")
         images.append(
             RawImage(
                 data=data,
                 ext="png",
-                caption="",  # Marker doesn't provide per-image captions
+                caption=caption,
                 content_hash=content_hash,
             )
         )
