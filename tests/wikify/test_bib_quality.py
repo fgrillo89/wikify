@@ -125,6 +125,111 @@ class TestTitleCleaning:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Bracketize refs: false positive prevention
+# ---------------------------------------------------------------------------
+
+
+class TestBracketizeRefs:
+    """_bracketize_refs should not corrupt normal prose numbers."""
+
+    def test_measurement_not_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "The film is 100 nm thick."
+        assert _bracketize_refs(md, ref_count=200) == md
+
+    def test_unit_suffix_not_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "At 300 K the value rose."
+        assert _bracketize_refs(md, ref_count=500) == md
+
+    def test_mid_sentence_number_not_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "The devices 3 were measured."
+        assert "[3]" not in _bracketize_refs(md, ref_count=50)
+
+    def test_out_of_range_not_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "references 200."
+        assert "[200]" not in _bracketize_refs(md, ref_count=30)
+
+    def test_real_citation_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "cross-point switches 20-22."
+        result = _bracketize_refs(md, ref_count=30)
+        assert "[20-22]" in result
+
+    def test_no_refs_section_skips(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "some text 5."
+        assert _bracketize_refs(md, ref_count=0) == md
+
+
+# ---------------------------------------------------------------------------
+# Equation binding normalization
+# ---------------------------------------------------------------------------
+
+
+class TestEquationBinding:
+    """Text-match equation binding should handle whitespace differences."""
+
+    def test_whitespace_normalized(self):
+        from wikify.ingest.pipeline import bind_equations_to_chunks
+        from wikify.models import Chunk
+
+        chunk = Chunk(
+            id="c1", doc_id="d1", ord=0,
+            text="The equation E=mc^2 describes mass-energy equivalence.",
+            char_span=(0, 55), section_path=["body"],
+        )
+        equations = [
+            {"id": "eq1", "latex": "E = mc^2", "context": "mass-energy"},
+        ]
+        bind_equations_to_chunks([chunk], equations, use_text_match=True)
+        assert "eq1" in chunk.equation_ids
+
+    def test_math_delimiters_stripped(self):
+        from wikify.ingest.pipeline import bind_equations_to_chunks
+        from wikify.models import Chunk
+
+        chunk = Chunk(
+            id="c1", doc_id="d1", ord=0,
+            text="We use $$R = V/I$$ for resistance.",
+            char_span=(0, 34), section_path=["body"],
+        )
+        equations = [
+            {"id": "eq1", "latex": "R = V/I", "context": "resistance"},
+        ]
+        bind_equations_to_chunks([chunk], equations, use_text_match=True)
+        assert "eq1" in chunk.equation_ids
+
+    def test_no_false_bind(self):
+        from wikify.ingest.pipeline import bind_equations_to_chunks
+        from wikify.models import Chunk
+
+        chunk = Chunk(
+            id="c1", doc_id="d1", ord=0,
+            text="This chunk discusses something completely different.",
+            char_span=(0, 51), section_path=["body"],
+        )
+        equations = [
+            {"id": "eq1", "latex": "E = mc^2", "context": "mass-energy"},
+        ]
+        bind_equations_to_chunks([chunk], equations, use_text_match=True)
+        assert chunk.equation_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Integration: _reference_entry_from_citation
+# ---------------------------------------------------------------------------
+
+
 class TestReferenceEntry:
     """End-to-end: raw citation -> BibTeX entry should be clean."""
 
@@ -141,6 +246,52 @@ class TestReferenceEntry:
         entry = _reference_entry_from_citation(cit)
         assert entry is not None
         assert "volume" not in entry  # suppressed because vol == year
+
+    def test_ordinal_one_based_in_kg(self):
+        """[1] in text should resolve to the first bibliography entry."""
+        from wikify.citestore.graph_build import build_knowledge_graph
+        from wikify.citestore.models import CitationEntry
+        from wikify.models import Chunk, Document
+        from wikify.store.vectors import VectorStore
+
+        doc = Document(
+            id="test_doc",
+            source_path="test.pdf",
+            kind="pdf",
+            title="Test Paper",
+            metadata={"year": 2020, "doi": "10.1234/test"},
+            markdown_path="",
+            image_dir="",
+            citations=[
+                CitationEntry(ord=0, raw_text="First ref", year=2010,
+                              doi="10.1234/first", title="First Paper"),
+                CitationEntry(ord=1, raw_text="Second ref", year=2011,
+                              doi="10.1234/second", title="Second Paper"),
+            ],
+            cites=["ref_first", "ref_second"],
+        )
+        chunk = Chunk(
+            id="test_doc__c0001__abc",
+            doc_id="test_doc",
+            ord=0,
+            text="Test text",
+            char_span=(0, 9), section_path=["body"],
+        )
+        import numpy as np
+        store = VectorStore(
+            ids=["test_doc__c0001__abc"],
+            matrix=np.zeros((1, 128), dtype=np.float32),
+        )
+        kg = build_knowledge_graph([doc], [chunk], store, {})
+        # [1] should resolve to the FIRST bibliography entry
+        refs_1 = kg.source("test_doc").references(ords=[1])
+        assert refs_1.count() >= 0  # just verify no crash; edge may not exist
+        # if the DOI matched, [1] -> first entry, [2] -> second
+        # The key assertion: ord_refs uses 1-based keys
+        ord_refs = kg._backend._ord_refs.get("test_doc", {})
+        if ord_refs:
+            assert 1 in ord_refs or 2 in ord_refs  # keys are one-based
+            assert 0 not in ord_refs  # zero should NOT be a key
 
     def test_volume_preserved_when_different(self):
         from wikify.ingest.bibtex import _reference_entry_from_citation

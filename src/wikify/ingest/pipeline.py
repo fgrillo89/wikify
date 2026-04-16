@@ -265,17 +265,23 @@ def bind_equations_to_chunks(
         return
 
     if use_text_match:
-        # Docling path: bind by text containment
+        # Docling path: bind by text containment with normalization.
+        # HybridChunker can alter whitespace, line breaks, and math
+        # delimiters, so we strip all whitespace for comparison.
+        def _compact(s: str) -> str:
+            return re.sub(r"\s+", "", s.lower())
+
         for eq in equations:
             latex = eq.get("latex", "")
             context = eq.get("context", "")
-            # Try matching latex or a distinctive fragment of context
-            needle = latex if len(latex) >= 5 else context[:40]
+            # Try compact latex first, then context fragment
+            needle = _compact(latex) if len(latex) >= 3 else ""
+            if not needle or len(needle) < 3:
+                needle = _compact(context[:40])
             if not needle:
                 continue
-            needle_lower = needle.lower()
             for c in body_chunks:
-                if needle_lower in c.text.lower():
+                if needle in _compact(c.text):
                     c.equation_ids.append(eq["id"])
                     break
     else:

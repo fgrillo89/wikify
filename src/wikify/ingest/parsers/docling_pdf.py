@@ -193,7 +193,7 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     md_text = _light_clean(md_text, formulas_enabled=opts.formulas)
 
     # Count bibliography entries for bracketize_refs range validation.
-    ref_count = _count_list_items(doc)
+    ref_count = _count_ref_list_items(doc)
     md_text = _bracketize_refs(md_text, ref_count=ref_count)
 
     metadata = _extract_metadata(doc, path)
@@ -348,12 +348,31 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
-def _count_list_items(doc) -> int:
-    """Count ListItem elements in the DoclingDocument (bibliography entries)."""
-    try:
-        from docling.datamodel.document import ListItem
+def _count_ref_list_items(doc) -> int:
+    """Count bibliography entries in the DoclingDocument.
 
-        return sum(1 for item, _ in doc.iterate_items() if isinstance(item, ListItem))
+    Only counts ListItems that appear after the last section header
+    containing 'reference' or 'bibliography'. This avoids counting
+    bullet lists in the body as bibliography entries.
+    """
+    try:
+        from docling.datamodel.document import ListItem, SectionHeaderItem
+
+        items = list(doc.iterate_items())
+        # Find the last references/bibliography header
+        last_ref_idx = -1
+        for i, (item, _) in enumerate(items):
+            if isinstance(item, SectionHeaderItem):
+                text = getattr(item, "text", "").lower()
+                if "reference" in text or "bibliography" in text:
+                    last_ref_idx = i
+        if last_ref_idx < 0:
+            return 0
+        # Count ListItems after that header
+        return sum(
+            1 for item, _ in items[last_ref_idx:]
+            if isinstance(item, ListItem)
+        )
     except Exception:
         return 0
 
@@ -428,11 +447,20 @@ def _bracketize_refs(md: str, ref_count: int = 0) -> str:
         if not nums or any(n < 1 or n > ref_count for n in nums):
             return m.group(0)
 
-        # Check what follows: if it's a unit, this is a measurement
+        # Check what follows: if it's a unit or a common word, skip.
+        # Real citations are followed by punctuation then a new sentence
+        # or another citation, NOT by a lowercase word continuing the
+        # same sentence.
         rest_after = md[m.end():]
         next_word_match = re.match(r"\s*([a-zA-Z]+)", rest_after)
-        if next_word_match and next_word_match.group(1).lower() in units:
-            return m.group(0)
+        if next_word_match:
+            nw = next_word_match.group(1).lower()
+            if nw in units:
+                return m.group(0)
+            # If followed by a lowercase word (not starting a sentence),
+            # this number is likely part of prose, not a citation.
+            if post in (" ", "") and nw[0].islower():
+                return m.group(0)
 
         return f"{m.group('pre')} [{nums_str}]{post}"
 

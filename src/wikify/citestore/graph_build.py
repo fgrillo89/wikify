@@ -101,7 +101,9 @@ def build_knowledge_graph(
                 if not target and cit.title and len(cit.title) > 15:
                     target = title_to_id.get(cit.title.lower()[:50])
                 if target:
-                    ord_refs[cit.ord] = target
+                    # cit.ord is zero-based from extraction; [N] markers
+                    # in text are one-based, so store as ord + 1.
+                    ord_refs[cit.ord + 1] = target
         if ord_refs:
             g.nodes[doc.id]["ord_refs"] = ord_refs
 
