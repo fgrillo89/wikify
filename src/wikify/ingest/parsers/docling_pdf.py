@@ -166,6 +166,7 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     opts = DoclingOptions.from_env()
     opts.hybrid_chunks = hybrid_chunks
 
+    effective_opts = opts
     converter = _get_converter(opts)
 
     try:
@@ -176,21 +177,21 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
             # enrichments (formulas, pic_describe) to fit in memory.
             import copy
 
-            fallback = copy.copy(opts)
-            fallback.formulas = False
-            fallback.pic_describe = False
+            effective_opts = copy.copy(opts)
+            effective_opts.formulas = False
+            effective_opts.pic_describe = False
             sys.stderr.write(
                 f"[docling] CUDA OOM on {path.name}, "
                 f"retrying without formula enrichment\n"
             )
-            converter = _get_converter(fallback)
+            converter = _get_converter(effective_opts)
             result = converter.convert(str(path.resolve()))
         else:
             raise
     doc = result.document
 
     md_text = doc.export_to_markdown()
-    md_text = _light_clean(md_text, formulas_enabled=opts.formulas)
+    md_text = _light_clean(md_text, formulas_enabled=effective_opts.formulas)
 
     # Count bibliography entries for bracketize_refs range validation.
     ref_count = _count_ref_list_items(doc)
@@ -445,6 +446,14 @@ def _bracketize_refs(md: str, ref_count: int = 0) -> str:
         except ValueError:
             return m.group(0)
         if not nums or any(n < 1 or n > ref_count for n in nums):
+            return m.group(0)
+
+        # Check immediate context for math operators -- skip if this
+        # looks like a mathematical expression (e.g. "x 2 + y 3.").
+        # Only check 3 chars before to avoid matching hyphens in
+        # compound words like "cross-point switches 20-22."
+        context_before = md[max(0, m.start() - 3):m.start()]
+        if re.search(r"[+*/=<>^]", context_before):
             return m.group(0)
 
         # Check what follows: if it's a unit or a common word, skip.

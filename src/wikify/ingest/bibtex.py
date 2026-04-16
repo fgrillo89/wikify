@@ -260,8 +260,13 @@ def _clean_bib_title(title: str) -> str:
     )
     # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
     title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
-    # Strip trailing "IEEE Trans. Circuit Theory 18 (1971) 507-519" patterns
-    title = re.sub(r",?\s*IEEE\s.*$", "", title)
+    # Strip trailing IEEE journal citation fragments:
+    # "..., IEEE Trans. Circuit Theory 18 (1971) 507-519"
+    # Only when IEEE is followed by a journal abbreviation (Trans., J., Proc.)
+    # and volume/year numbers. Preserves "IEEE 802.11" and "IEEE Access" in titles.
+    title = re.sub(
+        r",?\s*IEEE\s+(?:Trans|J|Proc)\b.*$", "", title,
+    )
     # Collapse multiple spaces
     title = re.sub(r"\s{2,}", " ", title).strip()
     return title

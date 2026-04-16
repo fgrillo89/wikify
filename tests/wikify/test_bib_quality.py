@@ -7,11 +7,8 @@ Regression tests for structural issues found during the mvp100 audit:
 - journal fragments in titles
 """
 
-import pytest
-
-from wikify.citestore.parse import extract_venue_fields, parse_citation
-from wikify.ingest.bibtex import _clean_bib_journal, _clean_bib_title
-
+from wikify.citestore.parse import extract_venue_fields, parse_citation  # noqa: E402
+from wikify.ingest.bibtex import _clean_bib_journal, _clean_bib_title  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Volume == year suppression
@@ -23,14 +20,20 @@ class TestVolumeYearSuppression:
 
     def test_year_as_volume_suppressed(self):
         # "Manage. Sci 1960, 324-342" -> volume should NOT be 1960
-        raw = "P. R. Winters, Forecasting Sales by Exponentially Weighted Moving Averages, Manage. Sci 1960, 324-342."
+        raw = (
+            "P. R. Winters, Forecasting Sales by Exponentially"
+            " Weighted Moving Averages, Manage. Sci 1960, 324-342."
+        )
         result = parse_citation(raw, year=1960)
         assert result.get("volume") is None or result.get("volume") != "1960"
 
     def test_real_volume_preserved(self):
-        # "Nature 433, 47 (2005)" -> volume=433 is real
-        raw = "D. B. Strukov, The missing memristor found, Nature 453, 80-83 (2008)."
-        result = parse_citation(raw, year=2008)
+        # "Nature 453, 80-83 (2008)" -> volume=453 is real
+        raw = (
+            "D. B. Strukov, The missing memristor found,"
+            " Nature 453, 80-83 (2008)."
+        )
+        parse_citation(raw, year=2008)
         fields = extract_venue_fields(raw, "The missing memristor found")
         # 453 is not a year, should be kept
         assert fields.get("volume") == "453"
@@ -112,6 +115,19 @@ class TestTitleCleaning:
         result = _clean_bib_title("Smith et al., A study of memristors")
         assert result.startswith("A study")
 
+    def test_ieee_in_title_preserved(self):
+        """IEEE in a real title should NOT be stripped."""
+        result = _clean_bib_title("Analysis of IEEE 802.11 networks")
+        assert "IEEE 802.11" in result
+
+    def test_ieee_journal_trailing_stripped(self):
+        """IEEE Trans. as trailing citation fragment should be stripped."""
+        result = _clean_bib_title(
+            "Some title, IEEE Trans. Circuit Theory 18 (1971) 507"
+        )
+        assert "IEEE" not in result
+        assert result.startswith("Some title")
+
     def test_trailing_journal_fragment_stripped(self):
         result = _clean_bib_title(
             "Some general theorems for nonlinear systems possess-! ing reactance"
@@ -163,6 +179,12 @@ class TestBracketizeRefs:
         md = "cross-point switches 20-22."
         result = _bracketize_refs(md, ref_count=30)
         assert "[20-22]" in result
+
+    def test_math_context_not_bracketed(self):
+        from wikify.ingest.parsers.docling_pdf import _bracketize_refs
+
+        md = "Equation x 2 + y 3."
+        assert "[3]" not in _bracketize_refs(md, ref_count=50)
 
     def test_no_refs_section_skips(self):
         from wikify.ingest.parsers.docling_pdf import _bracketize_refs
