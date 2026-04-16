@@ -1064,6 +1064,13 @@ def _refresh_images_index(ctx: dict) -> None:
     build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
 
 
+def _refresh_equations_index(ctx: dict) -> None:
+    from ..store.equations_index import build_equations_index, save_equations_index
+
+    idx = build_equations_index(ctx["docs"], ctx["chunks"])
+    save_equations_index(ctx["paths"].equations_index_path, idx)
+
+
 def _refresh_openalex(ctx: dict) -> None:
     """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
     if not ctx.get("resolve_bibliography_doi", False):
@@ -1161,6 +1168,7 @@ _REFRESH_STEPS: dict[str, callable] = {
     "doc_similarity":   _refresh_doc_similarity,
     "topics":           _refresh_topics,
     "images_index":     _refresh_images_index,
+    "equations_index":  _refresh_equations_index,
     "cite_heuristics":  _refresh_cite_heuristics,
     "openalex":         _refresh_openalex,
     "citation_edges":   _refresh_citation_edges,
@@ -1171,8 +1179,8 @@ _REFRESH_STEPS: dict[str, callable] = {
 
 REFRESH_DAG: list[tuple[str, list[str]]] = [
     # Wave A: independent steps (no citation dependency)
-    ("wave A (similarity+topics+images)", [
-        "doc_similarity", "topics", "images_index",
+    ("wave A (similarity+topics+images+equations)", [
+        "doc_similarity", "topics", "images_index", "equations_index",
     ]),
     # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
     ("wave B (heuristic enrichment)", [

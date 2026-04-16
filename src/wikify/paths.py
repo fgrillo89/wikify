@@ -37,6 +37,10 @@ class CorpusPaths:
         return self.root / "images.json"
 
     @property
+    def equations_index_path(self) -> Path:
+        return self.root / "equations.json"
+
+    @property
     def persona_path(self) -> Path:
         """Path to the optional cached corpus persona text.
 
