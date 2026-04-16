@@ -153,6 +153,7 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
 
     md_text = doc.export_to_markdown()
     md_text = _light_clean(md_text, formulas_enabled=opts.formulas)
+    md_text = _bracketize_refs(md_text)
 
     metadata = _extract_metadata(doc, path)
     images = _extract_images(doc)
@@ -304,6 +305,45 @@ def _is_likely_noise_title(title: str) -> bool:
     if title.isupper():
         return True
     return False
+
+
+def _bracketize_refs(md: str) -> str:
+    """Wrap bare inline reference numbers in [N] brackets.
+
+    Docling strips bracket formatting from superscript citations,
+    leaving bare ``20-22`` instead of ``[20-22]``. This post-processor
+    restores brackets so the citation ordinal resolver can match them.
+
+    Only wraps numbers that:
+    - Follow a word character (not math symbols)
+    - Are in a plausible citation range (1-999)
+    - Appear as comma/hyphen-separated groups (``1,2``, ``20-22``)
+    - Are followed by sentence-ending punctuation or whitespace
+    """
+    if not md:
+        return md
+    # Match: word-boundary, space, then bare ref group, then punctuation.
+    # Negative lookbehind excludes math contexts (=, <, >, +, /, ^, _).
+    # Negative lookahead excludes already-bracketed refs.
+    ref_re = re.compile(
+        r"(?<=[a-zA-Z)]) (\d{1,3}(?:[,\u2013-]\d{1,3})*)(?=[.,;: )\n])"
+    )
+
+    def _replace(m: re.Match) -> str:
+        nums_str = m.group(1)
+        # Parse the individual numbers to validate range
+        parts = re.split(r"[,\u2013-]", nums_str)
+        try:
+            nums = [int(p.strip()) for p in parts if p.strip()]
+        except ValueError:
+            return m.group(0)
+        # All numbers must be in citation range (1-999) and at least
+        # one must be > 1 to avoid wrapping "word 1." patterns
+        if not nums or max(nums) < 2 or any(n > 999 for n in nums):
+            return m.group(0)
+        return f" [{nums_str}]"
+
+    return ref_re.sub(_replace, md)
 
 
 def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
