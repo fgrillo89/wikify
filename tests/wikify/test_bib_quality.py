@@ -7,8 +7,8 @@ Regression tests for structural issues found during the mvp100 audit:
 - journal fragments in titles
 """
 
-from wikify.citestore.parse import extract_venue_fields, parse_citation  # noqa: E402
-from wikify.ingest.bibtex import _clean_bib_journal, _clean_bib_title  # noqa: E402
+from wikify.citestore.parse import extract_venue_fields, parse_citation
+from wikify.ingest.bibtex import _clean_bib_journal, _clean_bib_title
 
 # ---------------------------------------------------------------------------
 # Volume == year suppression
@@ -284,6 +284,21 @@ class TestAuthorCleaning:
         from wikify.ingest.bibtex import _clean_author_name
 
         assert _clean_author_name("McMaster") == "McMaster"
+
+    def test_particle_preserved(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("VAN DER WAALS") == "Van der Waals"
+
+    def test_particle_de_preserved(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("DE LA CRUZ") == "De la Cruz"
+
+    def test_particle_mixed_case_untouched(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("van der Waals") == "van der Waals"
 
     def test_hyphenated_name(self):
         from wikify.ingest.bibtex import _clean_author_name

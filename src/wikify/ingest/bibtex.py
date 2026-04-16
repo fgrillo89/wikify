@@ -100,24 +100,34 @@ _AFFILIATION_RE = re.compile(
 )
 
 
+# Lowercase name particles preserved during capitalization.
+_NAME_PARTICLES = frozenset({
+    "van", "von", "der", "de", "da", "di", "la", "le", "du",
+    "del", "den", "dos", "el", "al", "bin", "ibn",
+})
+
+
 def _clean_author_name(name: str) -> str:
     """Normalize an author name: strip affiliation symbols, fix casing."""
     # Strip affiliation/footnote markers
     name = _AFFILIATION_RE.sub("", name).strip()
-    # Title-case each part: "YANG" -> "Yang", "yang" -> "Yang"
+    # Only apply casing fixes when the entire name is all-caps or all-lower.
+    # Mixed-case names (van der Waals, McMaster) are left as-is.
+    all_upper = name == name.upper() and any(c.isalpha() for c in name)
+    all_lower = name == name.lower() and any(c.isalpha() for c in name)
+    if not (all_upper or all_lower):
+        return name
     parts = name.split()
     cleaned = []
-    for part in parts:
-        # Preserve hyphenated names: "Jean-Pierre" -> "Jean-Pierre"
-        if "-" in part:
-            part = "-".join(
-                w.capitalize() if w.isupper() or w.islower() else w
-                for w in part.split("-")
-            )
-        elif part.isupper() or part.islower():
-            part = part.capitalize()
-        # Preserve mixed case like "McMaster" or "deGroot"
-        cleaned.append(part)
+    for i, part in enumerate(parts):
+        low = part.lower()
+        # Preserve particles (van, de, von) unless they start the name
+        if i > 0 and low in _NAME_PARTICLES:
+            cleaned.append(low)
+        elif "-" in part:
+            cleaned.append("-".join(w.capitalize() for w in part.split("-")))
+        else:
+            cleaned.append(part.capitalize())
     return " ".join(cleaned)
 
 
@@ -254,9 +264,10 @@ def _clean_bib_title(title: str) -> str:
         rf"^(?:{_author_name},\s*){{{2},}}",
         "", title,
     )
-    # Strip trailing journal + venue fragment: ", Small Sci" / ", Nature 433"
+    # Strip trailing citation fragment: ", Small Sci 2, 2100049"
+    # Requires volume + pages/article-number after journal name.
     title = re.sub(
-        r",\s+(?:[A-Z][a-z]+\.?\s*){1,3}(?:\d{1,4}\s*)?$", "", title,
+        r",\s+[A-Z][a-z]+\.?\s+\d{1,4}\s*[,:]\s*\d+.*$", "", title,
     )
     # Strip trailing conference info after ". In: YYYY..." or ". In YYYY..."
     title = re.sub(r"\.\s+In[:\s]+\d{4}\b.*$", "", title)
