@@ -47,7 +47,7 @@ form possible:
 | Document images  | `corpus/images/{doc_id}/`             | (none)                         |
 | Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
 | Embeddings       | `corpus/vectors.npz` (numpy)          | vector search results          |
-| Knowledge graph  | `corpus/graph.json`                   | sampling decisions, author queries |
+| Knowledge graph  | `corpus/knowledge_graph.json`         | sampling decisions, author queries |
 | **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
 | Wiki graph       | `wiki/_graph.json`                    | metrics                        |
 | Runs / telemetry | `runs/{run_id}/...`                   | reports                        |
@@ -84,8 +84,11 @@ These are the contracts. Everything else is implementation.
     `_populate_doc_edges` after embedding (see Pipeline order below)
 - `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`,
   `section_type`, `equation_ids`. The `equation_ids` field lists every
-  equation whose source `char_offset` falls inside the chunk's
-  `char_span`; the chunker binds them after extraction.
+  equation bound to this chunk. Binding method depends on the parser:
+  default parser uses `char_offset` / `char_span` overlap; docling
+  HybridChunker uses whitespace-normalized text containment
+  (`use_text_match=True`) because its char_spans don't match
+  markdown offsets.
   Embedding lives in the vector store, keyed by `chunk.id`.
 - `KnowledgeGraph` (in `citestore/graph.py`) -- typed property graph
   (`nx.MultiDiGraph`) with Paper, Author, Chunk, Figure, and Equation
@@ -154,15 +157,15 @@ because the corpus graph depends on populated doc-level edges:
    GPU-accelerated via DirectML/CUDA when available (auto-detected).
 4. **`_populate_doc_edges`** — fills `Document.cites`,
    `Document.similar_to`, `Document.cites_same`. Must run BEFORE the
-   corpus graph builder, otherwise the saved `graph.json` has empty
+   corpus graph builder, otherwise the saved `knowledge_graph.json` has empty
    citation edges (long-standing bug, fixed in this pass).
 5. **`build_knowledge_graph`** — builds the unified `KnowledgeGraph`
    (Paper + Author + Chunk + Figure + Equation nodes, citation +
    authorship + collaboration + figure-near-chunk + equation-in-chunk
-   edges), computes PageRank, and writes `graph.json`. Citation
+   edges), computes PageRank, and writes `knowledge_graph.json`. Citation
    ordinals are stored one-based (`ord_refs[cit.ord + 1]`) to match
    `[N]` markers in text.
-6. **Topics, image index, equations index, library.bib**.
+6. **Topics, image index, equations index, bibliography**.
 7. **Re-save documents** with fully-populated edges + figure metadata.
 
 ## People and articles are separate kinds
@@ -416,10 +419,12 @@ export WIKIFY_DISPATCH_DIR=data/dispatch   # default
 | `docs/{doc_id}.json` | Document record (sections, images, citations, equations) |
 | `images/{doc_slug}/` | Binary figures (caption-only by default) |
 | `vectors.npz` + `.ids.json` + `.meta.json` | Chunk embeddings |
-| `graph.json` | Knowledge graph (Paper + Author + Chunk + Figure + Equation nodes) |
+| `knowledge_graph.json` | Knowledge graph (Paper + Author + Chunk + Figure + Equation nodes) |
 | `topics.json` | Topic vocabulary |
 | `equations.json` | Corpus-wide equation index (deduplicated by normalized LaTeX) |
-| `library.bib` | BibTeX export |
+| `corpus_papers.bib` | BibTeX for corpus source papers |
+| `cited_works.bib` | BibTeX for referenced works |
+| `citations.json` | Structured citation index |
 
 ### CLI workflows
 
