@@ -52,12 +52,29 @@ def _hash_embed(texts: Sequence[str], dim: int = HASH_DIM) -> np.ndarray:
     return out / safe[:, None]
 
 
+def _onnx_providers() -> list[str] | None:
+    """Return GPU-accelerated ONNX providers if available, else None (default)."""
+    try:
+        import onnxruntime as ort
+
+        available = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if "DmlExecutionProvider" in available:
+            return ["DmlExecutionProvider", "CPUExecutionProvider"]
+    except ImportError:
+        pass
+    return None
+
+
 def _load_fe(model: str | None) -> None:
     """Lazy-load the fastembed TextEmbedding model.
 
     Cached as a module-level handle so repeated calls within a process
     don't re-initialise. The first call downloads the ONNX model into
     fastembed's cache directory; subsequent calls are instant.
+
+    Automatically uses GPU (CUDA or DirectML) when available.
     """
     global _fe_model, _fe_model_id
     name = model or FE_MODEL_DEFAULT
@@ -65,7 +82,11 @@ def _load_fe(model: str | None) -> None:
         return
     from fastembed import TextEmbedding
 
-    _fe_model = TextEmbedding(model_name=name)
+    providers = _onnx_providers()
+    kwargs: dict = {"model_name": name}
+    if providers:
+        kwargs["providers"] = providers
+    _fe_model = TextEmbedding(**kwargs)
     _fe_model_id = name
 
 

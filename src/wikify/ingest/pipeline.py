@@ -1133,7 +1133,7 @@ def _refresh_cite_heuristics(ctx: dict) -> None:
 
 def _refresh_bibliography(ctx: dict) -> None:
     # DOI enrichment for source papers always runs (free, no API key).
-    # OpenAlex is the optional step gated by --resolve-bibliography-doi.
+    # OpenAlex is the optional step gated by --openalex.
     resolve_doi = True
     write_corpus_bibliography(
         ctx["paths"],
