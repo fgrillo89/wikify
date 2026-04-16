@@ -49,7 +49,7 @@ class DoclingOptions:
     | formulas        | ON       | +10-20s/paper (granite-docling-258M) |
     | formula_model   | granite  | granite=258M (fast), v2=larger (slow)|
     | ocr             | off      | +5-150s/paper (depends on page count)|
-    | images_scale    | 1.0      | 2.0 doubles image resolution         |
+    | images_scale    | 3.0      | native-like resolution (~216 DPI)     |
     | pic_classify    | off      | minor overhead                       |
     | pic_describe    | off      | +5-10s/paper (SmolVLM captioning)    |
     +-----------------+----------+--------------------------------------+
@@ -67,7 +67,7 @@ class DoclingOptions:
     pic_classify: bool = False
     pic_describe: bool = False
     vlm: bool = False
-    images_scale: float = 1.0
+    images_scale: float = 3.0
     # Batch sizes for GPU inference (ignored on CPU).
     layout_batch_size: int = 64
     ocr_batch_size: int = 64
@@ -82,7 +82,7 @@ class DoclingOptions:
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
-            images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "1.0")),
+            images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "3.0")),
         )
 
 
@@ -446,13 +446,24 @@ def _extract_metadata(doc, path: Path) -> dict:
     return metadata
 
 
+# Minimum pixel dimension for a real figure. Images smaller than this
+# in both width and height are logos, decorative elements, or equation
+# glyphs and are dropped at extraction time (zero-cost filter).
+_MIN_IMAGE_DIM = 150
+
+
 def _extract_images(doc) -> list[RawImage]:
     """Extract images from DoclingDocument.
 
     Requires ``generate_picture_images=True`` in pipeline options so
     Docling renders each PictureItem's bounding-box crop into an
     ``ImageRef`` with a PIL image or URI.
+
+    Images smaller than ``_MIN_IMAGE_DIM`` in both dimensions are
+    dropped as logos or decorative elements.
     """
+    import io as _io
+
     images: list[RawImage] = []
     try:
         from docling.datamodel.document import PictureItem
@@ -472,6 +483,17 @@ def _extract_images(doc) -> list[RawImage]:
             data = _image_bytes_from_item(item)
             if data is None:
                 continue
+
+            # Drop tiny images (logos, decorative elements).
+            try:
+                from PIL import Image as PilImage  # noqa: N813
+
+                pil = PilImage.open(_io.BytesIO(data))
+                w, h = pil.size
+                if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
+                    continue
+            except Exception:
+                pass
 
             content_hash = hashlib.sha1(data).hexdigest()[:12]
             images.append(
