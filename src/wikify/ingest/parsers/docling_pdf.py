@@ -44,9 +44,11 @@ class DoclingOptions:
 
     hybrid_chunks: bool = True
     formulas: bool = False
+    ocr: bool = False
     pic_classify: bool = False
     pic_describe: bool = False
     vlm: bool = False
+    images_scale: float = 1.0
     # Batch sizes for GPU inference (ignored on CPU).
     layout_batch_size: int = 64
     ocr_batch_size: int = 64
@@ -56,9 +58,11 @@ class DoclingOptions:
         """Build options from DOCLING_* environment variables."""
         return cls(
             formulas=os.environ.get("DOCLING_FORMULAS", "") == "1",
+            ocr=os.environ.get("DOCLING_OCR", "") == "1",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
+            images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "1.0")),
         )
 
 
@@ -119,6 +123,22 @@ def _disable_torch_compile_on_windows() -> None:
         pass
 
 
+_CACHED_CONVERTER = None
+_CACHED_OPTS_KEY = None
+
+
+def _get_converter(opts: DoclingOptions):
+    """Return a cached converter, rebuilding only if options changed."""
+    global _CACHED_CONVERTER, _CACHED_OPTS_KEY
+    key = (opts.formulas, opts.ocr, opts.pic_classify, opts.pic_describe,
+           opts.vlm, opts.images_scale, opts.layout_batch_size,
+           opts.ocr_batch_size)
+    if _CACHED_CONVERTER is None or _CACHED_OPTS_KEY != key:
+        _CACHED_CONVERTER = _build_converter(opts)
+        _CACHED_OPTS_KEY = key
+    return _CACHED_CONVERTER
+
+
 def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
@@ -126,7 +146,7 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     opts = DoclingOptions.from_env()
     opts.hybrid_chunks = hybrid_chunks
 
-    converter = _build_converter(opts)
+    converter = _get_converter(opts)
 
     result = converter.convert(str(path.resolve()))
     doc = result.document
@@ -208,7 +228,8 @@ def _make_standard_options(accel, opts: DoclingOptions):
     kwargs: dict = {
         "accelerator_options": accel,
         "generate_picture_images": True,
-        "images_scale": 2.0,
+        "images_scale": opts.images_scale,
+        "do_ocr": opts.ocr,
         "do_formula_enrichment": opts.formulas,
         "do_picture_classification": opts.pic_classify,
         "do_picture_description": opts.pic_describe,
@@ -273,6 +294,18 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
+def _is_likely_noise_title(title: str) -> bool:
+    """True if title looks like a section header, not a paper title."""
+    from wikify.ingest.metadata import _is_heading_noise
+
+    if _is_heading_noise(title):
+        return True
+    # Numbered section headers (e.g. "1. Introduction")
+    if re.match(r"^\d+\.\s", title):
+        return True
+    return False
+
+
 def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     """Minimal cleanup -- Docling output is already cleaner than pymupdf."""
     if not md:
@@ -315,6 +348,11 @@ def _extract_metadata(doc, path: Path) -> dict:
     if not title:
         title = fn_title or path.stem
     title = clean_markdown(title)
+
+    # Prefer filename-derived title when docling extraction looks wrong
+    # (section headers, journal names, numbered headings).
+    if fn_title and _is_likely_noise_title(title):
+        title = fn_title
 
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     if not authors and fn_author:

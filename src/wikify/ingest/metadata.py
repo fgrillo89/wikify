@@ -501,7 +501,7 @@ def _is_valid_venue(candidate: str) -> bool:
 
 def _is_heading_noise(heading: str) -> bool:
     lower = heading.casefold()
-    return lower in {
+    if lower in {
         "articles you may be interested in",
         "letters",
         "paper",
@@ -515,7 +515,27 @@ def _is_heading_noise(heading: str) -> bool:
         "abstract",
         "article",
         "check for updates",
-    }
+        "rapid communications",
+        "topical review",
+        "introduction",
+        "original article",
+        "research article",
+        "communication",
+        "full paper",
+        "you may also like",
+        "conflicts of interest",
+        "acknowledgements",
+        "acknowledgments",
+        "supplementary information",
+        "supporting information",
+        "author information",
+        "data availability",
+    }:
+        return True
+    # Numbered section headers (e.g. "1. Introduction")
+    if re.match(r"^\d+\.\s", heading):
+        return True
+    return False
 
 _AUTHOR_NOISE = {
     "ieee",
