@@ -230,6 +230,60 @@ class TestEquationBinding:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Author name cleaning
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorCleaning:
+    """Author names should be clean and properly capitalized."""
+
+    def test_affiliation_symbols_stripped(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("Hongyu An \u0b35") == "Hongyu An"
+
+    def test_asterisk_stripped(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("Yang Yi*") == "Yang Yi"
+
+    def test_all_caps_fixed(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("YANG YI") == "Yang Yi"
+
+    def test_all_lowercase_fixed(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("yang yi") == "Yang Yi"
+
+    def test_mixed_case_preserved(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("McMaster") == "McMaster"
+
+    def test_hyphenated_name(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("JEAN-PIERRE DUPONT") == "Jean-Pierre Dupont"
+
+    def test_normal_name_unchanged(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("Dmitri B. Strukov") == "Dmitri B. Strukov"
+
+    def test_private_use_area_stripped(self):
+        from wikify.ingest.bibtex import _clean_author_name
+
+        assert _clean_author_name("Name \ue9d9") == "Name"
+
+
+# ---------------------------------------------------------------------------
+# Integration: _reference_entry_from_citation
+# ---------------------------------------------------------------------------
+
+
 class TestReferenceEntry:
     """End-to-end: raw citation -> BibTeX entry should be clean."""
 

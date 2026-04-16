@@ -87,6 +87,40 @@ def _clean_title(value: str) -> str:
     return text.strip()
 
 
+# Unicode ranges for affiliation/footnote symbols that appear next to
+# author names in PDFs (Oriya digits, asterisks, private-use glyphs).
+_AFFILIATION_RE = re.compile(
+    r"[\u0B00-\u0B7F"  # Oriya script (used as superscript markers)
+    r"\u204E"           # ⁎ low asterisk
+    r"\u2020-\u2021"    # † ‡ daggers
+    r"\u00B9\u00B2\u00B3"  # ¹ ² ³ superscript digits
+    r"\u2070-\u209F"    # superscript/subscript block
+    r"\uE000-\uF8FF"   # private use area (font-specific symbols)
+    r"\*]+"
+)
+
+
+def _clean_author_name(name: str) -> str:
+    """Normalize an author name: strip affiliation symbols, fix casing."""
+    # Strip affiliation/footnote markers
+    name = _AFFILIATION_RE.sub("", name).strip()
+    # Title-case each part: "YANG" -> "Yang", "yang" -> "Yang"
+    parts = name.split()
+    cleaned = []
+    for part in parts:
+        # Preserve hyphenated names: "Jean-Pierre" -> "Jean-Pierre"
+        if "-" in part:
+            part = "-".join(
+                w.capitalize() if w.isupper() or w.islower() else w
+                for w in part.split("-")
+            )
+        elif part.isupper() or part.islower():
+            part = part.capitalize()
+        # Preserve mixed case like "McMaster" or "deGroot"
+        cleaned.append(part)
+    return " ".join(cleaned)
+
+
 def _clean_venue(value: str) -> str:
     text = _as_text(value)
     return re.sub(r"\s+", " ", text).strip()
@@ -136,7 +170,10 @@ def _is_plausible_author(name: str) -> bool:
 
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
-    authors_list = [a for a in _as_list(metadata.get("authors")) if _is_plausible_author(a)]
+    authors_list = [
+        _clean_author_name(a) for a in _as_list(metadata.get("authors"))
+        if _is_plausible_author(a)
+    ]
     title = _clean_bib_title(_clean_title(_as_text(doc.title)))
     # If title is garbage, recover from doc.id
     if _title_needs_fallback(title):
@@ -352,6 +389,7 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
 
     doi = _clean_doi(d.get("doi"))
 
+    authors = [_clean_author_name(a) for a in authors]
     first_author = authors[0].split()[-1] if authors else "unknown"
     base = _sanitize_id(f"ref_{year}_{first_author}_{title[:30]}")
 
