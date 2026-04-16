@@ -761,7 +761,7 @@ def query(
     """Ask a question against a wiki bundle; write the answer to data/queries/."""
     from .dispatch import Dispatch
     from .distill.query import run as query_run
-    from .embedding import embed_texts
+    from .embedding import embed_queries
 
 
     bundle = BundlePaths(root=bundle_dir)
@@ -778,7 +778,9 @@ def query(
         corpus=corpus,
         question=question,
         querier=querier,
-        embed=embed_texts,
+        # User question is a query — encode with query_prefix so it sits
+        # in the right subspace against passage-indexed wiki pages.
+        embed=embed_queries,
         model_id=model,
         tier=ModelTier.MEDIUM,
         save_log=save_log,

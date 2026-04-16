@@ -1093,7 +1093,7 @@ def _format_figure_key(kind: str, num: int, sub: str) -> str:
 
 def _rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
     """Build and persist the wiki knowledge graph + page vectors."""
-    from ..embedding import embed_texts
+    from ..embedding import current_backend, embed_passages, embedder_for
     from ..store.vectors import save_vectors
     from ..store.wiki_graph import (
         build_wiki_graph,
@@ -1101,8 +1101,14 @@ def _rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
         save_wiki_graph,
     )
 
-    wiki_vectors = build_wiki_vectors(pages, embed_texts)
-    wkg = build_wiki_graph(pages, vectors=wiki_vectors, embed_fn=embed_texts)
+    # Build uses passage embedding (indexing wiki page bodies); the graph
+    # stores a query-mode callable because search() encodes user queries.
+    wiki_vectors = build_wiki_vectors(pages, embed_passages)
+    backend = current_backend()
+    query_embed = embedder_for(
+        str(backend["backend"]), backend.get("model"), mode="query",
+    )
+    wkg = build_wiki_graph(pages, vectors=wiki_vectors, embed_fn=query_embed)
     save_wiki_graph(bundle.graph_path, wkg)
     if wiki_vectors.ids:
         save_vectors(bundle.wiki_vectors_path, wiki_vectors)
