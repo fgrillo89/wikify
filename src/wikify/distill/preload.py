@@ -53,7 +53,11 @@ def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
     from ..store.vectors_meta import read_meta
 
     vmeta = read_meta(corpus.vectors_path)
-    embed_fn = embedder_for(vmeta.backend, vmeta.model) if vmeta else None
+    # KG search uses query-mode embedding so task prefixes match how the
+    # user's question should be encoded against passage-embedded chunks.
+    embed_fn = (
+        embedder_for(vmeta.backend, vmeta.model, mode="query") if vmeta else None
+    )
     knowledge_graph = read_knowledge_graph(corpus, vectors=vectors, embed_fn=embed_fn)
     citation_index = load_citation_index(corpus)
     persona_text = ""

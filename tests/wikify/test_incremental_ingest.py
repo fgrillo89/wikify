@@ -285,14 +285,14 @@ def test_vector_reuse_on_incremental(sources_dir, corpus_dir):
 
     embed_call_texts: list[list[str]] = []
     real_embed = __import__(
-        "wikify.ingest.pipeline", fromlist=["embed_texts"]
-    ).embed_texts
+        "wikify.ingest.pipeline", fromlist=["embed_passages"]
+    ).embed_passages
 
     def tracking_embed(texts):
         embed_call_texts.append(list(texts))
         return real_embed(texts)
 
-    with patch("wikify.ingest.pipeline.embed_texts", side_effect=tracking_embed):
+    with patch("wikify.ingest.pipeline.embed_passages", side_effect=tracking_embed):
         paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
     # Alpha's chunk ids should NOT have been re-embedded
@@ -334,8 +334,8 @@ def test_embedder_change_reembeds_all(sources_dir, corpus_dir):
 
     embed_call_count = [0]
     real_embed = __import__(
-        "wikify.ingest.pipeline", fromlist=["embed_texts"]
-    ).embed_texts
+        "wikify.ingest.pipeline", fromlist=["embed_passages"]
+    ).embed_passages
 
     def counting_embed(texts):
         embed_call_count[0] += len(texts)
@@ -345,7 +345,7 @@ def test_embedder_change_reembeds_all(sources_dir, corpus_dir):
     _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
 
     with patch(
-        "wikify.ingest.pipeline.embed_texts",
+        "wikify.ingest.pipeline.embed_passages",
         side_effect=counting_embed,
     ):
         paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
