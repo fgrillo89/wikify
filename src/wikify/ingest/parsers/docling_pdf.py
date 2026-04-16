@@ -173,7 +173,10 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
 
     md_text = doc.export_to_markdown()
     md_text = _light_clean(md_text, formulas_enabled=opts.formulas)
-    md_text = _bracketize_refs(md_text)
+
+    # Count bibliography entries for bracketize_refs range validation.
+    ref_count = _count_list_items(doc)
+    md_text = _bracketize_refs(md_text, ref_count=ref_count)
 
     metadata = _extract_metadata(doc, path)
     images = _extract_images(doc)
@@ -261,12 +264,12 @@ def _make_standard_options(accel, opts: DoclingOptions):
             from docling.datamodel.pipeline_options import (
                 CodeFormulaVlmOptions,
             )
-
+        except ImportError:
+            pass  # docling version without formula support
+        else:
             kwargs["code_formula_options"] = (
                 CodeFormulaVlmOptions.from_preset(opts.formula_model)
             )
-        except (ImportError, Exception):
-            pass  # fall back to default model
 
     if _has_cuda():
         kwargs["layout_batch_size"] = opts.layout_batch_size
@@ -327,6 +330,16 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
+def _count_list_items(doc) -> int:
+    """Count ListItem elements in the DoclingDocument (bibliography entries)."""
+    try:
+        from docling.datamodel.document import ListItem
+
+        return sum(1 for item, _ in doc.iterate_items() if isinstance(item, ListItem))
+    except Exception:
+        return 0
+
+
 def _is_likely_noise_title(title: str) -> bool:
     """True if title looks like a section header, not a paper title."""
     from wikify.ingest.metadata import _is_heading_noise
@@ -339,41 +352,71 @@ def _is_likely_noise_title(title: str) -> bool:
     return False
 
 
-def _bracketize_refs(md: str) -> str:
+def _bracketize_refs(md: str, ref_count: int = 0) -> str:
     """Wrap bare inline reference numbers in [N] brackets.
 
     Docling strips bracket formatting from superscript citations,
     leaving bare ``20-22`` instead of ``[20-22]``. This post-processor
     restores brackets so the citation ordinal resolver can match them.
 
-    Only wraps numbers that:
-    - Follow a word character (not math symbols)
-    - Are in a plausible citation range (1-999)
-    - Appear as comma/hyphen-separated groups (``1,2``, ``20-22``)
-    - Are followed by sentence-ending punctuation or whitespace
+    Conservative heuristics to avoid corrupting normal numbers:
+    - Only runs when the document has a detectable references section
+      (``ref_count > 0``), so we know what range is valid
+    - Numbers must be in [1, ref_count] range
+    - Must appear as comma/hyphen-separated groups immediately before
+      sentence-ending punctuation (``.``, ``,``, ``;``)
+    - Must NOT be followed by a unit (nm, K, V, mA, etc.)
+    - Must NOT be preceded by common measurement words
     """
-    if not md:
+    if not md or ref_count < 2:
         return md
-    # Match: word-boundary, space, then bare ref group, then punctuation.
-    # Negative lookbehind excludes math contexts (=, <, >, +, /, ^, _).
-    # Negative lookahead excludes already-bracketed refs.
+
+    # Common unit suffixes that follow numbers (not citations).
+    units = frozenset({
+        "nm", "um", "mm", "cm", "m", "km",
+        "mv", "kv", "ma", "ka", "mhz", "ghz", "thz",
+        "ev", "mev", "kev",
+        "k", "c", "v", "a", "w", "s", "ms", "ns", "ps",
+        "hz", "ohm", "db",
+        "at", "wt", "mol", "torr", "pa", "mpa", "gpa",
+        "min", "max",
+    })
+    # Words before a number that indicate a measurement, not a citation.
+    meas_words = frozenset({
+        "is", "was", "are", "of", "about", "approximately", "nearly",
+        "over", "under", "than", "to", "from", "between", "at",
+        "x", "by", "or", "and", "only",
+    })
+
     ref_re = re.compile(
-        r"(?<=[a-zA-Z)]) (\d{1,3}(?:[,\u2013-]\d{1,3})*)(?=[.,;: )\n])"
+        r"(?P<pre>\w+) (?P<nums>\d{1,3}(?:[,\u2013-]\d{1,3})*)(?P<post>[.,;) ])"
     )
 
     def _replace(m: re.Match) -> str:
-        nums_str = m.group(1)
-        # Parse the individual numbers to validate range
+        pre_word = m.group("pre").lower()
+        nums_str = m.group("nums")
+        post = m.group("post")
+
+        # Skip if preceded by a measurement word
+        if pre_word in meas_words:
+            return m.group(0)
+
+        # Parse numbers and validate range
         parts = re.split(r"[,\u2013-]", nums_str)
         try:
             nums = [int(p.strip()) for p in parts if p.strip()]
         except ValueError:
             return m.group(0)
-        # All numbers must be in citation range (1-999) and at least
-        # one must be > 1 to avoid wrapping "word 1." patterns
-        if not nums or max(nums) < 2 or any(n > 999 for n in nums):
+        if not nums or any(n < 1 or n > ref_count for n in nums):
             return m.group(0)
-        return f" [{nums_str}]"
+
+        # Check what follows: if it's a unit, this is a measurement
+        rest_after = md[m.end():]
+        next_word_match = re.match(r"\s*([a-zA-Z]+)", rest_after)
+        if next_word_match and next_word_match.group(1).lower() in units:
+            return m.group(0)
+
+        return f"{m.group('pre')} [{nums_str}]{post}"
 
     return ref_re.sub(_replace, md)
 

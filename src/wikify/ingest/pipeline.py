@@ -151,7 +151,8 @@ def _parse_and_persist_worker(
 
     # Chunks
     docling_chunks = parsed.metadata.pop("_docling_chunks", None)
-    if docling_chunks:
+    is_docling = docling_chunks is not None
+    if is_docling:
         chunks = _chunks_from_docling(did, docling_chunks)
     else:
         chunks = chunk_document(did, parsed.markdown, parsed.sections)
@@ -160,7 +161,7 @@ def _parse_and_persist_worker(
     # Equations + figure refs
     equations = extract_equations(parsed.markdown)
     figure_refs = extract_figure_refs(parsed.markdown)
-    bind_equations_to_chunks(chunks, equations)
+    bind_equations_to_chunks(chunks, equations, use_text_match=is_docling)
 
     # Citations + image linking + sections
     citations = extract_citations(parsed.markdown, did)
@@ -237,21 +238,49 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
     return chunks
 
 
-def bind_equations_to_chunks(chunks: list[Chunk], equations: list[dict]) -> None:
-    """Attach equation ids to the chunks whose char_span contains them."""
+def bind_equations_to_chunks(
+    chunks: list[Chunk],
+    equations: list[dict],
+    *,
+    use_text_match: bool = False,
+) -> None:
+    """Attach equation ids to the chunks whose char_span contains them.
+
+    When ``use_text_match=True`` (docling HybridChunker path), falls back
+    to substring matching of the equation's latex/context in chunk text,
+    because HybridChunker char_spans don't correspond to the markdown
+    coordinate system used by equation char_offsets.
+    """
     if not equations:
         return
     body_chunks = [c for c in chunks if not (c.section_path and c.section_path[0] == "__image__")]
-    body_chunks.sort(key=lambda c: c.char_span[0])
     if not body_chunks:
         return
-    for eq in equations:
-        offset = int(eq.get("char_offset") or 0)
-        for c in body_chunks:
-            start, end = c.char_span
-            if start <= offset < end:
-                c.equation_ids.append(eq["id"])
-                break
+
+    if use_text_match:
+        # Docling path: bind by text containment
+        for eq in equations:
+            latex = eq.get("latex", "")
+            context = eq.get("context", "")
+            # Try matching latex or a distinctive fragment of context
+            needle = latex if len(latex) >= 5 else context[:40]
+            if not needle:
+                continue
+            needle_lower = needle.lower()
+            for c in body_chunks:
+                if needle_lower in c.text.lower():
+                    c.equation_ids.append(eq["id"])
+                    break
+    else:
+        # Default path: bind by char_span overlap
+        body_chunks.sort(key=lambda c: c.char_span[0])
+        for eq in equations:
+            offset = int(eq.get("char_offset") or 0)
+            for c in body_chunks:
+                start, end = c.char_span
+                if start <= offset < end:
+                    c.equation_ids.append(eq["id"])
+                    break
 
 
 def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
