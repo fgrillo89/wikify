@@ -193,12 +193,14 @@ def build_knowledge_graph(
             eq_id = eq.get("id", "")
             if not eq_id:
                 continue
+            eq_type = eq.get("type", "")
             g.add_node(eq_id, **{
                 "type": EQUATION,
                 "source_id": doc.id,
                 "latex": eq.get("latex", ""),
                 "label": eq.get("label", ""),
-                "kind": eq.get("type", ""),
+                "kind": eq_type,
+                "is_chemical": eq_type == "chemical",
             })
             g.add_edge(doc.id, eq_id, kind="CONTAINS_EQUATION")
 
