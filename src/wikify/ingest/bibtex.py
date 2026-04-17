@@ -986,17 +986,71 @@ def _merge_external_metadata(
     *,
     prefer_authors: bool,
 ) -> None:
+    """Merge DOI-content-negotiation data over locally extracted metadata.
+
+    DOI content negotiation (via doi.org, not OpenAlex) returns canonical
+    BibTeX from the publisher's registration agent — it is the authoritative
+    source for bibliographic fields when a DOI is available. We therefore
+    prefer DOI values for title (if local is empty or junk), for the
+    publication-identity fields (journal/venue/volume/pages/publisher/
+    issn/url), and for authors when ``prefer_authors`` is set.
+
+    The one field we keep local over DOI when both exist is ``summary`` —
+    DOI metadata sometimes has a truncated or publisher-marketing summary
+    while our parsed abstract is the real thing.
+    """
+    from .metadata import is_junk_title
+
+    # Fields for which DOI is authoritative: overwrite junk or empty local
+    # values with the DOI value. Title uses is_junk_title to detect "Word
+    # Document", section-header placeholders, etc.
+    _DOI_AUTHORITATIVE_NONTITLE = (
+        "journal", "venue", "volume", "pages", "publisher", "issn", "url",
+    )
+
     for key, value in external.items():
         if not value:
             continue
-        if key == "authors" and prefer_authors:
+        if key == "authors":
+            if prefer_authors:
+                metadata[key] = value
+            elif not metadata.get(key):
+                metadata[key] = value
+            continue
+        if key == "title":
+            local = _as_text(metadata.get("title"))
+            if not local or is_junk_title(local):
+                metadata[key] = value
+            continue
+        if key in _DOI_AUTHORITATIVE_NONTITLE:
+            local = _as_text(metadata.get(key))
+            if not local or _value_is_junk(local):
+                metadata[key] = value
+            continue
+        # For everything else (summary, year, etc.), keep local when present.
+        if not metadata.get(key):
             metadata[key] = value
-        elif key == "title" and not metadata.get("title"):
-            metadata[key] = value
-        elif not metadata.get(key):
-            metadata[key] = value
-        else:
-            metadata.setdefault(key, value)
+
+
+# Local values we treat as junk for DOI-authoritative fields. Matches the
+# ISSN header lines, copyright tails, and markdown formatting noise we saw
+# leaking from Marker-parsed mastheads into venue/journal fields.
+_JUNK_VALUE_RE = re.compile(
+    r"^\*\*|ISSN[:\s]|©\s*\d{4}|all\s+rights\s+reserved",
+    re.IGNORECASE,
+)
+
+
+def _value_is_junk(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return True
+    if _JUNK_VALUE_RE.search(stripped):
+        return True
+    # Volume/pages fields that are just placeholders ("xxx", "n/a", "-").
+    if stripped.lower() in {"xxx", "n/a", "na", "-", "—", "tbd", "in press"}:
+        return True
+    return False
 
 
 def _read_doc_markdown(corpus: CorpusPaths, doc: Document) -> str:

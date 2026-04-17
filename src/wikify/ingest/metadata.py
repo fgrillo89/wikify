@@ -213,8 +213,32 @@ def extract_doi(text: str) -> str | None:
     m = re.search(r"(10\.\d{4,}/[^\s<>\]]+)", text)
     if m:
         doi = re.split(r"[?#&\]]", m.group(1), maxsplit=1)[0]
-        return doi.rstrip(".,;)]}>")
+        doi = doi.rstrip(".,;)]}>")
+        return _normalise_doi_path(doi)
     return None
+
+
+# Supplementary / supporting / publisher-variant DOI suffixes. A publisher
+# often exposes the supplemental-info file under the DOI path; the registered
+# DOI is the prefix. Truncate so DOI negotiation hits the real record.
+_DOI_SUFFIX_TRIM = re.compile(
+    r"/(?:suppl_file|supplementary|supplemental|supporting|"
+    r"suppdata|appendix|pdf|fulltext)(?:/.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _normalise_doi_path(doi: str) -> str:
+    """Strip known publisher-variant tails that don't belong in a DOI.
+
+    Examples:
+        ``10.1021/acsami.4c11743/suppl_file/...`` → ``10.1021/acsami.4c11743``
+        ``10.1038/s41467-023-39033-z.pdf`` → ``10.1038/s41467-023-39033-z``
+    """
+    trimmed = _DOI_SUFFIX_TRIM.sub("", doi)
+    # Also strip trailing file extensions that sometimes follow a valid DOI.
+    trimmed = re.sub(r"\.(?:pdf|html?|xml)$", "", trimmed, flags=re.IGNORECASE)
+    return trimmed.rstrip(".,;)]}>")
 
 
 def extract_document_doi(md_text: str) -> str | None:
