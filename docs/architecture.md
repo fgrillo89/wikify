@@ -412,32 +412,45 @@ export WIKIFY_DISPATCH_DIR=data/dispatch   # default
 
 ### Embedder selection
 
-Default is `jinaai/jina-embeddings-v2-small-en` (512-d, 8192-tok, 33M
-params, MTEB ~47). The 8192-tok window is what makes Phase 2 section-level
-chunking actually activate — on shorter-context models the chunker falls
-back to paragraph splitting with overlap. Swap via env var; re-ingest is
-automatic because `vectors.meta.json` fingerprints the model.
+Default is `jinaai/jina-embeddings-v2-small-en` (512-d, 33M params, MTEB ~47).
+The native context window is 8192 tokens but `ModelConfig.max_tokens` is
+capped at 2048 on DirectML because the O(n²) attention activations at
+8k × even modest batch exhaust 8 GB VRAM (the whole point of the cap was
+eliminating OOM on commodity laptop GPUs). Section-level chunking still
+activates — typical section chunks fit well under 2k tokens — but truly
+long sections are split by the embedder's own tokenizer (see below).
+Swap via env var; re-ingest is automatic because `vectors.meta.json`
+fingerprints the model.
 
 ```bash
-# Fast (~5x) but short context (512 tok) — chunker paragraph-splits.
+# Fast (~20x) but short context (512 tok) — chunker paragraph-splits.
 export WIKIFY_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
 
 # Same 512-tok ceiling, higher MTEB than MiniLM.
 export WIKIFY_EMBED_MODEL=BAAI/bge-small-en-v1.5
 
-# Highest MTEB (~49) in this set. ~8x slower than MiniLM.
+# Highest MTEB (~62) in this set; long-context but slower.
 export WIKIFY_EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5-Q
 
-# Override per-model default batch_size (see _MODEL_CONFIGS in embedding.py)
+# Override per-model default batch_size (see _MODEL_CONFIGS in embedding.py).
+# DirectML-friendly defaults: jina=8, nomic=32, MiniLM/bge=256.
 export WIKIFY_EMBED_BATCH_SIZE=32
 ```
 
-Benchmark on mvp20 (886 chunks, DirectML RTX 3070 Laptop):
-| model | rate | slowdown | section-as-chunk? |
-|---|---|---|---|
-| MiniLM-L6 | 175 chunks/s | 1x | no (paragraph-split) |
-| **jina-v2-small (default)** | **33 chunks/s** | **~5x** | **yes** |
-| nomic-Q | 23 chunks/s | ~8x | yes |
+**Split-and-mean-pool guard**. `embedding._fe_embed_with` enforces
+`max_tokens` by tokenizing each input with fastembed's internal
+tokenizer and splitting any oversize text into consecutive token-windows
+of size `max_tokens - 2` (CLS/SEP headroom). Piece embeddings are
+mean-pooled and re-normalised before return. Fallback path when the
+tokenizer isn't accessible uses `char_cap = max_tokens * 1.0` — tokens
+≤ chars always, so correctness is preserved at a small efficiency cost.
+
+Benchmark on ald_all_marker (4985 chunks, DirectML RTX 3070 Laptop):
+| model | per-model batch | behaviour on 8 GB DML |
+|---|---|---|
+| MiniLM-L6 | 256 | fastest, paragraph-split only |
+| **jina-v2-small (default)** | **8** | section-level, token-split for oversize |
+| nomic-v1.5-Q | 32 | quantized weights, 2× slower than MiniLM |
 
 ### What ingest produces
 
@@ -454,6 +467,45 @@ Benchmark on mvp20 (886 chunks, DirectML RTX 3070 Laptop):
 | `corpus_papers.bib` | BibTeX for corpus source papers |
 | `cited_works.bib` | BibTeX for referenced works |
 | `citations.json` | Structured citation index |
+| `.citestore.db` | SQLite DOI-metadata cache (persistent across refreshes) |
+
+### DOI resolution
+
+Single entry point: `wikify.util.doi_resolver.resolve_many(dois, cache_path=...)`.
+Every DOI lookup in the pipeline goes through this function — both the
+corpus-paper enrichment (wave D in `refresh`) and the reference-citation
+enrichment (wave B). Do not add a fourth path; extend this one.
+
+Strategy:
+1. `DOICache` lookup at `<corpus>/.citestore.db`. Negative-result rows
+   count as cache hits for 14 days (`DOICache.NEGATIVE_TTL_DAYS`) so
+   failed resolutions don't re-hit the network every refresh; after the
+   TTL they become misses again so newly-registered DOIs get picked up.
+2. For uncached DOIs: CrossRef batch (`/works?filter=doi:A,B,...`,
+   75 DOIs/call, structured JSON output). Rate-limited via
+   `wikify.util.async_limits.with_limiter` + `with_semaphore`.
+3. For DOIs CrossRef missed or returned incomplete records for
+   (title-only, no authors): doi.org content-negotiation fallback
+   (`Accept: application/x-bibtex`, one request per DOI). Covers
+   non-CrossRef registration agents (DataCite / mEDRA / JaLC).
+4. Persist all outcomes — including negatives tagged `source="not-found"` —
+   via `DOICache.put` (which uses `INSERT OR REPLACE`, so a later
+   successful resolution upgrades an earlier negative row).
+
+Async-limit decorators are shared via `wikify.util.async_limits`;
+`citestore/resolver.py` (OpenAlex) and `util/doi_resolver.py` both
+import from there.
+
+### Citation graph wiring
+
+Corpus papers and external cited works are both `source` nodes in the KG
+(kinds `"corpus"` and `"cited"`). `CITES` edges go **both** directions:
+corpus → corpus (when one ingested paper cites another) AND corpus → cited
+(when an ingested paper cites an external work the corpus doesn't hold).
+The latter is essential — without it, every external reference is an
+isolated node and citation reasoning in distill produces empty results.
+Edges are emitted from `Document.citations` during `build_knowledge_graph`,
+matched by bibkey via `citation_index.doc_bibkeys`.
 
 ### CLI workflows
 
