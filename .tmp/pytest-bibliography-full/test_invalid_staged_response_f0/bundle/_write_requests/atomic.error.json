@@ -1,9 +1,0 @@
-{
-  "error": "3 validation errors for WriteResponse\nused_markers\n  Field required [type=missing, input_value={'page_id': 'atomic.reque..._markdown': 'too short'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\ntokens_in\n  Field required [type=missing, input_value={'page_id': 'atomic.reque..._markdown': 'too short'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\ntokens_out\n  Field required [type=missing, input_value={'page_id': 'atomic.reque..._markdown': 'too short'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
-  "error_type": "ValidationError",
-  "schema": "WriteResponse",
-  "raw": {
-    "page_id": "atomic.request",
-    "body_markdown": "too short"
-  }
-}

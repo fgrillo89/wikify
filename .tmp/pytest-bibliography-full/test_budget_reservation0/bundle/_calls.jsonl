@@ -1,5 +1,0 @@
-{"role":"extractor","tier":"S","input_tokens":800,"output_tokens":830,"context_used":800,"context_cap":120000,"wall_seconds":0.0,"cache_hit":false,"prompt_hash":"a5c3612530c7c923","haiku_eq":5000.0}
-{"role":"extractor","tier":"S","input_tokens":800,"output_tokens":830,"context_used":800,"context_cap":120000,"wall_seconds":0.0,"cache_hit":false,"prompt_hash":"a5c3612530c7c923","haiku_eq":5000.0}
-{"role":"extractor","tier":"S","input_tokens":800,"output_tokens":830,"context_used":800,"context_cap":120000,"wall_seconds":0.0,"cache_hit":false,"prompt_hash":"a5c3612530c7c923","haiku_eq":5000.0}
-{"role":"extractor","tier":"S","input_tokens":800,"output_tokens":830,"context_used":800,"context_cap":120000,"wall_seconds":0.0,"cache_hit":false,"prompt_hash":"a5c3612530c7c923","haiku_eq":5000.0}
-{"role":"writer","tier":"M","input_tokens":1000,"output_tokens":1800,"context_used":1000,"context_cap":120000,"wall_seconds":0.0,"cache_hit":false,"prompt_hash":"4c193539b7af06f2","haiku_eq":30100.0}

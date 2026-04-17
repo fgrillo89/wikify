@@ -1,9 +1,0 @@
-{
-  "error": "2 validation errors for ExtractResponse\nchunk_id\n  Field required [type=missing, input_value={'tokens_in': 0, 'tokens_out': 0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nconcepts\n  Field required [type=missing, input_value={'tokens_in': 0, 'tokens_out': 0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
-  "error_type": "ValidationError",
-  "schema": "ExtractResponse",
-  "raw": {
-    "tokens_in": 0,
-    "tokens_out": 0
-  }
-}

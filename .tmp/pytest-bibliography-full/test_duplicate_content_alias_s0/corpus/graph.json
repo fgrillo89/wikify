@@ -1,1 +1,0 @@
-{"nodes": {"paper_ed30b1503cfd": {"kind": "doc", "title": "Paper"}, "paper_ed30b1503cfd__c0000__9d8f1f4a": {"kind": "chunk", "doc_id": "paper_ed30b1503cfd"}}, "edges": {"contains": [["paper_ed30b1503cfd", "paper_ed30b1503cfd__c0000__9d8f1f4a"]]}}

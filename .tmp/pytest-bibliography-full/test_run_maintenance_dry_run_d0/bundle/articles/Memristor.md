@@ -1,3 +1,0 @@
-# Memristor
-
-Body.
