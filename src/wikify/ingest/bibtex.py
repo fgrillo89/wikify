@@ -555,11 +555,23 @@ def build_citation_index(
     # individual requests. ~10x speed-up on corpora with many DOIs.
     batch_cache: dict[str, dict[str, object]] = {}
     if resolve_doi and doi_lookup is None:
-        prefetch_dois = []
+        # Prefetch DOIs from both explicit metadata AND the pymupdf fallback
+        # for PDF-kind docs lacking a DOI. Doing the fallback up-front here
+        # (instead of lazily inside _with_fallback_metadata) means every
+        # discovered DOI hits the async batch path, not the sync one-off.
+        from .metadata import extract_pdf_doi_fallback
+
+        prefetch_dois: list[str] = []
         for doc in docs:
             meta = doc.metadata or {}
             raw = meta.get("doi")
             doi = _clean_doi(raw) if raw else ""
+            if not doi and doc.source_path:
+                src = Path(doc.source_path)
+                if src.suffix.lower() == ".pdf":
+                    recovered = extract_pdf_doi_fallback(src)
+                    if recovered:
+                        doi = _clean_doi(recovered)
             if doi:
                 prefetch_dois.append(doi)
         db_path = corpus.root / ".citestore.db" if corpus.root else None
@@ -568,19 +580,25 @@ def build_citation_index(
                 prefetch_dois, cache_path=db_path,
             )
 
+        # Cache-miss fallback uses the sync single-DOI helper — spinning up
+        # a fresh asyncio event loop + httpx.AsyncClient for a single
+        # lookup costs ~250 ms (profiled: 50 misses ≈ 13 s init overhead).
         def _cached_lookup(doi: str) -> dict[str, object]:
             key = doi.lower()
             if key in batch_cache:
                 return batch_cache[key]
-            # DOI discovered at refresh time (e.g. via pymupdf fallback)
-            # that wasn't in the initial prefetch. Re-enter the batch
-            # path with the single missing DOI so it hits the cache +
-            # limiter like the rest.
-            single = resolve_doi_metadata_batch(
-                [doi], cache_path=db_path,
-            )
-            result = single.get(key, {})
+            result = resolve_doi_metadata(doi) or {}
             batch_cache[key] = result
+            # Persist to the shared cache so subsequent refreshes skip the
+            # network entirely, matching the batch path's contract.
+            if result and db_path is not None:
+                try:
+                    from ..citestore.db import DOICache
+
+                    with DOICache(db_path) as cache:
+                        cache.put(doi, result, source="doi.org")
+                except Exception:  # noqa: BLE001
+                    pass
             return result
 
         doi_lookup = _cached_lookup
