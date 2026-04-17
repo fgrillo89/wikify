@@ -276,9 +276,15 @@ def _clean_bib_title(title: str) -> str:
     # Strip leading "Name, lowercase" (leaked author + venue)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
     # Strip leading multi-author prefix: "A. Name, B. Name, Title"
-    # or "First Last, F. Last, Title" (comma-separated author names)
-    # Each name: optional initials + surname, followed by comma.
-    _author_name = r"(?:[A-Z]\.?\s*){0,2}[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+    # or "First Last, F. Last, Title" (comma-separated author names).
+    # Each "author" must either (a) contain an initial with period, or
+    # (b) be at least two words (given + surname). Otherwise the pattern
+    # matches leading adjectives in titles like "Flexible, Transparent,
+    # and Wafer-Scale Artificial Synapse Array..." and chops the first
+    # two words off the title.
+    _author_with_initial = r"[A-Z]\.(?:\s*[A-Z]\.)*\s*[A-Z][a-z]+(?:-[A-Z][a-z]+)?"
+    _author_two_word = r"[A-Z][a-z]+\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?"
+    _author_name = rf"(?:{_author_with_initial}|{_author_two_word})"
     title = re.sub(
         rf"^(?:{_author_name},\s*){{{2},}}",
         "", title,
@@ -944,10 +950,26 @@ def resolve_doi_metadata_batch(
     return results
 
 
+# BibTeX allows ``month=jan`` style bare-word macros; bibtexparser does not
+# define these by default, so CrossRef/ACM records containing them used to
+# fail parsing entirely (observed on ACM responses for e.g. 10.1145/...).
+# Strip the month field with a regex instead of teaching the parser every
+# macro — we never consume ``month`` anyway and the stripped value contains
+# the fields we actually need.
+_BIBTEX_MONTH_RE = re.compile(
+    r",\s*month\s*=\s*[a-z]+\s*(?=,|\})", re.IGNORECASE,
+)
+
+# inproceedings records set booktitle instead of journal. Our fallback
+# pipeline expects journal/venue as the publication identity, so map it.
+_BIBTEX_BOOKTITLE_VENUE = ("booktitle",)
+
+
 def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     """Parse a single BibTeX entry string into a metadata dict."""
+    cleaned = _BIBTEX_MONTH_RE.sub("", bibtex_text)
     try:
-        db = bibtexparser.loads(bibtex_text)
+        db = bibtexparser.loads(cleaned)
     except Exception:
         return {}
     if not db.entries:
@@ -961,8 +983,13 @@ def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     for key in ("journal", "year", "volume", "pages", "publisher", "issn"):
         if entry.get(key):
             result[key] = _as_text(entry[key])
-    if entry.get("journal"):
-        result["venue"] = _clean_venue(entry["journal"])
+    # Conference proceedings set booktitle; map to journal/venue.
+    for key in _BIBTEX_BOOKTITLE_VENUE:
+        if entry.get(key) and not result.get("journal"):
+            result["journal"] = _as_text(entry[key])
+            break
+    if result.get("journal"):
+        result["venue"] = _clean_venue(result["journal"])
     return result
 
 
@@ -1057,6 +1084,14 @@ def _with_fallback_metadata(
             lookup(clean_doi),
             prefer_authors=_authors_need_fallback(metadata, fn_author),
         )
+
+    # Sync Document.title with metadata["title"] — _document_entry reads
+    # doc.title, but _merge_external_metadata writes to metadata["title"].
+    # Without this sync, a DOI-returned title silently fails to reach the
+    # bibtex entry even though it's in the metadata dict.
+    meta_title = _as_text(metadata.get("title"))
+    if meta_title and meta_title != title:
+        title = _clean_title(meta_title)
 
     if metadata == original_metadata and title == doc.title:
         return doc
@@ -1193,24 +1228,21 @@ def _merge_external_metadata(
 ) -> None:
     """Merge DOI-content-negotiation data over locally extracted metadata.
 
-    DOI content negotiation (via doi.org, not OpenAlex) returns canonical
-    BibTeX from the publisher's registration agent — it is the authoritative
-    source for bibliographic fields when a DOI is available. We therefore
-    prefer DOI values for title (if local is empty or junk), for the
-    publication-identity fields (journal/venue/volume/pages/publisher/
-    issn/url), and for authors when ``prefer_authors`` is set.
+    doi.org content negotiation returns the publisher-registered canonical
+    record. It is the authoritative source for bibliographic-identity
+    fields when a DOI is available, so we overwrite local values with
+    DOI values for: title, journal/venue, volume, pages, publisher, issn,
+    url. Summary and year are kept local-preferring (summary because the
+    DOI record sometimes carries marketing copy; year because our filename
+    convention is reliable and the DOI response sometimes lacks it).
 
-    The one field we keep local over DOI when both exist is ``summary`` —
-    DOI metadata sometimes has a truncated or publisher-marketing summary
-    while our parsed abstract is the real thing.
+    Authors follow the existing prefer_authors rule: DOI wins when the
+    local list was flagged as junk (_authors_need_fallback), otherwise
+    local wins since DOI records often abbreviate given names.
     """
-    from .metadata import is_junk_title
-
-    # Fields for which DOI is authoritative: overwrite junk or empty local
-    # values with the DOI value. Title uses is_junk_title to detect "Word
-    # Document", section-header placeholders, etc.
-    _DOI_AUTHORITATIVE_NONTITLE = (
-        "journal", "venue", "volume", "pages", "publisher", "issn", "url",
+    _DOI_AUTHORITATIVE = (
+        "title", "journal", "venue", "volume", "pages", "publisher",
+        "issn", "url",
     )
 
     for key, value in external.items():
@@ -1222,15 +1254,8 @@ def _merge_external_metadata(
             elif not metadata.get(key):
                 metadata[key] = value
             continue
-        if key == "title":
-            local = _as_text(metadata.get("title"))
-            if not local or is_junk_title(local):
-                metadata[key] = value
-            continue
-        if key in _DOI_AUTHORITATIVE_NONTITLE:
-            local = _as_text(metadata.get(key))
-            if not local or _value_is_junk(local):
-                metadata[key] = value
+        if key in _DOI_AUTHORITATIVE:
+            metadata[key] = value
             continue
         # For everything else (summary, year, etc.), keep local when present.
         if not metadata.get(key):
