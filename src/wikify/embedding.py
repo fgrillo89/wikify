@@ -198,20 +198,42 @@ def _fe_embed_with(
     if not texts:
         dim = getattr(_fe_model, "embedding_size", cfg.dim) or cfg.dim
         return np.zeros((0, dim), dtype=np.float32)
-    # Char-level truncation guard: protects against chunks on disk that were
-    # produced with a larger ``max_tokens`` cap than the active one. Without
-    # this, a stale chunks.jsonl (say, 8000 chars ≈ 2300 tok) fed to jina
-    # after capping max_tokens to 2048 still OOMs DML — ``max_tokens`` is
-    # metadata for the chunker, not an input-length enforcement on fastembed.
-    # Uses 2.5 chars/tok (worst-case) so the clipped text stays below cap.
+    # Split-and-mean-pool guard. ModelConfig.max_tokens is informational for
+    # the chunker, not an input-length enforcement on fastembed. Without this
+    # step, chunks produced under a larger cap (e.g. the 8000-char sections
+    # on disk pre-Apr-2026) would be fed whole to the embedder and OOM the
+    # GPU at 4k+ tokens. We slice oversize inputs into ``char_cap``-sized
+    # pieces, embed all pieces in one batched pass, then mean-pool the
+    # pieces belonging to the same source text and re-normalise. This
+    # preserves full section signal (unlike naive truncation) at the cost
+    # of blurring multi-topic sections into a single vector.
     char_cap = int(cfg.max_tokens * 2.5)
-    clipped = [t if len(t) <= char_cap else t[:char_cap] for t in texts]
+    pieces: list[str] = []
+    owners: list[int] = []
+    for i, t in enumerate(texts):
+        if len(t) <= char_cap:
+            pieces.append(t)
+            owners.append(i)
+        else:
+            for start in range(0, len(t), char_cap):
+                pieces.append(t[start:start + char_cap])
+                owners.append(i)
     bs = _resolve_batch_size(model, batch_size)
-    arr = np.asarray(
-        list(_fe_model.embed(list(clipped), batch_size=bs)),
+    piece_emb = np.asarray(
+        list(_fe_model.embed(pieces, batch_size=bs)),
         dtype=np.float32,
     )
-    return arr
+    n = len(texts)
+    dim = piece_emb.shape[1]
+    out = np.zeros((n, dim), dtype=np.float32)
+    counts = np.zeros(n, dtype=np.int32)
+    for emb, owner in zip(piece_emb, owners, strict=True):
+        out[owner] += emb
+        counts[owner] += 1
+    out /= counts[:, None].astype(np.float32)
+    norms = np.linalg.norm(out, axis=1)
+    safe = np.where(norms > 0, norms, 1.0)
+    return out / safe[:, None]
 
 
 def _apply_prefix(texts: Sequence[str], prefix: str) -> list[str]:
