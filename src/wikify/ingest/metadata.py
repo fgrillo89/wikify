@@ -527,6 +527,25 @@ def is_garbled_title(title: str) -> bool:
     return False
 
 
+def _strip_yaml_frontmatter(md_text: str) -> str:
+    """Drop the leading ``---\\n...\\n---`` block if present.
+
+    Obsidian-style YAML frontmatter is machine-generated metadata (source
+    paths, cites, similar_to) and should never be scanned as author or
+    publication content. Its ``source_path`` line in particular contains
+    the filename including its extension — a trap for any author parser
+    that anchors on the fn_author surname.
+    """
+    if not md_text.startswith("---"):
+        return md_text
+    # Find the closing delimiter on its own line. Accept both ``---`` and
+    # ``...`` as YAML terminators.
+    match = re.search(r"\n(?:---|\.\.\.)\s*\n", md_text[3:])
+    if not match:
+        return md_text
+    return md_text[3 + match.end():]
+
+
 def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) -> list[str]:
     """Find the paper's author list in the rendered markdown body.
 
@@ -538,7 +557,13 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
     reasonable-length line containing that surname as a whole word, and
     return the first parse whose names include the surname.
     """
-    window = md_text[:12000]
+    # Strip Obsidian-style YAML frontmatter before scanning. The frontmatter
+    # contains source_path / cites / similar_to lines that will snare any
+    # surname-anchored scanner (e.g. `source_path: "...[2012 Li] Title.pdf"`
+    # matches `fn_author="Li"` and the tail of the filename gets parsed as
+    # authors).
+    body = _strip_yaml_frontmatter(md_text)
+    window = body[:12000]
     lines = window.split("\n")
 
     # Strategy 1: filename-surname anchor. Most robust when the PDF has a

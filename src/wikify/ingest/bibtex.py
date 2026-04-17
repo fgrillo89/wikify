@@ -909,6 +909,14 @@ def _with_fallback_metadata(
     return replace(doc, title=title, metadata=metadata)
 
 
+_JUNK_AUTHOR_RE = re.compile(
+    r"(?:\bAir\s+Force\b|\bResearch\s+Laboratory\b|\bUniversity\b|"
+    r"\bInstitute\s+of\b|\bSchool\s+of\b|\bDepartment\s+of\b|"
+    r"\bPolytechnic\b|\bCollege\s+of\b|\.pdf\b|\.docx\b)",
+    re.IGNORECASE,
+)
+
+
 def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
     authors = _as_list(metadata.get("authors"))
     if not authors:
@@ -919,6 +927,10 @@ def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
             return True
         if len(author.split()) == 1:
             return True
+    # Any entry containing an institution marker, file extension, or
+    # similar non-person signal is a parse artifact; re-derive the list.
+    if any(_JUNK_AUTHOR_RE.search(a) for a in authors):
+        return True
     return False
 
 
