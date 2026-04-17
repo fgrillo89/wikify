@@ -37,17 +37,6 @@ def _fake_resolve_many(
         )
 
 
-def _rows_by_source(path: Path) -> dict[str, int]:
-    conn = sqlite3.connect(path)
-    try:
-        rows = conn.execute(
-            "SELECT source, COUNT(*) FROM works GROUP BY source",
-        ).fetchall()
-    finally:
-        conn.close()
-    return dict(rows)
-
-
 def _row_source(path: Path, doi: str) -> str:
     conn = sqlite3.connect(path)
     try:
