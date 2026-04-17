@@ -1,1 +1,0 @@
-{"nodes": {"foo_0fbcbce9b44a": {"kind": "doc", "title": "Paper"}, "foo_0fbcbce9b44a__c0000__55629982": {"kind": "chunk", "doc_id": "foo_0fbcbce9b44a"}}, "edges": {"contains": [["foo_0fbcbce9b44a", "foo_0fbcbce9b44a__c0000__55629982"]]}}

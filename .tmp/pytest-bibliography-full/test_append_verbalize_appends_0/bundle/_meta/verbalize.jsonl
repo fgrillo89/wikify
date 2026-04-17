@@ -1,3 +1,0 @@
-{"run_id": "r1", "when": "2026-04-12T23:51:00.497338+00:00", "role": "extract", "rid": "c1", "reasoning": "first reason"}
-{"run_id": "r1", "when": "2026-04-12T23:51:00.498340+00:00", "role": "extract", "rid": "c2", "reasoning": "second reason"}
-{"run_id": "r1", "when": "2026-04-12T23:51:00.498340+00:00", "role": "write", "rid": "Memristor", "reasoning": "third reason"}

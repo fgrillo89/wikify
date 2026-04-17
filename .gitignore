@@ -35,6 +35,10 @@ archive/
 .cache/
 .claude/worktrees/
 
+# Pytest / test fixtures (generated)
+.tmp/
+logs/
+
 # Benchmark results (generated)
 benchmarks/results/
 
