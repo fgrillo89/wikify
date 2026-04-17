@@ -581,19 +581,22 @@ def build_citation_index(
             if doi:
                 prefetch_dois.append(doi)
         db_path = corpus.root / ".citestore.db" if corpus.root else None
-        if prefetch_dois:
-            batch_cache = resolve_doi_metadata_batch(
-                prefetch_dois, cache_path=db_path,
-            )
+        if prefetch_dois and db_path is not None:
+            from ..util.doi_resolver import resolve_many
 
-        # Cache-miss fallback. Single unified retrieval path: same cache,
-        # same limiter, same persistence. ``resolve_doi_metadata`` is now
-        # a thin wrapper around the batch function with n=1.
+            batch_cache = resolve_many(prefetch_dois, cache_path=db_path)
+
         def _cached_lookup(doi: str) -> dict[str, object]:
             key = doi.lower()
             if key in batch_cache:
                 return batch_cache[key]
-            result = resolve_doi_metadata(doi, cache_path=db_path) or {}
+            # DOI discovered at refresh time that wasn't in the initial
+            # prefetch (rare; only when extract_document_doi inside
+            # _with_fallback_metadata finds a DOI neither in metadata
+            # nor in pymupdf's scan). Route through the shared resolver.
+            from ..util.doi_resolver import resolve_one
+
+            result = resolve_one(doi, cache_path=db_path) if db_path else {}
             batch_cache[key] = result
             return result
 
@@ -830,113 +833,8 @@ def write_corpus_bibliography(
 
 
 # ---------------------------------------------------------------------------
-# DOI content negotiation (for source document metadata enrichment)
+# BibTeX parsing helpers (used by the shared DOI resolver's doi.org path)
 # ---------------------------------------------------------------------------
-
-
-def resolve_doi_metadata(
-    doi: str, *, cache_path: Path | None = None, timeout: float = 10.0,
-) -> dict[str, object]:
-    """Fetch BibTeX metadata for a single DOI via doi.org content negotiation.
-
-    Thin sync wrapper around ``resolve_doi_metadata_batch``: checks the
-    shared DOI cache first, fetches from doi.org only on miss, persists
-    the result. Single unified retrieval path — callers no longer need
-    to decide "batch or single" or "cache or no cache".
-    """
-    if not doi:
-        return {}
-    results = resolve_doi_metadata_batch([doi], cache_path=cache_path, timeout=timeout)
-    return results.get(doi.lower(), {})
-
-
-def resolve_doi_metadata_batch(
-    dois: list[str],
-    *,
-    cache_path: Path | None = None,
-    concurrency: int = 10,
-    requests_per_second: float = 5.0,
-    timeout: float = 10.0,
-) -> dict[str, dict[str, object]]:
-    """Resolve many DOIs via doi.org content negotiation with cache + limiter.
-
-    Unified retrieval path for all DOI lookups in bibtex. Uses the shared
-    ``DOICache`` (SQLite ``works`` table at ``<corpus>/.citestore.db``)
-    for persistence — hits from any prior resolution (CrossRef, OpenAlex,
-    doi.org) satisfy this call without a network round-trip. Fresh
-    network fetches are rate-limited with aiolimiter.AsyncLimiter and
-    capped by asyncio.Semaphore, matching the ``with_limiter`` /
-    ``with_semaphore`` idiom in ``wikify.util.async_limits``.
-
-    Returns ``{lowercased_doi: metadata}``; missing / failed lookups are
-    omitted.
-    """
-    if not dois:
-        return {}
-    import asyncio
-
-    import httpx
-
-    from ..citestore.db import DOICache
-    from ..util.async_limits import with_limiter, with_semaphore
-
-    unique = list(dict.fromkeys(d.lower() for d in dois if d))
-    if not unique:
-        return {}
-
-    results: dict[str, dict[str, object]] = {}
-    if cache_path is not None:
-        with DOICache(cache_path) as cache:
-            hits = cache.get_many(unique)
-        results.update(hits)
-        to_fetch = [d for d in unique if d not in hits]
-    else:
-        to_fetch = unique
-
-    if not to_fetch:
-        return results
-
-    async def _run() -> dict[str, dict[str, object]]:
-        from aiolimiter import AsyncLimiter
-
-        limiter = AsyncLimiter(1, round(1 / requests_per_second, 3))
-        semaphore = asyncio.Semaphore(concurrency)
-        fetched: dict[str, dict[str, object]] = {}
-        headers = {"Accept": "application/x-bibtex"}
-
-        async with httpx.AsyncClient(
-            timeout=timeout, follow_redirects=True,
-        ) as client:
-            @with_limiter(limiter)
-            @with_semaphore(semaphore)
-            async def _get(url: str) -> httpx.Response:
-                return await client.get(url, headers=headers)
-
-            async def _one(doi: str) -> None:
-                try:
-                    resp = await _get(f"https://doi.org/{doi}")
-                except httpx.HTTPError:
-                    return
-                if resp.status_code != 200:
-                    return
-                parsed = _metadata_from_bibtex_entry(resp.text)
-                if parsed:
-                    fetched[doi] = parsed
-
-            await asyncio.gather(*(_one(d) for d in to_fetch))
-        return fetched
-
-    fetched = asyncio.run(_run())
-    results.update(fetched)
-
-    if cache_path is not None and fetched:
-        with DOICache(cache_path) as cache:
-            for doi, meta in fetched.items():
-                try:
-                    cache.put(doi, meta, source="doi.org")
-                except Exception:  # noqa: BLE001
-                    pass
-    return results
 
 
 # BibTeX allows ``month=jan`` style bare-word macros; bibtexparser does not
@@ -1067,10 +965,18 @@ def _with_fallback_metadata(
         metadata["doi"] = clean_doi
 
     if resolve_doi and clean_doi:
-        lookup = doi_lookup or resolve_doi_metadata
+        if doi_lookup is None:
+            from ..util.doi_resolver import resolve_one
+
+            db_path = corpus.root / ".citestore.db" if corpus.root else None
+            external = (
+                resolve_one(clean_doi, cache_path=db_path) if db_path else {}
+            )
+        else:
+            external = doi_lookup(clean_doi)
         _merge_external_metadata(
             metadata,
-            lookup(clean_doi),
+            external,
             prefer_authors=_authors_need_fallback(metadata, fn_author),
         )
 
