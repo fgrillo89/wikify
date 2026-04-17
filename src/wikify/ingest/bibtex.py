@@ -250,25 +250,97 @@ def _document_entry(doc: Document) -> dict[str, str]:
     return entry
 
 
+_AUTHOR_NAME_PARTICLES = frozenset({
+    "van", "von", "der", "de", "da", "di", "la", "le", "du",
+    "del", "den", "dos", "el", "al", "bin", "ibn", "and",
+    # Legitimate short name suffixes.
+    "jr", "sr", "ii", "iii", "iv",
+})
+
+
+def _author_has_prose_residue(author: str) -> bool:
+    """True if an author-list token contains prose or a colon.
+
+    A legitimate author token consists of initials (uppercase + period)
+    and/or capitalised name-words + recognised particles. Any other
+    lowercase word (``the``, ``gradual``, ``plasticity``) means prose
+    bled into the author slot; a colon means a running header was
+    parsed as a name. Reject either.
+    """
+    if ":" in author:
+        return True
+    for word in author.split():
+        w = word.strip(".,;:-").lower()
+        if not w or w.isdigit():
+            continue
+        if word != word.lower():
+            continue  # has uppercase — legitimate
+        if w in _AUTHOR_NAME_PARTICLES:
+            continue
+        return True
+    return False
+
+
+def _strip_year_anchored_tail(title: str) -> str:
+    """Strip a trailing citation fragment anchored on a 4-digit year.
+
+    Structural rule: a legitimate paper title almost never contains a
+    sentence break followed by a year. When the title does, cut at the
+    FIRST punctuation boundary (``. ``, ``, ``, `` (``) before the
+    year, provided that boundary is >= 20 chars in so short titles
+    aren't decapitated.
+
+    Replaces several publisher-specific trailing-tail regexes that
+    grew organically as each new failure mode surfaced (Chinese-style
+    citations, Park 2020's Journal-YYYY-vol-pages, Materials (YYYY),
+    etc.). Under this one rule every case reduces to "there's a year
+    past the title proper; cut at the earliest punctuation before it."
+    """
+    year_m = re.search(r"\b(?:19|20)\d{2}\b", title)
+    if not year_m:
+        return title
+    prefix = title[: year_m.start()]
+    cuts = []
+    for sep in (". ", ", ", " (", "? ", "! "):
+        idx = prefix.find(sep)
+        if idx >= 20:
+            cuts.append(idx)
+    if not cuts:
+        return title
+    return title[: min(cuts)].rstrip(" .,;:()?!")
+
+
 def _clean_bib_title(title: str) -> str:
     """Clean a title for BibTeX output: strip HTML, newlines, leaked metadata."""
+    import html as _html
+
     # Collapse newlines to spaces
     title = title.replace("\n", " ").replace("\r", " ")
+    # Decode HTML entities before looking for tags. Some upstream parses
+    # double-encode (``&amp;#x00D7;`` → ``&#x00D7;`` → ``×``); loop until
+    # the string is stable so both layers unwind.
+    for _ in range(3):
+        decoded = _html.unescape(title)
+        if decoded == title:
+            break
+        title = decoded
     # Convert HTML subscript/superscript to LaTeX (including <inf> variant)
     title = re.sub(r"<(?:sub|inf)>(.*?)</(?:sub|inf)>", r"$_{\1}$", title, flags=re.I | re.S)
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
-    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations).
+    # Strip any trailing citation fragment anchored on a 4-digit year. One
+    # structural rule in place of the several per-publisher regexes that
+    # used to live here.
+    title = _strip_year_anchored_tail(title)
+    # Strip a trailing abbreviated journal name: `. <Word> <Word>?` where
+    # each word is ≤12 chars title-cased (common abbrevs: "Neural Comput",
+    # "Phys Rev", "ACS Nano", "Briefings Bioinf"). A real title rarely
+    # ends with a period followed by 1-3 short capitalised words.
     title = re.sub(
-        r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
-    )
-    # Strip trailing ". Journal Name YYYY, Vol, Pages" — year embedded in
-    # the journal-name segment rather than after it. Observed on Park 2020:
-    # ". Journal of Materials Chemistry C 2020, 8, 9163− 9183". Requires a
-    # multi-word capitalised segment + 4-digit year + volume + page.
-    title = re.sub(
-        r"\.\s+[A-Z][A-Za-z ]{5,60}\s+\d{4}\s*,\s*\d+\s*,\s*\d+.*$", "", title,
+        r"\.\s+[A-Z][A-Za-z]{0,11}(?:\s+[A-Z][A-Za-z]{0,11}){0,2}\.?\s*$",
+        "",
+        title,
     )
     # Strip URLs anywhere in title (including space-broken URLs from PDF)
     title = re.sub(r"\s*https?://[\S\s]*$", "", title)
@@ -403,6 +475,26 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     # These catch text that _clean_bib_title couldn't fix.
     if title.isupper() and len(title.split()) <= 2:
         return None
+    # Web-PDF anchor IDs in the title mean the upstream reference-string
+    # parser emitted a mangled token soup (HTML `<a href="#sbref0021">`
+    # fragments with the tags stripped but the anchor IDs intact). The
+    # title is structurally unusable; reject the whole entry rather than
+    # try to clean a corrupt record.
+    if re.search(
+        # `/sbref0021`, `#sbref12`, `/fn5`, `/anchor3`, `90110-9/word\d+`,
+        # or the trailing `NNNNN-X)` / `NNNN-XX)` pattern seen when
+        # anchor IDs were rendered as ")-suffixed numeric blobs.
+        r"/(?:sbref|ref|anchor|fn|note|sec|bib)\d+"
+        r"|\d+-\d+/\w+\d+"
+        r"|,\s*\d{4,}-[A-Z0-9]\)",
+        title,
+        re.I,
+    ):
+        return None
+    # Citation-marker prefix (`>[N]`, `>N.`, `[N]`, `N.`) means the
+    # whole title is a reference-list line the parser didn't strip.
+    if re.match(r"^\s*>?\s*[\[\(]\d+[\]\)]|^\s*>?\s*\d+\.\s+[A-Z]", title):
+        return None
     # Journal+year fragment ("Nanoscale, 2016, 8: 1383")
     if re.match(r"^[A-Z][a-z]+,\s+\d{4}", title):
         return None
@@ -431,6 +523,21 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     # Still has doi.org or too many commas after cleaning
     if "doi.org" in title or title.count(",") > 5:
+        return None
+    # Final structural reject: a real paper title doesn't contain a
+    # 4-digit year. If one survived all the cleanup passes, the cleanup
+    # couldn't recover prose from the citation fragment — drop it
+    # rather than emit a bib entry whose title is still a citation.
+    if re.search(r"\b(?:19|20)\d{2}\b", title):
+        return None
+
+    # Filter structurally-broken author tokens: any token containing a
+    # lowercase content word that isn't a recognised name particle has
+    # either prose bled into it ("L. On the gradual unipolar") or a
+    # running-header colon ("M. Erratum:"). Drop those tokens; reject
+    # the entry if nothing clean survives.
+    authors = [a for a in authors if not _author_has_prose_residue(a)]
+    if not authors:
         return None
 
     # For heuristic-only citations, validate strictly

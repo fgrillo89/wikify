@@ -42,7 +42,6 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Bib parsing (structure only; we trust the writer's output format)
 # ---------------------------------------------------------------------------
@@ -178,14 +177,22 @@ def _author_has_digits(entry: dict[str, str]) -> bool:
 # punctuation clusters. Citation-fragment residue breaks prose shape in
 # specific ways we can test structurally.
 
+_ANCHOR_ID_RE = re.compile(
+    # `/sbref0021`, `#sbref0021`, `90110-9/sbref0021)`, `/fn5`, `/anchor3`.
+    # Requires a known anchor-name prefix (sbref|ref|fn|anchor|note|sec|bib)
+    # so chemical formulas with slashes (`Pt/HfO2`, `TiO2/Pt`) don't match.
+    r"(?:\d+-\d+/)?[/#](?:sbref|fn|anchor|note|sec|bib)\d+\)?",
+    re.IGNORECASE,
+)
+
+
 def _title_has_anchor_id(entry: dict[str, str]) -> bool:
-    """Title contains an HTML/PDF anchor id — a non-word + digits token
-    immediately preceded by `/` or `#`. General because any anchor id
-    follows this shape; not limited to `sbref`.
+    """Title contains an HTML/PDF anchor id — a known anchor-prefix token
+    (sbref, fn, anchor, note, sec, bib) preceded by ``/`` or ``#`` and
+    followed by digits. Real titles never contain these; they're web-PDF
+    tag residue.
     """
-    return bool(re.search(
-        r"[/#]\w+\d+\)?", entry.get("title", ""),
-    ))
+    return bool(_ANCHOR_ID_RE.search(entry.get("title", "")))
 
 
 def _title_has_citation_marker(entry: dict[str, str]) -> bool:
@@ -258,6 +265,17 @@ def _title_contains_markdown_link(entry: dict[str, str]) -> bool:
     a masthead or TOC line leaked into the title slot.
     """
     return "](" in entry.get("title", "")
+
+
+def _title_has_html_entity(entry: dict[str, str]) -> bool:
+    """Title contains an un-decoded HTML entity (`&amp;`, `&lt;`, `&#x...`).
+    A proper BibTeX title should never carry entities — they should have
+    been decoded upstream.
+    """
+    return bool(re.search(
+        r"&(?:amp|lt|gt|quot|apos|#x?\d+|\w{2,8});",
+        entry.get("title", ""),
+    ))
 
 
 # ---- Journal-shape --------------------------------------------------------
@@ -397,6 +415,12 @@ RULES: list[Rule] = [
         "title has no `](` markdown-link fragment",
         "first_heading picked up a banner with a hyperlink",
         _title_contains_markdown_link,
+    ),
+    (
+        "title_html_entity",
+        "title has no un-decoded HTML entities (`&amp;`, `&lt;`, `&#x...`)",
+        "upstream parser stripped HTML tags but not entities",
+        _title_has_html_entity,
     ),
     # Journal-shape ---------------------------------------------------------
     (

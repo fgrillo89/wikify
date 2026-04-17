@@ -5,6 +5,9 @@ import json
 import bibtexparser
 
 from wikify.ingest.bibtex import (
+    _author_has_prose_residue,
+    _clean_bib_title,
+    _strip_year_anchored_tail,
     paper_to_bibtex,
     write_corpus_bibliography,
     write_corpus_bibtex,
@@ -335,3 +338,69 @@ def test_dedup_by_doi_across_citations(tmp_path):
     # Both docs should cite the same reference
     assert ref_key in index["doc_citations"]["a_1"]
     assert ref_key in index["doc_citations"]["b_2"]
+
+
+# ---------------------------------------------------------------------------
+# _clean_bib_title: structural cleanup rules added in the quality-scan PR
+# ---------------------------------------------------------------------------
+
+
+class TestYearAnchoredTailStrip:
+    def test_strips_journal_year_vol_pages(self):
+        out = _strip_year_anchored_tail(
+            "Bistable switching in electroformed metal-insulator-metal devices. "
+            "Phys Status Solidi. 1988, 108, 11",
+        )
+        assert out == "Bistable switching in electroformed metal-insulator-metal devices"
+
+    def test_strips_book_publisher_and_year(self):
+        out = _strip_year_anchored_tail(
+            "Electronic Processes in Ionic Crystals 2nd edn. "
+            "(Oxford at the Clarendon Press, 1950)",
+        )
+        assert out == "Electronic Processes in Ionic Crystals 2nd edn"
+
+    def test_preserves_titles_without_years(self):
+        t = "Atomic Layer Deposition for Semiconductor Devices"
+        assert _strip_year_anchored_tail(t) == t
+
+    def test_preserves_titles_with_year_as_keyword(self):
+        # A title mentioning a year in its own prose (no punct boundary)
+        # — the strip only fires when a boundary exists before the year.
+        t = "The 2007 financial crisis analysis"
+        assert _strip_year_anchored_tail(t) == t
+
+    def test_handles_question_mark_boundary(self):
+        out = _strip_year_anchored_tail(
+            "Do We Have Brain To Spare? Neurology 2005, 64, 2004",
+        )
+        assert out == "Do We Have Brain To Spare"
+
+
+class TestCleanBibTitleHtmlEntity:
+    def test_decodes_single_level_entity(self):
+        assert _clean_bib_title("HfO&lt;inf&gt;x&lt;/inf&gt; crossbar") == (
+            "HfO$_{x}$ crossbar"
+        )
+
+    def test_decodes_double_encoded(self):
+        out = _clean_bib_title("10&amp;#x00D7;10nm crossbar")
+        assert "&" not in out
+        assert "#x" not in out
+
+
+class TestAuthorProseResidue:
+    def test_detects_lowercase_content_word(self):
+        assert _author_has_prose_residue("L. On the gradual unipolar")
+        assert _author_has_prose_residue("M. Short-term plasticity")
+
+    def test_accepts_clean_name(self):
+        assert not _author_has_prose_residue("J. Lecun")
+        assert not _author_has_prose_residue("van der Waals")
+
+    def test_detects_colon(self):
+        assert _author_has_prose_residue("Erratum: J. Heyd")
+
+    def test_accepts_particles(self):
+        assert not _author_has_prose_residue("de la Cruz")
+        assert not _author_has_prose_residue("van der Pauw")
