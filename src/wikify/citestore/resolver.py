@@ -12,7 +12,6 @@ import hashlib
 import logging
 import random
 from asyncio import Semaphore
-from functools import wraps
 from typing import Any
 
 import httpx
@@ -47,24 +46,8 @@ def _extract_openalex_id(url: str) -> str:
     return url.rsplit("/", 1)[-1] if "/" in url else url
 
 
-def add_limiter(limiter: AsyncLimiter):
-    def inner(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            async with limiter:
-                return await func(*args, **kwargs)
-        return wrapper
-    return inner
-
-
-def add_semaphore(semaphore: Semaphore):
-    def inner(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            async with semaphore:
-                return await func(*args, **kwargs)
-        return wrapper
-    return inner
+from ..util.async_limits import with_limiter as add_limiter
+from ..util.async_limits import with_semaphore as add_semaphore
 
 
 def parse_openalex_work(item: dict) -> Work:

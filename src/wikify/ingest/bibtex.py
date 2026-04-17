@@ -12,6 +12,7 @@ approach produced garbage and required 800+ lines of repair code.
 import hashlib
 import json
 import re
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -586,25 +587,15 @@ def build_citation_index(
                 prefetch_dois, cache_path=db_path,
             )
 
-        # Cache-miss fallback uses the sync single-DOI helper — spinning up
-        # a fresh asyncio event loop + httpx.AsyncClient for a single
-        # lookup costs ~250 ms (profiled: 50 misses ≈ 13 s init overhead).
+        # Cache-miss fallback. Single unified retrieval path: same cache,
+        # same limiter, same persistence. ``resolve_doi_metadata`` is now
+        # a thin wrapper around the batch function with n=1.
         def _cached_lookup(doi: str) -> dict[str, object]:
             key = doi.lower()
             if key in batch_cache:
                 return batch_cache[key]
-            result = resolve_doi_metadata(doi) or {}
+            result = resolve_doi_metadata(doi, cache_path=db_path) or {}
             batch_cache[key] = result
-            # Persist to the shared cache so subsequent refreshes skip the
-            # network entirely, matching the batch path's contract.
-            if result and db_path is not None:
-                try:
-                    from ..citestore.db import DOICache
-
-                    with DOICache(db_path) as cache:
-                        cache.put(doi, result, source="doi.org")
-                except Exception:  # noqa: BLE001
-                    pass
             return result
 
         doi_lookup = _cached_lookup
@@ -633,11 +624,17 @@ def build_citation_index(
         n_authors = len(_as_list(entry.get("author")))
         return (title_ok, n_authors)
 
+    # Build entries once upfront so the dedup pass isn't O(n^2) in
+    # _document_entry (which re-cleans titles, authors, etc.).
+    entry_by_doc: dict[str, dict[str, str]] = {
+        doc.id: _document_entry(doc) for doc in enriched_docs
+    }
+
     # First pass: pick the canonical doc per DOI.
     canonical_by_doi: dict[str, tuple[Document, dict[str, str]]] = {}
     no_doi_docs: list[Document] = []
     for doc in enriched_docs:
-        entry = _document_entry(doc)
+        entry = entry_by_doc[doc.id]
         doi = _clean_doi(entry.get("doi"))
         if not doi:
             no_doi_docs.append(doc)
@@ -645,6 +642,14 @@ def build_citation_index(
         prev = canonical_by_doi.get(doi)
         if prev is None or _doc_quality(entry) > _doc_quality(prev[1]):
             canonical_by_doi[doi] = (doc, entry)
+
+    # Build reverse index doi -> [doc.id] so the "point duplicates at
+    # canonical bibkey" step is O(n) instead of O(n^2).
+    docs_by_doi: dict[str, list[str]] = defaultdict(list)
+    for doc in enriched_docs:
+        d = _clean_doi(entry_by_doc[doc.id].get("doi"))
+        if d:
+            docs_by_doi[d].append(doc.id)
 
     # Second pass: emit one bib entry per canonical doc, then one per
     # DOI-less doc. Map every duplicate doc_id to the surviving bibkey so
@@ -658,12 +663,9 @@ def build_citation_index(
             entry=entry, doc_id=doc.id,
         )
         doi_bibkeys[doi] = entry["ID"]
-        # Point any other docs sharing this DOI at the canonical bibkey.
-        for other in enriched_docs:
-            if other.id != doc.id and _clean_doi(
-                _document_entry(other).get("doi")
-            ) == doi:
-                doc_bibkeys[other.id] = entry["ID"]
+        for other_id in docs_by_doi[doi]:
+            if other_id != doc.id:
+                doc_bibkeys[other_id] = entry["ID"]
     for doc in no_doi_docs:
         entry = _document_entry(doc)
         entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
@@ -834,27 +836,19 @@ def write_corpus_bibliography(
 
 
 def resolve_doi_metadata(
-    doi: str, *, timeout: float = 10.0,
+    doi: str, *, cache_path: Path | None = None, timeout: float = 10.0,
 ) -> dict[str, object]:
     """Fetch BibTeX metadata for a single DOI via doi.org content negotiation.
 
-    Synchronous single-DOI helper. When resolving a batch (the refresh
-    path in ``build_citation_index``), use ``resolve_doi_metadata_batch``
-    which fans requests out concurrently via an async semaphore.
+    Thin sync wrapper around ``resolve_doi_metadata_batch``: checks the
+    shared DOI cache first, fetches from doi.org only on miss, persists
+    the result. Single unified retrieval path — callers no longer need
+    to decide "batch or single" or "cache or no cache".
     """
-    import httpx
-
-    url = f"https://doi.org/{doi}"
-    headers = {"Accept": "application/x-bibtex"}
-    try:
-        resp = httpx.get(
-            url, headers=headers, timeout=timeout, follow_redirects=True,
-        )
-        if resp.status_code != 200:
-            return {}
-    except (httpx.HTTPError, Exception):
+    if not doi:
         return {}
-    return _metadata_from_bibtex_entry(resp.text)
+    results = resolve_doi_metadata_batch([doi], cache_path=cache_path, timeout=timeout)
+    return results.get(doi.lower(), {})
 
 
 def resolve_doi_metadata_batch(
@@ -865,38 +859,33 @@ def resolve_doi_metadata_batch(
     requests_per_second: float = 5.0,
     timeout: float = 10.0,
 ) -> dict[str, dict[str, object]]:
-    """Resolve many DOIs concurrently via doi.org content negotiation.
+    """Resolve many DOIs via doi.org content negotiation with cache + limiter.
 
-    Uses the same limiter + semaphore decorator pattern as
-    ``citestore.resolver.AsyncResolver`` (aiolimiter.AsyncLimiter for the
-    polite-qps floor, asyncio.Semaphore for the hard-concurrency cap) so
-    refresh-time DOI enrichment matches the idiom already established for
-    OpenAlex. Results are persisted in the ``citestore`` DOI cache
-    (``<corpus>/.citestore.db``) when ``cache_path`` is given — a second
-    refresh on the same corpus skips the network entirely.
+    Unified retrieval path for all DOI lookups in bibtex. Uses the shared
+    ``DOICache`` (SQLite ``works`` table at ``<corpus>/.citestore.db``)
+    for persistence — hits from any prior resolution (CrossRef, OpenAlex,
+    doi.org) satisfy this call without a network round-trip. Fresh
+    network fetches are rate-limited with aiolimiter.AsyncLimiter and
+    capped by asyncio.Semaphore, matching the ``with_limiter`` /
+    ``with_semaphore`` idiom in ``wikify.util.async_limits``.
 
-    Returns a dict keyed by input DOI (lowercased); missing / failed
-    lookups are omitted. Runs a fresh event loop so callers stay sync.
+    Returns ``{lowercased_doi: metadata}``; missing / failed lookups are
+    omitted.
     """
     if not dois:
         return {}
     import asyncio
-    from functools import wraps
 
     import httpx
-    from aiolimiter import AsyncLimiter
 
     from ..citestore.db import DOICache
+    from ..util.async_limits import with_limiter, with_semaphore
 
     unique = list(dict.fromkeys(d.lower() for d in dois if d))
     if not unique:
         return {}
 
     results: dict[str, dict[str, object]] = {}
-    to_fetch: list[str] = []
-
-    # Cache lookup — pull already-resolved DOIs, regardless of source
-    # (CrossRef / doi.org / OpenAlex all land in the same `works` table).
     if cache_path is not None:
         with DOICache(cache_path) as cache:
             hits = cache.get_many(unique)
@@ -909,18 +898,20 @@ def resolve_doi_metadata_batch(
         return results
 
     async def _run() -> dict[str, dict[str, object]]:
-        sem = asyncio.Semaphore(concurrency)
+        from aiolimiter import AsyncLimiter
+
         limiter = AsyncLimiter(1, round(1 / requests_per_second, 3))
+        semaphore = asyncio.Semaphore(concurrency)
         fetched: dict[str, dict[str, object]] = {}
         headers = {"Accept": "application/x-bibtex"}
 
         async with httpx.AsyncClient(
             timeout=timeout, follow_redirects=True,
         ) as client:
-            @wraps(client.get)
+            @with_limiter(limiter)
+            @with_semaphore(semaphore)
             async def _get(url: str) -> httpx.Response:
-                async with limiter, sem:
-                    return await client.get(url, headers=headers)
+                return await client.get(url, headers=headers)
 
             async def _one(doi: str) -> None:
                 try:
@@ -939,7 +930,6 @@ def resolve_doi_metadata_batch(
     fetched = asyncio.run(_run())
     results.update(fetched)
 
-    # Persist fresh results to the shared DOI cache.
     if cache_path is not None and fetched:
         with DOICache(cache_path) as cache:
             for doi, meta in fetched.items():

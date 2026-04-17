@@ -10,7 +10,6 @@ import asyncio
 import logging
 from asyncio import Semaphore
 from collections.abc import Callable
-from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,24 +37,8 @@ _DOI_FIELD_MAP = {
 # Async DOI content negotiation
 # ---------------------------------------------------------------------------
 
-def _add_limiter(limiter: AsyncLimiter):
-    def inner(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            async with limiter:
-                return await func(*args, **kwargs)
-        return wrapper
-    return inner
-
-
-def _add_semaphore(semaphore: Semaphore):
-    def inner(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            async with semaphore:
-                return await func(*args, **kwargs)
-        return wrapper
-    return inner
+from ..util.async_limits import with_limiter as _add_limiter
+from ..util.async_limits import with_semaphore as _add_semaphore
 
 
 _CROSSREF_BATCH_SIZE = 75
