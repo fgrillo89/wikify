@@ -7,11 +7,13 @@ import re
 from pathlib import Path
 
 from ..metadata import (
+    clean_filename_title,
     clean_markdown,
     extract_document_doi,
     extract_publication_fields,
     extract_summary,
     first_heading,
+    is_junk_title,
     parse_authors,
     parse_filename,
 )
@@ -116,17 +118,23 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
     props = doc.core_properties
     fn_year, fn_author, fn_title = parse_filename(filename)
 
+    # Word's default /Title property is often the placeholder "Word Document"
+    # or "Microsoft Word - foo.docx" when the author never set a custom title.
+    # Walk candidates in descending preference; skip any that is_junk_title
+    # rejects (placeholder literal, numbered section header, markdown link
+    # fragment, all-caps banner). clean_filename_title is a safe floor since
+    # the filename always has a human-readable stem.
     cp_title = (props.title or "").strip()
-    heading_title = first_heading(md_text)
-    if cp_title:
-        title = cp_title
-    elif heading_title:
-        title = heading_title
-    elif fn_title:
-        title = fn_title
-    else:
-        title = Path(filename).stem
-    title = clean_markdown(title)
+    heading_title = first_heading(md_text) or ""
+    fn_clean = clean_filename_title(filename)
+    title = ""
+    for cand in (cp_title, heading_title, fn_title, fn_clean):
+        cand = clean_markdown(cand or "")
+        if cand and not is_junk_title(cand):
+            title = cand
+            break
+    if not title:
+        title = fn_clean or Path(filename).stem
 
     cp_author = (props.author or "").strip()
     if cp_author:

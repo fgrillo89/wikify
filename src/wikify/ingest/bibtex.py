@@ -67,6 +67,15 @@ def _as_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
     if isinstance(value, str):
+        # Route through parse_authors which handles the CrossRef pattern
+        # "Wang, Tian-Yu and Meng, Jia-Lin" correctly (surname/given pairs,
+        # hyphenated given names, trailing affiliation letters). The old
+        # naive split on "," + " and " shredded it into singletons.
+        from .metadata import parse_authors
+
+        parsed = parse_authors(value)
+        if parsed:
+            return parsed
         parts = value.replace(" and ", ", ").split(",")
         return [p.strip() for p in parts if p.strip()]
     return []
@@ -117,6 +126,10 @@ def _clean_author_name(name: str) -> str:
     """Normalize an author name: strip affiliation symbols, fix casing."""
     # Strip affiliation/footnote markers
     name = _AFFILIATION_RE.sub("", name).strip()
+    # Drop lone backslashes left behind by LaTeX-escape passes (e.g.
+    # "Jianshi Tang \") and collapse the resulting double whitespace.
+    name = re.sub(r"\\+", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
     # Only apply casing fixes when the entire name is all-caps or all-lower.
     # Mixed-case names (van der Waals, McMaster) are left as-is.
     all_upper = name == name.upper() and any(c.isalpha() for c in name)
@@ -375,6 +388,23 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     # Journal+vol+pages only ("Mater. 25 1774-9")
     if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
+        return None
+    # Journal-coordinate signature anywhere in a short title: "Vol(Issue):pp-pp"
+    # Examples: "Oxid Met 2(1):59–99", "JAP 102(7):074114-1". Safe: real titles
+    # almost never contain "\d+\(\d+\):\d+" verbatim.
+    if re.search(r"\d+\s*\(\d+\)\s*:\s*\d+", title) and len(title) < 40:
+        return None
+    # Journal + year + volume + page triplet: "Circuit Theory 1971, 18, 507".
+    if re.match(r"^[A-Z][\w\.\s]{2,30}\s+\d{4}\s*,\s*\d+\s*,\s*\d+", title):
+        return None
+    # Book-chapter fragment: starts with "In " and contains a publisher name.
+    # Examples: "In Handbook of Memristor Networks, Springer, Berlin, Germany..."
+    # "In Proc. of IEDM, Elsevier...". These are citation tails, not titles.
+    if re.match(
+        r"^In\s+.+,\s*(Springer|Wiley|Elsevier|Academic|CRC|Taylor|"
+        r"Oxford|Cambridge|MIT|World Scientific|Nova|Pergamon)",
+        title,
+    ):
         return None
     # Conference location/date only ("(ASP-DAC), Incheon, ...")
     if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
@@ -813,6 +843,15 @@ def _with_fallback_metadata(
         doi = extract_document_doi(text)
         if doi:
             metadata["doi"] = doi
+    # pymupdf fallback: Marker strips DOIs printed in header/footer layout
+    # bands, so they never reach the cached markdown. Re-scan the source PDF
+    # directly; fixes ~80% of otherwise-DOI-less PDF entries at refresh time.
+    if needs_doi and not metadata.get("doi") and source_path.suffix.lower() == ".pdf":
+        from .metadata import extract_pdf_doi_fallback
+
+        doi = extract_pdf_doi_fallback(source_path)
+        if doi:
+            metadata["doi"] = doi
 
     clean_doi = _clean_doi(metadata.get("doi"))
     if clean_doi:
@@ -862,6 +901,14 @@ def _title_needs_fallback(title: str) -> bool:
     if not clean or len(clean) < 10:
         return True
     if clean.isupper():
+        return True
+    # Delegate placeholder detection ("Word Document", "Untitled", section
+    # headers like "1 Introduction", repository banners, markdown links) to
+    # the shared is_junk_title vocabulary so refresh fixes are picked up on
+    # cached docs without re-parse.
+    from .metadata import is_junk_title
+
+    if is_junk_title(clean):
         return True
     return bool(_GARBAGE_TITLE_RE.match(clean))
 

@@ -65,15 +65,45 @@ _JUNK_TITLE_LITERALS = frozenset({
 
 _MS_WORD_JUNK_RE = re.compile(r"^\s*microsoft\s+word\s*[-–—:]?\s*", re.IGNORECASE)
 
+# Common section-header names that some parsers lift as the document title
+# when the real title is in a different layout band.
+_SECTION_HEADER_LITERALS = frozenset({
+    "abstract", "summary", "introduction", "background",
+    "methods", "method", "materials and methods", "experimental",
+    "experimental section", "experimental methods", "experimental details",
+    "results", "results and discussion", "discussion",
+    "conclusion", "conclusions", "conclusions and outlook",
+    "references", "bibliography", "acknowledgments", "acknowledgements",
+    "appendix", "supporting information", "supplementary information",
+})
+
+# Numbered section headers: "1 Introduction", "2. Methods", "III. Results".
+_NUMBERED_SECTION_RE = re.compile(
+    r"^\s*(?:\d+|[ivxIVX]+)[.\s)]+\s*\w+", re.IGNORECASE,
+)
+
+# Repository / institution page banners: "University of ... [STARS]",
+# "Stanford University Libraries", "MIT Open Access".
+_REPOSITORY_BANNER_RE = re.compile(
+    r"^\s*(?:University|College|Institute|School|Department)\s+of\s+",
+    re.IGNORECASE,
+)
+
+# Markdown link fragments that sometimes leak into a heading-derived title
+# when Marker's first-heading extractor picks up a banner or TOC line.
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(")
+
 
 def is_junk_title(title: str, *, venue_hints: tuple[str, ...] = ()) -> bool:
     """Return True when ``title`` is a known placeholder or a venue name.
 
-    Catches Word's default ``"Word Document"`` / ``"Untitled"`` placeholders
-    and ``"Microsoft Word - foo.docx"``-style save-as artifacts. When a
-    journal / venue name slipped into the title slot (e.g. ``"Journal of
-    Alloys and Compounds"``) and the same string is present in
-    ``venue_hints``, it is treated as junk too.
+    Catches Word's default ``"Word Document"`` / ``"Untitled"`` placeholders,
+    ``"Microsoft Word - foo.docx"`` save-as artifacts, numbered section
+    headers (``"1 Introduction"``, ``"III. Methods"``), standalone section
+    names (``"Abstract"``, ``"Conclusions"``), university/repository banners,
+    and markdown-link fragments. When a venue name slipped into the title
+    slot and the same string appears in ``venue_hints``, it is treated as
+    junk too.
     """
     if title is None:
         return True
@@ -83,7 +113,18 @@ def is_junk_title(title: str, *, venue_hints: tuple[str, ...] = ()) -> bool:
     folded = collapsed.casefold()
     if folded in _JUNK_TITLE_LITERALS:
         return True
+    if folded in _SECTION_HEADER_LITERALS:
+        return True
     if _MS_WORD_JUNK_RE.match(collapsed):
+        return True
+    # Numbered section headers only when they end after the first word or
+    # two; "1 Introduction" fine to reject, but "1 Introduction to ALD" is
+    # a legitimate book-chapter title.
+    if _NUMBERED_SECTION_RE.match(collapsed) and len(collapsed.split()) <= 3:
+        return True
+    if _REPOSITORY_BANNER_RE.match(collapsed):
+        return True
+    if _MARKDOWN_LINK_RE.search(collapsed):
         return True
     if is_garbled_title(collapsed):
         return True
@@ -179,6 +220,33 @@ def extract_doi(text: str) -> str | None:
 def extract_document_doi(md_text: str) -> str | None:
     """Extract a document DOI while ignoring the references section."""
     return extract_doi(_pre_references_window(md_text))
+
+
+def extract_pdf_doi_fallback(path) -> str | None:
+    """Scan a PDF via pymupdf for a DOI printed on page 1-2 or the last page.
+
+    Marker classifies the header/footer band that usually carries the DOI
+    (e.g. ``doi: 10.1021/...`` or ``https://doi.org/...``) as page furniture
+    and drops it from the markdown. pymupdf preserves that text in its raw
+    page extraction, so we can recover the DOI for ~all journal PDFs that
+    Marker otherwise reports as DOI-less. Returns None if pymupdf is
+    unavailable or no DOI pattern matches.
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return None
+    try:
+        doc = fitz.open(str(path))
+    except Exception:  # noqa: BLE001 - any fitz-internal open failure
+        return None
+    try:
+        pages = [doc[i].get_text() for i in range(min(2, len(doc)))]
+        if len(doc) > 2:
+            pages.append(doc[-1].get_text())
+        return extract_doi("\n".join(pages))
+    finally:
+        doc.close()
 
 
 def extract_year_from_pdf_meta(meta: dict) -> int | None:

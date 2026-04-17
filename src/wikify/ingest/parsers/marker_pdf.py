@@ -232,6 +232,7 @@ def _extract_metadata(md_text: str, path: Path) -> dict:
         clean_markdown,
         extract_authors_from_markdown,
         extract_document_doi,
+        extract_pdf_doi_fallback,
         extract_publication_fields,
         extract_summary,
         first_heading,
@@ -242,6 +243,10 @@ def _extract_metadata(md_text: str, path: Path) -> dict:
     fn_year, fn_author, fn_title = parse_filename(path.name)
 
     doi = extract_document_doi(md_text)
+    if not doi:
+        # Marker strips DOIs printed in header/footer layout bands. pymupdf
+        # sees that text, so we scan the raw PDF as a fallback.
+        doi = extract_pdf_doi_fallback(path)
     publication = extract_publication_fields(md_text)
     summary = extract_summary(md_text)
 
