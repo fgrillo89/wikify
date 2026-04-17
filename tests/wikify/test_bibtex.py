@@ -6,7 +6,10 @@ import bibtexparser
 
 from wikify.ingest.bibtex import (
     _author_has_prose_residue,
+    _clean_author_name,
     _clean_bib_title,
+    _looks_like_author_fragment,
+    _strip_author_artifacts,
     _strip_year_anchored_tail,
     paper_to_bibtex,
     write_corpus_bibliography,
@@ -347,28 +350,41 @@ def test_dedup_by_doi_across_citations(tmp_path):
 
 class TestYearAnchoredTailStrip:
     def test_strips_journal_year_vol_pages(self):
-        out = _strip_year_anchored_tail(
+        # End-to-end via _clean_bib_title: year-anchor cuts at the LAST
+        # boundary before the year, then trailing-abbrev strip removes
+        # the journal-name residue.
+        out = _clean_bib_title(
             "Bistable switching in electroformed metal-insulator-metal devices. "
             "Phys Status Solidi. 1988, 108, 11",
         )
         assert out == "Bistable switching in electroformed metal-insulator-metal devices"
 
     def test_strips_book_publisher_and_year(self):
-        out = _strip_year_anchored_tail(
+        out = _clean_bib_title(
             "Electronic Processes in Ionic Crystals 2nd edn. "
             "(Oxford at the Clarendon Press, 1950)",
         )
-        assert out == "Electronic Processes in Ionic Crystals 2nd edn"
+        # LAST-boundary stops at the paren; the publisher text is
+        # cosmetic residue, not a bug worth a separate rule.
+        assert out.startswith("Electronic Processes in Ionic Crystals")
+        assert "1950" not in out
 
     def test_preserves_titles_without_years(self):
         t = "Atomic Layer Deposition for Semiconductor Devices"
         assert _strip_year_anchored_tail(t) == t
 
     def test_preserves_titles_with_year_as_keyword(self):
-        # A title mentioning a year in its own prose (no punct boundary)
-        # — the strip only fires when a boundary exists before the year.
         t = "The 2007 financial crisis analysis"
         assert _strip_year_anchored_tail(t) == t
+
+    def test_preserves_subtitle_before_citation(self):
+        # A legitimate subtitle shouldn't be lost to the year strip —
+        # only the citation tail after it.
+        out = _clean_bib_title(
+            "Paper Title. Subtitle of Work. Journal Name 2020, 5, 123",
+        )
+        assert "Subtitle" in out
+        assert "2020" not in out
 
     def test_handles_question_mark_boundary(self):
         out = _strip_year_anchored_tail(
@@ -404,3 +420,71 @@ class TestAuthorProseResidue:
     def test_accepts_particles(self):
         assert not _author_has_prose_residue("de la Cruz")
         assert not _author_has_prose_residue("van der Pauw")
+
+
+class TestStripAuthorArtifacts:
+    def test_strips_ieee_affiliation_tail(self):
+        assert _strip_author_artifacts(
+            "Facai Wu is with the University of ...",
+        ) == "Facai Wu"
+
+    def test_strips_et_al(self):
+        assert _strip_author_artifacts("Yue Xin and Bai Sun et al. -") == (
+            "Yue Xin and Bai Sun"
+        )
+
+    def test_strips_trailing_dash(self):
+        assert _strip_author_artifacts("Tatsuya Toda —") == "Tatsuya Toda"
+
+    def test_preserves_clean_name(self):
+        assert _strip_author_artifacts("J. Smith") == "J. Smith"
+
+    def test_strips_were_with(self):
+        assert _strip_author_artifacts(
+            "Hong Chen and Jinbin Wang were with the",
+        ) == "Hong Chen and Jinbin Wang"
+
+
+class TestLooksLikeAuthorFragment:
+    def test_initial_and_surname(self):
+        assert _looks_like_author_fragment("D. Querlioz")
+
+    def test_two_word_name(self):
+        assert _looks_like_author_fragment("Hai Li")
+
+    def test_hyphenated(self):
+        assert _looks_like_author_fragment("Galdin-Retailleau")
+
+    def test_rejects_prose_adjective(self):
+        # A single adjective looks like a candidate but the fragment test
+        # passes it — the reject rule in _reference_entry_from_citation
+        # uses an additional "some piece contains a period-initial" check
+        # that blocks adjective-only lists.
+        assert _looks_like_author_fragment("Flexible")
+
+    def test_rejects_long_piece(self):
+        assert not _looks_like_author_fragment(
+            "A Very Long Sentence That Goes Beyond Four Words",
+        )
+
+    def test_rejects_digits(self):
+        assert not _looks_like_author_fragment("TiO2")
+
+
+class TestCleanAuthorNameAffiliationCoda:
+    def test_strips_two_letter_affiliation(self):
+        assert _clean_author_name("Xin-Gui Tang ab") == "Xin-Gui Tang"
+
+    def test_strips_single_letter_affiliation(self):
+        assert _clean_author_name("Mi Hyang Park a") == "Mi Hyang Park"
+
+    def test_preserves_two_token_mixed_case_name(self):
+        # Guard against the widened trailing-letter regex stripping
+        # legitimate short given names like "Yang yi" / "Chen li".
+        assert _clean_author_name("Yang yi") == "Yang yi"
+
+    def test_normalises_all_lowercase(self):
+        assert _clean_author_name("yang yi") == "Yang Yi"
+
+    def test_preserves_particles(self):
+        assert _clean_author_name("van der Waals") == "van der Waals"

@@ -115,11 +115,10 @@ _AFFILIATION_RE = re.compile(
 )
 
 
-# Lowercase name particles preserved during capitalization.
-_NAME_PARTICLES = frozenset({
-    "van", "von", "der", "de", "da", "di", "la", "le", "du",
-    "del", "den", "dos", "el", "al", "bin", "ibn",
-})
+# Lowercase name particles + suffixes canonical in metadata.py. Re-exported
+# here under private names to keep existing callers untouched.
+from .metadata import NAME_PARTICLES as _NAME_PARTICLES  # noqa: E402
+from .metadata import NAME_SUFFIXES as _NAME_SUFFIXES  # noqa: E402
 
 
 def _clean_author_name(name: str) -> str:
@@ -136,12 +135,21 @@ def _clean_author_name(name: str) -> str:
     all_lower = name == name.lower() and any(c.isalpha() for c in name)
     if not (all_upper or all_lower):
         # In the mixed-case path, a trailing 1-2 letter ALL-LOWERCASE
-        # token after capitalised content is an affiliation superscript
-        # flattened inline ("Xin-Gui Tang ab"). Strip it; preserve the
-        # all-lower case like "yang yi" which gets normalised below.
-        from .metadata import _strip_trailing_affiliation_letter
-
-        return _strip_trailing_affiliation_letter(name)
+        # token is an affiliation superscript ("Xin-Gui Tang ab", "Park a")
+        # ONLY when the name has ≥2 capitalised tokens before it. A
+        # 2-token name like "Yang yi" (cap+lower) is a legitimate
+        # given-name pair where the lowercased second token must not
+        # be stripped — there's no room for an affiliation marker
+        # there. A 3-token name like "Xin-Gui Tang ab" has a clear
+        # byline shape with room for the marker.
+        tokens = name.split()
+        if (
+            len(tokens) >= 3
+            and re.fullmatch(r"[a-z]{1,2}", tokens[-1])
+            and tokens[-2][:1].isupper()
+        ):
+            return " ".join(tokens[:-1])
+        return name
     parts = name.split()
     cleaned = []
     for i, part in enumerate(parts):
@@ -300,12 +308,9 @@ def _document_entry(doc: Document) -> dict[str, str]:
     return entry
 
 
-_AUTHOR_NAME_PARTICLES = frozenset({
-    "van", "von", "der", "de", "da", "di", "la", "le", "du",
-    "del", "den", "dos", "el", "al", "bin", "ibn", "and",
-    # Legitimate short name suffixes.
-    "jr", "sr", "ii", "iii", "iv",
-})
+# Prose-residue check: particles + suffixes + the "and" separator that
+# shows up between names in our splitter's input.
+_AUTHOR_NAME_PARTICLES = _NAME_PARTICLES | _NAME_SUFFIXES | frozenset({"and"})
 
 
 def _looks_like_author_fragment(piece: str) -> bool:
@@ -373,12 +378,18 @@ def _strip_year_anchored_tail(title: str) -> str:
     prefix = title[: year_m.start()]
     cuts = []
     for sep in (". ", ", ", " (", "? ", "! "):
-        idx = prefix.find(sep)
+        # Use ``rfind`` (LAST boundary before the year) so a legitimate
+        # subtitle like "Paper Title. Subtitle. Journal 2020" keeps
+        # "Paper Title. Subtitle" rather than losing everything after
+        # the first period. The trailing-journal-abbrev strip that runs
+        # later in ``_clean_bib_title`` catches any short journal-name
+        # residue between the subtitle and the year.
+        idx = prefix.rfind(sep)
         if idx >= 20:
             cuts.append(idx)
     if not cuts:
         return title
-    return title[: min(cuts)].rstrip(" .,;:()?!")
+    return title[: max(cuts)].rstrip(" .,;:()?!")
 
 
 def _clean_bib_title(title: str) -> str:
@@ -410,6 +421,16 @@ def _clean_bib_title(title: str) -> str:
     # ends with a period followed by 1-3 short capitalised words.
     title = re.sub(
         r"\.\s+[A-Z][A-Za-z]{0,11}(?:\s+[A-Z][A-Za-z]{0,11}){0,2}\.?\s*$",
+        "",
+        title,
+    )
+    # Strip a trailing `. <Journal> NN, NNN[-NNN]` tail — journal name
+    # followed by volume and page numbers, no year. Complementary to the
+    # year-anchored strip (which needs a year) and the trailing-abbrev
+    # strip (which doesn't allow numbers). Covers "Proceedings of the
+    # IEEE 86, 2278-", "Nat Nanotechnol 11, 693-699".
+    title = re.sub(
+        r"\.\s+[A-Z][A-Za-z ]{1,40}\s+\d{1,4}\s*,\s*\d+(?:[-–]\d+)?\s*$",
         "",
         title,
     )
@@ -592,12 +613,16 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     # Citation-fragment title: the "title" is really a comma-separated
     # list of name-shaped tokens (e.g. `Galdin-Retailleau, D. Querlioz`
     # where the parser kept the tail of an author list as the title).
-    # Structural test: if every comma-separated piece is itself a valid
-    # author shape and there are ≥2 pieces, it's an author list not a
-    # title.
+    # Structural test: every comma-separated piece looks like a name AND
+    # at least one piece contains a period-initial (`[A-Z]\.`). The
+    # period-initial requirement avoids false positives on genuine
+    # comma-list adjective titles like "Flexible, Transparent,
+    # Wafer-Scale ..." where no piece carries an author-initial.
     pieces = [p.strip() for p in title.split(",") if p.strip()]
-    if len(pieces) >= 2 and all(
-        _looks_like_author_fragment(p) for p in pieces
+    if (
+        len(pieces) >= 2
+        and all(_looks_like_author_fragment(p) for p in pieces)
+        and any(re.search(r"\b[A-Z]\.", p) for p in pieces)
     ):
         return None
     # Journal+year fragment ("Nanoscale, 2016, 8: 1383")

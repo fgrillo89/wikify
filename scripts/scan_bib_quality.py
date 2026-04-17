@@ -68,12 +68,19 @@ def _iter_entries(bib: str) -> list[dict[str, str]]:
 # Shared primitives
 # ---------------------------------------------------------------------------
 
-# Lowercase words that are legitimate parts of author names.
-_NAME_PARTICLES = frozenset({
-    "van", "von", "der", "de", "da", "di", "la", "le", "du",
-    "del", "den", "dos", "el", "al", "bin", "ibn",
-    "and",  # separator, not a particle but shows up between names
-})
+# Lowercase words that are legitimate parts of author names. Canonical
+# vocabulary lives in wikify.ingest.metadata so rule membership stays
+# consistent across all three callers (bibtex.py, the scanner, and any
+# future consumer).
+try:
+    from wikify.ingest.metadata import NAME_PARTICLES, NAME_SUFFIXES
+    _NAME_PARTICLES = NAME_PARTICLES | NAME_SUFFIXES | frozenset({"and"})
+except ImportError:  # standalone script run outside the package tree
+    _NAME_PARTICLES = frozenset({
+        "van", "von", "der", "de", "da", "di", "la", "le", "du",
+        "del", "den", "dos", "el", "al", "bin", "ibn",
+        "jr", "sr", "ii", "iii", "iv", "and",
+    })
 
 
 def _author_tokens(author: str) -> list[str]:
