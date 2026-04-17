@@ -44,7 +44,8 @@ def parse_filename(filename: str) -> tuple[int | None, str | None, str | None]:
 
 def parse_authors(raw: str) -> list[str]:
     raw = raw.replace(";", ",").replace(" and ", ",")
-    parts = [a.strip() for a in raw.split(",") if a.strip()]
+    parts = [_strip_trailing_affiliation_letter(a.strip()) for a in raw.split(",") if a.strip()]
+    parts = [p for p in parts if p]
     assembled: list[str] = []
     i = 0
     while i < len(parts):
@@ -52,8 +53,13 @@ def parse_authors(raw: str) -> list[str]:
         if i + 1 < len(parts):
             nxt = parts[i + 1].strip()
             is_initials = bool(re.match(r"^[A-Z][.\s]*(?:[A-Z]\.?\s*)*$", nxt))
+            # Accept a plain Capitalized given name (``Tian``) OR a hyphenated
+            # Chinese given name (``Tian-Yu``, ``Jia-Lin``). Hyphens are the
+            # only thing that was missing here -- the old ``[A-Z][a-z]{1,14}``
+            # regex silently rejected half of the Chinese author lists we
+            # ingest.
             is_first_name = bool(
-                re.match(r"^[A-Z][a-z]{1,14}$", nxt)
+                re.match(r"^[A-Z][a-z]{1,14}(?:-[A-Z][a-z]{1,14})?$", nxt)
                 and len(part.split()) == 1
                 and part[0:1].isupper()
             )
@@ -64,6 +70,25 @@ def parse_authors(raw: str) -> list[str]:
         assembled.append(part)
         i += 1
     return [a for a in assembled if _is_valid_author(a)]
+
+
+# A single lowercase letter surrounded by whitespace at the end of an author
+# token is an affiliation superscript that was flattened inline ("Mi Hyang
+# Park a"). We strip it when not preceded by a period (so proper initials
+# like "J. Smith" are left alone).
+_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]$")
+
+
+def _strip_trailing_affiliation_letter(token: str) -> str:
+    token = token.strip()
+    if not token:
+        return token
+    # Repeat to strip double markers like "... Vu a a" → "... Vu".
+    while True:
+        new = _TRAILING_AFFIL_LETTER_RE.sub("", token).strip()
+        if new == token:
+            return new
+        token = new
 
 
 def extract_doi(text: str) -> str | None:
@@ -829,6 +854,10 @@ def _parse_author_line(line: str) -> list[str]:
         cleaned,
     )
     cleaned = re.sub(r"(?<=[A-Za-z])(?:\s+\d+(?:\s*,\s*\d+)*)+\b", "", cleaned)
+    # Digits glued directly to a surname ("Tian-Yu Wang1, Jia-Lin Meng2")
+    # are affiliation superscripts the PDF stripped of whitespace. Remove
+    # the trailing digit cluster; keep the name.
+    cleaned = re.sub(r"(?<=[A-Za-z])\d+(?=[,\s]|$)", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return []
@@ -843,6 +872,11 @@ def _parse_author_line(line: str) -> list[str]:
         # comma before "and" (", and X") — the comma splitter leaves
         # "and X" as its own part.
         part = re.sub(r"^(?:and|&)\s+", "", part, flags=re.IGNORECASE).strip()
+        # Trailing isolated lowercase letter is an affiliation superscript
+        # flattened inline ("Mi Hyang Park a" → "Mi Hyang Park").
+        # Guarded on the letter being preceded by lowercase so proper
+        # initials ("J. Smith", "J.") survive.
+        part = _strip_trailing_affiliation_letter(part)
         if not part:
             continue
         words = part.split()
