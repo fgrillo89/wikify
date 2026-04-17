@@ -73,18 +73,24 @@ _BOILERPLATE_KEYWORDS = frozenset(
         # "rights" intentionally excluded — too ambiguous on its own.
     }
 )
-# Strong markers: if any of these phrases appear the chunk is almost
-# certainly a license block. Checked in addition to the ratio test.
-_BOILERPLATE_PHRASES = (
+# Unambiguous phrases: appearing alone is enough to reject a chunk. These
+# are specific enough that they practically never show up in paper prose.
+_BOILERPLATE_UNAMBIGUOUS = frozenset({
+    "wiley online library",
+    "onlinelibrary.wiley.com",
+})
+
+# Ambiguous phrases: a paper discussing copyright / open access might
+# mention any of these. They're diagnostic but not conclusive; used as
+# input to the keyword-ratio test below.
+_BOILERPLATE_AMBIGUOUS = frozenset({
     "terms and conditions",
     "all rights reserved",
     "rights reserved",
     "creative commons license",
-    "wiley online library",
-    "onlinelibrary.wiley.com",
     "from sciencedirect",
     "acs publications",
-)
+})
 _WORD_RE = re.compile(r"[A-Za-z]+")
 
 # A chunk with at least this fraction of boilerplate-keyword tokens gets
@@ -99,14 +105,13 @@ _BOILERPLATE_MIN_WORDS = 20
 def _is_boilerplate_chunk(text: str) -> bool:
     """True if ``text`` is dominated by publisher license / download notices."""
     lower = text.lower()
-    for phrase in _BOILERPLATE_PHRASES:
-        if phrase in lower:
-            # Strong-phrase hit alone isn't enough (a paper reviewing
-            # licensing could mention "Creative Commons"); require the
-            # keyword ratio to confirm. But "wiley online library" and
-            # "onlinelibrary.wiley.com" are unambiguous.
-            if phrase in ("wiley online library", "onlinelibrary.wiley.com"):
-                return True
+    # Fast path: unambiguous phrases short-circuit.
+    if any(phrase in lower for phrase in _BOILERPLATE_UNAMBIGUOUS):
+        return True
+    # Slower path: ratio test on boilerplate keywords. Ambiguous phrases
+    # are part of the keyword set so a chunk heavy in "terms and
+    # conditions" language still gets rejected without being a false
+    # positive on a single mention.
     words = _WORD_RE.findall(lower)
     if len(words) < _BOILERPLATE_MIN_WORDS:
         return False

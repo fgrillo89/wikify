@@ -847,11 +847,6 @@ _BIBTEX_MONTH_RE = re.compile(
     r",\s*month\s*=\s*[a-z]+\s*(?=,|\})", re.IGNORECASE,
 )
 
-# inproceedings records set booktitle instead of journal. Our fallback
-# pipeline expects journal/venue as the publication identity, so map it.
-_BIBTEX_BOOKTITLE_VENUE = ("booktitle",)
-
-
 def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     """Parse a single BibTeX entry string into a metadata dict."""
     cleaned = _BIBTEX_MONTH_RE.sub("", bibtex_text)
@@ -870,11 +865,10 @@ def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     for key in ("journal", "year", "volume", "pages", "publisher", "issn"):
         if entry.get(key):
             result[key] = _as_text(entry[key])
-    # Conference proceedings set booktitle; map to journal/venue.
-    for key in _BIBTEX_BOOKTITLE_VENUE:
-        if entry.get(key) and not result.get("journal"):
-            result["journal"] = _as_text(entry[key])
-            break
+    # Conference proceedings use booktitle in place of journal; map for
+    # our downstream pipeline which keys off journal/venue.
+    if entry.get("booktitle") and not result.get("journal"):
+        result["journal"] = _as_text(entry["booktitle"])
     if result.get("journal"):
         result["venue"] = _clean_venue(result["journal"])
     return result
@@ -1156,26 +1150,6 @@ def _merge_external_metadata(
         if not metadata.get(key):
             metadata[key] = value
 
-
-# Local values we treat as junk for DOI-authoritative fields. Matches the
-# ISSN header lines, copyright tails, and markdown formatting noise we saw
-# leaking from Marker-parsed mastheads into venue/journal fields.
-_JUNK_VALUE_RE = re.compile(
-    r"^\*\*|ISSN[:\s]|©\s*\d{4}|all\s+rights\s+reserved",
-    re.IGNORECASE,
-)
-
-
-def _value_is_junk(value: str) -> bool:
-    stripped = value.strip()
-    if not stripped:
-        return True
-    if _JUNK_VALUE_RE.search(stripped):
-        return True
-    # Volume/pages fields that are just placeholders ("xxx", "n/a", "-").
-    if stripped.lower() in {"xxx", "n/a", "na", "-", "—", "tbd", "in press"}:
-        return True
-    return False
 
 
 def _read_doc_markdown(corpus: CorpusPaths, doc: Document) -> str:

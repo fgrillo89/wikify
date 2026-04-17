@@ -75,6 +75,9 @@ _SECTION_HEADER_LITERALS = frozenset({
     "conclusion", "conclusions", "conclusions and outlook",
     "references", "bibliography", "acknowledgments", "acknowledgements",
     "appendix", "supporting information", "supplementary information",
+    # Front-matter section labels Marker sometimes lifts as the title:
+    "conflict of interest", "competing interests", "funding", "ethics",
+    "data availability", "author contributions", "author contribution",
 })
 
 # Numbered section headers: "1 Introduction", "2. Methods", "III. Results".

@@ -72,32 +72,37 @@ def resolve_many(
     if not to_fetch:
         return results
 
-    # Step 2 — CrossRef batch for everything uncached.
+    # Steps 2 + 3 — CrossRef batch, then doi.org fallback for misses and
+    # incomplete records. Run in a single event loop so the HTTP client
+    # can be torn down once and the function can be extended to run from
+    # within an existing loop later (``asyncio.run`` in the middle of a
+    # coroutine raises).
     logger.info(
         "DOI resolve: %d cached, %d via CrossRef + doi.org fallback",
         len(results), len(to_fetch),
     )
-    xref = asyncio.run(
-        _crossref_batch(
+
+    async def _resolve() -> tuple[dict, dict]:
+        xref_local = await _crossref_batch(
             to_fetch,
             concurrency=crossref_concurrency,
             qps=crossref_qps,
             timeout=timeout,
-        ),
-    )
-
-    # Step 3 — doi.org fallback for CrossRef misses and incomplete records.
-    missed = [d for d in to_fetch if not _is_complete(xref.get(d))]
-    fallback: dict[str, dict[str, object]] = {}
-    if missed:
-        fallback = asyncio.run(
-            _doiorg_fallback(
-                missed,
+        )
+        missed_local = [
+            d for d in to_fetch if not _is_complete(xref_local.get(d))
+        ]
+        fallback_local: dict[str, dict[str, object]] = {}
+        if missed_local:
+            fallback_local = await _doiorg_fallback(
+                missed_local,
                 concurrency=doiorg_concurrency,
                 qps=doiorg_qps,
                 timeout=timeout,
-            ),
-        )
+            )
+        return xref_local, fallback_local
+
+    xref, fallback = asyncio.run(_resolve())
 
     # Merge: prefer CrossRef (richer) when both returned, fall back to
     # doi.org, then negative-cache whatever remains.
@@ -175,6 +180,10 @@ def _parse_crossref_item(item: dict) -> dict[str, object]:
     return {k: v for k, v in biblio.items() if v}
 
 
+_CROSSREF_MAX_RETRIES = 3
+_CROSSREF_BACKOFF_BASE = 1.0
+
+
 async def _crossref_batch(
     dois: list[str], *, concurrency: int, qps: float, timeout: float,
 ) -> dict[str, dict[str, object]]:
@@ -193,8 +202,8 @@ async def _crossref_batch(
 
         @with_limiter(limiter)
         @with_semaphore(semaphore)
-        async def fetch_batch(batch: list[str]) -> list[dict]:
-            resp = await client.get(
+        async def _one_request(batch: list[str]) -> httpx.Response:
+            return await client.get(
                 "https://api.crossref.org/works",
                 params={
                     "filter": ",".join(f"doi:{d}" for d in batch),
@@ -202,9 +211,41 @@ async def _crossref_batch(
                     "select": _CROSSREF_SELECT,
                 },
             )
-            if resp.status_code != 200:
+
+        async def fetch_batch(batch: list[str]) -> list[dict]:
+            # Retry 429/503 with bounded exponential backoff + jitter.
+            # Other non-200 codes (400, 500) aren't retryable — CrossRef
+            # returns 400 on malformed filter syntax; retrying wastes
+            # budget and shouldn't hide the diagnostic.
+            for attempt in range(_CROSSREF_MAX_RETRIES):
+                try:
+                    resp = await _one_request(batch)
+                except httpx.HTTPError as exc:
+                    logger.debug("CrossRef HTTP error (attempt %d): %s",
+                                 attempt + 1, exc)
+                    await asyncio.sleep(
+                        _CROSSREF_BACKOFF_BASE * (2 ** attempt)
+                        + random.uniform(0, 0.5),
+                    )
+                    continue
+                if resp.status_code == 200:
+                    return (resp.json().get("message") or {}).get("items") or []
+                if resp.status_code in (429, 503):
+                    logger.info("CrossRef %d, retry %d/%d", resp.status_code,
+                                attempt + 1, _CROSSREF_MAX_RETRIES)
+                    await asyncio.sleep(
+                        _CROSSREF_BACKOFF_BASE * (2 ** attempt)
+                        + random.uniform(0, 0.5),
+                    )
+                    continue
+                logger.warning(
+                    "CrossRef non-retryable %d for batch of %d DOIs",
+                    resp.status_code, len(batch),
+                )
                 return []
-            return (resp.json().get("message") or {}).get("items") or []
+            logger.warning("CrossRef exhausted retries for batch of %d DOIs",
+                           len(batch))
+            return []
 
         results = await asyncio.gather(
             *(fetch_batch(b) for b in batches), return_exceptions=True,

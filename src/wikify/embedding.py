@@ -186,6 +186,55 @@ def _resolve_batch_size(model: str | None, override: int | None) -> int:
     return model_config(model or FE_MODEL_DEFAULT).batch_size
 
 
+def _split_by_tokens(
+    text: str, max_tokens: int, tokenizer,
+) -> list[str]:
+    """Split ``text`` into pieces that each tokenize to <= ``max_tokens``.
+
+    Uses fastembed's exposed HuggingFace-style tokenizer to enforce the
+    actual token-length constraint (the thing the embedder OOMs on),
+    rather than a char-to-token ratio heuristic that's fragile on
+    dense scientific markdown. Reserves 2 tokens per piece for the
+    [CLS] / [SEP] special tokens the embedder prepends/appends.
+    """
+    try:
+        encoding = tokenizer.encode(text, add_special_tokens=False)
+        ids = list(encoding.ids)
+    except Exception:  # noqa: BLE001 - fall back to char-split on any failure
+        return _split_by_chars(text, max_tokens)
+    if len(ids) <= max_tokens:
+        return [text]
+    chunk = max_tokens - 2
+    pieces: list[str] = []
+    for i in range(0, len(ids), chunk):
+        pieces.append(tokenizer.decode(ids[i : i + chunk]))
+    return [p for p in pieces if p.strip()]
+
+
+def _split_by_chars(text: str, max_tokens: int) -> list[str]:
+    """Fallback when the tokenizer isn't accessible: conservative char split.
+
+    One character can map to at most one token (BPE tokens always consume
+    ≥1 char of input), so ``char_cap = max_tokens`` is guaranteed to keep
+    every piece within the model's window. Less efficient than token-based
+    splitting on typical text (3–4 chars/token usually) but correct without
+    tokenizer access.
+    """
+    if len(text) <= max_tokens:
+        return [text]
+    return [
+        text[i : i + max_tokens] for i in range(0, len(text), max_tokens)
+    ]
+
+
+def _get_tokenizer():
+    """Return fastembed's internal HuggingFace tokenizer, or None."""
+    try:
+        return _fe_model.model.tokenizer  # type: ignore[union-attr]
+    except AttributeError:
+        return None
+
+
 def _fe_embed_with(
     model: str | None,
     texts: Sequence[str],
@@ -198,31 +247,24 @@ def _fe_embed_with(
     if not texts:
         dim = getattr(_fe_model, "embedding_size", cfg.dim) or cfg.dim
         return np.zeros((0, dim), dtype=np.float32)
-    # Split-and-mean-pool guard. ModelConfig.max_tokens is informational for
-    # the chunker, not an input-length enforcement on fastembed. Without this
-    # step, chunks produced under a larger cap (e.g. the 8000-char sections
-    # on disk pre-Apr-2026) would be fed whole to the embedder and OOM the
-    # GPU at 4k+ tokens. We slice oversize inputs into ``char_cap``-sized
-    # pieces, embed all pieces in one batched pass, then mean-pool the
-    # pieces belonging to the same source text and re-normalise. This
-    # preserves full section signal (unlike naive truncation) at the cost
-    # of blurring multi-topic sections into a single vector.
-    #
-    # 1.5 chars/token is the worst-case ratio observed for dense scientific
-    # markdown (Marker output with equations, short numeric symbols, and
-    # reference-style tokens). Looser ratios (2.5) produced pieces of ~3k
-    # tokens that OOM'd DML at batch 8. Keep this tight.
-    char_cap = int(cfg.max_tokens * 1.5)
+    # Token-level split-and-mean-pool guard. ``ModelConfig.max_tokens`` is
+    # informational for the chunker; it's not enforced by fastembed on the
+    # way in. Without this pass, an oversize chunk (8k-char section from a
+    # pre-cap ingest, or a dense chunk with low chars/token ratio) gets
+    # fed whole to the embedder and OOMs the GPU. We tokenize each input,
+    # split any that exceed ``max_tokens`` into consecutive token-windows,
+    # embed all pieces in one batched pass, and mean-pool + re-normalise.
+    tokenizer = _get_tokenizer()
     pieces: list[str] = []
     owners: list[int] = []
     for i, t in enumerate(texts):
-        if len(t) <= char_cap:
-            pieces.append(t)
-            owners.append(i)
+        if tokenizer is not None:
+            parts = _split_by_tokens(t, cfg.max_tokens, tokenizer)
         else:
-            for start in range(0, len(t), char_cap):
-                pieces.append(t[start:start + char_cap])
-                owners.append(i)
+            parts = _split_by_chars(t, cfg.max_tokens)
+        for part in parts:
+            pieces.append(part)
+            owners.append(i)
     bs = _resolve_batch_size(model, batch_size)
     piece_emb = np.asarray(
         list(_fe_model.embed(pieces, batch_size=bs)),

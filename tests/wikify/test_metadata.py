@@ -70,6 +70,70 @@ class TestIsJunkTitle:
         # is_garbled_title catches "abc_def123" style tokens.
         assert is_junk_title("fn1_x2") is True
 
+    # ------------- Section-header literals (observed in the wild) -----------
+
+    def test_section_headers_rejected(self):
+        # Each of these actually leaked into corpus_papers.bib once from a
+        # paper where Marker tagged the section label as the first heading.
+        for t in (
+            "Abstract", "Introduction", "Conclusions", "References",
+            "Methods", "Results", "Discussion", "Acknowledgements",
+            "Supporting Information",
+            "Conflict of Interest",
+        ):
+            assert is_junk_title(t) is True, t
+
+    def test_section_header_case_insensitive(self):
+        assert is_junk_title("ABSTRACT") is True
+        assert is_junk_title("conclusions") is True
+
+    def test_numbered_section_rejected(self):
+        # `_NUMBERED_SECTION_RE` catches arabic, roman, lettered, and
+        # mixed-punctuation numbering as long as the whole thing is <= 3 words.
+        for t in (
+            "1 Introduction",
+            "2. Methods",
+            "III. Results",
+            "IV Discussion",
+        ):
+            assert is_junk_title(t) is True, t
+
+    def test_long_numbered_heading_accepted(self):
+        # A legitimate book-chapter title that happens to start with a
+        # number must survive — more than 3 words is the guard.
+        assert is_junk_title("1 Introduction to Atomic Layer Deposition") is False
+
+    # ------------- Repository / institutional banners ----------------------
+
+    def test_repository_banner_rejected(self):
+        # Marker picks up the first-page banner as a heading on some
+        # thesis / repository PDFs.
+        for t in (
+            "University of Central Florida",
+            "Institute of Physics",
+            "School of Chemistry",
+            "Department of Materials Science",
+            "College of Engineering",
+        ):
+            assert is_junk_title(t) is True, t
+
+    # ------------- Markdown link fragment ----------------------------------
+
+    def test_markdown_link_fragment_rejected(self):
+        # Observed: Marker emitted the header's hyperlinked venue as the
+        # first heading.
+        assert is_junk_title(
+            "[Materials Today: Proceedings xxx \\(xxxx\\) xxx](",
+        ) is True
+        assert is_junk_title("[www.acsanm.org](www.acsanm.org?ref=pdf)") is True
+
+    def test_plain_title_with_brackets_accepted(self):
+        # Brackets alone are fine; the junk pattern requires the `](` link
+        # syntax.
+        assert is_junk_title(
+            "[2022 Ismail] Forming-free Pt Al2O3 TiN memristor",
+        ) is False
+
 
 # ---------------------------------------------------------------------------
 # Filename title recovery
