@@ -154,19 +154,31 @@ class DOICache:
         self._conn.commit()
 
     def get_many(self, dois: list[str]) -> dict[str, dict[str, object]]:
-        """Look up multiple DOIs. Returns {doi: metadata} for found ones."""
+        """Look up multiple DOIs. Returns ``{doi: metadata}`` for every
+        row that exists in the cache, including negative-result rows
+        (empty metadata from a prior "not-found" resolution) so callers
+        can treat any cache hit as "already tried, don't re-fetch".
+
+        Callers that want only usable data should drop rows whose
+        ``title`` is empty.
+        """
         out: dict[str, dict[str, object]] = {}
         for doi in dois:
             meta = self.get(doi)
-            if meta and meta.get("title"):
+            if meta is not None:
                 out[doi.lower()] = meta
         return out
 
     def put_many(self, items: dict[str, dict[str, object]], source: str = "crossref") -> None:
-        """Store multiple resolved DOIs."""
+        """Store multiple resolved DOIs.
+
+        Entries with empty metadata ARE stored (as negative-result rows)
+        so that subsequent refreshes can see the DOI was already checked
+        and skip re-fetching it from upstream.
+        """
         for doi, meta in items.items():
-            if meta and meta.get("title"):
-                self.put(doi, meta, source)
+            marker = source if meta and meta.get("title") else "not-found"
+            self.put(doi, meta or {}, marker)
 
 
 class DatabaseManager:

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 from aiolimiter import AsyncLimiter
 
 from ..citestore.parse import parse_citation
+from ..util.async_limits import with_limiter as _add_limiter
+from ..util.async_limits import with_semaphore as _add_semaphore
 
 if TYPE_CHECKING:
     from ..models import Document
@@ -36,10 +38,6 @@ _DOI_FIELD_MAP = {
 # ---------------------------------------------------------------------------
 # Async DOI content negotiation
 # ---------------------------------------------------------------------------
-
-from ..util.async_limits import with_limiter as _add_limiter
-from ..util.async_limits import with_semaphore as _add_semaphore
-
 
 _CROSSREF_BATCH_SIZE = 75
 
@@ -233,24 +231,25 @@ def _fuse_citations(docs: list[Document]) -> None:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
-def _default_cache_path() -> Path:
-    """Global DOI cache: data/doi_cache.db (shared across corpora)."""
-    return Path("data/doi_cache.db")
-
-
 def enrich_citations(
     docs: list[Document],
     *,
+    cache_path: Path,
     use_doi: bool = True,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
-    cache_path: Path | None = None,
 ) -> None:
     """Enrich all citations across all documents in-place.
+
+    Uses the per-corpus ``<corpus>/.citestore.db`` cache (same file
+    bibtex.py uses) — a single DOI-resolution truth per corpus, visible
+    to both the corpus-paper and reference-citation paths.
 
     Four passes:
     0. Re-extract DOIs from raw_text (fixes truncated DOIs)
     1. Heuristic extraction via citestore.parse (zero API calls)
-    2. DOI resolution: check cache -> CrossRef batch -> doi.org fallback -> store in cache
+    2. DOI resolution: check cache -> CrossRef batch -> doi.org fallback
+       -> store in cache (both successful resolutions AND negative
+       results, so we don't re-fetch missing DOIs on every refresh).
     3. Cross-paper evidence fusion
     """
     from ..citestore.db import DOICache
@@ -287,9 +286,9 @@ def enrich_citations(
             _fuse_citations(docs)
             return
 
-        db_path = cache_path or _default_cache_path()
-        with DOICache(db_path) as cache:
-            # Check cache first
+        with DOICache(cache_path) as cache:
+            # Check cache first — existing rows (even empty ones from a
+            # prior negative-result cache) count as "already tried".
             doi_meta = cache.get_many(unique_dois)
             cached_count = len(doi_meta)
 
@@ -314,9 +313,16 @@ def enrich_citations(
                         fallback = asyncio.run(_resolve_dois_doiorg(missed))
                         fresh.update(fallback)
 
-                # Store all fresh results in cache
+                # Negative-result cache: any DOI still unresolved gets a
+                # placeholder row so we don't re-fetch it next refresh.
+                # Without this, CrossRef/doi.org misses cost 5+ s every
+                # refresh for papers that genuinely aren't registered.
+                for d in uncached:
+                    if d.lower() not in fresh:
+                        fresh[d.lower()] = {}
+
                 cache.put_many(fresh, source="crossref")
-                doi_meta.update(fresh)
+                doi_meta.update({k: v for k, v in fresh.items() if v})
 
             logger.info(
                 "DOI resolution: %d cached, %d fetched, %d total",

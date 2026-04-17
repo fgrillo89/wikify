@@ -18,6 +18,8 @@ import httpx
 from aiolimiter import AsyncLimiter
 from rapidfuzz import fuzz
 
+from ..util.async_limits import with_limiter as add_limiter
+from ..util.async_limits import with_semaphore as add_semaphore
 from .bibtex import openalex_to_bibtex
 from .db import DatabaseManager
 from .models import ResolutionResult, Work
@@ -44,10 +46,6 @@ def _sha256(text: str) -> str:
 
 def _extract_openalex_id(url: str) -> str:
     return url.rsplit("/", 1)[-1] if "/" in url else url
-
-
-from ..util.async_limits import with_limiter as add_limiter
-from ..util.async_limits import with_semaphore as add_semaphore
 
 
 def parse_openalex_work(item: dict) -> Work:

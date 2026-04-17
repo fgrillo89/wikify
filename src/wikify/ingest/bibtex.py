@@ -27,7 +27,6 @@ from .metadata import (
     extract_authors_from_markdown,
     extract_document_doi,
     extract_publication_fields,
-    first_heading,
     parse_filename,
 )
 
@@ -1230,7 +1229,7 @@ def _merge_external_metadata(
     local list was flagged as junk (_authors_need_fallback), otherwise
     local wins since DOI records often abbreviate given names.
     """
-    _DOI_AUTHORITATIVE = (
+    doi_authoritative = (
         "title", "journal", "venue", "volume", "pages", "publisher",
         "issn", "url",
     )
@@ -1244,7 +1243,7 @@ def _merge_external_metadata(
             elif not metadata.get(key):
                 metadata[key] = value
             continue
-        if key in _DOI_AUTHORITATIVE:
+        if key in doi_authoritative:
             metadata[key] = value
             continue
         # For everything else (summary, year, etc.), keep local when present.
