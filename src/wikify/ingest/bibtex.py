@@ -259,14 +259,28 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
-    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations)
+    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations).
     title = re.sub(
         r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
+    )
+    # Strip trailing ". Journal Name YYYY, Vol, Pages" — year embedded in
+    # the journal-name segment rather than after it. Observed on Park 2020:
+    # ". Journal of Materials Chemistry C 2020, 8, 9163− 9183". Requires a
+    # multi-word capitalised segment + 4-digit year + volume + page.
+    title = re.sub(
+        r"\.\s+[A-Z][A-Za-z ]{5,60}\s+\d{4}\s*,\s*\d+\s*,\s*\d+.*$", "", title,
     )
     # Strip URLs anywhere in title (including space-broken URLs from PDF)
     title = re.sub(r"\s*https?://[\S\s]*$", "", title)
     # Strip leading "Author et al., " prefix
     title = re.sub(r"^[A-Z][\w.-]+\s+et\s+al\.\s*,?\s*", "", title)
+    # Strip leading stranded initial — happens when an author's middle
+    # initial bleeds into the title at citation-parse time, producing
+    # "H. Memristors based on 2D materials..." (real title:
+    # "Memristors based on 2D materials..."). Only strip when the next
+    # token is title-cased and ≥4 chars, avoiding genus abbreviations
+    # like "A. vulgaris" where the species name is lowercased.
+    title = re.sub(r"^[A-Z]\.\s+(?=[A-Z][a-z]{3,})", "", title)
     # Strip leading "Surname, and Author, " (leaked last authors)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+and\s+[A-Z].*?,\s+", "", title)
     # Strip leading "Surname, Initials" (leaked single author at start)
