@@ -562,16 +562,25 @@ def build_citation_index(
             doi = _clean_doi(raw) if raw else ""
             if doi:
                 prefetch_dois.append(doi)
+        db_path = corpus.root / ".citestore.db" if corpus.root else None
         if prefetch_dois:
-            batch_cache = resolve_doi_metadata_batch(prefetch_dois)
+            batch_cache = resolve_doi_metadata_batch(
+                prefetch_dois, cache_path=db_path,
+            )
 
         def _cached_lookup(doi: str) -> dict[str, object]:
-            if doi in batch_cache:
-                return batch_cache[doi]
+            key = doi.lower()
+            if key in batch_cache:
+                return batch_cache[key]
             # DOI discovered at refresh time (e.g. via pymupdf fallback)
-            # that wasn't in the initial prefetch. Fall back to sync one-off.
-            result = resolve_doi_metadata(doi)
-            batch_cache[doi] = result
+            # that wasn't in the initial prefetch. Re-enter the batch
+            # path with the single missing DOI so it hits the cache +
+            # limiter like the rest.
+            single = resolve_doi_metadata_batch(
+                [doi], cache_path=db_path,
+            )
+            result = single.get(key, {})
+            batch_cache[key] = result
             return result
 
         doi_lookup = _cached_lookup
@@ -827,52 +836,94 @@ def resolve_doi_metadata(
 def resolve_doi_metadata_batch(
     dois: list[str],
     *,
+    cache_path: Path | None = None,
     concurrency: int = 10,
+    requests_per_second: float = 5.0,
     timeout: float = 10.0,
 ) -> dict[str, dict[str, object]]:
     """Resolve many DOIs concurrently via doi.org content negotiation.
 
-    Uses httpx.AsyncClient + asyncio.Semaphore(concurrency). doi.org serves
-    redirects at roughly 50 qps per source IP; 10 concurrent requests is a
-    polite default that also fits the "rate-limiter" contract for shared
-    infrastructure. Returns a dict keyed by input DOI; missing / failed
+    Uses the same limiter + semaphore decorator pattern as
+    ``citestore.resolver.AsyncResolver`` (aiolimiter.AsyncLimiter for the
+    polite-qps floor, asyncio.Semaphore for the hard-concurrency cap) so
+    refresh-time DOI enrichment matches the idiom already established for
+    OpenAlex. Results are persisted in the ``citestore`` DOI cache
+    (``<corpus>/.citestore.db``) when ``cache_path`` is given — a second
+    refresh on the same corpus skips the network entirely.
+
+    Returns a dict keyed by input DOI (lowercased); missing / failed
     lookups are omitted. Runs a fresh event loop so callers stay sync.
     """
     if not dois:
         return {}
     import asyncio
+    from functools import wraps
 
     import httpx
+    from aiolimiter import AsyncLimiter
 
-    unique = list(dict.fromkeys(d for d in dois if d))
+    from ..citestore.db import DOICache
+
+    unique = list(dict.fromkeys(d.lower() for d in dois if d))
     if not unique:
         return {}
 
+    results: dict[str, dict[str, object]] = {}
+    to_fetch: list[str] = []
+
+    # Cache lookup — pull already-resolved DOIs, regardless of source
+    # (CrossRef / doi.org / OpenAlex all land in the same `works` table).
+    if cache_path is not None:
+        with DOICache(cache_path) as cache:
+            hits = cache.get_many(unique)
+        results.update(hits)
+        to_fetch = [d for d in unique if d not in hits]
+    else:
+        to_fetch = unique
+
+    if not to_fetch:
+        return results
+
     async def _run() -> dict[str, dict[str, object]]:
         sem = asyncio.Semaphore(concurrency)
-        results: dict[str, dict[str, object]] = {}
+        limiter = AsyncLimiter(1, round(1 / requests_per_second, 3))
+        fetched: dict[str, dict[str, object]] = {}
         headers = {"Accept": "application/x-bibtex"}
 
         async with httpx.AsyncClient(
             timeout=timeout, follow_redirects=True,
         ) as client:
+            @wraps(client.get)
+            async def _get(url: str) -> httpx.Response:
+                async with limiter, sem:
+                    return await client.get(url, headers=headers)
+
             async def _one(doi: str) -> None:
-                async with sem:
-                    try:
-                        resp = await client.get(
-                            f"https://doi.org/{doi}", headers=headers,
-                        )
-                    except httpx.HTTPError:
-                        return
-                    if resp.status_code == 200:
-                        parsed = _metadata_from_bibtex_entry(resp.text)
-                        if parsed:
-                            results[doi] = parsed
+                try:
+                    resp = await _get(f"https://doi.org/{doi}")
+                except httpx.HTTPError:
+                    return
+                if resp.status_code != 200:
+                    return
+                parsed = _metadata_from_bibtex_entry(resp.text)
+                if parsed:
+                    fetched[doi] = parsed
 
-            await asyncio.gather(*(_one(d) for d in unique))
-        return results
+            await asyncio.gather(*(_one(d) for d in to_fetch))
+        return fetched
 
-    return asyncio.run(_run())
+    fetched = asyncio.run(_run())
+    results.update(fetched)
+
+    # Persist fresh results to the shared DOI cache.
+    if cache_path is not None and fetched:
+        with DOICache(cache_path) as cache:
+            for doi, meta in fetched.items():
+                try:
+                    cache.put(doi, meta, source="doi.org")
+                except Exception:  # noqa: BLE001
+                    pass
+    return results
 
 
 def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
