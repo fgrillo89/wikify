@@ -45,6 +45,16 @@ _LINE_NOISE_SUBSTRINGS = (
     "free of charge via the internet",
     "supporting information",
     "available free of charge",
+    # Publisher-specific per-page license footers. These appear as
+    # standalone lines (or short paragraphs) on every page of the PDF
+    # and never carry real content — always licensing metadata.
+    "onlinelibrary.wiley.com",
+    "see the terms and conditions",
+    "terms-and-conditions",
+    "wiley online library",
+    "downloaded for",
+    "from sciencedirect",
+    "acs publications",
 )
 
 # Single-line patterns matched by regex. Each branch is structurally
@@ -167,6 +177,108 @@ def _strip_noise_paragraphs(md: str) -> str:
     return "\n\n".join(kept)
 
 
+# --- publisher license blocks --------------------------------------------
+#
+# Wiley, Elsevier, ACS and similar journals stamp a multi-line license
+# notice on every PDF page. After pymupdf4llm reconstruction these land
+# as a single short paragraph that contains enough "content words" to
+# dodge the plain ``_LINE_NOISE_SUBSTRINGS`` filter (the sentence
+# "Downloaded from … by X University … Wiley Online Library on …" is
+# one line) but still carries zero research signal.
+#
+# The strongest signal is a paragraph that pairs "Downloaded from" with
+# a publisher domain, or pairs "licensed under" with "Creative Commons".
+# We match on the whole paragraph (case-insensitive) and drop it entirely
+# when those pairs co-occur — both signals must be present so a passing
+# mention of either phrase in real prose survives.
+_LICENSE_PARAGRAPH_PATTERNS = (
+    re.compile(
+        r"(?is)downloaded\s+from.{0,200}"
+        r"(?:wiley|onlinelibrary|sciencedirect|elsevier|pubs\.acs\.org|pubs\.rsc\.org|aip\.scitation|link\.springer)",
+    ),
+    re.compile(
+        r"(?is)licensed\s+under.{0,200}creative\s+commons",
+    ),
+    re.compile(
+        r"(?is)terms\s+and\s+conditions.{0,200}(?:wiley|onlinelibrary)",
+    ),
+    re.compile(
+        r"(?is)©\s*20\d{2}\s+(?:wiley|elsevier|acs|springer)",
+    ),
+)
+
+# Affiliation footnote block. Pattern: short paragraph whose text is
+# dominated by an institution marker plus an email. Real author
+# affiliations on the first page look like:
+#
+#   "… Institute of Micro and Nanotechnologies …, Technische Universität
+#    Ilmenau, Ilmenau, Germany. email: …@tu-ilmenau.de"
+#
+# or a dagger/asterisk-marked footnote line:
+#
+#   "† Institute of Molecular Sciences, …"
+#
+# We require BOTH an institution phrase AND an email-like token to keep
+# the filter narrow; research prose that happens to mention an institute
+# will almost never include "email:" or a lone bare address.
+_AFFILIATION_INSTITUTION_RE = re.compile(
+    r"(?i)\b(?:institute\s+of|department\s+of|school\s+of|college\s+of|"
+    r"laboratory\s+of|faculty\s+of|state\s+key\s+laboratory)\b"
+)
+_AFFILIATION_EMAIL_RE = re.compile(r"(?i)\b(?:e-?mail[:\s]|[\w.\-]+@[\w\-]+\.[a-z]{2,})")
+# Footnote-marker prefix: dagger / double-dagger / asterisk / section sign
+# at the very start of a short paragraph. ``#`` is deliberately excluded
+# so we don't match markdown section headings like ``## Institute of X``.
+_AFFILIATION_FOOTNOTE_PREFIX_RE = re.compile(
+    r"^\s*[\*\u2020\u2021\u00a7\u00b6]+\s*",
+)
+
+
+def _is_license_paragraph(para: str) -> bool:
+    """True if ``para`` is a publisher license / download-notice block."""
+    if not para or len(para) > 1200:
+        return False
+    return any(p.search(para) for p in _LICENSE_PARAGRAPH_PATTERNS)
+
+
+def _is_affiliation_paragraph(para: str) -> bool:
+    """True if ``para`` is an author-affiliation footnote block.
+
+    Conservative: requires both an institution phrase AND an email token,
+    OR a leading footnote marker plus an institution phrase. Keeps the
+    detector short-paragraph-only so body prose is never touched.
+    """
+    stripped = para.strip()
+    if not stripped or len(stripped) > 600:
+        return False
+    has_institution = bool(_AFFILIATION_INSTITUTION_RE.search(stripped))
+    if not has_institution:
+        return False
+    has_email = bool(_AFFILIATION_EMAIL_RE.search(stripped))
+    if has_email:
+        return True
+    # Footnote-marker leader (†, ‡, *, §) on a short institution-line.
+    if _AFFILIATION_FOOTNOTE_PREFIX_RE.match(stripped) and len(stripped) < 400:
+        return True
+    return False
+
+
+def _strip_publisher_boilerplate(md: str) -> str:
+    """Drop license paragraphs and affiliation footnotes.
+
+    Runs before ``_strip_noise_paragraphs`` because the Wiley/Elsevier
+    blocks contain ``©`` / ``Copyright`` tokens that already trip
+    ``is_noise_paragraph`` but survive when fused with a caption or
+    figure number by pymupdf's column reconstruction.
+    """
+    paragraphs = re.split(r"\n\s*\n", md)
+    kept = [
+        p for p in paragraphs
+        if not (_is_license_paragraph(p) or _is_affiliation_paragraph(p))
+    ]
+    return "\n\n".join(kept)
+
+
 _REFS_SPLIT_RE = re.compile(
     r"^(#{1,3})[^A-Za-z0-9\n]*(?:\d+[\d.]*\s*)?"
     r"(?:references?|bibliography|works\s+cited)"
@@ -208,6 +320,7 @@ def clean_markdown_text(md: str) -> str:
     body = _strip_line_noise(body)
     body = _strip_repeated_headers(body)
     body = _strip_leading_journal_heading(body)
+    body = _strip_publisher_boilerplate(body)
     body = _strip_noise_paragraphs(body)
     body = _normalize_body_text(body)
 
@@ -215,9 +328,10 @@ def clean_markdown_text(md: str) -> str:
         # References get lighter-touch cleanup: line-noise trim + body
         # normalization (whitespace, hyphen rejoin, Unicode drop) but
         # NOT paragraph-level noise filtering. Running headers and
-        # licensing footers have already been removed by pymupdf4llm's
-        # layout engine.
+        # licensing footers still get removed (Wiley/Elsevier stamp
+        # the per-page license on every page including the ref list).
         refs_tail = _strip_line_noise(refs_tail)
+        refs_tail = _strip_publisher_boilerplate(refs_tail)
         refs_tail = _normalize_body_text(refs_tail)
         out = body + "\n" + refs_tail
     else:
