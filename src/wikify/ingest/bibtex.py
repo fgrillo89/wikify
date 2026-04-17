@@ -546,7 +546,36 @@ def build_citation_index(
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
-    # Phase 1: enrich docs and build source entries
+    # Phase 1: enrich docs and build source entries.
+    #
+    # DOI content negotiation is the long pole in wave D (1 HTTP RTT per
+    # doc * 200+ docs). Pre-fetch all DOIs concurrently (10-way semaphore)
+    # before the serial enrichment loop so ``_with_fallback_metadata`` can
+    # look up results from the batch cache instead of blocking on
+    # individual requests. ~10x speed-up on corpora with many DOIs.
+    batch_cache: dict[str, dict[str, object]] = {}
+    if resolve_doi and doi_lookup is None:
+        prefetch_dois = []
+        for doc in docs:
+            meta = doc.metadata or {}
+            raw = meta.get("doi")
+            doi = _clean_doi(raw) if raw else ""
+            if doi:
+                prefetch_dois.append(doi)
+        if prefetch_dois:
+            batch_cache = resolve_doi_metadata_batch(prefetch_dois)
+
+        def _cached_lookup(doi: str) -> dict[str, object]:
+            if doi in batch_cache:
+                return batch_cache[doi]
+            # DOI discovered at refresh time (e.g. via pymupdf fallback)
+            # that wasn't in the initial prefetch. Fall back to sync one-off.
+            result = resolve_doi_metadata(doi)
+            batch_cache[doi] = result
+            return result
+
+        doi_lookup = _cached_lookup
+
     enriched_docs = [
         _with_fallback_metadata(
             corpus, doc,
@@ -774,7 +803,12 @@ def write_corpus_bibliography(
 def resolve_doi_metadata(
     doi: str, *, timeout: float = 10.0,
 ) -> dict[str, object]:
-    """Fetch BibTeX metadata for a DOI using DOI content negotiation."""
+    """Fetch BibTeX metadata for a single DOI via doi.org content negotiation.
+
+    Synchronous single-DOI helper. When resolving a batch (the refresh
+    path in ``build_citation_index``), use ``resolve_doi_metadata_batch``
+    which fans requests out concurrently via an async semaphore.
+    """
     import httpx
 
     url = f"https://doi.org/{doi}"
@@ -788,6 +822,57 @@ def resolve_doi_metadata(
     except (httpx.HTTPError, Exception):
         return {}
     return _metadata_from_bibtex_entry(resp.text)
+
+
+def resolve_doi_metadata_batch(
+    dois: list[str],
+    *,
+    concurrency: int = 10,
+    timeout: float = 10.0,
+) -> dict[str, dict[str, object]]:
+    """Resolve many DOIs concurrently via doi.org content negotiation.
+
+    Uses httpx.AsyncClient + asyncio.Semaphore(concurrency). doi.org serves
+    redirects at roughly 50 qps per source IP; 10 concurrent requests is a
+    polite default that also fits the "rate-limiter" contract for shared
+    infrastructure. Returns a dict keyed by input DOI; missing / failed
+    lookups are omitted. Runs a fresh event loop so callers stay sync.
+    """
+    if not dois:
+        return {}
+    import asyncio
+
+    import httpx
+
+    unique = list(dict.fromkeys(d for d in dois if d))
+    if not unique:
+        return {}
+
+    async def _run() -> dict[str, dict[str, object]]:
+        sem = asyncio.Semaphore(concurrency)
+        results: dict[str, dict[str, object]] = {}
+        headers = {"Accept": "application/x-bibtex"}
+
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True,
+        ) as client:
+            async def _one(doi: str) -> None:
+                async with sem:
+                    try:
+                        resp = await client.get(
+                            f"https://doi.org/{doi}", headers=headers,
+                        )
+                    except httpx.HTTPError:
+                        return
+                    if resp.status_code == 200:
+                        parsed = _metadata_from_bibtex_entry(resp.text)
+                        if parsed:
+                            results[doi] = parsed
+
+            await asyncio.gather(*(_one(d) for d in unique))
+        return results
+
+    return asyncio.run(_run())
 
 
 def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
