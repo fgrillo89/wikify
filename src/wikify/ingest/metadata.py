@@ -275,7 +275,7 @@ def parse_authors(raw: str) -> list[str]:
 # token is an affiliation superscript that was flattened inline ("Mi Hyang
 # Park a"). We strip it when not preceded by a period (so proper initials
 # like "J. Smith" are left alone).
-_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]$")
+_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]{1,2}$")
 
 
 def _strip_trailing_affiliation_letter(token: str) -> str:

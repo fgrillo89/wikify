@@ -294,16 +294,12 @@ def _journal_has_issn_or_rights(entry: dict[str, str]) -> bool:
     ))
 
 
-def _journal_has_city_paren(entry: dict[str, str]) -> bool:
-    """Journal name has a trailing `(<City>)` publisher-location tag.
-
-    General: any trailing `(<word>)` where the word is a recognised
-    city-name shape — Title-cased single word, no digits. Flags
-    `(Basel)`, `(Cham)`, `(London)`, but not `(Pt. A)` which has a
-    period.
-    """
-    journal = entry.get("journal", "")
-    return bool(re.search(r"\s*\([A-Z][a-z]{2,}\)\s*$", journal))
+# NOTE: we previously had a `journal_has_city_paren` rule that flagged
+# `(Basel)`, `(Cham)` etc. as publisher-location residue. Investigation
+# showed these are legitimate CrossRef-registered journal names (e.g.
+# `Nanomaterials (Basel)` is the actual container-title, distinguishing
+# it from other `Nanomaterials` journals). The rule was degenerate —
+# removed rather than carried as a growing city-exception list.
 
 
 # ---------------------------------------------------------------------------
@@ -428,12 +424,6 @@ RULES: list[Rule] = [
         "journal has no ISSN/rights/copyright/markdown-emphasis",
         "extract_publication_fields accepted masthead as venue",
         _journal_has_issn_or_rights,
-    ),
-    (
-        "journal_city_paren",
-        "journal has no trailing `(<City>)`",
-        "DOI content-neg returned container-title with location",
-        _journal_has_city_paren,
     ),
 ]
 
