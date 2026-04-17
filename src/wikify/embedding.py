@@ -84,7 +84,7 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
     # covers typical section chunks; the chunker (ingest/config.py) derives
     # max_chunk_chars from this value (≈5120 chars).
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=2048, batch_size=32,
+        dim=512, max_tokens=2048, batch_size=8,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
