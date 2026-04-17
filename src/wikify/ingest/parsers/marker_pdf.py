@@ -228,37 +228,59 @@ def _strip_image_links(md: str) -> str:
 def _extract_metadata(md_text: str, path: Path) -> dict:
     """Extract title, authors, year from markdown + filename."""
     from wikify.ingest.metadata import (
+        clean_filename_title,
         clean_markdown,
         extract_authors_from_markdown,
         extract_document_doi,
         extract_publication_fields,
         extract_summary,
         first_heading,
-        is_garbled_title,
+        is_junk_title,
         parse_filename,
     )
 
     fn_year, fn_author, fn_title = parse_filename(path.name)
 
-    title = first_heading(md_text) or ""
-    if not title or is_garbled_title(title):
-        title = fn_title or path.stem
-    title = clean_markdown(title)
+    doi = extract_document_doi(md_text)
+    publication = extract_publication_fields(md_text)
+    summary = extract_summary(md_text)
+
+    venue_hints = tuple(
+        v for v in (publication.get("venue"), publication.get("journal")) if v
+    )
+
+    # Candidate titles, in descending preference. The first that is not a
+    # Word/PDF placeholder ("Word Document", "Untitled", "Microsoft Word -
+    # foo.docx", empty), is not a section header, and is not a venue name
+    # wins. If nothing survives we fall back to the filename-derived stem.
+    candidates = [
+        first_heading(md_text) or "",
+        fn_title or "",
+        clean_filename_title(path.name),
+        path.stem,
+    ]
 
     # Prefer filename title when extraction picks up a section header
     from wikify.ingest.metadata import _is_heading_noise
 
-    if fn_title and (_is_heading_noise(title) or (title.isupper() and fn_title)):
-        title = fn_title
+    title = ""
+    for cand in candidates:
+        cand = clean_markdown(cand)
+        if not cand or is_junk_title(cand, venue_hints=venue_hints):
+            continue
+        if _is_heading_noise(cand):
+            continue
+        if cand.isupper() and fn_title:
+            continue
+        title = cand
+        break
+    if not title:
+        title = clean_filename_title(path.name) or path.stem
 
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     authors = [a for a in (_sanitize_author(a) for a in authors) if a]
     if not authors and fn_author:
         authors = [fn_author]
-
-    doi = extract_document_doi(md_text)
-    publication = extract_publication_fields(md_text)
-    summary = extract_summary(md_text)
 
     metadata = {
         "title": title,

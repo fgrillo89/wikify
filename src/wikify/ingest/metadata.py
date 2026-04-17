@@ -42,6 +42,83 @@ def parse_filename(filename: str) -> tuple[int | None, str | None, str | None]:
     return None, None, None
 
 
+# --- junk-title rejection -----------------------------------------------
+#
+# Known placeholder strings emitted by Word / PDF producers when no real
+# title was ever set on the document. These leak in via the docx parser
+# (``core_properties.title``) and, on Word-exported PDFs, via the PDF's
+# embedded ``/Title`` metadata field. Stored as casefolded strings for
+# O(1) lookup.
+
+_JUNK_TITLE_LITERALS = frozenset({
+    "word document",
+    "untitled",
+    "untitled.docx",
+    "document1",
+    "document",
+    "document 1",
+    "new document",
+    "new microsoft word document",
+    "title",
+})
+
+
+_MS_WORD_JUNK_RE = re.compile(r"^\s*microsoft\s+word\s*[-–—:]?\s*", re.IGNORECASE)
+
+
+def is_junk_title(title: str, *, venue_hints: tuple[str, ...] = ()) -> bool:
+    """Return True when ``title`` is a known placeholder or a venue name.
+
+    Catches Word's default ``"Word Document"`` / ``"Untitled"`` placeholders
+    and ``"Microsoft Word - foo.docx"``-style save-as artifacts. When a
+    journal / venue name slipped into the title slot (e.g. ``"Journal of
+    Alloys and Compounds"``) and the same string is present in
+    ``venue_hints``, it is treated as junk too.
+    """
+    if title is None:
+        return True
+    collapsed = re.sub(r"\s+", " ", title).strip()
+    if not collapsed:
+        return True
+    folded = collapsed.casefold()
+    if folded in _JUNK_TITLE_LITERALS:
+        return True
+    if _MS_WORD_JUNK_RE.match(collapsed):
+        return True
+    if is_garbled_title(collapsed):
+        return True
+    for hint in venue_hints:
+        hint_folded = re.sub(r"\s+", " ", (hint or "")).strip().casefold()
+        if hint_folded and hint_folded == folded:
+            return True
+    return False
+
+
+_FILENAME_HASH_SUFFIX_RE = re.compile(r"_[0-9a-f]{6,}$", re.IGNORECASE)
+
+
+def clean_filename_title(filename: str) -> str:
+    """Derive a human-readable title from a corpus filename.
+
+    Strips the ``[YYYY Author]`` prefix, the trailing ``_<hexhash>``
+    incremental-ingest suffix and any file extension, then replaces
+    ``_``/``-`` with spaces and collapses whitespace. Returns ``""`` when
+    nothing readable remains.
+    """
+    if not filename:
+        return ""
+    stem = re.sub(r"\.(?:pdf|docx|pptx|md|html?)$", "", filename, flags=re.IGNORECASE)
+    _, _, fn_title = parse_filename(filename)
+    base = fn_title if fn_title else stem
+    # Drop the leading ``[YYYY Author]`` bracket when parse_filename didn't match
+    # (parse_filename returns None for some filename variants).
+    base = re.sub(r"^\[\d{4}(?:\s+[^\]]+)?\]\s*", "", base)
+    base = _FILENAME_HASH_SUFFIX_RE.sub("", base)
+    base = base.replace("_", " ").replace("-", " ")
+    base = re.sub(r"\s+", " ", base).strip()
+    return base
+
+
 def parse_authors(raw: str) -> list[str]:
     raw = raw.replace(";", ",").replace(" and ", ",")
     parts = [_strip_trailing_affiliation_letter(a.strip()) for a in raw.split(",") if a.strip()]

@@ -1,11 +1,13 @@
 """Regression tests for ingest metadata helpers.
 
-Covers author parsing fixes:
-- hyphenated Chinese given names (``Tian-Yu``, ``Jia-Lin``) are not split
-  apart by the surname/given reassembler
-- trailing single-letter affiliation markers (``Mi Hyang Park a``) are
-  stripped without damaging proper initials (``J. Smith``)
-- affiliation digits glued directly to a surname (``Wang1``) are stripped
+Covers the fixes for:
+- Bug 2 (junk title rejection): ``Word Document``, ``Untitled``, empty,
+  ``Document1``, ``Microsoft Word - foo.docx`` and venue-matching strings
+  must not be accepted as titles. ``clean_filename_title`` recovers a
+  readable title from ``[YYYY Author] Foo_<hash>.ext`` filenames.
+- Bug 6 (author parsing): hyphenated Chinese given names are not split
+  apart; trailing single-letter affiliation markers are stripped without
+  damaging proper initials.
 """
 
 from __future__ import annotations
@@ -14,8 +16,94 @@ from wikify.ingest.bibtex import _clean_author_name
 from wikify.ingest.metadata import (
     _parse_author_line,
     _strip_trailing_affiliation_letter,
+    clean_filename_title,
+    is_junk_title,
     parse_authors,
 )
+
+# ---------------------------------------------------------------------------
+# Junk title rejection
+# ---------------------------------------------------------------------------
+
+
+class TestIsJunkTitle:
+    def test_word_document_rejected(self):
+        assert is_junk_title("Word Document") is True
+
+    def test_word_document_case_insensitive(self):
+        assert is_junk_title("word document") is True
+        assert is_junk_title("WORD DOCUMENT") is True
+
+    def test_untitled_rejected(self):
+        assert is_junk_title("Untitled") is True
+        assert is_junk_title("untitled.docx") is True
+
+    def test_empty_rejected(self):
+        assert is_junk_title("") is True
+        assert is_junk_title("   ") is True
+
+    def test_document1_rejected(self):
+        assert is_junk_title("Document1") is True
+        assert is_junk_title("Document 1") is True
+
+    def test_microsoft_word_prefix_rejected(self):
+        assert is_junk_title("Microsoft Word - manuscript.docx") is True
+        assert is_junk_title("Microsoft Word - Paper final") is True
+
+    def test_venue_as_title_rejected(self):
+        # Journal name leaked into the title slot.
+        venues = ("Journal of Alloys and Compounds",)
+        assert is_junk_title(
+            "Journal of Alloys and Compounds", venue_hints=venues,
+        ) is True
+
+    def test_venue_match_case_insensitive(self):
+        venues = ("Nature Communications",)
+        assert is_junk_title("nature communications", venue_hints=venues) is True
+
+    def test_real_title_accepted(self):
+        assert is_junk_title(
+            "Atomic Layer Deposition of HfO2 for Memristive Synapses",
+        ) is False
+
+    def test_garbled_hash_rejected(self):
+        # is_garbled_title catches "abc_def123" style tokens.
+        assert is_junk_title("fn1_x2") is True
+
+
+# ---------------------------------------------------------------------------
+# Filename title recovery
+# ---------------------------------------------------------------------------
+
+
+class TestCleanFilenameTitle:
+    def test_full_bracket_prefix_and_hash(self):
+        name = (
+            "[2022 Ismail] Forming-free Pt Al2O3 HfO2 HfAlOx TiN memristor"
+            " with controllable_ae0430fe3c3f.pdf"
+        )
+        out = clean_filename_title(name)
+        assert "2022" not in out
+        assert "Ismail" not in out
+        assert "ae0430fe3c3f" not in out
+        assert out.startswith("Forming free Pt Al2O3 HfO2")
+
+    def test_docx_extension(self):
+        name = "[1971 Chua] Memristor-The_missing_circuit_element_514791d621fa.docx"
+        out = clean_filename_title(name)
+        assert "514791d621fa" not in out
+        assert "Memristor" in out
+        assert "missing circuit element" in out
+
+    def test_no_brackets(self):
+        name = "plain_title_file_1234567890ab.pdf"
+        out = clean_filename_title(name)
+        assert "1234567890ab" not in out
+        assert out == "plain title file"
+
+    def test_empty(self):
+        assert clean_filename_title("") == ""
+
 
 # ---------------------------------------------------------------------------
 # _clean_author_name behavioural guarantees
