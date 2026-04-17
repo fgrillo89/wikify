@@ -88,31 +88,14 @@ class DOICache:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def get(self, doi: str) -> dict[str, object] | None:
-        """Look up a DOI. Returns metadata dict or None."""
-        assert self._conn
-        row = self._conn.execute(
-            "SELECT * FROM works WHERE doi = ?", (doi.lower(),)
-        ).fetchone()
-        if not row:
-            return None
-        return {
-            "title": row["title"],
-            "authors": json.loads(row["authors_json"]),
-            "journal": row["journal"],
-            "venue": row["journal"],
-            "year": str(row["year"]) if row["year"] else "",
-            "volume": row["volume"],
-            "pages": (
-                f"{row['first_page']}--{row['last_page']}".strip("-")
-                if row["first_page"] or row["last_page"]
-                else ""
-            ),
-            "publisher": row["publisher"],
-        }
-
     def put(self, doi: str, meta: dict[str, object], source: str = "crossref") -> None:
-        """Store resolved metadata for a DOI."""
+        """Store resolved metadata for a DOI.
+
+        Uses ``INSERT OR REPLACE`` so a later successful resolution can
+        overwrite a prior negative-result row (and so an updated record
+        with richer fields replaces a thin one). ``resolved_at`` is reset
+        on every write by the schema default.
+        """
         assert self._conn
         authors = meta.get("authors") or []
         pages = str(meta.get("pages") or "")
@@ -134,10 +117,10 @@ class DOICache:
                 year = None
 
         self._conn.execute(
-            """INSERT OR IGNORE INTO works
+            """INSERT OR REPLACE INTO works
                (doi, title, year, journal, authors_json, volume,
-                first_page, last_page, publisher, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                first_page, last_page, publisher, source, resolved_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
             (
                 doi.lower(),
                 meta.get("title") or "",
@@ -153,32 +136,57 @@ class DOICache:
         )
         self._conn.commit()
 
+    # Negative-result rows older than this are treated as cache misses so a
+    # DOI that failed to resolve a month ago gets a fresh attempt (the paper
+    # may have been registered since). Successful (title-bearing) rows are
+    # treated as valid indefinitely — DOIs don't change their metadata.
+    NEGATIVE_TTL_DAYS = 14
+
     def get_many(self, dois: list[str]) -> dict[str, dict[str, object]]:
         """Look up multiple DOIs. Returns ``{doi: metadata}`` for every
         row that exists in the cache, including negative-result rows
-        (empty metadata from a prior "not-found" resolution) so callers
-        can treat any cache hit as "already tried, don't re-fetch".
+        younger than ``NEGATIVE_TTL_DAYS`` (so retries have a bounded
+        chance to pick up newly-registered DOIs). Expired negatives
+        appear as cache misses.
 
         Callers that want only usable data should drop rows whose
         ``title`` is empty.
         """
+        assert self._conn
+        if not dois:
+            return {}
+        lowered = [d.lower() for d in dois]
+        placeholders = ",".join(["?"] * len(lowered))
+        rows = self._conn.execute(
+            f"SELECT * FROM works WHERE doi IN ({placeholders})",
+            lowered,
+        ).fetchall()
         out: dict[str, dict[str, object]] = {}
-        for doi in dois:
-            meta = self.get(doi)
-            if meta is not None:
-                out[doi.lower()] = meta
+        for row in rows:
+            if not row["title"]:
+                # Negative row — honour TTL.
+                expired = self._conn.execute(
+                    "SELECT julianday('now') - julianday(resolved_at) > ? "
+                    "FROM works WHERE doi = ?",
+                    (self.NEGATIVE_TTL_DAYS, row["doi"]),
+                ).fetchone()
+                if expired and expired[0]:
+                    continue
+            out[row["doi"]] = {
+                "title": row["title"],
+                "authors": json.loads(row["authors_json"]),
+                "journal": row["journal"],
+                "venue": row["journal"],
+                "year": str(row["year"]) if row["year"] else "",
+                "volume": row["volume"],
+                "pages": (
+                    f"{row['first_page']}--{row['last_page']}".strip("-")
+                    if row["first_page"] or row["last_page"]
+                    else ""
+                ),
+                "publisher": row["publisher"],
+            }
         return out
-
-    def put_many(self, items: dict[str, dict[str, object]], source: str = "crossref") -> None:
-        """Store multiple resolved DOIs.
-
-        Entries with empty metadata ARE stored (as negative-result rows)
-        so that subsequent refreshes can see the DOI was already checked
-        and skip re-fetching it from upstream.
-        """
-        for doi, meta in items.items():
-            marker = source if meta and meta.get("title") else "not-found"
-            self.put(doi, meta or {}, marker)
 
 
 class DatabaseManager:

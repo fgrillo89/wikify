@@ -110,12 +110,16 @@ def resolve_many(
         else:
             fresh[doi] = {}
 
-    # Step 4 — persist (including negatives). Source tag on the row
-    # records which path actually produced the data, for diagnostics.
+    # Step 4 — persist (including negatives). Source tag records which
+    # path actually produced the complete data, not just which one had any
+    # fragment: a CrossRef title-only record that was completed by doi.org
+    # should be tagged "doi.org", not "crossref".
     with DOICache(cache_path) as cache:
         for doi, meta in fresh.items():
-            if _is_complete(meta):
-                src = "crossref" if doi in xref and xref[doi] else "doi.org"
+            if _is_complete(xref.get(doi)):
+                src = "crossref"
+            elif _is_complete(fallback.get(doi)):
+                src = "doi.org"
             else:
                 src = "not-found"
             cache.put(doi, meta, src)

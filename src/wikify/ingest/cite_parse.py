@@ -6,7 +6,6 @@ wikify's Document model and the shared DOI resolver.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,8 +14,6 @@ from ..citestore.parse import parse_citation
 
 if TYPE_CHECKING:
     from ..models import Document
-
-logger = logging.getLogger(__name__)
 
 _DOI_FIELD_MAP = {
     "title": "title",
