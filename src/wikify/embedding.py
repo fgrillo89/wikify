@@ -207,7 +207,12 @@ def _fe_embed_with(
     # pieces belonging to the same source text and re-normalise. This
     # preserves full section signal (unlike naive truncation) at the cost
     # of blurring multi-topic sections into a single vector.
-    char_cap = int(cfg.max_tokens * 2.5)
+    #
+    # 1.5 chars/token is the worst-case ratio observed for dense scientific
+    # markdown (Marker output with equations, short numeric symbols, and
+    # reference-style tokens). Looser ratios (2.5) produced pieces of ~3k
+    # tokens that OOM'd DML at batch 8. Keep this tight.
+    char_cap = int(cfg.max_tokens * 1.5)
     pieces: list[str] = []
     owners: list[int] = []
     for i, t in enumerate(texts):
