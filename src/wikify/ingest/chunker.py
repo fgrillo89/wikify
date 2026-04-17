@@ -41,6 +41,83 @@ _NON_CONCLUSION_TYPES = frozenset(
 _CITATION_RE = re.compile(r"\[[\w\s,\.]+\d{4}\]|\[\d+\]")
 _EQUATION_RE = re.compile(r"\$\$.*?\$\$|\\\[.*?\\\]", re.DOTALL)
 
+# --- boilerplate safety net ----------------------------------------------
+#
+# Publisher license footers (Wiley, Elsevier, ACS) get stamped on every
+# PDF page and sometimes survive parse-time cleanup because they fuse
+# with a caption or figure marker during column reconstruction. The
+# chunker is the last gate before these reach retrieval, where they
+# score high on vague queries because they're lexically dense and
+# identical across papers.
+#
+# Heuristic: count words whose lowercase form matches a license-keyword
+# set. If the ratio exceeds the threshold, the chunk is mostly licensing
+# text and we drop it. Keywords must be specific enough that legitimate
+# scientific prose rarely accumulates more than one or two hits.
+_BOILERPLATE_KEYWORDS = frozenset(
+    {
+        "downloaded",
+        "wiley",
+        "elsevier",
+        "sciencedirect",
+        "onlinelibrary",
+        "licensed",
+        "licence",
+        "license",
+        "creative",
+        "commons",
+        "reserved",
+        "redistribution",
+        "rightslink",
+        "copyright",
+        # "rights" intentionally excluded — too ambiguous on its own.
+    }
+)
+# Unambiguous phrases: appearing alone is enough to reject a chunk. These
+# are specific enough that they practically never show up in paper prose.
+_BOILERPLATE_UNAMBIGUOUS = frozenset({
+    "wiley online library",
+    "onlinelibrary.wiley.com",
+})
+
+# Ambiguous phrases: a paper discussing copyright / open access might
+# mention any of these. They're diagnostic but not conclusive; used as
+# input to the keyword-ratio test below.
+_BOILERPLATE_AMBIGUOUS = frozenset({
+    "terms and conditions",
+    "all rights reserved",
+    "rights reserved",
+    "creative commons license",
+    "from sciencedirect",
+    "acs publications",
+})
+_WORD_RE = re.compile(r"[A-Za-z]+")
+
+# A chunk with at least this fraction of boilerplate-keyword tokens gets
+# dropped. 0.08 works out to ~5 keyword hits in a 60-word license block
+# while a research paragraph rarely clears 2%.
+_BOILERPLATE_RATIO = 0.08
+# Minimum word count before the ratio test applies; shorter chunks are
+# left to ``MIN_CHUNK_ALNUM`` and the existing filters.
+_BOILERPLATE_MIN_WORDS = 20
+
+
+def _is_boilerplate_chunk(text: str) -> bool:
+    """True if ``text`` is dominated by publisher license / download notices."""
+    lower = text.lower()
+    # Fast path: unambiguous phrases short-circuit.
+    if any(phrase in lower for phrase in _BOILERPLATE_UNAMBIGUOUS):
+        return True
+    # Slower path: ratio test on boilerplate keywords. Ambiguous phrases
+    # are part of the keyword set so a chunk heavy in "terms and
+    # conditions" language still gets rejected without being a false
+    # positive on a single mention.
+    words = _WORD_RE.findall(lower)
+    if len(words) < _BOILERPLATE_MIN_WORDS:
+        return False
+    hits = sum(1 for w in words if w in _BOILERPLATE_KEYWORDS)
+    return hits / len(words) >= _BOILERPLATE_RATIO
+
 
 def chunk_document(
     doc_id: str,
@@ -71,6 +148,8 @@ def chunk_document(
             for piece_start, piece_end in _split_oversize(text):
                 piece = text[piece_start:piece_end].strip()
                 if not piece or _alnum_count(piece) < MIN_CHUNK_ALNUM:
+                    continue
+                if _is_boilerplate_chunk(piece):
                     continue
                 absolute = (start + sub_start, start + sub_end)
                 cid = _chunk_id(doc_id, ord_, piece)

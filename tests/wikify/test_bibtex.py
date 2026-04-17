@@ -259,6 +259,41 @@ def test_crossref_resolved_citation_without_title_is_not_exported(tmp_path):
     assert references.entries == []
 
 
+def test_bibliography_preserves_balanced_paren_doi(tmp_path):
+    """A DOI with balanced parens (Elsevier S-prefix) must round-trip to bib."""
+    doc = _doc("a_1", "Title A", ["Alice"], 2020)
+    doc.metadata["doi"] = "10.1000/a"
+    # Simulate a citation persisted before the paren-aware extractor fix --
+    # raw_text carries the full DOI but cit.doi was truncated at ``(``.
+    doc.citations = [
+        _resolved_citation(
+            1,
+            "W. Maass. Networks of spiking neurons. Neural Netw. 10, "
+            "1659-1671 (1997). doi:10.1016/S0893-6080(97)00011-7",
+            doi="10.1016/S0893-6080(97",
+            title="Networks of spiking neurons",
+            authors=["W. Maass"],
+            year=1997, venue="Neural Netw.",
+        ),
+    ]
+
+    corpus = CorpusPaths(root=tmp_path / "corpus")
+    write_corpus_bibliography(corpus, [doc])
+
+    references = bibtexparser.loads(
+        corpus.references_bib_path.read_text(encoding="utf-8"),
+    )
+    assert len(references.entries) == 1
+    assert references.entries[0]["doi"] == "10.1016/S0893-6080(97)00011-7"
+
+    index = json.loads(
+        corpus.citation_index_path.read_text(encoding="utf-8"),
+    )
+    ref_keys = [k for k, e in index["entries"].items() if e["kind"] == "reference"]
+    assert len(ref_keys) == 1
+    assert index["entries"][ref_keys[0]]["doi"] == "10.1016/S0893-6080(97)00011-7"
+
+
 def test_dedup_by_doi_across_citations(tmp_path):
     """Two citations referencing the same DOI -> one .bib entry."""
     first = _doc("a_1", "Title A", ["Alice"], 2020)

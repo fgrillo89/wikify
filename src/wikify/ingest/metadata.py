@@ -42,9 +42,209 @@ def parse_filename(filename: str) -> tuple[int | None, str | None, str | None]:
     return None, None, None
 
 
+# --- junk-title rejection -----------------------------------------------
+#
+# Known placeholder strings emitted by Word / PDF producers when no real
+# title was ever set on the document. These leak in via the docx parser
+# (``core_properties.title``) and, on Word-exported PDFs, via the PDF's
+# embedded ``/Title`` metadata field. Stored as casefolded strings for
+# O(1) lookup.
+
+_JUNK_TITLE_LITERALS = frozenset({
+    "word document",
+    "untitled",
+    "untitled.docx",
+    "document1",
+    "document",
+    "document 1",
+    "new document",
+    "new microsoft word document",
+    "title",
+})
+
+
+_MS_WORD_JUNK_RE = re.compile(r"^\s*microsoft\s+word\s*[-–—:]?\s*", re.IGNORECASE)
+
+# Common section-header names that some parsers lift as the document title
+# when the real title is in a different layout band.
+_SECTION_HEADER_LITERALS = frozenset({
+    "abstract", "summary", "introduction", "background",
+    "methods", "method", "materials and methods", "experimental",
+    "experimental section", "experimental methods", "experimental details",
+    "results", "results and discussion", "discussion",
+    "conclusion", "conclusions", "conclusions and outlook",
+    "references", "bibliography", "acknowledgments", "acknowledgements",
+    "appendix", "supporting information", "supplementary information",
+    # Front-matter section labels Marker sometimes lifts as the title:
+    "conflict of interest", "competing interests", "funding", "ethics",
+    "data availability", "author contributions", "author contribution",
+})
+
+# Numbered section headers: "1 Introduction", "2. Methods", "III. Results".
+_NUMBERED_SECTION_RE = re.compile(
+    r"^\s*(?:\d+|[ivxIVX]+)[.\s)]+\s*\w+", re.IGNORECASE,
+)
+
+# Repository / institution page banners: "University of ... [STARS]",
+# "Stanford University Libraries", "MIT Open Access".
+_REPOSITORY_BANNER_RE = re.compile(
+    r"^\s*(?:University|College|Institute|School|Department)\s+of\s+",
+    re.IGNORECASE,
+)
+
+# Markdown link fragments that sometimes leak into a heading-derived title
+# when Marker's first-heading extractor picks up a banner or TOC line.
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(")
+
+
+def is_junk_title(title: str, *, venue_hints: tuple[str, ...] = ()) -> bool:
+    """Return True when ``title`` is a known placeholder or a venue name.
+
+    Catches Word's default ``"Word Document"`` / ``"Untitled"`` placeholders,
+    ``"Microsoft Word - foo.docx"`` save-as artifacts, numbered section
+    headers (``"1 Introduction"``, ``"III. Methods"``), standalone section
+    names (``"Abstract"``, ``"Conclusions"``), university/repository banners,
+    and markdown-link fragments. When a venue name slipped into the title
+    slot and the same string appears in ``venue_hints``, it is treated as
+    junk too.
+    """
+    if title is None:
+        return True
+    collapsed = re.sub(r"\s+", " ", title).strip()
+    if not collapsed:
+        return True
+    folded = collapsed.casefold()
+    if folded in _JUNK_TITLE_LITERALS:
+        return True
+    if folded in _SECTION_HEADER_LITERALS:
+        return True
+    if _MS_WORD_JUNK_RE.match(collapsed):
+        return True
+    # Numbered section headers only when they end after the first word or
+    # two; "1 Introduction" fine to reject, but "1 Introduction to ALD" is
+    # a legitimate book-chapter title.
+    if _NUMBERED_SECTION_RE.match(collapsed) and len(collapsed.split()) <= 3:
+        return True
+    if _REPOSITORY_BANNER_RE.match(collapsed):
+        return True
+    if _MARKDOWN_LINK_RE.search(collapsed):
+        return True
+    if is_garbled_title(collapsed):
+        return True
+    for hint in venue_hints:
+        hint_folded = re.sub(r"\s+", " ", (hint or "")).strip().casefold()
+        if hint_folded and hint_folded == folded:
+            return True
+    return False
+
+
+_FILENAME_HASH_SUFFIX_RE = re.compile(r"_[0-9a-f]{6,}$", re.IGNORECASE)
+
+
+def choose_document_title(
+    md_text: str,
+    path,
+    *,
+    venue_hints: tuple[str, ...] = (),
+) -> str:
+    """Pick the document title from available signals, preferring authoritative
+    sources over heuristics.
+
+    Priority:
+      1. ``fn_title`` from ``[YYYY Author] Real Title.ext`` filename convention.
+         User-curated, directly authoritative. Use when ≥20 chars and not
+         flagged by ``is_junk_title``.
+      2. ``first_heading(md_text)`` when the markdown's first H1/H2 is long
+         enough to look like a paper title (≥20 chars) and not junk. Guards
+         against short section-label headings (``"Conflict of Interest"``,
+         ``"1 Introduction"``, ``"Abstract"``).
+      3. ``clean_filename_title(path.name)`` — filename stem tidied.
+      4. ``path.stem`` — last resort.
+
+    This inverts the previous heuristic that ranked first_heading over the
+    filename, which was fragile for PDFs where Marker sees ``#`` sections
+    before the title. Filename > heading > stem is the structural rule.
+    """
+    fn_year, fn_author, fn_title = parse_filename(getattr(path, "name", str(path)))
+    fn_clean = clean_filename_title(getattr(path, "name", str(path)))
+
+    candidates: list[tuple[str, int]] = []
+    # (candidate_text, min_length_for_acceptance). We still accept a
+    # shorter-but-non-junk candidate if nothing longer passes.
+    fn_title_text = clean_markdown(fn_title or "")
+    candidates.append((fn_title_text, 20))
+
+    heading = first_heading(md_text) or ""
+    candidates.append((clean_markdown(heading), 20))
+    candidates.append((fn_clean, 0))
+    candidates.append((getattr(path, "stem", str(path)), 0))
+
+    # Pass 1: accept long, non-junk candidates in priority order.
+    for cand, min_len in candidates:
+        if cand and len(cand) >= min_len and not is_junk_title(
+            cand, venue_hints=venue_hints
+        ):
+            return cand
+
+    # Pass 2: accept any non-junk candidate, even short ones.
+    for cand, _ in candidates:
+        if cand and not is_junk_title(cand, venue_hints=venue_hints):
+            return cand
+
+    # Everything is junk — return the cleaned filename as the least-bad option.
+    return fn_clean or getattr(path, "stem", "")
+
+
+def validate_authors_against_filename(
+    authors: list[str], fn_author: str | None,
+) -> list[str]:
+    """Keep an extracted author list only if it includes the filename author.
+
+    Our filenames encode the first author's surname by convention
+    (``[2023 Song]``). When ``extract_authors_from_markdown`` returns a list
+    that contains no variant of that surname, the extractor almost certainly
+    latched onto a title, banner, or section label that superficially looked
+    like a comma-separated list. In that case the caller should fall back to
+    ``[fn_author]``. Returns ``[]`` to signal rejection.
+    """
+    if not authors or not fn_author:
+        return authors
+    surname = _extract_surname(fn_author) or fn_author
+    if not surname:
+        return authors
+    folded = surname.casefold()
+    for name in authors:
+        if folded in name.casefold():
+            return authors
+    return []
+
+
+def clean_filename_title(filename: str) -> str:
+    """Derive a human-readable title from a corpus filename.
+
+    Strips the ``[YYYY Author]`` prefix, the trailing ``_<hexhash>``
+    incremental-ingest suffix and any file extension, then replaces
+    ``_``/``-`` with spaces and collapses whitespace. Returns ``""`` when
+    nothing readable remains.
+    """
+    if not filename:
+        return ""
+    stem = re.sub(r"\.(?:pdf|docx|pptx|md|html?)$", "", filename, flags=re.IGNORECASE)
+    _, _, fn_title = parse_filename(filename)
+    base = fn_title if fn_title else stem
+    # Drop the leading ``[YYYY Author]`` bracket when parse_filename didn't match
+    # (parse_filename returns None for some filename variants).
+    base = re.sub(r"^\[\d{4}(?:\s+[^\]]+)?\]\s*", "", base)
+    base = _FILENAME_HASH_SUFFIX_RE.sub("", base)
+    base = base.replace("_", " ").replace("-", " ")
+    base = re.sub(r"\s+", " ", base).strip()
+    return base
+
+
 def parse_authors(raw: str) -> list[str]:
     raw = raw.replace(";", ",").replace(" and ", ",")
-    parts = [a.strip() for a in raw.split(",") if a.strip()]
+    parts = [_strip_trailing_affiliation_letter(a.strip()) for a in raw.split(",") if a.strip()]
+    parts = [p for p in parts if p]
     assembled: list[str] = []
     i = 0
     while i < len(parts):
@@ -52,8 +252,13 @@ def parse_authors(raw: str) -> list[str]:
         if i + 1 < len(parts):
             nxt = parts[i + 1].strip()
             is_initials = bool(re.match(r"^[A-Z][.\s]*(?:[A-Z]\.?\s*)*$", nxt))
+            # Accept a plain Capitalized given name (``Tian``) OR a hyphenated
+            # Chinese given name (``Tian-Yu``, ``Jia-Lin``). Hyphens are the
+            # only thing that was missing here -- the old ``[A-Z][a-z]{1,14}``
+            # regex silently rejected half of the Chinese author lists we
+            # ingest.
             is_first_name = bool(
-                re.match(r"^[A-Z][a-z]{1,14}$", nxt)
+                re.match(r"^[A-Z][a-z]{1,14}(?:-[A-Z][a-z]{1,14})?$", nxt)
                 and len(part.split()) == 1
                 and part[0:1].isupper()
             )
@@ -66,17 +271,87 @@ def parse_authors(raw: str) -> list[str]:
     return [a for a in assembled if _is_valid_author(a)]
 
 
+# A single lowercase letter surrounded by whitespace at the end of an author
+# token is an affiliation superscript that was flattened inline ("Mi Hyang
+# Park a"). We strip it when not preceded by a period (so proper initials
+# like "J. Smith" are left alone).
+_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]$")
+
+
+def _strip_trailing_affiliation_letter(token: str) -> str:
+    token = token.strip()
+    if not token:
+        return token
+    # Repeat to strip double markers like "... Vu a a" → "... Vu".
+    while True:
+        new = _TRAILING_AFFIL_LETTER_RE.sub("", token).strip()
+        if new == token:
+            return new
+        token = new
+
+
 def extract_doi(text: str) -> str | None:
     m = re.search(r"(10\.\d{4,}/[^\s<>\]]+)", text)
     if m:
         doi = re.split(r"[?#&\]]", m.group(1), maxsplit=1)[0]
-        return doi.rstrip(".,;)]}>")
+        doi = doi.rstrip(".,;)]}>")
+        return _normalise_doi_path(doi)
     return None
+
+
+# Supplementary / supporting / publisher-variant DOI suffixes. A publisher
+# often exposes the supplemental-info file under the DOI path; the registered
+# DOI is the prefix. Truncate so DOI negotiation hits the real record.
+_DOI_SUFFIX_TRIM = re.compile(
+    r"/(?:suppl_file|supplementary|supplemental|supporting|"
+    r"suppdata|appendix|pdf|fulltext)(?:/.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _normalise_doi_path(doi: str) -> str:
+    """Strip known publisher-variant tails that don't belong in a DOI.
+
+    Examples:
+        ``10.1021/acsami.4c11743/suppl_file/...`` → ``10.1021/acsami.4c11743``
+        ``10.1038/s41467-023-39033-z.pdf`` → ``10.1038/s41467-023-39033-z``
+    """
+    trimmed = _DOI_SUFFIX_TRIM.sub("", doi)
+    # Also strip trailing file extensions that sometimes follow a valid DOI.
+    trimmed = re.sub(r"\.(?:pdf|html?|xml)$", "", trimmed, flags=re.IGNORECASE)
+    return trimmed.rstrip(".,;)]}>")
 
 
 def extract_document_doi(md_text: str) -> str | None:
     """Extract a document DOI while ignoring the references section."""
     return extract_doi(_pre_references_window(md_text))
+
+
+def extract_pdf_doi_fallback(path) -> str | None:
+    """Scan a PDF via pymupdf for a DOI printed on page 1-2 or the last page.
+
+    Marker classifies the header/footer band that usually carries the DOI
+    (e.g. ``doi: 10.1021/...`` or ``https://doi.org/...``) as page furniture
+    and drops it from the markdown. pymupdf preserves that text in its raw
+    page extraction, so we can recover the DOI for ~all journal PDFs that
+    Marker otherwise reports as DOI-less. Returns None if pymupdf is
+    unavailable or no DOI pattern matches.
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return None
+    try:
+        doc = fitz.open(str(path))
+    except Exception:  # noqa: BLE001 - any fitz-internal open failure
+        return None
+    try:
+        pages = [doc[i].get_text() for i in range(min(2, len(doc)))]
+        if len(doc) > 2:
+            pages.append(doc[-1].get_text())
+        return extract_doi("\n".join(pages))
+    finally:
+        doc.close()
 
 
 def extract_year_from_pdf_meta(meta: dict) -> int | None:
@@ -255,6 +530,25 @@ def is_garbled_title(title: str) -> bool:
     return False
 
 
+def _strip_yaml_frontmatter(md_text: str) -> str:
+    """Drop the leading ``---\\n...\\n---`` block if present.
+
+    Obsidian-style YAML frontmatter is machine-generated metadata (source
+    paths, cites, similar_to) and should never be scanned as author or
+    publication content. Its ``source_path`` line in particular contains
+    the filename including its extension — a trap for any author parser
+    that anchors on the fn_author surname.
+    """
+    if not md_text.startswith("---"):
+        return md_text
+    # Find the closing delimiter on its own line. Accept both ``---`` and
+    # ``...`` as YAML terminators.
+    match = re.search(r"\n(?:---|\.\.\.)\s*\n", md_text[3:])
+    if not match:
+        return md_text
+    return md_text[3 + match.end():]
+
+
 def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) -> list[str]:
     """Find the paper's author list in the rendered markdown body.
 
@@ -266,7 +560,13 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
     reasonable-length line containing that surname as a whole word, and
     return the first parse whose names include the surname.
     """
-    window = md_text[:12000]
+    # Strip Obsidian-style YAML frontmatter before scanning. The frontmatter
+    # contains source_path / cites / similar_to lines that will snare any
+    # surname-anchored scanner (e.g. `source_path: "...[2012 Li] Title.pdf"`
+    # matches `fn_author="Li"` and the tail of the filename gets parsed as
+    # authors).
+    body = _strip_yaml_frontmatter(md_text)
+    window = body[:12000]
     lines = window.split("\n")
 
     # Strategy 1: filename-surname anchor. Most robust when the PDF has a
@@ -352,12 +652,22 @@ def _pre_references_window(md_text: str) -> str:
     return window
 
 
+_HOMEPAGE_MARKER_RE = re.compile(r"\s+journal\s+homepage\s*:", re.IGNORECASE)
+
+
 def _venue_from_homepage_line(line: str) -> str | None:
+    # Fast fail: skip the expensive regex + string-cleanup work when the
+    # line doesn't contain "journal homepage" at all. extract_publication_
+    # fields calls this helper on every markdown line of every doc
+    # (13k+ calls on a 200-paper corpus); the early exit drops wave D
+    # regex cost from ~55 s to ~0.5 s.
+    if "journal homepage" not in line.casefold():
+        return None
     cleaned = _strip_heading(line)
-    match = re.search(r"(.+?)\s+journal\s+homepage\s*:", cleaned, re.IGNORECASE)
+    match = _HOMEPAGE_MARKER_RE.search(cleaned)
     if not match:
         return None
-    return _clean_venue_candidate(match.group(1))
+    return _clean_venue_candidate(cleaned[: match.start()])
 
 
 def _venue_from_published_by_line(line: str) -> str | None:
@@ -829,6 +1139,10 @@ def _parse_author_line(line: str) -> list[str]:
         cleaned,
     )
     cleaned = re.sub(r"(?<=[A-Za-z])(?:\s+\d+(?:\s*,\s*\d+)*)+\b", "", cleaned)
+    # Digits glued directly to a surname ("Tian-Yu Wang1, Jia-Lin Meng2")
+    # are affiliation superscripts the PDF stripped of whitespace. Remove
+    # the trailing digit cluster; keep the name.
+    cleaned = re.sub(r"(?<=[A-Za-z])\d+(?=[,\s]|$)", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return []
@@ -843,6 +1157,11 @@ def _parse_author_line(line: str) -> list[str]:
         # comma before "and" (", and X") — the comma splitter leaves
         # "and X" as its own part.
         part = re.sub(r"^(?:and|&)\s+", "", part, flags=re.IGNORECASE).strip()
+        # Trailing isolated lowercase letter is an affiliation superscript
+        # flattened inline ("Mi Hyang Park a" → "Mi Hyang Park").
+        # Guarded on the letter being preceded by lowercase so proper
+        # initials ("J. Smith", "J.") survive.
+        part = _strip_trailing_affiliation_letter(part)
         if not part:
             continue
         words = part.split()

@@ -7,13 +7,13 @@ import re
 from pathlib import Path
 
 from ..metadata import (
-    clean_markdown,
+    choose_document_title,
     extract_document_doi,
     extract_publication_fields,
     extract_summary,
-    first_heading,
     parse_authors,
     parse_filename,
+    validate_authors_against_filename,
 )
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
@@ -116,17 +116,12 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
     props = doc.core_properties
     fn_year, fn_author, fn_title = parse_filename(filename)
 
-    cp_title = (props.title or "").strip()
-    heading_title = first_heading(md_text)
-    if cp_title:
-        title = cp_title
-    elif heading_title:
-        title = heading_title
-    elif fn_title:
-        title = fn_title
-    else:
-        title = Path(filename).stem
-    title = clean_markdown(title)
+    # Filename-first title priority: `[YYYY Author] Real Title.docx` is
+    # user-curated and authoritative. core_properties.title on Word-saved
+    # documents is frequently the literal "Word Document" placeholder.
+    # choose_document_title walks filename > first_heading > stem and rejects
+    # junk at each step, so we don't special-case "Word Document" here.
+    title = choose_document_title(md_text, Path(filename))
 
     cp_author = (props.author or "").strip()
     if cp_author:
@@ -135,6 +130,9 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
         authors = [fn_author]
     else:
         authors = []
+    authors = validate_authors_against_filename(authors, fn_author)
+    if not authors and fn_author:
+        authors = [fn_author]
 
     year: int | None = None
     if props.created is not None:

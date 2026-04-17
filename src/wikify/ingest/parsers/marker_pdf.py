@@ -228,37 +228,42 @@ def _strip_image_links(md: str) -> str:
 def _extract_metadata(md_text: str, path: Path) -> dict:
     """Extract title, authors, year from markdown + filename."""
     from wikify.ingest.metadata import (
-        clean_markdown,
+        choose_document_title,
         extract_authors_from_markdown,
         extract_document_doi,
+        extract_pdf_doi_fallback,
         extract_publication_fields,
         extract_summary,
-        first_heading,
-        is_garbled_title,
         parse_filename,
+        validate_authors_against_filename,
     )
 
     fn_year, fn_author, fn_title = parse_filename(path.name)
 
-    title = first_heading(md_text) or ""
-    if not title or is_garbled_title(title):
-        title = fn_title or path.stem
-    title = clean_markdown(title)
+    doi = extract_document_doi(md_text)
+    if not doi:
+        # Marker strips DOIs printed in header/footer layout bands. pymupdf
+        # sees that text, so we scan the raw PDF as a fallback.
+        doi = extract_pdf_doi_fallback(path)
+    publication = extract_publication_fields(md_text)
+    summary = extract_summary(md_text)
 
-    # Prefer filename title when extraction picks up a section header
-    from wikify.ingest.metadata import _is_heading_noise
+    venue_hints = tuple(
+        v for v in (publication.get("venue"), publication.get("journal")) if v
+    )
 
-    if fn_title and (_is_heading_noise(title) or (title.isupper() and fn_title)):
-        title = fn_title
+    # Filename-first title priority: our `[YYYY Author] Real Title.ext`
+    # filenames are user-curated and authoritative. first_heading is
+    # trusted only when the filename has nothing useful.
+    title = choose_document_title(md_text, path, venue_hints=venue_hints)
 
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     authors = [a for a in (_sanitize_author(a) for a in authors) if a]
+    # Sanity: reject an extracted list that doesn't contain the filename
+    # author's surname -- the extractor latched onto a title or banner.
+    authors = validate_authors_against_filename(authors, fn_author)
     if not authors and fn_author:
         authors = [fn_author]
-
-    doi = extract_document_doi(md_text)
-    publication = extract_publication_fields(md_text)
-    summary = extract_summary(md_text)
 
     metadata = {
         "title": title,

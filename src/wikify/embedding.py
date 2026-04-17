@@ -76,10 +76,15 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
         query_prefix="Represent this sentence for searching relevant passages: ",
         batch_size=256,
     ),
-    # Jina v2-small: 33M params, 8192-tok window, 512-d, MTEB ~47.
-    # The only small model that keeps the long-context story.
+    # Jina v2-small: 33M params, native 8192-tok window, 512-d, MTEB ~47.
+    # max_tokens capped at 2048 here (not the model's native 8192) because
+    # O(n²) attention at 8k × real section-sized inputs exhausts both 8 GB
+    # DirectML VRAM (FusedMatMul 80070057 / Mul 8007000E at any batch) and
+    # commodity RAM on CPU fallback ("bad allocation"). 2048 tokens still
+    # covers typical section chunks; the chunker (ingest/config.py) derives
+    # max_chunk_chars from this value (≈5120 chars).
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=8192, batch_size=128,
+        dim=512, max_tokens=2048, batch_size=8,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
@@ -127,7 +132,14 @@ def _hash_embed(texts: Sequence[str], dim: int = HASH_DIM) -> np.ndarray:
 
 
 def _onnx_providers() -> list[str] | None:
-    """Return GPU-accelerated ONNX providers if available, else None (default)."""
+    """Return GPU-accelerated ONNX providers if available, else None (default).
+
+    ``WIKIFY_EMBED_FORCE_CPU=1`` forces CPU, a safety valve for long-context
+    embedders on GPUs that OOM on 8k sequences (DirectML on 8 GB cards
+    cannot run jina-v2-small / nomic at full context).
+    """
+    if os.environ.get("WIKIFY_EMBED_FORCE_CPU", "") == "1":
+        return ["CPUExecutionProvider"]
     try:
         import onnxruntime as ort
 
@@ -174,6 +186,55 @@ def _resolve_batch_size(model: str | None, override: int | None) -> int:
     return model_config(model or FE_MODEL_DEFAULT).batch_size
 
 
+def _split_by_tokens(
+    text: str, max_tokens: int, tokenizer,
+) -> list[str]:
+    """Split ``text`` into pieces that each tokenize to <= ``max_tokens``.
+
+    Uses fastembed's exposed HuggingFace-style tokenizer to enforce the
+    actual token-length constraint (the thing the embedder OOMs on),
+    rather than a char-to-token ratio heuristic that's fragile on
+    dense scientific markdown. Reserves 2 tokens per piece for the
+    [CLS] / [SEP] special tokens the embedder prepends/appends.
+    """
+    try:
+        encoding = tokenizer.encode(text, add_special_tokens=False)
+        ids = list(encoding.ids)
+    except Exception:  # noqa: BLE001 - fall back to char-split on any failure
+        return _split_by_chars(text, max_tokens)
+    if len(ids) <= max_tokens:
+        return [text]
+    chunk = max_tokens - 2
+    pieces: list[str] = []
+    for i in range(0, len(ids), chunk):
+        pieces.append(tokenizer.decode(ids[i : i + chunk]))
+    return [p for p in pieces if p.strip()]
+
+
+def _split_by_chars(text: str, max_tokens: int) -> list[str]:
+    """Fallback when the tokenizer isn't accessible: conservative char split.
+
+    One character can map to at most one token (BPE tokens always consume
+    ≥1 char of input), so ``char_cap = max_tokens`` is guaranteed to keep
+    every piece within the model's window. Less efficient than token-based
+    splitting on typical text (3–4 chars/token usually) but correct without
+    tokenizer access.
+    """
+    if len(text) <= max_tokens:
+        return [text]
+    return [
+        text[i : i + max_tokens] for i in range(0, len(text), max_tokens)
+    ]
+
+
+def _get_tokenizer():
+    """Return fastembed's internal HuggingFace tokenizer, or None."""
+    try:
+        return _fe_model.model.tokenizer  # type: ignore[union-attr]
+    except AttributeError:
+        return None
+
+
 def _fe_embed_with(
     model: str | None,
     texts: Sequence[str],
@@ -182,16 +243,44 @@ def _fe_embed_with(
 ) -> np.ndarray:
     _load_fe(model)
     assert _fe_model is not None, "_load_fe must initialise _fe_model"
+    cfg = model_config(model or FE_MODEL_DEFAULT)
     if not texts:
-        cfg = model_config(model or FE_MODEL_DEFAULT)
         dim = getattr(_fe_model, "embedding_size", cfg.dim) or cfg.dim
         return np.zeros((0, dim), dtype=np.float32)
+    # Token-level split-and-mean-pool guard. ``ModelConfig.max_tokens`` is
+    # informational for the chunker; it's not enforced by fastembed on the
+    # way in. Without this pass, an oversize chunk (8k-char section from a
+    # pre-cap ingest, or a dense chunk with low chars/token ratio) gets
+    # fed whole to the embedder and OOMs the GPU. We tokenize each input,
+    # split any that exceed ``max_tokens`` into consecutive token-windows,
+    # embed all pieces in one batched pass, and mean-pool + re-normalise.
+    tokenizer = _get_tokenizer()
+    pieces: list[str] = []
+    owners: list[int] = []
+    for i, t in enumerate(texts):
+        if tokenizer is not None:
+            parts = _split_by_tokens(t, cfg.max_tokens, tokenizer)
+        else:
+            parts = _split_by_chars(t, cfg.max_tokens)
+        for part in parts:
+            pieces.append(part)
+            owners.append(i)
     bs = _resolve_batch_size(model, batch_size)
-    arr = np.asarray(
-        list(_fe_model.embed(list(texts), batch_size=bs)),
+    piece_emb = np.asarray(
+        list(_fe_model.embed(pieces, batch_size=bs)),
         dtype=np.float32,
     )
-    return arr
+    n = len(texts)
+    dim = piece_emb.shape[1]
+    out = np.zeros((n, dim), dtype=np.float32)
+    counts = np.zeros(n, dtype=np.int32)
+    for emb, owner in zip(piece_emb, owners, strict=True):
+        out[owner] += emb
+        counts[owner] += 1
+    out /= counts[:, None].astype(np.float32)
+    norms = np.linalg.norm(out, axis=1)
+    safe = np.where(norms > 0, norms, 1.0)
+    return out / safe[:, None]
 
 
 def _apply_prefix(texts: Sequence[str], prefix: str) -> list[str]:

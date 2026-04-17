@@ -1176,7 +1176,11 @@ def _refresh_openalex(ctx: dict) -> None:
 def _refresh_cite_heuristics(ctx: dict) -> None:
     """Enrich citations with heuristic parsing + DOI content negotiation."""
     from .cite_parse import enrich_citations
-    enrich_citations(ctx["docs"], use_doi=True)
+    enrich_citations(
+        ctx["docs"],
+        cache_path=ctx["paths"].root / ".citestore.db",
+        use_doi=True,
+    )
 
 
 def _refresh_bibliography(ctx: dict) -> None:

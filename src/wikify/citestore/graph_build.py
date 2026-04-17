@@ -107,7 +107,9 @@ def build_knowledge_graph(
         if ord_refs:
             g.nodes[doc.id]["ord_refs"] = ord_refs
 
-    # Cited-only source nodes (referenced but not in corpus)
+    # Cited-only source nodes (referenced but not in corpus).
+    # Built from citation_index: we key them on the bibkey so CITES edges
+    # emitted from ``doc_citations`` resolve directly to these nodes.
     _cited_entries = _extract_cited_works(docs, citation_index)
     for cid, attrs in _cited_entries.items():
         if cid not in g:
@@ -215,10 +217,34 @@ def build_knowledge_graph(
     # ------------------------------------------------------------------
     # 7. Citation edges (CITES)
     # ------------------------------------------------------------------
+    # ``doc.cites`` only carries in-corpus resolved targets. To cover the
+    # external-reference neighborhood we also emit edges to the ``cited``
+    # source nodes that correspond to every bibkey in
+    # ``citation_index.doc_citations``. Bibkeys that map back to a corpus
+    # doc go to the corpus node; unresolved / reference bibkeys go to
+    # their dedicated ``cited`` node (created above).
+    doc_bibkeys: dict[str, str] = {}
+    doc_citations_map: dict[str, list[str]] = {}
+    if citation_index:
+        doc_bibkeys = citation_index.get("doc_bibkeys", {}) or {}
+        doc_citations_map = citation_index.get("doc_citations", {}) or {}
+    bibkey_to_doc_id = {bibkey: did for did, bibkey in doc_bibkeys.items()}
+
     for doc in docs:
+        seen_targets: set[str] = set()
+        # In-corpus targets already resolved by the pipeline.
         for target_id in doc.cites or []:
-            if target_id in g:
+            if target_id in g and target_id not in seen_targets:
                 g.add_edge(doc.id, target_id, kind="CITES")
+                seen_targets.add(target_id)
+        # All bibkeys cited by this doc (corpus + external).
+        for bibkey in doc_citations_map.get(doc.id, []):
+            target = bibkey_to_doc_id.get(bibkey, bibkey)
+            if target == doc.id or target in seen_targets:
+                continue
+            if target in g:
+                g.add_edge(doc.id, target, kind="CITES")
+                seen_targets.add(target)
 
     # ------------------------------------------------------------------
     # 8. Authorship edges (AUTHORED_BY + COLLABORATED)
@@ -265,20 +291,30 @@ def _extract_cited_works(
     These are works referenced by corpus papers but not in the corpus
     themselves. We create lightweight source nodes for them so the graph
     can represent the full citation neighborhood.
+
+    Corpus-source bibkeys (``kind == 'source'`` in the citation index, or
+    any bibkey registered in ``doc_bibkeys``) are excluded -- those works
+    already have rich ``corpus`` nodes built from ``Document`` metadata.
     """
     corpus_ids = {d.id for d in docs}
     cited: dict[str, dict] = {}
 
-    if citation_index:
-        entries = citation_index.get("entries", {})
-        for key, entry in entries.items():
-            if key not in corpus_ids:
-                cited[key] = {
-                    "title": entry.get("title", ""),
-                    "year": entry.get("year"),
-                    "doi": entry.get("doi", ""),
-                    "authors": entry.get("authors", []),
-                }
+    if not citation_index:
+        return cited
+
+    entries = citation_index.get("entries", {})
+    source_bibkeys = set((citation_index.get("doc_bibkeys") or {}).values())
+    for key, entry in entries.items():
+        if key in corpus_ids or key in source_bibkeys:
+            continue
+        if entry.get("kind") == "source":
+            continue
+        cited[key] = {
+            "title": entry.get("title", ""),
+            "year": entry.get("year"),
+            "doi": entry.get("doi", ""),
+            "authors": entry.get("authors", []),
+        }
 
     return cited
 

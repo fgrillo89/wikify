@@ -12,6 +12,7 @@ approach produced garbage and required 800+ lines of repair code.
 import hashlib
 import json
 import re
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -26,7 +27,6 @@ from .metadata import (
     extract_authors_from_markdown,
     extract_document_doi,
     extract_publication_fields,
-    first_heading,
     parse_filename,
 )
 
@@ -46,7 +46,13 @@ def _sanitize_id(s: str) -> str:
 def _clean_doi(value: object) -> str:
     raw = str(value or "").strip()
     raw = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", raw)
-    return raw.rstrip(".,;)")
+    # Strip trailing punctuation that never belongs to a DOI. Only strip an
+    # unbalanced trailing ``)`` so DOIs like 10.1016/S0893-6080(97)00011-7
+    # keep their balanced parens.
+    raw = raw.rstrip(".,;")
+    while raw.endswith(")") and raw.count(")") > raw.count("("):
+        raw = raw[:-1]
+    return raw
 
 
 def _as_text(value: object) -> str:
@@ -61,6 +67,15 @@ def _as_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
     if isinstance(value, str):
+        # Route through parse_authors which handles the CrossRef pattern
+        # "Wang, Tian-Yu and Meng, Jia-Lin" correctly (surname/given pairs,
+        # hyphenated given names, trailing affiliation letters). The old
+        # naive split on "," + " and " shredded it into singletons.
+        from .metadata import parse_authors
+
+        parsed = parse_authors(value)
+        if parsed:
+            return parsed
         parts = value.replace(" and ", ", ").split(",")
         return [p.strip() for p in parts if p.strip()]
     return []
@@ -111,6 +126,10 @@ def _clean_author_name(name: str) -> str:
     """Normalize an author name: strip affiliation symbols, fix casing."""
     # Strip affiliation/footnote markers
     name = _AFFILIATION_RE.sub("", name).strip()
+    # Drop lone backslashes left behind by LaTeX-escape passes (e.g.
+    # "Jianshi Tang \") and collapse the resulting double whitespace.
+    name = re.sub(r"\\+", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
     # Only apply casing fixes when the entire name is all-caps or all-lower.
     # Mixed-case names (van der Waals, McMaster) are left as-is.
     all_upper = name == name.upper() and any(c.isalpha() for c in name)
@@ -257,9 +276,15 @@ def _clean_bib_title(title: str) -> str:
     # Strip leading "Name, lowercase" (leaked author + venue)
     title = re.sub(r"^[A-Z][a-z]+[-\w]*,\s+(?=[a-z])", "", title)
     # Strip leading multi-author prefix: "A. Name, B. Name, Title"
-    # or "First Last, F. Last, Title" (comma-separated author names)
-    # Each name: optional initials + surname, followed by comma.
-    _author_name = r"(?:[A-Z]\.?\s*){0,2}[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+    # or "First Last, F. Last, Title" (comma-separated author names).
+    # Each "author" must either (a) contain an initial with period, or
+    # (b) be at least two words (given + surname). Otherwise the pattern
+    # matches leading adjectives in titles like "Flexible, Transparent,
+    # and Wafer-Scale Artificial Synapse Array..." and chops the first
+    # two words off the title.
+    _author_with_initial = r"[A-Z]\.(?:\s*[A-Z]\.)*\s*[A-Z][a-z]+(?:-[A-Z][a-z]+)?"
+    _author_two_word = r"[A-Z][a-z]+\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?"
+    _author_name = rf"(?:{_author_with_initial}|{_author_two_word})"
     title = re.sub(
         rf"^(?:{_author_name},\s*){{{2},}}",
         "", title,
@@ -369,6 +394,23 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     # Journal+vol+pages only ("Mater. 25 1774-9")
     if re.match(r"^[A-Z][a-z]+\.?\s+\d+\s+\d+", title) and len(title) < 30:
+        return None
+    # Journal-coordinate signature anywhere in a short title: "Vol(Issue):pp-pp"
+    # Examples: "Oxid Met 2(1):59–99", "JAP 102(7):074114-1". Safe: real titles
+    # almost never contain "\d+\(\d+\):\d+" verbatim.
+    if re.search(r"\d+\s*\(\d+\)\s*:\s*\d+", title) and len(title) < 40:
+        return None
+    # Journal + year + volume + page triplet: "Circuit Theory 1971, 18, 507".
+    if re.match(r"^[A-Z][\w\.\s]{2,30}\s+\d{4}\s*,\s*\d+\s*,\s*\d+", title):
+        return None
+    # Book-chapter fragment: starts with "In " and contains a publisher name.
+    # Examples: "In Handbook of Memristor Networks, Springer, Berlin, Germany..."
+    # "In Proc. of IEDM, Elsevier...". These are citation tails, not titles.
+    if re.match(
+        r"^In\s+.+,\s*(Springer|Wiley|Elsevier|Academic|CRC|Taylor|"
+        r"Oxford|Cambridge|MIT|World Scientific|Nova|Pergamon)",
+        title,
+    ):
         return None
     # Conference location/date only ("(ASP-DAC), Incheon, ...")
     if re.match(r"^\(?[A-Z]{2,6}[-\s]?[A-Z]*\)?\s*,?\s*\w+,.*\d{4}", title):
@@ -510,7 +552,56 @@ def build_citation_index(
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
-    # Phase 1: enrich docs and build source entries
+    # Phase 1: enrich docs and build source entries.
+    #
+    # DOI content negotiation is the long pole in wave D (1 HTTP RTT per
+    # doc * 200+ docs). Pre-fetch all DOIs concurrently (10-way semaphore)
+    # before the serial enrichment loop so ``_with_fallback_metadata`` can
+    # look up results from the batch cache instead of blocking on
+    # individual requests. ~10x speed-up on corpora with many DOIs.
+    batch_cache: dict[str, dict[str, object]] = {}
+    if resolve_doi and doi_lookup is None:
+        # Prefetch DOIs from both explicit metadata AND the pymupdf fallback
+        # for PDF-kind docs lacking a DOI. Doing the fallback up-front here
+        # (instead of lazily inside _with_fallback_metadata) means every
+        # discovered DOI hits the async batch path, not the sync one-off.
+        from .metadata import extract_pdf_doi_fallback
+
+        prefetch_dois: list[str] = []
+        for doc in docs:
+            meta = doc.metadata or {}
+            raw = meta.get("doi")
+            doi = _clean_doi(raw) if raw else ""
+            if not doi and doc.source_path:
+                src = Path(doc.source_path)
+                if src.suffix.lower() == ".pdf":
+                    recovered = extract_pdf_doi_fallback(src)
+                    if recovered:
+                        doi = _clean_doi(recovered)
+            if doi:
+                prefetch_dois.append(doi)
+        db_path = corpus.root / ".citestore.db" if corpus.root else None
+        if prefetch_dois and db_path is not None:
+            from ..util.doi_resolver import resolve_many
+
+            batch_cache = resolve_many(prefetch_dois, cache_path=db_path)
+
+        def _cached_lookup(doi: str) -> dict[str, object]:
+            key = doi.lower()
+            if key in batch_cache:
+                return batch_cache[key]
+            # DOI discovered at refresh time that wasn't in the initial
+            # prefetch (rare; only when extract_document_doi inside
+            # _with_fallback_metadata finds a DOI neither in metadata
+            # nor in pymupdf's scan). Route through the shared resolver.
+            from ..util.doi_resolver import resolve_one
+
+            result = resolve_one(doi, cache_path=db_path) if db_path else {}
+            batch_cache[key] = result
+            return result
+
+        doi_lookup = _cached_lookup
+
     enriched_docs = [
         _with_fallback_metadata(
             corpus, doc,
@@ -520,7 +611,64 @@ def build_citation_index(
         for doc in docs
     ]
 
+    # DOI-based dedup: multiple source files (e.g. a .pdf and .docx of the
+    # same paper) can produce separate Document objects with identical DOIs.
+    # Emit one bib entry per DOI, preferring the document with richer
+    # metadata (valid title, more authors). Docs without a DOI are always
+    # emitted — we have no reliable dedup signal for them.
+    from .metadata import is_junk_title
+
+    def _doc_quality(entry: dict[str, str]) -> tuple[int, int]:
+        """Sort key for picking the better of two duplicate docs. Higher is
+        better: (title_is_real, author_count)."""
+        title = _as_text(entry.get("title"))
+        title_ok = int(bool(title) and not is_junk_title(title))
+        n_authors = len(_as_list(entry.get("author")))
+        return (title_ok, n_authors)
+
+    # Build entries once upfront so the dedup pass isn't O(n^2) in
+    # _document_entry (which re-cleans titles, authors, etc.).
+    entry_by_doc: dict[str, dict[str, str]] = {
+        doc.id: _document_entry(doc) for doc in enriched_docs
+    }
+
+    # First pass: pick the canonical doc per DOI.
+    canonical_by_doi: dict[str, tuple[Document, dict[str, str]]] = {}
+    no_doi_docs: list[Document] = []
     for doc in enriched_docs:
+        entry = entry_by_doc[doc.id]
+        doi = _clean_doi(entry.get("doi"))
+        if not doi:
+            no_doi_docs.append(doc)
+            continue
+        prev = canonical_by_doi.get(doi)
+        if prev is None or _doc_quality(entry) > _doc_quality(prev[1]):
+            canonical_by_doi[doi] = (doc, entry)
+
+    # Build reverse index doi -> [doc.id] so the "point duplicates at
+    # canonical bibkey" step is O(n) instead of O(n^2).
+    docs_by_doi: dict[str, list[str]] = defaultdict(list)
+    for doc in enriched_docs:
+        d = _clean_doi(entry_by_doc[doc.id].get("doi"))
+        if d:
+            docs_by_doi[d].append(doc.id)
+
+    # Second pass: emit one bib entry per canonical doc, then one per
+    # DOI-less doc. Map every duplicate doc_id to the surviving bibkey so
+    # downstream CITES/bib-index lookups still resolve.
+    for doi, (doc, entry) in canonical_by_doi.items():
+        entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
+        source_entries.append(entry)
+        doc_bibkeys[doc.id] = entry["ID"]
+        entries[entry["ID"]] = _index_record(
+            bibkey=entry["ID"], kind="source",
+            entry=entry, doc_id=doc.id,
+        )
+        doi_bibkeys[doi] = entry["ID"]
+        for other_id in docs_by_doi[doi]:
+            if other_id != doc.id:
+                doc_bibkeys[other_id] = entry["ID"]
+    for doc in no_doi_docs:
         entry = _document_entry(doc)
         entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
         source_entries.append(entry)
@@ -529,16 +677,23 @@ def build_citation_index(
             bibkey=entry["ID"], kind="source",
             entry=entry, doc_id=doc.id,
         )
-        doi = _clean_doi(entry.get("doi"))
-        if doi:
-            doi_bibkeys[doi] = entry["ID"]
 
     # Phase 2: process citations from each doc
+    from .citations import repair_doi
+
     for doc in enriched_docs:
         cited_keys: list[str] = []
         for cit_obj in doc.citations:
             cit = cit_obj.to_dict() if hasattr(cit_obj, "to_dict") else cit_obj
             bibkey = None
+
+            # Heal DOIs that were persisted truncated by the pre-fix extractor
+            # (``10.1038/s41467-``, ``10.1016/S0893-6080(97``). Safe: only
+            # replaces the stored DOI when raw_text yields a longer / better
+            # balanced candidate.
+            repaired = repair_doi(cit.get("raw_text") or "", cit.get("doi") or "")
+            if repaired and repaired != cit.get("doi"):
+                cit["doi"] = repaired
 
             # Try to match to an existing source doc by DOI
             cit_doi = _clean_doi(cit.get("doi"))
@@ -678,33 +833,25 @@ def write_corpus_bibliography(
 
 
 # ---------------------------------------------------------------------------
-# DOI content negotiation (for source document metadata enrichment)
+# BibTeX parsing helpers (used by the shared DOI resolver's doi.org path)
 # ---------------------------------------------------------------------------
 
 
-def resolve_doi_metadata(
-    doi: str, *, timeout: float = 10.0,
-) -> dict[str, object]:
-    """Fetch BibTeX metadata for a DOI using DOI content negotiation."""
-    import httpx
-
-    url = f"https://doi.org/{doi}"
-    headers = {"Accept": "application/x-bibtex"}
-    try:
-        resp = httpx.get(
-            url, headers=headers, timeout=timeout, follow_redirects=True,
-        )
-        if resp.status_code != 200:
-            return {}
-    except (httpx.HTTPError, Exception):
-        return {}
-    return _metadata_from_bibtex_entry(resp.text)
-
+# BibTeX allows ``month=jan`` style bare-word macros; bibtexparser does not
+# define these by default, so CrossRef/ACM records containing them used to
+# fail parsing entirely (observed on ACM responses for e.g. 10.1145/...).
+# Strip the month field with a regex instead of teaching the parser every
+# macro — we never consume ``month`` anyway and the stripped value contains
+# the fields we actually need.
+_BIBTEX_MONTH_RE = re.compile(
+    r",\s*month\s*=\s*[a-z]+\s*(?=,|\})", re.IGNORECASE,
+)
 
 def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     """Parse a single BibTeX entry string into a metadata dict."""
+    cleaned = _BIBTEX_MONTH_RE.sub("", bibtex_text)
     try:
-        db = bibtexparser.loads(bibtex_text)
+        db = bibtexparser.loads(cleaned)
     except Exception:
         return {}
     if not db.entries:
@@ -718,8 +865,12 @@ def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
     for key in ("journal", "year", "volume", "pages", "publisher", "issn"):
         if entry.get(key):
             result[key] = _as_text(entry[key])
-    if entry.get("journal"):
-        result["venue"] = _clean_venue(entry["journal"])
+    # Conference proceedings use booktitle in place of journal; map for
+    # our downstream pipeline which keys off journal/venue.
+    if entry.get("booktitle") and not result.get("journal"):
+        result["journal"] = _as_text(entry["booktitle"])
+    if result.get("journal"):
+        result["venue"] = _clean_venue(result["journal"])
     return result
 
 
@@ -771,22 +922,18 @@ def _with_fallback_metadata(
     title = doc.title
 
     if text and needs_title:
-        metadata_title = _as_text(metadata.get("title"))
-        heading = (
-            metadata_title
-            if metadata_title and not _title_needs_fallback(metadata_title)
-            else ""
-        )
-        if not heading:
-            heading = (
-                _best_markdown_title(text, title)
-                or first_heading(text)
-                or ""
-            )
-        if heading and not _title_needs_fallback(heading):
-            title = _clean_title(heading)
+        from .metadata import choose_document_title
+
+        # Filename-first priority: `[YYYY Author] Real Title.ext` is
+        # authoritative. Heuristic heading extraction is the fallback.
+        chosen = choose_document_title(text, source_path)
+        if chosen and not _title_needs_fallback(chosen):
+            title = _clean_title(chosen)
     if text and needs_authors:
+        from .metadata import validate_authors_against_filename
+
         authors = extract_authors_from_markdown(text, fn_author=fn_author)
+        authors = validate_authors_against_filename(authors, fn_author)
         if authors:
             metadata["authors"] = authors
     if text and needs_publication:
@@ -797,22 +944,55 @@ def _with_fallback_metadata(
         doi = extract_document_doi(text)
         if doi:
             metadata["doi"] = doi
+    # pymupdf fallback: Marker strips DOIs printed in header/footer layout
+    # bands, so they never reach the cached markdown. Re-scan the source PDF
+    # directly; fixes ~80% of otherwise-DOI-less PDF entries at refresh time.
+    if needs_doi and not metadata.get("doi") and source_path.suffix.lower() == ".pdf":
+        from .metadata import extract_pdf_doi_fallback
+
+        doi = extract_pdf_doi_fallback(source_path)
+        if doi:
+            metadata["doi"] = doi
 
     clean_doi = _clean_doi(metadata.get("doi"))
     if clean_doi:
         metadata["doi"] = clean_doi
 
     if resolve_doi and clean_doi:
-        lookup = doi_lookup or resolve_doi_metadata
+        if doi_lookup is None:
+            from ..util.doi_resolver import resolve_one
+
+            db_path = corpus.root / ".citestore.db" if corpus.root else None
+            external = (
+                resolve_one(clean_doi, cache_path=db_path) if db_path else {}
+            )
+        else:
+            external = doi_lookup(clean_doi)
         _merge_external_metadata(
             metadata,
-            lookup(clean_doi),
+            external,
             prefer_authors=_authors_need_fallback(metadata, fn_author),
         )
+
+    # Sync Document.title with metadata["title"] — _document_entry reads
+    # doc.title, but _merge_external_metadata writes to metadata["title"].
+    # Without this sync, a DOI-returned title silently fails to reach the
+    # bibtex entry even though it's in the metadata dict.
+    meta_title = _as_text(metadata.get("title"))
+    if meta_title and meta_title != title:
+        title = _clean_title(meta_title)
 
     if metadata == original_metadata and title == doc.title:
         return doc
     return replace(doc, title=title, metadata=metadata)
+
+
+_JUNK_AUTHOR_RE = re.compile(
+    r"(?:\bAir\s+Force\b|\bResearch\s+Laboratory\b|\bUniversity\b|"
+    r"\bInstitute\s+of\b|\bSchool\s+of\b|\bDepartment\s+of\b|"
+    r"\bPolytechnic\b|\bCollege\s+of\b|\.pdf\b|\.docx\b)",
+    re.IGNORECASE,
+)
 
 
 def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
@@ -825,6 +1005,10 @@ def _authors_need_fallback(metadata: dict, fn_author: str | None) -> bool:
             return True
         if len(author.split()) == 1:
             return True
+    # Any entry containing an institution marker, file extension, or
+    # similar non-person signal is a parse artifact; re-derive the list.
+    if any(_JUNK_AUTHOR_RE.search(a) for a in authors):
+        return True
     return False
 
 
@@ -846,6 +1030,14 @@ def _title_needs_fallback(title: str) -> bool:
     if not clean or len(clean) < 10:
         return True
     if clean.isupper():
+        return True
+    # Delegate placeholder detection ("Word Document", "Untitled", section
+    # headers like "1 Introduction", repository banners, markdown links) to
+    # the shared is_junk_title vocabulary so refresh fixes are picked up on
+    # cached docs without re-parse.
+    from .metadata import is_junk_title
+
+    if is_junk_title(clean):
         return True
     return bool(_GARBAGE_TITLE_RE.match(clean))
 
@@ -923,17 +1115,41 @@ def _merge_external_metadata(
     *,
     prefer_authors: bool,
 ) -> None:
+    """Merge DOI-content-negotiation data over locally extracted metadata.
+
+    doi.org content negotiation returns the publisher-registered canonical
+    record. It is the authoritative source for bibliographic-identity
+    fields when a DOI is available, so we overwrite local values with
+    DOI values for: title, journal/venue, volume, pages, publisher, issn,
+    url. Summary and year are kept local-preferring (summary because the
+    DOI record sometimes carries marketing copy; year because our filename
+    convention is reliable and the DOI response sometimes lacks it).
+
+    Authors follow the existing prefer_authors rule: DOI wins when the
+    local list was flagged as junk (_authors_need_fallback), otherwise
+    local wins since DOI records often abbreviate given names.
+    """
+    doi_authoritative = (
+        "title", "journal", "venue", "volume", "pages", "publisher",
+        "issn", "url",
+    )
+
     for key, value in external.items():
         if not value:
             continue
-        if key == "authors" and prefer_authors:
+        if key == "authors":
+            if prefer_authors:
+                metadata[key] = value
+            elif not metadata.get(key):
+                metadata[key] = value
+            continue
+        if key in doi_authoritative:
             metadata[key] = value
-        elif key == "title" and not metadata.get("title"):
+            continue
+        # For everything else (summary, year, etc.), keep local when present.
+        if not metadata.get(key):
             metadata[key] = value
-        elif not metadata.get(key):
-            metadata[key] = value
-        else:
-            metadata.setdefault(key, value)
+
 
 
 def _read_doc_markdown(corpus: CorpusPaths, doc: Document) -> str:
