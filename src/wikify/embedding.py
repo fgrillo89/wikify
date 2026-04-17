@@ -76,13 +76,15 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
         query_prefix="Represent this sentence for searching relevant passages: ",
         batch_size=256,
     ),
-    # Jina v2-small: 33M params, 8192-tok window, 512-d, MTEB ~47.
-    # The only small model that keeps the long-context story. batch_size=32
-    # because real section-level chunks fill the 8k window; larger batches
-    # OOM DirectML on 8 GB cards (observed on RTX 3070 Laptop with mvp-ish
-    # corpora: batch 128 × 4k-tok chunks trips FusedMatMul 80070057).
+    # Jina v2-small: 33M params, native 8192-tok window, 512-d, MTEB ~47.
+    # max_tokens capped at 2048 here (not the model's native 8192) because
+    # O(n²) attention at 8k × real section-sized inputs exhausts both 8 GB
+    # DirectML VRAM (FusedMatMul 80070057 / Mul 8007000E at any batch) and
+    # commodity RAM on CPU fallback ("bad allocation"). 2048 tokens still
+    # covers typical section chunks; the chunker (ingest/config.py) derives
+    # max_chunk_chars from this value (≈5120 chars).
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=8192, batch_size=32,
+        dim=512, max_tokens=2048, batch_size=32,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
@@ -130,7 +132,14 @@ def _hash_embed(texts: Sequence[str], dim: int = HASH_DIM) -> np.ndarray:
 
 
 def _onnx_providers() -> list[str] | None:
-    """Return GPU-accelerated ONNX providers if available, else None (default)."""
+    """Return GPU-accelerated ONNX providers if available, else None (default).
+
+    ``WIKIFY_EMBED_FORCE_CPU=1`` forces CPU, a safety valve for long-context
+    embedders on GPUs that OOM on 8k sequences (DirectML on 8 GB cards
+    cannot run jina-v2-small / nomic at full context).
+    """
+    if os.environ.get("WIKIFY_EMBED_FORCE_CPU", "") == "1":
+        return ["CPUExecutionProvider"]
     try:
         import onnxruntime as ort
 
@@ -185,13 +194,21 @@ def _fe_embed_with(
 ) -> np.ndarray:
     _load_fe(model)
     assert _fe_model is not None, "_load_fe must initialise _fe_model"
+    cfg = model_config(model or FE_MODEL_DEFAULT)
     if not texts:
-        cfg = model_config(model or FE_MODEL_DEFAULT)
         dim = getattr(_fe_model, "embedding_size", cfg.dim) or cfg.dim
         return np.zeros((0, dim), dtype=np.float32)
+    # Char-level truncation guard: protects against chunks on disk that were
+    # produced with a larger ``max_tokens`` cap than the active one. Without
+    # this, a stale chunks.jsonl (say, 8000 chars ≈ 2300 tok) fed to jina
+    # after capping max_tokens to 2048 still OOMs DML — ``max_tokens`` is
+    # metadata for the chunker, not an input-length enforcement on fastembed.
+    # Uses 2.5 chars/tok (worst-case) so the clipped text stays below cap.
+    char_cap = int(cfg.max_tokens * 2.5)
+    clipped = [t if len(t) <= char_cap else t[:char_cap] for t in texts]
     bs = _resolve_batch_size(model, batch_size)
     arr = np.asarray(
-        list(_fe_model.embed(list(texts), batch_size=bs)),
+        list(_fe_model.embed(list(clipped), batch_size=bs)),
         dtype=np.float32,
     )
     return arr
