@@ -566,7 +566,11 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
     # matches `fn_author="Li"` and the tail of the filename gets parsed as
     # authors).
     body = _strip_yaml_frontmatter(md_text)
-    window = body[:12000]
+    # Widened from 12000 to 40000 to reach the author byline on PDFs
+    # with long front-matter (DoD Form 298 reports, thesis cover pages,
+    # journal landing pages with "You may also like" recommendation
+    # blocks). The extra scan is cheap — per-line regex, not embedder.
+    window = body[:40000]
     lines = window.split("\n")
 
     # Strategy 1: filename-surname anchor. Most robust when the PDF has a
@@ -906,6 +910,13 @@ def _is_valid_author(name: str) -> bool:
         return False
     if re.search(r"[(\[|]|\d+\s*$", name):
         return False
+    # Reject names containing a colon: real author names never do, but
+    # journal running headers ("CHUA: MEMRISTOR-MISSING CIRCUIT ELEMENT
+    # 509") and byline/title concatenations routinely produce
+    # colon-joined strings that a surname-anchored scanner otherwise
+    # accepts as authors.
+    if ":" in name:
+        return False
     if all(w.lower() in _AUTHOR_NOISE for w in words):
         return False
     # Reject journal / venue names that slip through citation parsing.
@@ -1122,6 +1133,12 @@ def _parse_author_line(line: str) -> list[str]:
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\[[^\]]*\]", "", cleaned)
+    # Strip parenthetical nicknames / middle-name expansions. Common on
+    # byline lines: "Hai (Helen) Li and Robinson E. Pino" — the "(Helen)"
+    # middle name otherwise tripped _is_valid_author's paren filter and
+    # the whole author got rejected, falling back to just the fn_author
+    # surname.
+    cleaned = re.sub(r"\s*\([^)]*\)", "", cleaned)
     # Footnote/affiliation marker cluster like " *" or " †" or " ✉" right
     # after a name becomes a hard separator. Convert to comma BEFORE we
     # strip the markers — this is how we pry apart lines where pymupdf4llm
@@ -1178,6 +1195,12 @@ def _parse_author_line(line: str) -> list[str]:
         ):
             continue
         if re.search(r"[(\[|]|\d+\s*$", part):
+            continue
+        # Reject colon-containing parts: journal running headers
+        # ("CHUA: MEMRISTOR-MISSING CIRCUIT ELEMENT 509" after the
+        # trailing page-number strip) otherwise fool the
+        # surname-anchored scanner. Author names never contain ":".
+        if ":" in part:
             continue
         names.append(part)
     return names
