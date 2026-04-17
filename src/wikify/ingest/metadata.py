@@ -138,6 +138,84 @@ def is_junk_title(title: str, *, venue_hints: tuple[str, ...] = ()) -> bool:
 _FILENAME_HASH_SUFFIX_RE = re.compile(r"_[0-9a-f]{6,}$", re.IGNORECASE)
 
 
+def choose_document_title(
+    md_text: str,
+    path,
+    *,
+    venue_hints: tuple[str, ...] = (),
+) -> str:
+    """Pick the document title from available signals, preferring authoritative
+    sources over heuristics.
+
+    Priority:
+      1. ``fn_title`` from ``[YYYY Author] Real Title.ext`` filename convention.
+         User-curated, directly authoritative. Use when ≥20 chars and not
+         flagged by ``is_junk_title``.
+      2. ``first_heading(md_text)`` when the markdown's first H1/H2 is long
+         enough to look like a paper title (≥20 chars) and not junk. Guards
+         against short section-label headings (``"Conflict of Interest"``,
+         ``"1 Introduction"``, ``"Abstract"``).
+      3. ``clean_filename_title(path.name)`` — filename stem tidied.
+      4. ``path.stem`` — last resort.
+
+    This inverts the previous heuristic that ranked first_heading over the
+    filename, which was fragile for PDFs where Marker sees ``#`` sections
+    before the title. Filename > heading > stem is the structural rule.
+    """
+    fn_year, fn_author, fn_title = parse_filename(getattr(path, "name", str(path)))
+    fn_clean = clean_filename_title(getattr(path, "name", str(path)))
+
+    candidates: list[tuple[str, int]] = []
+    # (candidate_text, min_length_for_acceptance). We still accept a
+    # shorter-but-non-junk candidate if nothing longer passes.
+    fn_title_text = clean_markdown(fn_title or "")
+    candidates.append((fn_title_text, 20))
+
+    heading = first_heading(md_text) or ""
+    candidates.append((clean_markdown(heading), 20))
+    candidates.append((fn_clean, 0))
+    candidates.append((getattr(path, "stem", str(path)), 0))
+
+    # Pass 1: accept long, non-junk candidates in priority order.
+    for cand, min_len in candidates:
+        if cand and len(cand) >= min_len and not is_junk_title(
+            cand, venue_hints=venue_hints
+        ):
+            return cand
+
+    # Pass 2: accept any non-junk candidate, even short ones.
+    for cand, _ in candidates:
+        if cand and not is_junk_title(cand, venue_hints=venue_hints):
+            return cand
+
+    # Everything is junk — return the cleaned filename as the least-bad option.
+    return fn_clean or getattr(path, "stem", "")
+
+
+def validate_authors_against_filename(
+    authors: list[str], fn_author: str | None,
+) -> list[str]:
+    """Keep an extracted author list only if it includes the filename author.
+
+    Our filenames encode the first author's surname by convention
+    (``[2023 Song]``). When ``extract_authors_from_markdown`` returns a list
+    that contains no variant of that surname, the extractor almost certainly
+    latched onto a title, banner, or section label that superficially looked
+    like a comma-separated list. In that case the caller should fall back to
+    ``[fn_author]``. Returns ``[]`` to signal rejection.
+    """
+    if not authors or not fn_author:
+        return authors
+    surname = _extract_surname(fn_author) or fn_author
+    if not surname:
+        return authors
+    folded = surname.casefold()
+    for name in authors:
+        if folded in name.casefold():
+            return authors
+    return []
+
+
 def clean_filename_title(filename: str) -> str:
     """Derive a human-readable title from a corpus filename.
 

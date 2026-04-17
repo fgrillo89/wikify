@@ -7,15 +7,13 @@ import re
 from pathlib import Path
 
 from ..metadata import (
-    clean_filename_title,
-    clean_markdown,
+    choose_document_title,
     extract_document_doi,
     extract_publication_fields,
     extract_summary,
-    first_heading,
-    is_junk_title,
     parse_authors,
     parse_filename,
+    validate_authors_against_filename,
 )
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
@@ -118,23 +116,12 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
     props = doc.core_properties
     fn_year, fn_author, fn_title = parse_filename(filename)
 
-    # Word's default /Title property is often the placeholder "Word Document"
-    # or "Microsoft Word - foo.docx" when the author never set a custom title.
-    # Walk candidates in descending preference; skip any that is_junk_title
-    # rejects (placeholder literal, numbered section header, markdown link
-    # fragment, all-caps banner). clean_filename_title is a safe floor since
-    # the filename always has a human-readable stem.
-    cp_title = (props.title or "").strip()
-    heading_title = first_heading(md_text) or ""
-    fn_clean = clean_filename_title(filename)
-    title = ""
-    for cand in (cp_title, heading_title, fn_title, fn_clean):
-        cand = clean_markdown(cand or "")
-        if cand and not is_junk_title(cand):
-            title = cand
-            break
-    if not title:
-        title = fn_clean or Path(filename).stem
+    # Filename-first title priority: `[YYYY Author] Real Title.docx` is
+    # user-curated and authoritative. core_properties.title on Word-saved
+    # documents is frequently the literal "Word Document" placeholder.
+    # choose_document_title walks filename > first_heading > stem and rejects
+    # junk at each step, so we don't special-case "Word Document" here.
+    title = choose_document_title(md_text, Path(filename))
 
     cp_author = (props.author or "").strip()
     if cp_author:
@@ -143,6 +130,9 @@ def _extract_docx_metadata(doc, md_text: str, filename: str) -> dict:
         authors = [fn_author]
     else:
         authors = []
+    authors = validate_authors_against_filename(authors, fn_author)
+    if not authors and fn_author:
+        authors = [fn_author]
 
     year: int | None = None
     if props.created is not None:

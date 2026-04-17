@@ -556,7 +556,53 @@ def build_citation_index(
         for doc in docs
     ]
 
+    # DOI-based dedup: multiple source files (e.g. a .pdf and .docx of the
+    # same paper) can produce separate Document objects with identical DOIs.
+    # Emit one bib entry per DOI, preferring the document with richer
+    # metadata (valid title, more authors). Docs without a DOI are always
+    # emitted — we have no reliable dedup signal for them.
+    from .metadata import is_junk_title
+
+    def _doc_quality(entry: dict[str, str]) -> tuple[int, int]:
+        """Sort key for picking the better of two duplicate docs. Higher is
+        better: (title_is_real, author_count)."""
+        title = _as_text(entry.get("title"))
+        title_ok = int(bool(title) and not is_junk_title(title))
+        n_authors = len(_as_list(entry.get("author")))
+        return (title_ok, n_authors)
+
+    # First pass: pick the canonical doc per DOI.
+    canonical_by_doi: dict[str, tuple[Document, dict[str, str]]] = {}
+    no_doi_docs: list[Document] = []
     for doc in enriched_docs:
+        entry = _document_entry(doc)
+        doi = _clean_doi(entry.get("doi"))
+        if not doi:
+            no_doi_docs.append(doc)
+            continue
+        prev = canonical_by_doi.get(doi)
+        if prev is None or _doc_quality(entry) > _doc_quality(prev[1]):
+            canonical_by_doi[doi] = (doc, entry)
+
+    # Second pass: emit one bib entry per canonical doc, then one per
+    # DOI-less doc. Map every duplicate doc_id to the surviving bibkey so
+    # downstream CITES/bib-index lookups still resolve.
+    for doi, (doc, entry) in canonical_by_doi.items():
+        entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
+        source_entries.append(entry)
+        doc_bibkeys[doc.id] = entry["ID"]
+        entries[entry["ID"]] = _index_record(
+            bibkey=entry["ID"], kind="source",
+            entry=entry, doc_id=doc.id,
+        )
+        doi_bibkeys[doi] = entry["ID"]
+        # Point any other docs sharing this DOI at the canonical bibkey.
+        for other in enriched_docs:
+            if other.id != doc.id and _clean_doi(
+                _document_entry(other).get("doi")
+            ) == doi:
+                doc_bibkeys[other.id] = entry["ID"]
+    for doc in no_doi_docs:
         entry = _document_entry(doc)
         entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
         source_entries.append(entry)
@@ -565,9 +611,6 @@ def build_citation_index(
             bibkey=entry["ID"], kind="source",
             entry=entry, doc_id=doc.id,
         )
-        doi = _clean_doi(entry.get("doi"))
-        if doi:
-            doi_bibkeys[doi] = entry["ID"]
 
     # Phase 2: process citations from each doc
     from .citations import repair_doi
@@ -817,22 +860,18 @@ def _with_fallback_metadata(
     title = doc.title
 
     if text and needs_title:
-        metadata_title = _as_text(metadata.get("title"))
-        heading = (
-            metadata_title
-            if metadata_title and not _title_needs_fallback(metadata_title)
-            else ""
-        )
-        if not heading:
-            heading = (
-                _best_markdown_title(text, title)
-                or first_heading(text)
-                or ""
-            )
-        if heading and not _title_needs_fallback(heading):
-            title = _clean_title(heading)
+        from .metadata import choose_document_title
+
+        # Filename-first priority: `[YYYY Author] Real Title.ext` is
+        # authoritative. Heuristic heading extraction is the fallback.
+        chosen = choose_document_title(text, source_path)
+        if chosen and not _title_needs_fallback(chosen):
+            title = _clean_title(chosen)
     if text and needs_authors:
+        from .metadata import validate_authors_against_filename
+
         authors = extract_authors_from_markdown(text, fn_author=fn_author)
+        authors = validate_authors_against_filename(authors, fn_author)
         if authors:
             metadata["authors"] = authors
     if text and needs_publication:

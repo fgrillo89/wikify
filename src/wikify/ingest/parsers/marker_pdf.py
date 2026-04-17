@@ -228,16 +228,14 @@ def _strip_image_links(md: str) -> str:
 def _extract_metadata(md_text: str, path: Path) -> dict:
     """Extract title, authors, year from markdown + filename."""
     from wikify.ingest.metadata import (
-        clean_filename_title,
-        clean_markdown,
+        choose_document_title,
         extract_authors_from_markdown,
         extract_document_doi,
         extract_pdf_doi_fallback,
         extract_publication_fields,
         extract_summary,
-        first_heading,
-        is_junk_title,
         parse_filename,
+        validate_authors_against_filename,
     )
 
     fn_year, fn_author, fn_title = parse_filename(path.name)
@@ -254,36 +252,16 @@ def _extract_metadata(md_text: str, path: Path) -> dict:
         v for v in (publication.get("venue"), publication.get("journal")) if v
     )
 
-    # Candidate titles, in descending preference. The first that is not a
-    # Word/PDF placeholder ("Word Document", "Untitled", "Microsoft Word -
-    # foo.docx", empty), is not a section header, and is not a venue name
-    # wins. If nothing survives we fall back to the filename-derived stem.
-    candidates = [
-        first_heading(md_text) or "",
-        fn_title or "",
-        clean_filename_title(path.name),
-        path.stem,
-    ]
-
-    # Prefer filename title when extraction picks up a section header
-    from wikify.ingest.metadata import _is_heading_noise
-
-    title = ""
-    for cand in candidates:
-        cand = clean_markdown(cand)
-        if not cand or is_junk_title(cand, venue_hints=venue_hints):
-            continue
-        if _is_heading_noise(cand):
-            continue
-        if cand.isupper() and fn_title:
-            continue
-        title = cand
-        break
-    if not title:
-        title = clean_filename_title(path.name) or path.stem
+    # Filename-first title priority: our `[YYYY Author] Real Title.ext`
+    # filenames are user-curated and authoritative. first_heading is
+    # trusted only when the filename has nothing useful.
+    title = choose_document_title(md_text, path, venue_hints=venue_hints)
 
     authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
     authors = [a for a in (_sanitize_author(a) for a in authors) if a]
+    # Sanity: reject an extracted list that doesn't contain the filename
+    # author's surname -- the extractor latched onto a title or banner.
+    authors = validate_authors_against_filename(authors, fn_author)
     if not authors and fn_author:
         authors = [fn_author]
 
