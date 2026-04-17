@@ -2,8 +2,10 @@
 
 from wikify.ingest.citations import (
     _extract_author_last_names,
+    _extract_doi,
     _find_refs_section,
     extract_citations,
+    repair_doi,
 )
 
 SAMPLE_MD = "\n".join(
@@ -84,6 +86,63 @@ def test_extract_author_last_names_filters_venue_words():
     assert "Furthmuller" in names
     # Venue words should be filtered
     assert "Rev" not in names
+
+
+def test_doi_with_balanced_parens_not_truncated():
+    """Elsevier legacy DOIs carry balanced parens (Neural Netw 1997, Nat Commun)."""
+    raw = (
+        "W. Maass. Networks of spiking neurons: The third generation of "
+        "neural network models. Neural Netw. 10, 1659 (1997). "
+        "doi:10.1016/S0893-6080(97)00011-7"
+    )
+    assert _extract_doi(raw) == "10.1016/S0893-6080(97)00011-7"
+
+
+def test_doi_trailing_unbalanced_paren_stripped():
+    raw = "See reference (10.1038/nature06932)."
+    assert _extract_doi(raw) == "10.1038/nature06932"
+
+
+def test_doi_trailing_period_stripped():
+    raw = "doi:10.1038/nature06932."
+    assert _extract_doi(raw) == "10.1038/nature06932"
+
+
+def test_doi_extraction_from_paren_doi_in_reference():
+    """Full reference text with a DOI that has parens must survive extraction."""
+    md = "\n".join(
+        [
+            "# Paper",
+            "",
+            "## References",
+            "",
+            "[1] W. Maass. Networks of spiking neurons. "
+            "Neural Netw. 10, 1659-1671 (1997). "
+            "doi:10.1016/S0893-6080(97)00011-7",
+        ]
+    )
+    cits = extract_citations(md, "doc-x")
+    assert cits[0].doi == "10.1016/S0893-6080(97)00011-7"
+
+
+def test_repair_doi_replaces_truncated_with_fresh_balanced():
+    raw = (
+        "W. Maass. Networks of spiking neurons. Neural Netw. 10, 1659 "
+        "(1997). doi:10.1016/S0893-6080(97)00011-7"
+    )
+    assert (
+        repair_doi(raw, "10.1016/S0893-6080(97")
+        == "10.1016/S0893-6080(97)00011-7"
+    )
+
+
+def test_repair_doi_keeps_existing_when_raw_has_no_doi():
+    assert repair_doi("No DOI here.", "10.1038/nature06932") == "10.1038/nature06932"
+
+
+def test_repair_doi_keeps_longer_existing():
+    raw = "partial: 10.1038/nat"
+    assert repair_doi(raw, "10.1038/nature06932") == "10.1038/nature06932"
 
 
 def test_acs_reference_extracts_year_and_doi():

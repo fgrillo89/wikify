@@ -33,7 +33,10 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_CODE_RE = re.compile(r"`+([^`]*)`+")
 
 _YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-3]\d)\b")
-_DOI_RE = re.compile(r"\b(10\.\d{4,}/[^\s,;)\]]+)")
+# DOI bodies may contain balanced parentheses (e.g. 10.1016/S0893-6080(97)00011-7).
+# Match greedy up to whitespace/comma/semicolon/bracket; strip unbalanced trailing
+# parens in ``_extract_doi`` so we don't eat the paren-year segment of Elsevier DOIs.
+_DOI_RE = re.compile(r"\b(10\.\d{4,}/[^\s,;\]]+)")
 
 # Author last-name pattern: uppercase word of 2+ chars, not all-caps
 # acronyms (IEEE, ACS), not common venue words.
@@ -92,7 +95,45 @@ def _extract_doi(text: str) -> str | None:
     m = _DOI_RE.search(text)
     if not m:
         return None
-    return m.group(1).rstrip(".,;)")
+    doi = m.group(1)
+    # Strip trailing punctuation that is never part of a DOI.
+    doi = doi.rstrip(".,;")
+    # Strip only unbalanced trailing ``)`` (DOIs like
+    # ``10.1016/S0893-6080(97)00011-7`` must keep their balanced parens).
+    while doi.endswith(")") and doi.count(")") > doi.count("("):
+        doi = doi[:-1]
+    return doi or None
+
+
+def repair_doi(raw_text: str, current: str) -> str:
+    """Return the best DOI we can harvest from ``raw_text``.
+
+    Existing corpora carry truncated DOIs (``10.1038/s41467-``,
+    ``10.1016/S0893-6080(97``) persisted before the paren-aware extraction
+    fix landed.  A plain ``refresh`` cannot heal them because
+    ``cite_parse.enrich_citations`` only re-extracts when the stored DOI
+    is syntactically invalid -- and those truncated strings are valid by
+    the loose check.  Callers that build downstream artifacts should run
+    DOIs through here so a re-extracted balanced DOI can replace a short
+    truncated one. We keep ``current`` untouched when it is the longer /
+    balanced candidate to avoid regressing API-resolved DOIs.
+    """
+    current = (current or "").strip()
+    if not raw_text:
+        return current
+    fresh = _extract_doi(raw_text) or ""
+    if not fresh:
+        return current
+    if not current:
+        return fresh
+    # Prefer the balanced + longer candidate.
+    cur_balanced = current.count("(") == current.count(")")
+    fresh_balanced = fresh.count("(") == fresh.count(")")
+    if fresh_balanced and not cur_balanced:
+        return fresh
+    if cur_balanced and not fresh_balanced:
+        return current
+    return fresh if len(fresh) > len(current) else current
 
 
 def _extract_year(text: str) -> int | None:

@@ -46,7 +46,13 @@ def _sanitize_id(s: str) -> str:
 def _clean_doi(value: object) -> str:
     raw = str(value or "").strip()
     raw = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", raw)
-    return raw.rstrip(".,;)")
+    # Strip trailing punctuation that never belongs to a DOI. Only strip an
+    # unbalanced trailing ``)`` so DOIs like 10.1016/S0893-6080(97)00011-7
+    # keep their balanced parens.
+    raw = raw.rstrip(".,;")
+    while raw.endswith(")") and raw.count(")") > raw.count("("):
+        raw = raw[:-1]
+    return raw
 
 
 def _as_text(value: object) -> str:
@@ -534,11 +540,21 @@ def build_citation_index(
             doi_bibkeys[doi] = entry["ID"]
 
     # Phase 2: process citations from each doc
+    from .citations import repair_doi
+
     for doc in enriched_docs:
         cited_keys: list[str] = []
         for cit_obj in doc.citations:
             cit = cit_obj.to_dict() if hasattr(cit_obj, "to_dict") else cit_obj
             bibkey = None
+
+            # Heal DOIs that were persisted truncated by the pre-fix extractor
+            # (``10.1038/s41467-``, ``10.1016/S0893-6080(97``). Safe: only
+            # replaces the stored DOI when raw_text yields a longer / better
+            # balanced candidate.
+            repaired = repair_doi(cit.get("raw_text") or "", cit.get("doi") or "")
+            if repaired and repaired != cit.get("doi"):
+                cit["doi"] = repaired
 
             # Try to match to an existing source doc by DOI
             cit_doi = _clean_doi(cit.get("doi"))
