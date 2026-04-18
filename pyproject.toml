@@ -85,6 +85,14 @@ select = ["E", "F", "I", "N", "W"]
 # metrics.py uses math-style uppercase variables (W, M, L, Q) intentionally.
 "src/wikify/eval/metrics.py" = ["N803", "N806"]
 "src/wikify/eval/audit.py" = ["N806"]
+# KG tests use NetworkX `G` convention and long fixture strings.
+"tests/wikify/citestore/test_graph.py" = ["E501", "N806"]
+# Wiki-graph tests have long fixture body_markdown strings.
+"tests/wikify/store/test_wiki_graph.py" = ["E501"]
+# Scale / sampling / policy tests all construct an nx.MultiDiGraph named G.
+"tests/wikify/test_image_sampling.py" = ["N806"]
+"tests/wikify/test_policy_and_coverage_gap.py" = ["N806"]
+"tests/wikify/test_scale_regression.py" = ["N806"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

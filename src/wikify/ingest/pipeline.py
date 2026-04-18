@@ -35,7 +35,6 @@ from ..store.vectors_meta import write_meta as write_vectors_meta
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
-from .coupling import compute_coupling
 from .equations import extract_equations
 from .figure_refs import extract_figure_refs
 from .images import (
@@ -651,24 +650,6 @@ def _compute_doc_similarity(
                 if doc.id == d_id:
                     doc.similar_to = top
                     break
-
-
-def populate_doc_edges(
-    docs: list[Document],
-    docs_chunks_pairs: list[tuple[str, list[Chunk]]],
-    store: VectorStore,
-) -> None:
-    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc.
-
-    Legacy entry point that runs all three steps. Prefer the split
-    steps (_refresh_doc_similarity, _refresh_citation_edges) in the DAG
-    for correct dependency ordering.
-    """
-    _compute_doc_similarity(docs, docs_chunks_pairs, store)
-    _resolve_citations(docs)
-    coupling = compute_coupling(docs, min_strength=3, top_k=5)
-    for doc in docs:
-        doc.cites_same = coupling.get(doc.id, [])
 
 
 def _resolve_citations(docs: list[Document]) -> None:

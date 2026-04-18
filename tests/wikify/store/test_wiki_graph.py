@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import numpy as np
 import pytest
 
 from wikify.models import Evidence, WikiPage
-from wikify.store.vectors import VectorStore
 from wikify.store.wiki_graph import (
     PAGE,
     WikiKnowledgeGraph,
