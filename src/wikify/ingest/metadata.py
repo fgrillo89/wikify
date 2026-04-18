@@ -271,11 +271,22 @@ def parse_authors(raw: str) -> list[str]:
     return [a for a in assembled if _is_valid_author(a)]
 
 
+# Canonical name-particle / name-suffix vocabularies. Kept here so the
+# rules in bibtex.py (_clean_author_name, _author_has_prose_residue) and
+# scripts/scan_bib_quality.py all share the same membership — adding a
+# new particle (e.g. "zu", "vor") only has to happen in one place.
+NAME_PARTICLES = frozenset({
+    "van", "von", "der", "de", "da", "di", "la", "le", "du",
+    "del", "den", "dos", "el", "al", "bin", "ibn",
+})
+NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
+
+
 # A single lowercase letter surrounded by whitespace at the end of an author
 # token is an affiliation superscript that was flattened inline ("Mi Hyang
 # Park a"). We strip it when not preceded by a period (so proper initials
 # like "J. Smith" are left alone).
-_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]$")
+_TRAILING_AFFIL_LETTER_RE = re.compile(r"(?<=[a-z])\s+[a-z]{1,2}$")
 
 
 def _strip_trailing_affiliation_letter(token: str) -> str:

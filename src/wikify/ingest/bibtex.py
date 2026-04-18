@@ -115,11 +115,10 @@ _AFFILIATION_RE = re.compile(
 )
 
 
-# Lowercase name particles preserved during capitalization.
-_NAME_PARTICLES = frozenset({
-    "van", "von", "der", "de", "da", "di", "la", "le", "du",
-    "del", "den", "dos", "el", "al", "bin", "ibn",
-})
+# Lowercase name particles + suffixes canonical in metadata.py. Re-exported
+# here under private names to keep existing callers untouched.
+from .metadata import NAME_PARTICLES as _NAME_PARTICLES  # noqa: E402
+from .metadata import NAME_SUFFIXES as _NAME_SUFFIXES  # noqa: E402
 
 
 def _clean_author_name(name: str) -> str:
@@ -135,6 +134,21 @@ def _clean_author_name(name: str) -> str:
     all_upper = name == name.upper() and any(c.isalpha() for c in name)
     all_lower = name == name.lower() and any(c.isalpha() for c in name)
     if not (all_upper or all_lower):
+        # In the mixed-case path, a trailing 1-2 letter ALL-LOWERCASE
+        # token is an affiliation superscript ("Xin-Gui Tang ab", "Park a")
+        # ONLY when the name has ≥2 capitalised tokens before it. A
+        # 2-token name like "Yang yi" (cap+lower) is a legitimate
+        # given-name pair where the lowercased second token must not
+        # be stripped — there's no room for an affiliation marker
+        # there. A 3-token name like "Xin-Gui Tang ab" has a clear
+        # byline shape with room for the marker.
+        tokens = name.split()
+        if (
+            len(tokens) >= 3
+            and re.fullmatch(r"[a-z]{1,2}", tokens[-1])
+            and tokens[-2][:1].isupper()
+        ):
+            return " ".join(tokens[:-1])
         return name
     parts = name.split()
     cleaned = []
@@ -175,8 +189,42 @@ def _normalise_title_key(value: object) -> str:
 # ---------------------------------------------------------------------------
 
 
+# IEEE-style author-affiliation prose tail: "Jinbin Wang are with the..."
+# (also "is with", "was with", "were with"). These come from the first-page
+# byline followed by its affiliation sentence that an over-eager author
+# extractor fused with the name.
+_AFFILIATION_PROSE_TAIL_RE = re.compile(
+    r"\s+(?:is|are|was|were)\s+with\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_author_artifacts(name: str) -> str:
+    """Structurally clean a single author-list token: strip IEEE
+    affiliation prose ("... is with the University..."), trailing
+    "et al." / "et al" / " - " / " — " / " _" residues.
+
+    Recovery path, not rejection: `"Facai Wu is with the"` becomes
+    `"Facai Wu"` rather than being discarded whole.
+    """
+    s = name.strip()
+    s = _AFFILIATION_PROSE_TAIL_RE.sub("", s)
+    # Strip trailing "et al." / "et al" optionally followed by a dash.
+    s = re.sub(r"\s+et\s+al\.?\s*[-–—_]*\s*$", "", s, flags=re.IGNORECASE)
+    # Strip lone trailing dash/em-dash/underscore clusters.
+    s = re.sub(r"\s*[-–—_]+\s*$", "", s)
+    return s.strip()
+
+
 def _is_plausible_author(name: str) -> bool:
-    """Check if a string looks like an author name (not body text)."""
+    """Check if a string looks like an author name (not body text).
+
+    A name must start with a capital, have ≤5 words, and contain no
+    prose-residue (lowercase non-particle words, colons, digits, etc.).
+    Prose-residue delegates to ``_author_has_prose_residue`` so the
+    same rule that filters references (cited_works.bib) also filters
+    corpus papers.
+    """
     name = name.strip()
     if not name or len(name) < 2:
         return False
@@ -186,23 +234,33 @@ def _is_plausible_author(name: str) -> bool:
     # Must start with uppercase
     if not words[0][0].isupper():
         return False
-    # Must not contain common non-name words
-    noise = {"particular", "variabilities", "abstract", "results", "however",
-             "therefore", "moreover", "furthermore", "respectively", "simultaneously"}
-    if any(w.lower() in noise for w in words):
-        return False
     # Must not contain chemical formulas or numbers
     if re.search(r"\d|[A-Z]{2,}\d", name):
+        return False
+    # Must not contain prose residue — same rule as references.
+    if _author_has_prose_residue(name):
         return False
     return True
 
 
 def _document_entry(doc: Document) -> dict[str, str]:
     metadata = doc.metadata or {}
+    # Clean each author-list token of IEEE affiliation prose and "et al."
+    # residue BEFORE plausibility checks so recoverable names survive.
+    raw_authors = _as_list(metadata.get("authors"))
+    cleaned = [_strip_author_artifacts(a) for a in raw_authors]
     authors_list = [
-        _clean_author_name(a) for a in _as_list(metadata.get("authors"))
-        if _is_plausible_author(a)
+        _clean_author_name(a) for a in cleaned if _is_plausible_author(a)
     ]
+    # Corpus entries should emit even when no author survives cleanup —
+    # the title (from filename) is authoritative. Fall back to the
+    # filename surname when the author list empties out.
+    if not authors_list:
+        fn_year, fn_author, fn_title = parse_filename(
+            Path(doc.source_path).name if doc.source_path else "",
+        )
+        if fn_author:
+            authors_list = [_clean_author_name(fn_author)]
     title = _clean_bib_title(_clean_title(_as_text(doc.title)))
     # If title is garbage, recover from doc.id
     if _title_needs_fallback(title):
@@ -250,25 +308,131 @@ def _document_entry(doc: Document) -> dict[str, str]:
     return entry
 
 
+# Prose-residue check: particles + suffixes + the "and" separator that
+# shows up between names in our splitter's input.
+_AUTHOR_NAME_PARTICLES = _NAME_PARTICLES | _NAME_SUFFIXES | frozenset({"and"})
+
+
+def _looks_like_author_fragment(piece: str) -> bool:
+    """True if ``piece`` has the shape of an author-name fragment —
+    1–4 words, at least one capitalised, mostly letters/periods/hyphens,
+    no lowercase content word. Used to detect titles that are really
+    comma-separated author-list tails ("Galdin-Retailleau, D. Querlioz").
+    """
+    piece = piece.strip()
+    if not piece or len(piece) > 40:
+        return False
+    words = piece.split()
+    if not words or len(words) > 4:
+        return False
+    if not any(w[0:1].isupper() for w in words):
+        return False
+    # Reject if any lowercase word is a prose content word.
+    if _author_has_prose_residue(piece):
+        return False
+    # Mostly alphabetic? Allow `.`/`-`/`'`.
+    return bool(re.fullmatch(r"[A-Za-z.\-'\s]+", piece))
+
+
+def _author_has_prose_residue(author: str) -> bool:
+    """True if an author-list token contains prose or a colon.
+
+    A legitimate author token consists of initials (uppercase + period)
+    and/or capitalised name-words + recognised particles. Any other
+    lowercase word (``the``, ``gradual``, ``plasticity``) means prose
+    bled into the author slot; a colon means a running header was
+    parsed as a name. Reject either.
+    """
+    if ":" in author:
+        return True
+    for word in author.split():
+        w = word.strip(".,;:-").lower()
+        if not w or w.isdigit():
+            continue
+        if word != word.lower():
+            continue  # has uppercase — legitimate
+        if w in _AUTHOR_NAME_PARTICLES:
+            continue
+        return True
+    return False
+
+
+def _strip_year_anchored_tail(title: str) -> str:
+    """Strip a trailing citation fragment anchored on a 4-digit year.
+
+    Structural rule: a legitimate paper title almost never contains a
+    sentence break followed by a year. When the title does, cut at the
+    FIRST punctuation boundary (``. ``, ``, ``, `` (``) before the
+    year, provided that boundary is >= 20 chars in so short titles
+    aren't decapitated.
+
+    Replaces several publisher-specific trailing-tail regexes that
+    grew organically as each new failure mode surfaced (Chinese-style
+    citations, Park 2020's Journal-YYYY-vol-pages, Materials (YYYY),
+    etc.). Under this one rule every case reduces to "there's a year
+    past the title proper; cut at the earliest punctuation before it."
+    """
+    year_m = re.search(r"\b(?:19|20)\d{2}\b", title)
+    if not year_m:
+        return title
+    prefix = title[: year_m.start()]
+    cuts = []
+    for sep in (". ", ", ", " (", "? ", "! "):
+        # Use ``rfind`` (LAST boundary before the year) so a legitimate
+        # subtitle like "Paper Title. Subtitle. Journal 2020" keeps
+        # "Paper Title. Subtitle" rather than losing everything after
+        # the first period. The trailing-journal-abbrev strip that runs
+        # later in ``_clean_bib_title`` catches any short journal-name
+        # residue between the subtitle and the year.
+        idx = prefix.rfind(sep)
+        if idx >= 20:
+            cuts.append(idx)
+    if not cuts:
+        return title
+    return title[: max(cuts)].rstrip(" .,;:()?!")
+
+
 def _clean_bib_title(title: str) -> str:
     """Clean a title for BibTeX output: strip HTML, newlines, leaked metadata."""
+    import html as _html
+
     # Collapse newlines to spaces
     title = title.replace("\n", " ").replace("\r", " ")
+    # Decode HTML entities before looking for tags. Some upstream parses
+    # double-encode (``&amp;#x00D7;`` → ``&#x00D7;`` → ``×``); loop until
+    # the string is stable so both layers unwind.
+    for _ in range(3):
+        decoded = _html.unescape(title)
+        if decoded == title:
+            break
+        title = decoded
     # Convert HTML subscript/superscript to LaTeX (including <inf> variant)
     title = re.sub(r"<(?:sub|inf)>(.*?)</(?:sub|inf)>", r"$_{\1}$", title, flags=re.I | re.S)
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
-    # Strip trailing ". Journal, Year, Vol, Pages" (Chinese-style citations).
+    # Strip any trailing citation fragment anchored on a 4-digit year. One
+    # structural rule in place of the several per-publisher regexes that
+    # used to live here.
+    title = _strip_year_anchored_tail(title)
+    # Strip a trailing abbreviated journal name: `. <Word> <Word>?` where
+    # each word is ≤12 chars title-cased (common abbrevs: "Neural Comput",
+    # "Phys Rev", "ACS Nano", "Briefings Bioinf"). A real title rarely
+    # ends with a period followed by 1-3 short capitalised words.
     title = re.sub(
-        r"\.\s+[A-Z][a-z]+[^,]*,\s*\d{4}\s*,\s*\d+.*$", "", title,
+        r"\.\s+[A-Z][A-Za-z]{0,11}(?:\s+[A-Z][A-Za-z]{0,11}){0,2}\.?\s*$",
+        "",
+        title,
     )
-    # Strip trailing ". Journal Name YYYY, Vol, Pages" — year embedded in
-    # the journal-name segment rather than after it. Observed on Park 2020:
-    # ". Journal of Materials Chemistry C 2020, 8, 9163− 9183". Requires a
-    # multi-word capitalised segment + 4-digit year + volume + page.
+    # Strip a trailing `. <Journal> NN, NNN[-NNN]` tail — journal name
+    # followed by volume and page numbers, no year. Complementary to the
+    # year-anchored strip (which needs a year) and the trailing-abbrev
+    # strip (which doesn't allow numbers). Covers "Proceedings of the
+    # IEEE 86, 2278-", "Nat Nanotechnol 11, 693-699".
     title = re.sub(
-        r"\.\s+[A-Z][A-Za-z ]{5,60}\s+\d{4}\s*,\s*\d+\s*,\s*\d+.*$", "", title,
+        r"\.\s+[A-Z][A-Za-z ]{1,40}\s+\d{1,4}\s*,\s*\d+(?:[-–]\d+)?\s*$",
+        "",
+        title,
     )
     # Strip URLs anywhere in title (including space-broken URLs from PDF)
     title = re.sub(r"\s*https?://[\S\s]*$", "", title)
@@ -303,6 +467,10 @@ def _clean_bib_title(title: str) -> str:
         rf"^(?:{_author_name},\s*){{{2},}}",
         "", title,
     )
+    # After stripping the leading author-list, a dangling "and " may be
+    # left at the very start of the title (the Oxford comma's "and"
+    # that introduced the last author). Drop it.
+    title = re.sub(r"^(?:and|&)\s+", "", title, flags=re.IGNORECASE)
     # Strip trailing citation fragment: ", Small Sci 2, 2100049"
     # Requires volume + pages/article-number after journal name.
     title = re.sub(
@@ -403,6 +571,60 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
     # These catch text that _clean_bib_title couldn't fix.
     if title.isupper() and len(title.split()) <= 2:
         return None
+    # Citation-coordinate title: 6 or fewer words AND contains `<digit>, <digit>`
+    # — the "title" is just journal+vol+pages with no prose content.
+    if (
+        len(title.split()) <= 6
+        and re.search(r"\d+\s*,\s*\d{3,}", title)
+    ):
+        return None
+    # Web-PDF anchor IDs in the title mean the upstream reference-string
+    # parser emitted a mangled token soup (HTML `<a href="#sbref0021">`
+    # fragments with the tags stripped but the anchor IDs intact). The
+    # title is structurally unusable; reject the whole entry rather than
+    # try to clean a corrupt record.
+    if re.search(
+        # `/sbref0021`, `#sbref12`, `/fn5`, `/anchor3`, `90110-9/word\d+`,
+        # or the trailing `NNNNN-X)` / `NNNN-XX)` pattern seen when
+        # anchor IDs were rendered as ")-suffixed numeric blobs.
+        r"/(?:sbref|ref|anchor|fn|note|sec|bib)\d+"
+        r"|\d+-\d+/\w+\d+"
+        r"|,\s*\d{4,}-[A-Z0-9]\)",
+        title,
+        re.I,
+    ):
+        return None
+    # Citation-marker prefix (`>[N]`, `>N.`, `[N]`, `N.`) means the
+    # whole title is a reference-list line the parser didn't strip.
+    # Also catches `>[\[N\] V](#page-0-0)...` markdown-link wrappings
+    # around the marker.
+    if re.match(
+        r"^\s*>?\s*[\[\(]\d+[\]\)]"
+        r"|^\s*>?\s*\d+\.\s+[A-Z]"
+        r"|^\s*>?\s*\[\\\[\d",
+        title,
+    ):
+        return None
+    # Markdown-link syntax `](` in the title never appears in a real
+    # paper title — it means a banner/TOC line with a hyperlink leaked
+    # into the title slot.
+    if "](" in title:
+        return None
+    # Citation-fragment title: the "title" is really a comma-separated
+    # list of name-shaped tokens (e.g. `Galdin-Retailleau, D. Querlioz`
+    # where the parser kept the tail of an author list as the title).
+    # Structural test: every comma-separated piece looks like a name AND
+    # at least one piece contains a period-initial (`[A-Z]\.`). The
+    # period-initial requirement avoids false positives on genuine
+    # comma-list adjective titles like "Flexible, Transparent,
+    # Wafer-Scale ..." where no piece carries an author-initial.
+    pieces = [p.strip() for p in title.split(",") if p.strip()]
+    if (
+        len(pieces) >= 2
+        and all(_looks_like_author_fragment(p) for p in pieces)
+        and any(re.search(r"\b[A-Z]\.", p) for p in pieces)
+    ):
+        return None
     # Journal+year fragment ("Nanoscale, 2016, 8: 1383")
     if re.match(r"^[A-Z][a-z]+,\s+\d{4}", title):
         return None
@@ -431,6 +653,21 @@ def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
         return None
     # Still has doi.org or too many commas after cleaning
     if "doi.org" in title or title.count(",") > 5:
+        return None
+    # Final structural reject: a real paper title doesn't contain a
+    # 4-digit year. If one survived all the cleanup passes, the cleanup
+    # couldn't recover prose from the citation fragment — drop it
+    # rather than emit a bib entry whose title is still a citation.
+    if re.search(r"\b(?:19|20)\d{2}\b", title):
+        return None
+
+    # Filter structurally-broken author tokens: any token containing a
+    # lowercase content word that isn't a recognised name particle has
+    # either prose bled into it ("L. On the gradual unipolar") or a
+    # running-header colon ("M. Erratum:"). Drop those tokens; reject
+    # the entry if nothing clean survives.
+    authors = [a for a in authors if not _author_has_prose_residue(a)]
+    if not authors:
         return None
 
     # For heuristic-only citations, validate strictly
@@ -923,11 +1160,17 @@ def _with_fallback_metadata(
     needs_doi = not metadata.get("doi")
     needs_authors = _authors_need_fallback(metadata, fn_author)
     needs_title = _title_needs_fallback(doc.title)
+    # If we have a DOI, don't early-return even when every local field
+    # looks "present" — the DOI-authoritative merge needs to run so
+    # junk-but-non-empty values (ISSN lines in the venue slot, etc.)
+    # get overwritten with the publisher-registered truth.
+    has_doi = bool(metadata.get("doi"))
     if (
         not needs_publication
         and not needs_doi
         and not needs_authors
         and not needs_title
+        and not has_doi
         and metadata == original_metadata
     ):
         return doc
