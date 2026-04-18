@@ -865,8 +865,13 @@ def build_citation_index(
     # DOI-based dedup: multiple source files (e.g. a .pdf and .docx of the
     # same paper) can produce separate Document objects with identical DOIs.
     # Emit one bib entry per DOI, preferring the document with richer
-    # metadata (valid title, more authors). Docs without a DOI are always
-    # emitted — we have no reliable dedup signal for them.
+    # metadata (valid title, more authors).
+    #
+    # DOI-less fallback: for pre-DOI papers (pre-~2000) our corpus
+    # convention `[YYYY Author] Title.ext` is a reliable identity key.
+    # Group DOI-less docs by (year, author-surname, normalised-title) and
+    # emit one canonical entry per group; duplicate doc_ids map to the
+    # surviving bibkey so CITES / bib-index lookups still resolve.
     from .metadata import is_junk_title
 
     def _doc_quality(entry: dict[str, str]) -> tuple[int, int]:
@@ -919,7 +924,61 @@ def build_citation_index(
         for other_id in docs_by_doi[doi]:
             if other_id != doc.id:
                 doc_bibkeys[other_id] = entry["ID"]
+    # Group DOI-less docs by filename-convention key; pick a canonical
+    # per group using the same quality rule as the DOI dedup.
+    def _filename_key(doc: Document) -> tuple[int | None, str, str] | None:
+        name = Path(doc.source_path).name
+        year, author, title = parse_filename(name)
+        if not (year or author or title):
+            return None
+        norm_author = (author or "").strip().casefold()
+        norm_title = _TITLE_TOKEN_RE.sub(
+            "", (title or "").casefold(),
+        ) if title else ""
+        # Second casefold+compact pass using the title-token pattern (same
+        # used for bibkey construction) so "The_missing_circuit_element"
+        # and "the missing circuit element" hash identically.
+        norm_title = "".join(_TITLE_TOKEN_RE.findall((title or "").casefold()))
+        if not norm_title:
+            return None
+        return (year, norm_author, norm_title)
+
+    canonical_by_fn: dict[tuple, tuple[Document, dict[str, str]]] = {}
+    unkeyed_docs: list[Document] = []
+    fn_key_for_doc: dict[str, tuple] = {}
     for doc in no_doi_docs:
+        key = _filename_key(doc)
+        if key is None:
+            unkeyed_docs.append(doc)
+            continue
+        fn_key_for_doc[doc.id] = key
+        entry = entry_by_doc[doc.id]
+        prev = canonical_by_fn.get(key)
+        if prev is None or _doc_quality(entry) > _doc_quality(prev[1]):
+            canonical_by_fn[key] = (doc, entry)
+
+    # Emit canonicals, then map every duplicate doc.id to the surviving
+    # bibkey. Same pattern as the DOI dedup above.
+    docs_by_fn: dict[tuple, list[str]] = defaultdict(list)
+    for doc in no_doi_docs:
+        key = fn_key_for_doc.get(doc.id)
+        if key is not None:
+            docs_by_fn[key].append(doc.id)
+
+    for key, (doc, entry) in canonical_by_fn.items():
+        entry = _document_entry(doc)
+        entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
+        source_entries.append(entry)
+        doc_bibkeys[doc.id] = entry["ID"]
+        entries[entry["ID"]] = _index_record(
+            bibkey=entry["ID"], kind="source",
+            entry=entry, doc_id=doc.id,
+        )
+        for other_id in docs_by_fn[key]:
+            if other_id != doc.id:
+                doc_bibkeys[other_id] = entry["ID"]
+
+    for doc in unkeyed_docs:
         entry = _document_entry(doc)
         entry["ID"] = _unique_bibkey(entry["ID"], source_seen)
         source_entries.append(entry)
