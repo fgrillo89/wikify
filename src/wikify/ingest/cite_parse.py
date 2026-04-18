@@ -82,6 +82,7 @@ def enrich_citations(
     cache_path: Path,
     use_doi: bool = True,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
+    skip_content_neg: bool = False,
 ) -> None:
     """Enrich all citations across all documents in-place.
 
@@ -90,7 +91,8 @@ def enrich_citations(
     1. Heuristic extraction via citestore.parse (zero API calls)
     2. DOI resolution via the shared resolver: cache -> CrossRef batch
        -> doi.org fallback -> negative-cache. One code path for all
-       DOI lookups in wikify.
+       DOI lookups in wikify. When ``skip_content_neg`` is True, step 3
+       of the resolver (doi.org fallback) is suppressed for speed.
     3. Cross-paper evidence fusion
     """
     from ..citestore.parse import _clean_doi
@@ -130,7 +132,11 @@ def enrich_citations(
                     d.lower(): doi_lookup(d) for d in unique_dois
                 }
             else:
-                doi_meta = resolve_many(unique_dois, cache_path=cache_path)
+                doi_meta = resolve_many(
+                    unique_dois,
+                    cache_path=cache_path,
+                    skip_content_neg=skip_content_neg,
+                )
 
             for doc in docs:
                 for cit in doc.citations:

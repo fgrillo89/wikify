@@ -1004,6 +1004,7 @@ def refresh_corpus(
     *,
     stale_doc_ids: set[str] | None = None,
     resolve_bibliography_doi: bool = False,
+    cite_resolution: str = "crossref",
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.).
 
@@ -1011,6 +1012,12 @@ def refresh_corpus(
     shared ``ctx`` to the refresh DAG (see :mod:`wikify.ingest.dag`).
     Each wave runs its steps in parallel; waves run sequentially so
     later steps can depend on earlier results.
+
+    ``cite_resolution`` tunes wave B's citation enrichment speed:
+
+    - ``"off"``:       heuristic parse only; no network work.
+    - ``"crossref"``:  CrossRef batch only; no doi.org fallback (default).
+    - ``"full"``:      CrossRef + doi.org fallback (slow on cold caches).
     """
     from ..store.corpus import all_chunks as load_all_chunks
     from ..store.corpus import list_documents
@@ -1046,6 +1053,7 @@ def refresh_corpus(
         store=store,
         graph=None,  # populated by wave B
         resolve_bibliography_doi=resolve_bibliography_doi,
+        cite_resolution=cite_resolution,
     )
 
     run_dag(REFRESH_DAG, ctx, timings=timings)
@@ -1067,6 +1075,7 @@ def ingest_corpus(
     parser_backend: str = "default",
     refresh: bool = True,
     resolve_bibliography_doi: bool = False,
+    cite_resolution: str = "crossref",
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1107,6 +1116,7 @@ def ingest_corpus(
             refresh_corpus(
                 paths,
                 resolve_bibliography_doi=resolve_bibliography_doi,
+                cite_resolution=cite_resolution,
             )
         else:
             print(
@@ -1171,6 +1181,7 @@ def ingest_corpus(
             paths,
             stale_doc_ids=stale_doc_ids,
             resolve_bibliography_doi=resolve_bibliography_doi,
+            cite_resolution=cite_resolution,
         )
     else:
         print(

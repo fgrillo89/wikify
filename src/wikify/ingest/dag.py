@@ -230,12 +230,31 @@ def _refresh_openalex(ctx: dict) -> None:
 
 
 def _refresh_cite_heuristics(ctx: dict) -> None:
-    """Enrich citations with heuristic parsing + DOI content negotiation."""
+    """Enrich citations with heuristic parsing + (tiered) DOI resolution.
+
+    ``ctx["cite_resolution"]`` drives the speed/completeness trade-off:
+
+    - ``"off"``:       heuristic parse only; no network work. Fastest.
+    - ``"crossref"``:  CrossRef batch only; no doi.org fallback. Default.
+    - ``"full"``:      CrossRef + doi.org fallback. Legacy; slow on cold
+                       caches (5-40 min on corpora with many refs).
+    """
     from .cite_parse import enrich_citations
+
+    mode = str(ctx.get("cite_resolution") or "crossref").lower()
+    if mode == "off":
+        enrich_citations(
+            ctx["docs"],
+            cache_path=ctx["paths"].root / ".citestore.db",
+            use_doi=False,
+        )
+        return
+
     enrich_citations(
         ctx["docs"],
         cache_path=ctx["paths"].root / ".citestore.db",
         use_doi=True,
+        skip_content_neg=(mode != "full"),
     )
 
 
