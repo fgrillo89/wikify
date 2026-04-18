@@ -8,6 +8,20 @@ summary synthesiser.
 import re
 from dataclasses import dataclass
 
+# Strip leftover HTML sup/sub tags like ``<sup>c</sup>`` or ``<sub>1</sub>``
+# from author strings. Parsers occasionally leak affiliation markup through
+# when the sup-ref bracketiser (which targets numeric citation markers)
+# leaves non-numeric affiliation markers like ``<sup>c</sup>`` untouched.
+_SUP_SUB_TAG_RE = re.compile(r"</?su[pb]>[^<]*</?su[pb]>?", re.IGNORECASE)
+
+
+def _strip_inline_markup(name: str) -> str:
+    """Drop leftover ``<sup>…</sup>``/``<sub>…</sub>`` tags and tidy whitespace."""
+    name = re.sub(r"<sup>[^<]*</sup>", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"<sub>[^<]*</sub>", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s+", " ", name).strip(" ,.;")
+    return name
+
 # --- public surface ------------------------------------------------------
 
 
@@ -146,6 +160,9 @@ def choose_document_title(
     path,
     *,
     venue_hints: tuple[str, ...] = (),
+    xmp_title: str = "",
+    info_title: str = "",
+    extra_title: str = "",
 ) -> str:
     """Pick the document title from available signals, preferring authoritative
     sources over heuristics.
@@ -154,30 +171,37 @@ def choose_document_title(
       1. ``fn_title`` from ``[YYYY Author] Real Title.ext`` filename convention.
          User-curated, directly authoritative. Use when ≥20 chars and not
          flagged by ``is_junk_title``.
-      2. ``first_heading(md_text)`` when the markdown's first H1/H2 is long
-         enough to look like a paper title (≥20 chars) and not junk. Guards
-         against short section-label headings (``"Conflict of Interest"``,
-         ``"1 Introduction"``, ``"Abstract"``).
-      3. ``clean_filename_title(path.name)`` — filename stem tidied.
-      4. ``path.stem`` — last resort.
+      2. ``xmp_title`` — publisher-injected XMP ``dc:title`` when present.
+         Clean on modern PDFs; garbled manuscript IDs ("acs_nn_nn-...") and
+         "untitled" placeholders are caught by ``is_junk_title``.
+      3. ``extra_title`` — parser-specific candidate (e.g. Docling's
+         ``doc.name``). Optional.
+      4. ``info_title`` — legacy ``/Info`` dict title. Often empty or a
+         Word save-as artifact.
+      5. ``first_heading(md_text)`` when ≥20 chars and not junk. Guards
+         against section-label headings ("Conflict of Interest", "1
+         Introduction", "Abstract").
+      6. ``clean_filename_title(path.name)`` — filename stem tidied.
+      7. ``path.stem`` — last resort.
 
-    This inverts the previous heuristic that ranked first_heading over the
-    filename, which was fragile for PDFs where Marker sees ``#`` sections
-    before the title. Filename > heading > stem is the structural rule.
+    Filename > all extracted signals > heading > stem remains the structural
+    rule. XMP/Info are inserted below the authoritative filename and above
+    the often-noisy heading-based extraction.
     """
     fn_year, fn_author, fn_title = parse_filename(getattr(path, "name", str(path)))
     fn_clean = clean_filename_title(getattr(path, "name", str(path)))
 
-    candidates: list[tuple[str, int]] = []
     # (candidate_text, min_length_for_acceptance). We still accept a
-    # shorter-but-non-junk candidate if nothing longer passes.
-    fn_title_text = clean_markdown(fn_title or "")
-    candidates.append((fn_title_text, 20))
-
-    heading = first_heading(md_text) or ""
-    candidates.append((clean_markdown(heading), 20))
-    candidates.append((fn_clean, 0))
-    candidates.append((getattr(path, "stem", str(path)), 0))
+    # shorter-but-non-junk candidate in pass 2 if nothing longer passes.
+    candidates: list[tuple[str, int]] = [
+        (clean_markdown(fn_title or ""), 20),
+        (clean_markdown(xmp_title or ""), 20),
+        (clean_markdown(extra_title or ""), 20),
+        (clean_markdown(info_title or ""), 20),
+        (clean_markdown(first_heading(md_text) or ""), 20),
+        (fn_clean, 0),
+        (getattr(path, "stem", str(path)), 0),
+    ]
 
     # Pass 1: accept long, non-junk candidates in priority order.
     for cand, min_len in candidates:
@@ -193,6 +217,132 @@ def choose_document_title(
 
     # Everything is junk — return the cleaned filename as the least-bad option.
     return fn_clean or getattr(path, "stem", "")
+
+
+def assemble_pdf_metadata(
+    path,
+    md_text: str,
+    *,
+    fitz_doc=None,
+    extra_title_candidate: str = "",
+) -> dict:
+    """Fuse all available metadata sources for a PDF-backed parse.
+
+    One function, one priority decision per field. Parsers call this
+    instead of re-implementing the chains. Sources fused:
+
+    - Filename (``[YYYY Author] Title.ext`` convention, user-curated)
+    - XMP packet (``dc:title``, ``dc:creator``, ``prism:doi``, ...)
+    - ``/Info`` dict (legacy, often sparse)
+    - Markdown body (DOI, author lines, venue / volume / pages regex,
+      summary)
+    - Parser-specific signal via ``extra_title_candidate`` (e.g.
+      Docling's ``doc.name``)
+
+    Priority chains (highest wins, all gated by junk/length filters):
+
+    - title:    filename → XMP → extra → /Info → first_heading → stem
+                (see ``choose_document_title``)
+    - authors:  markdown≥2 → XMP≥2 → /Info≥2 → any → [fn_author]
+                (all validated against filename surname)
+    - year:     filename → XMP pub date → /Info creation date
+    - doi:      markdown body → raw-PDF fallback scan → XMP
+    - venue/volume/pages: markdown regex → XMP gap-fill
+    - keywords: XMP ``dc:subject`` (single source)
+
+    ``fitz_doc`` can be passed when the caller already has it open; the
+    caller keeps ownership. When ``None``, a short-lived fitz.open is made
+    here and closed before return.
+    """
+    from .xmp import read_xmp
+
+    info: dict = {}
+    xmp: dict = {}
+    opened = False
+    if fitz_doc is None:
+        try:
+            import fitz  # pymupdf
+
+            fitz_doc = fitz.open(str(path))
+            opened = True
+        except Exception:  # noqa: BLE001 - missing/broken file
+            fitz_doc = None
+    if fitz_doc is not None:
+        try:
+            info = fitz_doc.metadata or {}
+            xmp = read_xmp(fitz_doc)
+        finally:
+            if opened:
+                fitz_doc.close()
+
+    fn_year, fn_author, _ = parse_filename(getattr(path, "name", str(path)))
+
+    # Markdown-derived signals.
+    md_authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
+    md_authors = validate_authors_against_filename(md_authors, fn_author)
+    publication = extract_publication_fields(md_text)
+    for field in ("venue", "volume", "pages"):
+        if not publication.get(field) and xmp.get(field):
+            publication[field] = xmp[field]
+
+    venue_hints = tuple(
+        v for v in (publication.get("venue"), publication.get("journal")) if v
+    )
+    title = choose_document_title(
+        md_text,
+        path,
+        venue_hints=venue_hints,
+        xmp_title=xmp.get("title") or "",
+        info_title=(info.get("title") or "").strip(),
+        extra_title=extra_title_candidate,
+    )
+
+    # Authors: XMP and /Info lists also get the filename-surname guard so a
+    # publisher-supplied list from the wrong paper can't slip through.
+    xmp_authors = validate_authors_against_filename(
+        list(xmp.get("authors") or []), fn_author
+    )
+    info_raw = (info.get("author") or "").strip()
+    info_authors = validate_authors_against_filename(
+        parse_authors(info_raw) if info_raw else [], fn_author
+    )
+    authors: list[str] = []
+    for group in (md_authors, xmp_authors, info_authors):
+        if len(group) >= 2:
+            authors = group
+            break
+    if not authors:
+        for group in (md_authors, xmp_authors, info_authors):
+            if group:
+                authors = group
+                break
+    if not authors and fn_author:
+        authors = [fn_author]
+
+    # Universal post-sanitation: strip leftover <sup>…</sup>/<sub>…</sub>
+    # markup that sneaks through via markdown/XMP author strings (e.g.
+    # affiliation markers like ``<sup>c</sup>``).
+    authors = [a for a in (_strip_inline_markup(a) for a in authors) if a]
+
+    year = fn_year or xmp.get("year") or extract_year_from_pdf_meta(info)
+
+    doi = extract_document_doi(md_text)
+    if not doi:
+        doi = extract_pdf_doi_fallback(path)
+    if not doi and xmp.get("doi"):
+        doi = extract_doi(xmp["doi"]) or ""
+
+    metadata = {
+        "title": title,
+        "authors": authors,
+        "year": year,
+        "doi": doi or "",
+        "summary": extract_summary(md_text),
+    }
+    metadata.update(publication)
+    if xmp.get("keywords"):
+        metadata["keywords"] = xmp["keywords"]
+    return metadata
 
 
 def validate_authors_against_filename(

@@ -11,6 +11,7 @@ Covers the fixes from the PR #14 follow-up review:
 
 from __future__ import annotations
 
+from wikify.ingest.metadata import _strip_inline_markup as _sanitize_author
 from wikify.ingest.parsers._citations import (
     bracketize_concat_refs,
     bracketize_sup_refs,
@@ -18,7 +19,6 @@ from wikify.ingest.parsers._citations import (
 )
 from wikify.ingest.parsers.marker_pdf import (
     _label_from_caption,
-    _sanitize_author,
     _strip_image_links,
 )
 

@@ -198,7 +198,23 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     ref_count = _count_ref_list_items(doc)
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
-    metadata = _extract_metadata(doc, path)
+    from wikify.ingest.metadata import assemble_pdf_metadata, parse_filename
+
+    # Docling's DoclingDocument carries its own ``doc.name`` — often a
+    # filename-derived placeholder but occasionally a useful title. Pass it
+    # to the shared priority chain as an extra candidate; junk/length
+    # filters will drop it when worthless.
+    extra = ""
+    if hasattr(doc, "name") and doc.name:
+        extra = str(doc.name).strip()
+    metadata = assemble_pdf_metadata(path, md_text, extra_title_candidate=extra)
+    # Parser-specific post-hoc guard: Docling occasionally produces an
+    # all-caps title that ``is_junk_title`` does not flag. Fall back to
+    # ``fn_title`` when that happens.
+    if _is_likely_noise_title(metadata.get("title", "")):
+        _, _, fn_title = parse_filename(path.name)
+        if fn_title:
+            metadata["title"] = fn_title
     images = _extract_images(doc)
     sections = section_spans(md_text)
 
@@ -407,56 +423,11 @@ def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     return md.strip() + "\n"
 
 
-def _extract_metadata(doc, path: Path) -> dict:
-    """Pull title, authors, year from the DoclingDocument."""
-    from wikify.ingest.metadata import (
-        clean_markdown,
-        extract_authors_from_markdown,
-        extract_document_doi,
-        extract_publication_fields,
-        extract_summary,
-        first_heading,
-        is_garbled_title,
-        parse_filename,
-    )
-
-    fn_year, fn_author, fn_title = parse_filename(path.name)
-
-    md_text = doc.export_to_markdown()
-
-    title = ""
-    if hasattr(doc, "name") and doc.name:
-        title = doc.name.strip()
-    heading = first_heading(md_text)
-    if heading and (not title or is_garbled_title(title) or title == path.stem):
-        title = heading
-    if not title:
-        title = fn_title or path.stem
-    title = clean_markdown(title)
-
-    # Prefer filename-derived title when docling extraction looks wrong
-    # (section headers, journal names, numbered headings).
-    if fn_title and _is_likely_noise_title(title):
-        title = fn_title
-
-    authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
-    if not authors and fn_author:
-        authors = [fn_author]
-
-    year = fn_year
-    doi = extract_document_doi(md_text)
-    publication = extract_publication_fields(md_text)
-    summary = extract_summary(md_text)
-
-    metadata = {
-        "title": title,
-        "authors": authors,
-        "year": year,
-        "doi": doi,
-        "summary": summary,
-    }
-    metadata.update(publication)
-    return metadata
+# Metadata assembly lives in ``ingest/metadata.py::assemble_pdf_metadata``.
+# Docling-specific quirks handled in ``parse()``: ``doc.name`` feeds the
+# shared chain as ``extra_title_candidate``, and a post-hoc
+# ``_is_likely_noise_title`` guard catches all-caps / section-header titles
+# Docling occasionally produces that ``is_junk_title`` misses.
 
 
 # Minimum pixel dimension for a real figure. Images smaller than this
