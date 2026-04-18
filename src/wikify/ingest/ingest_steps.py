@@ -84,15 +84,22 @@ class _Probe:
 
 
 def _ingest_metadata_probe(ctx: dict) -> None:
-    """Open each PDF once with fitz, collect XMP DOI + raw-page DOI scan.
+    """Open each source once, collect candidate DOIs for batch resolution.
+
+    PDFs: open with fitz, read the XMP ``prism:doi`` field, and fall back
+    to a raw-page regex scan when XMP is silent.
+    DOCX: open with ``python-docx``, concat body paragraphs + the core
+    properties (``subject`` / ``description`` / ``keywords``), and regex
+    the first 10 KB for a DOI. Less aggressive than the PDF path because
+    docx rarely holds a DOI outside the body text.
 
     Results are published into ``ctx`` as:
 
-    - ``probes``:  ``{path_str: _Probe}`` for PDFs only.
+    - ``probes``:  ``{path_str: _Probe}`` for every source we probed.
     - ``dois_to_resolve``:  deduplicated lowercase DOI strings.
 
-    Non-PDF sources are ignored here; their parsers own metadata and
-    pass 4 skips them.
+    Sources we can't probe (unreadable, missing, or other formats) get
+    an empty probe so pass 4 still sees the key.
     """
     from .metadata import extract_doi, extract_pdf_doi_fallback
     from .xmp import read_xmp
@@ -102,32 +109,41 @@ def _ingest_metadata_probe(ctx: dict) -> None:
     dois: list[str] = []
 
     for src in sources:
-        if src.suffix.lower() != ".pdf":
-            continue
+        ext = src.suffix.lower()
         xmp_doi = ""
         md_doi = ""
-        try:
-            import fitz  # pymupdf
-        except Exception:  # noqa: BLE001 - pymupdf missing entirely
-            probes[str(src)] = _Probe(path=src, xmp_doi="", md_doi_candidate="")
-            continue
-        try:
-            doc = fitz.open(str(src))
-        except Exception:  # noqa: BLE001 - broken PDF
-            probes[str(src)] = _Probe(path=src, xmp_doi="", md_doi_candidate="")
-            continue
-        try:
-            xmp = read_xmp(doc) or {}
-            raw = xmp.get("doi") or ""
-            if raw:
-                xmp_doi = extract_doi(raw) or ""
-        finally:
-            doc.close()
-        # Raw-page DOI scan (same helper as the legacy fallback).  This is
-        # what lets pass 4 skip the re-scan: we've done it once here and
-        # pass 2 can resolve against the resulting DOI.
-        if not xmp_doi:
-            md_doi = extract_pdf_doi_fallback(src) or ""
+
+        if ext == ".pdf":
+            try:
+                import fitz  # pymupdf
+            except Exception:  # noqa: BLE001 - pymupdf missing entirely
+                probes[str(src)] = _Probe(path=src, xmp_doi="", md_doi_candidate="")
+                continue
+            try:
+                doc = fitz.open(str(src))
+            except Exception:  # noqa: BLE001 - broken PDF
+                probes[str(src)] = _Probe(path=src, xmp_doi="", md_doi_candidate="")
+                continue
+            try:
+                xmp = read_xmp(doc) or {}
+                raw = xmp.get("doi") or ""
+                if raw:
+                    xmp_doi = extract_doi(raw) or ""
+            finally:
+                doc.close()
+            # Raw-page DOI scan (same helper as the legacy fallback).  This is
+            # what lets pass 4 skip the re-scan: we've done it once here and
+            # pass 2 can resolve against the resulting DOI.
+            if not xmp_doi:
+                md_doi = extract_pdf_doi_fallback(src) or ""
+        elif ext == ".docx":
+            md_doi = _probe_docx_doi(src)
+        else:
+            # Other formats (html, md, pptx): parser owns its own DOI
+            # extraction; pass 2 will miss them here, but the refresh
+            # DAG's bibliography step still resolves anything with a DOI.
+            pass
+
         probes[str(src)] = _Probe(
             path=src,
             xmp_doi=xmp_doi,
@@ -139,6 +155,49 @@ def _ingest_metadata_probe(ctx: dict) -> None:
 
     ctx["probes"] = probes
     ctx["dois_to_resolve"] = list(dict.fromkeys(dois))
+
+
+def _probe_docx_doi(path: Path) -> str:
+    """Return the first DOI in a docx body + core properties, or ``""``.
+
+    Scans a bounded 10 KB window of paragraph text for speed — DOIs on
+    research papers are printed on page 1 in every house style we've
+    seen. Also checks ``core_properties.subject/description/keywords``
+    in case a publisher template stashes the DOI there.
+    """
+    from .metadata import extract_doi
+
+    try:
+        from docx import Document
+    except Exception:  # noqa: BLE001 - python-docx missing
+        return ""
+    try:
+        doc = Document(str(path))
+    except Exception:  # noqa: BLE001 - broken docx
+        return ""
+
+    # Short-circuit on core properties first — cheap and sometimes decisive.
+    props = doc.core_properties
+    for field in ("subject", "description", "keywords"):
+        val = getattr(props, field, None) or ""
+        if not val:
+            continue
+        found = extract_doi(val)
+        if found:
+            return found
+
+    # Bounded body scan.
+    buf: list[str] = []
+    budget = 10_000
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        buf.append(text)
+        budget -= len(text)
+        if budget <= 0:
+            break
+    return extract_doi("\n".join(buf)) or ""
 
 
 # ---------------------------------------------------------------------------
