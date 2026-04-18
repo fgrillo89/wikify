@@ -14,7 +14,16 @@ from ._sections import section_spans, toc_spans
 from .registry import ParseResult
 
 
-def parse(path: Path) -> ParseResult:
+def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
+    """Parse a PDF into markdown + images + sections + metadata.
+
+    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion step
+    is skipped and ``ParseResult.metadata`` is returned empty. Used by
+    the ingest DAG to decouple content parsing (GPU / CPU-bound, pass 3)
+    from metadata fusion (pass 4), which runs after DOI batch resolution
+    (pass 2). The default preserves single-pass legacy behaviour for
+    direct ``parse_file`` callers and the ``reassemble_metadata`` script.
+    """
     import fitz  # pymupdf
     import pymupdf4llm
 
@@ -63,7 +72,10 @@ def parse(path: Path) -> ParseResult:
 
         md_text = _strip_pdf_artifacts(md_text)
         md_text = clean_markdown_text(md_text)
-        metadata = assemble_pdf_metadata(path, md_text, fitz_doc=doc)
+        if skip_metadata:
+            metadata = {}
+        else:
+            metadata = assemble_pdf_metadata(path, md_text, fitz_doc=doc)
         images_raw = extract_pdf_media(doc, md_text)
         # Capture the PDF bookmark TOC. When the document ships a real
         # outline (>= 3 entries) we use it as the canonical section

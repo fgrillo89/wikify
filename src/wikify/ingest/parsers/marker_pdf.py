@@ -128,7 +128,12 @@ def _get_converter():
 # ---------------------------------------------------------------------------
 
 
-def parse(path: Path) -> ParseResult:
+def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
+    """Parse a PDF via Marker into markdown + images + sections + metadata.
+
+    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion is
+    skipped (ingest DAG pass 3 -> pass 4 decoupling). See ``pdf.parse``.
+    """
     converter = _get_converter()
 
     try:
@@ -164,9 +169,12 @@ def parse(path: Path) -> ParseResult:
     # chunks, matching Docling's behavior.
     md_text = _strip_image_links(md_text)
 
-    from wikify.ingest.metadata import assemble_pdf_metadata
+    if skip_metadata:
+        metadata: dict = {}
+    else:
+        from wikify.ingest.metadata import assemble_pdf_metadata
 
-    metadata = assemble_pdf_metadata(path, md_text)
+        metadata = assemble_pdf_metadata(path, md_text)
     sections = section_spans(md_text)
     title = metadata.get("title") or path.stem
 

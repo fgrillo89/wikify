@@ -160,7 +160,20 @@ def _get_converter(opts: DoclingOptions):
     return _CACHED_CONVERTER
 
 
-def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
+def parse(
+    path: Path,
+    *,
+    hybrid_chunks: bool = True,
+    skip_metadata: bool = False,
+) -> ParseResult:
+    """Parse a PDF via Docling into markdown + images + sections + metadata.
+
+    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion is
+    skipped (ingest DAG pass 3 -> pass 4 decoupling). The
+    ``_docling_chunks`` HybridChunker payload still rides in
+    ``metadata`` because downstream chunking depends on it; the fusion
+    step in pass 4 merges its output over that payload.
+    """
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
 
@@ -198,23 +211,26 @@ def parse(path: Path, *, hybrid_chunks: bool = True) -> ParseResult:
     ref_count = _count_ref_list_items(doc)
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
-    from wikify.ingest.metadata import assemble_pdf_metadata, parse_filename
+    if skip_metadata:
+        metadata: dict = {}
+    else:
+        from wikify.ingest.metadata import assemble_pdf_metadata, parse_filename
 
-    # Docling's DoclingDocument carries its own ``doc.name`` — often a
-    # filename-derived placeholder but occasionally a useful title. Pass it
-    # to the shared priority chain as an extra candidate; junk/length
-    # filters will drop it when worthless.
-    extra = ""
-    if hasattr(doc, "name") and doc.name:
-        extra = str(doc.name).strip()
-    metadata = assemble_pdf_metadata(path, md_text, extra_title_candidate=extra)
-    # Parser-specific post-hoc guard: Docling occasionally produces an
-    # all-caps title that ``is_junk_title`` does not flag. Fall back to
-    # ``fn_title`` when that happens.
-    if _is_likely_noise_title(metadata.get("title", "")):
-        _, _, fn_title = parse_filename(path.name)
-        if fn_title:
-            metadata["title"] = fn_title
+        # Docling's DoclingDocument carries its own ``doc.name`` — often a
+        # filename-derived placeholder but occasionally a useful title. Pass
+        # it to the shared priority chain as an extra candidate; junk/length
+        # filters will drop it when worthless.
+        extra = ""
+        if hasattr(doc, "name") and doc.name:
+            extra = str(doc.name).strip()
+        metadata = assemble_pdf_metadata(path, md_text, extra_title_candidate=extra)
+        # Parser-specific post-hoc guard: Docling occasionally produces an
+        # all-caps title that ``is_junk_title`` does not flag. Fall back to
+        # ``fn_title`` when that happens.
+        if _is_likely_noise_title(metadata.get("title", "")):
+            _, _, fn_title = parse_filename(path.name)
+            if fn_title:
+                metadata["title"] = fn_title
     images = _extract_images(doc)
     sections = section_spans(md_text)
 

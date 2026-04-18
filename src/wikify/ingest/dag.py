@@ -1,22 +1,38 @@
-"""Refresh DAG: wave-by-wave rebuild of corpus-wide derived artifacts.
+"""DAG primitives + the refresh DAG.
 
-The refresh pipeline is expressed as an ordered list of waves.  Each wave
-contains one or more steps that run in parallel on a thread pool; waves
+Pipelines in ``wikify.ingest`` are expressed as an ordered list of waves.
+Each wave contains one or more steps that run in parallel; waves
 themselves execute sequentially so a later wave may depend on the
 results of any earlier one.
 
-Each step is a ``Callable[[dict], None]`` that reads from and publishes
-into a shared ``ctx`` dict constructed by the caller (see
-``pipeline.refresh_corpus``).
+Two wave shapes are supported:
+
+- ``kind="threads"`` (default): steps run on a ``ThreadPoolExecutor``.
+  Good for I/O + CPU helpers that don't clash on the GIL.  All refresh
+  waves use this kind.
+
+- ``kind="mixed"``: exactly two steps run concurrently under one asyncio
+  event loop — step[0] is a network-bound async coroutine (invoked
+  directly) and step[1] is a GPU/CPU-bound sync function (dispatched to
+  ``loop.run_in_executor``).  Used by the ingest DAG's ``resolve+parse``
+  wave so DOI batch resolution (HTTP) and Marker/Docling content parsing
+  (process pool) overlap on the wall clock instead of serialising.
+
+Each step is a ``Callable[[dict], None]`` (or ``Awaitable[None]`` for
+mixed waves) that reads from and publishes into a shared ``ctx`` dict
+constructed by the caller.
 
 To add a new derived artifact: define ``_refresh_<name>(ctx)`` below and
 register it in the appropriate ``Wave`` in ``REFRESH_DAG`` (or introduce
-a new wave).
+a new wave).  To add a new ingest phase, see ``ingest_steps.py`` and
+``INGEST_DAG`` defined there.
 """
 
+import asyncio
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Callable
+from typing import Awaitable, Callable, Literal
 
 from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
 from ..store.images_index import build_images_index
@@ -31,38 +47,87 @@ from .topics import extract_topics, write_topics
 
 @dataclass
 class Step:
-    """A single refresh operation: a name plus the function that runs it."""
+    """A single pipeline operation: a name plus the function that runs it.
+
+    ``fn`` is normally ``Callable[[dict], None]``.  In a ``kind="mixed"``
+    wave the first step's ``fn`` may be an async coroutine function
+    (``Callable[[dict], Awaitable[None]]``) — it is awaited directly
+    inside the wave's event loop.  The second step is always sync and
+    is dispatched to an executor.
+    """
 
     name: str
-    fn: Callable[[dict], None]
+    fn: Callable[[dict], None] | Callable[[dict], Awaitable[None]]
 
 
 @dataclass
 class Wave:
-    """A group of steps that may run concurrently within a single stage."""
+    """A group of steps that run concurrently within a single stage.
+
+    ``kind`` selects the concurrency primitive:
+
+    - ``"threads"`` (default): steps run on a ``ThreadPoolExecutor``.
+    - ``"mixed"``: exactly two steps run under one asyncio event loop;
+      step[0] is awaited as a coroutine, step[1] is run in a worker
+      thread via ``run_in_executor``.  Used when one step is network-
+      bound (async HTTP) and the other is CPU/GPU-bound (process pool
+      owned inside the step) so they overlap cleanly.
+    """
 
     label: str
     steps: list[Step]
+    kind: Literal["threads", "mixed"] = "threads"
 
 
 def run_dag(dag: list[Wave], ctx: dict, *, timings: dict) -> None:
     """Execute ``dag`` over ``ctx``, recording per-wave timings.
 
-    Waves run sequentially.  Within each wave, a single step is invoked
-    directly; two or more steps run on a ``ThreadPoolExecutor`` sized
-    to the number of steps.  Exceptions propagate to the caller.
+    Waves run sequentially.  Within each wave the ``kind`` field picks
+    the dispatcher: ``threads`` for the standard thread-pool fan-out,
+    ``mixed`` for the async + worker-thread pair used by ingest pass
+    2 + 3.  Exceptions propagate to the caller.
     """
     from .pipeline import _timed
 
     for wave in dag:
         with _timed(timings, wave.label):
-            if len(wave.steps) == 1:
+            if wave.kind == "mixed":
+                _run_mixed_wave(wave, ctx)
+            elif len(wave.steps) == 1:
                 wave.steps[0].fn(ctx)
             else:
                 with ThreadPoolExecutor(max_workers=len(wave.steps)) as pool:
                     futs = {pool.submit(step.fn, ctx): step.name for step in wave.steps}
                     for fut in futs:
                         fut.result()  # propagate exceptions
+
+
+def _run_mixed_wave(wave: Wave, ctx: dict) -> None:
+    """Run a mixed wave: step[0] async, step[1] sync, gathered.
+
+    The first step's ``fn`` must be an async coroutine function.  The
+    second step's ``fn`` is a plain sync callable; it's dispatched to a
+    one-thread executor so both progress concurrently.  Exceptions from
+    either raise out via ``asyncio.gather``.
+    """
+    if len(wave.steps) != 2:
+        raise ValueError(
+            f"mixed wave {wave.label!r} needs exactly 2 steps, got {len(wave.steps)}"
+        )
+    async_step, sync_step = wave.steps
+    if not inspect.iscoroutinefunction(async_step.fn):
+        raise TypeError(
+            f"mixed wave {wave.label!r}: step[0] {async_step.name!r} "
+            f"must be an async coroutine function"
+        )
+
+    async def _drive() -> None:
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            sync_fut = loop.run_in_executor(pool, sync_step.fn, ctx)
+            await asyncio.gather(async_step.fn(ctx), sync_fut)
+
+    asyncio.run(_drive())
 
 
 # ---------------------------------------------------------------------------

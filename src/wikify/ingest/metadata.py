@@ -225,6 +225,7 @@ def assemble_pdf_metadata(
     *,
     fitz_doc=None,
     extra_title_candidate: str = "",
+    resolved: dict | None = None,
 ) -> dict:
     """Fuse all available metadata sources for a PDF-backed parse.
 
@@ -253,6 +254,16 @@ def assemble_pdf_metadata(
     ``fitz_doc`` can be passed when the caller already has it open; the
     caller keeps ownership. When ``None``, a short-lived fitz.open is made
     here and closed before return.
+
+    ``resolved`` is an optional CrossRef / doi.org record (fetched
+    upstream via ``util.doi_resolver.resolve_many``) for a DOI we already
+    found in XMP. When truthy the expensive raw-PDF DOI fallback scan
+    (``extract_pdf_doi_fallback``, which re-opens the PDF and pulls its
+    cover/last pages) is skipped — we already know the DOI resolves, so
+    re-scanning the PDF is wasted work. The DOI-authoritative merge of
+    title / journal / volume / pages into the final metadata still
+    happens later in ``bibtex._merge_external_metadata`` at bibliography
+    build time; we don't duplicate that here.
     """
     from .xmp import read_xmp
 
@@ -327,7 +338,10 @@ def assemble_pdf_metadata(
     year = fn_year or xmp.get("year") or extract_year_from_pdf_meta(info)
 
     doi = extract_document_doi(md_text)
-    if not doi:
+    # If a caller already resolved the DOI upstream (ingest DAG pass 2),
+    # skip the expensive raw-PDF fallback scan that re-opens the PDF
+    # just to find a DOI we already have.
+    if not doi and not resolved:
         doi = extract_pdf_doi_fallback(path)
     if not doi and xmp.get("doi"):
         doi = extract_doi(xmp["doi"]) or ""

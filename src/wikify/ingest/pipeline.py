@@ -132,17 +132,26 @@ def _parse_and_persist_worker(
     src_str: str,
     corpus_root_str: str,
     parser_backend: str = "default",
+    skip_metadata: bool = False,
 ) -> FileReceipt:
     """Parse, chunk, enrich, and persist one source file. Returns a lightweight receipt.
 
     Runs in a worker process. Reconstructs CorpusPaths from the root string
     since dataclasses with Path fields don't pickle reliably across processes.
+
+    When ``skip_metadata`` is True (set by the ingest DAG's pass 3) the
+    PDF metadata-fusion step inside ``parse_file`` is skipped; the doc is
+    persisted with an empty metadata dict (sections + citations + chunks
+    are still built from the parsed markdown).  Pass 4 loads the markdown
+    back and runs ``assemble_pdf_metadata`` with DOI-resolved context.
     """
     src = Path(src_str)
     paths = CorpusPaths(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
-    kind, parsed = parse_file(src, parser_backend=parser_backend)
+    kind, parsed = parse_file(
+        src, parser_backend=parser_backend, skip_metadata=skip_metadata,
+    )
     did = doc_id_for(src)
 
     # Images
@@ -398,8 +407,14 @@ def _stream_parse_and_persist(
     paths: CorpusPaths,
     max_workers: int | None,
     parser_backend: str = "default",
+    skip_metadata: bool = False,
 ) -> list[FileReceipt]:
-    """Parse, persist each source in parallel. Returns sorted receipts."""
+    """Parse, persist each source in parallel. Returns sorted receipts.
+
+    ``skip_metadata`` is forwarded to the per-file worker; the ingest DAG
+    sets it ``True`` during pass 3 so metadata fusion can run as pass 4
+    with DOI-resolved context.
+    """
     from tqdm import tqdm
 
     workers = max_workers if max_workers is not None else _default_workers()
@@ -426,7 +441,7 @@ def _stream_parse_and_persist(
             futures = {
                 pool.submit(
                     _parse_and_persist_worker, str(src), corpus_root_str,
-                    parser_backend,
+                    parser_backend, skip_metadata,
                 ): src
                 for src in sources
             }
@@ -454,7 +469,7 @@ def _stream_parse_and_persist(
         for src in sources:
             try:
                 receipt = _parse_and_persist_worker(
-                    str(src), corpus_root_str, parser_backend,
+                    str(src), corpus_root_str, parser_backend, skip_metadata,
                 )
                 receipts.append(receipt)
                 bar.set_postfix_str(
@@ -1119,7 +1134,7 @@ def ingest_corpus(
             )
         return paths
 
-    # 2. Stream parse+persist (each file written to disk as it completes).
+    # 2. Run the ingest DAG (metadata_probe -> resolve+parse -> fuse).
     #    Crash resume: if a prior run persisted artifacts but crashed before
     #    saving the manifest, those files are already on disk. We skip them
     #    and build synthetic receipts instead of re-parsing.
@@ -1130,16 +1145,17 @@ def ingest_corpus(
         )
         receipts.extend(recovered)
         if to_parse:
-            with _timed(timings, "parse+persist (streaming)"):
-                receipts.extend(
-                    _stream_parse_and_persist(
-                        to_parse, paths, max_workers, parser_backend,
-                    )
+            from .ingest_steps import run_ingest_dag
+
+            receipts.extend(
+                run_ingest_dag(
+                    to_parse,
+                    paths,
+                    max_workers=max_workers,
+                    parser_backend=parser_backend,
+                    timings=timings,
                 )
-        else:
-            timings["parse+persist (streaming)"] = 0.0
-    else:
-        timings["parse+persist (streaming)"] = 0.0
+            )
 
     # 3. Identify stale doc_ids from replacements + deletes
     stale_doc_ids = _identify_stale_docs(
