@@ -266,9 +266,40 @@ def _fe_embed_with(
             pieces.append(part)
             owners.append(i)
     bs = _resolve_batch_size(model, batch_size)
-    piece_emb = np.asarray(
-        list(_fe_model.embed(pieces, batch_size=bs)),
-        dtype=np.float32,
+    # Eagerly drain the generator but print a batch-progress line every
+    # ~2 s so "big embed" runs never look like a hang again. The original
+    # one-liner (`list(_fe_model.embed(...))`) produced zero telemetry
+    # between submission and completion — a DirectML fallback to CPU
+    # was indistinguishable from a deadlock for 2+ hours on a cold
+    # long-context model.
+    piece_chunks: list[np.ndarray] = []
+    total = len(pieces)
+    import sys
+    import time
+
+    t0 = time.monotonic()
+    last_print = t0
+    n_done = 0
+    emit_progress = total >= bs * 4  # skip chatter on tiny runs
+    for emb in _fe_model.embed(pieces, batch_size=bs):
+        piece_chunks.append(np.asarray(emb, dtype=np.float32))
+        n_done += 1
+        if emit_progress:
+            now = time.monotonic()
+            if n_done == total or (now - last_print) >= 2.0:
+                last_print = now
+                elapsed = now - t0
+                rate = n_done / elapsed if elapsed > 0 else 0.0
+                eta = (total - n_done) / rate if rate > 0 else float("inf")
+                print(
+                    f"[embed] {n_done}/{total} pieces "
+                    f"({100.0*n_done/total:.0f}%), "
+                    f"{rate:.1f} p/s, eta {eta:.0f}s",
+                    file=sys.stderr,
+                )
+    piece_emb = (
+        np.stack(piece_chunks) if piece_chunks
+        else np.zeros((0, cfg.dim), dtype=np.float32)
     )
     n = len(texts)
     dim = piece_emb.shape[1]
