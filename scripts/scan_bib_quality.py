@@ -315,18 +315,44 @@ def _journal_has_issn_or_rights(entry: dict[str, str]) -> bool:
 
 RULES: list[Rule] = [
     # Structural ------------------------------------------------------------
+    # Missing-field rules are split by bib-file scope (prefix "corpus_" /
+    # "ref_") because the root-cause pipeline stage differs: corpus
+    # entries are built by `_document_entry` with a filename fallback,
+    # while references come from `_reference_entry_from_citation` after
+    # CrossRef resolution. The scope is enforced in ``scan()``.
     (
-        "title_missing", "entry has a title field",
-        "upstream: _reference_entry_from_citation filter",
+        "corpus_title_missing",
+        "corpus entry has a title field",
+        "bibtex._document_entry: filename fallback (_title_needs_fallback)",
         _r_missing_field("title"),
     ),
     (
-        "author_missing", "entry has an author field",
-        "upstream: _reference_entry_from_citation filter",
+        "corpus_author_missing",
+        "corpus entry has an author field",
+        "bibtex._document_entry: fn_author fallback when cleanup empties list",
         _r_missing_field("author"),
     ),
     (
-        "year_missing", "entry has a year field",
+        "corpus_year_missing",
+        "corpus entry has a year field",
+        "parser metadata.year extraction + filename [YYYY ...] prefix",
+        _r_missing_field("year"),
+    ),
+    (
+        "ref_title_missing",
+        "reference entry has a title field",
+        "upstream: _reference_entry_from_citation filter (pre-reject)",
+        _r_missing_field("title"),
+    ),
+    (
+        "ref_author_missing",
+        "reference entry has an author field",
+        "upstream: CrossRef resolution + _author_has_prose_residue filter",
+        _r_missing_field("author"),
+    ),
+    (
+        "ref_year_missing",
+        "reference entry has a year field",
         "upstream: citestore.parse year-extraction regex",
         _r_missing_field("year"),
     ),
@@ -461,12 +487,29 @@ def find_duplicates(entries: list[dict[str, str]]) -> list[list[dict[str, str]]]
 # Scan driver
 # ---------------------------------------------------------------------------
 
+def _rule_applies_to(rule_id: str, bib_scope: str) -> bool:
+    """Rules prefixed ``corpus_`` run only on corpus_papers.bib; rules
+    prefixed ``ref_`` run only on cited_works.bib; everything else runs
+    on both.
+    """
+    if rule_id.startswith("corpus_"):
+        return bib_scope == "corpus"
+    if rule_id.startswith("ref_"):
+        return bib_scope == "ref"
+    return True
+
+
 def scan(
-    entries: list[dict[str, str]], *, only: set[str] | None = None,
+    entries: list[dict[str, str]],
+    *,
+    only: set[str] | None = None,
+    bib_scope: str = "both",
 ) -> tuple[dict[str, list[dict[str, str]]], list[list[dict[str, str]]]]:
     hits: dict[str, list[dict[str, str]]] = {}
     for rule_id, _invariant, _rootcause, predicate in RULES:
         if only and rule_id not in only:
+            continue
+        if not _rule_applies_to(rule_id, bib_scope):
             continue
         matched = [e for e in entries if predicate(e)]
         if matched:
@@ -524,10 +567,14 @@ def main() -> int:
     root = Path(args.corpus)
 
     totals: Counter[str] = Counter()
+    scope_by_file = {
+        "corpus_papers.bib": "corpus",
+        "cited_works.bib": "ref",
+    }
     for bib_name in ("corpus_papers.bib", "cited_works.bib"):
         bib = (root / bib_name).read_text(encoding="utf-8")
         entries = _iter_entries(bib)
-        hits, dups = scan(entries, only=only)
+        hits, dups = scan(entries, only=only, bib_scope=scope_by_file[bib_name])
         _print_report(bib_name, len(entries), hits, dups,
                       max_examples=args.max_examples)
         for rule_id, matches in hits.items():
