@@ -298,9 +298,16 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
 
         probe = probes.get(str(src_path))
         resolved_record: dict | None = None
+        doi_hint = ""
         if probe is not None:
             for cand in (probe.xmp_doi, probe.md_doi_candidate):
-                if cand and cand.lower() in resolved_by_doi:
+                if not cand:
+                    continue
+                # First non-empty probe DOI is the hint — it skips the
+                # raw-PDF fallback scan in pass 4 even if CrossRef missed.
+                if not doi_hint:
+                    doi_hint = cand
+                if cand.lower() in resolved_by_doi:
                     rec = resolved_by_doi[cand.lower()]
                     if rec:
                         resolved_record = rec
@@ -308,7 +315,7 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
 
         try:
             new_metadata = assemble_pdf_metadata(
-                src_path, body, resolved=resolved_record,
+                src_path, body, resolved=resolved_record, doi_hint=doi_hint,
             )
         except Exception as exc:  # noqa: BLE001 - per-doc, keep going
             print(f"[ingest] fuse FAIL {receipt.doc_id}: {exc}", file=sys.stderr)

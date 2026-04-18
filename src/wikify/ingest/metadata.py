@@ -226,6 +226,7 @@ def assemble_pdf_metadata(
     fitz_doc=None,
     extra_title_candidate: str = "",
     resolved: dict | None = None,
+    doi_hint: str = "",
 ) -> dict:
     """Fuse all available metadata sources for a PDF-backed parse.
 
@@ -264,6 +265,14 @@ def assemble_pdf_metadata(
     title / journal / volume / pages into the final metadata still
     happens later in ``bibtex._merge_external_metadata`` at bibliography
     build time; we don't duplicate that here.
+
+    ``doi_hint`` is a DOI string the caller already discovered in an
+    earlier pass (e.g. the ingest DAG's pass-1 XMP / raw-PDF scan). When
+    set, the fallback scan is suppressed even if ``resolved`` is ``None``
+    (resolution may simply have missed), and the hint is used as the DOI
+    value when the markdown body doesn't print one. Net effect: on a
+    full ingest each PDF's cover pages are scanned once (pass 1) instead
+    of twice (pass 1 + pass 4).
     """
     from .xmp import read_xmp
 
@@ -338,13 +347,16 @@ def assemble_pdf_metadata(
     year = fn_year or xmp.get("year") or extract_year_from_pdf_meta(info)
 
     doi = extract_document_doi(md_text)
-    # If a caller already resolved the DOI upstream (ingest DAG pass 2),
-    # skip the expensive raw-PDF fallback scan that re-opens the PDF
-    # just to find a DOI we already have.
-    if not doi and not resolved:
+    # If a caller already resolved the DOI upstream, or merely probed it
+    # in an earlier ingest pass, skip the expensive raw-PDF fallback scan
+    # that re-opens the PDF just to find a DOI we already have.
+    already_probed = bool(resolved) or bool(doi_hint)
+    if not doi and not already_probed:
         doi = extract_pdf_doi_fallback(path)
     if not doi and xmp.get("doi"):
         doi = extract_doi(xmp["doi"]) or ""
+    if not doi and doi_hint:
+        doi = doi_hint
 
     metadata = {
         "title": title,
