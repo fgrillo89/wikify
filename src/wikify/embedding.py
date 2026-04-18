@@ -83,8 +83,16 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
     # commodity RAM on CPU fallback ("bad allocation"). 2048 tokens still
     # covers typical section chunks; the chunker (ingest/config.py) derives
     # max_chunk_chars from this value (≈5120 chars).
+    #
+    # batch_size=4 (down from 8) after the ald_references regression: on a
+    # 6 k-chunk corpus where ~37% of chunks are close to the 2048-token
+    # cap, batch 8 hit DirectML's FusedMatMul OOM and onnxruntime silently
+    # fell back to the CPU provider for that session — no error, just a
+    # 4-12 h runtime. Halving the batch keeps the VRAM footprint safely
+    # below the 8 GB DirectML ceiling on long-chunk corpora. Small
+    # corpora (mvp20) are unaffected; larger corpora stop hanging.
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=2048, batch_size=8,
+        dim=512, max_tokens=2048, batch_size=4,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
@@ -160,8 +168,13 @@ def _load_fe(model: str | None) -> None:
     don't re-initialise. The first call downloads the ONNX model into
     fastembed's cache directory; subsequent calls are instant.
 
-    Automatically uses GPU (CUDA or DirectML) when available.
+    Automatically uses GPU (CUDA or DirectML) when available. The active
+    provider is logged so silent CPU fallbacks (the Jina-on-DirectML-OOM
+    regression we hit on long-chunk corpora) are visible instead of
+    presenting as a 4-12 h hang.
     """
+    import sys
+
     global _fe_model, _fe_model_id
     name = model or FE_MODEL_DEFAULT
     if _fe_model is not None and _fe_model_id == name:
@@ -174,6 +187,20 @@ def _load_fe(model: str | None) -> None:
         kwargs["providers"] = providers
     _fe_model = TextEmbedding(**kwargs)
     _fe_model_id = name
+
+    # Report which ONNX provider fastembed actually wired up. fastembed
+    # exposes the inner onnxruntime session at .model.model; when the
+    # requested DirectML/CUDA provider is unavailable or rejected the
+    # session silently falls back to CPU, which on long-context models
+    # tanks throughput by 100×+.
+    active = ""
+    try:
+        session = _fe_model.model.model  # type: ignore[union-attr]
+        active = ", ".join(session.get_providers())
+    except Exception:  # noqa: BLE001 - best-effort diagnostic only
+        pass
+    if active:
+        print(f"[embed] model={name} providers={active}", file=sys.stderr)
 
 
 def _resolve_batch_size(model: str | None, override: int | None) -> int:
