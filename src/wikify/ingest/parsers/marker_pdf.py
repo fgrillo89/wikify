@@ -38,10 +38,6 @@ from .registry import ParseResult, RawImage
 _CONVERTER = None
 
 
-def supported_extensions() -> set[str]:
-    return {".pdf"}
-
-
 # ---------------------------------------------------------------------------
 # Windows patches (shared concern with docling)
 # ---------------------------------------------------------------------------

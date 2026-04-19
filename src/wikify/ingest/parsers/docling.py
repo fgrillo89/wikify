@@ -95,9 +95,6 @@ class DoclingOptions:
         )
 
 
-def supported_extensions() -> set[str]:
-    return {".pdf", ".docx", ".pptx", ".html", ".htm"}
-
 
 def _patch_hf_symlinks() -> None:
     """On Windows without Developer Mode, HF hub symlink creation fails.

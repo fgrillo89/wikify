@@ -95,7 +95,7 @@ FORMAT_PREFERENCE: tuple[str, ...] = (
 def iter_sources(
     root: Path,
     *,
-    parser_backend: str = "default",
+    parser_backend: str = "lite",
     dedup_same_stem: bool = False,
 ):
     """Yield every supported file under *root*.
@@ -881,7 +881,7 @@ def _prepare_change_set(
     paths: CorpusPaths,
     mode: str,
     timings: dict[str, float],
-    parser_backend: str = "default",
+    parser_backend: str = "lite",
     dedup_same_stem: bool = False,
 ) -> tuple:
     """Enumerate sources, diff against manifest, deduplicate.
