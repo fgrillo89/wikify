@@ -68,10 +68,13 @@ def ingest(
         "default",
         "--parser",
         help=(
-            "Parser backend. Accepted source formats depend on the backend "
-            "(default supports .pdf/.docx/.pptx/.html/.htm/.md/.markdown/.txt). "
-            "Run `wikify ingest` and the header line prints the exact set for "
-            "the selected backend."
+            "Parser backend. 'default' uses Marker for PDF and Docling for "
+            ".docx/.pptx/.html — best quality, GPU-bound. 'lite' uses the "
+            "lightweight built-ins (pymupdf4llm / python-docx / python-pptx / "
+            "trafilatura); pick this for CI, small ingests, or any "
+            "no-GPU environment. 'marker' and 'docling' are single-backend "
+            "overrides. The header line printed at ingest start shows the "
+            "accepted extensions for the selected backend."
         ),
     ),
     no_refresh: bool = typer.Option(

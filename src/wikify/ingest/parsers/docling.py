@@ -1,8 +1,16 @@
-"""PDF parser using IBM Docling.
+"""Multi-format parser using IBM Docling.
 
-Converts PDFs via Docling's layout-analysis pipeline (RT-DETRv2 +
-TableFormer) and optionally returns pre-chunked output from Docling's
-HybridChunker instead of raw markdown for our default chunker.
+Docling's ``DocumentConverter`` natively handles PDF, DOCX, PPTX, and
+HTML — all through one interface that returns a ``DoclingDocument`` we
+can lower to markdown + images + sections. This parser exposes
+``.pdf``, ``.docx``, ``.pptx``, ``.html``, ``.htm`` as supported so it
+can replace the legacy ``python-docx`` / ``python-pptx`` / ``trafilatura``
+paths when higher-quality structured output is needed.
+
+PDF still gets the full enrichment pipeline (RT-DETRv2 layout +
+TableFormer + optional formulas/VLM). DOCX / PPTX / HTML use Docling's
+default pipelines for those formats; Docling already knows how to walk
+the native structure, so no custom options are wired.
 
 When ``hybrid_chunks=True`` (the default), the ``ParseResult.metadata``
 carries ``_docling_chunks``: a list of ``(text, heading_path)`` pairs
@@ -10,7 +18,7 @@ that the pipeline can consume directly, skipping ``chunk_document``.
 
 GPU acceleration is used automatically when CUDA is available.
 
-Enrichment options are controlled via environment variables:
+Enrichment options (PDF only) are controlled via env vars:
 
   DOCLING_FORMULAS=1       Enable formula/equation extraction (LaTeX)
   DOCLING_PIC_CLASSIFY=1   Enable picture classification
@@ -88,7 +96,7 @@ class DoclingOptions:
 
 
 def supported_extensions() -> set[str]:
-    return {".pdf"}
+    return {".pdf", ".docx", ".pptx", ".html", ".htm"}
 
 
 def _patch_hf_symlinks() -> None:
@@ -272,7 +280,13 @@ def _make_accelerator():
 
 
 def _build_converter(opts: DoclingOptions):
-    """Build a DocumentConverter from options, choosing the right pipeline."""
+    """Build a DocumentConverter from options, choosing the right pipeline.
+
+    PDF gets the full enrichment pipeline (layout + tables + optional
+    formulas/VLM). DOCX, PPTX, and HTML are declared in
+    ``allowed_formats`` so Docling will dispatch to its native parsers
+    for those formats without any custom options.
+    """
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -282,6 +296,12 @@ def _build_converter(opts: DoclingOptions):
     accel = _make_accelerator()
     pipeline_opts = _make_standard_options(accel, opts)
     return DocumentConverter(
+        allowed_formats=[
+            InputFormat.PDF,
+            InputFormat.DOCX,
+            InputFormat.PPTX,
+            InputFormat.HTML,
+        ],
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pipeline_opts,

@@ -1127,7 +1127,7 @@ def ingest_corpus(
     *,
     max_workers: int | None = None,
     mode: str = "additive",
-    parser_backend: str = "default",
+    parser_backend: str = "lite",
     refresh: bool = True,
     resolve_bibliography_doi: bool = False,
     cite_resolution: str = "crossref",

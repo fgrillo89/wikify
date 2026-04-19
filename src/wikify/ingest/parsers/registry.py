@@ -114,7 +114,7 @@ def _lazy_marker():
 
 
 def _lazy_docling():
-    from . import docling_pdf as p
+    from . import docling as p
     return p
 
 
@@ -149,25 +149,52 @@ class ParserBackend(str, Enum):
     ``is_gpu`` property marks backends that hold GPU models — ingest
     pins those to a single worker to avoid N copies of the model
     across a process pool.
+
+    DEFAULT is the best-quality configuration: Marker for PDFs,
+    Docling for DOCX / PPTX / HTML, built-in markdown reader for
+    ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
+    escape hatch (pymupdf4llm + python-docx + python-pptx +
+    trafilatura) for CI, tests, and low-resource environments.
+    MARKER and DOCLING are single-format overrides for users who
+    want one parser everywhere.
     """
 
     DEFAULT = "default"
+    LITE = "lite"
     MARKER = "marker"
     DOCLING = "docling"
 
     @property
     def is_gpu(self) -> bool:
         """GPU-bound backends must not be parallelised across worker processes."""
-        return self in {ParserBackend.MARKER, ParserBackend.DOCLING}
+        return self in {
+            ParserBackend.DEFAULT,
+            ParserBackend.MARKER,
+            ParserBackend.DOCLING,
+        }
 
     def overrides(self) -> dict[str, tuple[DocKind, Callable]]:
         """Return ``{suffix: (DocKind, lazy_loader)}`` for this backend."""
-        if self is ParserBackend.DEFAULT:
+        if self is ParserBackend.LITE:
             return {}
+        if self is ParserBackend.DEFAULT:
+            return {
+                "pdf":  ("pdf",  _lazy_marker),
+                "docx": ("docx", _lazy_docling),
+                "pptx": ("pptx", _lazy_docling),
+                "html": ("html", _lazy_docling),
+                "htm":  ("html", _lazy_docling),
+            }
         if self is ParserBackend.MARKER:
             return {"pdf": ("pdf", _lazy_marker)}
         if self is ParserBackend.DOCLING:
-            return {"pdf": ("pdf", _lazy_docling)}
+            return {
+                "pdf":  ("pdf",  _lazy_docling),
+                "docx": ("docx", _lazy_docling),
+                "pptx": ("pptx", _lazy_docling),
+                "html": ("html", _lazy_docling),
+                "htm":  ("html", _lazy_docling),
+            }
         # Unreachable; all members handled above. The NotImplementedError
         # surfaces as a clear ValueError via ``_resolve_backend`` if a new
         # member is added without a branch here.
@@ -255,13 +282,17 @@ def validate_backend(backend: str | ParserBackend) -> None:
 def parse_file(
     path: Path,
     *,
-    parser_backend: str | ParserBackend = ParserBackend.DEFAULT,
+    parser_backend: str | ParserBackend = ParserBackend.LITE,
     skip_metadata: bool = False,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
     ``parser_backend`` selects an override table. Unknown or
-    uninstalled backends raise ``ValueError``.
+    uninstalled backends raise ``ValueError``. The default is ``LITE``
+    so library callers (tests, scripts) get fast lightweight parsers
+    and don't pay for GPU-model initialisation unless they explicitly
+    ask for ``DEFAULT`` (or ``MARKER`` / ``DOCLING``). The CLI opts
+    into ``DEFAULT`` for end-user ingest.
 
     ``skip_metadata`` is forwarded to PDF parsers that support it;
     non-PDF parsers ignore it silently. The ingest DAG sets this to
