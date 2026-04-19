@@ -19,7 +19,13 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
 @pytest.fixture
 def corpus(tmp_path) -> CorpusPaths:
-    return ingest_corpus(FIXTURE, tmp_path / "corpus")
+    # dedup_same_stem=False: the tiny fixture ships
+    # sample.pdf/.docx/.pptx/.html with matching stems on purpose — each
+    # carries different content to exercise per-format parsers. The new
+    # default (True) would collapse them to sample.pdf and leave the
+    # iteration-history test with a dossier too sparse to produce two
+    # iterations.
+    return ingest_corpus(FIXTURE, tmp_path / "corpus", dedup_same_stem=False)
 
 
 def _run(

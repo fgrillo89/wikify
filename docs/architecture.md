@@ -144,8 +144,10 @@ These are the contracts. Everything else is implementation.
 `ingest/pipeline.py::ingest_corpus` runs in this order — order matters
 because the corpus graph depends on populated doc-level edges:
 
-1. **Parse + chunk per source** (single-threaded for docling due to
-   GPU model; parallel for default parser). Each source produces
+1. **Parse + chunk per source** (single-threaded for GPU-bound
+   backends: ``default``, ``marker``, ``docling`` — each loads GPU
+   models and a process pool would duplicate them N×. Parallel for
+   ``lite``). Each source produces
    `parsed`, `chunks`, `equations`, `figure_refs`. Equations are
    bound to chunks via `char_span` overlap (default parser) or
    whitespace-normalized text containment (docling HybridChunker).

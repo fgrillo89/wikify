@@ -145,17 +145,18 @@ _PARSER_TABLE: dict[str, tuple[DocKind, Callable]] = {
 class ParserBackend(str, Enum):
     """Every parser backend the pipeline knows about.
 
-    Members carry their own override table via ``overrides()``. The
-    ``is_gpu`` property marks backends that hold GPU models — ingest
-    pins those to a single worker to avoid N copies of the model
-    across a process pool.
+    Override tables are declared in the module-level ``_OVERRIDES`` data
+    table below; ``overrides()`` is a thin lookup. This matches
+    CLAUDE.md's "one explicit data table over scattered branches"
+    architectural rule and makes adding a backend a single-dict-entry
+    edit instead of a new ``if`` branch.
 
     DEFAULT is the best-quality configuration: Marker for PDFs,
     Docling for DOCX / PPTX / HTML, built-in markdown reader for
     ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
     escape hatch (pymupdf4llm + python-docx + python-pptx +
     trafilatura) for CI, tests, and low-resource environments.
-    MARKER and DOCLING are single-format overrides for users who
+    MARKER and DOCLING are single-parser overrides for users who
     want one parser everywhere.
     """
 
@@ -175,30 +176,41 @@ class ParserBackend(str, Enum):
 
     def overrides(self) -> dict[str, tuple[DocKind, Callable]]:
         """Return ``{suffix: (DocKind, lazy_loader)}`` for this backend."""
-        if self is ParserBackend.LITE:
-            return {}
-        if self is ParserBackend.DEFAULT:
-            return {
-                "pdf":  ("pdf",  _lazy_marker),
-                "docx": ("docx", _lazy_docling),
-                "pptx": ("pptx", _lazy_docling),
-                "html": ("html", _lazy_docling),
-                "htm":  ("html", _lazy_docling),
-            }
-        if self is ParserBackend.MARKER:
-            return {"pdf": ("pdf", _lazy_marker)}
-        if self is ParserBackend.DOCLING:
-            return {
-                "pdf":  ("pdf",  _lazy_docling),
-                "docx": ("docx", _lazy_docling),
-                "pptx": ("pptx", _lazy_docling),
-                "html": ("html", _lazy_docling),
-                "htm":  ("html", _lazy_docling),
-            }
-        # Unreachable; all members handled above. The NotImplementedError
-        # surfaces as a clear ValueError via ``_resolve_backend`` if a new
-        # member is added without a branch here.
-        raise NotImplementedError(f"no overrides defined for {self}")
+        return _OVERRIDES[self]
+
+
+# ---------------------------------------------------------------------------
+# Backend override table. One row per ParserBackend member: the suffix
+# overrides that backend binds on top of ``_PARSER_TABLE``. Adding or
+# retargeting a backend is a single-row change here.
+# ---------------------------------------------------------------------------
+
+
+_OVERRIDES: dict[ParserBackend, dict[str, tuple[DocKind, Callable]]] = {
+    ParserBackend.LITE: {},
+    ParserBackend.DEFAULT: {
+        "pdf":  ("pdf",  _lazy_marker),
+        "docx": ("docx", _lazy_docling),
+        "pptx": ("pptx", _lazy_docling),
+        "html": ("html", _lazy_docling),
+        "htm":  ("html", _lazy_docling),
+    },
+    ParserBackend.MARKER: {
+        "pdf":  ("pdf",  _lazy_marker),
+    },
+    ParserBackend.DOCLING: {
+        "pdf":  ("pdf",  _lazy_docling),
+        "docx": ("docx", _lazy_docling),
+        "pptx": ("pptx", _lazy_docling),
+        "html": ("html", _lazy_docling),
+        "htm":  ("html", _lazy_docling),
+    },
+}
+# Defence against silent drift: every enum member must have a row.
+assert set(_OVERRIDES) == set(ParserBackend), (
+    f"_OVERRIDES missing entries for "
+    f"{set(ParserBackend) - set(_OVERRIDES)}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -221,36 +233,29 @@ def backend_requires_single_worker(key: str | ParserBackend) -> bool:
 
 
 def supported_extensions(
-    backend: str | ParserBackend | None = None,
+    backend: str | ParserBackend,
 ) -> set[str]:
     """Return every source-file extension (with leading ``.``) the pipeline
-    will parse, for a given backend.
+    will parse for ``backend``.
 
     Union of the built-in format table with the backend's overrides.
     Overrides can only widen the set (by binding existing suffixes to a
-    different parser); they never remove formats.
-
-    When ``backend`` is ``None`` the built-in table alone is returned.
-    Used by ``iter_sources`` to filter the input tree and by the CLI to
-    surface the accepted formats to the user.
+    different parser); they never remove formats. Raises ``ValueError``
+    with the list of available backends on an unknown key — a typo at
+    the CLI boundary must surface, not silently degrade to the built-in
+    set.
     """
+    key = backend.value if isinstance(backend, ParserBackend) else backend
+    overrides = _resolve_backend(key)
     exts = {f".{s}" for s in _PARSER_TABLE}
-    if backend is None:
-        return exts
-    try:
-        b = backend if isinstance(backend, ParserBackend) else ParserBackend(backend)
-    except ValueError:
-        return exts
-    exts.update(f".{s}" for s in b.overrides())
+    exts.update(f".{s}" for s in overrides)
     return exts
 
 
 def _resolve_backend(key: str) -> dict[str, tuple[DocKind, Callable]]:
     """Resolve a backend key to its suffix override table.
 
-    Raises ``ValueError`` for unknown or uninstalled backends. Calls
-    ``overrides()`` eagerly so missing parser-module imports surface
-    immediately via ``validate_backend``.
+    Raises ``ValueError`` for unknown backends.
     """
     try:
         backend = ParserBackend(key)
@@ -259,24 +264,27 @@ def _resolve_backend(key: str) -> dict[str, tuple[DocKind, Callable]]:
             f"unknown parser backend {key!r}; "
             f"available: {available_backends()}"
         ) from None
-    try:
-        return backend.overrides()
-    except (ImportError, NotImplementedError) as exc:
-        raise ValueError(
-            f"parser backend {key!r} is not installed: {exc}"
-        ) from exc
+    return backend.overrides()
 
 
 def validate_backend(backend: str | ParserBackend) -> None:
     """Raise ``ValueError`` if *backend* is unknown or not installed.
 
     Call this before ingest starts so the user gets a clear error
-    before any files are parsed. Eagerly resolves the override table
-    (importing parser modules) to surface missing dependencies
-    immediately.
+    before any files are parsed. Invokes each lazy loader in the
+    backend's override table to force the parser-module import, so
+    a missing dependency (e.g. ``marker-pdf`` not installed) surfaces
+    here rather than per-file during ingest.
     """
     key = backend.value if isinstance(backend, ParserBackend) else backend
-    _resolve_backend(key)  # raises on missing module or unknown key
+    overrides = _resolve_backend(key)  # raises on unknown key
+    for _suffix, (_kind, loader) in overrides.items():
+        try:
+            loader()
+        except ImportError as exc:
+            raise ValueError(
+                f"parser backend {key!r} is not installed: {exc}"
+            ) from exc
 
 
 def parse_file(
