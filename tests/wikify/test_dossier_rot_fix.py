@@ -32,6 +32,7 @@ from wikify.distill.explorer import (
 
 def _empty_kg():
     import networkx as nx
+
     from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
     backend = NetworkXBackend(G=nx.MultiDiGraph())
     return KnowledgeGraph(backend=backend)

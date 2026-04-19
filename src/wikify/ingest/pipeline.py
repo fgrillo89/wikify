@@ -21,7 +21,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
 from ..embedding import embed_passages
 from ..models import Chunk, DocSection, Document
 from ..paths import CorpusPaths
@@ -30,15 +29,12 @@ from ..store.corpus import (
     write_vector_store,
 )
 from ..store.doc_markdown import write_doc_markdown
-from ..store.images_index import build_images_index
 from ..store.vectors import VectorStore
 from ..store.vectors_meta import VectorsMeta
 from ..store.vectors_meta import write_meta as write_vectors_meta
-from .bibtex import write_corpus_bibliography
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
-from .coupling import compute_coupling
 from .equations import extract_equations
 from .figure_refs import extract_figure_refs
 from .images import (
@@ -48,7 +44,6 @@ from .images import (
     save_doc_images,
 )
 from .parsers.registry import parse_file, validate_backend
-from .topics import extract_topics, write_topics
 
 # ---------------------------------------------------------------------------
 # Timing helper
@@ -136,17 +131,26 @@ def _parse_and_persist_worker(
     src_str: str,
     corpus_root_str: str,
     parser_backend: str = "default",
+    skip_metadata: bool = False,
 ) -> FileReceipt:
     """Parse, chunk, enrich, and persist one source file. Returns a lightweight receipt.
 
     Runs in a worker process. Reconstructs CorpusPaths from the root string
     since dataclasses with Path fields don't pickle reliably across processes.
+
+    When ``skip_metadata`` is True (set by the ingest DAG's pass 3) the
+    PDF metadata-fusion step inside ``parse_file`` is skipped; the doc is
+    persisted with an empty metadata dict (sections + citations + chunks
+    are still built from the parsed markdown).  Pass 4 loads the markdown
+    back and runs ``assemble_pdf_metadata`` with DOI-resolved context.
     """
     src = Path(src_str)
     paths = CorpusPaths(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
-    kind, parsed = parse_file(src, parser_backend=parser_backend)
+    kind, parsed = parse_file(
+        src, parser_backend=parser_backend, skip_metadata=skip_metadata,
+    )
     did = doc_id_for(src)
 
     # Images
@@ -402,8 +406,14 @@ def _stream_parse_and_persist(
     paths: CorpusPaths,
     max_workers: int | None,
     parser_backend: str = "default",
+    skip_metadata: bool = False,
 ) -> list[FileReceipt]:
-    """Parse, persist each source in parallel. Returns sorted receipts."""
+    """Parse, persist each source in parallel. Returns sorted receipts.
+
+    ``skip_metadata`` is forwarded to the per-file worker; the ingest DAG
+    sets it ``True`` during pass 3 so metadata fusion can run as pass 4
+    with DOI-resolved context.
+    """
     from tqdm import tqdm
 
     workers = max_workers if max_workers is not None else _default_workers()
@@ -430,7 +440,7 @@ def _stream_parse_and_persist(
             futures = {
                 pool.submit(
                     _parse_and_persist_worker, str(src), corpus_root_str,
-                    parser_backend,
+                    parser_backend, skip_metadata,
                 ): src
                 for src in sources
             }
@@ -458,7 +468,7 @@ def _stream_parse_and_persist(
         for src in sources:
             try:
                 receipt = _parse_and_persist_worker(
-                    str(src), corpus_root_str, parser_backend,
+                    str(src), corpus_root_str, parser_backend, skip_metadata,
                 )
                 receipts.append(receipt)
                 bar.set_postfix_str(
@@ -640,24 +650,6 @@ def _compute_doc_similarity(
                 if doc.id == d_id:
                     doc.similar_to = top
                     break
-
-
-def populate_doc_edges(
-    docs: list[Document],
-    docs_chunks_pairs: list[tuple[str, list[Chunk]]],
-    store: VectorStore,
-) -> None:
-    """Fill in ``similar_to`` / ``cites`` / ``cites_same`` for every doc.
-
-    Legacy entry point that runs all three steps. Prefer the split
-    steps (_refresh_doc_similarity, _refresh_citation_edges) in the DAG
-    for correct dependency ordering.
-    """
-    _compute_doc_similarity(docs, docs_chunks_pairs, store)
-    _resolve_citations(docs)
-    coupling = compute_coupling(docs, min_strength=3, top_k=5)
-    for doc in docs:
-        doc.cites_same = coupling.get(doc.id, [])
 
 
 def _resolve_citations(docs: list[Document]) -> None:
@@ -1012,20 +1004,24 @@ def refresh_corpus(
     *,
     stale_doc_ids: set[str] | None = None,
     resolve_bibliography_doi: bool = False,
+    cite_resolution: str = "crossref",
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.).
 
-    Loads the active corpus from disk, embeds chunks, then runs the
-    refresh DAG defined below.  Each wave runs its steps in parallel;
-    waves run sequentially so later steps can depend on earlier results.
+    Loads the active corpus from disk, embeds chunks, then hands the
+    shared ``ctx`` to the refresh DAG (see :mod:`wikify.ingest.dag`).
+    Each wave runs its steps in parallel; waves run sequentially so
+    later steps can depend on earlier results.
 
-    To add a new derived artifact: add a ``_refresh_*`` function and
-    place its name in the appropriate wave (or add a new wave).
+    ``cite_resolution`` tunes wave B's citation enrichment speed:
+
+    - ``"off"``:       heuristic parse only; no network work.
+    - ``"crossref"``:  CrossRef batch only; no doi.org fallback (default).
+    - ``"full"``:      CrossRef + doi.org fallback (slow on cold caches).
     """
-    from concurrent.futures import ThreadPoolExecutor
-
     from ..store.corpus import all_chunks as load_all_chunks
     from ..store.corpus import list_documents
+    from .dag import REFRESH_DAG, run_dag
 
     timings: dict[str, float] = {}
     t0 = time.monotonic()
@@ -1057,197 +1053,12 @@ def refresh_corpus(
         store=store,
         graph=None,  # populated by wave B
         resolve_bibliography_doi=resolve_bibliography_doi,
+        cite_resolution=cite_resolution,
     )
 
-    # ---- execute the DAG ----
-    for wave_label, step_names in REFRESH_DAG:
-        steps = [(_REFRESH_STEPS[name], name) for name in step_names]
-        with _timed(timings, wave_label):
-            if len(steps) == 1:
-                steps[0][0](ctx)
-            else:
-                with ThreadPoolExecutor(max_workers=len(steps)) as pool:
-                    futs = {pool.submit(fn, ctx): name for fn, name in steps}
-                    for fut in futs:
-                        fut.result()  # propagate exceptions
+    run_dag(REFRESH_DAG, ctx, timings=timings)
 
     _print_timings(timings, t0)
-
-
-# ---------------------------------------------------------------------------
-# Refresh DAG: waves and steps
-# ---------------------------------------------------------------------------
-# Each wave is (label, [step_names]).  Steps within a wave run in parallel.
-# Waves run sequentially -- a step may depend on anything from earlier waves.
-#
-# To add a step: define ``_refresh_<name>(ctx)`` and register it in
-# ``_REFRESH_STEPS``, then place the key in the right wave.
-
-def _refresh_doc_similarity(ctx: dict) -> None:
-    """Compute doc-level embedding similarity (independent of citations)."""
-    _compute_doc_similarity(ctx["docs"], ctx["pairs"], ctx["store"])
-
-
-def _refresh_citation_edges(ctx: dict) -> None:
-    """Compute citation links + bibliographic coupling (needs enriched citations)."""
-    _resolve_citations(ctx["docs"])
-    coupling = compute_coupling(ctx["docs"], min_strength=3, top_k=5)
-    for doc in ctx["docs"]:
-        doc.cites_same = coupling.get(doc.id, [])
-
-
-def _refresh_topics(ctx: dict) -> None:
-    vocab = extract_topics(ctx["pairs"], declared_per_doc=ctx["declared"])
-    write_topics(ctx["paths"].topics_path, vocab)
-
-
-def _refresh_images_index(ctx: dict) -> None:
-    build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
-
-
-def _refresh_equations_index(ctx: dict) -> None:
-    from ..store.equations_index import build_equations_index, save_equations_index
-
-    idx = build_equations_index(ctx["docs"], ctx["chunks"])
-    save_equations_index(ctx["paths"].equations_index_path, idx)
-
-
-def _refresh_openalex(ctx: dict) -> None:
-    """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
-    if not ctx.get("resolve_bibliography_doi", False):
-        return
-    import asyncio
-
-    from ..citestore import AsyncResolver, DatabaseManager
-
-    all_cits = []
-    for doc in ctx["docs"]:
-        all_cits.extend(doc.citations or [])
-    if not all_cits:
-        return
-
-    db_path = ctx["paths"].root / ".citestore.db"
-
-    async def _run() -> None:
-        async with DatabaseManager(db_path) as db:
-            import os
-            email = os.environ.get("OPENALEX_EMAIL", "wikify@example.com")
-            resolver = AsyncResolver(
-                db,
-                email=email,
-                expand_references=True,
-            )
-            try:
-                # Convert to dicts for the resolver API
-                cit_dicts = [c.to_dict() if hasattr(c, "to_dict") else c for c in all_cits]
-                results = await resolver.resolve_batch(cit_dicts)
-            finally:
-                await resolver.close()
-
-        # Map results back onto CitationEntry objects
-        result_by_text: dict[str, object] = {}
-        for r in results:
-            if r.source_text:
-                result_by_text[r.source_text] = r
-
-        for cit in all_cits:
-            raw = cit.raw_text if hasattr(cit, "raw_text") else cit.get("raw_text", "")
-            r = result_by_text.get(raw)
-            if r is None or r.work is None:
-                continue
-            w = r.work
-            cit.resolution = "openalex"
-            cit.title = w.title
-            cit.authors = w.authors
-            cit.year = w.year or cit.year
-            cit.venue = w.journal
-            cit.volume = w.volume
-            cit.pages = (
-                f"{w.first_page}--{w.last_page}".strip("-")
-                if w.first_page or w.last_page
-                else ""
-            )
-            cit.publisher = w.publisher
-            cit.doi = w.doi or cit.doi
-
-    asyncio.run(_run())
-
-
-def _refresh_cite_heuristics(ctx: dict) -> None:
-    """Enrich citations with heuristic parsing + DOI content negotiation."""
-    from .cite_parse import enrich_citations
-    enrich_citations(
-        ctx["docs"],
-        cache_path=ctx["paths"].root / ".citestore.db",
-        use_doi=True,
-    )
-
-
-def _refresh_bibliography(ctx: dict) -> None:
-    # DOI enrichment for source papers always runs (free, no API key).
-    # OpenAlex is the optional step gated by --openalex.
-    resolve_doi = True
-    write_corpus_bibliography(
-        ctx["paths"],
-        ctx["docs"],
-        resolve_doi=resolve_doi,
-    )
-
-
-def _refresh_knowledge_graph(ctx: dict) -> None:
-    from ..store.bibliography import load_citation_index
-
-    citation_index = load_citation_index(ctx["paths"])
-    kg = build_knowledge_graph(
-        ctx["docs"], ctx["chunks"], ctx["store"], citation_index,
-    )
-    save_knowledge_graph(ctx["paths"].knowledge_graph_path, kg)
-    ctx["knowledge_graph"] = kg
-
-
-def _refresh_doc_resave(ctx: dict) -> None:
-    _resave_docs(ctx["paths"], ctx["docs"])
-
-
-_REFRESH_STEPS: dict[str, callable] = {
-    "doc_similarity":   _refresh_doc_similarity,
-    "topics":           _refresh_topics,
-    "images_index":     _refresh_images_index,
-    "equations_index":  _refresh_equations_index,
-    "cite_heuristics":  _refresh_cite_heuristics,
-    "openalex":         _refresh_openalex,
-    "citation_edges":   _refresh_citation_edges,
-    "bibliography":     _refresh_bibliography,
-    "knowledge_graph":    _refresh_knowledge_graph,
-    "doc_resave":     _refresh_doc_resave,
-}
-
-REFRESH_DAG: list[tuple[str, list[str]]] = [
-    # Wave A: independent steps (no citation dependency)
-    ("wave A (similarity+topics+images+equations)", [
-        "doc_similarity", "topics", "images_index", "equations_index",
-    ]),
-    # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
-    ("wave B (heuristic enrichment)", [
-        "cite_heuristics",
-    ]),
-    # Wave C: OpenAlex enrichment (optional, overwrites heuristics with authoritative data)
-    ("wave C (openalex enrichment)", [
-        "openalex",
-    ]),
-    # Wave D: citation graph + bibliography (depend on enriched citations)
-    ("wave D (edges+bibliography)", [
-        "citation_edges", "bibliography",
-    ]),
-    # Wave E: knowledge graph (depends on citation edges)
-    ("wave E (knowledge graph)", [
-        "knowledge_graph",
-    ]),
-    # Wave F: derived artifacts (depend on KG)
-    ("wave F (resave)", [
-        "doc_resave",
-    ]),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -1264,6 +1075,7 @@ def ingest_corpus(
     parser_backend: str = "default",
     refresh: bool = True,
     resolve_bibliography_doi: bool = False,
+    cite_resolution: str = "crossref",
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1304,6 +1116,7 @@ def ingest_corpus(
             refresh_corpus(
                 paths,
                 resolve_bibliography_doi=resolve_bibliography_doi,
+                cite_resolution=cite_resolution,
             )
         else:
             print(
@@ -1312,7 +1125,7 @@ def ingest_corpus(
             )
         return paths
 
-    # 2. Stream parse+persist (each file written to disk as it completes).
+    # 2. Run the ingest DAG (metadata_probe -> resolve+parse -> fuse).
     #    Crash resume: if a prior run persisted artifacts but crashed before
     #    saving the manifest, those files are already on disk. We skip them
     #    and build synthetic receipts instead of re-parsing.
@@ -1323,16 +1136,17 @@ def ingest_corpus(
         )
         receipts.extend(recovered)
         if to_parse:
-            with _timed(timings, "parse+persist (streaming)"):
-                receipts.extend(
-                    _stream_parse_and_persist(
-                        to_parse, paths, max_workers, parser_backend,
-                    )
+            from .ingest_steps import run_ingest_dag
+
+            receipts.extend(
+                run_ingest_dag(
+                    to_parse,
+                    paths,
+                    max_workers=max_workers,
+                    parser_backend=parser_backend,
+                    timings=timings,
                 )
-        else:
-            timings["parse+persist (streaming)"] = 0.0
-    else:
-        timings["parse+persist (streaming)"] = 0.0
+            )
 
     # 3. Identify stale doc_ids from replacements + deletes
     stale_doc_ids = _identify_stale_docs(
@@ -1367,6 +1181,7 @@ def ingest_corpus(
             paths,
             stale_doc_ids=stale_doc_ids,
             resolve_bibliography_doi=resolve_bibliography_doi,
+            cite_resolution=cite_resolution,
         )
     else:
         print(

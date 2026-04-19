@@ -81,7 +81,8 @@ These are the contracts. Everything else is implementation.
     `ingest/figure_refs.py` — caption-first, complements the binary
     image extractor
   - `similar_to`, `cites`, `cites_same`: doc-level edges populated by
-    `_populate_doc_edges` after embedding (see Pipeline order below)
+    the refresh DAG — `_refresh_doc_similarity` + `_refresh_citation_edges`
+    in `ingest/dag.py` (see Pipeline order below)
 - `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`,
   `section_type`, `equation_ids`. The `equation_ids` field lists every
   equation bound to this chunk. Binding method depends on the parser:
@@ -155,10 +156,11 @@ because the corpus graph depends on populated doc-level edges:
    figure references found in chunk prose.
 3. **Embed everything** in one batch through the embedder.
    GPU-accelerated via DirectML/CUDA when available (auto-detected).
-4. **`_populate_doc_edges`** — fills `Document.cites`,
-   `Document.similar_to`, `Document.cites_same`. Must run BEFORE the
-   corpus graph builder, otherwise the saved `knowledge_graph.json` has empty
-   citation edges (long-standing bug, fixed in this pass).
+4. **Refresh DAG** (`ingest/dag.py::REFRESH_DAG`) — wave A fills
+   `Document.similar_to` (`_refresh_doc_similarity`); wave D fills
+   `Document.cites` and `Document.cites_same` (`_refresh_citation_edges`).
+   Both run BEFORE the corpus graph builder, otherwise the saved
+   `knowledge_graph.json` has empty citation edges.
 5. **`build_knowledge_graph`** — builds the unified `KnowledgeGraph`
    (Paper + Author + Chunk + Figure + Equation nodes, citation +
    authorship + collaboration + figure-near-chunk + equation-in-chunk

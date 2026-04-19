@@ -79,8 +79,22 @@ def ingest(
         "--openalex",
         help="Enable OpenAlex bulk resolution + depth-1 reference expansion.",
     ),
+    cite_resolution: str = typer.Option(
+        "crossref",
+        "--cite-resolution",
+        help=(
+            "Citation DOI resolution tier. "
+            "'off' = heuristic parse only; "
+            "'crossref' = CrossRef batch (default, fast); "
+            "'full' = CrossRef + doi.org fallback (slow on cold caches)."
+        ),
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
+    if cite_resolution not in {"off", "crossref", "full"}:
+        raise typer.BadParameter(
+            f"--cite-resolution must be off|crossref|full, got {cite_resolution!r}"
+        )
     paths = ingest_corpus(
         input_dir,
         output_dir,
@@ -89,6 +103,7 @@ def ingest(
         parser_backend=parser,
         refresh=not no_refresh,
         resolve_bibliography_doi=openalex,
+        cite_resolution=cite_resolution,
     )
     typer.echo(f"corpus written to {paths.root}")
 
@@ -101,12 +116,30 @@ def refresh(
         "--openalex",
         help="Enable OpenAlex bulk resolution + depth-1 reference expansion.",
     ),
+    cite_resolution: str = typer.Option(
+        "crossref",
+        "--cite-resolution",
+        help=(
+            "Citation DOI resolution tier. "
+            "'off' = heuristic parse only; "
+            "'crossref' = CrossRef batch (default, fast); "
+            "'full' = CrossRef + doi.org fallback (slow on cold caches)."
+        ),
+    ),
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.)."""
     from .paths import CorpusPaths
 
+    if cite_resolution not in {"off", "crossref", "full"}:
+        raise typer.BadParameter(
+            f"--cite-resolution must be off|crossref|full, got {cite_resolution!r}"
+        )
     paths = CorpusPaths(root=corpus_dir)
-    refresh_corpus(paths, resolve_bibliography_doi=openalex)
+    refresh_corpus(
+        paths,
+        resolve_bibliography_doi=openalex,
+        cite_resolution=cite_resolution,
+    )
     typer.echo(f"refresh complete: {paths.root}")
 
 

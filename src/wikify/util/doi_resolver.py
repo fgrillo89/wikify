@@ -18,6 +18,24 @@ cite_parse.py) call this module — identical strategy for both:
 Every outbound request is gated by ``AsyncLimiter`` (polite qps floor)
 and ``Semaphore`` (hard concurrency cap) via the shared decorators in
 ``wikify.util.async_limits``.
+
+**Speed tiers** (``skip_content_neg`` flag):
+
++---------------+-----------+------------------------------------------------+
+| flag          | steps run | what you trade                                 |
++===============+===========+================================================+
+| ``False`` —   | 1 → 2 → 3 | ~85% + the DataCite/mEDRA/JaLC tail, plus      |
+| ``full``      |           | title-only CrossRef records completed via      |
+| resolution    |           | doi.org. Slow: one HTTP req per CrossRef miss  |
+| (legacy       |           | at ~8 req/s, so 5k misses ≈ 10 min.            |
+| default).     |           |                                                |
++---------------+-----------+------------------------------------------------+
+| ``True`` —    | 1 → 2     | ~85% of scholarly DOIs (CrossRef-registered).  |
+| crossref-only | skip 3    | Non-CrossRef registrars stay unresolved.       |
+| (current      |           | Title-only CrossRef records stay title-only.   |
+| default for   |           | Orders of magnitude faster on cold cache       |
+| ingest).      |           | (~50s for 10k DOIs).                           |
++---------------+-----------+------------------------------------------------+
 """
 
 from __future__ import annotations
@@ -51,8 +69,14 @@ def resolve_many(
     doiorg_concurrency: int = 5,
     doiorg_qps: float = 8.0,
     timeout: float = 15.0,
+    skip_content_neg: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Resolve many DOIs. Cache -> CrossRef batch -> doi.org fallback.
+
+    When ``skip_content_neg`` is True the doi.org fallback is suppressed —
+    CrossRef-registered DOIs still resolve fully, but DataCite / mEDRA /
+    JaLC DOIs and title-only CrossRef records are negative-cached. See
+    the module docstring for the speed/completeness trade-off.
 
     Returns ``{lowercased_doi: metadata}`` with one entry per DOI that
     was attempted (resolved OR negatively cached). A row whose title
@@ -72,14 +96,16 @@ def resolve_many(
     if not to_fetch:
         return results
 
-    # Steps 2 + 3 — CrossRef batch, then doi.org fallback for misses and
-    # incomplete records. Run in a single event loop so the HTTP client
-    # can be torn down once and the function can be extended to run from
-    # within an existing loop later (``asyncio.run`` in the middle of a
-    # coroutine raises).
+    # Steps 2 (+ optionally 3) — CrossRef batch, then doi.org fallback
+    # for misses and incomplete records. Run in a single event loop so
+    # the HTTP client can be torn down once and the function can be
+    # extended to run from within an existing loop later (``asyncio.run``
+    # in the middle of a coroutine raises).
     logger.info(
-        "DOI resolve: %d cached, %d via CrossRef + doi.org fallback",
-        len(results), len(to_fetch),
+        "DOI resolve: %d cached, %d via CrossRef%s",
+        len(results),
+        len(to_fetch),
+        "" if skip_content_neg else " + doi.org fallback",
     )
 
     async def _resolve() -> tuple[dict, dict]:
@@ -89,17 +115,18 @@ def resolve_many(
             qps=crossref_qps,
             timeout=timeout,
         )
-        missed_local = [
-            d for d in to_fetch if not _is_complete(xref_local.get(d))
-        ]
         fallback_local: dict[str, dict[str, object]] = {}
-        if missed_local:
-            fallback_local = await _doiorg_fallback(
-                missed_local,
-                concurrency=doiorg_concurrency,
-                qps=doiorg_qps,
-                timeout=timeout,
-            )
+        if not skip_content_neg:
+            missed_local = [
+                d for d in to_fetch if not _is_complete(xref_local.get(d))
+            ]
+            if missed_local:
+                fallback_local = await _doiorg_fallback(
+                    missed_local,
+                    concurrency=doiorg_concurrency,
+                    qps=doiorg_qps,
+                    timeout=timeout,
+                )
         return xref_local, fallback_local
 
     xref, fallback = asyncio.run(_resolve())

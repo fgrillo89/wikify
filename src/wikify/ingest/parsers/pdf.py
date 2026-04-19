@@ -8,24 +8,22 @@ import re
 from pathlib import Path
 
 from ..figures import extract_pdf_media
-from ..metadata import (
-    clean_markdown,
-    extract_authors_from_markdown,
-    extract_document_doi,
-    extract_publication_fields,
-    extract_summary,
-    extract_year_from_pdf_meta,
-    first_heading,
-    is_garbled_title,
-    parse_authors,
-    parse_filename,
-)
+from ..metadata import assemble_pdf_metadata
 from ._clean import clean_markdown_text
 from ._sections import section_spans, toc_spans
 from .registry import ParseResult
 
 
-def parse(path: Path) -> ParseResult:
+def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
+    """Parse a PDF into markdown + images + sections + metadata.
+
+    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion step
+    is skipped and ``ParseResult.metadata`` is returned empty. Used by
+    the ingest DAG to decouple content parsing (GPU / CPU-bound, pass 3)
+    from metadata fusion (pass 4), which runs after DOI batch resolution
+    (pass 2). The default preserves single-pass legacy behaviour for
+    direct ``parse_file`` callers and the ``reassemble_metadata`` script.
+    """
     import fitz  # pymupdf
     import pymupdf4llm
 
@@ -74,7 +72,10 @@ def parse(path: Path) -> ParseResult:
 
         md_text = _strip_pdf_artifacts(md_text)
         md_text = clean_markdown_text(md_text)
-        metadata = _extract_metadata(doc, md_text, path.name)
+        if skip_metadata:
+            metadata = {}
+        else:
+            metadata = assemble_pdf_metadata(path, md_text, fitz_doc=doc)
         images_raw = extract_pdf_media(doc, md_text)
         # Capture the PDF bookmark TOC. When the document ships a real
         # outline (>= 3 entries) we use it as the canonical section
@@ -154,59 +155,8 @@ def _fitz_fallback_markdown(doc) -> str:
     return "\n\n".join(pages)
 
 
-# --- metadata -----------------------------------------------------------
-
-
-def _extract_metadata(doc, md_text: str, filename: str) -> dict:
-    meta = doc.metadata or {}
-    fn_year, fn_author, fn_title = parse_filename(filename)
-
-    title = (meta.get("title") or "").strip()
-    if not title or is_garbled_title(title):
-        heading = first_heading(md_text)
-        title = heading or fn_title or Path(filename).stem
-    title = clean_markdown(title)
-
-    # Authors: in-document extraction (markdown body) wins over PDF metadata
-    # when it yields a richer list. PDF metadata often carries only the
-    # corresponding author (e.g. "H. Kim") even when the paper has 12 real
-    # authors. Pass the filename-derived surname as an anchor so the
-    # extractor can skip over landing-page recommendation blocks whose
-    # author lists come from unrelated papers. Filename parse is the
-    # last-resort fallback.
-    md_authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
-    raw_author = (meta.get("author") or "").strip()
-    meta_authors = parse_authors(raw_author) if raw_author else []
-    if len(md_authors) >= 2:
-        authors = md_authors
-    elif meta_authors:
-        authors = meta_authors
-    elif md_authors:
-        authors = md_authors
-    elif fn_author:
-        authors = [fn_author]
-    else:
-        authors = []
-
-    # Year: filename year wins over PDF creation/mod date because the
-    # latter reflects when the file was last touched, not the publication
-    # year (Chua 1971 → 1999, Matveyev 2015 → 2026 etc). On a miss, year
-    # is None — never the current year.
-    year = fn_year or extract_year_from_pdf_meta(meta)
-    doi = extract_document_doi(md_text)
-    publication = extract_publication_fields(md_text)
-    summary = extract_summary(md_text)
-
-    metadata = {
-        "title": title,
-        "authors": authors,
-        "year": year,
-        "doi": doi,
-        "summary": summary,
-    }
-    metadata.update(publication)
-    return metadata
-
+# Metadata assembly lives in ``ingest/metadata.py::assemble_pdf_metadata``
+# — one priority-chain decision per field, shared across all PDF parsers.
 
 # Image extraction now lives in ``ingest/figures.py::extract_pdf_media``.
 

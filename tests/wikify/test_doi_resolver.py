@@ -172,6 +172,78 @@ def test_is_complete_requires_title_and_authors():
     assert not _is_complete({"title": "", "authors": ["A"]})
 
 
+def test_skip_content_neg_suppresses_doiorg_fallback(tmp_path):
+    # CrossRef returns an incomplete record; ordinarily doi.org completes it.
+    # With skip_content_neg=True the fallback must NOT be called and the
+    # result must be negative-cached.
+    xref_results = {"10.1000/h": {"title": "Thin Title"}}
+
+    async def fake_xref(dois, *, concurrency, qps, timeout):
+        return {d.lower(): xref_results.get(d.lower(), {}) for d in dois}
+
+    async def fail_doiorg(*args, **kwargs):
+        raise AssertionError("doi.org fallback must not be called")
+
+    from wikify.util import doi_resolver
+
+    with patch.object(doi_resolver, "_crossref_batch", fake_xref), \
+         patch.object(doi_resolver, "_doiorg_fallback", fail_doiorg):
+        result = doi_resolver.resolve_many(
+            ["10.1000/h"],
+            cache_path=tmp_path / ".citestore.db",
+            skip_content_neg=True,
+        )
+    # CrossRef returned title-only → treated as incomplete → negative-cached.
+    assert _is_empty_row(result["10.1000/h"])
+    assert _row_source(tmp_path / ".citestore.db", "10.1000/h") == "not-found"
+
+
+def test_enrich_citations_skip_content_neg_propagates():
+    # enrich_citations must forward skip_content_neg to resolve_many.
+    # Use a real CitationEntry so to_dict() / heuristic-parse behaviour
+    # match production; patch the actual HTTP layers to catch the flag.
+    from wikify.citestore.models import CitationEntry
+    from wikify.ingest import cite_parse
+    from wikify.models import Document
+    from wikify.util import doi_resolver as _dr
+
+    captured: dict[str, object] = {}
+
+    def fake_resolve_many(
+        dois, *, cache_path, skip_content_neg=False, **_kwargs,
+    ):
+        captured["skip"] = skip_content_neg
+        return {d.lower(): {} for d in dois}
+
+    cit = CitationEntry(
+        ord=0,
+        raw_text="Author A. (2020). Example paper. Journal. 10.1234/s41586-020-1234-5",
+        doi="10.1234/s41586-020-1234-5",
+        title="Example Paper With Long Enough Title",
+        authors=["Author A."],
+        year=2020,
+    )
+    doc = Document(
+        id="d1",
+        source_path="x.pdf",
+        kind="pdf",
+        title="T",
+        metadata={},
+        markdown_path="x.md",
+        image_dir="x/",
+    )
+    doc.citations = [cit]
+
+    with patch.object(_dr, "resolve_many", fake_resolve_many):
+        cite_parse.enrich_citations(
+            [doc],
+            cache_path=Path("/tmp/unused.db"),
+            use_doi=True,
+            skip_content_neg=True,
+        )
+    assert captured.get("skip") is True
+
+
 def test_put_overwrites_negative_with_positive(tmp_path):
     # Regression for the INSERT OR REPLACE semantic: a negative row
     # must not permanently block a later successful resolution.

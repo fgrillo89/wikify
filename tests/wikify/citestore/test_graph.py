@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
 
-import networkx as nx
-import numpy as np
 import pytest
 
 from wikify.citestore.graph import (
     AUTHOR,
-    CHUNK,
-    EQUATION,
-    FIGURE,
-    SECTION,
     SOURCE,
     KnowledgeGraph,
-    NetworkXBackend,
-    QueryBuilder,
 )
 from wikify.citestore.graph_build import (
     build_knowledge_graph,
@@ -28,7 +18,6 @@ from wikify.citestore.graph_build import (
 )
 from wikify.models import Chunk, DocImage, DocSection, Document
 from wikify.store.vectors import VectorStore
-
 
 # ---------------------------------------------------------------------------
 # Fixture: small graph with 3 papers, 2 authors, chunks, sections
@@ -135,7 +124,6 @@ def fixture_data():
 @pytest.fixture
 def kg(fixture_data) -> KnowledgeGraph:
     docs, chunks, vectors = fixture_data
-    from wikify.embedding import _hash_embed
 
     return build_knowledge_graph(docs, chunks, vectors=vectors)
 
@@ -485,8 +473,7 @@ class TestNearbyTraversals:
         """Search for chunks, then find nearby figures."""
         hits = kg_with_search.source("paper_A").chunks().search("methods ALD", top_k=3)
         if hits:
-            chunk_ids = {h["id"] for h in hits}
-            qb = kg_with_search.chunks().where(id=hits[0]["id"]) if hits else kg_with_search.chunks()
+            qb = kg_with_search.chunks().where(id=hits[0]["id"])
             # Just verify the chain doesn't crash
             figs = qb.nearby_figures()
             assert isinstance(figs.count(), int)

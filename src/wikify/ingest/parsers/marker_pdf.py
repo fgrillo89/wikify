@@ -128,7 +128,12 @@ def _get_converter():
 # ---------------------------------------------------------------------------
 
 
-def parse(path: Path) -> ParseResult:
+def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
+    """Parse a PDF via Marker into markdown + images + sections + metadata.
+
+    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion is
+    skipped (ingest DAG pass 3 -> pass 4 decoupling). See ``pdf.parse``.
+    """
     converter = _get_converter()
 
     try:
@@ -164,7 +169,12 @@ def parse(path: Path) -> ParseResult:
     # chunks, matching Docling's behavior.
     md_text = _strip_image_links(md_text)
 
-    metadata = _extract_metadata(md_text, path)
+    if skip_metadata:
+        metadata: dict = {}
+    else:
+        from wikify.ingest.metadata import assemble_pdf_metadata
+
+        metadata = assemble_pdf_metadata(path, md_text)
     sections = section_spans(md_text)
     title = metadata.get("title") or path.stem
 
@@ -195,17 +205,9 @@ def _light_clean(md: str) -> str:
 
 _IMAGE_LINK_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 
-# Remaining <sup>...</sup> after bracketize_sup_refs are non-numeric
-# affiliation markers (``<sup>b</sup>``) that should never reach author
-# metadata or the persisted bib file.
-_SUP_TAG_RE = re.compile(r"<sup>[^<]*</sup>", re.IGNORECASE)
-
-
-def _sanitize_author(name: str) -> str:
-    """Drop affiliation sup tags and tidy trailing punctuation from a name."""
-    name = _SUP_TAG_RE.sub("", name)
-    name = re.sub(r"\s+", " ", name).strip(" ,.;")
-    return name
+# Affiliation ``<sup>…</sup>`` / ``<sub>…</sub>`` stripping for author
+# names now lives in ``ingest/metadata.py::_strip_inline_markup`` — shared
+# across every PDF parser.
 
 
 def _strip_image_links(md: str) -> str:
@@ -225,55 +227,10 @@ def _strip_image_links(md: str) -> str:
     return md
 
 
-def _extract_metadata(md_text: str, path: Path) -> dict:
-    """Extract title, authors, year from markdown + filename."""
-    from wikify.ingest.metadata import (
-        choose_document_title,
-        extract_authors_from_markdown,
-        extract_document_doi,
-        extract_pdf_doi_fallback,
-        extract_publication_fields,
-        extract_summary,
-        parse_filename,
-        validate_authors_against_filename,
-    )
-
-    fn_year, fn_author, fn_title = parse_filename(path.name)
-
-    doi = extract_document_doi(md_text)
-    if not doi:
-        # Marker strips DOIs printed in header/footer layout bands. pymupdf
-        # sees that text, so we scan the raw PDF as a fallback.
-        doi = extract_pdf_doi_fallback(path)
-    publication = extract_publication_fields(md_text)
-    summary = extract_summary(md_text)
-
-    venue_hints = tuple(
-        v for v in (publication.get("venue"), publication.get("journal")) if v
-    )
-
-    # Filename-first title priority: our `[YYYY Author] Real Title.ext`
-    # filenames are user-curated and authoritative. first_heading is
-    # trusted only when the filename has nothing useful.
-    title = choose_document_title(md_text, path, venue_hints=venue_hints)
-
-    authors = extract_authors_from_markdown(md_text, fn_author=fn_author)
-    authors = [a for a in (_sanitize_author(a) for a in authors) if a]
-    # Sanity: reject an extracted list that doesn't contain the filename
-    # author's surname -- the extractor latched onto a title or banner.
-    authors = validate_authors_against_filename(authors, fn_author)
-    if not authors and fn_author:
-        authors = [fn_author]
-
-    metadata = {
-        "title": title,
-        "authors": authors,
-        "year": fn_year,
-        "doi": doi,
-        "summary": summary,
-    }
-    metadata.update(publication)
-    return metadata
+# Metadata assembly lives in ``ingest/metadata.py::assemble_pdf_metadata``.
+# Marker's only parser-specific twist is ``_sanitize_author``, which the
+# caller applies on top of the shared author chain to drop Marker's
+# <sup>b</sup> affiliation tags.
 
 
 # ---------------------------------------------------------------------------

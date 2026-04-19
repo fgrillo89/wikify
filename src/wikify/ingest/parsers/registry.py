@@ -246,11 +246,18 @@ def parse_file(
     path: Path,
     *,
     parser_backend: str | ParserBackend = ParserBackend.DEFAULT,
+    skip_metadata: bool = False,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
     ``parser_backend`` selects an override table.  Unknown or
     uninstalled backends raise ``ValueError``.
+
+    ``skip_metadata`` is forwarded to PDF parsers (``pdf``,
+    ``marker_pdf``, ``docling_pdf``) that support it; non-PDF parsers
+    ignore it silently.  The ingest DAG sets this to ``True`` during
+    pass 3 (content parse) so metadata fusion can run in pass 4 with
+    DOI-resolved context from pass 2.
     """
     key = parser_backend.value if isinstance(parser_backend, ParserBackend) else parser_backend
     if key == ParserBackend.DEFAULT.value:
@@ -263,4 +270,8 @@ def parse_file(
     if entry is None:
         raise ValueError(f"unsupported file type: {path.suffix}")
     kind, loader = entry
-    return kind, loader().parse(path)
+    parser = loader()
+    # Only PDF parsers accept skip_metadata; forward when it's set.
+    if skip_metadata and suffix == "pdf":
+        return kind, parser.parse(path, skip_metadata=True)
+    return kind, parser.parse(path)

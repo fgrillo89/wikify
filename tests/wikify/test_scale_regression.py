@@ -20,6 +20,7 @@ from wikify.store.vectors import VectorStore
 
 def _empty_kg(vectors=None):
     import networkx as nx
+
     from wikify.citestore.graph import KnowledgeGraph, NetworkXBackend
     backend = NetworkXBackend(G=nx.MultiDiGraph())
     return KnowledgeGraph(backend=backend, vectors=vectors)
@@ -28,6 +29,7 @@ def _empty_kg(vectors=None):
 def _kg_with_chunks(chunk_ids, vectors=None):
     """KG with actual chunk nodes so chunks().similar_to() works."""
     import networkx as nx
+
     from wikify.citestore.graph import CHUNK, KnowledgeGraph, NetworkXBackend
     G = nx.MultiDiGraph()
     for cid in chunk_ids:
