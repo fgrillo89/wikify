@@ -43,7 +43,7 @@ from .images import (
     rewrite_sidecar_near_chunks,
     save_doc_images,
 )
-from .parsers.registry import parse_file, validate_backend
+from .parsers.registry import parse_file, supported_extensions, validate_backend
 
 # ---------------------------------------------------------------------------
 # Timing helper
@@ -79,14 +79,74 @@ class FileReceipt:
 # Source processing helpers (per-file, parallelisable)
 # ---------------------------------------------------------------------------
 
-_SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".docx", ".pptx", ".html", ".htm"}
+# Preference order when multiple formats of the same paper live in the
+# same source directory. PDF wins because layout-aware parsers (Marker,
+# Docling) produce cleaner markdown than ad-hoc .docx/.pptx conversions
+# — see the Chua 1971 regression where a .docx companion to a .pdf
+# produced fragmented images and sparse chunks. Lower-ranked formats
+# are skipped at source-enumeration time so we don't waste parse cycles
+# or persist duplicate Documents.
+FORMAT_PREFERENCE: tuple[str, ...] = (
+    ".pdf", ".docx", ".pptx", ".html", ".htm",
+    ".md", ".markdown", ".txt",
+)
 
 
-def iter_sources(root: Path):
-    """Yield every supported file under *root*."""
+def iter_sources(
+    root: Path,
+    *,
+    parser_backend: str = "default",
+    dedup_same_stem: bool = False,
+):
+    """Yield every supported file under *root*.
+
+    The accepted extension set is the parser registry's
+    ``supported_extensions(parser_backend)`` — widening Docling or
+    adding a new backend automatically widens what ingest sees.
+
+    When ``dedup_same_stem`` is True, files with identical stems
+    inside the same directory (``paper.pdf`` + ``paper.docx``) are
+    treated as one paper in multiple formats and only the
+    highest-ranked per ``FORMAT_PREFERENCE`` survives. A
+    ``[skip-format]`` line is logged for each dropped duplicate.
+    This is what the Chua-1971 regression needs. Default is **off**
+    because synthetic test fixtures routinely use the same stem
+    across formats to exercise per-format parsers; the CLI opts
+    in explicitly for real user corpora.
+    """
+    from collections import defaultdict
+
+    exts = supported_extensions(parser_backend)
+
+    if not dedup_same_stem:
+        for p in root.rglob("*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                yield p
+        return
+
+    # Group by (parent dir, stem) — same stem in different subdirectories
+    # is a *different* paper (e.g. the user organised by year), never a
+    # duplicate.
+    by_location: dict[tuple[str, str], list[Path]] = defaultdict(list)
     for p in root.rglob("*"):
-        if p.is_file() and p.suffix.lower() in _SUPPORTED_EXTS:
-            yield p
+        if p.is_file() and p.suffix.lower() in exts:
+            by_location[(str(p.parent), p.stem)].append(p)
+
+    order = {ext: i for i, ext in enumerate(FORMAT_PREFERENCE)}
+    last = len(FORMAT_PREFERENCE)
+    for group in by_location.values():
+        if len(group) == 1:
+            yield group[0]
+            continue
+        group.sort(key=lambda p: order.get(p.suffix.lower(), last))
+        winner = group[0]
+        for loser in group[1:]:
+            print(
+                f"  [skip-format] {loser.name}: "
+                f"same stem as {winner.name} (preferred format)",
+                file=sys.stderr,
+            )
+        yield winner
 
 
 def doc_id_for(path: Path) -> str:
@@ -821,6 +881,8 @@ def _prepare_change_set(
     paths: CorpusPaths,
     mode: str,
     timings: dict[str, float],
+    parser_backend: str = "default",
+    dedup_same_stem: bool = False,
 ) -> tuple:
     """Enumerate sources, diff against manifest, deduplicate.
 
@@ -835,7 +897,17 @@ def _prepare_change_set(
 
     with _timed(timings, "enumerate+dedupe"):
         manifest = CorpusManifest.load(paths.manifest_path)
-        raw_sources = sorted(iter_sources(input_dir))
+        exts = sorted(supported_extensions(parser_backend))
+        print(
+            f"[ingest] parser={parser_backend} "
+            f"accepts={' '.join(exts)}",
+            file=sys.stderr,
+        )
+        raw_sources = sorted(iter_sources(
+            input_dir,
+            parser_backend=parser_backend,
+            dedup_same_stem=dedup_same_stem,
+        ))
         change_set = diff_sources(
             raw_sources, manifest, input_root=input_dir, mode=mode,
         )
@@ -1072,10 +1144,11 @@ def ingest_corpus(
     *,
     max_workers: int | None = None,
     mode: str = "additive",
-    parser_backend: str = "default",
+    parser_backend: str = "lite",
     refresh: bool = True,
     resolve_bibliography_doi: bool = False,
     cite_resolution: str = "crossref",
+    dedup_same_stem: bool = False,
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1102,6 +1175,8 @@ def ingest_corpus(
     # 1. Enumerate, diff, dedupe
     manifest, change_set, dedup_aliases = _prepare_change_set(
         input_dir, paths, mode, timings,
+        parser_backend=parser_backend,
+        dedup_same_stem=dedup_same_stem,
     )
 
     # If nothing changed but derived artifacts are missing, still run refresh.

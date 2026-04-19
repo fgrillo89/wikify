@@ -1,21 +1,27 @@
 """Dispatch a source file to the right parser based on suffix.
 
-Parser selection uses an enum + factory pattern.  The built-in table
-covers all currently implemented formats (md, pdf, docx, pptx, html).
-To add a new backend (e.g. docling):
+Parser selection is a single ``ParserBackend`` enum. Each member
+returns its own override table; ``DEFAULT`` adds no overrides, so
+every suffix goes to the built-in ``_PARSER_TABLE``. Other members
+replace the parser for specific suffixes (e.g. ``MARKER`` replaces
+``.pdf``).
 
-1. Create a parser module in this package (``docling.py``) that exposes
+To add a new backend:
+
+1. Create the parser module (e.g. ``my_parser.py``) exposing
    ``parse(path) -> ParseResult`` and ``supported_extensions() -> set[str]``.
-2. Add a member to ``ParserBackend`` with a ``_overrides()`` method that
+2. Add a ``ParserBackend`` member plus a branch in ``overrides()`` that
    returns ``{suffix: (DocKind, lazy_loader)}``.
-3. Select it via ``--parser <name>`` on the CLI.
+3. Flag ``is_gpu`` if the backend holds GPU models; that pins ingest
+   to a single worker.
 
-``validate_backend()`` is called before ingest starts and raises if a
-backend's parser module cannot be imported -- no silent partial corpus.
+``validate_backend()`` runs before ingest starts and raises if the
+selected backend's parser module cannot be imported.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -70,45 +76,10 @@ class DocumentParser(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Parser backend enum + factory
-#
-# Only implemented backends appear here.  Adding a future backend
-# (e.g. docling) means adding an enum member with an _overrides()
-# method that imports the parser module.  If the module is missing,
-# validate_backend() will raise before ingest starts.
-# ---------------------------------------------------------------------------
-
-
-class ParserBackend(str, Enum):
-    """Implemented parser backends.
-
-    Each member's ``_overrides()`` returns a suffix override table.
-    DEFAULT uses the built-in ``_PARSER_TABLE`` for all formats.
-    """
-
-    DEFAULT = "default"
-
-    def _overrides(self) -> dict[str, tuple[DocKind, callable]]:
-        """Return suffix override table for this backend.
-
-        DEFAULT returns empty (uses the built-in table).  Future
-        backends import their parser module here; ImportError
-        propagates immediately via ``validate_backend()``.
-        """
-        if self is ParserBackend.DEFAULT:
-            return {}
-        # Future backends: add branches here.
-        #   if self is ParserBackend.DOCLING:
-        #       from . import docling as p
-        #       return {"pdf": ("pdf", lambda: p)}
-        raise NotImplementedError(f"no override table for {self.value!r}")
-
-
-# ---------------------------------------------------------------------------
-# Default parser table
-#
-# One row per supported suffix.  Lazy imports keep heavy dependencies
-# (pymupdf, python-docx, ...) out of the module top level.
+# Lazy loaders — cheap trampolines whose body does the heavy import.
+# Keeping these as module-level functions lets the enum's ``overrides()``
+# method reference them without importing the parser until the backend
+# is actually used.
 # ---------------------------------------------------------------------------
 
 
@@ -137,8 +108,24 @@ def _lazy_html():
     return p
 
 
-# suffix -> (DocKind, lazy_loader)
-_PARSER_TABLE: dict[str, tuple[DocKind, callable]] = {
+def _lazy_marker():
+    from . import marker_pdf as p
+    return p
+
+
+def _lazy_docling():
+    from . import docling as p
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Built-in format table. Every suffix the pipeline recognises is listed
+# here with its default DocKind and lazy loader; backend overrides can
+# bind these suffixes to a different parser but never remove them.
+# ---------------------------------------------------------------------------
+
+
+_PARSER_TABLE: dict[str, tuple[DocKind, Callable]] = {
     "md":       ("md",   _lazy_md),
     "markdown": ("md",   _lazy_md),
     "txt":      ("md",   _lazy_md),
@@ -149,8 +136,69 @@ _PARSER_TABLE: dict[str, tuple[DocKind, callable]] = {
     "htm":      ("html", _lazy_html),
 }
 
-# Custom backends registered by plugins at import time.
-_CUSTOM_BACKENDS: dict[str, dict[str, tuple[DocKind, callable]]] = {}
+
+# ---------------------------------------------------------------------------
+# The single parser-backend registry.
+# ---------------------------------------------------------------------------
+
+
+class ParserBackend(str, Enum):
+    """Every parser backend the pipeline knows about.
+
+    Members carry their own override table via ``overrides()``. The
+    ``is_gpu`` property marks backends that hold GPU models — ingest
+    pins those to a single worker to avoid N copies of the model
+    across a process pool.
+
+    DEFAULT is the best-quality configuration: Marker for PDFs,
+    Docling for DOCX / PPTX / HTML, built-in markdown reader for
+    ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
+    escape hatch (pymupdf4llm + python-docx + python-pptx +
+    trafilatura) for CI, tests, and low-resource environments.
+    MARKER and DOCLING are single-format overrides for users who
+    want one parser everywhere.
+    """
+
+    DEFAULT = "default"
+    LITE = "lite"
+    MARKER = "marker"
+    DOCLING = "docling"
+
+    @property
+    def is_gpu(self) -> bool:
+        """GPU-bound backends must not be parallelised across worker processes."""
+        return self in {
+            ParserBackend.DEFAULT,
+            ParserBackend.MARKER,
+            ParserBackend.DOCLING,
+        }
+
+    def overrides(self) -> dict[str, tuple[DocKind, Callable]]:
+        """Return ``{suffix: (DocKind, lazy_loader)}`` for this backend."""
+        if self is ParserBackend.LITE:
+            return {}
+        if self is ParserBackend.DEFAULT:
+            return {
+                "pdf":  ("pdf",  _lazy_marker),
+                "docx": ("docx", _lazy_docling),
+                "pptx": ("pptx", _lazy_docling),
+                "html": ("html", _lazy_docling),
+                "htm":  ("html", _lazy_docling),
+            }
+        if self is ParserBackend.MARKER:
+            return {"pdf": ("pdf", _lazy_marker)}
+        if self is ParserBackend.DOCLING:
+            return {
+                "pdf":  ("pdf",  _lazy_docling),
+                "docx": ("docx", _lazy_docling),
+                "pptx": ("pptx", _lazy_docling),
+                "html": ("html", _lazy_docling),
+                "htm":  ("html", _lazy_docling),
+            }
+        # Unreachable; all members handled above. The NotImplementedError
+        # surfaces as a clear ValueError via ``_resolve_backend`` if a new
+        # member is added without a branch here.
+        raise NotImplementedError(f"no overrides defined for {self}")
 
 
 # ---------------------------------------------------------------------------
@@ -158,60 +206,52 @@ _CUSTOM_BACKENDS: dict[str, dict[str, tuple[DocKind, callable]]] = {}
 # ---------------------------------------------------------------------------
 
 
-# Backends that use GPU models and must not be parallelized across
-# worker processes (each worker would load its own GPU model copy).
-_GPU_BACKENDS: set[str] = set()
-
-
-def register_parser_backend(
-    name: str,
-    overrides: dict[str, tuple[DocKind, callable]],
-    *,
-    gpu: bool = False,
-) -> None:
-    """Register a custom parser backend that overrides specific formats.
-
-    **Must be called at import time** (module top-level or package
-    ``__init__``), not dynamically at runtime.  On Windows,
-    ``ProcessPoolExecutor`` workers start fresh processes that only
-    see registrations made during module import.
-
-    Set ``gpu=True`` for backends that load GPU models (forces
-    single-worker mode in the ingest pipeline).
-    """
-    _CUSTOM_BACKENDS[name] = overrides
-    if gpu:
-        _GPU_BACKENDS.add(name)
-
-
-def backend_requires_single_worker(name: str) -> bool:
-    """True if this backend uses GPU models and needs single-threaded ingest."""
-    return name in _GPU_BACKENDS
-
-
 def available_backends() -> list[str]:
-    """Return all implemented backend names (enum + custom)."""
-    return sorted(
-        [b.value for b in ParserBackend]
-        + list(_CUSTOM_BACKENDS)
-    )
+    """Return all implemented backend names."""
+    return sorted(b.value for b in ParserBackend)
 
 
-def _resolve_backend(key: str) -> dict[str, tuple[DocKind, callable]]:
+def backend_requires_single_worker(key: str | ParserBackend) -> bool:
+    """True if this backend uses GPU models and needs single-threaded ingest."""
+    try:
+        b = key if isinstance(key, ParserBackend) else ParserBackend(key)
+    except ValueError:
+        return False
+    return b.is_gpu
+
+
+def supported_extensions(
+    backend: str | ParserBackend | None = None,
+) -> set[str]:
+    """Return every source-file extension (with leading ``.``) the pipeline
+    will parse, for a given backend.
+
+    Union of the built-in format table with the backend's overrides.
+    Overrides can only widen the set (by binding existing suffixes to a
+    different parser); they never remove formats.
+
+    When ``backend`` is ``None`` the built-in table alone is returned.
+    Used by ``iter_sources`` to filter the input tree and by the CLI to
+    surface the accepted formats to the user.
+    """
+    exts = {f".{s}" for s in _PARSER_TABLE}
+    if backend is None:
+        return exts
+    try:
+        b = backend if isinstance(backend, ParserBackend) else ParserBackend(backend)
+    except ValueError:
+        return exts
+    exts.update(f".{s}" for s in b.overrides())
+    return exts
+
+
+def _resolve_backend(key: str) -> dict[str, tuple[DocKind, Callable]]:
     """Resolve a backend key to its suffix override table.
 
-    Raises ``ValueError`` if the backend is unknown.  For enum
-    backends, eagerly imports the parser module so missing deps
-    surface immediately.  Custom backends (registered via
-    ``register_parser_backend``) are trusted at registration time;
-    their loaders are invoked lazily during ``parse_file``.
+    Raises ``ValueError`` for unknown or uninstalled backends. Calls
+    ``overrides()`` eagerly so missing parser-module imports surface
+    immediately via ``validate_backend``.
     """
-    # Custom backends are trusted at registration time.
-    if key in _CUSTOM_BACKENDS:
-        return _CUSTOM_BACKENDS[key]
-
-    # Resolve via enum.  This calls _overrides() which imports the
-    # parser module -- ImportError becomes a clear ValueError.
     try:
         backend = ParserBackend(key)
     except ValueError:
@@ -219,9 +259,8 @@ def _resolve_backend(key: str) -> dict[str, tuple[DocKind, callable]]:
             f"unknown parser backend {key!r}; "
             f"available: {available_backends()}"
         ) from None
-
     try:
-        return backend._overrides()
+        return backend.overrides()
     except (ImportError, NotImplementedError) as exc:
         raise ValueError(
             f"parser backend {key!r} is not installed: {exc}"
@@ -232,39 +271,36 @@ def validate_backend(backend: str | ParserBackend) -> None:
     """Raise ``ValueError`` if *backend* is unknown or not installed.
 
     Call this before ingest starts so the user gets a clear error
-    before any files are parsed.  For non-default backends, eagerly
-    resolves the override table (importing parser modules) to surface
-    missing dependencies immediately.
+    before any files are parsed. Eagerly resolves the override table
+    (importing parser modules) to surface missing dependencies
+    immediately.
     """
     key = backend.value if isinstance(backend, ParserBackend) else backend
-    if key == ParserBackend.DEFAULT.value:
-        return
     _resolve_backend(key)  # raises on missing module or unknown key
 
 
 def parse_file(
     path: Path,
     *,
-    parser_backend: str | ParserBackend = ParserBackend.DEFAULT,
+    parser_backend: str | ParserBackend = ParserBackend.LITE,
     skip_metadata: bool = False,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
-    ``parser_backend`` selects an override table.  Unknown or
-    uninstalled backends raise ``ValueError``.
+    ``parser_backend`` selects an override table. Unknown or
+    uninstalled backends raise ``ValueError``. The default is ``LITE``
+    so library callers (tests, scripts) get fast lightweight parsers
+    and don't pay for GPU-model initialisation unless they explicitly
+    ask for ``DEFAULT`` (or ``MARKER`` / ``DOCLING``). The CLI opts
+    into ``DEFAULT`` for end-user ingest.
 
-    ``skip_metadata`` is forwarded to PDF parsers (``pdf``,
-    ``marker_pdf``, ``docling_pdf``) that support it; non-PDF parsers
-    ignore it silently.  The ingest DAG sets this to ``True`` during
-    pass 3 (content parse) so metadata fusion can run in pass 4 with
-    DOI-resolved context from pass 2.
+    ``skip_metadata`` is forwarded to PDF parsers that support it;
+    non-PDF parsers ignore it silently. The ingest DAG sets this to
+    ``True`` during pass 3 (content parse) so metadata fusion can run
+    in pass 4 with DOI-resolved context from pass 2.
     """
     key = parser_backend.value if isinstance(parser_backend, ParserBackend) else parser_backend
-    if key == ParserBackend.DEFAULT.value:
-        overrides: dict[str, tuple[DocKind, callable]] = {}
-    else:
-        overrides = _resolve_backend(key)
-
+    overrides = _resolve_backend(key)
     suffix = path.suffix.lower().lstrip(".")
     entry = overrides.get(suffix) or _PARSER_TABLE.get(suffix)
     if entry is None:
