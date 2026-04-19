@@ -67,7 +67,12 @@ def ingest(
     parser: str = typer.Option(
         "default",
         "--parser",
-        help="Parser backend: 'default' (pymupdf). Extensible via registry.",
+        help=(
+            "Parser backend. Accepted source formats depend on the backend "
+            "(default supports .pdf/.docx/.pptx/.html/.htm/.md/.markdown/.txt). "
+            "Run `wikify ingest` and the header line prints the exact set for "
+            "the selected backend."
+        ),
     ),
     no_refresh: bool = typer.Option(
         False,

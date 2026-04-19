@@ -197,6 +197,35 @@ def available_backends() -> list[str]:
     )
 
 
+def supported_extensions(
+    backend: str | ParserBackend | None = None,
+) -> set[str]:
+    """Return every source-file extension (with leading ``.``) the
+    pipeline will parse, for a given backend.
+
+    The set is the union of the built-in format table with the
+    backend's overrides — overrides can only widen the set (by
+    binding existing suffixes to a different parser); they never
+    remove formats.
+
+    When ``backend`` is ``None`` the built-in table alone is
+    returned. Used by ``iter_sources`` to filter the input tree and
+    by the CLI to surface the accepted formats to the user.
+    """
+    exts = {f".{s}" for s in _PARSER_TABLE}
+    if backend is None:
+        return exts
+    key = backend.value if isinstance(backend, ParserBackend) else backend
+    if key == ParserBackend.DEFAULT.value:
+        return exts
+    try:
+        overrides = _resolve_backend(key)
+    except ValueError:
+        return exts
+    exts.update(f".{s}" for s in overrides)
+    return exts
+
+
 def _resolve_backend(key: str) -> dict[str, tuple[DocKind, callable]]:
     """Resolve a backend key to its suffix override table.
 
