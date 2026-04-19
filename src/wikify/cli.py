@@ -97,6 +97,18 @@ def ingest(
             "'full' = CrossRef + doi.org fallback (slow on cold caches)."
         ),
     ),
+    no_format_dedup: bool = typer.Option(
+        False,
+        "--no-format-dedup",
+        help=(
+            "Disable same-stem format dedup. By default, when a source "
+            "directory contains `paper.pdf` and `paper.docx` with matching "
+            "stems the pipeline parses only the higher-ranked format "
+            "(pdf > docx > pptx > html > ...). Pass this flag to keep all "
+            "copies — useful when same-stem files genuinely are different "
+            "documents."
+        ),
+    ),
 ) -> None:
     """Parse, chunk, embed and graph an input directory."""
     if cite_resolution not in {"off", "crossref", "full"}:
@@ -112,6 +124,7 @@ def ingest(
         refresh=not no_refresh,
         resolve_bibliography_doi=openalex,
         cite_resolution=cite_resolution,
+        dedup_same_stem=not no_format_dedup,
     )
     typer.echo(f"corpus written to {paths.root}")
 
