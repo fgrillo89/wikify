@@ -96,7 +96,7 @@ def iter_sources(
     root: Path,
     *,
     parser_backend: str = "lite",
-    dedup_same_stem: bool = False,
+    dedup_same_stem: bool = True,
 ):
     """Yield every supported file under *root*.
 
@@ -104,15 +104,19 @@ def iter_sources(
     ``supported_extensions(parser_backend)`` — widening Docling or
     adding a new backend automatically widens what ingest sees.
 
-    When ``dedup_same_stem`` is True, files with identical stems
-    inside the same directory (``paper.pdf`` + ``paper.docx``) are
-    treated as one paper in multiple formats and only the
+    When ``dedup_same_stem`` is True (default), files with identical
+    stems inside the same directory (``paper.pdf`` + ``paper.docx``)
+    are treated as one paper in multiple formats and only the
     highest-ranked per ``FORMAT_PREFERENCE`` survives. A
     ``[skip-format]`` line is logged for each dropped duplicate.
-    This is what the Chua-1971 regression needs. Default is **off**
-    because synthetic test fixtures routinely use the same stem
-    across formats to exercise per-format parsers; the CLI opts
-    in explicitly for real user corpora.
+    This is what the Chua-1971 regression needs; real user corpora
+    typically have same-stem format pairs for the same paper.
+
+    Pass ``dedup_same_stem=False`` when you have a directory with
+    intentionally matching stems — e.g. synthetic test fixtures that
+    exercise per-format parsers with ``sample.pdf`` / ``sample.docx``
+    / ``sample.pptx`` / ``sample.html`` of different content. The
+    CLI disables dedup via ``--no-format-dedup``.
     """
     from collections import defaultdict
 
@@ -882,7 +886,7 @@ def _prepare_change_set(
     mode: str,
     timings: dict[str, float],
     parser_backend: str = "lite",
-    dedup_same_stem: bool = False,
+    dedup_same_stem: bool = True,
 ) -> tuple:
     """Enumerate sources, diff against manifest, deduplicate.
 
@@ -1148,7 +1152,7 @@ def ingest_corpus(
     refresh: bool = True,
     resolve_bibliography_doi: bool = False,
     cite_resolution: str = "crossref",
-    dedup_same_stem: bool = False,
+    dedup_same_stem: bool = True,
 ) -> CorpusPaths:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1161,6 +1165,20 @@ def ingest_corpus(
     artifacts (embeddings, graph, topics, etc.) are rebuilt via
     ``refresh_corpus()``. Pass ``refresh=False`` or use ``--no-refresh``
     from the CLI to skip.
+
+    ``parser_backend`` defaults to ``"lite"`` (pymupdf4llm + python-docx
+    + python-pptx + trafilatura — no GPU models, fast to start) because
+    most library callers are tests or scripts that should not pay for
+    Marker/Docling model downloads on first use. The CLI entry point
+    (``wikify ingest``) explicitly passes ``"default"`` so interactive
+    users get the best-quality parsers. See ``ParserBackend`` for the
+    full list.
+
+    ``dedup_same_stem`` defaults to ``True``: ``paper.pdf`` next to
+    ``paper.docx`` in the same directory is treated as the same paper
+    in two formats and only the preferred one is parsed. Set
+    ``dedup_same_stem=False`` when a directory has intentionally-matching
+    stems (typical in synthetic test fixtures).
     """
     from .manifest import SourceRecord
 
