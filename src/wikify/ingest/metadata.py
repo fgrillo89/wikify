@@ -8,15 +8,14 @@ summary synthesiser.
 import re
 from dataclasses import dataclass
 
-# Strip leftover HTML sup/sub tags like ``<sup>c</sup>`` or ``<sub>1</sub>``
-# from author strings. Parsers occasionally leak affiliation markup through
-# when the sup-ref bracketiser (which targets numeric citation markers)
-# leaves non-numeric affiliation markers like ``<sup>c</sup>`` untouched.
-_SUP_SUB_TAG_RE = re.compile(r"</?su[pb]>[^<]*</?su[pb]>?", re.IGNORECASE)
-
 
 def _strip_inline_markup(name: str) -> str:
-    """Drop leftover ``<sup>…</sup>``/``<sub>…</sub>`` tags and tidy whitespace."""
+    """Drop leftover ``<sup>…</sup>``/``<sub>…</sub>`` tags and tidy whitespace.
+
+    Parsers occasionally leak affiliation markup like ``<sup>c</sup>`` into
+    author strings when the sup-ref bracketiser (which targets numeric
+    citation markers) leaves non-numeric affiliation markers untouched.
+    """
     name = re.sub(r"<sup>[^<]*</sup>", "", name, flags=re.IGNORECASE)
     name = re.sub(r"<sub>[^<]*</sub>", "", name, flags=re.IGNORECASE)
     name = re.sub(r"\s+", " ", name).strip(" ,.;")
