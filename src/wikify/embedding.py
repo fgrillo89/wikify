@@ -84,15 +84,16 @@ _MODEL_CONFIGS: dict[str, ModelConfig] = {
     # covers typical section chunks; the chunker (ingest/config.py) derives
     # max_chunk_chars from this value (≈5120 chars).
     #
-    # batch_size=4 (down from 8) after the ald_references regression: on a
-    # 6 k-chunk corpus where ~37% of chunks are close to the 2048-token
-    # cap, batch 8 hit DirectML's FusedMatMul OOM and onnxruntime silently
-    # fell back to the CPU provider for that session — no error, just a
-    # 4-12 h runtime. Halving the batch keeps the VRAM footprint safely
-    # below the 8 GB DirectML ceiling on long-chunk corpora. Small
-    # corpora (mvp20) are unaffected; larger corpora stop hanging.
+    # batch_size=2 (down from 8 -> 4 -> 2) — progressive tightening. The
+    # 8->4 step stopped hangs on mvp20 but Marker-parsed ald_references
+    # (Docling-emitted 8 k-char mega-chunks feeding the tokenizer splitter
+    # into full 2046-token pieces) still blew past the 8 GB DirectML
+    # ceiling, taking out the GPU with DXGI_ERROR_DEVICE_HUNG after
+    # hours of CPU fallback. batch=2 halves the per-call activation
+    # memory again (one piece = ~2 k tokens × 512 dim × N layers) and
+    # stays within VRAM even on dense corpora.
     "jinaai/jina-embeddings-v2-small-en": ModelConfig(
-        dim=512, max_tokens=2048, batch_size=4,
+        dim=512, max_tokens=2048, batch_size=2,
     ),
     "nomic-ai/nomic-embed-text-v1.5": ModelConfig(
         dim=768,
@@ -169,9 +170,13 @@ def _load_fe(model: str | None) -> None:
     fastembed's cache directory; subsequent calls are instant.
 
     Automatically uses GPU (CUDA or DirectML) when available. The active
-    provider is logged so silent CPU fallbacks (the Jina-on-DirectML-OOM
-    regression we hit on long-chunk corpora) are visible instead of
-    presenting as a 4-12 h hang.
+    provider is logged, and on GPU-requested sessions we run a tiny
+    health-check inference to detect silent CPU fallback before committing
+    to a multi-hour embed — DirectML can silently route ops to CPU when
+    VRAM is exhausted, which previously presented as a 4-12 h hang that
+    sometimes ended with ``DXGI_ERROR_DEVICE_HUNG``. A 1-token warmup
+    that takes > ``_HEALTH_CHECK_SLOW_S`` is treated as evidence of the
+    fallback and raises ``RuntimeError`` with a clear remediation hint.
     """
     import sys
 
@@ -201,6 +206,78 @@ def _load_fe(model: str | None) -> None:
         pass
     if active:
         print(f"[embed] model={name} providers={active}", file=sys.stderr)
+
+    _assert_not_silent_cpu_fallback(name, providers)
+
+
+# A trivial 1-token inference on Jina-v2-small takes ~30 ms warm on
+# DirectML and ~500 ms on CPU. Anything over 2 s means we're probably
+# on CPU and the caller is about to sink hours into a silent fallback.
+# Threshold is intentionally generous so cold-model first-call latency
+# (weight load + kernel compile) doesn't trip false positives.
+_HEALTH_CHECK_SLOW_S = 2.0
+
+
+def _assert_not_silent_cpu_fallback(
+    model_name: str, providers: list[str] | None,
+) -> None:
+    """Probe with one short inference; fail loudly if it's absurdly slow.
+
+    Only runs when a GPU provider was requested (CUDA or DirectML is in
+    ``providers``) — CPU-intentional setups are left alone. If the probe
+    exceeds ``_HEALTH_CHECK_SLOW_S`` we assume the session is executing
+    on CPU despite the GPU provider being listed, raise
+    ``RuntimeError`` with a remediation hint, and let the caller bail
+    out immediately instead of burning the next N hours.
+    """
+    import sys
+    import time
+
+    # Opt out: either no GPU provider was requested, or the user has
+    # explicitly asked us not to check (CI benches, embedded test envs).
+    if providers is None:
+        return
+    gpu_requested = any(
+        p in ("CUDAExecutionProvider", "DmlExecutionProvider")
+        for p in providers
+    )
+    if not gpu_requested:
+        return
+    if os.environ.get("WIKIFY_EMBED_SKIP_HEALTH_CHECK", "") == "1":
+        return
+
+    try:
+        t0 = time.monotonic()
+        # Single trivial string; we don't care about the embedding, only
+        # how long the inference takes to return.
+        _ = list(_fe_model.embed(["health check"], batch_size=1))
+        elapsed = time.monotonic() - t0
+    except Exception as exc:  # noqa: BLE001 - any probe failure is diagnostic
+        print(
+            f"[embed] WARN: health-check inference raised {exc!r}; "
+            f"proceeding without GPU validation",
+            file=sys.stderr,
+        )
+        return
+
+    if elapsed > _HEALTH_CHECK_SLOW_S:
+        alt = (
+            "sentence-transformers/all-MiniLM-L6-v2"
+            if model_name != "sentence-transformers/all-MiniLM-L6-v2"
+            else "hash"
+        )
+        raise RuntimeError(
+            f"Embedder {model_name!r} took {elapsed:.1f}s to infer a "
+            f"1-token input despite GPU providers {providers!r} being "
+            f"requested — onnxruntime appears to have silently fallen "
+            f"back to CPU. This will stall ingest for hours. Set "
+            f"WIKIFY_EMBED_MODEL={alt!r} and retry, or set "
+            f"WIKIFY_EMBED_SKIP_HEALTH_CHECK=1 to bypass this check.",
+        )
+    print(
+        f"[embed] health check OK ({elapsed*1000:.0f} ms)",
+        file=sys.stderr,
+    )
 
 
 def _resolve_batch_size(model: str | None, override: int | None) -> int:
