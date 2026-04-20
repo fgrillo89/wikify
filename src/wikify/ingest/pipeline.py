@@ -280,13 +280,25 @@ def _parse_and_persist_worker(
 
 
 def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]:
-    """Build Chunk objects from Docling's HybridChunker output."""
+    """Build Chunk objects from Docling's HybridChunker output.
+
+    Applies ``_split_oversize`` after converting each docling chunk so the
+    chunker's hard cap (``max_chunk_chars()`` derived from the active
+    embedder's ``max_tokens``) is enforced uniformly — ``chunk_document``
+    already respects it for Marker/default parsers, and this path was
+    skipping the same safety net. HybridChunker's own ``max_tokens=2000``
+    is a merge-peer hint, not a hard cap — it routinely emits chunks that
+    overshoot (observed 8 k chars on dense Word-sourced papers), which
+    then pushed the Jina embedder past its VRAM ceiling at infer time.
+    """
+    from .chunker import _split_oversize
     from .config import MIN_CHUNK_ALNUM
     from .section_classifier import classify_section_path
 
     chunks: list[Chunk] = []
     offset = 0
-    for ord_, dc in enumerate(docling_chunks):
+    ord_ = 0
+    for dc in docling_chunks:
         text = dc["text"].strip()
         if not text:
             continue
@@ -295,21 +307,28 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
             continue
         heading_path = dc.get("heading_path", ["body"])
         section_type = classify_section_path(heading_path).value
-        h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
-        cid = f"{doc_id}__c{ord_:04d}__{h}"
-        end = offset + len(text)
-        chunks.append(
-            Chunk(
-                id=cid,
-                doc_id=doc_id,
-                ord=ord_,
-                text=text,
-                char_span=(offset, end),
-                section_path=list(heading_path),
-                section_type=section_type,
+        for piece_start, piece_end in _split_oversize(text):
+            piece = text[piece_start:piece_end].strip()
+            if not piece:
+                continue
+            if sum(1 for c in piece if c.isalnum()) < MIN_CHUNK_ALNUM:
+                continue
+            h = hashlib.sha1(piece.encode("utf-8")).hexdigest()[:8]
+            cid = f"{doc_id}__c{ord_:04d}__{h}"
+            end = offset + len(piece)
+            chunks.append(
+                Chunk(
+                    id=cid,
+                    doc_id=doc_id,
+                    ord=ord_,
+                    text=piece,
+                    char_span=(offset, end),
+                    section_path=list(heading_path),
+                    section_type=section_type,
+                )
             )
-        )
-        offset = end
+            offset = end
+            ord_ += 1
     return chunks
 
 
