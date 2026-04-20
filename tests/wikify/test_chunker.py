@@ -169,6 +169,36 @@ def test_chunk_document_drops_all_license_chunk() -> None:
         assert "onlinelibrary.wiley.com" not in c.text
 
 
+def test_chunks_from_docling_respects_max_chunk_cap() -> None:
+    """Regression: Docling's HybridChunker emits chunks past its nominal
+    max_tokens=2000 when it merges peers, producing 8 k-char chunks that
+    bypass the chunker's max_chunk_chars() safety net. _chunks_from_docling
+    must apply _split_oversize like chunk_document does."""
+    from wikify.ingest.chunker import max_chunk_chars
+    from wikify.ingest.pipeline import _chunks_from_docling
+
+    cap = max_chunk_chars()
+    # Build an oversize docling chunk (3× cap, sentence-boundaried so
+    # _split_oversize can cut cleanly).
+    sentence = "Atomic layer deposition grows thin films by self-limiting surface reactions. " * 3
+    big_text = sentence * max(1, (3 * cap) // len(sentence))
+    docling_chunks = [
+        {"text": big_text, "heading_path": ["body"]},
+        {"text": "A normal-sized section about ALD precursors and growth kinetics.",
+         "heading_path": ["body", "Methods"]},
+    ]
+    chunks = _chunks_from_docling("doc_big", docling_chunks)
+    # Every emitted chunk must be within the cap.
+    for c in chunks:
+        assert len(c.text) <= cap, (
+            f"chunk {c.ord} is {len(c.text)} chars, exceeds cap {cap}"
+        )
+    # The oversize chunk should have been split, so we see multiple chunks
+    # from the body path.
+    body_chunks = [c for c in chunks if c.section_path == ["body"]]
+    assert len(body_chunks) >= 2
+
+
 def test_chunk_document_keeps_real_content_alongside_license() -> None:
     """If cleaner misses a license fragment fused with content, chunker may
     still emit a mixed chunk — but a pure license section must be dropped.
