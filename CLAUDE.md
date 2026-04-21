@@ -1,203 +1,190 @@
-# Claude Code - Working Conventions
+# Wikify — Agent Contract
 
-Runtime-specific guidance for using this repo through Claude Code.
-This file is not the architecture source of truth.
+Canonical guide for any agentic runtime (Claude Code, Codex, …).
+Sister file: `AGENTS.md`. Keep the two in sync — the body is
+identical; only the filename changes.
 
-## Current Focus
+Architecture stays runtime-neutral. `.claude/skills/*` and MCP servers
+are adapters, not architecture truth.
 
-`wikify` is the active track for strategy science.
-The core question is exploration autonomy: does giving the model control
-over corpus navigation produce better wikis than rule-based strategies,
-and does any of it beat simple retrieve-and-summarise?
-
-- baseline mode: retrieve-and-summarise (no iterative exploration)
-- scripted mode: deterministic LevyExplorer (E/M/X strategies)
-- guided mode: model navigates via interactive KG tool-calling
-
-The pipeline is parametric from fully deterministic to fully agentic.
-Named presets capture key study conditions. See `docs/study-design.md`.
-
-All comparisons must run under the same pipeline contract and telemetry.
-
-## Behavioral Guidelines
-
-### Think Before Coding
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them. Do not pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop and ask.
-
-### Simplicity First
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that was not requested.
-- No error handling for impossible scenarios.
-- If you wrote 200 lines and it could be 50, rewrite it.
-- **No dead versioning.** When iterating on a file (prompt, schema, template, plan), delete the old version and keep the new one under the canonical name. Do NOT leave `foo_v1.yaml` sitting next to `foo_v2.yaml` as a fallback "just in case." Do NOT rename the file by appending a version suffix -- the file system IS the version, git history IS the changelog. The only acceptable version-suffixed files are those where the OLD version is still actively reachable from production code during a real migration, and in that case the migration must be on a tracked task with a deadline.
-
-### Basic Caveman Mode
-- Purpose: always-on, token-saving communication style for assistant replies.
-- Activation: default on for all replies in this repo; no opt-in phrase required.
-- Deactivation: only when user says `normal mode` or `stop caveman`.
-- Scope: applies to assistant replies only, not generated code, commit messages, PR text, docs, or user-facing artifacts unless explicitly requested.
-- Persistence: stays active across turns until explicitly stopped.
-- Trigger policy: always enabled by default; brevity requests do not change mode state.
-- Style: concise and direct with normal grammar, clear ordering, and no filler, pleasantries, or soft hedging.
-- Fidelity: keep technical terms, code, commands, errors, paths, schemas, and quoted text exact.
-- Structure preference: `Problem. Cause. Fix. Verify.`
-- Temporary clarity override: use normal clarity for security warnings, destructive actions, multi-step instructions where terse phrasing risks mistakes, or visible user confusion, then resume caveman style.
-- Prohibited: heavy abbreviation, stylized dialects, fake primitive speech, or comic phrasing.
-
-### Architectural Style
-Write code so the reader can understand the business behavior without jumping
-through a maze of tiny abstractions. Locality of behavior is the default.
-
-- Code that changes together should live together.
-- Prefer one explicit data table over several one-line modules or subclasses
-  when behavior differs only by configuration.
-- Prefer one config object with clear ownership over parallel concepts such as
-  "preset", "strategy", "factory config", and "runtime config" unless each has
-  a distinct job that can be explained in one sentence.
-- Keep `__init__.py` files boring: public re-exports only. Do not put config,
-  factories, side effects, or business behavior there.
-- Classify every new knob before adding it:
-  - Domain or strategy knob: belongs with the business object it changes.
-  - Runtime knob: belongs on the pipeline/service function that runs the work.
-  - Adapter knob: belongs in CLI/MCP/skill/runtime wiring and is passed inward
-    explicitly.
-  - Mode knob: belongs in `RuntimeOverrides` or the strategy's mode logic.
-- Do not smuggle runtime choices into domain config by mutating config objects
-  after construction. Pass runtime choices as explicit parameters.
-- For small closed vocabularies, use a shared enum at the contract boundary.
-  Do not scatter ad hoc strings or tiny conversion helpers through the code.
-- Vendor/model/provider names should stay at adapter boundaries. Core business
-  logic should use domain terms such as role, tier, strategy id, or mode.
-- A factory should instantiate; it should not hide a second registry. If a
-  registry stores constructor defaults, prefer `Thing(**DEFAULTS[key], seed=seed)`
-  over building an object and then cloning/replacing it.
-- Delete superseded structure in the same change. Leaving the old module,
-  alias, preset layer, or helper behind creates a second source of truth.
-
-Good shape:
-
-```python
-DEFAULTS = {
-    "balanced": dict(
-        explorer=LevyExplorer(...),
-        budget=AdaptiveBudget(...),
-        tier=ModelTier.MEDIUM,
-    ),
-}
-
-
-def build_config(kind: ConfigId | str, *, seed: int = 0) -> Config:
-    key = kind.value if isinstance(kind, ConfigId) else kind
-    return Config(**DEFAULTS[key], seed=seed)
-```
-
-Bad smell:
-
-```python
-# Three modules that only differ by constants.
-# A Preset object that only maps 1:1 to Config.
-# A Strategy object whose only behavior is returning Config.
-# A domain config mutated by the CLI to carry runtime-only options.
-# A helper that turns Enum("M") into "tier-M" when tier.value would do.
-```
-
-### Surgical Changes
-When editing existing code:
-- Do not "improve" adjacent code, comments, or formatting.
-- Do not refactor things that are not broken.
-- Match existing style, even if you would do it differently.
-- If you notice unrelated dead code, mention it. Do not delete it.
-- Remove imports/variables/functions that YOUR changes made unused.
-- Do not remove pre-existing dead code unless asked.
-- Every changed line should trace directly to the user's request.
-
-### Blast Radius Discipline
-Before shipping ANY non-trivial change (new function, renamed symbol,
-rewritten handler, schema field, CLI flag, removed module):
-1. **Enumerate every caller and every consumer** of the thing you're
-   changing. Use Grep aggressively. Do not guess -- verify.
-2. **Amend every caller in the same commit.** A PR that updates a
-   function signature but leaves callers broken is a bug. A skill that
-   references a deleted helper is a bug.
-3. **Delete orphaned code.** If your change makes a helper, a branch, a
-   test fixture, or an entire module unused, DELETE it in the same
-   commit. Dangling references to removed features are worse than the
-   features themselves -- they mislead future readers.
-4. **Delete superseded files, don't leave them as "fallback."** See the
-   no-dead-versioning rule. A file left "just in case" becomes a second
-   source of truth that silently diverges.
-5. **When in doubt, grep for the symbol name across `src/`, `tests/`,
-   and `.claude/skills/`.**
-6. **Name the blast radius in your commit body.** One sentence:
-   "Touches X, Y, Z; no other callers." This forces you to actually
-   look. If you can't name the radius, you don't know what you changed.
-
-### Goal-Driven Execution
-Transform tasks into verifiable goals:
-- "Add validation" -> "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" -> "Write a test that reproduces it, then make it pass"
-
-For multi-step tasks, state a brief plan with verification steps.
-
-### Quality Review Protocol
-
-When asked to assess the output of a pipeline run, a test run, or any generated artifact: **never declare it good until you have opened the actual rendered artifact the user would see.** This rule exists because I have shipped "looks great" reviews based on intermediate formats while the rendered output was broken. Concretely:
-
-1. **Render the output the way the user would see it.** Markdown bodies are intermediate; the user looks at HTML, PDFs, rendered sites, or downstream tool output. Open those files. Do not pronounce judgement on a `.md` file when an `.html` sits next to it.
-2. **Sample across all kinds and variations, not the best-looking one.** For wikis: at least one article (concept) page, one people page, one heavily cross-linked page, one sparsely-evidenced page, one skeleton. For papers: intro, methods, a figure page. For agents: first response, middle response, final response. Cherry-picking the best example is not quality review.
-3. **Compare against the user's implicit reference.** If the target is Wikipedia, the standard is a real Wikipedia article: H2 sections with meaningful labels, inline citations, no meta-commentary ("this article appears in the corpus"), clean bullet lists, wikilinks that resolve. If the target is a scientific paper, the standard is a real published paper. Do not lower the bar to match what the tool happens to produce.
-4. **Check navigation and index.** Does the index only enumerate real pages? Do internal links resolve? Does the HTML landing page reflect the real page count?
-5. **Look for failure modes explicitly.** Empty pages, broken bullet lists rendered as run-on prose, orphan markers, placeholder text (`1.`, "See references", `[TITLE]`), meta-commentary that refers to "the corpus" as an entity, missing sections, truncated titles, garbage characters.
-6. **Report every issue you find.** Do not pick the worst one and stop. Enumerate them. The user will prioritize.
-7. **Metrics are a supplement, never a substitute.** M1/M3/M6 can pass while the rendered output is visually broken; the converse is rarely true. A green metrics report with broken HTML means the metrics are wrong, not that the output is fine.
-8. **After pipeline changes, assume the output is broken until you have verified otherwise.** A "green" test suite proves the code compiles and tests pass; it does not prove the generated artifacts look right.
-
-If a test-run playbook exists (`docs/test-run-playbook.md`), follow it step by step. Do not improvise the review.
+---
 
 ## Read First
 
-For `wikify` work, read in this order:
+1. `docs/architecture.md` — system design
+2. `docs/study-design.md` — baseline / scripted / guided conditions
+3. `docs/strategies.md` — E / M / X strategy science
+4. `docs/metrics.md` — M1–M6, GT-P, GT-C
+5. `docs/test-run-playbook.md` — required before any test run
+6. `docs/distill-test-readiness.md` — current pre-study readiness state
 
-1. `docs/architecture.md`
-2. `docs/study-design.md`
-3. `docs/strategies.md`
-4. `docs/metrics.md`
-5. `docs/test-run-playbook.md` (required before any test run)
+---
 
-## Wikify Ground Rules
+## Current Focus
 
-- Product artifact is the wiki bundle on disk.
-- Corpus is authoritative evidence; pages are authoritative human-facing outputs.
-- Structured state supports retrieval, provenance, graph reasoning, and telemetry.
-- Strategy comparisons are only valid when telemetry and action interfaces are shared.
-- Iteration is first-class: `create`, `refine`, `merge`.
-- Run and provenance history are append-only.
-- Coverage memory persists across epochs where refine semantics require it.
+Active track is `wikify`. Core question: **exploration autonomy** —
+does model-driven corpus navigation beat rule-based strategies, and
+does anything beat simple retrieve-and-summarise? Modes `baseline` /
+`scripted` (E/M/X) / `guided`; see `docs/study-design.md`.
+Comparisons require shared telemetry and action interfaces across modes.
 
-## Distill Design Rules
+---
 
-The general architectural style above applies directly to distill. Keep distill
-easy to read at a glance. Structure should follow the business logic of a run:
+## Product
 
-- `distill/strategy.py` owns the E/M/X strategy table, budget allocation,
-  run modes (scripted/guided), and the single factory.
-- `distill/explorer.py` owns corpus navigation (`LevyExplorer`), action
-  dispatch, and `build_snapshot`.
-- `distill/pipeline.py` owns run-time execution and prompt-layer choices.
-- CLI code is an adapter. It wires dependencies and passes user choices in,
-  but should not become a second place where distill behavior lives.
+- **Input**: papers ingested into a corpus (`data/corpora/`).
+- **Process**: distill loop extracts evidence, canonicalises concepts,
+  writes wiki pages, iterates.
+- **Output**: wiki bundle on disk (`data/wikis/`) rendered to static
+  HTML (`_html/`).
 
-Strategy config is for what actually varies between E/M/X: explorer, budget
-allocator, tiers, allocation override, and seed. Do not add field guides,
-artifact templates, mode selection, prompt names, model ids, cache paths,
-or CLI-only flags to `StrategyConfig`. Those are run parameters or adapter
-concerns and should be explicit arguments to the pipeline.
+Corpus is authoritative evidence. Wiki pages are authoritative
+human-facing output. Telemetry is first-class — strategies, prompts,
+and costs are compared over time.
 
-Preferred distill shape:
+---
+
+## Boundaries
+
+- `ingest/` — parse, chunk, embed, graph, citations, manifest.
+- `distill/` — the distillation loop: strategy, explorer, pipeline,
+  dossier, write prep.
+- `eval/` — metrics (M1–M6, GT-P, GT-C).
+- `render/html/` — static site generation.
+- `store/` — persistence (wiki index, images index).
+- `prompts/` — layered prompt system.
+- Top-level: `types.py`, `config.py`, `schema.py`, `context.py`,
+  `meter.py`, `cache.py`, `embedding.py`, `dispatch.py`, `models.py`,
+  `paths.py`, `cli.py`.
+
+Dependency rules:
+
+- `distill` reads `ingest` outputs; does not touch `eval` or `render`.
+- `eval` and `render` consume wiki bundles, never modify them.
+- `cli.py` is a thin adapter — dependencies in, business logic out.
+
+---
+
+## Data Layout
+
+```
+data/
+  corpora/    ingested corpora
+  wikis/      wiki bundles
+  papers/     input PDFs
+  cache/      extract cache
+  test_runs/  test run outputs
+```
+
+---
+
+## CLI
+
+All commands run under `uv run python -m`. See
+`docs/architecture.md` § CLI workflows for full args.
+
+```bash
+wikify.cli ingest   <input> --out <corpus> [--mode additive|sync] [--parser default|docling]
+wikify.cli distill  --preset <name> --budget 1x --seed 0 --corpus <> --bundle <>
+wikify.cli distill  --strategy {E|M|X} --mode {scripted|guided} --phase {all|extract|write} ...
+wikify.cli campaign --strategy M --iterations 3 ...
+wikify.cli study    --presets <csv> --budgets <csv> --seeds <csv>
+wikify.cli eval     --bundle <> --corpus <>
+wikify.cli html     --bundle <>
+wikify.cli query    --bundle <> "question"
+```
+
+---
+
+## Key Vocabulary
+
+| Term | Location | Notes |
+|---|---|---|
+| `StrategyId` (E / M / X) | `types.py` | Explore, Mixed, Exploit |
+| `ModelTier` (S / M / L) | `types.py` | Single tier vocabulary; use `tier.value` for strings |
+| `LevyExplorer` | `distill/explorer.py` | Corpus navigation + action dispatch |
+| `StrategyConfig` | `distill/strategy.py` | Strategy-knob schema (explorer + budget + tiers + seed) |
+| `BudgetAllocator` | `distill/strategy.py` | `StaticBudget`, `AdaptiveBudget` |
+| `RuntimeOverrides` | `distill/strategy.py` | Mutable run-time controls |
+| Mode `scripted` / `guided` | CLI `--mode` | scripted = rules, guided = LLM |
+| Iteration `create` / `refine` / `merge` | CLI `--iteration` | Coverage memory persists across refine |
+| `Dispatch` | `dispatch.py` | Single file-based request / response class |
+
+---
+
+## Working Rules
+
+### Before coding
+
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them; do not pick silently.
+- If a simpler approach exists, say so and push back.
+- Translate tasks into verifiable goals: "Add validation" →
+  "Write tests for invalid inputs, then make them pass." For
+  multi-step work, state a brief plan with verification steps.
+
+### Simplicity first
+
+- No features, abstractions, or configurability beyond what was asked.
+- No error handling for impossible scenarios.
+- If you wrote 200 lines and it could be 50, rewrite it.
+
+### Surgical changes
+
+- **Stay in lane. Do not touch code unrelated to the user's
+  request.** Do not "improve" adjacent code, comments, or
+  formatting. Do not refactor what is not broken. Match existing
+  style. Every changed line should trace directly to the request.
+- **Code YOUR change orphaned: delete in the same commit.** No
+  exceptions. Dangling references mislead future readers.
+- **Pre-existing dead code or nearby smells: leave them alone.**
+  Mention only if they block the task or the user should know.
+
+### Blast radius
+
+Before any non-trivial change (new function, rename, schema field,
+flag, module removal):
+
+1. **Map every caller and every consumer.** Grep across `src/`,
+   `tests/`, `.claude/skills/`, `docs/`, and any script that imports
+   the symbol. No guessing — verify. This is the load-bearing step:
+   **no broken link is acceptable.**
+2. **Amend every caller in the same commit.** A PR that changes a
+   signature and leaves callers broken is a bug. A skill or doc that
+   points at a deleted helper is a bug.
+3. **Delete code orphaned by this change in the same commit.** Do
+   not leave "fallback" files behind.
+4. **Name the radius in the commit body.** One sentence: "Touches
+   X, Y, Z; no other callers." If you can't name it, you don't know
+   what you changed.
+
+---
+
+## Architecture Style
+
+- **Locality of behaviour.** Code that changes together lives together.
+- **One data table + one factory** over scattered one-line modules or
+  parallel preset / config layers.
+- **Classify every new knob before adding it:**
+  - **Strategy** → `StrategyConfig` (changes E/M/X science).
+  - **Runtime** → `pipeline.run(...)` / `run_with_preloaded(...)`
+    (changes this run, not E/M/X).
+  - **Mode** → `RuntimeOverrides` or mode action schemas (adaptive
+    behaviour during a run).
+  - **Adapter** → CLI / skill / MCP wiring, passed inward explicitly.
+- **Constructor injection** over hidden mutable globals. Immutable
+  module-level instances are fine.
+- **Runtime choices are explicit parameters**, not fields smuggled
+  into domain config.
+- **Protocols for real extension points only.**
+- **Enums / dispatch tables** over `if/elif` chains on stable kinds.
+- **`__init__.py` files stay boring** — public re-exports only.
+- **Vendor / model / provider names stay at adapter boundaries.**
+  Core logic uses domain terms (role, tier, strategy id, mode).
+- **No dead versioning.** Delete the superseded file in the same
+  change. Git history is the changelog; the filesystem is the version.
+
+### Preferred distill shape
 
 ```python
 class StrategyId(str, Enum):
@@ -213,20 +200,14 @@ class StrategyConfig:
     budget: BudgetAllocator
     extract_tier: ModelTier
     write_tier: ModelTier
-    edit_tier: ModelTier = ModelTier.MEDIUM
-    compact_tier: ModelTier = ModelTier.SMALL
-    orchestrate_tier: ModelTier = ModelTier.LARGE
-    exploit_fraction_override: float | None = None
+    # edit / compact / orchestrate tiers default from ModelTier
     seed: int = 0
 
 
 STRATEGY_CONFIGS = {
     StrategyId.MIXED.value: dict(
-        name="M",
-        explorer=LevyExplorer(...),
-        budget=AdaptiveBudget(...),
-        extract_tier=ModelTier.SMALL,
-        write_tier=ModelTier.MEDIUM,
+        name="M", explorer=LevyExplorer(...), budget=AdaptiveBudget(...),
+        extract_tier=ModelTier.SMALL, write_tier=ModelTier.MEDIUM,
     ),
 }
 
@@ -236,108 +217,165 @@ def build_strategy(strategy_id: StrategyId | str, *, seed: int = 0) -> StrategyC
     return StrategyConfig(**STRATEGY_CONFIGS[key], seed=seed)
 ```
 
-Avoid:
+Do NOT:
 
-```python
-# Do not split one-line strategy differences across explore.py/mixed.py/exploit.py.
-# Do not make both "preset" and "config" layers unless they have different jobs.
-# Do not store model_id on StrategyConfig when routing is by ModelTier.
-# Do not put executable config/factory logic in __init__.py.
+- split one-line strategy differences across `explore.py` / `mixed.py`
+  / `exploit.py`;
+- introduce a `Preset` layer that maps 1:1 to `Config`;
+- store `model_id` on `StrategyConfig` (routing is by `ModelTier`; no
+  `model_id_for_tier()` helper);
+- put executable config / factory logic in `__init__.py`;
+- add field guides, artifact templates, mode selection, prompt names,
+  or CLI-only flags to `StrategyConfig` — those are run parameters or
+  adapter concerns.
+
+---
+
+## Writer / Page Rules
+
+- **Titles** are natural Wikipedia style (`Atomic Layer Deposition`,
+  not `concept-atomic-layer-deposition`). The id IS the title; `kind`
+  distinguishes page type.
+- **Articles** are full Wikipedia-style encyclopedic prose — not
+  stubs. Sections are guidance, not strict requirements.
+- **No visible `[[wikilinks]]` in body prose.** Cross-links live in
+  the `links: list[str]` field on `WikiPage` (see `models.py`).
+- **Person pages** are written by the model in Wikipedia voice.
+  `author_context` carries metadata (primary publications, citations,
+  coauthors). The phrase "appears in this corpus" is banned. Degrades
+  gracefully if `author_context` is missing.
+
+---
+
+## Error Handling
+
+- Per-call `ValidationError` and `QuoteNotInChunkError` are caught,
+  written to `.error.json` next to the request, and skipped so the
+  run continues. The `.error.json` IS the log — this is explicit
+  logging, not silent-passing.
+- Staged `.response.json` must validate against its schema
+  (`ExtractResponse`, `WriteResponse`, …) before being consumed.
+- Outside those two named exceptions: no bare `except`, no silent
+  `pass`. Failures are logged or re-raised — never hidden.
+
+---
+
+## Data-Handling Principles
+
+Distilled from bugs we shipped. These apply to **new** features, not
+just the current instances named under each rule. Counterparts to the
+code-structure rules in Architecture Style above.
+
+1. **One canonical surface per cross-cutting concern.** Parallel
+   external-lookup, classifier, or telemetry paths diverge silently.
+   Extend the existing path; don't fork it.
+   — `util.doi_resolver.resolve_many` (CrossRef → doi.org → `.citestore.db`
+   cache); `metadata.is_junk_title`; shared scripted/guided action dispatch.
+
+2. **Source text is sacred; the query is not.** Normalise the query
+   to fit the corpus; leave source text untouched so provenance back
+   to raw bytes stays intact.
+   — quote-substring validation uses tolerant NFKC + dash + brackets
+   + emphasis normalisation on the query side only.
+
+3. **Convert at the boundary; assert at storage.** When a concept is
+   indexed differently across a boundary (0- vs 1-based, raw vs
+   normalised, display vs storage), convert once at the boundary.
+   Callers must not guess.
+   — citation ordinals stored one-based in the KG (`ord + 1`) to
+   match `[N]` markers.
+
+4. **User-controlled input is ground truth.** Filenames, tags, front
+   matter, passed-in parameters beat values inferred by extraction.
+   Validate extractions against them; reject mismatches loudly.
+   — `choose_document_title` (filename > heading > stem);
+   `validate_authors_against_filename`.
+
+5. **Per-field merge, not per-record.** When two sources disagree,
+   the winner is decided per field. Record-level precedence hides
+   bugs.
+   — `doi.org` wins for title / journal / venue / volume / pages /
+   publisher / issn / url; local wins for summary and year.
+
+6. **Bidirectional edges are emitted both ways at build time.**
+   Downstream code does not infer the reverse.
+   — `CITES` edges go corpus→corpus AND corpus→cited; without the
+   latter, external refs are isolated.
+
+7. **State for cross-run comparison is persisted explicitly.** Static
+   approximations of stateful signals invalidate comparisons.
+   — `coverage_gap` residuals persist across refine epochs.
+
+---
+
+## Quality Review Protocol
+
+When asked to assess a pipeline run or any generated artifact: **never
+declare it good until you have opened the actual rendered artifact
+the user would see.**
+
+1. **Render the output the user would see.** Markdown is intermediate;
+   open the HTML / PDF / rendered site. Do not pronounce judgement on
+   a `.md` file when an `.html` sits next to it.
+2. **Sample across kinds** — article, person, heavily cross-linked,
+   sparsely-evidenced, skeleton. Not just the best-looking one.
+3. **Compare against the user's implicit reference.** Wikipedia for
+   wikis; published papers for papers. Do not lower the bar to match
+   what the tool happens to produce.
+4. **Check navigation and index.** Does the index enumerate real
+   pages? Do internal links resolve?
+5. **Look for failure modes explicitly.** Empty pages, run-on prose
+   from broken bullets, orphan markers, placeholder text, meta-
+   commentary ("this article appears in the corpus"), truncated
+   titles, garbage characters.
+6. **Report every issue.** Enumerate them. The user will prioritise.
+7. **Metrics are a supplement, never a substitute.** M1 / M3 / M6 can
+   pass while the HTML is visually broken.
+8. **After pipeline changes, assume the output is broken until
+   verified.** Green tests do not prove the artifacts look right.
+
+If `docs/test-run-playbook.md` applies, follow it step by step. Do
+not improvise the review.
+
+---
+
+## Response Style — Caveman Mode
+
+Default on. Deactivate only when user says `normal mode` or `stop caveman`.
+
+- **Scope**: assistant replies only — not code, commits, PRs, docs.
+- **Style**: short, direct, normal grammar; no filler or hedging.
+  Preferred shape: `Problem. Cause. Fix. Verify.`
+- **Fidelity**: technical terms, code, paths, schemas, quotes exact.
+- **Clarity override**: normal prose for security warnings,
+  destructive actions, or visible user confusion. Resume after.
+
+---
+
+## Tooling and Interaction
+
+- **Package manager**: `uv`. Use `uv add` (not `uv pip install`) so
+  `pyproject.toml` stays in sync.
+- **Data library**: polars, not pandas.
+- **Tests**: `uv run pytest tests/wikify -q` (full: `uv run pytest -q`).
+- **Lint**: `uv run ruff check src/wikify tests/wikify`.
+- **Windows console**: ASCII only; no special Unicode.
+- **Embeddings GPU**: auto-detected (CUDA > DirectML > CPU).
+- **Commit messages**: never include absolute paths or personal PC paths.
+- **Hooks**: never skip (`--no-verify`) or bypass signing unless the
+  user explicitly asks.
+
+---
+
+## Corrections Log
+
+When the user corrects a mistake, add an entry below. Format:
+
+```
+- **Topic**: what went wrong → what to do instead.
 ```
 
-`ModelTier` is the single vocabulary for `S`, `M`, and `L`. Request schemas,
-mode runtime, strategy configs, and cost accounting should use `ModelTier`
-directly. When a string label is needed for cache keys, provenance, or JSON,
-use `tier.value`; do not introduce a `model_id_for_tier()` helper or a parallel
-strategy-level `model_id` field.
-
-When introducing a new distill knob, first classify it:
-
-- Strategy knob: changes E/M/X science, belongs in `StrategyConfig`.
-- Runtime knob: changes this run without defining E/M/X, belongs on
-  `pipeline.run(...)` / `run_with_preloaded(...)`.
-- Mode knob: changes adaptive behavior during a run, belongs in
-  `RuntimeOverrides` or mode action schemas.
-- Adapter knob: CLI or runtime-specific wiring only, stays in the
-  adapter and is passed inward explicitly.
-
-## Runtime Neutrality
-
-Keep product architecture runtime-neutral:
-
-- `distill/*` owns business logic and strategy behavior.
-- `dispatch.py` is the single adapter for file-based request/response.
-- `.claude/skills/*` are execution helpers, not architecture truth.
-
-No product logic should depend on one runtime vendor.
-
-## Preferred Operations
-
-Use `wikify` CLI workflows instead of ad hoc file mutation:
-
-- `uv run python -m wikify.cli ingest ... [--mode additive|sync] [--parser default|docling]`
-- `uv run python -m wikify.cli distill --strategy {E|M|X} --mode {scripted|guided} ...`
-- `uv run python -m wikify.cli distill --phase extract|write|all ...`
-- `uv run python -m wikify.cli campaign --strategy M --iterations 3 ...`
-- `uv run python -m wikify.cli eval --bundle ... --corpus ...`
-- `uv run python -m wikify.cli query --bundle ... "question"`
-- `uv run python -m wikify.cli html --bundle ...`
-
-## Prompt and Schema Rules
-
-- Staged `.response.json` files must validate against the matching schema
-  (`ExtractResponse`, `WriteResponse`, etc.) before consuming them.
-- Validation failures should produce explicit `.error.json` artifacts.
-
-## Python Tooling
-
-- Package manager: `uv`
-- Lint (focused): `uv run ruff check src/wikify tests/wikify`
-- Tests (focused): `uv run pytest tests/wikify -q`
-- Full tests when needed: `uv run pytest -q`
-
-## Code Quality
-
-- Prefer small, responsibility-focused modules.
-- Prefer explicit boundaries and dependency direction.
-- Prefer constructor injection over hidden mutable globals.
-- Use protocols only for real extension points.
-- Keep explorer, mode, and metric logic testable without live model calls.
-- Keep scale-sensitive paths near-linear where possible (explorer and crosslink hot paths).
-
-## Corrections And Lessons Learned
-
-When the user corrects a mistake or misinterpretation, add an entry below.
-
-Format:
-`- **Topic**: What went wrong -> what to do instead.`
+Promote anything that becomes a standing rule into the body of this
+file. Prune duplicates when you promote.
 
 <!-- Add corrections below this line -->
-- **Data libraries**: Always use polars over pandas. User strongly prefers polars.
-- **Package installs**: Always use `uv add` instead of `uv pip install` so `pyproject.toml` stays in sync.
-- **Commit messages**: Never include absolute paths or personal PC paths in commit messages.
-- **Unicode on Windows**: Avoid special Unicode characters in console output; use ASCII.
-- **No silent error swallowing**: Never hide failures with bare `except` or silent `pass` blocks.
-- **Module-level instances**: Immutable module-level instances can be acceptable, but hidden mutable globals are not.
-- **Skill files are adapters**: Claude-specific skill files are useful operating surfaces, but they are not the architecture source of truth.
-- **wikify page names**: Use natural Wikipedia-style titles ("Atomic Layer Deposition", not "concept-atomic-layer-deposition"). The kind field distinguishes page types; the id IS the title.
-- **wikify writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible `[[wikilinks]]` in prose.
-- **wikify person pages**: Person pages are written by the model like article pages. Author metadata (primary publications, citations, coauthors) is assembled at ingest/distill time and attached to the writer's `WriteRequest` as `author_context` for grounding. The writer produces biographical prose in Wikipedia voice; the "appears in this corpus" phrasing is banned. Robust to missing `author_context` for persons mentioned in text but not authors.
-- **No dead versioned files**: Always delete the superseded version when you ship the new one. If you're ever tempted to keep the old file "just in case," that's a signal the new one isn't ready or the deprecation needs a tracked migration.
-- **Quality review means rendered HTML**: Never declare output "good" based on the intermediate markdown. Open the rendered artifact the user would see. Sample pages across kinds (article, person, edge cases), not just the best-looking one. Compare against the user's implicit reference (Wikipedia for wikis, real papers for papers). Enumerate every failure mode you find. See the "Quality Review Protocol" in the Behavioral Guidelines section above for the full protocol.
-- **Quote substring validation**: Uses tolerant normalization (NFKC + dash + brackets + emphasis). Picks verbatim phrases from clean chunks; do not normalize chunk text when selecting quotes.
-- **Pipeline error handling**: Per-call `ValidationError` and `QuoteNotInChunkError` are caught and skipped. The run continues; `.error.json` artifacts are left for postmortem.
-- **Coverage gap must be stateful**: Strategy experiments require real `coverage_gap` updates and persistence across refine epochs; static coverage scores invalidate comparisons.
-- **Mode comparability**: `scripted` and `guided` modes must emit actions through one shared interface with common telemetry fields.
-- **Locality of behavior**: Prefer a clear local data table plus one factory over scattered one-line modules, parallel preset/config layers, or `__init__.py` behavior. Classify knobs before adding them: domain/strategy, runtime, mode, or adapter. Runtime choices should be explicit parameters, not fields smuggled into domain config.
-- **Docling parser**: Default: formulas ON (granite-docling-258M), OCR off, images_scale=3.0. Converter is cached at module level. `DOCLING_FORMULAS=0` to disable for fast iteration. `DOCLING_OCR=1` for scanned PDFs. Docling strips inline `[N]` citation brackets; `_bracketize_refs` restores them using bibliography entry count as the valid range.
-- **Equation-chunk binding**: Default parser uses `char_span` overlap. Docling HybridChunker uses whitespace-normalized text containment (`use_text_match=True`) because HybridChunker char_spans don't match markdown offsets.
-- **Citation ordinals**: `CitationEntry.ord` is zero-based from extraction. KG `ord_refs` stores as `cit.ord + 1` (one-based) to match `[N]` markers in text.
-- **Embeddings GPU**: `embedding.py` auto-detects CUDA > DirectML > CPU via onnxruntime providers. No config needed.
-- **BibTeX author names**: `_clean_author_name` strips affiliation symbols (Oriya, asterisks, daggers, PUA glyphs) and title-cases all-caps/all-lowercase names. Preserves particles (van, de, von) and mixed case (McMaster).
-- **DOI resolution is unified**: every DOI lookup goes through `wikify.util.doi_resolver.resolve_many` (CrossRef batch first, doi.org content-negotiation fallback, per-corpus `.citestore.db` cache, 14-day negative-result TTL). Do NOT add a fourth path — extend this one. Async rate limiting via shared `with_limiter` / `with_semaphore` decorators in `util.async_limits`.
-- **Single title-junk vocabulary**: `metadata.is_junk_title` is the only place that decides whether a title string is a placeholder ("Word Document", section header, repository banner, markdown-link fragment). Don't reinvent per-parser junk filters — extend `_SECTION_HEADER_LITERALS` or the module-level regexes instead.
-- **Filename is authoritative for title + author**: our `[YYYY Author] Real Title.ext` convention is the source of truth. `metadata.choose_document_title` ranks filename > first_heading > stem with a `≥20 chars AND not is_junk_title` guard. `validate_authors_against_filename` rejects an extracted author list that doesn't contain the filename surname (catches the "extractor latched onto a title/banner line" failure mode).
-- **DOI-authoritative metadata merge**: when `doi.org` content-negotiation returns data, it wins unconditionally over locally-extracted values for title / journal / venue / volume / pages / publisher / issn / url. Summary and year stay local-preferring (DOI records often omit or mis-date these). See `bibtex._merge_external_metadata`.
-- **Citation graph is bidirectional**: `CITES` edges go corpus→corpus AND corpus→cited. External cited works (`kind="cited"`) must get CITES edges too — without them they're isolated nodes and distill's citation reasoning returns empty. Wired in `citestore.graph_build._extract_cited_works`.
-- **Embedder split-and-mean-pool**: `embedding._fe_embed_with` token-splits oversize inputs via fastembed's internal tokenizer and mean-pools + re-normalises piece embeddings. `ModelConfig.max_tokens` is the enforcement target, not the chunker's char cap. Jina-v2-small is capped at 2048 tokens on DirectML (8k context exhausts 8 GB VRAM at any reasonable batch).
