@@ -1,8 +1,13 @@
 # Distill-test readiness and replay plan
 
 Pre-study review of the distill pipeline against `ald_all_marker`, plus
-the telemetry plan needed to produce publication-grade exploration
-figures. Written before the first full-scale strategy comparison run.
+the telemetry needed for exploration replay. This document distinguishes:
+
+- **Confirmed in code**: verified against the current implementation.
+- **Observed on `ald_all_marker`**: corpus-specific findings that should
+  be tied to a reproducible artifact or script.
+- **Proposed telemetry**: useful for replay and diagnosis, but not yet
+  required for the pipeline to function.
 
 ## Corpus state (ald_all_marker)
 
@@ -19,33 +24,49 @@ strategy comparisons are trustworthy.
 
 ### Issue 1 — PageRank on corpus papers is nearly flat
 
-Spread over 205 corpus sources: top/bottom ≈ 0.00048 / 0.00013 ≈ **3.7×**.
-The citation graph is dominated by corpus→external edges (208 corpus
-papers cite into the 7340-node `kind="cited"` pool), so intra-corpus
-PageRank carries weak signal.
+Confirmed in code:
+- PageRank is computed on `CITES` edges only.
+- `docs/strategies.md` currently describes PageRank as living on
+  `cites ∪ doc_similar`, which does not match the implementation.
 
-Consequence: `scripted-explore` (`global_op=pagerank`, `jump_rate=1.0`)
-behaves close to `scripted-uniform`. That collapses axis A for the E
-anchor cell.
+Observed on `ald_all_marker`:
+- corpus-source PageRank spread is narrow enough that the signal may be
+  weak for within-corpus ranking.
 
-Fix options:
-- **(a)** Compute PageRank on `cites ∪ doc_similar` as
-  `docs/strategies.md` promises. Current code
-  (`citestore/graph_build.py:367`) uses `cites` only.
-- **(b)** Use personalized PageRank restricted to corpus nodes (restart
-  on the 208-node corpus set), which sharpens within-corpus structure.
-- **(c)** Accept flat signal; document it as a finding.
+Consequence:
+- the current pure global-jump preset provides a weaker contrast than
+  intended on this small corpus;
+- for the renamed follow-on design, this mainly affects the future
+  `high-exploration` condition rather than the immediate
+  `baseline / balanced / guided` table.
 
-Lean: (a) first. Matches docs, cheapest, one-line semantic change.
+Decision:
+- Keep PageRank strict: compute it on **corpus-to-corpus citation edges
+  only**.
+- Do **not** include `doc_similar` edges in PageRank. Similarity edges
+  are useful for traversal, but not clean enough for centrality because
+  they are constructed from capped nearest-neighbor rules.
 
-### Issue 2 — Edge `type` missing from serialized `knowledge_graph.json`
+Action:
+- Update docs to match the intended strict corpus-citation definition.
+- Re-check PageRank spread after this change on the larger target corpus.
 
-`Counter(e.get('type') for e in edges)` over the saved JSON returns
-`{None: 41496}`. Runtime `KnowledgeGraph` has the types; the export
-drops them. Not breaking distill today (types are reconstructed during
-`build_knowledge_graph`), but any replay/animation tool that reads the
-raw JSON has no way to distinguish `cites`, `doc_similar`, `co_section`,
-`authored_by`. Fix in the graph-write path. ~10 LOC.
+### Issue 2 — Replay consumers must read edge `kind`, not edge `type`
+
+Confirmed in code:
+- serialized edges use `kind`, not `type`;
+- runtime graph consumers also read `kind`.
+
+Consequence: any replay or animation tool that expects `edge.type` will
+see `None` for every edge, even though the information is present under
+`kind`.
+
+Decision:
+- Standardize replay tooling on `kind`. This matches the current KG
+  runtime and avoids inventing a second edge-field convention.
+
+This is a schema-contract issue, not a graph-loss bug or a distill
+correctness bug.
 
 ### Issue 3 — `refine_uncertain` is not uncertainty-based
 
@@ -56,19 +77,25 @@ cached extraction output. Either wire it to cached logprobs/alternates,
 or drop the option from the ablation table. `docs/strategies.md` Open
 Questions already flags this.
 
-### Issue 4 — Bootstrap under-specified in code vs. docs
+### Issue 4 — Bootstrap diverges between docs and implementation
 
 Docs promise an "abstract sweep" as round zero — one abstract per doc,
 `min(n_docs, 0.1 × total_budget)` chunks. Code only enforces
 `jump_rate=1` while `wiki_is_empty` and picks doc-then-3-chunks per
-`global_op`. For `scripted-explore` the first few picks land on high-PR
+`global_op`. For the current pure global-jump preset, the first few picks land on high-PR
 docs but do NOT sweep all 208 abstracts.
 
-For a convergence-curve study the bootstrap must be identical across
-strategies. Decision required:
-- implement explicit abstract sweep for round zero, or
-- keep current behaviour and update `docs/strategies.md` locked-constants
-  table.
+Decision for the main small-scale run:
+- bootstrap is **off** for all three main conditions;
+- seeded bootstrap will be evaluated later as a side experiment, not as
+  part of the first comparison table.
+
+If/when seeded bootstrap is tested, define it explicitly as:
+- the same seed rule for every condition;
+- seed documents selected by corpus-citation PageRank plus a submodular
+  embedding-coverage objective;
+- one abstract-equivalent chunk per selected document;
+- seed size capped by budget, not by "all abstracts in corpus".
 
 ### Issue 5 — `coverage_gap` keeps popping captions after text exhausts
 
@@ -83,14 +110,19 @@ Fix: either gate captions behind `GlobalOp.FIGURES` only (cleanest) or
 pin captions to terminal residual after exhaust so they never refill
 the main heap. ~20 LOC.
 
-### Issue 6 — Write-budget reserve vs. guided mid-session writes
+### Issue 6 — Guided `write_now` can spend into the reserved write headroom
 
 `pipeline.run` holds `expected_write_reserve = split.write_haiku_eq *
-0.95` off-limits during extract. Guided-full's mid-session `write_now`
+0.95` off-limits during extract. Guided's mid-session `write_now`
 bypasses this because `_run_write_pass` is called mid-extract with its
 own `1.05 × budget` guard. In practice the orchestrator can spend the
-reserve before the final write pass. Not a bug; needs to be documented
-so E/M/X and guided results are comparable.
+reserved headroom before the final write pass.
+
+Decision:
+- accept this for `guided` and document it explicitly as part of the
+  treatment;
+- scripted/default conditions keep fixed reserve semantics, while
+  `guided` is allowed to re-time spending via `write_now`.
 
 ## Strategy business logic — end-to-end inventory
 
@@ -104,7 +136,7 @@ so E/M/X and guided results are comparable.
 | `extract_tier`, `write_tier`, `edit_tier`, `compact_tier` | S / M / L | `StrategyConfig` + `RuntimeOverrides` | yes (`set_tier`, full tools only) |
 | `orchestrate_tier` | locked = L | `StrategyConfig` | locked |
 | `dedup_after_extract` | locked on | canonicalize | locked |
-| `bootstrap_rule` | locked "abstract sweep" — **not implemented** | — | see Issue 4 |
+| `bootstrap_rule` | docs say "abstract sweep"; implementation differs | — | see Issue 4 |
 
 ### How the explorer touches the corpus per step
 
@@ -158,23 +190,33 @@ traced to a parameter change.
 | Max concepts per run | 60 | `max_concepts` | medium |
 | Cost meter hard abort | 1.05 × budget | `meter.py` | low |
 
-## Adjustment checklist (before the first full-scale run)
+## Adjustment checklist
 
-### Must-fix
+### Immediate blockers for the small-scale run
 
-- [ ] **Issue 1: PageRank fix.** Union `cites ∪ doc_similar`, or switch
-      to personalised PageRank on the corpus node set. Re-write
-      `knowledge_graph.json` once.
-- [ ] **Issue 2: serialize edge `type`** in `graph_build` save path.
-- [ ] **Issue 4: bootstrap decision.** Implement abstract sweep OR
-      remove the row from the locked-constants table.
+- [ ] **Issue 1: PageRank fix.** Make docs and code agree on strict
+      corpus-to-corpus citation PageRank. Re-write `knowledge_graph.json`
+      once for the small-scale run.
+- [ ] **Issue 4: bootstrap decision.** Turn bootstrap into an explicit,
+      optional seeded variant and update docs to stop promising a full
+      abstract sweep by default.
 - [ ] **Issue 5: gate captions.** Text-only coverage_gap; captions
       reached only via `global_op=figures`.
+- [ ] **Condition naming sync.** Make the new canonical names visible in
+      the small-scale study surfaces and document the alias/migration map.
+- [ ] **Baseline rewrite.** Replace the current baseline with the
+      explicit abstract-first baseline defined below.
+- [ ] **Guided reserve rule.** Keep `guided` write-reserve behavior as an
+      accepted treatment difference and document it consistently.
+
+### Follow-on blockers
+
+- [ ] **Issue 1 follow-on validation.** Re-check PageRank spread on the
+      larger target corpus after the strict corpus-citation change.
+- [ ] **Issue 2: lock the replay edge schema.** Replay tooling must read
+      edge `kind`, not edge `type`.
 - [ ] **Issue 3: `refine_uncertain`.** Wire to real entropy signal
-      OR drop from ablation list.
-
-### Telemetry add-ons for replay (see next section)
-
+      OR drop from the broader condition table.
 - [ ] Per-step exploration record with residual snapshots.
 - [ ] Evidence-birth events (chunk → page mapping with timestamp).
 - [ ] KG subgraph export keyed by corpus (one-off per corpus).
@@ -182,27 +224,234 @@ traced to a parameter change.
 
 ### Sanity smoke
 
-- [ ] `scripted-mixed --budget 0.1x --seed 0` on `ald_all_marker`.
+- [ ] `balanced --budget 0.1x --seed 0` on `ald_all_marker`.
 - [ ] Verify `_run.json::policy_actions` and
       `n_cached_skipped + n_new_extracted == len(chunks_read)`.
 - [ ] Confirm `_meta/io_lineage/<run_id>/` emits all three files.
 - [ ] `eval` passes M6 grounding gate on the smoke run.
 
-### Study-run scope (needs a decision)
+### Regression tests required
 
-- Corpus: `ald_all_marker` only, or replicate on a second corpus?
-- Presets: 5 anchor cells (E, M, X, guided-navigate, guided-full) at
-  3 budgets × 3 seeds = **45 runs**, or include the 21 ablation cells
-  from `strategies.md` (+66 runs)?
-- Baseline: include `baselines/pipeline.py` (retrieve-and-summarise)?
-  +1 run per (budget × seed).
+- [ ] PageRank graph-input test: asserts exactly which edge kinds
+      participate in PageRank.
+- [ ] Bootstrap test: when seeded bootstrap is enabled, it follows the
+      explicit seed-set definition and budget cap.
+- [ ] Coverage-gap caption test: `coverage_gap` never returns caption
+      chunks.
+- [ ] Guided `write_now` behavior test: reserve-spending differences are
+      explicitly accepted and logged.
+
+## Immediate Run Plan
+
+This section is the current source of truth for the first small-scale
+comparison. It is intended to be concrete enough to translate directly
+into an implementation action plan.
+
+### Goal
+
+Run a small-scale comparison on `ald_all_marker` that is strong enough
+to validate the refactored study shape and leave the codebase ready for
+the larger follow-on corpus study.
+
+### Conditions
+
+Use the **new condition names as canonical names**. This requires a code
+change in strategy naming, docs, and CLI preset surfaces.
+
+Main comparison table:
+- `baseline`
+- `balanced`
+- `guided`
+
+Planned follow-on condition set after the small-scale run:
+- `baseline`
+- `no-navigation`
+- `high-exploration`
+- `balanced`
+- `high-exploitation`
+- `guided`
+
+Migration map for current code/doc terminology:
+- current `scripted-mixed` -> new canonical `balanced`
+- current `guided-full` -> new canonical `guided`
+- `no-navigation`, `high-exploration`, and `high-exploitation` are
+  follow-on named conditions that require code changes before use
+
+### Campaign shape
+
+- corpus: `ald_all_marker` only
+- budgets: `0.1x / 1x / 3x`
+- seed count: 1
+- iterations: `create + refine`
+- bootstrap: off for the main comparison table
+
+### Fixed run controls
+
+- model tiers fixed for non-guided conditions
+- use `extract=S`, `write=M`, `edit=M`, `compact=S`
+- budget split fixed at `60 / 35 / 5` for `extract / write / curate`
+- this split is provisional and should be revisited after a measurement
+  phase on page yield, evidence density, and write throughput
+
+### Exact condition semantics
+
+`balanced`
+- scripted mode
+- explorer = current mixed explorer policy:
+  `local_op=similarity_walk`, `global_op=coverage_gap`,
+  `jump_rate=0.1`
+- fixed tiers and fixed `60 / 35 / 5` split
+
+`guided`
+- guided mode
+- allowed actions/tools:
+  `walk_local`, `jump_uniform`, `jump_pagerank`, `jump_gap`,
+  `jump_figures`, `pick_chunks`, `sample_chunks`, `write_now`,
+  `search_chunks`, `get_source_info`, `list_sources`, `get_citations`,
+  `get_coverage`, `get_pages`, `get_budget`, `done`,
+  `set_allocation`, `set_tier`
+- fallback explorer = the same explorer policy as `balanced`
+- starts from the same default tiers and split as `balanced`
+- may change navigation, allocation, tiers, and write timing mid-run
+- reserve-spending differences caused by `write_now` are accepted as
+  part of the guided treatment
+
+### Baseline definition
+
+The baseline should be replaced with a new abstract-first,
+source-grounded retrieve-and-synthesise condition.
+
+Required behavior:
+- no active navigation loop
+- no graph walk after each read
+- use the same default tiers as `balanced`
+- use the same `60 / 35 / 5` split at the run level
+- partition the baseline extract budget as:
+  - 1/3 for abstract seeding
+  - 2/3 for post-seed evidence retrieval
+- seed documents selected by corpus-citation PageRank plus a submodular
+  embedding-space coverage objective
+- one abstract-equivalent chunk per selected document
+- stop abstract seeding when the next abstract chunk would exceed the
+  seed-phase budget cap
+- candidate concepts extracted from those seed chunks
+- evidence gathered afterward with plain chunk similarity search only
+- use document embeddings for coverage defined as mean-pooled chunk
+  embeddings over non-reference, non-caption chunks
+- greedy seed selection objective:
+  for candidate doc `d` and selected seed set `S`, maximize
+  `0.7 * pr_norm(d) + 0.3 * coverage_gain(d | S)`
+- define `coverage_gain(d | S)` as the increase in
+  `sum_u max_{s in S} max(0, cos(e_u, e_s))` over all corpus docs `u`
+  when `d` is added, where `e_x` is the document embedding and cosine
+  similarity is clipped at zero
+- retrieval default for support gathering:
+  `top_k = 8` chunks per candidate page, with at most 2 chunks per
+  source document in the final retrieved set
+- baseline refine may create new pages if still within budget
+- `create + refine` uses the same run-level split; refine remains
+  non-agentic and uses the same similarity-retrieval rule
+
+### What this first run is for
+
+- validate the new baseline against `balanced` and `guided`
+- validate the new naming and study framing
+- measure whether the fixed `60 / 35 / 5` split is sensible
+- leave the codebase ready to add `no-navigation`,
+  `high-exploration`, and `high-exploitation` cleanly
+
+## Follow-on Readiness Constraints
+
+Changes made for the small-scale run should keep the codebase in a good
+state for the larger follow-on study.
+
+### Naming and study surfaces
+
+- new condition names should become canonical in docs and code
+- avoid keeping `E / M / X` as the primary study surface
+- old names may survive as temporary aliases only if needed for
+  migration, not as the conceptual vocabulary
+
+### Strategy design constraints
+
+- PageRank remains strict corpus-to-corpus citation centrality
+- similarity edges may guide traversal, but not centrality
+- bootstrap must be explicit, optional, and reusable across conditions
+- baseline remains non-agentic even after refine is added
+
+### Budgeting constraints
+
+- fixed scripted/default split for comparability
+- guided remains the only adaptive-allocation condition
+- keep the split measurable and easy to revise after pilot results
+
+### Study scalability constraints
+
+- decisions on `ald_all_marker` should scale to a much larger corpus
+- avoid designs that require "all abstracts in corpus" passes by default
+- prefer budget-capped seeding and explicit condition definitions
+
+## Implementation Worklist
+
+This worklist is grouped so it can be translated into parallel
+implementation tasks.
+
+### 1. Strategy naming and study surfaces
+
+- rename canonical conditions to `baseline`, `no-navigation`,
+  `high-exploration`, `balanced`, `high-exploitation`, `guided`
+- update study docs to use the new names throughout
+- update CLI preset surfaces and any study-driver assumptions
+- clearly note that this is a code change, not a docs-only relabel
+
+### 2. Baseline rewrite
+
+- replace the current baseline with the new abstract-first baseline
+- implement budget-capped seed selection
+- implement PageRank-plus-submodular seed selection
+- keep evidence retrieval as plain chunk similarity search
+- support `create + refine`, including baseline refine creating new pages
+  within budget
+
+### 3. PageRank and centrality cleanup
+
+- make code and docs agree on strict corpus-citation PageRank
+- remove doc references that imply `doc_similar` participates in PageRank
+- verify PageRank spread after the fix on small and later large corpora
+
+### 4. Bootstrap cleanup
+
+- remove the implied default abstract-sweep contract from docs
+- keep bootstrap off for the main small-scale run
+- define seeded bootstrap as an optional side experiment with:
+  PageRank-plus-submodular seed set, one abstract-equivalent chunk per
+  selected document, and a hard budget cap
+
+### 5. Coverage and write-reserve fixes
+
+- gate captions out of `coverage_gap` unless explicitly using figures
+- document that guided `write_now` may spend into reserved write
+  headroom and that this is an accepted part of the guided treatment
+
+### 6. Telemetry and replay readiness
+
+- persist step-level picks in replay telemetry
+- add residual before/after snapshots and page-birth events
+- standardize replay tooling on edge `kind`
+- choose the first viewer target after the main study surfaces are stable
 
 ## Replay / diagnostic plan — graph-replay of exploration
 
-Current telemetry is too thin for an animation:
-- `policy_actions` records the action and counts but not the actual
-  picked chunks (only `reason` for `pick_chunks`).
-- `chunks_read` is an ordered list of ids with no per-step context.
+Current telemetry is useful for run audit, but not replay-grade:
+- `_run.json` already records `chunks_read`, `policy_actions`,
+  budget splits, and write rejections.
+- `_meta/io_lineage/<run_id>/` already records chunk metadata and
+  extractor output summaries.
+- Guided snapshots already compute residual histograms.
+
+Still missing for replay:
+- `policy_actions` does not persist the actual picks per step.
+- `chunks_read` is ordered, but has no per-step context.
 - `_trace.jsonl` (KG trace in `citestore/graph.py`) is opt-in and only
   captures search / similar_to / collect terminal calls. Distill does
   not call `enable_trace()`.
@@ -270,8 +519,7 @@ Write event:
 | PageRank of picked doc | from `state.pagerank_doc` |
 
 Implementation: one `ExploreRecorder` injected into the explorer (or
-wrapping the mode); flushed after each `next_batch`. Zero cost to model
-calls.
+wrapping the mode), flushed after each `next_batch`. Zero model-call cost.
 
 ### Static graph artifact — `<corpus>/explore_graph.json`
 
@@ -279,8 +527,8 @@ Exported once per corpus, reused across runs:
 
 - **nodes**: `{id, kind (corpus / cited), title, pagerank, is_corpus}`
   for all source nodes; `{id, doc_id, section, is_caption}` for chunks.
-- **edges**: `{src, dst, type}` for `cites`, `doc_similar`, `co_section`,
-  `authored_by` (typed — requires Issue 2 fixed).
+- **edges**: `{src, dst, kind}` for `cites`, `doc_similar`,
+  `co_section`, `authored_by`.
 - **layout**: precomputed 2D coordinates (force-directed or UMAP on doc
   embeddings) so the viewer does not have to lay out ~20k nodes.
 
@@ -310,255 +558,32 @@ useful for diagnosis.
 | Recorder + trace emission | ~150 LOC in `explorer.py` + pipeline hook |
 | `explore_graph.json` export | ~80 LOC, one-time per corpus |
 | Issue 1: PageRank fix | ~30 LOC in `graph_build.py` |
-| Issue 2: edge-type serialization | ~10 LOC |
+| Issue 2: replay schema cleanup (`type` -> `kind` in viewers/tools) | ~10 LOC |
 | Issue 5: caption gating | ~20 LOC |
 | Issue 3: `refine_uncertain` (wire or remove) | ~20 LOC |
-| Issue 4: bootstrap (implement abstract sweep) | ~30 LOC |
+| Issue 4: bootstrap definition + optional seeded variant | ~30 LOC |
 | Static panels script | ~200 LOC |
 | Animated video script | ~150 LOC |
 | Smoke run + Playbook Part 5 review | half-day |
 
-## Adjacent improvements — ergonomics and Obsidian overlay
+## Deferred non-core improvements
 
-Patterns to adopt from LLM-wiki practice, filtered through wikify's
-constraints: evidence-first pages, python pipeline, CLI-driven, study
-output as the primary product, "no wikilinks in body prose" rule, the
-vault-first pivot that already pushes chat / vector / graph into
-Obsidian plugins.
+Useful, but out of scope for pre-study readiness:
+- reviewer ergonomics such as `hot.md`, `runs.md`, and study
+  `comparison.md`;
+- lint/report surfaces (`wikify lint --bundle`);
+- richer writer feedback such as contradiction and gap callouts;
+- Obsidian overlays for corpus/wiki browsing.
 
-None of these touch the scientific core (vectors, KG, metrics, HTML
-renderer, cost meter, strategies). They add human-review ergonomics on
-top of existing artifacts.
-
-### Patterns (ordered by effort × value)
-
-1. **`hot.md` per bundle and per corpus.** ~500-word human-readable
-   markdown. For a bundle: last iteration's strategy / mode / budget,
-   M1 and M6 status, top-10 open coverage gaps from
-   `coverage_memory.json`, last pages touched, current
-   `write_rejections`. For a corpus: last ingest's doc-count delta,
-   unresolved-DOI count, `is_junk_title` warnings, embedder
-   fingerprint. Structured H2 headings so the next LLM session can
-   parse them. Lives next to `_run.json` / `coverage_memory.json` /
-   `manifest.json`, does NOT replace them.
-
-2. **`runs.md` per bundle.** Markdown render of
-   `_meta/run_history.jsonl`. One line per iteration, columns:
-   timestamp, strategy, mode, budget_used / target, M1, M3, grounding
-   pass, n_pages, n_rejections. Pure presentation layer.
-
-3. **Cross-bundle `comparison.md` for study outputs.** When
-   `wikify study` finishes, emit `<out_dir>/comparison.md` putting
-   every preset × budget × seed cell side-by-side with M1 / M2 / M3
-   / M5 / R_P / R_C_declared / G1 / G2. The reviewer-facing surface
-   of a study run.
-
-4. **Writer callouts in the style guide.** Four Obsidian-flavoured
-   callouts, mapped to wikify's evidence-first semantics:
-   - `> [!contradiction]` — two Evidence items on the same dossier
-     disagree.
-   - `> [!gap]` — a section the artifact template expects has no
-     dossier backing (currently the writer produces vague prose;
-     callout makes the gap explicit).
-   - `> [!key-insight]` — a quantified claim grounded in evidence
-     from ≥2 docs.
-   - `> [!stale]` — a claim whose only citing doc is more than N
-     years older than the most recent doc on the same topic in the
-     corpus. Auto-inserted by a post-write pass.
-
-   Does not conflict with the "no wikilinks in body prose" rule:
-   callouts are prose, not wikilinks.
-
-5. **Bidirectional contradiction detection at canonicalize.** Concrete
-   wikify hook: `distill/dossier.py::canonicalize` already merges
-   candidates by normalised title / alias. Extend it: when two merged
-   candidates' `(definition, summary)` pairs disagree beyond a
-   threshold (embedding cosine < 0.6 on the pair, or a tier-S
-   tiebreak call), tag both dossier entries with a `conflict_with`
-   id. The writer reads these tags and emits `[!contradiction]` on
-   the resulting page.
-
-6. **`wikify lint --bundle` command.** One entrypoint consolidating
-   playbook Parts 5, 6, 9 into a markdown report at
-   `_meta/lint-report-YYYY-MM-DD.md`. Wikify-specific categories:
-   - pages with `evidence_count = 0` (skeletons leaked past filter)
-   - `[^eN]` markers that don't resolve (overlaps M6 G2)
-   - `_index.md` entries pointing at renamed / deleted pages
-   - pages missing required frontmatter (`title`, `kind`, `created`)
-   - H2 sections the artifact template declared but left empty
-   - callout counts (`[!gap]`, `[!contradiction]`, `[!stale]`)
-   - frontmatter `links:` targets that don't resolve.
-
-   Exit non-zero if any category is above threshold. Replaces a chunk
-   of the manual review workflow.
-
-7. **Explicit round semantics for `refine`.** Campaign already does
-   this implicitly via `coverage_gap`. Document the mapping in
-   `study-design.md`:
-   - Round 1 (`iteration=create`): broad, bootstrap + global_op heavy.
-   - Round 2 (`iteration=refine`, adaptive): gap-fill, coverage_gap
-     on the top-residual residual set, evidence-anchored similarity
-     walks.
-   - Round 3 (`iteration=refine` second pass OR `iteration=merge`):
-     synthesis — cross-link pass + callout resolution.
-   Matches Karpathy autoresearch's broad → gap-fill → synthesis
-   structure.
-
-8. **Per-page write-with-revise subagent.** Not about parallelism —
-   parallelism for single-call writes belongs at the dispatch layer
-   (async `_dispatch_many`, not subagent spawn). Motivation is
-   **multi-turn quality per page**: today `_run_write_pass` catches
-   `ValidationError`, appends to `write_rejections`, and moves on
-   without retrying. A self-contained per-page subagent runs
-   `write → validate → if ValidationError, revise once at tier+1 →
-   emit final or .error.json`. Isolated context, own turn budget.
-   Reduces rejection count; plays well with staged dispatch.
-
-9. **Bundle README with cross-project snippet.** `wikify html` (or a
-   new `wikify readme`) emits `<bundle>/README.md` that includes a
-   paragraph telling an external Claude Code project how to read this
-   bundle from another directory (`hot.md → index.md → page`). Makes
-   wikify outputs reusable as a knowledge base for adjacent projects.
-
-10. **`/wikify` router skill (thin).** One Claude Code skill
-    dispatching `ingest X`, `distill X`, `lint X`, `query X`, `study X`
-    to the corresponding CLI commands. Wikify is CLI-first, so this is
-    a veneer for interactive sessions — not a second source of truth.
-    Skill stays short; all logic remains in the CLI.
-
-### Obsidian overlay — dual-vault (corpus + wiki)
-
-Goal: make both the ingested corpus and the distilled wiki navigable
-as Obsidian vaults **in addition to** the existing HTML renderer and
-scientific tooling. The Wikipedia-style HTML stays as-is; it is the
-canonical reader surface for a chosen bundle. The Obsidian layer is a
-sibling surface: useful for exploration, cross-linking, and lint, not
-for publication.
-
-#### Wiki bundle (additive)
-
-Keep `_html/`, `articles/`, `people/`, `_run.json`, `_meta/` exactly
-where they are. Add at the bundle root:
-
-- `index.md` — rename `_index.md` → `index.md` (no dead versioning;
-  delete the old). Obsidian picks it up as the landing page.
-- `hot.md`, `runs.md` — as described above.
-- `_templates/{article,person}.md` — Obsidian Templater templates.
-- `.obsidian/snippets/wikify-callouts.css` — four callout styles.
-- `_attachments/images/` — symlink (or copy) of corpus figures that
-  appear on any wiki page so Obsidian resolves `![[fig]]` embeds
-  inside the vault.
-
-Frontmatter additions on every page:
-- `status: skeleton | draft | published`
-- `bibkeys: [...]` — derived from Evidence records
-- `evidence_count: N`
-- `gap_count`, `contradiction_count` — populated by `wikify lint`
-
-**No wikilinks in body prose.** Graph edges come from two places:
-- the existing `links:` frontmatter field (already emitted by the
-  crosslink pass) — Obsidian reads frontmatter links when configured
-  via Graph settings;
-- an auto-generated "See also" section appended at the end of every
-  page by a post-write pass, containing wikilinks derived from
-  `links:`. Wikipedia pattern — end-of-article, not inline.
-
-Staging dirs (`_dossiers/`, `_write_requests/`, `_meta/`) stay
-underscore-prefixed. Hide them via Obsidian's `app.json`
-(`userIgnoreFilters`) rather than renaming — renaming has too large a
-blast radius across the Python pipeline.
-
-#### Corpus (additive)
-
-Corpus markdown at `corpus/markdown/{doc_id}.md` is already
-Obsidian-readable. Keep `vectors.npz`, `knowledge_graph.json`,
-`manifest.json`, `chunks/`, `docs/` untouched. Add an overlay on top:
-
-- `corpus/index.md` — doc catalogue grouped by year / author / venue,
-  one row per doc with `[[markdown/doc_id|Title]]` link, bibkey,
-  chunk count, figure count.
-- `corpus/hot.md` — last ingest summary: doc-count delta,
-  unresolved-DOI count, junk-title warnings, embedder fingerprint.
-- `corpus/log.md` — ingest history rendered from `manifest.json`.
-- `corpus/entities/{author_slug}.md` — one page per author, derived
-  from KG via `build_author_context`: papers authored, co-authors,
-  year range, affiliations.
-- `corpus/concepts/{topic_slug}.md` — one page per sanitised topic in
-  `topics.json`: document frequency, linked docs, declared vs.
-  inferred flag.
-- `corpus/figures/index.md` — caption-indexed catalogue linking to
-  binary figures in `images/`.
-- `corpus/.obsidian/snippets/corpus-callouts.css` — same callouts.
-
-All derived, not source-of-truth. Regenerated at the end of `ingest`
-(new `build_obsidian_overlay` step after step 6 in the ingest
-pipeline). Hide `vectors.*`, `.citestore.db`, `manifest.json`,
-`chunks/`, `docs/` via Obsidian's `app.json`.
-
-#### Cross-vault link (what makes the dual-vault actually useful)
-
-Every wiki page's evidence footnote references `chunk_id = "doc5#c12"`.
-A post-render pass appends an Obsidian wikilink next to each
-footnote body targeting `../corpus/markdown/doc5` — so the reviewer
-can jump from a wiki claim straight to the source corpus markdown in
-one hop, inside the same Obsidian window. This is the piece that
-turns two separate vaults into one navigable system.
-
-#### What this does NOT do
-
-- Does not replace the Wikipedia-style HTML renderer.
-- Does not change the distill pipeline, the strategies, or the
-  metrics framework.
-- Does not put wikilinks into body prose (Wikipedia-voice rule holds).
-- Does not version Python paths to look Obsidian-native — underscore
-  staging dirs stay, Obsidian is configured to hide them.
-
-#### Effort
-
-| Piece | Rough effort |
-|---|---|
-| `hot.md` + `runs.md` renderer (bundle + corpus) | ~100 LOC |
-| `comparison.md` for `wikify study` | ~80 LOC |
-| Four callouts in style guide + artifact template + CSS | ~40 LOC + 40 LOC CSS |
-| Bidirectional contradiction at canonicalize + writer prompt hook | ~80 LOC |
-| `wikify lint --bundle` command | ~250 LOC |
-| Bundle `_attachments/` symlink pass + See-also appender | ~80 LOC |
-| Corpus `index.md` / `hot.md` / `log.md` | ~120 LOC |
-| Corpus `entities/` + `concepts/` + `figures/` derivations | ~180 LOC |
-| Cross-vault footnote wikilink post-render pass | ~60 LOC |
-| Frontmatter additions (`status`, `bibkeys`, counts) | ~40 LOC |
-| Per-page write-with-revise subagent + pipeline hook | ~120 LOC |
-| `/wikify` router skill | ~60 LOC skill file |
-| `wikify readme` command (or fold into `html`) | ~40 LOC |
-
-Total ~1300 LOC, no changes to the scientific core.
-
-### Explicitly not adopted
-
-- PostToolUse auto-commit of every wiki edit — noisy history, rejected.
-- Replacing the Wikipedia-style HTML with an Obsidian-only surface —
-  Obsidian is additive.
-- `hot.md` / `runs.md` as the sole state carrier — the structured
-  JSONs stay authoritative for reproducibility.
-- Spawning a subagent per page just to parallelise single-call writes
-  — parallelism belongs at the dispatch layer. Subagent isolation is
-  reserved for multi-turn per-page logic (write-with-revise).
-- Wikilinks in body prose — conflicts with the Wikipedia-voice rule.
-  Graph edges come from frontmatter + a See-also section.
+These can improve inspection and iteration, but they should not block
+the first trustworthy strategy-comparison run.
 
 ## Open decisions
 
-1. **Ablation scope for first run.** 5 anchor cells at 3 budgets × 3
-   seeds = 45 runs vs. full 33-cell ablation (+66 runs).
-2. **Baseline.** Include `baselines/pipeline.py` in the first study or
-   defer.
-3. **PageRank fix direction.** (a) `cites ∪ doc_similar`,
-   (b) personalised PageRank on corpus, (c) accept flat and document.
-   Lean (a).
-4. **Replay viewer target.** Static panels only, GIF/mp4 as well, or
+1. **Replay viewer target.** Static panels only, GIF/mp4 as well, or
    interactive HTML on top.
-5. **Bootstrap.** Implement abstract sweep, or pin current and update
-   `docs/strategies.md`.
-6. **Obsidian overlay rollout.** Ship all 9 patterns at once, or start
-   with the cheap three (`hot.md`, `runs.md`, callouts) and gate the
-   rest on reviewer feedback.
+   Decision: static panels plus animation; interactive HTML remains
+   optional stretch work.
+2. **Bootstrap side experiment timing.** Seeded bootstrap is optional for
+   now and is not a near-term blocker. Get the main comparison working
+   first; revisit seeded bootstrap after the core pipeline is in place.
