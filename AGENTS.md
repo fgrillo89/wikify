@@ -135,10 +135,9 @@ wikify.cli query    --bundle <> "question"
   request.** Do not "improve" adjacent code, comments, or
   formatting. Do not refactor what is not broken. Match existing
   style. Every changed line should trace directly to the request.
-- **Code YOUR change orphaned: delete in the same commit.** No
-  exceptions. Dangling references mislead future readers.
 - **Pre-existing dead code or nearby smells: leave them alone.**
   Mention only if they block the task or the user should know.
+  (Orphans caused BY your change are handled under Blast radius.)
 
 ### Blast radius
 
@@ -152,15 +151,30 @@ flag, module removal):
 2. **Amend every caller in the same commit.** A PR that changes a
    signature and leaves callers broken is a bug. A skill or doc that
    points at a deleted helper is a bug.
-3. **Delete code orphaned by this change in the same commit.** Do
-   not leave "fallback" files behind.
+3. **Delete orphans in the same commit.** If your change makes a
+   helper, branch, test fixture, file, or module unused, delete it.
+   Also remove imports, variables, and functions your change made
+   unused. No "fallback" files left behind (see No dead versioning).
 4. **Name the radius in the commit body.** One sentence: "Touches
    X, Y, Z; no other callers." If you can't name it, you don't know
    what you changed.
 
+### Parallelism
+
+Use subagents whenever the task is parallelisable: independent file
+reads, broad codebase searches, multi-target audits, independent tool
+calls. Dispatch them in a single message so they run concurrently. Do
+not serialize work that has no data dependency.
+
 ---
 
 ## Architecture Style
+
+SOLID applies at every seam: single responsibility per unit, open/closed
+where extension is a real requirement, substitutability at interface
+boundaries, narrow interfaces over fat ones, depend on abstractions at
+adapter seams. The bullets below are the wikify-specific expression of
+these.
 
 - **Locality of behaviour.** Code that changes together lives together.
 - **One data table + one factory** over scattered one-line modules or
@@ -224,7 +238,6 @@ Do NOT:
 - introduce a `Preset` layer that maps 1:1 to `Config`;
 - store `model_id` on `StrategyConfig` (routing is by `ModelTier`; no
   `model_id_for_tier()` helper);
-- put executable config / factory logic in `__init__.py`;
 - add field guides, artifact templates, mode selection, prompt names,
   or CLI-only flags to `StrategyConfig` — those are run parameters or
   adapter concerns.
