@@ -18,6 +18,8 @@ import re
 from collections.abc import Iterable
 
 from ..models import Chunk
+from .abstract_tagger import tag_abstracts
+from .boilerplate import is_boilerplate
 from .config import (
     MIN_CHUNK_ALNUM,
     MIN_CHUNK_CHARS,
@@ -167,6 +169,19 @@ def chunk_document(
                 ord_ += 1
 
     _apply_conclusion_fallback(chunks)
+    # Soft boilerplate flag: chunks survived the aggressive
+    # ``_is_boilerplate_chunk`` filter above (which drops obvious
+    # publisher license blocks). The soft flag set here marks
+    # remaining admin / journal-end-matter chunks (thesis copyright
+    # preambles, "Reprints and permissions / Peer review information"
+    # footers) so the fluent KG API can hide them by default. Flagged
+    # chunks are kept in the corpus so downstream eval / debugging can
+    # still see them.
+    for c in chunks:
+        c.is_boilerplate = is_boilerplate(c.text)
+    # Tag the canonical abstract chunk (sets section_type='abstract'
+    # on exactly one chunk per doc that has body content). Idempotent.
+    tag_abstracts(chunks)
     return chunks
 
 

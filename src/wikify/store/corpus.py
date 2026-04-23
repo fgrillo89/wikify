@@ -170,6 +170,7 @@ def _chunk_to_dict(c: Chunk) -> dict:
         "section_path": c.section_path,
         "section_type": c.section_type,
         "equation_ids": list(c.equation_ids or []),
+        "is_boilerplate": c.is_boilerplate,
     }
 
 
@@ -183,6 +184,7 @@ def _chunk_from_dict(d: dict) -> Chunk:
         section_path=d["section_path"],
         section_type=d.get("section_type", "body"),
         equation_ids=list(d.get("equation_ids") or []),
+        is_boilerplate=bool(d.get("is_boilerplate", False)),
     )
 
 
