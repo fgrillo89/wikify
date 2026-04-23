@@ -325,9 +325,9 @@ def run_baseline(
         equations_index=equations_index,
     )
 
-    pages = [p for p in pages if p.evidence]
-    pages = crosslink(pages)
-    for page in pages:
+    drafted_pages = [p for p in pages if p.evidence and p.body_markdown.strip()]
+    drafted_pages = crosslink(drafted_pages)
+    for page in drafted_pages:
         page.provenance = {
             **(page.provenance or {}),
             "condition": "baseline",
@@ -336,8 +336,8 @@ def run_baseline(
             "seed_doc_ids": seed_doc_ids,
         }
         write_page_file(bundle, page)
-    build_index(bundle, pages).save()
-    rebuild_wiki_graph(bundle, pages)
+    build_index(bundle, drafted_pages).save()
+    rebuild_wiki_graph(bundle, drafted_pages)
     meter.write_snapshot(bundle.run_path)
 
     snapshot = json.loads(bundle.run_path.read_text(encoding="utf-8"))
@@ -358,11 +358,11 @@ def run_baseline(
     snapshot["baseline_write_fraction"] = cfg.write_fraction
     snapshot["min_evidence_chunks"] = cfg.min_evidence_chunks
     snapshot["skipped_thin_pages"] = skipped_thin
-    snapshot["n_pages_written"] = len(write_pages)
+    snapshot["n_pages_written"] = len(drafted_pages)
     snapshot["write_rejections"] = write_rejections
     snapshot["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
     bundle.run_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    return pages
+    return drafted_pages
 
 
 # -- Default brief (no editor pass) ---------------------------------------

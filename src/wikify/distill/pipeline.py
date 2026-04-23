@@ -822,7 +822,9 @@ def _finalize_pages(
     Person candidates come from the extractor (kind='person' entries).
     No deterministic author-page generation; the writer produces all prose.
     """
-    pages = [p for p in pages if p.evidence]
+    # Only persist drafted pages. Candidate pages that were budget-truncated
+    # or rejected by the writer must not leak into the bundle as blank stubs.
+    pages = [p for p in pages if p.evidence and p.body_markdown.strip()]
     pages = crosslink(pages)
     for page in pages:
         page.provenance = updated_page_provenance(

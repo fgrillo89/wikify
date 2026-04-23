@@ -42,6 +42,7 @@ from wikify.ingest.pipeline import ingest_corpus
 from wikify.meter import CostMeter
 from wikify.paths import BundlePaths, CorpusPaths
 from wikify.schema import WriteRequest, WriteResponse
+from wikify.store.wiki_bundle import load_bundle
 from wikify.types import Role, Writer
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
@@ -138,9 +139,24 @@ class _CostTunedWriter(Writer):
             f"# {request.title}\n\n"
             f"## Definition\n\n"
             f"{request.title} is a placeholder for the budget reservation test[^{m1}].\n\n"
-            f"## Background\n\n"
-            f"Additional context grounded in evidence[^{m_last}].\n\n"
-            f"## References\n\n"
+            "## Background\n\n"
+            + (
+                f"Additional context grounded in evidence[^{m_last}]. "
+                "This deterministic test writer pads the article so it clears "
+                "the real structural validator without changing the tuned token "
+                "cost assumptions used by the budget test. "
+            )
+            * 12
+            + "\n\n"
+            + "## Discussion\n\n"
+            + (
+                f"The budget test needs one valid drafted page before later "
+                f"pages are truncated by the write reserve logic[^{m1}]. "
+                "These sentences are filler for validator realism only. "
+            )
+            * 10
+            + "\n\n"
+            + "## References\n\n"
             + "\n".join(
                 f"[^{m}]: {ev.quote or 'supporting quote'} ({ev.doc_id})"
                 for m, ev in zip(used, request.evidence, strict=False)
@@ -222,3 +238,10 @@ def test_budget_reservation(corpus, tmp_path):
         "Expected at least one successful write call; "
         f"writer_agg={writer_agg}, write_rejections={rejections}"
     )
+
+    # 4. Only successfully drafted pages should be persisted. Budget-truncated
+    #    pages must not leak into the bundle as blank stubs.
+    loaded = load_bundle(bundle.root)
+    assert loaded.pages, "Expected at least one drafted page in the bundle"
+    assert all(p.body_clean.strip() for p in loaded.pages)
+    assert len(loaded.pages) == writer_agg.get("calls", 0)
