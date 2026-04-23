@@ -197,6 +197,54 @@ def test_cites_edges_when_bibkey_differs_from_doc_id():
     assert g.nodes["[2020 X] Paper A_abcdef"].get("kind") == "corpus"
 
 
+def test_pagerank_uses_only_corpus_to_corpus_cites():
+    """PageRank must be strict corpus-to-corpus citation centrality.
+
+    Edges to ``cited`` (external) source nodes must NOT participate; only
+    ``corpus -> corpus`` CITES contribute. See
+    docs/distill-test-readiness.md, Issue 1.
+    """
+    a = _doc("corpus_a", "Corpus A", doi="10.0/a")
+    b = _doc(
+        "corpus_b", "Corpus B",
+        citations=[
+            CitationEntry(ord=0, raw_text="Corpus A 2020.", doi="10.0/a"),
+            CitationEntry(ord=1, raw_text="External 2021.", doi="10.9/x"),
+        ],
+        cites=["corpus_a"],
+    )
+    docs = [a, b]
+    doc_bibkeys = {"corpus_a": "corpus_a", "corpus_b": "corpus_b"}
+    external = {
+        "ref_ext_2021": {
+            "bibkey": "ref_ext_2021", "kind": "reference",
+            "title": "External 2021", "year": 2021, "doi": "10.9/x",
+            "authors": ["X. Author"],
+        },
+    }
+    index = _citation_index(
+        docs,
+        doc_bibkeys=doc_bibkeys,
+        doc_citations={"corpus_b": ["corpus_a", "ref_ext_2021"]},
+        external_entries=external,
+    )
+
+    kg = build_knowledge_graph(docs, [], vectors=None, citation_index=index)
+    g = kg._backend.G
+
+    # External cited node MUST exist but MUST NOT have a pagerank score.
+    assert g.nodes["ref_ext_2021"].get("kind") == "cited"
+    assert "pagerank" not in g.nodes["ref_ext_2021"]
+
+    # Both corpus nodes MUST have pageranks summing to 1.0 (within fp tol).
+    pr_a = g.nodes["corpus_a"].get("pagerank")
+    pr_b = g.nodes["corpus_b"].get("pagerank")
+    assert pr_a is not None and pr_b is not None
+    assert abs(pr_a + pr_b - 1.0) < 1e-3
+    # The cited target receives the rank flow, not corpus_b.
+    assert pr_a > pr_b
+
+
 def test_cited_nodes_are_not_isolated_when_cited():
     """No cited node should be isolated if at least one corpus paper cites it."""
     citing = _doc(
