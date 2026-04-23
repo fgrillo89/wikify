@@ -518,17 +518,17 @@ matched by bibkey via `citation_index.doc_bibkeys`.
 uv run python -m wikify.cli ingest <input_dir> --out <corpus_dir>
 
 # Distill (preset)
-uv run python -m wikify.cli distill --preset scripted-mixed --budget 1x --seed 0 \
+uv run python -m wikify.cli distill --preset balanced --budget 1x --seed 0 \
   --corpus <corpus_dir> --bundle <bundle_dir>
 
 # Distill (manual)
-uv run python -m wikify.cli distill --strategy M --mode guided --guided-tools navigate \
+uv run python -m wikify.cli distill --strategy balanced --mode guided --guided-tools full \
   --budget 1x --seed 0 --corpus <corpus_dir> --bundle <bundle_dir>
 
-# Study
+# Study (canonical small-scale comparison)
 uv run python -m wikify.cli study \
-  --presets scripted-mixed,guided-navigate,guided-full \
-  --include-baseline --budgets 1x --seeds 0,1,2
+  --presets baseline,balanced,guided \
+  --budgets 0.1x,1x,3x --seeds 0
 
 # Eval
 uv run python -m wikify.cli eval --bundle <bundle_dir> --corpus <corpus_dir>

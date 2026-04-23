@@ -151,7 +151,7 @@ not materialized edges. Each operator lives at exactly one level:
 | `similarity_walk` | chunk | walks similar chunks (vector search) / `co_section` |
 | `refine_uncertain` | chunk | uncertainty is per-chunk |
 | `uniform` (global) | **doc-then-chunk** | pick a doc, then read 3 chunks (abstract + top-2 by vector similarity). Pure chunk-uniform is dominated by long documents. |
-| `pagerank` (global) | **doc-then-chunk** | PageRank lives on `cites` / `doc_similar`; once a doc is picked, the same per-doc rule applies. |
+| `pagerank` (global) | **doc-then-chunk** | PageRank is strict corpus-to-corpus citation centrality (CITES edges where both endpoints are `kind=corpus`). Similarity edges may guide traversal but never participate in centrality. Once a doc is picked, the per-doc abstract+top-2 rule applies. |
 | `coverage_gap` (global) | chunk | the M1 residual is per-chunk; doc-level averages destroy the gradient. |
 | `figures` (global) | chunk | targets high-residual caption chunks from the caption heap. |
 
@@ -243,9 +243,24 @@ the priority-fill envelope's pool ceilings.
 
 When the wiki is empty, `local_op` is undefined. The first round of any
 strategy uses `global_op` only (forced `jump_rate = 1`) until the wiki
-has at least one concept page with evidence. The bootstrap rule is
-fixed: an abstract sweep — one chunk per doc (the abstract chunk) — for
-the smallest possible scaffold to anchor subsequent walks.
+has at least one concept page with evidence. There is **no implicit
+abstract sweep**: the explorer just falls through to its configured
+`global_op`, and the first picks land on whatever that operator selects.
+
+For controlled comparisons that need a shared scaffold, use the
+explicit, optional **seeded bootstrap** in `distill/seed.py`
+(`select_seeded_bootstrap`):
+
+- one abstract-equivalent chunk per selected document,
+- documents picked by the greedy submodular objective
+  `0.7 · pr_norm(d) + 0.3 · coverage_gain(d | S)` over corpus-citation
+  PageRank and mean-pooled document embeddings,
+- hard cap from a budget allocation (not "all abstracts in corpus"),
+- the same seeded set across every condition being compared.
+
+Seeded bootstrap is **off by default** for the small-scale comparison
+table (`baseline / balanced / guided`); turn it on as a side
+experiment, never as the silent default.
 
 ## Axis B — Budget allocator
 
@@ -270,22 +285,47 @@ Drop candidate concepts whose normalised title already exists as a wiki
 page id or alias. Always-on by default; toggled only as an ablation.
 Reported as a column on every run, not as a study axis.
 
-## The four anchor cells
+## The small-scale comparison table
 
-Three deterministic anchors plus one model-driven cell. Each is one
-specific point in the seven-knob space.
+Canonical naming for the first run lives in
+`docs/distill-test-readiness.md`. Three conditions, all on the same
+`60 / 35 / 5` extract / write / curate split with `extract=S, write=M,
+edit=M, compact=S`:
 
-| Cell | explorer                                      | schedule         | tiering | One-line interpretation |
-|------|-----------------------------------------------|------------------|---------|-------------------------|
-| **E** explore | `(none, pagerank, 1.0)`                  | `(0.2, static)`   | `(S, S)` | breadth-first cheap floor |
-| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.65, adaptive)` | `(S, M)` | the Levy + Bayesian-opt prescription; the headline candidate |
-| **X** exploit | `(similarity_walk, none, 0.0)`           | `(0.6, static)`   | `(M, M)` | depth-first quality ceiling |
-| **agent**     | model-driven (replaces axes A and B)     | - | `(orchestrate=L, extract=S, write=M)` | upper reference for state-leverage; one expensive model in a planning loop |
+| Cell | explorer                                      | schedule           | tiering | One-line interpretation |
+|------|-----------------------------------------------|--------------------|---------|-------------------------|
+| **baseline** | abstract-first source-grounded; no nav loop | `(0.35, static)` | `(S, M)` | non-agentic reference; PageRank+submodular seed selection plus plain similarity retrieval |
+| **balanced** | `(similarity_walk, coverage_gap, 0.1)`     | `(0.35, static)` | `(S, M)` | scripted Levy + coverage_gap; the headline scripted candidate |
+| **guided**   | guided mode over the `balanced` explorer    | `(0.35, static, mutable)` | `(S, M)` start; orchestrator may `set_tier`/`set_allocation` | model-driven exploration and budget allocation |
 
-`E` is the cost floor; `X` is the quality ceiling; `M` is the literature-
-blessed middle and the candidate the study expects to win; `agent` is the
-upper reference that tells us how much the deterministic loop is leaving
-on the table.
+Follow-on conditions (`no-navigation`, `high-exploration`,
+`high-exploitation`) require code work and are deferred. The legacy
+`E / M / X` rows below stay only as migration aliases and should not be
+used for new comparisons.
+
+## Legacy anchor cells
+
+| Cell | explorer                                      | schedule         | tiering | Status |
+|------|-----------------------------------------------|------------------|---------|--------|
+| **E** explore | `(none, pagerank, 1.0)`                  | `(0.2, static)`   | `(S, S)` | legacy alias; close to follow-on `high-exploration` |
+| **M** mixed   | `(similarity_walk, coverage_gap, 0.1)`   | `(0.65, adaptive)` | `(S, M)` | legacy alias; superseded by `balanced` (fixed split) |
+| **X** exploit | `(similarity_walk, none, 0.0)`           | `(0.6, static)`   | `(M, M)` | legacy alias; close to follow-on `high-exploitation` |
+| **agent**     | model-driven (replaces axes A and B)     | - | `(orchestrate=L, extract=S, write=M)` | upper reference; superseded by `guided` for the small-scale run |
+
+### Guided `write_now` and the write reserve
+
+The standard pipeline holds 95% of the planned write budget off-limits
+during the extract loop so the write phase always has headroom. Guided
+mode's mid-session `write_now` runs through `_run_write_pass` with its
+own `1.05 × budget` guard, which means the orchestrator can spend the
+reserved write headroom before the final write pass.
+
+This is **accepted treatment for `guided`** (see
+`docs/distill-test-readiness.md`, Issue 6). The scripted / baseline
+conditions keep the strict reserve; the guided treatment is, by design,
+allowed to re-time spending via `write_now`. Cross-condition reports
+should record the per-run reserve consumption rather than treat the
+divergence as a bug.
 
 ### The agent cell
 
@@ -357,7 +397,7 @@ These are not study knobs. They are fixed at config time.
 | `RESPONSE_RESERVE` | 8K | context envelope |
 | `chunks_per_landed_doc` | 3 | explorer |
 | `dedup_after_extract` (default) | `on` | extract pipeline |
-| `bootstrap_rule` | abstract sweep | explorer |
+| `bootstrap_rule` | none by default (seeded bootstrap is explicit + optional; see `distill/seed.py`) | explorer |
 | `cost meter abort threshold` | 1.05 x budget | cost meter |
 | `live status interval` | 10 calls or 5 seconds | cost meter |
 | `extractor cache key` | `(model_id, prompt_hash, chunk_id)` | cache |

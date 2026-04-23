@@ -28,7 +28,7 @@ Same prompt stack as the normal pipeline (field guide + artifact template
 + style guide) so output format is comparable.
 
 ```bash
-wikify study --presets scripted-mixed --include-baseline --budgets 1x --seeds 0
+wikify study --presets balanced --include-baseline --budgets 1x --seeds 0
 ```
 
 ### Normal mode (parametric)
@@ -68,25 +68,28 @@ wikify distill --mode guided --guided-tools full --budget 1x
 
 ### Named presets
 
-Stored in `src/wikify/distill/strategy.py` as `STRATEGY_CONFIGS`. Each
-preset is a point in the strategy parameter space:
+Stored in `src/wikify/distill/strategy.py` as `PRESET_CONFIGS`. The
+small-scale run uses the canonical three:
 
 | Preset | Mode | Strategy | Guided tools | Budget allocator |
 |--------|------|----------|--------------|------------------|
-| `scripted-explore` | scripted | E (PageRank, no local, jump_rate=1.0) | -- | Static 20% exploit |
-| `scripted-mixed` | scripted | M (similarity_walk + coverage_gap, jump_rate=0.1) | -- | Adaptive 65% exploit |
-| `scripted-exploit` | scripted | X (similarity_walk only, jump_rate=0.0) | -- | Static 60% exploit |
-| `guided-navigate` | guided | M (fallback) | navigate | Adaptive 65% exploit |
-| `guided-full` | guided | M (fallback) | full | Adaptive 65% exploit (model can override) |
+| `baseline` | baseline pipeline (`baselines/pipeline.py`) | balanced (tiers + split only) | -- | Static 35% exploit (60/35/5 split, 1/3 abstract seeding + 2/3 evidence retrieval) |
+| `balanced` | scripted | balanced (similarity_walk + coverage_gap, jump_rate=0.1) | -- | Static 35% exploit (60/35/5 split) |
+| `guided` | guided | balanced (fallback) | full | Static 35% exploit; orchestrator may re-time via `set_allocation` and `write_now` |
+
+The legacy preset aliases (`scripted-mixed`, `guided-full`,
+`scripted-explore`, `scripted-exploit`, `guided-navigate`) and the
+legacy `E` / `M` / `X` strategy ids have been removed. See
+`docs/distill-test-readiness.md` for the historical migration map.
 
 Presets are convenience shortcuts. All parameters can be overridden:
 
 ```bash
-# Use a preset
-wikify distill --preset guided-navigate --budget 1x
+# Use a canonical preset
+wikify distill --preset guided --budget 1x
 
 # Override tiers on a preset
-wikify distill --preset scripted-mixed --extract-tier M --budget 1x
+wikify distill --preset balanced --extract-tier M --budget 1x
 ```
 
 ## Budget and convergence
@@ -217,7 +220,7 @@ Multi-turn file-based dispatch for tool-calling:
 
 ```bash
 wikify study \
-  --presets scripted-mixed,guided-navigate,guided-full \
+  --presets baseline,balanced,guided \
   --include-baseline \
   --budgets 3x \
   --seeds 0,1,2 \
@@ -259,5 +262,5 @@ wikify study \
 4. Unit test: tool-calling dispatch with mock orchestrator
 5. Unit test: write_now mid-session (empty + non-empty candidates)
 6. Unit test: convergence detection
-7. Smoke: `wikify distill --preset scripted-mixed --budget 0.1x --seed 0`
-8. Smoke: `wikify study --presets scripted-mixed,guided-navigate --include-baseline --budgets 0.1x --seeds 0`
+7. Smoke: `wikify distill --preset balanced --budget 0.1x --seed 0`
+8. Smoke: `wikify study --presets baseline,balanced,guided --budgets 0.1x --seeds 0`
