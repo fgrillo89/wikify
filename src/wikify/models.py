@@ -111,6 +111,13 @@ class Chunk:
     # full document markdown — gives the extract handler equation context
     # in addition to the chunk text.
     equation_ids: list[str] = field(default_factory=list)
+    # Soft flag set at ingest by ``ingest.boilerplate.is_boilerplate``:
+    # True for chunks dominated by legal / journal-end-matter language
+    # (thesis copyright preambles, "Reprints and permissions / Peer
+    # review information" footers, etc.). The fluent ``KnowledgeGraph``
+    # API filters these out by default; consumers that want to see them
+    # pass ``include_boilerplate=True``.
+    is_boilerplate: bool = False
     # embedding lives in the vector store, keyed by id
 
 
