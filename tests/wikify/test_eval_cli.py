@@ -27,7 +27,7 @@ def test_eval_cli_writes_report(tmp_path):
         run_id="M_1x_seed0",
         events_path=bundle.calls_path,
     )
-    cfg = build_strategy("M", seed=0)
+    cfg = build_strategy("balanced", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

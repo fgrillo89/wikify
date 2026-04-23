@@ -1,4 +1,4 @@
-"""End-to-end smoke test: ingest -> distill (E, M, X) -> eval, all under fake binding."""
+"""End-to-end smoke test: ingest -> distill (balanced) -> eval, all under fake binding."""
 
 from pathlib import Path
 
@@ -31,7 +31,7 @@ def corpus(tmp_path_factory) -> CorpusPaths:
     return ingest_corpus(FIXTURE, out)
 
 
-@pytest.mark.parametrize("strategy", ["E", "M", "X"])
+@pytest.mark.parametrize("strategy", ["balanced"])
 def test_distill_produces_bundle(strategy, corpus, tmp_path):
     from .fakes import FakeExtractor, FakeWriter
 
@@ -102,10 +102,12 @@ def test_heaps_over_seeds(corpus, tmp_path):
 
     bundles = []
     for i, budget in enumerate([5_000.0, 10_000.0, 20_000.0]):
-        bundle = BundlePaths(root=tmp_path / f"M_b{i}")
+        bundle = BundlePaths(root=tmp_path / f"balanced_b{i}")
         cache = ExtractCache(root=tmp_path / f"cache_{i}")
-        meter = CostMeter(budget_haiku_eq=budget, run_id=f"M_b{i}", events_path=bundle.calls_path)
-        cfg = build_strategy("M", seed=i)
+        meter = CostMeter(
+            budget_haiku_eq=budget, run_id=f"balanced_b{i}", events_path=bundle.calls_path
+        )
+        cfg = build_strategy("balanced", seed=i)
         pipeline_run(
             corpus=corpus,
             bundle=bundle,

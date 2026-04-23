@@ -31,6 +31,12 @@ if TYPE_CHECKING:
 
 GuidedTools = Literal["navigate", "full"]
 
+# ``ModeName`` is defined early so PresetConfig can reference it. The
+# build_mode dispatch only knows about ``scripted`` / ``guided``;
+# ``baseline`` is a CLI-level routing flag that sends the run through
+# ``baselines/pipeline.py`` instead of the LevyExplorer pipeline.
+ModeName = Literal["scripted", "guided", "baseline"]
+
 # Tool-set constants for guided mode (study-design.md §Tool filtering).
 # Includes both the explorer action vocabulary (pick_chunks, walk_local,
 # jump_*) used by the current single-turn orchestrator AND the KG tool
@@ -121,38 +127,25 @@ class StrategyConfig:
 
 
 STRATEGY_CONFIGS: dict[str, dict[str, Any]] = {
-    StrategyId.EXPLORE.value: dict(
-        name="E",
-        explorer=LevyExplorer(
-            local_op=LocalOp.NONE,
-            global_op=GlobalOp.PAGERANK,
-            jump_rate=1.0,
-        ),
-        budget=StaticBudget(exploit_fraction=0.2),
-        extract_tier=ModelTier.SMALL,
-        write_tier=ModelTier.SMALL,
-    ),
-    StrategyId.MIXED.value: dict(
-        name="M",
+    # ``balanced`` is the canonical scripted condition for the small-scale
+    # study: mixed explorer (similarity_walk + coverage_gap, jump_rate=0.1)
+    # with a fixed 60/35/5 extract/write/curate split and S/M/M/S tiers.
+    # The fixed allocator makes cross-condition comparisons clean; guided
+    # remains the only adaptive-allocation condition (via set_allocation).
+    # Follow-on slots (``high-exploration``, ``high-exploitation``,
+    # ``no-navigation``) will land here when they are implemented.
+    StrategyId.BALANCED.value: dict(
+        name="balanced",
         explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,
             jump_rate=0.1,
         ),
-        budget=AdaptiveBudget(exploit_fraction_initial=0.65),
+        budget=StaticBudget(exploit_fraction=0.35),
         extract_tier=ModelTier.SMALL,
         write_tier=ModelTier.MEDIUM,
-    ),
-    StrategyId.EXPLOIT.value: dict(
-        name="X",
-        explorer=LevyExplorer(
-            local_op=LocalOp.SIMILARITY_WALK,
-            global_op=GlobalOp.UNIFORM,  # never used: jump_rate=0
-            jump_rate=0.0,
-        ),
-        budget=StaticBudget(exploit_fraction=0.6),
-        extract_tier=ModelTier.MEDIUM,
-        write_tier=ModelTier.MEDIUM,
+        edit_tier=ModelTier.MEDIUM,
+        compact_tier=ModelTier.SMALL,
     ),
 }
 
@@ -171,13 +164,33 @@ class PresetConfig:
     allowed_tools: frozenset[str] | None  # None for scripted modes
 
 
+# Canonical study surface for the small-scale run (see
+# docs/distill-test-readiness.md). The main comparison table is exactly
+# ``baseline`` / ``balanced`` / ``guided``; everything else is either a
+# follow-on slot or a legacy alias kept only for migration.
+#
+# - ``baseline``: abstract-first, source-grounded retrieve-and-synthesise.
+#   No active navigation loop, no graph walk after each read; same default
+#   tiers and 60/35/5 split as ``balanced``. Resolved by the CLI to the
+#   baseline pipeline (``baselines/pipeline.py``), not the LevyExplorer
+#   loop. ``strategy_id`` here is set to ``balanced`` only so callers that
+#   inspect the strategy config (e.g., for tier defaults) see a coherent
+#   view; the explorer is never invoked.
+# - ``balanced``: scripted mixed explorer with fixed 60/35/5 split.
+# - ``guided``: guided mode over the same base as ``balanced``, full tools
+#   (set_allocation, set_tier, done, write_now, ...). The only adaptive-
+#   allocation condition; ``write_now`` may dip into the reserved write
+#   headroom — accepted as part of the guided treatment.
 PRESET_CONFIGS: dict[str, dict[str, Any]] = {
-    "scripted-explore": dict(strategy_id="E", mode="scripted", guided_tools=None),
-    "scripted-mixed": dict(strategy_id="M", mode="scripted", guided_tools=None),
-    "scripted-exploit": dict(strategy_id="X", mode="scripted", guided_tools=None),
-    "guided-navigate": dict(strategy_id="M", mode="guided", guided_tools="navigate"),
-    "guided-full": dict(strategy_id="M", mode="guided", guided_tools="full"),
+    "baseline": dict(strategy_id="balanced", mode="baseline", guided_tools=None),
+    "balanced": dict(strategy_id="balanced", mode="scripted", guided_tools=None),
+    "guided": dict(strategy_id="balanced", mode="guided", guided_tools="full"),
 }
+
+# Names that the CLI / study driver should advertise as canonical. Other
+# entries in PRESET_CONFIGS resolve, but are not surfaced as primary
+# choices for the small-scale run.
+CANONICAL_PRESETS: tuple[str, ...] = ("baseline", "balanced", "guided")
 
 
 def build_preset(preset_id: str, *, seed: int = 0) -> PresetConfig:
@@ -194,8 +207,6 @@ def build_preset(preset_id: str, *, seed: int = 0) -> PresetConfig:
 
 
 # ---- Section 3: Run mode (was policy.py) ---------------------------------
-
-ModeName = Literal["scripted", "guided"]
 
 
 @dataclass

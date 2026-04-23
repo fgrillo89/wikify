@@ -26,7 +26,6 @@ budgets are exhausted.
 import dataclasses
 import json
 import random
-import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -48,15 +47,11 @@ from ..prompts import (
 from ..prompts.registry import _content_hash
 from ..schema import (
     EditorBrief,
-    EquationRef,
     ExtractRequest,
-    FigureCaption,
-    ImageRef,
     QuoteNotInChunkError,
     WriteRequest,
     WriteResponse,
 )
-from ..store.images_index import ImageRecord
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from ..types import Compactor, Editor, Extractor, Orchestrator, Writer
@@ -75,6 +70,21 @@ from .explorer import (
     build_snapshot,
     init_coverage_state,
     restore_coverage_state,
+)
+from .extract_request import (
+    equations_for_chunk as _equations_for_chunk,
+)
+from .extract_request import (
+    figure_captions_for_chunk as _figure_captions_for_chunk,
+)
+from .extract_request import (
+    normalize_title as _normalize_title,
+)
+from .extract_request import (
+    resolve_citation_refs as _resolve_citation_refs,
+)
+from .extract_request import (
+    to_imageref as _to_imageref,
 )
 from .iteration import (
     append_run_history,
@@ -96,13 +106,15 @@ from .strategy import (
 )
 from .write_prep import (
     WriteRequestConfig,
-    build_write_request,
     crosslink,
     is_writable_page,
     load_pages_manifest,
     save_pages_manifest,
     save_write_requests,
 )
+from .write_runner import append_verbalize as _append_verbalize
+from .write_runner import rebuild_wiki_graph as _rebuild_wiki_graph
+from .write_runner import run_write_pass as _run_write_pass
 
 Phase = Literal["all", "extract", "write"]
 Iteration = Literal["create", "refine", "merge"]
@@ -110,74 +122,6 @@ Iteration = Literal["create", "refine", "merge"]
 
 EXTRACT_PROMPT = load_prompt("wikify/extract").name
 WRITE_PROMPT = load_prompt("wikify/write").name
-
-
-def _run_write_pass(
-    pages: list,
-    max_concepts: int,
-    writer: Writer,
-    meter: CostMeter,
-    strategy: StrategyConfig,
-    bundle: BundlePaths,
-    briefs: dict,
-    dossier_store: DossierStore,
-    chunks_by_id: dict,
-    images_index: object,
-    write_req_cfg: WriteRequestConfig,
-    author_ctx: dict,
-    citation_index: dict,
-    knowledge_graph: object,
-    budget_haiku_eq: float,
-    verbalize: bool,
-    write_rejections: list[dict],
-    equations_index: object | None = None,
-) -> None:
-    """Run a write pass over pages. Used both at end-of-extraction and mid-session."""
-    avg_write_cost = 30_000.0
-    n_writes_completed = 0
-    try:
-        for page in pages[:max_concepts]:
-            if not is_writable_page(page):
-                continue
-            if meter.spent_haiku_eq + avg_write_cost > budget_haiku_eq * 1.05:
-                write_rejections.append({"page_id": page.id, "reason": "budget_truncated"})
-                continue
-            spent_before = meter.spent_haiku_eq
-            req = build_write_request(
-                page,
-                pages,
-                briefs,
-                dossier_store,
-                chunks_by_id,
-                images_index,
-                write_req_cfg,
-                author_ctx,
-                citation_index,
-                knowledge_graph=knowledge_graph,
-                equations_index=equations_index,
-            )
-            try:
-                resp = writer.write(req)
-            except ValidationError as exc:
-                sys.stderr.write(
-                    f"[{meter._run_id}] writer REJECTED page={page.id!r}: "  # noqa: SLF001
-                    f"{type(exc).__name__}: {str(exc)[:200]}\n"
-                )
-                write_rejections.append({"page_id": page.id, "error": str(exc)[:500]})
-                continue
-            page.body_markdown = resp.body_markdown
-            page.equations = [eq.model_dump() for eq in resp.equations]
-            if verbalize:
-                _append_verbalize(
-                    bundle, meter._run_id, "write", page.id, resp.reasoning  # noqa: SLF001
-                )
-            call_cost = meter.spent_haiku_eq - spent_before
-            n_writes_completed += 1
-            avg_write_cost = (
-                avg_write_cost * (n_writes_completed - 1) + call_cost
-            ) / n_writes_completed
-    except BudgetExceededError:
-        pass
 
 
 def run(
@@ -524,13 +468,20 @@ def run_with_preloaded(
             extract_many = getattr(extractor, "extract_many", None)
             if extract_many is not None:
                 # Parallel dispatch: fire all requests, collect responses.
-                # Per-chunk rejections must NOT crash the run; collect responses
-                # then process each. extract_many raises on batch-level failure.
+                # extract_many returns ONLY successful responses (errored
+                # slots get .error.json files for diagnosis but are not
+                # propagated). Match by chunk_id since the result list
+                # may be shorter than the request list.
                 try:
                     batch_resps = extract_many(batch_reqs)
                 except (ValidationError, QuoteNotInChunkError):
                     batch_resps = []
-                for (cid, ck), resp in zip(batch_chunks, batch_resps):
+                ck_by_id = {cid: ck for cid, ck in batch_chunks}
+                for resp in batch_resps:
+                    cid = resp.chunk_id
+                    ck = ck_by_id.get(cid)
+                    if ck is None:
+                        continue
                     for concept in resp.concepts:
                         candidates.append(
                             Candidate(concept=concept, chunk_id=cid, doc_id=ck.doc_id)
@@ -808,38 +759,6 @@ def _write_prompt_layer_files(bundle: BundlePaths, layers: dict[str, str]) -> No
             path.write_text(text, encoding="utf-8")
 
 
-def _append_verbalize(
-    bundle: BundlePaths,
-    run_id: str,
-    role: str,
-    rid: str,
-    reasoning: str,
-) -> None:
-    """Append one handler-reasoning line to ``_meta/verbalize.jsonl``.
-
-    Called only when the run was invoked with ``verbalize=True`` and
-    the handler populated a non-empty ``reasoning`` field in its
-    response. Silent no-op for empty reasoning so the log stays tight.
-    """
-    if not reasoning:
-        return
-    path = bundle.verbalize_log_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "run_id": run_id,
-        "when": datetime.now(timezone.utc).isoformat(),
-        "role": role,
-        "rid": rid,
-        "reasoning": reasoning,
-    }
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-
-
-def _normalize_title(t: str) -> str:
-    return " ".join(t.lower().split())
-
-
 # --- sampler state -------------------------------------------------------
 
 
@@ -888,230 +807,6 @@ def _build_explorer_state(
     )
     init_coverage_state(state, all_chunk_ids)
     return state
-
-
-def _to_imageref(rec: ImageRecord) -> ImageRef:
-    return ImageRef(
-        id=rec.id,
-        label=rec.label,
-        caption=rec.caption,
-        page=rec.page,
-        path=rec.path,
-        near_chunk_ids=list(rec.near_chunk_ids),
-    )
-
-
-def _resolve_citation_refs(
-    chunk_text: str,
-    doc_id: str,
-    knowledge_graph: object | None,
-) -> list[dict]:
-    """Build citation_refs for an ExtractRequest from the KnowledgeGraph.
-
-    Parses [N] markers from chunk text, then resolves each ordinal to a
-    target source via the KG's ord_refs index. Returns dicts compatible
-    with the ExtractRequest.citation_refs schema.
-    """
-    if knowledge_graph is None:
-        return []
-    from ..citestore.graph import parse_citation_markers
-
-    ords = parse_citation_markers(chunk_text)
-    if not ords:
-        return []
-
-    source_node = knowledge_graph.source(doc_id).first()
-    if not source_node:
-        return []
-
-    ord_refs = source_node.get("ord_refs", {})
-    results: list[dict] = []
-    for n in ords:
-        target_id = ord_refs.get(n)
-        if not target_id:
-            continue
-        target = knowledge_graph.source(target_id).first()
-        if not target:
-            continue
-        results.append({
-            "ord": n,
-            "title": target.get("title", ""),
-            "authors": (target.get("authors") or [])[:3],
-            "year": target.get("year"),
-            "doi": target.get("doi", ""),
-            "in_corpus": target.get("kind") == "corpus",
-            "corpus_doc_id": target_id if target.get("kind") == "corpus" else "",
-        })
-    return results
-
-
-def _equations_for_chunk(chunk: Chunk, docs_by_id: dict[str, Document]) -> list[EquationRef]:
-    """Build the EquationRef list for one chunk's ExtractRequest.
-
-    Pulls ``Document.equations`` for the chunk's parent doc and filters
-    to those whose ``id`` is in ``chunk.equation_ids`` (the chunker
-    binds equations to chunks at ingest time via char_span overlap).
-    Equation order matches ``chunk.equation_ids`` so the model sees
-    them in source order.
-    """
-    if not chunk.equation_ids:
-        return []
-    doc = docs_by_id.get(chunk.doc_id)
-    if doc is None or not doc.equations:
-        return []
-    by_id: dict[str, dict] = {e["id"]: e for e in doc.equations if e.get("id")}
-    out: list[EquationRef] = []
-    for eq_id in chunk.equation_ids:
-        eq = by_id.get(eq_id)
-        if eq is None:
-            continue
-        try:
-            out.append(
-                EquationRef(
-                    id=eq["id"],
-                    latex=str(eq.get("latex") or ""),
-                    type=eq.get("type", "unicode"),
-                    label=eq.get("label"),
-                    context=str(eq.get("context") or ""),
-                )
-            )
-        except Exception:  # noqa: BLE001
-            # Be permissive: a malformed equation record should never
-            # crash the extract pipeline. Skip it and move on.
-            continue
-    return out
-
-
-def _figure_captions_for_chunk(
-    chunk: Chunk,
-    docs_by_id: dict[str, Document],
-    images_index,
-) -> list[FigureCaption]:
-    """Build per-chunk figure captions for ExtractRequest.
-
-    Combines two sources so the model sees every figure that's
-    semantically near the current chunk:
-
-    1. **Binary images** in ``images_index`` whose ``near_chunk_ids``
-       includes ``chunk.id``. These have an ``image_id`` set so the
-       handler knows it can attach the figure as evidence with a real
-       image binary backing it.
-    2. **Body figure refs** (``Document.figure_refs``) whose
-       ``section_path`` matches the chunk's section_path. Caption-only
-       — used when the figure extractor failed to grab the binary but
-       the prose still has a usable caption.
-
-    Caption chunks (``__image__``) skip this entirely — they ARE the
-    image, no need to also link a caption.
-    """
-    sp = list(chunk.section_path or [])
-    if sp and sp[0] == "__image__":
-        return []
-    out: list[FigureCaption] = []
-    seen_keys: set[tuple[str, int, str]] = set()
-
-    # 1. Binary images near this chunk.
-    for rec in images_index.for_doc(chunk.doc_id):
-        if chunk.id not in (rec.near_chunk_ids or ()):
-            continue
-        # Try to derive (kind, num, sub) from the label or stem.
-        stem = rec.id.rsplit("/", 1)[-1]
-        kind, num, sub = _parse_figure_label(rec.label or stem)
-        if num is None:
-            continue
-        key_triple = (kind, num, sub)
-        if key_triple in seen_keys:
-            continue
-        seen_keys.add(key_triple)
-        out.append(
-            FigureCaption(
-                key=_format_figure_key(kind, num, sub),
-                kind=kind,
-                num=num,
-                sub=sub,
-                caption=(rec.caption or "")[:500],
-                image_id=rec.id,
-            )
-        )
-
-    # 2. Body figure_refs in the same section.
-    doc = docs_by_id.get(chunk.doc_id)
-    if doc is not None and doc.figure_refs:
-        for fr in doc.figure_refs:
-            kind = fr.get("kind") or "figure"
-            num = fr.get("num")
-            sub = (fr.get("sub") or "").lower()
-            if num is None:
-                continue
-            key_triple = (kind, int(num), sub)
-            if key_triple in seen_keys:
-                continue
-            # Only surface a body figure_ref when its section_path matches
-            # the chunk's section — otherwise we'd flood every chunk with
-            # every figure in the doc.
-            ref_section = list(fr.get("section_path") or [])
-            if ref_section and sp and ref_section[0] != sp[0]:
-                # Different top-level section: skip.
-                continue
-            seen_keys.add(key_triple)
-            out.append(
-                FigureCaption(
-                    key=fr.get("key") or _format_figure_key(kind, int(num), sub),
-                    kind=kind,
-                    num=int(num),
-                    sub=sub,
-                    caption=str(fr.get("caption") or "")[:500],
-                    image_id=None,
-                )
-            )
-
-    return out
-
-
-_FIGURE_LABEL_RE = re.compile(
-    r"^(?P<kind>fig(?:ure)?|table|scheme|sch)[._\s]*(?P<num>\d+)\s*(?P<sub>[a-z])?",
-    re.IGNORECASE,
-)
-
-
-def _parse_figure_label(s: str) -> tuple[str, int | None, str]:
-    """Parse a label or stem into ``(kind, num, sub)``."""
-    if not s:
-        return ("figure", None, "")
-    m = _FIGURE_LABEL_RE.match(s.strip().lower())
-    if not m:
-        return ("figure", None, "")
-    kind_raw = m.group("kind")
-    kind = "figure" if kind_raw.startswith("fig") else kind_raw
-    return (kind, int(m.group("num")), (m.group("sub") or "").lower())
-
-
-def _format_figure_key(kind: str, num: int, sub: str) -> str:
-    label = "Fig." if kind == "figure" else kind.capitalize()
-    return f"{label} {num}{sub}"
-
-
-def _rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
-    """Build and persist the wiki knowledge graph + page vectors."""
-    from ..embedding import current_backend, embed_passages, embedder_for
-    from ..store.vectors import save_vectors
-    from ..store.wiki_graph import (
-        build_wiki_graph,
-        build_wiki_vectors,
-        save_wiki_graph,
-    )
-
-    # Build uses passage embedding (indexing wiki page bodies); the graph
-    # stores a query-mode callable because search() encodes user queries.
-    wiki_vectors = build_wiki_vectors(pages, embed_passages)
-    backend = current_backend()
-    query_embed = embedder_for(
-        str(backend["backend"]), backend.get("model"), mode="query",
-    )
-    wkg = build_wiki_graph(pages, vectors=wiki_vectors, embed_fn=query_embed)
-    save_wiki_graph(bundle.graph_path, wkg)
-    if wiki_vectors.ids:
-        save_vectors(bundle.wiki_vectors_path, wiki_vectors)
 
 
 def _finalize_pages(
