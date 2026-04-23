@@ -280,10 +280,21 @@ Migration map for current code/doc terminology:
 ### Campaign shape
 
 - corpus: `ald_all_marker` only
-- budgets: `0.1x / 1x / 3x`
+- budgets: `5x / 10x / 30x` (250k / 500k / 1.5M haiku-eq)
 - seed count: 1
 - iterations: `create + refine`
 - bootstrap: off for the main comparison table
+
+The original `0.1x / 1x / 3x` table (5k / 50k / 150k) was sized against
+an obsolete cost model. With actual tier rates (S=1/5, M=3/15, L=15/75
+input/output haiku-eq per token, plus per-call overhead) and realistic
+academic-paper chunk sizes, a single tier-M write call costs ~30-70k
+heq depending on payload. The smallest budget that funds a full
+write-bearing run is roughly `5x = 250k`, which buys ~9 seed extracts,
+~30 evidence extracts, and ~5-7 writes after the baseline's cost
+shaves (capped writer output, no graph-walk bonus context). See the
+budget arithmetic notes in `BaselineConfig` for the per-call cost
+model.
 
 ### Fixed run controls
 
