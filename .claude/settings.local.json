@@ -11,7 +11,8 @@
       "Skill(update-config)",
       "Skill(claude-api)",
       "Skill(claude-api:*)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "PowerShell(Copy-Item *)"
     ]
   },
   "enableAllProjectMcpServers": true,
