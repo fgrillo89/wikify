@@ -555,11 +555,14 @@ class Dispatch:
                 if not _error_path(req_path).exists():
                     _cleanup(req_path)
 
-        # Collect (entry, was_hit) for every request via get_or_extract.
+        # Collect (entry, was_hit) per request, SKIPPING any that errored
+        # in dispatch. A single bad quote in a batch must not destroy the
+        # other successes — the .error.json files preserve diagnostics
+        # for the failed ones, the meter records cost for the successes.
         t0 = time.monotonic()
-        entries: list[tuple[CachedExtract, bool]] = []
+        entries: list[tuple[CachedExtract, bool] | None] = []
         dispatch_cursor = 0
-        for i, (req, key) in enumerate(zip(requests, keys)):
+        for i, key in enumerate(keys):
             if i not in uncached_set:
                 def _unreachable() -> CachedExtract:  # noqa: E306
                     raise AssertionError(
@@ -572,17 +575,26 @@ class Dispatch:
                 j = dispatch_cursor
                 dispatch_cursor += 1
                 if j in errors:
-                    raise errors[j]
+                    # Dispatch produced an .error.json; drop this slot
+                    # but keep going so the rest of the batch survives.
+                    entries.append(None)
+                    continue
                 resp = validated[j]
                 entry, was_hit = self._cache.get_or_extract(
                     key, lambda r=resp: _response_to_entry(r)
                 )
                 entries.append((entry, was_hit))
 
-        # Record meter costs and build final responses in input order.
+        # Record meter cost + emit responses for successful slots only.
+        # Partial-batch return: caller gets a list shorter than requests
+        # when some entries errored; dispatch tracking lives in the
+        # .error.json files alongside the request payloads.
         wall = time.monotonic() - t0
         results: list[ExtractResponse] = []
-        for req, key, (entry, was_hit) in zip(requests, keys, entries):
+        for req, key, slot in zip(requests, keys, entries):
+            if slot is None:
+                continue
+            entry, was_hit = slot
             _record_call(
                 self._meter,
                 role=Role.EXTRACTOR,

@@ -37,9 +37,10 @@ class Role(str, Enum):
 
 
 class StrategyId(str, Enum):
-    EXPLORE = "E"
-    MIXED = "M"
-    EXPLOIT = "X"
+    BALANCED = "balanced"
+    # Follow-on slots (``high-exploration``, ``high-exploitation``,
+    # ``no-navigation``) will be added when implemented; see
+    # docs/distill-test-readiness.md.
 
 
 # --- protocols -----------------------------------------------------------

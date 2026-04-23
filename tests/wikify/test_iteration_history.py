@@ -36,7 +36,7 @@ def _run(
     run_id: str,
     iteration: str,
 ) -> None:
-    cfg = build_strategy("M", seed=0)
+    cfg = build_strategy("balanced", seed=0)
     meter = CostMeter(
         budget_haiku_eq=40_000.0,
         run_id=run_id,

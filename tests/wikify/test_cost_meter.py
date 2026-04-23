@@ -81,7 +81,7 @@ def test_mixed_strategy_uses_tier_m_for_writer():
     """
     from wikify.distill.strategy import build_strategy
 
-    cfg = build_strategy("M")
+    cfg = build_strategy("balanced")
     assert cfg.write_tier == "M"
 
 

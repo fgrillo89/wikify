@@ -33,7 +33,7 @@ def corpus(tmp_path_factory) -> CorpusPaths:
 
 def _strategy(seed: int = 0) -> StrategyConfig:
     return StrategyConfig(
-        name="M",
+        name="balanced",
         explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,

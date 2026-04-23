@@ -326,6 +326,13 @@ def _global_pagerank(state: ExplorerState, k_per_doc: int) -> list[str]:
 
 
 def _global_coverage_gap(state: ExplorerState, _k_per_doc: int) -> list[str]:
+    """Pop the highest-residual unseen TEXT chunk from the coverage heap.
+
+    Caption chunks are skipped here so once text is exhausted the heap
+    does not start feeding caption snippets to the extractor as if they
+    were prose. Captions are reachable only via ``GlobalOp.FIGURES``
+    (the dedicated caption heap).
+    """
     if not state.coverage_residuals:
         return _global_uniform(state, _k_per_doc)
     while state.coverage_heap:
@@ -333,6 +340,11 @@ def _global_coverage_gap(state: ExplorerState, _k_per_doc: int) -> list[str]:
         if state.coverage_versions.get(cid, -1) != v:
             continue
         if cid in state.seen_chunks:
+            continue
+        if cid in state.caption_chunk_ids:
+            # Drop captions entirely from this heap; they live on the
+            # caption_heap and the version bump means a stale entry will
+            # be ignored even if re-pushed.
             continue
         heapq.heappush(state.coverage_heap, (neg, v, cid))
         return [cid]

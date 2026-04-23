@@ -86,6 +86,48 @@ def test_coverage_gap_picks_highest_residual_unseen():
     assert batch == ["c2"]
 
 
+def test_coverage_gap_skips_caption_chunks_even_when_top_residual():
+    """Captions must never feed the coverage_gap heap (Issue 5).
+
+    Once text chunks exhaust, captions should not start arriving via the
+    main heap — they live on caption_heap and are reachable only via
+    GlobalOp.FIGURES. Otherwise empty / near-empty caption extractions
+    inflate ``n_empty / n_total`` past the playbook's 20% gate.
+    """
+    state = _synthetic_state()
+    # c2 is the highest residual but flagged as a caption chunk.
+    state.caption_chunk_ids.add("c2")
+    restore_coverage_state(
+        state,
+        residuals={"c1": 0.10, "c2": 0.95, "c3": 0.40, "c4": 0.30},
+        seen_chunks=set(),
+        doc_seen_counts={},
+    )
+    # c2 lives on the caption heap because of restore_coverage_state.
+    state.caption_chunk_ids.add("c2")
+    sampler = LevyExplorer(local_op=LocalOp.NONE, global_op=GlobalOp.COVERAGE_GAP, jump_rate=1.0)
+    picks: list[str] = []
+    for _ in range(3):
+        picks.extend(sampler.next_batch(state, 1))
+    assert "c2" not in picks, "coverage_gap leaked a caption chunk"
+
+
+def test_global_figures_still_returns_caption_chunks():
+    """Captions remain reachable via GlobalOp.FIGURES (only path)."""
+    state = _synthetic_state()
+    state.caption_chunk_ids.update({"c2", "c4"})
+    restore_coverage_state(
+        state,
+        residuals={"c1": 0.10, "c2": 0.95, "c3": 0.40, "c4": 0.80},
+        seen_chunks=set(),
+        doc_seen_counts={},
+    )
+    state.caption_chunk_ids.update({"c2", "c4"})
+    sampler = LevyExplorer(local_op=LocalOp.NONE, global_op=GlobalOp.FIGURES, jump_rate=1.0)
+    batch = sampler.next_batch(state, 2)
+    assert set(batch) <= {"c2", "c4"}
+
+
 def test_coverage_feedback_discounts_seen_chunk_and_neighbors():
     state = _synthetic_state()
     apply_coverage_feedback(state, "c1", as_evidence=True)
@@ -107,7 +149,7 @@ def test_llm_policy_records_actions_in_snapshot(corpus, tmp_path):
         events_path=bundle.calls_path,
     )
     cfg = StrategyConfig(
-        name="M",
+        name="balanced",
         explorer=LevyExplorer(
             local_op=LocalOp.SIMILARITY_WALK,
             global_op=GlobalOp.COVERAGE_GAP,

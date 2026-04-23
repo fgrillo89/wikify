@@ -47,7 +47,7 @@ def ready_bundle(tmp_path_factory):
         run_id="qt_test",
         events_path=bundle.calls_path,
     )
-    cfg = build_strategy("M", seed=0)
+    cfg = build_strategy("balanced", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

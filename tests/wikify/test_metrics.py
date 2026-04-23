@@ -36,7 +36,7 @@ def loaded_bundle(tmp_path_factory):
         run_id="M_1x_seed0",
         events_path=bundle.calls_path,
     )
-    cfg = build_strategy("M", seed=0)
+    cfg = build_strategy("balanced", seed=0)
     pipeline_run(
         corpus=corpus,
         bundle=bundle,

@@ -33,7 +33,7 @@ def _meter(bundle: BundlePaths, run_id: str) -> CostMeter:
 def test_invalid_staged_response_falls_back_to_writer(corpus, tmp_path):
     bundle = BundlePaths(root=tmp_path / "bundle")
     cache = ExtractCache(root=tmp_path / "cache")
-    cfg = build_strategy("M", seed=0)
+    cfg = build_strategy("balanced", seed=0)
 
     # Phase 1: extract to materialize _write_requests + _pages.json.
     pipeline_run(
