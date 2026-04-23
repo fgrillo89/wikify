@@ -20,7 +20,17 @@ from .types import ModelTier
 app = typer.Typer(add_completion=False, help="wikify CLI")
 
 
-_BUDGET_TABLE = {"0.1x": 5_000.0, "1x": 50_000.0, "3x": 150_000.0}
+# Calibrated against the realistic per-call cost model documented in
+# docs/distill-test-readiness.md and BaselineConfig: per-write ~57k heq
+# at tier M with the baseline's cost shaves applied, per-extract ~5.5k
+# heq at tier S, fixed 60/35/5 split. With those numbers, 1x lands on
+# roughly 3-4 fully-grounded pages (top_k=8 evidence each).
+_BUDGET_TABLE = {
+    "0.1x": 50_000.0,    # smoke; 0-1 pages, mostly to verify pipeline shape
+    "1x": 500_000.0,     # ~3-4 pages, the unit of comparison
+    "3x": 1_500_000.0,   # ~9-10 pages, a full small-scale run
+    "10x": 5_000_000.0,  # large run; ~30 pages
+}
 _VALID_TIERS = tuple(tier.value for tier in ModelTier)
 
 
@@ -166,11 +176,15 @@ def refresh(
 
 @app.command()
 def distill(
-    strategy: str = typer.Option("", "--strategy", help="E | M | X"),
+    strategy: str = typer.Option(
+        "",
+        "--strategy",
+        help="balanced",
+    ),
     mode: str = typer.Option(
         "scripted",
         "--mode",
-        help="scripted | guided",
+        help="scripted | guided | baseline",
     ),
     preset: str | None = typer.Option(
         None,
@@ -308,7 +322,7 @@ def distill(
             raise typer.BadParameter("--strategy is required (or use --preset)")
         if strategy not in STRATEGY_CONFIGS:
             raise typer.BadParameter(f"unknown strategy: {strategy}")
-        if mode not in ("scripted", "guided"):
+        if mode not in ("scripted", "guided", "baseline"):
             raise typer.BadParameter(f"unknown mode: {mode}")
         cfg = build_strategy(strategy, seed=seed)
 
@@ -392,6 +406,40 @@ def distill(
     # Apply allocation override (goes through PolicyRuntime in pipeline.run).
     if exploit_fraction is not None:
         cfg.exploit_fraction_override = exploit_fraction
+
+    # Baseline preset is a separate pipeline (abstract-first source-grounded,
+    # no LevyExplorer loop). It carries its own fixed 60/35/5 split and
+    # ignores strategy-level exploit_fraction overrides so cross-condition
+    # comparisons stay clean. Warn loudly if the user passes one anyway.
+    if mode == "baseline":
+        from .baselines.pipeline import BaselineConfig, run_baseline
+        from .distill.preload import preload_corpus
+
+        if exploit_fraction is not None:
+            typer.echo(
+                "warning: --exploit-fraction is ignored for the baseline "
+                "preset; the 60/35/5 split is owned by BaselineConfig "
+                "(see docs/distill-test-readiness.md).",
+                err=True,
+            )
+        preloaded = preload_corpus(CorpusPaths(root=corpus_dir))
+        run_baseline(
+            kg=preloaded.knowledge_graph,
+            bundle=bundle,
+            strategy=cfg,
+            extractor=dispatch,
+            writer=dispatch,
+            meter=meter,
+            budget_haiku_eq=budget_haiku_eq,
+            preloaded=preloaded,
+            config=BaselineConfig(),
+            field_name=field,
+            artifact_name=artifact,
+            verbalize=verbalize,
+        )
+        typer.echo(f"baseline bundle written to {bundle.root}")
+        return
+
     pipeline_run(
         corpus=CorpusPaths(root=corpus_dir),
         bundle=bundle,
@@ -561,25 +609,61 @@ def _quick_convergence_metric(bundle: BundlePaths) -> float:
         return 0.0
 
 
-def _run_baseline(preloaded: object, bundle: BundlePaths) -> None:
-    """Execute a baseline run using the consolidated pipeline."""
-    from .baselines.pipeline import run_baseline
+def _run_baseline(
+    preloaded: object,
+    bundle: BundlePaths,
+    *,
+    cache: ExtractCache,
+    budget_haiku_eq: float,
+    field: str,
+    artifact: str,
+    seed: int,
+    verbalize: bool,
+) -> None:
+    """Execute a baseline run using the abstract-first baseline pipeline."""
+    from .baselines.pipeline import BaselineConfig, run_baseline
+    from .dispatch import Dispatch
 
-    kg = preloaded.kg  # type: ignore[attr-defined]
-    run_baseline(kg=kg, bundle=bundle)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    run_id = f"baseline_{seed}_{ts}"
+    meter = CostMeter(
+        budget_haiku_eq=budget_haiku_eq,
+        run_id=run_id,
+        events_path=bundle.calls_path,
+    )
+    dispatch = Dispatch(meter, cache)
+    cfg = build_strategy("balanced", seed=seed)
+    run_baseline(
+        kg=preloaded.knowledge_graph,  # type: ignore[attr-defined]
+        bundle=bundle,
+        strategy=cfg,
+        extractor=dispatch,
+        writer=dispatch,
+        meter=meter,
+        budget_haiku_eq=budget_haiku_eq,
+        preloaded=preloaded,  # type: ignore[arg-type]
+        config=BaselineConfig(),
+        field_name=field,
+        artifact_name=artifact,
+        verbalize=verbalize,
+    )
 
 
 @app.command()
 def study(
     presets: str = typer.Option(
-        "scripted-mixed",
+        "balanced",
         "--presets",
         help=f"Comma-separated presets: {', '.join(PRESET_CONFIGS)}",
     ),
     include_baseline: bool = typer.Option(
         False,
         "--include-baseline",
-        help="Run the baseline (retrieve-and-summarise) for each budget x seed.",
+        help=(
+            "Run the legacy topic-retrieve-summarise baseline for each "
+            "budget x seed. Prefer adding ``baseline`` to --presets for "
+            "the new abstract-first source-grounded baseline."
+        ),
     ),
     budgets: str = typer.Option("1x", "--budgets", help="Comma-separated: 0.5x,1x,2x"),
     seeds: str = typer.Option("0", "--seeds", help="Comma-separated: 0,1,2"),
@@ -677,24 +761,46 @@ def study(
                     dispatch = Dispatch(meter, cache)
                     iteration_op = "create" if rnd == 1 else "refine"
 
-                    run_with_preloaded(
-                        preloaded=preloaded,
-                        bundle=bundle,
-                        strategy=resolved.strategy,
-                        extractor=dispatch,
-                        writer=dispatch,
-                        meter=meter,
-                        budget_haiku_eq=sub_budget,
-                        iteration=iteration_op,
-                        editor=dispatch,
-                        compactor=dispatch,
-                        orchestrator=dispatch,
-                        mode_name=resolved.mode,
-                        field_name=field,
-                        artifact_name=artifact,
-                        verbalize=verbalize,
-                        allowed_tools=resolved.allowed_tools,
-                    )
+                    if resolved.mode == "baseline":
+                        from .baselines.pipeline import (
+                            BaselineConfig,
+                            run_baseline,
+                        )
+
+                        run_baseline(
+                            kg=preloaded.knowledge_graph,
+                            bundle=bundle,
+                            strategy=resolved.strategy,
+                            extractor=dispatch,
+                            writer=dispatch,
+                            meter=meter,
+                            budget_haiku_eq=sub_budget,
+                            preloaded=preloaded,
+                            config=BaselineConfig(),
+                            field_name=field,
+                            artifact_name=artifact,
+                            verbalize=verbalize,
+                            iteration=iteration_op,
+                        )
+                    else:
+                        run_with_preloaded(
+                            preloaded=preloaded,
+                            bundle=bundle,
+                            strategy=resolved.strategy,
+                            extractor=dispatch,
+                            writer=dispatch,
+                            meter=meter,
+                            budget_haiku_eq=sub_budget,
+                            iteration=iteration_op,
+                            editor=dispatch,
+                            compactor=dispatch,
+                            orchestrator=dispatch,
+                            mode_name=resolved.mode,
+                            field_name=field,
+                            artifact_name=artifact,
+                            verbalize=verbalize,
+                            allowed_tools=resolved.allowed_tools,
+                        )
 
                     budget_remaining -= meter.spent_haiku_eq
 
@@ -731,7 +837,16 @@ def study(
                 bundle_name = f"baseline_{bud}_seed{seed}"
                 bundle = BundlePaths(root=out_dir / bundle_name)
                 bundle.ensure()
-                _run_baseline(preloaded=preloaded, bundle=bundle)
+                _run_baseline(
+                    preloaded=preloaded,
+                    bundle=bundle,
+                    cache=cache,
+                    budget_haiku_eq=_parse_budget(bud),
+                    field=field,
+                    artifact=artifact,
+                    seed=seed,
+                    verbalize=verbalize,
+                )
 
                 typer.echo(
                     f"[{run_n}/{total}] baseline {bud} seed{seed}: done -> {bundle.root}"
