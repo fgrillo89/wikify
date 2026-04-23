@@ -44,3 +44,6 @@ benchmarks/results/
 
 # Notebooks (local exploration, not versioned)
 notebooks/
+
+# Scratch (one-off scripts, experiments, not versioned)
+scratch/
