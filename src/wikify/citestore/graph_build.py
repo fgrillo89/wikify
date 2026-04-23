@@ -148,6 +148,10 @@ def build_knowledge_graph(
             "section_type": ck.section_type,
             "char_span": list(ck.char_span),
             "equation_ids": list(ck.equation_ids),
+            # Soft boilerplate flag set at ingest. The fluent API filters
+            # ``is_boilerplate=True`` chunks by default; consumers opt
+            # back in via ``include_boilerplate=True``.
+            "is_boilerplate": ck.is_boilerplate,
         })
 
     # ------------------------------------------------------------------
@@ -356,14 +360,27 @@ def _compute_metrics(
     graph: nx.MultiDiGraph,
     author_sources: dict[str, set[str]],
 ) -> None:
-    """Compute PageRank, citation counts, h-index on the graph."""
-    # Build citation-only subgraph for PageRank
+    """Compute PageRank, citation counts, h-index on the graph.
+
+    PageRank is strict corpus-to-corpus citation centrality: only CITES
+    edges whose source AND target are both ``kind == 'corpus'`` source
+    nodes participate. Edges to external (``kind == 'cited'``) works are
+    excluded so external authority does not leak into the within-corpus
+    ranking signal.
+    """
+    corpus_ids = {
+        nid for nid, ndata in graph.nodes(data=True)
+        if ndata.get("type") == SOURCE and ndata.get("kind") == "corpus"
+    }
+    # Strict corpus-to-corpus citation subgraph for PageRank.
     cite_edges = [
         (u, v) for u, v, d in graph.edges(data=True)
-        if d.get("kind") == "CITES"
+        if d.get("kind") == "CITES" and u in corpus_ids and v in corpus_ids
     ]
     if cite_edges:
-        cite_g = nx.DiGraph(cite_edges)
+        cite_g = nx.DiGraph()
+        cite_g.add_nodes_from(corpus_ids)
+        cite_g.add_edges_from(cite_edges)
         pr = nx.pagerank(cite_g, alpha=0.85)
         for nid, score in pr.items():
             if nid in graph:

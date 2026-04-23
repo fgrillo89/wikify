@@ -205,19 +205,52 @@ class QueryBuilder:
 
     Each traversal returns a new QueryBuilder scoped to the result set.
     Nothing executes until a terminal (.collect(), .ids(), .count(), etc.).
+
+    When the queryset's node type is ``CHUNK``, the terminal operations
+    apply a soft boilerplate filter by default — chunks whose
+    ``is_boilerplate`` attribute is True are excluded. This keeps the
+    canonical access path (the fluent API) clean for every consumer
+    (model agents, baseline, evidence retrieval, eval) without each
+    one having to know the filter exists. To opt back in (debugging,
+    boilerplate audits), pass ``include_boilerplate=True`` to the
+    method that produces the queryset (``kg.chunks(...)``,
+    ``source.chunks(...)``) or call ``.with_boilerplate()`` on an
+    existing builder.
     """
 
-    __slots__ = ("_kg", "_ids", "_type")
+    __slots__ = ("_kg", "_ids", "_type", "_include_boilerplate")
 
     def __init__(
         self,
         kg: KnowledgeGraph,
         node_ids: set[str],
         node_type: str | None = None,
+        *,
+        include_boilerplate: bool = False,
     ) -> None:
         self._kg = kg
         self._ids = frozenset(node_ids)
         self._type = node_type
+        self._include_boilerplate = include_boilerplate
+
+    # ---- Boilerplate filter ----
+
+    def with_boilerplate(self) -> QueryBuilder:
+        """Return a queryset that includes boilerplate-flagged chunks."""
+        return QueryBuilder(
+            self._kg, set(self._ids), self._type,
+            include_boilerplate=True,
+        )
+
+    def _filter_boilerplate(self, ids: set[str] | frozenset[str]) -> set[str]:
+        """Drop boilerplate chunks unless include_boilerplate is True."""
+        if self._include_boilerplate or self._type != CHUNK:
+            return set(ids)
+        backend = self._kg._backend
+        return {
+            cid for cid in ids
+            if not backend.G.nodes.get(cid, {}).get("is_boilerplate", False)
+        }
 
     # ---- Traversal helpers ----
 
@@ -278,8 +311,12 @@ class QueryBuilder:
             qb = qb.where(section_type=type)
         return qb
 
-    def chunks(self) -> QueryBuilder:
-        """Chunks of these sources or sections."""
+    def chunks(self, *, include_boilerplate: bool = False) -> QueryBuilder:
+        """Chunks of these sources or sections.
+
+        Boilerplate-flagged chunks are excluded by default. Pass
+        ``include_boilerplate=True`` to see them (debugging / audit).
+        """
         result: set[str] = set()
         backend = self._kg._backend
         if self._type == SECTION:
@@ -290,7 +327,24 @@ class QueryBuilder:
             for sid in self._ids:
                 result.update(backend._chunks_of_source.get(sid, []))
                 result.update(backend._chunks_of_section.get(sid, []))
-        return QueryBuilder(self._kg, result, CHUNK)
+        return QueryBuilder(
+            self._kg, result, CHUNK,
+            include_boilerplate=include_boilerplate,
+        )
+
+    def abstract_chunk(self) -> dict | None:
+        """The canonical abstract chunk for the (first) source in the set.
+
+        Reads the ``section_type == "abstract"`` invariant set at ingest
+        by :func:`abstract_tagger.tag_abstracts` — exactly one chunk per
+        body-bearing source has the abstract tag. Returns the chunk dict,
+        or None if the source has no body content (rare).
+
+        Use:
+            chunk = kg.source(doc_id).abstract_chunk()
+        """
+        match = self.chunks().where(section_type="abstract").first()
+        return match
 
     def figures(self) -> QueryBuilder:
         """Figures of these sources."""
@@ -478,26 +532,43 @@ class QueryBuilder:
         return results
 
     def _resolve_chunk_scope(self) -> set[str]:
-        """Resolve the current set to chunk IDs for vector search."""
+        """Resolve the current set to chunk IDs for vector search.
+
+        Applies the soft boilerplate filter (unless include_boilerplate
+        was set on this query) so vector search results never surface
+        boilerplate chunks. Cross-type traversals (source → chunks via
+        scope resolution) get the same default behaviour as direct
+        ``.chunks()`` calls.
+        """
         if self._type == CHUNK:
-            return set(self._ids)
-        # If current set is sources/sections/etc, get their chunks
-        backend = self._kg._backend
-        chunk_ids: set[str] = set()
-        for nid in self._ids:
-            if not backend.has_node(nid):
-                continue
-            ntype = backend.G.nodes[nid].get("type")
-            if ntype == CHUNK:
-                chunk_ids.add(nid)
-            elif ntype == SOURCE:
-                chunk_ids.update(backend._chunks_of_source.get(nid, []))
-            elif ntype == SECTION:
-                chunk_ids.update(backend._chunks_of_section.get(nid, []))
-            elif ntype == FIGURE:
-                chunk_ids.update(backend._chunks_near_figure.get(nid, []))
-            elif ntype == EQUATION:
-                chunk_ids.update(backend._chunks_with_equation.get(nid, []))
+            chunk_ids = set(self._ids)
+        else:
+            backend = self._kg._backend
+            chunk_ids = set()
+            for nid in self._ids:
+                if not backend.has_node(nid):
+                    continue
+                ntype = backend.G.nodes[nid].get("type")
+                if ntype == CHUNK:
+                    chunk_ids.add(nid)
+                elif ntype == SOURCE:
+                    chunk_ids.update(backend._chunks_of_source.get(nid, []))
+                elif ntype == SECTION:
+                    chunk_ids.update(backend._chunks_of_section.get(nid, []))
+                elif ntype == FIGURE:
+                    chunk_ids.update(backend._chunks_near_figure.get(nid, []))
+                elif ntype == EQUATION:
+                    chunk_ids.update(backend._chunks_with_equation.get(nid, []))
+        # Apply soft boilerplate filter (no-op if include_boilerplate=True
+        # or queryset isn't chunks). Vector-search consumers (similar_to,
+        # search, the writer's evidence retrieval, the explorer's local
+        # walks) all flow through here, so this is the chokepoint.
+        if not self._include_boilerplate:
+            backend = self._kg._backend
+            chunk_ids = {
+                cid for cid in chunk_ids
+                if not backend.G.nodes.get(cid, {}).get("is_boilerplate", False)
+            }
         return chunk_ids
 
     # ---- Terminals (execute and return) ----
@@ -505,35 +576,37 @@ class QueryBuilder:
     def collect(self) -> list[dict]:
         """Materialize all nodes as dicts."""
         backend = self._kg._backend
+        ids = self._filter_boilerplate(self._ids)
         result = [
-            backend.node(nid) for nid in sorted(self._ids)
+            backend.node(nid) for nid in sorted(ids)
             if backend.has_node(nid)
         ]
         self._kg._trace.log(
-            "collect", {}, len(self._ids), len(result),
+            "collect", {}, len(ids), len(result),
             [r["id"] for r in result[:5]],
         )
         return result
 
     def ids(self) -> list[str]:
         """Return just the node IDs."""
-        return sorted(self._ids)
+        return sorted(self._filter_boilerplate(self._ids))
 
     def count(self) -> int:
         """Count matches."""
-        return len(self._ids)
+        return len(self._filter_boilerplate(self._ids))
 
     def first(self) -> dict | None:
         """First result or None."""
-        if not self._ids:
+        ids = self._filter_boilerplate(self._ids)
+        if not ids:
             return None
-        nid = min(self._ids)
+        nid = min(ids)
         backend = self._kg._backend
         return backend.node(nid) if backend.has_node(nid) else None
 
     def exists(self) -> bool:
         """Any matches?"""
-        return len(self._ids) > 0
+        return len(self._filter_boilerplate(self._ids)) > 0
 
     def titles(self) -> list[str]:
         """Return the title (or id) of each node as a flat list.
@@ -694,10 +767,14 @@ class KnowledgeGraph:
             qb = qb.where(**filters)
         return qb
 
-    def chunks(self, **filters: object) -> QueryBuilder:
-        """All chunks, optionally filtered."""
+    def chunks(self, *, include_boilerplate: bool = False, **filters: object) -> QueryBuilder:
+        """All chunks, optionally filtered.
+
+        Boilerplate-flagged chunks are excluded by default; pass
+        ``include_boilerplate=True`` to opt back in.
+        """
         ids = self._backend.nodes_of_type(CHUNK)
-        qb = QueryBuilder(self, ids, CHUNK)
+        qb = QueryBuilder(self, ids, CHUNK, include_boilerplate=include_boilerplate)
         if filters:
             qb = qb.where(**filters)
         return qb
