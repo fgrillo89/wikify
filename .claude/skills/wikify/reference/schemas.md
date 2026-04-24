@@ -15,7 +15,7 @@ the executable source of truth for shape validation.
 - Every durable artifact carries `schema_version: int`.
 - Bump on a breaking field change: removed key, renamed key, changed type, changed semantics.
 - Non-breaking additions (new optional field) do not bump.
-- Skills assert `schema_version == N` before they read an artifact. If the version is ahead, fail fast with `SchemaVersionMismatch`; do not attempt forward-compatibility in prose.
+- Skills assert `schema_version == N` before they read an artifact. If the version is ahead, fail fast with `SchemaVersionMismatchError`; do not attempt forward-compatibility in prose.
 - Parity-test transcripts are invalidated on any bump; re-record and diff.
 
 ## Session artifacts

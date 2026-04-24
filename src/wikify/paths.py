@@ -135,6 +135,26 @@ class BundlePaths:
         ``{run_id, when, role, rid, page_id|chunk_id, reasoning}``."""
         return self.meta_dir / "verbalize.jsonl"
 
+    @property
+    def session_dir(self) -> Path:
+        return self.root / "_session"
+
+    @property
+    def session_path(self) -> Path:
+        return self.session_dir / "session.json"
+
+    @property
+    def session_checkpoints_dir(self) -> Path:
+        return self.session_dir / "checkpoints"
+
+    @property
+    def session_lock_path(self) -> Path:
+        return self.session_dir / "session.lock"
+
+    @property
+    def scratch_dir(self) -> Path:
+        return self.root / "_scratch"
+
     def ensure(self) -> None:
         self.articles_dir.mkdir(parents=True, exist_ok=True)
         self.people_dir.mkdir(parents=True, exist_ok=True)
