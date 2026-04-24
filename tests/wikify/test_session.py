@@ -138,8 +138,19 @@ def test_cli_init_show_update_checkpoint_close(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["session", "close", "--session", str(session_path)])
     assert result.exit_code == 0, result.output
+    close_payload = json.loads(result.output)
     final = json.loads(session_path.read_text(encoding="utf-8"))
     assert final["status"] == "closed"
+    run_path = Path(close_payload["run_path"])
+    assert run_path.exists()
+    snapshot = json.loads(run_path.read_text(encoding="utf-8"))
+    assert snapshot["schema_version"] == 1
+    assert snapshot["strategy"] == "baseline"
+    assert snapshot["status"] == "closed"
+    assert snapshot["session_id"] == final["session_id"]
+    assert set(snapshot["stages"].keys()) == {"seed_selection", "extract", "write"}
+    assert "page_counts" in snapshot
+    assert "telemetry_paths" in snapshot
 
 
 def test_cli_init_refuses_to_overwrite(tmp_path: Path) -> None:

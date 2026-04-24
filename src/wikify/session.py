@@ -270,6 +270,57 @@ def read_lock(session_path: Path) -> dict | None:
         return None
 
 
+RUN_SCHEMA_VERSION = 1
+
+
+def write_run_snapshot(session: "SessionV1") -> Path:
+    """Flush a final telemetry snapshot to <bundle>/_run.json.
+
+    Called by `wikify session close`. The snapshot is session-derived —
+    it does not include meter-only fields (per-call token counts, cache
+    hit rates) because those live in _calls.jsonl and the skill path
+    does not own a CostMeter. Parity against legacy `run_baseline`
+    output is the future gate for the recorded-transcript test; today
+    this writes a stable, schema_version-stamped minimum.
+    """
+    bundle_paths = BundlePaths(Path(session.bundle_root))
+    bundle_paths.ensure()
+    pages = [p.model_dump(mode="json") for p in session.pages]
+    counts = {"planned": 0, "drafted": 0, "validated": 0, "committed": 0, "failed": 0}
+    for entry in pages:
+        status = entry.get("status", "planned")
+        counts[status] = counts.get(status, 0) + 1
+    snapshot = {
+        "schema_version": RUN_SCHEMA_VERSION,
+        "session_id": session.session_id,
+        "strategy": session.strategy,
+        "status": session.status,
+        "bundle_root": session.bundle_root,
+        "corpus_root": session.corpus_root,
+        "created_at": session.created_at,
+        "closed_at": session.updated_at,
+        "budget_target_haiku_eq": session.budget.haiku_eq_target,
+        "budget_spent_haiku_eq": session.budget.haiku_eq_spent,
+        "stages": {
+            name: stage.model_dump(mode="json")
+            for name, stage in {
+                "seed_selection": session.stages.seed_selection,
+                "extract": session.stages.extract,
+                "write": session.stages.write,
+            }.items()
+        },
+        "config": session.config.model_dump(mode="json"),
+        "pages": pages,
+        "n_pages_committed": counts.get("committed", 0),
+        "n_pages_failed": counts.get("failed", 0),
+        "page_counts": counts,
+        "telemetry_paths": session.telemetry_paths.model_dump(mode="json"),
+    }
+    run_path = bundle_paths.run_path
+    run_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+    return run_path
+
+
 @contextmanager
 def session_lock(session_path: Path, owner: str, ttl_seconds: int = 3600):
     """Context manager: acquire the lock, run the block, release on exit.

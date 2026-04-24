@@ -80,12 +80,16 @@ apply canonicalisation (skill or CLI helper) -> session.pages (status=planned)
 
 # write phase
 for each planned page in session:
-    wikify kg evidence --session <s> --page-id <id> --top-k 8
-    wikify draft write-request --session <s> --page-id <id>     # emits draft-<id>.json
-    Task subagent (tier M) -> response-<id>.json
-    wikify validate write --draft draft-<id>.json --response response-<id>.json
+    chunk_ids=$(wikify kg evidence --session <s> --page-id <id> --top-k 8 | jq -c .chunk_ids)
+    wikify draft write-request --session <s> --page-id <id> --chunk-ids "$chunk_ids"
+        # emits <bundle>/_scratch/draft-<id>.json and records draft_path on
+        # session.pages[<id>]. The skill reads the draft, spawns the Task
+        # subagent with it, and writes the subagent's WriteResponse JSON
+        # to <bundle>/_scratch/response-<id>.json.
+    wikify validate write --draft <bundle>/_scratch/draft-<id>.json --response <bundle>/_scratch/response-<id>.json
         on ok=false: retry once; then escalate per reference/escalation.md; then mark failed
-    wikify bundle commit-page --session <s> --response response-<id>.json
+    wikify bundle commit-page --session <s> --response <bundle>/_scratch/response-<id>.json
+        # rebuilds _index.json and _wiki_graph.json under the session lock
     wikify session checkpoint --session <s> --label "after-<id>"
 
 wikify session close --session <s>

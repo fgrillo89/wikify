@@ -23,6 +23,7 @@ from ..session import (
     save_session,
     session_lock,
     touch,
+    write_run_snapshot,
 )
 
 
@@ -156,6 +157,7 @@ def cmd_close(
             session = load_session(session_path)
             updated = touch(session.model_copy(update={"status": mapped}))
             save_session(session_path, updated)
+            run_path = write_run_snapshot(updated)
     except SessionLockHeldError as exc:
         typer.echo(
             json.dumps(
@@ -169,7 +171,9 @@ def cmd_close(
             err=True,
         )
         raise typer.Exit(code=2) from exc
-    typer.echo(json.dumps({"ok": True, "status": updated.status}))
+    typer.echo(
+        json.dumps({"ok": True, "status": updated.status, "run_path": str(run_path)})
+    )
 
 
 @app.command("lock")

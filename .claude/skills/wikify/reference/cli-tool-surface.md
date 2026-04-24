@@ -65,7 +65,14 @@ wikify session show --session <path> --full            # full JSON
 wikify session update --session <path> --patch '{"pages":[{"page_id":"X","status":"drafted"}]}'
 wikify session checkpoint --session <path> --label "after-seed-selection"
 wikify session close --session <path>                  # flushes final _run.json
+wikify session lock --session <path> [--owner <name>] [--ttl-seconds 3600]
+wikify session unlock --session <path>
 ```
+
+`session update`, `session close`, `draft write-request`, and `bundle
+commit-page` all acquire the session lock implicitly and exit `2` with a
+structured `{"error": "lock_held", "owner": "...", "acquired_at": "..."}`
+payload on stderr if another owner holds it.
 
 ### KG
 
@@ -78,9 +85,18 @@ wikify kg evidence --session <path> --page-id "Atomic Layer Deposition" --top-k 
 ### Draft / validate / bundle
 
 ```
-wikify draft write-request --session <path> --page-id "<id>"
-wikify validate write --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json
-wikify bundle commit-page --session <path> --response <scratch>/response-<id>.json
+wikify draft write-request \
+    --session <path> --page-id "<id>" \
+    --chunk-ids '["chunk_1","chunk_2","chunk_3"]'
+    # --chunk-ids is REQUIRED. Typical callers pipe it from `wikify kg evidence`.
+
+wikify validate write \
+    --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json
+
+wikify bundle commit-page \
+    --session <path> --response <scratch>/response-<id>.json \
+    [--validation <scratch>/validation-<id>.json]
+    # rebuilds <bundle>/_index.json and <bundle>/_wiki_graph.json under the session lock
 ```
 
 ### Render / eval / ingest

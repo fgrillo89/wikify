@@ -191,6 +191,123 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
     assert ald["status"] == "committed"
 
 
+def test_bundle_commit_page_rebuilds_index_and_graph(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    filler = "ALD is a self-limiting vapor-phase technique. " * 40
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": (
+                    "**ALD** is self-limiting.[^e1]\n\n"
+                    f"{filler}\n\n## Mechanism\n\n{filler}\n\n"
+                    "## Applications\n\n"
+                    f"{filler}\n\n## References\n\n"
+                    '[^e1]: chunk_x (doc_x) > "self-limiting"\n'
+                ),
+                "used_markers": ["e1"],
+                "tokens_in": 100,
+                "tokens_out": 50,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    # Index + graph must now exist on disk.
+    assert Path(payload["index_path"]).exists()
+    assert Path(payload["graph_path"]).exists()
+
+
+def test_bundle_commit_page_no_partial_write_on_lock_held(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """Acquiring the lock BEFORE the page write means lock_held leaves no partial state."""
+    session_path, bundle = initialized_session
+    scratch = BundlePaths(bundle).scratch_dir
+    scratch.mkdir(parents=True, exist_ok=True)
+    response_path = scratch / "response-NEW.json"
+    filler = "New page filler prose. " * 80
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "NEW",
+                "page_kind": "article",
+                "body_markdown": (
+                    "**NEW** lead.[^e1]\n\n"
+                    f"{filler}\n\n## Section\n\n{filler}\n\n## More\n\n{filler}\n\n"
+                    "## References\n\n"
+                    '[^e1]: chunk_x (doc_x) > "claim"\n'
+                ),
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Someone else holds the lock.
+    lock_result = runner.invoke(
+        app,
+        ["session", "lock", "--session", str(session_path), "--owner", "other"],
+    )
+    assert lock_result.exit_code == 0
+
+    commit = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+        ],
+    )
+    assert commit.exit_code == 2
+
+    # No NEW.md should have been written.
+    new_article = BundlePaths(bundle).articles_dir / "NEW.md"
+    assert not new_article.exists(), "partial page write leaked under lock_held"
+
+
 def test_bundle_commit_page_rejects_failed_validation(
     initialized_session: tuple[Path, Path],
 ) -> None:
