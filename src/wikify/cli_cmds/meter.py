@@ -44,11 +44,18 @@ class BudgetExceededError(RuntimeError):
 
 
 def check_budget_gate(target: float, projected_spent: float) -> None:
-    """Mirror `CostMeter.record`'s 1.05x hard-abort gate.
+    """Hard-abort gate: refuse the record when projected spend exceeds
+    `target * ABORT_RATIO` (default 1.05x).
 
-    Skill-side writers (`wikify meter record`, `wikify bundle commit-page`
-    auto-record) must refuse to record a call that would carry the session
-    past the abort ratio, matching legacy behavior.
+    Intentional divergence from legacy `CostMeter.record`: on legacy a
+    `budget=0` session aborts on the first nonzero record (the math
+    `haiku_eq > 0 * 1.05 = 0` is always true). That is a nonsensical
+    production configuration — every legacy caller passes a positive
+    budget — but skill-path sessions routinely initialize with
+    `budget_target=0` (e.g., `wikify session init` with no
+    `--budget-target`) to mean "no ceiling". Treat `target <= 0` as
+    "no enforced ceiling" rather than "abort everything"; callers that
+    want real abort behavior must supply a positive target.
     """
     if target <= 0:
         return
@@ -104,12 +111,16 @@ def append_call_record(
     with session_lock(session_path, owner=_cli_owner(owner)):
         fresh = load_session(session_path)
         new_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
-        check_budget_gate(float(fresh.budget.haiku_eq_target), new_spent)
+        # Append the record + update the aggregate BEFORE the gate raises,
+        # matching legacy CostMeter.record (meter.py:250-256) which writes
+        # the breaching record to _calls.jsonl so the post-run snapshot
+        # shows exactly how the budget was blown.
         bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
         with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
             fh.write(record.to_json() + "\n")
         updated = apply_merge_patch(fresh, {"budget": {"haiku_eq_spent": new_spent}})
         save_session(session_path, touch(updated))
+        check_budget_gate(float(fresh.budget.haiku_eq_target), new_spent)
     return record
 
 
@@ -141,6 +152,15 @@ def cmd_record(
         raise typer.BadParameter(
             f"invalid --role {role!r}; expected one of {[r.value for r in Role]}"
         ) from exc
+    # The write role is auto-recorded by `wikify bundle commit-page`.
+    # Allowing callers to also record it here double-charges the budget
+    # (there is no dedup key). Refuse at the CLI layer so the doc-only
+    # contract in run-baseline.md / schemas.md is enforced in code.
+    if role_e is Role.WRITER:
+        raise typer.BadParameter(
+            "role=writer is auto-recorded by `wikify bundle commit-page`; "
+            "do not record it explicitly via `wikify meter record`."
+        )
     try:
         tier_e = ModelTier(tier)
     except ValueError as exc:

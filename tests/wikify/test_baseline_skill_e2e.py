@@ -551,17 +551,60 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
     legacy_snapshot = meter.snapshot()
     skill_agg = _aggregate_calls_jsonl(synthetic_path)
 
-    # Core meter numbers must match exactly.
-    assert skill_agg["budget_used_haiku_eq"] == legacy_snapshot["budget_used_haiku_eq"]
-    assert skill_agg["wall_seconds"] == legacy_snapshot["wall_seconds"]
-    assert skill_agg["calls"] == legacy_snapshot["calls"]
-    assert skill_agg["cache_hit_rate"] == legacy_snapshot["cache_hit_rate"]
-    assert skill_agg["context"]["used_max"] == legacy_snapshot["context"]["used_max"]
-    # Each role's haiku_eq aggregates must match.
+    # Core top-level numbers must match exactly.
+    for key in ("budget_used_haiku_eq", "wall_seconds", "calls", "cache_hit_rate"):
+        assert skill_agg[key] == legacy_snapshot[key], (
+            f"top-level parity mismatch on {key!r}: skill={skill_agg[key]}"
+            f" vs legacy={legacy_snapshot[key]}"
+        )
+
+    # context sub-dict: every field must match.
+    for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
+        assert skill_agg["context"][subkey] == legacy_snapshot["context"][subkey], (
+            f"context parity mismatch on {subkey!r}: "
+            f"skill={skill_agg['context'][subkey]} "
+            f"vs legacy={legacy_snapshot['context'][subkey]}"
+        )
+
+    # by_role: every role bucket must match on every legacy aggregate field.
+    bucket_fields_nonempty = (
+        "calls",
+        "haiku_eq",
+        "wall_seconds",
+        "cache_hit_rate",
+        "input_tokens",
+        "output_tokens",
+        "context_used_max",
+        "context_used_mean",
+        "headroom_min",
+        "headroom_mean",
+    )
     for role_key, legacy_bucket in legacy_snapshot["by_role"].items():
         skill_bucket = skill_agg["by_role"][role_key]
         if legacy_bucket.get("calls", 0) == 0:
-            assert skill_bucket["calls"] == 0
-        else:
-            assert skill_bucket["haiku_eq"] == legacy_bucket["haiku_eq"]
-            assert skill_bucket["calls"] == legacy_bucket["calls"]
+            assert skill_bucket == {"calls": 0}, (
+                f"by_role[{role_key!r}] empty-bucket shape mismatch: "
+                f"skill={skill_bucket}"
+            )
+            continue
+        for field_key in bucket_fields_nonempty:
+            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+                f"by_role[{role_key!r}][{field_key!r}] mismatch: "
+                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+            )
+
+    # by_tier: same full-shape assertion.
+    assert set(skill_agg["by_tier"].keys()) == set(legacy_snapshot["by_tier"].keys()), (
+        f"by_tier key-set mismatch: skill={set(skill_agg['by_tier'].keys())}"
+        f" vs legacy={set(legacy_snapshot['by_tier'].keys())}"
+    )
+    for tier_key, legacy_bucket in legacy_snapshot["by_tier"].items():
+        skill_bucket = skill_agg["by_tier"][tier_key]
+        if legacy_bucket.get("calls", 0) == 0:
+            assert skill_bucket == {"calls": 0}
+            continue
+        for field_key in bucket_fields_nonempty:
+            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+                f"by_tier[{tier_key!r}][{field_key!r}] mismatch: "
+                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+            )

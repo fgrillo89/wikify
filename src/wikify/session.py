@@ -350,9 +350,10 @@ def write_run_snapshot(session: "SessionV1") -> Path:
 
     # Per-close run_id so session resume + second close produces a
     # distinct run_id, matching legacy semantics where every
-    # `run_baseline()` invocation mints a fresh id. Downstream consumers
-    # that join on run_id don't see collisions.
-    run_id = f"{session.session_id}-{session.updated_at}"
+    # `run_baseline()` invocation mints a fresh id. updated_at is only
+    # second-granularity — a UUID suffix guarantees uniqueness even
+    # when two closes fire in the same second.
+    run_id = f"{session.session_id}-{session.updated_at}-{uuid4().hex[:8]}"
 
     snapshot = {
         "schema_version": RUN_SCHEMA_VERSION,

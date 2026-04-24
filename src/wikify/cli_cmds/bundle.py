@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 
+from ..context import response_reserve, total_context
 from ..distill.write_runner import rebuild_wiki_graph
 from ..meter import CallRecord
 from ..models import WikiPage
@@ -27,6 +28,16 @@ from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from ..types import ModelTier, Role
 from .meter import BudgetExceededError, check_budget_gate, haiku_eq_for
+
+
+def _write_context_cap() -> int:
+    """Match legacy dispatch: `total_context() - response_reserve()`.
+
+    Using the hardcoded 200_000 Claude context window would silently
+    inflate every headroom metric by ~80k and break parity with the
+    legacy CostMeter snapshot. See review finding #4 on PR#32 round 2.
+    """
+    return total_context() - response_reserve()
 
 app = typer.Typer(add_completion=False, help="Promote validated drafts into bundle artifacts.")
 
@@ -166,43 +177,13 @@ def cmd_commit_page(
                     err=True,
                 )
                 raise typer.Exit(code=1)
-            kind = parsed.page_kind or "article"
-            page = WikiPage(
-                id=parsed.page_id,
-                kind=kind,  # type: ignore[arg-type]
-                title=parsed.page_id,
-                aliases=[],
-                body_markdown=parsed.body_markdown,
-                evidence=[],
-                provenance={
-                    "session_id": fresh.session_id,
-                    "strategy": fresh.strategy,
-                    "committed_via": "wikify bundle commit-page",
-                },
-            )
-            page_path = write_page_file(bundle_paths, page)
 
-            # Rebuild indices over ALL committed pages on disk — keeps
-            # _index.json / _wiki_graph.json in sync with the bundle
-            # contents, not just the page we just wrote. Convert the
-            # on-disk Page objects (body_clean only) into WikiPages with
-            # full body_markdown by reparsing each file's original body.
-            loaded = load_bundle(bundle_paths.root)
-            wiki_pages = [_page_to_wiki_page(p) for p in loaded.pages]
-            build_index(bundle_paths, wiki_pages).save()
-            rebuild_wiki_graph(bundle_paths, wiki_pages)
-
-            # Auto-record the write call in _calls.jsonl. The skill
-            # path does not hold a CostMeter instance; this entry is
-            # the skill-side equivalent of legacy meter.record() after
-            # a write dispatch. Tokens come from the response itself;
-            # tier comes from session.config.default_tiers["write"].
-            #
-            # Validation contract (mirrors `wikify meter record`):
-            #   - misconfigured tier: fail loudly, do not silently default
-            #   - negative tokens: reject (would decrement budget)
-            #   - tokens_in > context_cap: reject
-            #   - 1.05x budget overrun: refuse like legacy CostMeter
+            # ------------------------------------------------------------
+            # All validation + budget gating runs BEFORE any canonical
+            # disk write. If we refuse the commit, no page file, no index
+            # rebuild, no wiki-graph rebuild has happened — the bundle
+            # stays in its pre-commit state.
+            # ------------------------------------------------------------
             write_tier_str = fresh.config.default_tiers.get("write", "M")
             try:
                 write_tier = ModelTier(write_tier_str)
@@ -224,7 +205,7 @@ def cmd_commit_page(
                 raise typer.Exit(code=1) from None
             tokens_in = int(parsed.tokens_in)
             tokens_out = int(parsed.tokens_out)
-            context_cap = 200_000
+            context_cap = _write_context_cap()
             if tokens_in < 0 or tokens_out < 0:
                 typer.echo(
                     json.dumps(
@@ -257,6 +238,31 @@ def cmd_commit_page(
                 raise typer.Exit(code=1)
             haiku_eq = haiku_eq_for(write_tier, tokens_in, tokens_out)
             projected_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
+
+            # Build the CallRecord early so we can append it BEFORE the
+            # budget gate raises — matching legacy CostMeter.record which
+            # appends the breaching record and updates aggregates before
+            # aborting (see src/wikify/meter.py:250-256).
+            call_record = CallRecord(
+                role=Role.WRITER,
+                tier=write_tier,
+                input_tokens=tokens_in,
+                output_tokens=tokens_out,
+                context_used=tokens_in,
+                context_cap=context_cap,
+                wall_seconds=0.0,
+                cache_hit=False,
+                prompt_hash="",
+                haiku_eq=haiku_eq,
+            )
+            bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
+            with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
+                fh.write(call_record.to_json() + "\n")
+            # Bump session spent to reflect the appended record.
+            budget_patch = apply_merge_patch(
+                fresh, {"budget": {"haiku_eq_spent": projected_spent}}
+            )
+            save_session(session_path, touch(budget_patch))
             try:
                 check_budget_gate(
                     float(fresh.budget.haiku_eq_target), projected_spent
@@ -275,34 +281,41 @@ def cmd_commit_page(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
-            call_record = CallRecord(
-                role=Role.WRITER,
-                tier=write_tier,
-                input_tokens=tokens_in,
-                output_tokens=tokens_out,
-                context_used=tokens_in,
-                context_cap=context_cap,
-                wall_seconds=0.0,
-                cache_hit=False,
-                prompt_hash="",
-                haiku_eq=haiku_eq,
-            )
-            bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
-            with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
-                fh.write(call_record.to_json() + "\n")
 
-            # Update session: mark this page committed + bump spent. page_entry
-            # is guaranteed non-None by the precondition check above.
-            new_pages = [p.model_dump(mode="json") for p in fresh.pages]
+            # ------------------------------------------------------------
+            # Gate cleared — promotion to canonical artifacts runs.
+            # ------------------------------------------------------------
+            kind = parsed.page_kind or "article"
+            page = WikiPage(
+                id=parsed.page_id,
+                kind=kind,  # type: ignore[arg-type]
+                title=parsed.page_id,
+                aliases=[],
+                body_markdown=parsed.body_markdown,
+                evidence=[],
+                provenance={
+                    "session_id": fresh.session_id,
+                    "strategy": fresh.strategy,
+                    "committed_via": "wikify bundle commit-page",
+                },
+            )
+            page_path = write_page_file(bundle_paths, page)
+
+            # Rebuild indices over ALL committed pages on disk.
+            loaded = load_bundle(bundle_paths.root)
+            wiki_pages = [_page_to_wiki_page(p) for p in loaded.pages]
+            build_index(bundle_paths, wiki_pages).save()
+            rebuild_wiki_graph(bundle_paths, wiki_pages)
+
+            # Final session patch: mark the page committed.
+            reread = load_session(session_path)
+            new_pages = [p.model_dump(mode="json") for p in reread.pages]
             for entry in new_pages:
                 if entry["page_id"] == parsed.page_id:
                     entry["status"] = "committed"
                     entry["validation_path"] = str(validation)
                     break
-            updated = apply_merge_patch(
-                fresh,
-                {"pages": new_pages, "budget": {"haiku_eq_spent": projected_spent}},
-            )
+            updated = apply_merge_patch(reread, {"pages": new_pages})
             save_session(session_path, touch(updated))
     except SessionLockHeldError as exc:
         typer.echo(

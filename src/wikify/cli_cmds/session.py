@@ -13,6 +13,7 @@ from ..paths import BundlePaths
 from ..session import (
     SchemaVersionMismatchError,
     SessionLockHeldError,
+    UnknownRoleError,
     acquire_lock,
     apply_merge_patch,
     checkpoint_session,
@@ -177,6 +178,18 @@ def cmd_close(
             err=True,
         )
         raise typer.Exit(code=2) from exc
+    except UnknownRoleError as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "unknown_role_in_calls_jsonl",
+                    "message": str(exc),
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(
         json.dumps({"ok": True, "status": updated.status, "run_path": str(run_path)})
     )

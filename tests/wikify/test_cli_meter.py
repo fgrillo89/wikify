@@ -48,7 +48,7 @@ def test_meter_record_appends_calls_jsonl_and_updates_budget(tmp_path: Path) -> 
             "--session",
             str(session_path),
             "--role",
-            "writer",
+            "editor",
             "--tier",
             "M",
             "--input-tokens",
@@ -64,7 +64,7 @@ def test_meter_record_appends_calls_jsonl_and_updates_budget(tmp_path: Path) -> 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["ok"] is True
-    assert payload["role"] == "writer"
+    assert payload["role"] == "editor"
     assert payload["tier"] == "M"
     assert payload["haiku_eq"] > 0
 
@@ -76,7 +76,7 @@ def test_meter_record_appends_calls_jsonl_and_updates_budget(tmp_path: Path) -> 
     lines = calls_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
-    assert record["role"] == "writer"
+    assert record["role"] == "editor"
     assert record["tier"] == "M"
     assert record["input_tokens"] == 1000
     assert record["output_tokens"] == 500
@@ -100,7 +100,7 @@ def test_meter_record_rejects_input_tokens_above_context_cap(tmp_path: Path) -> 
             "--session",
             str(session_path),
             "--role",
-            "writer",
+            "editor",
             "--tier",
             "M",
             "--input-tokens",
@@ -112,6 +112,34 @@ def test_meter_record_rejects_input_tokens_above_context_cap(tmp_path: Path) -> 
         ],
     )
     assert result.exit_code != 0
+
+
+def test_meter_record_refuses_role_writer(tmp_path: Path) -> None:
+    """The write role is auto-recorded by `wikify bundle commit-page`.
+    Allowing `wikify meter record --role writer` would double-charge
+    the budget. Refuse at the CLI layer, per review finding F on
+    PR#32 round 2.
+    """
+    session_path = _init_session(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "meter",
+            "record",
+            "--session",
+            str(session_path),
+            "--role",
+            "writer",
+            "--tier",
+            "M",
+            "--input-tokens",
+            "10",
+            "--output-tokens",
+            "10",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "commit-page" in (result.stderr or result.output)
 
 
 def test_meter_record_rejects_invalid_role_or_tier(tmp_path: Path) -> None:
@@ -187,7 +215,7 @@ def test_meter_record_enforces_1_05x_budget_abort(tmp_path: Path) -> None:
             "--session",
             str(session_path),
             "--role",
-            "writer",
+            "editor",
             "--tier",
             "M",
             "--input-tokens",
@@ -199,9 +227,16 @@ def test_meter_record_enforces_1_05x_budget_abort(tmp_path: Path) -> None:
     assert result.exit_code == 3, result.output
     err = json.loads(result.stderr or result.output)
     assert err["error"] == "budget_exceeded"
-    # _calls.jsonl must NOT have been written.
+    # _calls.jsonl MUST carry the breaching record — legacy
+    # CostMeter.record appends before raising, and the skill path
+    # matches that ordering.
     calls_path = BundlePaths(bundle).calls_path
-    assert not calls_path.exists() or not calls_path.read_text().strip()
+    assert calls_path.exists(), "skill path must append the breaching record like legacy"
+    lines = [ln for ln in calls_path.read_text().splitlines() if ln.strip()]
+    assert len(lines) == 1
+    breaching = json.loads(lines[0])
+    assert breaching["role"] == "editor"
+    assert breaching["haiku_eq"] > 100
 
 
 def test_meter_record_stores_haiku_eq_spent_as_float(tmp_path: Path) -> None:
@@ -262,7 +297,7 @@ def test_meter_record_accumulates_in_session_close_snapshot(tmp_path: Path) -> N
             "--session",
             str(session_path),
             "--role",
-            "writer",
+            "editor",
             "--tier",
             "M",
             "--input-tokens",
@@ -284,9 +319,12 @@ def test_meter_record_accumulates_in_session_close_snapshot(tmp_path: Path) -> N
     assert snapshot["context"]["used_max"] == 1500
     # by_role is pre-populated with every Role enum value; roles not
     # exercised this run appear with calls=0 (mirrors legacy CostMeter).
-    assert {"extractor", "writer"} <= set(snapshot["by_role"].keys())
+    assert {"extractor", "editor"} <= set(snapshot["by_role"].keys())
     assert snapshot["by_role"]["extractor"]["calls"] == 1
-    assert snapshot["by_role"]["writer"]["calls"] == 1
+    assert snapshot["by_role"]["editor"]["calls"] == 1
+    # Writer was not exercised here (it is only reachable via commit-page
+    # auto-record); pre-population still surfaces the key with calls=0.
+    assert snapshot["by_role"]["writer"]["calls"] == 0
     # by_tier is populated from observed tiers only.
     assert set(snapshot["by_tier"].keys()) == {"S", "M"}
 
