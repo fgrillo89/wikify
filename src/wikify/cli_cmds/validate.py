@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,12 @@ from ..schema import WriteRequest, WriteResponse
 app = typer.Typer(add_completion=False, help="Schema and structural validation for drafts.")
 
 VALIDATION_SCHEMA_VERSION = 1
+
+# Match `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` in a References block.
+_REF_DEF_RE = re.compile(
+    r'^\[\^e(\d+)\]:\s*(?P<body>.*?)\s*>\s*"(?P<quote>.+?)"\s*$',
+    re.MULTILINE,
+)
 
 
 def _utcnow() -> str:
@@ -31,18 +38,33 @@ def _pydantic_errors(exc: ValidationError) -> list[dict]:
     ]
 
 
+def _parse_ref_quotes(body_markdown: str) -> dict[int, str]:
+    """Extract `[^eN]: ... > "<quote>"` pairs from the response body."""
+    quotes: dict[int, str] = {}
+    for match in _REF_DEF_RE.finditer(body_markdown):
+        idx = int(match.group(1)) - 1  # convert 1-based marker to 0-based
+        quotes[idx] = match.group("quote")
+    return quotes
+
+
 def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> list[dict]:
-    """Verify every used `[^eN]` marker maps to an evidence entry whose quote is:
+    """Verify every used `[^eN]` marker is grounded in its source chunk.
 
-    1. actually cited somewhere in the response body, AND
-    2. a verbatim substring of the cited chunk's source text
-       (evidence_v2[i].chunk_text).
+    The ground-truth quote lives in the response body's References block,
+    not in the draft's evidence_v2 — the draft provides chunk_text for
+    the subagent to pick a verbatim quote from, and the subagent writes
+    the quote into a `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line.
+    Grounding is verified by:
 
-    Marker `eN` is 1-based into `draft.evidence_v2` (position-based, not
-    label-based). Grounding is the load-bearing property; a quote that is
-    echoed in the body but is NOT in the chunk text is fabricated and
-    must fail validation.
+    1. Every used marker has a `[^eN]:` definition in the body.
+    2. Every used marker maps to a 1-based position in draft.evidence_v2.
+    3. The evidence entry carries non-empty chunk_text.
+    4. The extracted body-quote is a verbatim substring of chunk_text.
+
+    A draft-side `evidence_v2[i].quote`, when non-empty, is treated as an
+    advisory suggestion and is not cross-checked here.
     """
+    body_quotes = _parse_ref_quotes(response.body_markdown)
     errors: list[dict] = []
     for marker in response.used_markers:
         idx = _marker_to_index(marker)
@@ -57,27 +79,20 @@ def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> lis
                 }
             )
             continue
-        evidence = draft.evidence_v2[idx]
-        quote = (evidence.quote or "").strip()
-        if not quote:
+        body_quote = body_quotes.get(idx)
+        if not body_quote:
             errors.append(
                 {
-                    "path": f"evidence_v2/{idx}/quote",
-                    "code": "empty_quote",
-                    "message": f"evidence_v2[{idx}] has empty quote; cannot verify grounding",
-                }
-            )
-            continue
-        if quote not in response.body_markdown:
-            errors.append(
-                {
-                    "path": f"evidence_v2/{idx}/quote",
+                    "path": f"body_markdown/[^{marker}]",
                     "code": "quote_not_in_body",
                     "message": (
-                        f"quote for {marker!r} not echoed in response body references"
+                        f"used marker {marker!r} has no matching `[^{marker}]:` "
+                        "definition in the body References block"
                     ),
                 }
             )
+            continue
+        evidence = draft.evidence_v2[idx]
         chunk_text = evidence.chunk_text or ""
         if not chunk_text:
             errors.append(
@@ -90,14 +105,14 @@ def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> lis
                 }
             )
             continue
-        if quote not in chunk_text:
+        if body_quote not in chunk_text:
             errors.append(
                 {
-                    "path": f"evidence_v2/{idx}/quote",
+                    "path": f"body_markdown/[^{marker}]",
                     "code": "quote_not_in_source",
                     "message": (
-                        f"quote for {marker!r} is not a substring of evidence_v2[{idx}]."
-                        "chunk_text — fabricated or corrupted citation"
+                        f"body quote for {marker!r} is not a substring of "
+                        f"evidence_v2[{idx}].chunk_text — fabricated or corrupted citation"
                     ),
                 }
             )
@@ -129,6 +144,9 @@ def cmd_validate_write(
     """Validate a WriteResponse scratch payload against its WriteRequest draft."""
     draft_data = json.loads(draft.read_text(encoding="utf-8"))
     response_data = json.loads(response.read_text(encoding="utf-8"))
+    # `schema_version` is a scratch-envelope field, not part of WriteRequest.
+    # Strip before Pydantic validation so the canonical model stays clean.
+    draft_data_clean = {k: v for k, v in draft_data.items() if k != "schema_version"}
 
     errors: list[dict] = []
     structural_checks = {
@@ -138,7 +156,7 @@ def cmd_validate_write(
     }
 
     try:
-        parsed_draft = WriteRequest.model_validate(draft_data)
+        parsed_draft = WriteRequest.model_validate(draft_data_clean)
     except ValidationError as exc:
         errors.extend({**e, "path": f"draft/{e['path']}"} for e in _pydantic_errors(exc))
         structural_checks["pydantic"] = "fail"
@@ -166,9 +184,7 @@ def cmd_validate_write(
                 }
             )
         quote_errors = _quote_grounding_errors(parsed_draft, parsed_response)
-        body_errors = [
-            e for e in quote_errors if e["code"] in {"quote_not_in_body", "empty_quote"}
-        ]
+        body_errors = [e for e in quote_errors if e["code"] == "quote_not_in_body"]
         source_errors = [
             e
             for e in quote_errors
