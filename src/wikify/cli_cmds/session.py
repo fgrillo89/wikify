@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,13 +12,24 @@ import typer
 from ..paths import BundlePaths
 from ..session import (
     SchemaVersionMismatchError,
+    SessionLockHeldError,
+    acquire_lock,
     apply_merge_patch,
     checkpoint_session,
     init_session,
     load_session,
+    read_lock,
+    release_lock,
     save_session,
+    session_lock,
     touch,
 )
+
+
+def _cli_owner(override: str | None) -> str:
+    if override:
+        return override
+    return f"wikify-cli/pid-{os.getpid()}"
 
 app = typer.Typer(add_completion=False, help="Durable session file for skill workflows.")
 
@@ -87,17 +99,33 @@ def cmd_update(
         "--patch",
         help="JSON Merge Patch. If '-' or omitted, read from stdin.",
     ),
+    owner: str | None = typer.Option(None, "--owner", help="Override the lock owner string."),
 ) -> None:
-    """Apply a JSON Merge Patch (RFC 7396) to the session."""
+    """Apply a JSON Merge Patch (RFC 7396) to the session. Holds the session lock."""
     if patch is None or patch == "-":
         patch_text = sys.stdin.read()
     else:
         patch_text = patch
     patch_data = json.loads(patch_text)
-    session = load_session(session_path)
-    updated = apply_merge_patch(session, patch_data)
-    updated = touch(updated)
-    save_session(session_path, updated)
+    try:
+        with session_lock(session_path, owner=_cli_owner(owner)):
+            session = load_session(session_path)
+            updated = apply_merge_patch(session, patch_data)
+            updated = touch(updated)
+            save_session(session_path, updated)
+    except SessionLockHeldError as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "lock_held",
+                    "owner": exc.owner,
+                    "acquired_at": exc.acquired_at,
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
     typer.echo(json.dumps({"ok": True, "updated_at": updated.updated_at}))
 
 
@@ -117,16 +145,75 @@ def cmd_close(
     status: str = typer.Option(
         "closed", "--status", help="One of: closed, failed, abandoned."
     ),
+    owner: str | None = typer.Option(None, "--owner", help="Override the lock owner string."),
 ) -> None:
-    """Mark the session finished. Does not delete the file."""
-    session = load_session(session_path)
-    target_status = status if status != "closed" else "closed"
-    if target_status not in {"closed", "failed", "abandoned"}:
+    """Mark the session finished. Does not delete the file. Holds the session lock."""
+    if status not in {"closed", "failed", "abandoned"}:
         raise typer.BadParameter(f"invalid status: {status}")
-    mapped = "closed" if target_status == "closed" else "failed"
-    updated = touch(session.model_copy(update={"status": mapped}))
-    save_session(session_path, updated)
+    mapped = "closed" if status == "closed" else "failed"
+    try:
+        with session_lock(session_path, owner=_cli_owner(owner)):
+            session = load_session(session_path)
+            updated = touch(session.model_copy(update={"status": mapped}))
+            save_session(session_path, updated)
+    except SessionLockHeldError as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "lock_held",
+                    "owner": exc.owner,
+                    "acquired_at": exc.acquired_at,
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
     typer.echo(json.dumps({"ok": True, "status": updated.status}))
+
+
+@app.command("lock")
+def cmd_lock(
+    session_path: Path = typer.Option(..., "--session"),
+    owner: str | None = typer.Option(None, "--owner"),
+    ttl_seconds: int = typer.Option(3600, "--ttl-seconds"),
+) -> None:
+    """Acquire the session lock explicitly. Fails with exit 2 if already held."""
+    try:
+        acquire_lock(session_path, owner=_cli_owner(owner), ttl_seconds=ttl_seconds)
+    except SessionLockHeldError as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "lock_held",
+                    "owner": exc.owner,
+                    "acquired_at": exc.acquired_at,
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
+    record = read_lock(session_path) or {}
+    typer.echo(
+        json.dumps(
+            {
+                "ok": True,
+                "owner": record.get("owner"),
+                "acquired_at": record.get("acquired_at"),
+                "expires_at": record.get("expires_at"),
+            }
+        )
+    )
+
+
+@app.command("unlock")
+def cmd_unlock(
+    session_path: Path = typer.Option(..., "--session"),
+) -> None:
+    """Release the session lock unconditionally."""
+    release_lock(session_path)
+    typer.echo(json.dumps({"ok": True}))
 
 
 def _count_by_status(pages: list[dict]) -> dict[str, int]:

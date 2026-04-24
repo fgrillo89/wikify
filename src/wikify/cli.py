@@ -8,6 +8,8 @@ from pathlib import Path
 import typer
 
 from .cache import ExtractCache
+from .cli_cmds import bundle as bundle_cli
+from .cli_cmds import draft as draft_cli
 from .cli_cmds import kg as kg_cli
 from .cli_cmds import session as session_cli
 from .cli_cmds import validate as validate_cli
@@ -23,7 +25,9 @@ from .types import ModelTier
 app = typer.Typer(add_completion=False, help="wikify CLI")
 app.add_typer(session_cli.app, name="session")
 app.add_typer(kg_cli.app, name="kg")
+app.add_typer(draft_cli.app, name="draft")
 app.add_typer(validate_cli.app, name="validate")
+app.add_typer(bundle_cli.app, name="bundle")
 
 
 # Calibrated against the realistic per-call cost model documented in

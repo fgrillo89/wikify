@@ -31,10 +31,17 @@ def _pydantic_errors(exc: ValidationError) -> list[dict]:
     ]
 
 
-def _quote_in_chunk_errors(draft: WriteRequest, response: WriteResponse) -> list[dict]:
-    """Verify every used `[^eN]` marker maps to an evidence entry whose quote is in the body.
+def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> list[dict]:
+    """Verify every used `[^eN]` marker maps to an evidence entry whose quote is:
 
-    Marker `eN` is 1-based into `draft.evidence_v2` (position-based, not label-based).
+    1. actually cited somewhere in the response body, AND
+    2. a verbatim substring of the cited chunk's source text
+       (evidence_v2[i].chunk_text).
+
+    Marker `eN` is 1-based into `draft.evidence_v2` (position-based, not
+    label-based). Grounding is the load-bearing property; a quote that is
+    echoed in the body but is NOT in the chunk text is fabricated and
+    must fail validation.
     """
     errors: list[dict] = []
     for marker in response.used_markers:
@@ -52,12 +59,46 @@ def _quote_in_chunk_errors(draft: WriteRequest, response: WriteResponse) -> list
             continue
         evidence = draft.evidence_v2[idx]
         quote = (evidence.quote or "").strip()
-        if quote and quote not in response.body_markdown:
+        if not quote:
+            errors.append(
+                {
+                    "path": f"evidence_v2/{idx}/quote",
+                    "code": "empty_quote",
+                    "message": f"evidence_v2[{idx}] has empty quote; cannot verify grounding",
+                }
+            )
+            continue
+        if quote not in response.body_markdown:
             errors.append(
                 {
                     "path": f"evidence_v2/{idx}/quote",
                     "code": "quote_not_in_body",
-                    "message": f"quote for {marker!r} not found in response body",
+                    "message": (
+                        f"quote for {marker!r} not echoed in response body references"
+                    ),
+                }
+            )
+        chunk_text = evidence.chunk_text or ""
+        if not chunk_text:
+            errors.append(
+                {
+                    "path": f"evidence_v2/{idx}/chunk_text",
+                    "code": "chunk_text_missing",
+                    "message": (
+                        f"evidence_v2[{idx}] has no chunk_text; cannot verify source grounding"
+                    ),
+                }
+            )
+            continue
+        if quote not in chunk_text:
+            errors.append(
+                {
+                    "path": f"evidence_v2/{idx}/quote",
+                    "code": "quote_not_in_source",
+                    "message": (
+                        f"quote for {marker!r} is not a substring of evidence_v2[{idx}]."
+                        "chunk_text — fabricated or corrupted citation"
+                    ),
                 }
             )
     return errors
@@ -90,7 +131,11 @@ def cmd_validate_write(
     response_data = json.loads(response.read_text(encoding="utf-8"))
 
     errors: list[dict] = []
-    structural_checks = {"pydantic": "pending", "quote_in_chunk": "pending"}
+    structural_checks = {
+        "pydantic": "pending",
+        "quote_in_body": "pending",
+        "quote_in_source": "pending",
+    }
 
     try:
         parsed_draft = WriteRequest.model_validate(draft_data)
@@ -120,8 +165,17 @@ def cmd_validate_write(
                     ),
                 }
             )
-        quote_errors = _quote_in_chunk_errors(parsed_draft, parsed_response)
-        structural_checks["quote_in_chunk"] = "fail" if quote_errors else "pass"
+        quote_errors = _quote_grounding_errors(parsed_draft, parsed_response)
+        body_errors = [
+            e for e in quote_errors if e["code"] in {"quote_not_in_body", "empty_quote"}
+        ]
+        source_errors = [
+            e
+            for e in quote_errors
+            if e["code"] in {"quote_not_in_source", "chunk_text_missing", "unknown_marker"}
+        ]
+        structural_checks["quote_in_body"] = "fail" if body_errors else "pass"
+        structural_checks["quote_in_source"] = "fail" if source_errors else "pass"
         errors.extend(quote_errors)
 
     ok = not errors

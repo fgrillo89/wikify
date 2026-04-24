@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -190,21 +191,61 @@ def checkpoint_session(session_path: Path, label: str) -> Path:
     return dest
 
 
-def acquire_lock(session_path: Path, owner: str, ttl_seconds: int = 3600) -> None:
-    paths = BundlePaths(Path(json.loads(session_path.read_text())["bundle_root"]))
-    lock_path = paths.session_lock_path
-    if lock_path.exists():
-        existing = json.loads(lock_path.read_text(encoding="utf-8"))
-        raise SessionLockHeldError(
-            existing.get("owner", "unknown"), existing.get("acquired_at", "")
+def _lock_is_stale(record: dict) -> bool:
+    """Return True if a lock record's expires_at is in the past."""
+    expires = record.get("expires_at")
+    if not expires:
+        ttl = record.get("ttl_seconds")
+        acquired = record.get("acquired_at")
+        if not (ttl and acquired):
+            return False
+        try:
+            acquired_dt = datetime.strptime(acquired, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            return False
+        return datetime.now(timezone.utc) > acquired_dt + timedelta(seconds=int(ttl))
+    try:
+        expires_dt = datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
         )
-    now = _utcnow()
+    except ValueError:
+        return False
+    return datetime.now(timezone.utc) > expires_dt
+
+
+def _lock_path_for(session_path: Path) -> Path:
+    bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
+    return BundlePaths(bundle_root).session_lock_path
+
+
+def acquire_lock(session_path: Path, owner: str, ttl_seconds: int = 3600) -> None:
+    """Acquire the session lock or raise SessionLockHeldError.
+
+    A lock whose `expires_at` has passed is treated as stale and silently
+    reclaimed. Otherwise the existing owner holds and acquisition fails.
+    """
+    lock_path = _lock_path_for(session_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        try:
+            existing = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+        if existing and not _lock_is_stale(existing):
+            raise SessionLockHeldError(
+                existing.get("owner", "unknown"), existing.get("acquired_at", "")
+            )
+    now_dt = datetime.now(timezone.utc)
+    expires_dt = now_dt + timedelta(seconds=ttl_seconds)
     lock_path.write_text(
         json.dumps(
             {
                 "owner": owner,
-                "acquired_at": now,
                 "pid": os.getpid(),
+                "acquired_at": now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expires_at": expires_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "ttl_seconds": ttl_seconds,
             }
         ),
@@ -213,7 +254,32 @@ def acquire_lock(session_path: Path, owner: str, ttl_seconds: int = 3600) -> Non
 
 
 def release_lock(session_path: Path) -> None:
-    paths = BundlePaths(Path(json.loads(session_path.read_text())["bundle_root"]))
-    lock_path = paths.session_lock_path
+    lock_path = _lock_path_for(session_path)
     if lock_path.exists():
         lock_path.unlink()
+
+
+def read_lock(session_path: Path) -> dict | None:
+    """Return the lock record (or None if no lock file exists)."""
+    lock_path = _lock_path_for(session_path)
+    if not lock_path.exists():
+        return None
+    try:
+        return json.loads(lock_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+@contextmanager
+def session_lock(session_path: Path, owner: str, ttl_seconds: int = 3600):
+    """Context manager: acquire the lock, run the block, release on exit.
+
+    If acquisition fails the context never enters and SessionLockHeldError
+    propagates to the caller. Release is best-effort — if the lock was
+    already removed (e.g., stale-reclaimed elsewhere) the unlink is a no-op.
+    """
+    acquire_lock(session_path, owner=owner, ttl_seconds=ttl_seconds)
+    try:
+        yield
+    finally:
+        release_lock(session_path)

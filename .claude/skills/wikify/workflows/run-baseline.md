@@ -5,10 +5,11 @@ description: Produce a wiki bundle using the abstract-first source-grounded base
 
 # run-baseline
 
-> **Status**: Phase 3 in progress. Session and `wikify kg` CLI families
-> land on commit 3a/3b of this pivot branch. `wikify draft`, `wikify
-> validate`, and `wikify bundle` families ship on commit 3c alongside a
-> recorded-transcript parity test. See `docs/skill-pivot-phase-0-plan.md`.
+> **Status**: the CLI families referenced below — `session`, `kg`,
+> `draft`, `validate`, `bundle` — are all implemented. The recorded-
+> transcript parity test against `run_baseline()` is still outstanding
+> and is the gate for deleting the legacy Python path. See
+> `docs/skill-pivot-phase-0-plan.md`.
 
 ## Purpose
 

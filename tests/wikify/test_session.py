@@ -156,6 +156,81 @@ def test_cli_init_refuses_to_overwrite(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_cli_lock_blocks_update_and_close(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    init_result = runner.invoke(
+        app, ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
+    )
+    session_path = Path(json.loads(init_result.output)["session_path"])
+
+    # Outside owner grabs the lock.
+    lock_result = runner.invoke(
+        app, ["session", "lock", "--session", str(session_path), "--owner", "outsider"]
+    )
+    assert lock_result.exit_code == 0, lock_result.output
+
+    # Update must now fail with exit 2 and a structured lock_held payload.
+    upd = runner.invoke(
+        app,
+        ["session", "update", "--session", str(session_path), "--patch", "{}"],
+    )
+    assert upd.exit_code == 2, upd.output + upd.stderr
+    err_payload = json.loads(upd.stderr or upd.output)
+    assert err_payload["error"] == "lock_held"
+    assert err_payload["owner"] == "outsider"
+
+    # Close is gated by the same lock.
+    clos = runner.invoke(app, ["session", "close", "--session", str(session_path)])
+    assert clos.exit_code == 2
+
+    # After unlock, update and close proceed.
+    unlock = runner.invoke(app, ["session", "unlock", "--session", str(session_path)])
+    assert unlock.exit_code == 0
+    upd2 = runner.invoke(
+        app, ["session", "update", "--session", str(session_path), "--patch", "{}"]
+    )
+    assert upd2.exit_code == 0
+    clos2 = runner.invoke(app, ["session", "close", "--session", str(session_path)])
+    assert clos2.exit_code == 0
+
+
+def test_stale_lock_past_ttl_is_reclaimed(tmp_path: Path) -> None:
+    from wikify.paths import BundlePaths
+    from wikify.session import acquire_lock
+
+    bundle = tmp_path / "bundle"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    init_result = runner.invoke(
+        app, ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
+    )
+    session_path = Path(json.loads(init_result.output)["session_path"])
+
+    # Write a stale lock record directly: expired 1 hour ago.
+    import json as _json
+
+    paths = BundlePaths(bundle)
+    paths.session_lock_path.write_text(
+        _json.dumps(
+            {
+                "owner": "ghost",
+                "pid": 99999,
+                "acquired_at": "2000-01-01T00:00:00Z",
+                "expires_at": "2000-01-01T01:00:00Z",
+                "ttl_seconds": 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # New acquire should succeed by reclaiming the stale lock.
+    acquire_lock(session_path, owner="new-owner")
+    record = _json.loads(paths.session_lock_path.read_text(encoding="utf-8"))
+    assert record["owner"] == "new-owner"
+
+
 def test_bundle_paths_exposes_session_layout(tmp_path: Path) -> None:
     paths = BundlePaths(tmp_path / "bundle")
     assert paths.session_dir == tmp_path / "bundle" / "_session"

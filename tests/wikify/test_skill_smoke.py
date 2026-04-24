@@ -3,13 +3,14 @@
 Scope:
 - Frontmatter parses as YAML with required fields.
 - Every reference/<name>.md path mentioned in a skill body resolves on disk.
-
-The Python-symbol-import check is added in Commit 3 once the new wikify.session
-and wikify.cli_cmds modules exist.
+- Every src/wikify/<path>.py::<symbol> or wikify.<dotted> reference in a
+  skill body resolves to a real importable module (and symbol, when named).
+- The Phase 0 reference set exists.
 """
 
 from __future__ import annotations
 
+import importlib
 import re
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 import yaml
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "wikify"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 REFERENCE_PATH_RE = re.compile(
@@ -24,6 +26,16 @@ REFERENCE_PATH_RE = re.compile(
     r"|(?:^|\s)reference/([a-z0-9\-]+)\.md",
     re.MULTILINE,
 )
+
+# Matches `src/wikify/<path>.py` and optional `::symbol` suffix.
+# Used to extract Python symbols that skills claim exist.
+PYTHON_PATH_RE = re.compile(
+    r"src/wikify/([a-z0-9_/]+)\.py(?:::([A-Za-z_][A-Za-z0-9_]*))?"
+)
+
+# Free-form `wikify.<dotted>` references, e.g. wikify.baselines.pipeline.BaselineConfig.
+# Only rooted at `wikify.` so we don't sweep up plain English words.
+WIKIFY_DOTTED_RE = re.compile(r"\bwikify\.[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)+")
 
 
 def _all_skill_files() -> list[Path]:
@@ -81,3 +93,54 @@ def test_expected_reference_files_present() -> None:
     present = {p.name for p in reference_dir.glob("*.md")}
     missing = expected - present
     assert not missing, f"Phase 0 reference files missing: {sorted(missing)}"
+
+
+def _python_references() -> list[tuple[Path, str, str | None]]:
+    """Collect every (skill, module_path, optional_symbol) referenced by any skill."""
+    refs: list[tuple[Path, str, str | None]] = []
+    for skill_path in _all_skill_files():
+        body = skill_path.read_text(encoding="utf-8")
+        for match in PYTHON_PATH_RE.finditer(body):
+            raw_path, symbol = match.group(1), match.group(2)
+            module = "wikify." + raw_path.replace("/", ".")
+            refs.append((skill_path.relative_to(SKILLS_ROOT), module, symbol))
+        for match in WIKIFY_DOTTED_RE.finditer(body):
+            dotted = match.group(0)
+            # Skip examples inside code blocks that reference nonexistent
+            # chains like `wikify.session.session.json` — the last segment
+            # is a file, not a symbol. We require at least 2 dots total
+            # (wikify.X.Y) and resolve as module first, then symbol.
+            parts = dotted.split(".")
+            if len(parts) < 3:
+                continue
+            # Heuristic: if last segment looks file-suffix-y ("json", "md",
+            # "py"), skip.
+            if parts[-1] in {"json", "md", "py", "jsonl", "npz", "lock"}:
+                continue
+            # Try to split into module + symbol: last segment CamelCase or
+            # ALL_CAPS => symbol; else treat whole thing as module.
+            last = parts[-1]
+            if last and (last[0].isupper() or last.isupper()):
+                module = ".".join(parts[:-1])
+                symbol = last
+            else:
+                module = ".".join(parts)
+                symbol = None
+            refs.append((skill_path.relative_to(SKILLS_ROOT), module, symbol))
+    return refs
+
+
+def test_referenced_python_symbols_import() -> None:
+    """Every `src/wikify/<path>.py::<symbol>` and `wikify.<dotted>` reference
+    in skills must resolve: module importable, symbol present if named.
+    """
+    missing: list[str] = []
+    for skill_rel, module, symbol in _python_references():
+        try:
+            mod = importlib.import_module(module)
+        except Exception as exc:  # pragma: no cover - exact type varies
+            missing.append(f"{skill_rel}: module {module!r} not importable ({exc})")
+            continue
+        if symbol is not None and not hasattr(mod, symbol):
+            missing.append(f"{skill_rel}: {module}.{symbol} does not exist")
+    assert not missing, "Skills reference missing Python symbols:\n  " + "\n  ".join(missing)
