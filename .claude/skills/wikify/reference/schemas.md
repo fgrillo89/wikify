@@ -136,12 +136,26 @@ first mutated.
 ### `<bundle>/_run.json`
 
 Run snapshot flushed on `wikify session close` (and legacy `run_baseline()`).
-Current field-set is the merge gate for schema parity; see `src/wikify/meter.py`
-and `src/wikify/baselines/pipeline.py` for the current keys. No `schema_version`
-field yet — will be added when session closure takes over as the only writer.
+
+**Skill-path writer** (`src/wikify/session.py::write_run_snapshot`): emits
+`schema_version: 1` plus a session-derived field set — `session_id`,
+`strategy`, `status`, `bundle_root`, `corpus_root`, `created_at`,
+`closed_at`, `budget`, `stages`, `config`, `pages`, `n_pages_committed`,
+`n_pages_failed`, `page_counts`, `telemetry_paths`.
+
+**Legacy writer** (`src/wikify/baselines/pipeline.py::run_baseline`): emits
+a different field set today — no `schema_version`; fields include
+`strategy`, `mode="baseline"`, `seed_doc_ids`, `seed_chunks_read`,
+`evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
+`baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
+`n_pages_written`, `write_rejections`, plus `CostMeter` snapshot fields.
+
+Full field-set convergence between the two writers is the named
+**Phase 5 deletion gate** — once the skill path emits a superset of
+legacy fields with the same semantics, `run_baseline()` can be removed.
 
 Owning command: `wikify session close` (skill-driven path);
-`baselines.pipeline.run_baseline` (legacy path).
+`baselines.pipeline.run_baseline` (legacy path, scheduled for deletion).
 
 ### `<bundle>/_calls.jsonl`
 

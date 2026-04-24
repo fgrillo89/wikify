@@ -38,7 +38,7 @@ from typer.testing import CliRunner
 
 from wikify.cli import app
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths
+from wikify.paths import BundlePaths, CorpusPaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
@@ -269,17 +269,51 @@ def test_baseline_skill_path_runs_cli_sequence(
     assert bundle_paths.graph_path.exists()
 
 
-def test_baseline_skill_bundle_has_same_top_level_artifacts_as_legacy(
+def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
     tmp_path: Path, tiny_corpus: Path
 ) -> None:
-    """Structural-parity check: the skill path and legacy run_baseline produce
-    the same *kinds* of top-level artifacts on disk, even though specific
-    field sets inside _run.json differ (legacy has meter-derived fields the
-    skill path doesn't yet emit).
+    """Compare the top-level bundle artifact set produced by the skill
+    path against the one produced by legacy ``run_baseline()`` on the
+    same fixture.
 
-    This is a contract lower bound. Full schema-level parity of _run.json
-    and _calls.jsonl is tracked as Tier 1 follow-up work in the roadmap.
+    This is a contract lower bound — the skill path must at minimum
+    emit every top-level artifact the legacy path emits, and must not
+    silently introduce new ones the rest of the system doesn't know
+    about. Deeper field-level parity for _run.json and _calls.jsonl is
+    tracked as Tier 1 follow-up work.
     """
+    # --- Legacy bundle ----------------------------------------------------
+    from wikify.baselines.pipeline import BaselineConfig, run_baseline
+    from wikify.cache import ExtractCache
+    from wikify.distill.preload import preload_corpus
+    from wikify.distill.strategy import build_strategy
+    from wikify.meter import CostMeter
+
+    from .fakes import FakeExtractor, FakeWriter
+    from .test_baseline_pipeline import _ValidFakeWriter
+
+    legacy_bundle = tmp_path / "legacy-bundle"
+    legacy_paths = BundlePaths(legacy_bundle)
+    cache = ExtractCache(root=tmp_path / "cache")
+    meter = CostMeter(
+        budget_haiku_eq=30_000.0,
+        run_id="legacy-parity",
+        events_path=legacy_paths.calls_path,
+    )
+    preloaded = preload_corpus(CorpusPaths(tiny_corpus))
+    run_baseline(
+        kg=preloaded.knowledge_graph,
+        bundle=legacy_paths,
+        strategy=build_strategy("balanced", seed=0),
+        extractor=FakeExtractor(cache, meter),
+        writer=_ValidFakeWriter(meter),
+        meter=meter,
+        budget_haiku_eq=30_000.0,
+        preloaded=preloaded,
+        config=BaselineConfig(min_evidence_chunks=1),
+    )
+    _ = FakeWriter  # keep the import visible so future parity work can diff.
+
     # --- Skill-path bundle ------------------------------------------------
     skill_bundle = tmp_path / "skill-bundle"
     skill_paths = BundlePaths(skill_bundle)
@@ -359,16 +393,42 @@ def test_baseline_skill_bundle_has_same_top_level_artifacts_as_legacy(
     )
     runner.invoke(app, ["session", "close", "--session", str(session_path)])
 
-    # --- Legacy bundle — just check it is NOT accidentally a subset -------
-    # We do not actually run run_baseline() here because that requires the
-    # extra fake-binding wiring and duplicates coverage in
-    # test_baseline_pipeline.py. Instead we assert the skill bundle's
-    # top-level artifact set matches the declared contract.
+    # --- Compare top-level artifact sets ----------------------------------
+    # Legacy artifacts that the skill-path should reproduce.
+    legacy_top = {p.name for p in legacy_bundle.iterdir()}
+    skill_top = {p.name for p in skill_bundle.iterdir()}
 
-    top_level = {p.name for p in skill_bundle.iterdir()}
-    assert "_session" in top_level
-    assert "_scratch" in top_level
-    assert "_run.json" in top_level
-    assert "_index.json" in top_level
-    assert "_wiki_graph.json" in top_level
-    assert "articles" in top_level  # the page kind actually written
+    # Every legacy artifact must exist on the skill path too. Skill-only
+    # additions (_session, _scratch) are allowed because they are
+    # explicitly part of the skill architecture (see schemas.md).
+    legacy_required = {"_run.json", "_index.json", "_wiki_graph.json"}
+    assert legacy_required.issubset(legacy_top), (
+        f"legacy bundle missing expected artifacts: {legacy_required - legacy_top}"
+    )
+    missing_from_skill = legacy_required - skill_top
+    assert not missing_from_skill, (
+        f"skill bundle missing legacy artifacts: {missing_from_skill}"
+    )
+
+    # Articles directory must be present on both (baseline only writes
+    # concept pages, not persons, on this fixture).
+    assert (legacy_bundle / "articles").exists()
+    assert (skill_bundle / "articles").exists()
+
+    # Skill-only additions must match a documented allowlist — either
+    # architectural additions (_session, _scratch per the schemas.md
+    # contract) or bundle-side artifacts listed in paths.py that legacy
+    # only writes conditionally (e.g., _wiki_vectors.* only appears
+    # when rebuild_wiki_graph produces non-empty embeddings).
+    skill_only = skill_top - legacy_top
+    allowed_skill_only = {
+        "_session",
+        "_scratch",
+        "_wiki_vectors.npz",
+        "_wiki_vectors.ids.json",
+        # Legacy-only conditional fields that the skill path also emits
+        # now are intentionally allowed here; they converge when legacy
+        # and skill paths share the same bundle state.
+    }
+    unexpected = skill_only - allowed_skill_only
+    assert not unexpected, f"skill bundle introduced unexpected artifacts: {unexpected}"

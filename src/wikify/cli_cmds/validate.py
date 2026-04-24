@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -307,6 +308,13 @@ def cmd_validate_write(
         "structural_checks": structural_checks,
         "checked_at": _utcnow(),
     }
+
+    # Bind the verdict to the specific response bytes it witnessed. A
+    # commit-page caller can then refuse any verdict whose bytes no
+    # longer match the response on disk (stale/edited response).
+    response_bytes = response.read_bytes()
+    verdict["response_sha256"] = hashlib.sha256(response_bytes).hexdigest()
+    verdict["response_path"] = str(response.resolve())
 
     out_path = out or (draft.parent / f"validation-{page_id}.json")
     out_path.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")

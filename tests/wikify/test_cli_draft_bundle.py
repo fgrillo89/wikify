@@ -220,6 +220,169 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
     assert ald["validation_path"] == val_payload["validation_path"]
 
 
+def test_bundle_commit_page_rejects_verdict_page_id_mismatch(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """A verdict whose page_id names a different page must not authorise
+    promotion of this response.
+    """
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Build a verdict that claims ok=true but names a DIFFERENT page.
+    verdict_path = scratch / "validation-SOMETHING-ELSE.json"
+    verdict_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "page_id": "SomethingElse",
+                "response_path": str(response_path.resolve()),
+                "response_sha256": __import__("hashlib").sha256(
+                    response_path.read_bytes()
+                ).hexdigest(),
+                "errors": [],
+                "structural_checks": {"pydantic": "pass"},
+                "checked_at": "2026-04-24T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            str(verdict_path),
+        ],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stderr or result.output)
+    assert err["error"] == "verdict_page_id_mismatch"
+
+
+def test_bundle_commit_page_rejects_response_edited_after_validation(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """If response bytes change after `wikify validate write` recorded a
+    verdict, commit-page must refuse to promote — the verdict is stale.
+    """
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Validate — this captures response_sha256 into the verdict.
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    assert val.exit_code == 0
+    verdict_path = Path(json.loads(val.output)["validation_path"])
+
+    # Edit the response AFTER validation.
+    response_data = json.loads(response_path.read_text(encoding="utf-8"))
+    response_data["body_markdown"] = (
+        response_data["body_markdown"] + "\n<!-- tampered -->\n"
+    )
+    response_path.write_text(json.dumps(response_data), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            str(verdict_path),
+        ],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stderr or result.output)
+    assert err["error"] == "response_content_changed"
+
+
 def test_bundle_commit_page_rejects_unvalidated_page(
     initialized_session: tuple[Path, Path],
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,57 @@ def cmd_commit_page(
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # Bind the verdict to THIS response. A stale ok=true verdict must
+    # not authorise a different or later-edited response.
+    verdict_page_id = verdict.get("page_id")
+    if verdict_page_id != parsed.page_id:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "verdict_page_id_mismatch",
+                    "verdict_page_id": verdict_page_id,
+                    "response_page_id": parsed.page_id,
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    verdict_response_path = verdict.get("response_path")
+    if verdict_response_path and Path(verdict_response_path).resolve() != response.resolve():
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "verdict_response_path_mismatch",
+                    "verdict_response_path": verdict_response_path,
+                    "response_path": str(response.resolve()),
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    verdict_sha = verdict.get("response_sha256")
+    if verdict_sha:
+        actual_sha = hashlib.sha256(response.read_bytes()).hexdigest()
+        if actual_sha != verdict_sha:
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "response_content_changed",
+                        "verdict_sha256": verdict_sha,
+                        "response_sha256": actual_sha,
+                        "message": (
+                            "response bytes changed since the verdict was recorded; "
+                            "re-run `wikify validate write` to refresh the verdict"
+                        ),
+                    }
+                ),
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     session = load_session(session_path)
     bundle_paths = BundlePaths(Path(session.bundle_root))
