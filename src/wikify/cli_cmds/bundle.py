@@ -35,35 +35,46 @@ def _cli_owner(override: str | None) -> str:
 def cmd_commit_page(
     session_path: Path = typer.Option(..., "--session"),
     response: Path = typer.Option(..., "--response", help="Path to response-<page_id>.json."),
-    validation: Path | None = typer.Option(
-        None,
+    validation: Path = typer.Option(
+        ...,
         "--validation",
         help=(
-            "Path to validation-<page_id>.json. If provided, commit is rejected "
-            "when the verdict has ok=false."
+            "Path to validation-<page_id>.json with ok=true. Required: "
+            "commit-page enforces the atoms.md precondition that the page "
+            "has passed `wikify validate write` before promotion."
         ),
     ),
     owner: str | None = typer.Option(None, "--owner"),
 ) -> None:
-    """Promote a validated WriteResponse into pages/<id>.md and update the session."""
-    response_data = json.loads(response.read_text(encoding="utf-8"))
-    parsed = WriteResponse.model_validate(response_data)
+    """Promote a validated WriteResponse into pages/<id>.md and update the session.
 
-    if validation is not None:
-        verdict = json.loads(validation.read_text(encoding="utf-8"))
-        if not verdict.get("ok", False):
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "error": "validation_failed",
-                        "verdict_path": str(validation),
-                        "errors": verdict.get("errors", []),
-                    }
-                ),
-                err=True,
-            )
-            raise typer.Exit(code=1)
+    Preconditions enforced (per reference/atoms.md commit-page):
+      - The --validation verdict's ok field is true.
+      - The session page entry's status is `validated` (set by
+        `wikify validate write --session`).
+    If either fails, no canonical mutation happens.
+    """
+    response_data = json.loads(response.read_text(encoding="utf-8"))
+    # Same envelope-stripping contract as `wikify validate write`: scratch
+    # writers may attach schema_version, but the canonical Pydantic model
+    # is extra="forbid".
+    response_data_clean = {k: v for k, v in response_data.items() if k != "schema_version"}
+    parsed = WriteResponse.model_validate(response_data_clean)
+
+    verdict = json.loads(validation.read_text(encoding="utf-8"))
+    if not verdict.get("ok", False):
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "validation_failed",
+                    "verdict_path": str(validation),
+                    "errors": verdict.get("errors", []),
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     session = load_session(session_path)
     bundle_paths = BundlePaths(Path(session.bundle_root))
@@ -79,6 +90,27 @@ def cmd_commit_page(
             page_entry = next(
                 (p for p in fresh.pages if p.page_id == parsed.page_id), None
             )
+            if page_entry is None or page_entry.status != "validated":
+                actual = page_entry.status if page_entry else "<missing>"
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "precondition_not_met",
+                            "page_id": parsed.page_id,
+                            "expected_status": "validated",
+                            "actual_status": actual,
+                            "message": (
+                                "commit-page requires the session page entry "
+                                "to be status=validated. Run "
+                                "`wikify validate write --session <p>` first so "
+                                "the validated transition is recorded."
+                            ),
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=1)
             kind = parsed.page_kind or "article"
             page = WikiPage(
                 id=parsed.page_id,
@@ -105,24 +137,14 @@ def cmd_commit_page(
             build_index(bundle_paths, wiki_pages).save()
             rebuild_wiki_graph(bundle_paths, wiki_pages)
 
-            # Update session: mark this page committed.
+            # Update session: mark this page committed. page_entry is
+            # guaranteed non-None by the precondition check above.
             new_pages = [p.model_dump(mode="json") for p in fresh.pages]
-            if page_entry is None:
-                new_pages.append(
-                    {
-                        "page_id": parsed.page_id,
-                        "status": "committed",
-                        "draft_path": None,
-                        "validation_path": (str(validation) if validation else None),
-                    }
-                )
-            else:
-                for entry in new_pages:
-                    if entry["page_id"] == parsed.page_id:
-                        entry["status"] = "committed"
-                        if validation is not None:
-                            entry["validation_path"] = str(validation)
-                        break
+            for entry in new_pages:
+                if entry["page_id"] == parsed.page_id:
+                    entry["status"] = "committed"
+                    entry["validation_path"] = str(validation)
+                    break
             updated = apply_merge_patch(fresh, {"pages": new_pages})
             save_session(session_path, touch(updated))
     except SessionLockHeldError as exc:

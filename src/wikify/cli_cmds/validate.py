@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,14 @@ import typer
 from pydantic import ValidationError
 
 from ..schema import WriteRequest, WriteResponse
+from ..session import (
+    SessionLockHeldError,
+    apply_merge_patch,
+    load_session,
+    save_session,
+    session_lock,
+    touch,
+)
 
 app = typer.Typer(add_completion=False, help="Schema and structural validation for drafts.")
 
@@ -47,35 +56,100 @@ def _parse_ref_quotes(body_markdown: str) -> dict[int, str]:
     return quotes
 
 
-def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> list[dict]:
-    """Verify every used `[^eN]` marker is grounded in its source chunk.
+_PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
 
-    The ground-truth quote lives in the response body's References block,
-    not in the draft's evidence_v2 — the draft provides chunk_text for
-    the subagent to pick a verbatim quote from, and the subagent writes
-    the quote into a `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line.
+
+def _parse_prose_markers(body_markdown: str) -> set[int]:
+    """Return 0-based indices of every `[^eN]` marker found anywhere in the body."""
+    return {int(m.group(1)) - 1 for m in _PROSE_MARKER_RE.finditer(body_markdown)}
+
+
+def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> list[dict]:
+    """Verify every `[^eN]:` definition in the body is grounded in chunk_text.
+
+    The ground-truth quote lives in the response body's References block.
+    The subagent picks a verbatim substring from chunk_text and writes it
+    into a `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line per
+    reference/citation-format.md.
+
+    This function treats the body definitions as the source of truth —
+    not `response.used_markers`, which the subagent could silently empty
+    while still writing valid-looking prose. `used_markers` is
+    additionally cross-checked against the definition set so a mismatch
+    is also surfaced.
+
     Grounding is verified by:
 
-    1. Every used marker has a `[^eN]:` definition in the body.
-    2. Every used marker maps to a 1-based position in draft.evidence_v2.
+    1. Every in-prose `[^eN]` marker has a matching `[^eN]:` definition
+       (enforced by `WriteResponse` validator, re-checked here so an
+       empty `used_markers` does not reduce this function to a no-op).
+    2. Every definition resolves to a 1-based position in draft.evidence_v2.
     3. The evidence entry carries non-empty chunk_text.
-    4. The extracted body-quote is a verbatim substring of chunk_text.
+    4. The extracted definition-quote is a verbatim substring of chunk_text.
+    5. `used_markers` equals the set of prose markers.
 
-    A draft-side `evidence_v2[i].quote`, when non-empty, is treated as an
-    advisory suggestion and is not cross-checked here.
+    A draft-side `evidence_v2[i].quote`, when non-empty, is treated as
+    advisory only and is not cross-checked here.
     """
     body_quotes = _parse_ref_quotes(response.body_markdown)
+    prose_markers = _parse_prose_markers(response.body_markdown)
+    declared_markers = {
+        idx for m in response.used_markers if (idx := _marker_to_index(m)) is not None
+    }
     errors: list[dict] = []
-    for marker in response.used_markers:
-        idx = _marker_to_index(marker)
-        if idx is None or idx < 0 or idx >= len(draft.evidence_v2):
+
+    # 5. Cross-check used_markers bookkeeping against prose. Each side can
+    # drift independently; either drift masks grounding failures.
+    undeclared = sorted(prose_markers - declared_markers)
+    if undeclared:
+        errors.append(
+            {
+                "path": "used_markers",
+                "code": "undeclared_prose_marker",
+                "message": (
+                    f"body uses marker(s) {sorted(f'e{i + 1}' for i in undeclared)} "
+                    "that are missing from used_markers"
+                ),
+            }
+        )
+    spurious = sorted(declared_markers - prose_markers)
+    if spurious:
+        errors.append(
+            {
+                "path": "used_markers",
+                "code": "spurious_used_marker",
+                "message": (
+                    f"used_markers contains {sorted(f'e{i + 1}' for i in spurious)} "
+                    "with no corresponding `[^eN]` in prose"
+                ),
+            }
+        )
+
+    # 1. If the body uses no [^eN] markers at all, fail explicitly — the
+    # WriteResponse validator normally catches this, but we re-check so
+    # grounding logic is never vacuously satisfied.
+    if not prose_markers and not declared_markers:
+        errors.append(
+            {
+                "path": "body_markdown",
+                "code": "no_markers",
+                "message": "response body has no [^eN] markers; grounding cannot be verified",
+            }
+        )
+        return errors
+
+    # 2–4. Ground every marker that appears either in prose or in the
+    # declared set. We take the union so that either form of drift still
+    # gets every citation checked.
+    checked = prose_markers | declared_markers
+    for idx in sorted(checked):
+        marker = f"e{idx + 1}"
+        if idx < 0 or idx >= len(draft.evidence_v2):
             errors.append(
                 {
-                    "path": f"used_markers/{marker}",
+                    "path": f"markers/{marker}",
                     "code": "unknown_marker",
-                    "message": (
-                        f"response uses marker {marker!r} with no matching evidence_v2 entry"
-                    ),
+                    "message": f"marker {marker!r} has no matching evidence_v2 entry",
                 }
             )
             continue
@@ -86,8 +160,8 @@ def _quote_grounding_errors(draft: WriteRequest, response: WriteResponse) -> lis
                     "path": f"body_markdown/[^{marker}]",
                     "code": "quote_not_in_body",
                     "message": (
-                        f"used marker {marker!r} has no matching `[^{marker}]:` "
-                        "definition in the body References block"
+                        f"marker {marker!r} has no `[^{marker}]:` definition "
+                        "in the body References block"
                     ),
                 }
             )
@@ -140,13 +214,28 @@ def cmd_validate_write(
         "--out",
         help="Validation verdict output path. Defaults to validation-<page_id>.json next to draft.",
     ),
+    session_path: Path | None = typer.Option(
+        None,
+        "--session",
+        help=(
+            "Optional session.json path. When supplied AND validation ok=true, "
+            "the session page entry for this page_id is transitioned to "
+            "status=validated and validation_path is set under the session lock. "
+            "This closes the atoms.md contract — bundle commit-page then refuses "
+            "to promote pages whose status is not `validated`."
+        ),
+    ),
+    owner: str | None = typer.Option(None, "--owner", help="Override the lock owner string."),
 ) -> None:
     """Validate a WriteResponse scratch payload against its WriteRequest draft."""
     draft_data = json.loads(draft.read_text(encoding="utf-8"))
     response_data = json.loads(response.read_text(encoding="utf-8"))
-    # `schema_version` is a scratch-envelope field, not part of WriteRequest.
-    # Strip before Pydantic validation so the canonical model stays clean.
+    # `schema_version` is a scratch-envelope field, not part of the canonical
+    # WriteRequest / WriteResponse Pydantic models (which are `extra="forbid"`).
+    # Strip from both before validation so either side can carry the envelope
+    # without tripping model validation.
     draft_data_clean = {k: v for k, v in draft_data.items() if k != "schema_version"}
+    response_data_clean = {k: v for k, v in response_data.items() if k != "schema_version"}
 
     errors: list[dict] = []
     structural_checks = {
@@ -165,7 +254,7 @@ def cmd_validate_write(
         structural_checks["pydantic"] = "pass"
 
     try:
-        parsed_response = WriteResponse.model_validate(response_data)
+        parsed_response = WriteResponse.model_validate(response_data_clean)
     except ValidationError as exc:
         errors.extend({**e, "path": f"response/{e['path']}"} for e in _pydantic_errors(exc))
         structural_checks["pydantic"] = "fail"
@@ -184,7 +273,17 @@ def cmd_validate_write(
                 }
             )
         quote_errors = _quote_grounding_errors(parsed_draft, parsed_response)
-        body_errors = [e for e in quote_errors if e["code"] == "quote_not_in_body"]
+        body_errors = [
+            e
+            for e in quote_errors
+            if e["code"]
+            in {
+                "quote_not_in_body",
+                "no_markers",
+                "undeclared_prose_marker",
+                "spurious_used_marker",
+            }
+        ]
         source_errors = [
             e
             for e in quote_errors
@@ -211,7 +310,59 @@ def cmd_validate_write(
 
     out_path = out or (draft.parent / f"validation-{page_id}.json")
     out_path.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
-    typer.echo(json.dumps({"ok": ok, "validation_path": str(out_path), "errors": len(errors)}))
+
+    session_patched = False
+    if ok and session_path is not None:
+        try:
+            with session_lock(
+                session_path,
+                owner=owner or f"wikify-cli/pid-{os.getpid()}",
+            ):
+                fresh = load_session(session_path)
+                new_pages = [p.model_dump(mode="json") for p in fresh.pages]
+                found = False
+                for entry in new_pages:
+                    if entry["page_id"] == page_id:
+                        entry["status"] = "validated"
+                        entry["validation_path"] = str(out_path)
+                        found = True
+                        break
+                if not found:
+                    new_pages.append(
+                        {
+                            "page_id": page_id,
+                            "status": "validated",
+                            "draft_path": None,
+                            "validation_path": str(out_path),
+                        }
+                    )
+                updated = apply_merge_patch(fresh, {"pages": new_pages})
+                save_session(session_path, touch(updated))
+                session_patched = True
+        except SessionLockHeldError as exc:
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "lock_held",
+                        "owner": exc.owner,
+                        "acquired_at": exc.acquired_at,
+                    }
+                ),
+                err=True,
+            )
+            raise typer.Exit(code=2) from exc
+
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "validation_path": str(out_path),
+                "errors": len(errors),
+                "session_patched": session_patched,
+            }
+        )
+    )
     raise typer.Exit(code=0 if ok else 1)
 
 

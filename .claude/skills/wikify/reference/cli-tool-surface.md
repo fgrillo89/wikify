@@ -91,12 +91,18 @@ wikify draft write-request \
     # --chunk-ids is REQUIRED. Typical callers pipe it from `wikify kg evidence`.
 
 wikify validate write \
-    --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json
+    --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json \
+    --session <path>
+    # --session is REQUIRED for the skill workflow: on ok=true it transitions
+    # session.pages[<id>].status from drafted to validated under the lock.
 
 wikify bundle commit-page \
     --session <path> --response <scratch>/response-<id>.json \
-    [--validation <scratch>/validation-<id>.json]
-    # rebuilds <bundle>/_index.json and <bundle>/_wiki_graph.json under the session lock
+    --validation <scratch>/validation-<id>.json
+    # --validation is REQUIRED. commit-page verifies the verdict's ok=true
+    # AND the session page entry is status=validated before writing the
+    # page file and rebuilding <bundle>/_index.json / _wiki_graph.json
+    # under the session lock.
 ```
 
 ### Render / eval / ingest

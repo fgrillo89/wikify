@@ -1,21 +1,30 @@
-"""End-to-end skill-path walk for the baseline workflow.
+"""Happy-path skill-CLI walk for the baseline workflow (structural smoke test).
 
-Exercises the entire `run-baseline.md` loop through the wikify CLI against
-`tests/fixtures/tiny/`. The write-subagent step is simulated by writing a
-canned, structurally-valid WriteResponse to scratch — this keeps the test
-fast and API-key-free while still exercising every deterministic CLI
-surface and every on-disk artifact the skill produces.
+Exercises the deterministic CLI families the `run-baseline.md` skill
+drives: `session init/update/close`, `kg evidence`, `draft write-request`,
+`validate write --session`, `bundle commit-page --validation`. The
+write-subagent step is simulated by writing a canned structurally-valid
+WriteResponse to scratch. Grounding passes because the synthesised body
+quote is drawn from a real chunk_text substring.
 
-Scope today:
-- Proves the skill-path workflow runs end-to-end and emits every
-  documented artifact (session, scratch, pages, index, wiki graph,
-  _run.json).
-- Compares skill-path outputs structurally against legacy `run_baseline()`
-  on the same fixture.
+What this test covers:
+- Every documented artifact is produced: session.json, scratch draft,
+  validation verdict, page markdown, _index.json, _wiki_graph.json,
+  _run.json.
+- The full `planned -> drafted -> validated -> committed` page-status
+  transition per `reference/atoms.md`.
+- The new commit-page precondition: page must be `validated` in
+  session.pages before promotion.
 
-Named future work (tracked in project_skill_pivot_roadmap memory):
-- `_run.json` field-set parity with legacy (seed_doc_ids, split_initial,
-  skipped_thin_pages, write_rejections, ...).
+What this test does NOT cover (scoped follow-up work):
+- The extract stage (`stages.extract`) — this test injects one canned
+  page id via `session update --patch`, bypassing the extract +
+  canonicalisation pipeline.
+- `stages.*.status` transitions to `done` — the CLI does not yet mutate
+  the stages map automatically; that is a separate roadmap item.
+- Retry / escalation / `failed` status arm per `run-baseline.md:116`.
+- `_run.json` field-set parity with legacy `run_baseline()`
+  (seed_doc_ids, split_initial, skipped_thin_pages, write_rejections).
 - `_calls.jsonl` parity via a CostMeter rehydrated from subagent records.
 """
 
@@ -87,7 +96,7 @@ def _synthesise_valid_response(page_id: str, draft_path: Path, out_path: Path) -
     )
 
 
-def test_baseline_skill_path_runs_end_to_end(
+def test_baseline_skill_path_runs_cli_sequence(
     tmp_path: Path, tiny_corpus: Path
 ) -> None:
     bundle = tmp_path / "bundle"
@@ -171,7 +180,8 @@ def test_baseline_skill_path_runs_end_to_end(
     response_path = bundle_paths.scratch_dir / f"response-{page_id}.json"
     _synthesise_valid_response(page_id, draft_path, response_path)
 
-    # 6. validate write
+    # 6. validate write — with --session so the page transitions
+    # planned/drafted -> validated per atoms.md.
     val = runner.invoke(
         app,
         [
@@ -181,23 +191,28 @@ def test_baseline_skill_path_runs_end_to_end(
             str(draft_path),
             "--response",
             str(response_path),
+            "--session",
+            str(session_path),
         ],
     )
-    # The canned response uses a literal "self-limiting" quote that is NOT
-    # a verbatim substring of the real chunk_text from the fixture — the
-    # quote_in_source check will fail. That is the grounding rule working
-    # as intended. Accept either exit code and inspect the verdict.
-    verdict_path = Path(json.loads(val.output)["validation_path"])
+    val_payload = json.loads(val.output)
+    verdict_path = Path(val_payload["validation_path"])
     verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
     assert val.exit_code == 0, verdict
     assert verdict["ok"] is True, verdict
     assert verdict["structural_checks"]["pydantic"] == "pass"
     assert verdict["structural_checks"]["quote_in_body"] == "pass"
     assert verdict["structural_checks"]["quote_in_source"] == "pass"
+    assert val_payload["session_patched"] is True
 
-    # 7. bundle commit-page — bypass the verdict gate by not passing
-    # --validation. The skeleton test's goal is to prove the structural
-    # path; realistic grounding is covered by test_cli_validate.py.
+    # Session page entry should now be `validated`.
+    patched = json.loads(session_path.read_text(encoding="utf-8"))
+    page_entry = next(p for p in patched["pages"] if p["page_id"] == page_id)
+    assert page_entry["status"] == "validated"
+    assert page_entry["validation_path"] == str(verdict_path)
+
+    # 7. bundle commit-page — now requires --validation AND session
+    # status=validated.
     commit = runner.invoke(
         app,
         [
@@ -207,6 +222,8 @@ def test_baseline_skill_path_runs_end_to_end(
             str(session_path),
             "--response",
             str(response_path),
+            "--validation",
+            str(verdict_path),
         ],
     )
     assert commit.exit_code == 0, commit.output
@@ -313,6 +330,20 @@ def test_baseline_skill_bundle_has_same_top_level_artifacts_as_legacy(
     draft_path_2 = skill_paths.scratch_dir / f"draft-{page_id}.json"
     response_path = skill_paths.scratch_dir / f"response-{page_id}.json"
     _synthesise_valid_response(page_id, draft_path_2, response_path)
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path_2),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    verdict_path = json.loads(val.output)["validation_path"]
     runner.invoke(
         app,
         [
@@ -322,6 +353,8 @@ def test_baseline_skill_bundle_has_same_top_level_artifacts_as_legacy(
             str(session_path),
             "--response",
             str(response_path),
+            "--validation",
+            verdict_path,
         ],
     )
     runner.invoke(app, ["session", "close", "--session", str(session_path)])

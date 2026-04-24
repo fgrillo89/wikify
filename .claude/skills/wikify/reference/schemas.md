@@ -65,10 +65,25 @@ Opaque lockfile. Contents: `{owner, acquired_at, expires_at}`. Owned by
 ### `<bundle>/_scratch/draft-<page_id>.json`
 
 The model-facing `WriteRequest` payload — prompt-layer-resolved, evidence-packed.
-Source of truth: `src/wikify/schema.py::WriteRequest`. Carries `schema_version: 1`
-added alongside the existing fields.
+Canonical fields: `src/wikify/schema.py::WriteRequest` (frozen, `extra="forbid"`).
+
+The scratch file also carries a top-level `schema_version: 1` envelope
+field. The envelope is **not** part of the canonical `WriteRequest`
+model — it is stripped by `wikify validate write` before Pydantic
+validation. Skills and downstream tools may rely on the envelope to
+version the on-disk format independently of the Pydantic schema.
 
 Created by: `wikify draft write-request`. Read by: the write subagent.
+
+### `<bundle>/_scratch/response-<page_id>.json`
+
+The subagent's raw `WriteResponse` output. Canonical fields:
+`src/wikify/schema.py::WriteResponse` (frozen, `extra="forbid"`). The
+same `schema_version: 1` envelope convention applies — scratch writers
+may emit it; `wikify validate write` strips it before Pydantic checks.
+
+Created by: the write subagent (skill-driven). Read by: `wikify
+validate write` and `wikify bundle commit-page`.
 
 ### `<bundle>/_scratch/validation-<page_id>.json`
 
@@ -90,9 +105,11 @@ Created by: `wikify validate write`. Read by: the workflow skill.
 
 ## Bundle artifacts
 
-### `<bundle>/pages/<id>.md`
+### `<bundle>/articles/<id>.md` and `<bundle>/people/<id>.md`
 
-Wikipedia-style page markdown with YAML frontmatter.
+Wikipedia-style page markdown with YAML frontmatter. The subdirectory
+is determined by the page `kind`: `article` → `articles/`, `person` →
+`people/` (enforced by `src/wikify/store/wiki_files.py::write_page`).
 
 Frontmatter required fields: `id, kind (article|person), title, aliases, created_at`.
 Body rules: see `write-constraints.md`. Citation format: see `citation-format.md`.
