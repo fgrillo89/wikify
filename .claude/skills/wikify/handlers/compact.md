@@ -5,6 +5,8 @@ tier: S
 dispatch_role: compact
 ---
 
+> **DEPRECATED**: dispatch-era handler, scheduled for deletion after baseline parity lands. See `docs/skill-centric-pivot.md`.
+
 # compact
 
 ## Context

@@ -1,3 +1,8 @@
+---
+name: wikify/reference/knowledge-graph
+description: Fluent API for the corpus KnowledgeGraph — traversal, citation analysis, scoped vector search.
+---
+
 # Knowledge Graph fluent API
 
 The `KnowledgeGraph` is the agent's primary reasoning interface for corpus

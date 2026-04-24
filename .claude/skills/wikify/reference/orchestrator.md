@@ -1,3 +1,8 @@
+---
+name: wikify/reference/orchestrator
+description: Orchestrator action catalog and policy model for guided-mode extract-loop decisions.
+---
+
 # Orchestrator action catalog
 
 The orchestrator is the LLM-policy decision maker. It runs at tier L (opus, locked) and picks ONE action each iteration of the extract loop. It is the only opus-tier caller in the pipeline (excluding handler-level escalation).
@@ -55,7 +60,7 @@ These are callable inside the orchestrator handler. They return data to inform t
 | `semantic_query` | `{query: str, k: int, scope: "all"\|"unseen"\|"page:<id>"}` | `[{chunk_id, doc_id, score, is_seen}]` sorted by cosine similarity |
 | `inspect_pages` | `{page_ids: list[str] \| null}` | `[{id, title, n_evidence, has_body}]` for named pages or all pages |
 
-Python helper: `wikify.distill.sampler.semantic_query_chunks(state, query_vec, k, scope)`.
+Python helper (legacy guided path): a semantic-query helper over the exploration state. Skill-driven guided mode replaces this with `wikify kg evidence` CLI invocations.
 
 ### Knowledge Graph tools
 
@@ -144,7 +149,7 @@ Both run at tier L (opus). Both are billed through the cost meter. But they have
 
 ## How control actions take effect
 
-The `set_allocation` and `set_tier` actions mutate a `PolicyRuntime` object in `src/wikify/distill/policy.py`. The pipeline reads the runtime on every iteration:
+The `set_allocation` and `set_tier` actions mutate a `PolicyRuntime` object held by the legacy guided pipeline. Skill-driven guided mode will realise the same effect via explicit `wikify session update` calls. The legacy pipeline reads the runtime on every iteration:
 - After `set_allocation`, the next iteration re-splits the remaining budget using the new `exploit_fraction`.
 - After `set_tier`, the next extract/write call uses the new tier.
 

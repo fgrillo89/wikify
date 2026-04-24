@@ -5,6 +5,8 @@ tier: M
 dispatch_role: write
 ---
 
+> **DEPRECATED**: dispatch-era handler, scheduled for deletion after baseline parity lands. See `docs/skill-centric-pivot.md`.
+
 # write
 
 ## Context

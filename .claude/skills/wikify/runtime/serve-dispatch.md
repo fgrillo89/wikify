@@ -3,6 +3,8 @@ name: wikify/runtime/serve-dispatch
 description: Long-running loop that services file-dispatch requests from a wikify distill or query harness.
 ---
 
+> **DEPRECATED**: dispatch-era runtime, scheduled for deletion after baseline parity lands. See `docs/skill-centric-pivot.md`.
+
 # serve-dispatch
 
 ## When to use this skill

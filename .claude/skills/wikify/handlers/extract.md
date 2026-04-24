@@ -5,6 +5,8 @@ tier: S
 dispatch_role: extract
 ---
 
+> **DEPRECATED**: dispatch-era handler, scheduled for deletion after baseline parity lands. See `docs/skill-centric-pivot.md`.
+
 # extract
 
 ## Context

@@ -520,6 +520,38 @@ def _extract_chunks(
     return candidates
 
 
+def select_evidence_chunks_for_page(
+    *,
+    page_title: str,
+    kg,
+    top_k: int,
+    max_per_source: int,
+    seen_chunk_ids: set[str] | None = None,
+) -> list[str]:
+    """Pull top_k evidence chunks for one page, applying per-source cap.
+
+    Public entry point for CLI commands; preserves the ranking and dedup
+    behaviour of the pipeline's _select_evidence_chunks loop body.
+    """
+    seen = set(seen_chunk_ids or set())
+    hits = kg.chunks().search(page_title, top_k=top_k * 4)
+    out: list[str] = []
+    per_doc: dict[str, int] = {}
+    for hit in hits:
+        cid = hit.get("id") or hit.get("chunk_id")
+        if not cid or cid in seen:
+            continue
+        doc_id = hit.get("source_id") or hit.get("doc_id") or ""
+        if per_doc.get(doc_id, 0) >= max_per_source:
+            continue
+        per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
+        out.append(cid)
+        seen.add(cid)
+        if len(out) >= top_k:
+            break
+    return out
+
+
 def _select_evidence_chunks(
     *,
     pages: list[WikiPage],
@@ -531,22 +563,15 @@ def _select_evidence_chunks(
     out: list[str] = []
     seen = set(seed_chunk_ids)
     for page in pages:
-        hits = kg.chunks().search(page.title, top_k=cfg.evidence_top_k * 4)
-        per_doc: dict[str, int] = {}
-        kept = 0
-        for hit in hits:
-            cid = hit.get("id") or hit.get("chunk_id")
-            if not cid or cid in seen:
-                continue
-            doc_id = hit.get("source_id") or hit.get("doc_id") or ""
-            if per_doc.get(doc_id, 0) >= cfg.evidence_max_per_source:
-                continue
-            per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
-            out.append(cid)
-            seen.add(cid)
-            kept += 1
-            if kept >= cfg.evidence_top_k:
-                break
+        chosen = select_evidence_chunks_for_page(
+            page_title=page.title,
+            kg=kg,
+            top_k=cfg.evidence_top_k,
+            max_per_source=cfg.evidence_max_per_source,
+            seen_chunk_ids=seen,
+        )
+        out.extend(chosen)
+        seen.update(chosen)
     return out
 
 
