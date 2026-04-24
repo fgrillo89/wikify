@@ -1,65 +1,74 @@
-# Wikify: skill-centric pivot (agent-driven, tool-backed)
+# Wikify: skill-centric pivot (agent-driven, session-backed)
 
 ## Review outcome
 
-This revision adopts the architecture the user wants:
+This revision adopts the architecture the user wants, with one missing piece
+now made explicit: a durable run session object.
 
 - The agent runtime is the only place that calls models.
 - Skills are the primary workflow surface.
-- Python remains the canonical backend for tools, schemas, persistence, telemetry, and reproducible strategy state.
-- Shared references stay small and reusable; deterministic or repeated logic stays in Python.
+- Python is the backend for deterministic tools, schemas, validation,
+  persistence, telemetry, and session management.
 - `.claude/skills/` is the first skill pack, not the architecture truth.
-- We do not delete the current Python paths until the agent-driven tool path proves parity on artifacts, telemetry, and tests.
+- The agent owns orchestration.
+- The CLI acts as a sandbox and harness.
+- A persistent session object is the durable coordination point between them.
 
-The key correction is this:
-
-- "models are called by the agent runtime" is good and intentional
-- "all stateful behavior moves into skill markdown" is not
-
-## Why the earlier version was still off
-
-The earlier revision corrected too hard in the other direction. It treated skills mainly as adapters over a Python runtime. That missed the user's real design goal: the LLM should drive the workflow through skills and tool use, and Python should stop calling model SDKs directly.
-
-The right split is:
+The key split is:
 
 - agent runtime: planning, model calls, tool calls, subagents, workflow execution
-- Python backend: deterministic tools, validation, persistence, strategy state, telemetry
+- Python backend: deterministic tools, validation, persistence, strategy state,
+  telemetry, and session durability
 
 ## Goal
 
-Run Wikify primarily through agent skills and tool use, with no Python model-calling path, while keeping the scientific core testable, inspectable, and portable.
+Run Wikify primarily through agent skills and tool use, with no Python
+model-calling path, while keeping the scientific core testable, inspectable,
+portable, and resumable.
+
+This is aspirational in stages, not all at once. The full autoresearch shape is
+the target architecture. The self-guided strategy skill should move closest to
+that shape first. Baseline and scripted strategies can adopt the same session,
+tool, and artifact contracts earlier while remaining more constrained and
+procedural.
 
 ## Non-goals
 
 - Calling models from Python
-- Replacing the Python backend with skill markdown
-- Making `.claude/skills/` the source of truth for strategy definitions or state transitions
-- Deleting the current Python runtime before the new path proves parity
+- Replacing all deterministic Python tool code with skill markdown
+- Using hidden in-memory runtime state as the source of truth
 - Baking vendor-specific model names into core Python contracts
+- Letting models write canonical artifacts directly with no validation layer
 
 ## Direct answer: is this vendor agnostic?
 
-Yes at the core, no at the exact runtime semantics layer.
+Yes at the core, no at the exact runtime-semantics layer.
 
-That is not a contradiction. It means:
+Portable:
 
-- the portable part is the tool contract, schemas, bundle format, state model, telemetry, and strategy semantics
-- the non-portable part is skill packaging, frontmatter, subagent syntax, context loading, permission semantics, and vendor runtime behavior
+- tool contracts
+- session schema
+- bundle schema
+- telemetry schema
+- strategy parameters
+- file layouts
+- deterministic Python services
+
+Not fully portable:
+
+- skill packaging
+- skill frontmatter
+- subagent syntax
+- tool permission semantics
+- context-loading behavior
+- vendor runtime ergonomics
 
 So the correct claim is:
 
-- a **skill-driven tool architecture** can be vendor agnostic enough
-- a **specific skill runtime** is not fully vendor agnostic
-
-For Wikify, that is fine. We should optimize for:
-
-1. One portable Python backend contract
-2. One Anthropic skill pack now
-3. Future skill packs for other runtimes if needed
+- a skill-driven, tool-backed architecture can be vendor-agnostic enough
+- a specific skill runtime is not fully vendor agnostic
 
 ## Best practices for skill workflows
-
-This plan follows the usual skill-authoring rules:
 
 - Keep top-level skills short and operational.
 - Use progressive disclosure. Put detail in shared references, not in every skill.
@@ -68,28 +77,217 @@ This plan follows the usual skill-authoring rules:
 - Keep one canonical source of truth for schemas, constraints, and state transitions.
 - Make skills call stable tool contracts instead of re-encoding backend logic.
 - Treat skill files as workflow assets, not as the durable system of record.
+- Make the session object explicit and inspectable.
+
+## Autoresearch framing
+
+This plan should eventually be framed as Wikify-style `autoresearch`.
+
+The useful idea from Karpathy's `autoresearch` repo is the loop shape:
+
+- the human provides the program and the starting objective
+- the agent runs an iterative loop autonomously
+- each iteration creates artifacts, evaluates them, keeps or discards results,
+  and updates durable run state
+- the loop stops only when explicit stopping criteria are met
+
+For Wikify, that becomes:
+
+- the user triggers a workflow through a skill
+- the skill creates or resumes a session
+- the orchestrator iterates on wiki creation autonomously
+- each iteration selects work, drafts artifacts, validates them, commits them,
+  updates telemetry, and decides whether to continue
+- the loop stops when stopping criteria say "enough"
+
+This is a better framing than "one workflow run". The system's job is not to
+execute one pipeline pass. Its job is to keep researching and improving the
+bundle until the session says the target has been met or the run should stop.
+
+### Aspirational rollout
+
+This framing is directional for the whole system, but it should land unevenly:
+
+- `run-baseline.md` proves the tool, session, scratch, and promotion contracts
+- scripted E/M/X skills remain more constrained and procedural at first
+- `run-guided.md` is the primary autoresearch-style skill and should become the
+  strongest autonomous loop earliest
+
+In other words:
+
+- baseline proves the architecture
+- scripted proves modular strategy workflows
+- self-guided proves the true autoresearch loop
+
+### Autoresearch loop for Wikify
+
+Canonical loop:
+
+1. Initialize or resume session
+2. Inspect current bundle and session state
+3. Choose the next unit of work
+4. Prepare request artifacts
+5. Call model subagents
+6. Validate outputs
+7. Promote valid outputs into the bundle
+8. Update telemetry and session state
+9. Evaluate stopping criteria
+10. Repeat or close session
+
+### Stopping criteria
+
+The loop must stop for explicit reasons, not because the skill runs out of prose.
+
+Minimum stopping criteria:
+
+- budget exhausted
+- no high-value pending work remains
+- novelty gain falls below threshold for N iterations
+- coverage target reached
+- page-quality target reached
+- validation failures exceed threshold
+- user-configured max iterations reached
+- user interrupts or closes the session
+
+Recommended rule:
+
+- stopping criteria live in session state and are readable by the workflow
+- the workflow may tighten them during a run only through explicit session updates
+
+### What this changes in the plan
+
+- workflows are long-lived autonomous loops, not one-shot scripts
+- session state must include loop counters, stopping criteria, and recent gains
+- telemetry must make "why did the loop stop?" easy to answer
+- `run-baseline.md` is the first autoresearch-style vertical slice
+
+Primary source:
+
+- https://github.com/karpathy/autoresearch
+- https://github.com/karpathy/autoresearch/blob/master/program.md
+
+## KPI / metrics framework
+
+From an autoresearch perspective, KPI definition is mandatory. The loop cannot
+decide whether to continue, revise, or stop unless the objective function is
+explicit.
+
+### Principles
+
+- KPIs must be computable from durable artifacts, not private agent judgment.
+- KPIs should distinguish optimization targets from safety and quality gates.
+- KPIs must be tracked per iteration in session state and run telemetry.
+- A workflow may optimize a small primary KPI set, but it must never ignore hard quality floors.
+
+### KPI categories
+
+Use four categories:
+
+1. **Primary outcome KPIs**
+   The main objective the workflow is trying to improve.
+2. **Quality gates**
+   Hard minimums below which the run is considered invalid or degraded.
+3. **Efficiency KPIs**
+   Budget, latency, and token-cost signals used to decide whether improvement is worth the spend.
+4. **Progress KPIs**
+   Signals that tell the orchestrator whether more looping is likely to pay off.
+
+### Candidate primary outcome KPIs for Wikify
+
+- grounded page count
+- grounded person-page count
+- evidence density per page
+- citation coverage over selected concepts
+- rendered page quality review pass rate
+- eval metrics already tracked in the project such as M1-M6, GT-P, GT-C where appropriate
+
+The exact mix can vary by workflow, but each workflow should declare its primary KPI set explicitly.
+
+### Candidate quality gates
+
+- schema-valid bundle artifacts
+- no blank or undrafted persisted pages
+- HTML render succeeds
+- references and internal links resolve
+- minimum evidence floor per page
+- no banned placeholder or corpus-meta phrasing
+- no severe regressions on evaluation metrics relative to the previous accepted checkpoint
+
+Quality gates are not optimization targets. They are admission criteria.
+
+### Candidate efficiency KPIs
+
+- haiku-equivalent tokens spent
+- cost per accepted page
+- cost per accepted improvement
+- iterations to convergence
+- validation failure rate
+- discarded-draft rate
+
+### Candidate progress KPIs
+
+- novelty gain over the last N iterations
+- newly grounded pages per iteration
+- reduction in uncovered target concepts
+- reduction in missing-citation or validation-error backlog
+- marginal improvement in chosen eval metrics
+
+### KPI ownership
+
+- the workflow skill chooses which KPI family matters for the current run
+- the deterministic Python backend computes and persists KPI values
+- session state stores the latest KPI snapshot and recent deltas
+- stop criteria reference named KPI fields, not free-form agent prose
+
+### Session fields for KPIs
+
+Add or reserve fields such as:
+
+- `kpi_snapshot`
+- `kpi_history_path`
+- `primary_kpis`
+- `quality_gates`
+- `progress_window`
+- `acceptance_policy`
+
+### Acceptance policy
+
+Each workflow should define an explicit acceptance policy for iterative changes.
+
+Examples:
+
+- accept a draft only if quality gates pass
+- accept a loop iteration only if primary KPIs improve or progress KPIs justify continued search
+- stop if progress KPIs remain flat for N iterations
+- roll back or mark failed if quality gates regress
+
+This is the Wikify equivalent of autoresearch's "keep or discard" rule.
 
 ## Target architecture
 
 ```mermaid
 flowchart TB
     subgraph AGENT["Agent runtime"]
-        A1[skills]
-        A2[subagents or tool-calling loop]
-        A3[model runtime]
+        A1[workflow skills]
+        A2[model-calling subagents]
     end
 
-    subgraph CORE["Runtime-neutral Python backend"]
-        C1[ingest DAG]
-        C2[strategy state]
+    subgraph CLI["Deterministic CLI tools"]
+        C1[session]
+        C2[kg query]
         C3[request builders]
-        C4[prompt assembly helpers]
-        C5[schema validation]
-        C6[budget cache telemetry]
-        C7[knowledge graph API]
-        C8[bundle persistence]
-        C9[eval and html render]
-        C10[tool and dispatch interfaces]
+        C4[schema validation]
+        C5[budget and telemetry]
+        C6[bundle persistence]
+        C7[html render and eval]
+        C8[ingest DAG]
+    end
+
+    subgraph FILES["Durable file contracts"]
+        F1[session.json]
+        F2[scratch artifacts]
+        F3[bundle artifacts]
+        F4[run telemetry]
     end
 
     subgraph REFS["Shared references"]
@@ -98,17 +296,252 @@ flowchart TB
         R3[citation format]
         R4[KG usage notes]
         R5[parameters and tiers]
+        R6[CLI tool surface]
     end
 
-    AGENT --> CORE
-    AGENT --> REFS
+    A1 -->|Bash + Read| CLI
+    A1 -->|Task| A2
+    A2 -->|Bash + Read| CLI
+    CLI --> FILES
+    A1 --> REFS
+    A2 --> REFS
 ```
 
-Invariant:
+Invariants:
 
 - the agent runtime calls models and tools
-- Python owns the canonical implementation of each stateful, cross-cutting concern
-- skills orchestrate the backend, but do not become the source of truth for it
+- skills own the per-iteration control loop
+- deterministic tools are CLI subprocesses
+- model-calling steps are subagents
+- the control loop is autoresearch-style: iterate until stopping criteria are met
+- Python owns the canonical implementation of deterministic, stateful,
+  cross-cutting concerns
+- durable state lives on disk in explicit files, not hidden process memory
+- skills orchestrate tools, but do not become the source of truth for tool behavior
+
+## Persistent run-state / session object
+
+The missing piece is an explicit, durable session object. If skills own the
+loop, they still need a stable state carrier that survives:
+
+- subagent boundaries
+- CLI subprocess boundaries
+- agent restarts
+- long-running refine and campaign workflows
+
+The session object is therefore a first-class part of the tool surface.
+
+### Session principles
+
+1. **Explicit, not implicit.** There is no unnamed "current run".
+2. **Durable.** Session state lives on disk and is resumable.
+3. **Inspectable.** A human can open the session file and understand run state.
+4. **CLI-mutated.** The agent may read the session directly, but canonical session mutations happen through CLI commands.
+5. **Checkpointed.** Every meaningful transition leaves the run resumable.
+6. **Scoped.** Every scratch artifact belongs to exactly one session.
+7. **Lockable.** Mutating tools can prevent two workflows from corrupting the same session.
+
+### Session file
+
+Canonical location:
+
+- bundle-bound runs: `<bundle>/_session/session.json`
+- scratch-only exploratory runs: `<scratch>/<run_id>/session.json`
+
+Minimum fields:
+
+- `schema_version`
+- `tool_surface_version`
+- `run_id`
+- `created_at`
+- `updated_at`
+- `workflow`
+- `status`
+- `corpus_path`
+- `bundle_path`
+- `scratch_dir`
+- `strategy_id`
+- `mode`
+- `seed`
+- `budget_target_haiku_eq`
+- `budget_spent_haiku_eq`
+- `write_reserve_haiku_eq`
+- `current_phase`
+- `current_step`
+- `artifacts`
+- `pending_actions`
+- `completed_actions`
+- `errors`
+
+Recommended fields:
+
+- `coverage_state_path`
+- `pages_manifest_path`
+- `telemetry_path`
+- `calls_path`
+- `active_page_id`
+- `active_chunk_ids`
+- `transcript_path`
+- `lock`
+- `iteration_index`
+- `recent_gains`
+- `stopping_criteria`
+- `stop_reason`
+- `kpi_snapshot`
+- `acceptance_policy`
+
+### Session statuses
+
+Use a small fixed vocabulary:
+
+- `created`
+- `running`
+- `awaiting_model`
+- `validating`
+- `paused`
+- `completed`
+- `failed`
+- `abandoned`
+
+### Session mutation rules
+
+- The agent may read the session directly.
+- The agent does not hand-edit canonical session fields with raw shell writes.
+- The CLI owns canonical mutations: `session init/show/update/checkpoint/close`.
+- Free-form model output is written to scratch artifacts first.
+- Validation happens before promotion.
+- Promotion into canonical bundle artifacts happens through CLI commands only.
+
+### Locking and concurrency
+
+Assume one orchestrating workflow at a time unless concurrency is explicitly designed.
+
+Best practices:
+
+- session carries a `lock` record with `owner`, `acquired_at`, `expires_at`
+- mutating commands fail fast if the lock is held by another actor
+- subagents work on disjoint scratch artifacts
+- the parent workflow owns promotion into canonical state
+
+### Checkpoint strategy
+
+Checkpoint after:
+
+- session creation
+- chunk selection
+- request artifact creation
+- model output receipt
+- validation result
+- page commit
+- iteration end
+- render/eval completion
+- final session close
+
+Guiding rule: if the agent stops after any step, the next agent should be able
+to resume from the session without guessing.
+
+## CLI tool surface and file contracts
+
+The CLI is the load-bearing surface between the agent and the Python backend.
+Design it like the Unix tool surface that LLMs already use well: small,
+composable, typed, and explicit about side effects.
+
+### Principles
+
+1. **Narrow surface.** The agent interacts with a small, enumerable command set.
+2. **Files are the interface.** Commands pass paths, not large blobs.
+3. **Token-light by construction.** Default outputs are IDs and summaries.
+4. **Versioned schemas.** Every durable file has `schema_version`.
+5. **Enumerable file types.** The agent does not invent new file types mid-workflow.
+6. **Stable exit codes and stderr contract.** `0` success, nonzero documented failure.
+7. **No hidden state.** Every command is a function of flags, file paths, corpus files, and explicit session files.
+8. **Composable with Unix primitives.** The agent can mix `wikify` with `Read`, `Glob`, and shell tools without surprises.
+
+### CLI families
+
+Use a few stable families:
+
+- `wikify session ...`
+- `wikify kg ...`
+- `wikify draft ...`
+- `wikify validate ...`
+- `wikify bundle ...`
+- `wikify render ...`
+- `wikify eval ...`
+- `wikify ingest ...`
+
+These families are intentionally boring. The agent should be able to learn them once.
+
+### Session commands
+
+Minimum proposed commands:
+
+- `wikify session init --workflow ... --corpus ... --bundle ...`
+- `wikify session show --session ...`
+- `wikify session update --session ... --patch ...`
+- `wikify session checkpoint --session ...`
+- `wikify session lock --session ...`
+- `wikify session unlock --session ...`
+- `wikify session close --session ... --status completed|failed|abandoned`
+
+Important rules:
+
+- `init` creates the directory layout and session file
+- all later mutating commands take `--session <path>` explicitly
+- no command infers session from cwd
+
+### File types the agent is allowed to touch
+
+Enumerate in `.claude/skills/wikify/reference/schemas.md`. Initial set:
+
+- **read-only, corpus-side:** raw papers, parsed chunks, knowledge graph export
+- **read/write, session-side:** `_session/session.json`, `_session/checkpoints/*.json`
+- **read/write, bundle-side:** `bundle.json`, `pages/*.json`, `citations.json`, `_run.json`, `_calls.jsonl`
+- **read/write, scratch:** `<scratch>/extract-<id>.json`, `<scratch>/draft-<page>.json`, `<scratch>/response-<id>.json`, `<scratch>/validation-<id>.json`
+
+The agent creates scratch files only through `wikify` CLI commands, not by inventing arbitrary file writes.
+
+### Scratch artifact policy
+
+Scratch files are where the model is allowed to think in artifacts without
+damaging canonical outputs.
+
+Best practices:
+
+- every scratch file belongs to exactly one session
+- every scratch file has a schema and status
+- scratch files are phase-typed: request, response, draft, validation, delta
+- promotion to bundle artifacts happens only through validate + commit commands
+- scratch files are clearable between runs and archiveable for debugging
+
+Recommended scratch statuses:
+
+- `created`
+- `filled`
+- `validated`
+- `rejected`
+- `promoted`
+- `superseded`
+- `archived`
+
+### Token-light output discipline
+
+CLI commands default to IDs and summaries, with a `--full` flag only when needed.
+
+Examples:
+
+- `wikify kg query --topic X` -> `{results: [{id, title, score, source_id}, ...]}`
+- `wikify validate --file draft.json` -> `{ok: false, errors: [{path, code, message}]}`
+- `wikify bundle list --bundle B` -> `{pages: [{id, kind, status}]}`
+
+The agent decides when to spend tokens by explicitly requesting full content.
+
+### Failure modes
+
+- A command that would emit too much stdout writes to a file and returns the path.
+- Commands that list many results paginate or emit jsonl.
+- Schema violations are never silent.
+- Session inconsistency is a first-class error.
 
 ## Revised atom / skill boundary
 
@@ -117,9 +550,7 @@ Rule:
 - If behavior must be deterministic, tested, replayable, or compared across runs, keep it in Python.
 - If behavior is workflow guidance, tool-selection logic, runtime-specific invocation advice, or reusable task instructions for an agent, make it a skill or reference file.
 
-### Keep in Python as tools and services
-
-These are atoms or services exposed to the agent runtime:
+### Keep in Python as CLI-exposed tools
 
 - `preload_corpus`
 - `KnowledgeGraph` and query builders
@@ -127,30 +558,88 @@ These are atoms or services exposed to the agent runtime:
 - prompt assembly and prompt-layer loading helpers
 - response validation and structural checks
 - coverage state updates
-- strategy definitions and budget allocation
+- strategy parameter sets, budget allocation, telemetry discriminators
 - cache and cost metering
+- session schema, checkpointing, locking, and consistency validation
 - bundle writing and finalization
-- CLI entrypoints and dispatch/tool contracts
+- `html` render, `eval`, and `ingest`
 
 ### Put in skills
 
-These belong in skills or reference files:
-
 - operator workflows for common user-facing tasks
-- instructions for when to choose scripted vs guided vs baseline
+- scripted strategy variants: `run-scripted-E.md`, `run-scripted-M.md`, `run-scripted-X.md`
+- guided mode: `run-guided.md`
+- the per-iteration control loop for scripted and guided
 - reusable write/extract/query/orchestrate instructions that point to shared references
-- service skills such as `serve-dispatch`
-- runtime-specific guidance on how to invoke the Python tools
+- runtime-specific guidance on how to invoke CLI tools and subagents
 
 ### Important correction
 
-Prompt assembly and validation are not skills. They are deterministic support code. The agent may use them, but they should stay in Python.
+Prompt assembly and validation are not skills. They are deterministic support code.
+
+## Skills workflow structure
+
+If skills own orchestration, they need strong structure or they will sprawl.
+
+### Layers
+
+Use four layers only:
+
+1. **Workflow skills**
+   End-to-end owners like `run-baseline.md` or `run-guided.md`
+2. **Phase references**
+   Extract, draft, validate, commit, render, eval
+3. **Domain references**
+   Schemas, KG usage, citation format, write constraints, tiers
+4. **CLI references**
+   Deterministic tool surface and file contracts
+
+Avoid adding a fifth "micro-handler" layer unless repeated adapter logic clearly justifies it.
+
+### Workflow skill template
+
+Each workflow skill should have:
+
+- purpose
+- inputs
+- required session state
+- commands it may invoke
+- model-calling steps
+- artifacts it creates
+- validation checkpoints
+- completion criteria
+- failure/resume instructions
+
+### Phase decomposition
+
+For the first vertical slices, decompose into:
+
+- `init-session`
+- `evaluate-stop`
+- `select-work`
+- `prepare-request-artifacts`
+- `call-model`
+- `validate-output`
+- `commit-artifacts`
+- `update-session`
+- `render-and-eval`
+- `close-session`
+
+Each phase should correspond to a small set of CLI commands and file mutations.
+
+### Modularity rules
+
+- Workflow skills may call subagents, but subagents should usually work against scratch artifacts, not canonical bundle files.
+- The parent workflow owns session mutation and promotion steps.
+- Reference files are fact stores, not action scripts.
+- A skill should not restate a schema that already lives in a reference file.
+- A workflow should not require reading the whole repo to proceed.
 
 ## What to build
 
 ### 1. Shared references
 
-Consolidate duplicated handler content into small shared reference files:
+Consolidate duplicated guidance into:
 
 - `.claude/skills/wikify/reference/write-constraints.md`
 - `.claude/skills/wikify/reference/schemas.md`
@@ -158,156 +647,149 @@ Consolidate duplicated handler content into small shared reference files:
 - `.claude/skills/wikify/reference/escalation.md`
 - `.claude/skills/wikify/reference/tiers.md`
 - `.claude/skills/wikify/reference/atoms.md`
+- `.claude/skills/wikify/reference/cli-tool-surface.md`
 
-These should contain facts and constraints, not workflow steps.
+These contain facts and contracts, not workflow steps.
 
 ### 2. Agent-facing workflow skills
 
 Keep a small number of top-level workflows:
 
-- `.claude/skills/wikify/workflows/run-scripted.md`
+- `.claude/skills/wikify/workflows/run-scripted-E.md`
+- `.claude/skills/wikify/workflows/run-scripted-M.md`
+- `.claude/skills/wikify/workflows/run-scripted-X.md`
 - `.claude/skills/wikify/workflows/run-guided.md`
 - `.claude/skills/wikify/workflows/run-baseline.md`
 - `.claude/skills/wikify/workflows/run-campaign.md`
 - `.claude/skills/wikify/workflows/ask.md`
-- `.claude/skills/wikify/runtime/serve-dispatch.md`
 
 Each workflow should:
 
-- assume the agent runtime calls the model
-- call Python tools, CLI entrypoints, or dispatch interfaces as needed
-- point to shared references instead of duplicating schemas and constraints
-- stay short enough that an agent can load it cheaply
+- assume the agent runtime calls the model via subagents
+- use the session file explicitly
+- invoke deterministic CLI tools for typed transitions, validation, and persistence
+- own the autoresearch loop in skill prose
+- point to shared references instead of duplicating schemas
+- stay short enough to load cheaply
 
-### 3. Thin handler skills over Python tools
+Autonomy expectation by workflow:
 
-Keep handler skills as runtime adapters over the existing request/response schema:
+- `run-baseline.md`: lowest autonomy, highest determinism
+- `run-scripted-{E,M,X}.md`: medium autonomy, constrained loop
+- `run-guided.md`: highest autonomy, closest to the target autoresearch shape
 
-- `handlers/extract.md`
-- `handlers/write.md`
-- `handlers/edit.md`
-- `handlers/compact.md`
-- `handlers/orchestrate.md`
-- `handlers/query.md`
-- `handlers/maintenance.md`
+### 3. Handler skills: open question
 
-These should stay thin:
+The earlier plan proposed a handler layer (`handlers/extract.md`,
+`handlers/write.md`, etc.). Under a strong session + CLI surface, these may be
+redundant. Defer the decision.
 
-- read request
-- resolve references
-- call one task/subagent if needed
-- call Python validators and persistence helpers through the tool surface
-- write response or error
-
-They should not absorb more pipeline logic.
+Build the first vertical slice (`run-baseline.md`) without handler skills.
+Reintroduce them only if repeated adapter logic proves they are useful.
 
 ### 4. Python cleanup and tool extraction
 
-Refine the core around reusable atoms, but keep the backend:
+Refine the core around reusable atoms and expose them via CLI:
 
-- make request-building helpers more explicit and importable
-- make validation and persistence helpers easy for skill-driven flows to call
-- keep `distill/pipeline.py` as the canonical stateful backend until the agent-driven path reaches parity
-- keep `baselines/pipeline.py` as the canonical baseline backend until a common service layer clearly replaces it
-- keep `dispatch.py` as the durable adapter boundary for unattended runs
-- keep CLI commands as stable runtime-neutral entrypoints and fallback automation surfaces
+- make request-building helpers callable via CLI subcommands that emit JSON to disk
+- expose validation and persistence helpers as CLI commands
+- add a session service layer that owns session schema, locking, checkpointing, and consistency validation
+- keep `distill/pipeline.py` as the current backend until the skill-driven path reaches parity, then delete per workflow
+- keep `baselines/pipeline.py` until `run-baseline.md` reaches parity, then delete
+- shrink `distill/strategy.py` to parameter sets, budget math, and telemetry discriminators only
+- `dispatch.py` is a deletion candidate; do not extend it
+- dispatch-only CLI wrappers are deletion candidates once workflows are proven
 
 ## Fluent KG API improvements
 
-These improvements are still good because they improve the runtime-neutral tool surface:
+These still make sense because they improve the deterministic tool surface:
 
-- add `KnowledgeGraph.similar_chunks(chunk_id, top_k)` as shorthand
+- add `KnowledgeGraph.similar_chunks(chunk_id, top_k)`
 - add typed citation walk helpers like `.references(hops=N)` and `.cited_by(hops=N)`
 - add `KnowledgeGraph.abstracts()`
 - add `.unique_by_source(per_source=1)`
 - add chainable ordering such as `.order_by("pagerank")`
 
-These belong in Python, with pytest coverage, regardless of which skill runtime sits on top.
+These belong in Python with pytest coverage.
 
 ## What not to delete yet
 
-The earlier delete list was too aggressive. Keep these for now:
+Keep these until the skill-driven path reaches parity:
 
 - `src/wikify/distill/pipeline.py`
 - `src/wikify/baselines/pipeline.py`
-- `src/wikify/distill/strategy.py` core strategy definitions
-- `src/wikify/distill/write_runner.py` until its reusable pieces are folded into stable Python services
+- `src/wikify/distill/write_runner.py` until reusable pieces are exposed as CLI tools
 - `src/wikify/distill/query.py`
 - `src/wikify/distill/maintenance.py`
+- `src/wikify/cli.py` commands for `html`, `eval`, and `ingest`
+
+Deletion candidates, but do not delete yet:
+
 - `src/wikify/dispatch.py`
-- `src/wikify/cli.py` commands for `distill`, `campaign`, `query`, `html`, `eval`, and `ingest`
+- `src/wikify/cli.py` commands for `distill`, `campaign`, and `query` if their only role is old dispatch paths
+- control-flow portions of `src/wikify/distill/strategy.py`
 
-Delete only:
+Delete outright:
 
-- duplicated prose across handler skills after reference consolidation
-- dead adapter glue once a replacement is proven
+- duplicated prose across skills after reference consolidation
+- dead adapter glue once replacement is proven
 - dead tests that only cover removed adapter glue
-
-Also note:
-
-- `src/wikify/distill/seed.py` already exists on this branch, so this plan should treat it as current state, not a future file
-- `docs/writer-block-plan.md` does not exist in the current repo snapshot, so it should not appear in the delete list
 
 ## Key limitations and pitfalls
 
 ### Skill/runtime mismatch
 
-Some repos look fully skill-centric because the agent drives everything, but the durable state and tool contracts still live outside the skill markdown.
-
 Mitigation:
 
 - model calls happen in the agent runtime
-- stateful behavior stays in Python tools and services
-- skills point to tools instead of re-encoding the tool logic
+- stateful deterministic behavior stays in Python
+- skills point to tools instead of re-encoding tool logic
 
 ### Skill sprawl
 
-Too many small skills create hidden dependency chains and make prompts harder to reason about.
-
 Mitigation:
 
-- prefer a few top-level workflows plus shared references
-- create a new skill only when it owns a reusable workflow, not just a paragraph of text
+- prefer a few top-level workflows plus references
+- create a skill only when it owns a reusable workflow
 
 ### Prompt drift
 
-If constraints live half in Python and half in multiple handler files, behavior will drift.
-
 Mitigation:
 
-- keep canonical constraints in shared references and canonical validation in Python
+- keep canonical constraints in references and validation in Python
 - snapshot prompt assembly in tests
 
 ### State durability
 
-Coverage memory, iteration history, retries, and budget usage cannot depend on an interactive session remaining alive.
-
 Mitigation:
 
 - keep state in Python and on disk
-- use skills to drive or service that backend
+- make the session object the only durable coordination point
+
+### Session drift
+
+Mitigation:
+
+- one canonical session schema
+- one CLI family responsible for session mutations
+- consistency validation after each promotion step
+- lock and checkpoint semantics defined before parallel subagent use
 
 ### Observability loss
-
-Skill-native loops can make it harder to explain why a run took a path or exceeded budget.
 
 Mitigation:
 
 - keep telemetry and action logs in Python
-- require parity with current `_run.json`, `_calls.jsonl`, and dispatch artifacts
+- require parity with `_run.json`, `_calls.jsonl`, and session checkpoints
 
 ### Reproducibility risk
 
-Scientific comparisons break if strategy behavior lives in changing prompt prose instead of versioned code.
-
 Mitigation:
 
-- keep E/M/X strategy behavior in Python
-- let skills choose or invoke strategies, not redefine them
+- keep strategy parameters and discriminators in Python
+- keep workflow transcripts and parity fixtures under version control
 
 ### Vendor lock-in
-
-If the plan hardcodes Anthropic skill semantics as the architecture, adding Codex or another runtime later becomes a reimplementation project.
 
 Mitigation:
 
@@ -316,11 +798,9 @@ Mitigation:
 
 ### Testability gap
 
-A plan that moves core behavior into markdown loses the easy unit-test surface.
-
 Mitigation:
 
-- move repeated logic into Python helpers or scripts
+- move repeated logic into Python helpers and scripts
 - use skill smoke tests and parity tests, not skill-only logic
 
 ## Testing strategy
@@ -334,8 +814,8 @@ Use normal pytest coverage for:
 - prompt assembly
 - schema validation
 - budget allocation
-- strategy behavior
 - cache and telemetry
+- session schema, checkpointing, locking, and consistency validation
 
 ### Skill adapter tests
 
@@ -344,24 +824,29 @@ Add lightweight tests that check:
 - frontmatter parses
 - referenced files exist
 - referenced Python symbols still import
-- handler prompts assemble using the shared references
+- workflow steps only reference documented CLI commands
+- workflow steps only create allowed session and scratch artifact types
 
 ### Parity tests
 
-Add the tests that matter most for this migration:
+Parity is schema-level first, artifact-level second.
 
-1. Run current Python entrypoint with canned or fake dispatch responses.
-2. Run the skill-driven workflow that wraps the same path.
-3. Confirm the same bundle structure, telemetry shape, and rendered output invariants.
+Mechanism: recorded-transcript parity.
 
-For Wikify, parity beats cleverness.
+1. Exercise the current Python entrypoint with a canned corpus and record model request/response pairs to `tests/wikify/fixtures/transcripts/`.
+2. Run the skill-driven workflow against the same canned corpus, replaying the transcript to the model-calling subagents.
+3. Assert that bundle JSON, `_run.json`, and `_calls.jsonl` field-sets are structurally identical.
+4. Assert that session checkpoints and scratch artifacts obey their schemas and are resumable.
+5. Render HTML and check visible artifacts with the Quality Review Protocol.
+
+Live-subagent smoke runs happen manually, not in CI.
 
 ## Revised migration sequence
 
 ### Phase 0: reference consolidation
 
 - create the shared reference files
-- trim duplicated text from handler skills
+- trim duplicated text from skills
 - add smoke tests for skill metadata, reference existence, and imports
 
 ### Phase 1: Python tool-contract cleanup
@@ -369,38 +854,46 @@ For Wikify, parity beats cleverness.
 - make request builders, prompt assembly, and validation boundaries explicit
 - tighten import paths for reusable atoms
 - add the KG helper methods and tests
-- identify which runtime functions should become explicit tool surfaces for agent use
+- identify which runtime functions become explicit tool surfaces
+- define the session schema and implement `wikify session init/show/update/checkpoint/close`
 
 ### Phase 2: workflow-skill cleanup
 
-- simplify workflow skills so they wrap current CLI, tool, or dispatch entrypoints
+- simplify workflow skills so they wrap current CLI and tool entrypoints
 - keep them short and reference-driven
-- make "agent calls model, then uses Python tools" the explicit default in every workflow
-- avoid adding new nested workflow layers unless a repeated operator flow clearly needs one
+- make "agent calls model, then uses Python tools" the explicit default
+- define allowed scratch artifact types and promotion steps
 
-### Phase 3: handler refinement
+### Phase 3: `run-baseline.md` vertical slice
 
-- keep handlers thin over request/response schemas
-- move any repeated deterministic logic discovered in handlers back into Python
-- add response-validation and prompt-assembly tests
-- remove any remaining assumption that Python itself calls vendor model APIs
+Build one end-to-end workflow over the hybrid tool surface:
 
-### Phase 4: agent-driven pilot, not replacement
+- `run-baseline.md` owns the control loop in skill prose over an explicit session file
+- deterministic steps invoked as CLI subcommands
+- model-calling steps invoked as subagents
+- success criterion: bundle JSON schema, `_run.json`, and `_calls.jsonl` field-sets structurally identical to current baseline output
+- session can be paused and resumed mid-run without guessing
+- loop stop reason is recorded explicitly in the session and telemetry
 
-- experiment with a more skill-driven guided loop behind a clearly labeled adapter path
-- compare artifact quality, telemetry, and cost against current mainline runtime
-- do not delete the Python backend based on one successful smoke run
+This is the first production vertical, not a toy pilot.
+
+### Phase 4: expand to scripted/guided
+
+- add scripted E/M/X workflows
+- add guided workflow
+- keep the same session and scratch discipline
 
 ### Phase 5: deletion decision
 
-Delete code only if all of these are true:
+Delete code when all of these are true:
 
-- parity holds on rendered artifacts and telemetry
-- the replacement path still uses a runtime-neutral Python backend
-- unattended runs remain possible
-- the new path is easier to test and maintain than the old one
+- parity holds on bundle and telemetry schemas
+- downstream `html` render and `eval` continue to work unchanged
+- session checkpoints are resumable
+- stopping criteria behave deterministically on replayed transcripts
+- the new path is easier to test and maintain
 
-If those conditions are not met, keep the Python backend and treat the skills work as a successful front-end and workflow improvement rather than a full backend replacement.
+Deletion is per workflow, not all-or-nothing.
 
 ## Verification
 
@@ -410,16 +903,25 @@ For each phase:
 2. `uv run pytest tests/wikify -q`
 3. skill smoke tests pass
 4. at least one real bundle is rendered to HTML and reviewed with the Quality Review Protocol
-5. workflow-skill outputs match the existing Python runtime's bundle and telemetry shape for the same canned inputs
+5. workflow outputs match the existing runtime's bundle JSON and telemetry field-sets for the same canned inputs
 6. no Python path directly calls vendor model APIs
+7. every workflow mutation of durable state goes through the session contract
+8. every CLI tool the agent invokes has a documented input schema, output schema, and stable exit codes
+9. every closed session records a stop reason and the stopping criterion that fired
+10. every iterative workflow records KPI snapshots and the acceptance decision for each iteration
 
 ## Decision summary
 
-The strongest version of this plan is:
+The committed shape of this plan:
 
-- **skill-centric at the workflow layer**
-- **agent-driven for all model calls**
-- **Python-backed for tools, state, validation, and telemetry**
-- **vendor-specific only at the skill-pack edge**
+- **skill-driven control flow.** Skills own the loop.
+- **agent-driven model calls.** Model-calling steps are subagents.
+- **CLI-only deterministic tool surface.** Python exposes narrow deterministic commands.
+- **session-centric orchestration.** Skills orchestrate through an explicit, durable session object.
+- **autoresearch loop.** The orchestrator iterates autonomously on wiki creation until explicit stopping criteria are met.
+- **file-contract-centric.** Intermediate artifacts are typed, versioned files.
+- **scratch-before-promotion.** Model output lands in scratch, is validated, then promoted.
+- **baseline-first.** `run-baseline.md` is the first merge-worthy autoresearch vertical slice.
 
-That keeps the benefits of skills without giving up reproducibility, portability, or testability.
+That keeps the benefits of skills without giving up reproducibility,
+portability, resumability, or testability.
