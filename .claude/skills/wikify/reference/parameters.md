@@ -1,3 +1,8 @@
+---
+name: wikify/reference/parameters
+description: User-settable parameter catalog for wikify workflows and CLI — defaults, ranges, categories.
+---
+
 # wikify parameters reference
 
 Every user-settable knob, grouped by category, with defaults and acceptable ranges. Refer to this when building workflows or invoking the CLI directly.

@@ -1,3 +1,8 @@
+---
+name: wikify/reference/orchestrator
+description: Orchestrator action catalog and policy model for guided-mode extract-loop decisions.
+---
+
 # Orchestrator action catalog
 
 The orchestrator is the LLM-policy decision maker. It runs at tier L (opus, locked) and picks ONE action each iteration of the extract loop. It is the only opus-tier caller in the pipeline (excluding handler-level escalation).

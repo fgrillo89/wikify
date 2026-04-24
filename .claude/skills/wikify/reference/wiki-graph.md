@@ -1,3 +1,8 @@
+---
+name: wikify/reference/wiki-graph
+description: Fluent API for the WikiKnowledgeGraph — page relationships, scoped search, dedup and extend helpers.
+---
+
 # Wiki Knowledge Graph fluent API
 
 The `WikiKnowledgeGraph` is the agent's interface for navigating wiki pages,

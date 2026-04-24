@@ -5,6 +5,8 @@ tier: M
 dispatch_role: query
 ---
 
+> **DEPRECATED**: dispatch-era handler, scheduled for deletion after baseline parity lands. See `docs/skill-centric-pivot.md`.
+
 # query
 
 ## Context
