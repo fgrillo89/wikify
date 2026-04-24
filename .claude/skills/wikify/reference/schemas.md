@@ -32,7 +32,7 @@ Required fields for baseline strategy:
 - `strategy: "baseline" | "scripted-E" | "scripted-M" | "scripted-X" | "guided"`
 - `bundle_root: str` — absolute path
 - `corpus_root: str` — absolute path
-- `status: "active" | "closed" | "failed"`
+- `status: "active" | "completed" | "failed" | "abandoned"`
 - `created_at, updated_at: ISO8601`
 - `budget: {haiku_eq_target: int, haiku_eq_spent: int}`
 - `stages: {seed_selection, extract, write}` — each `{status: pending|running|done|failed, started_at: str|null, finished_at: str|null}`

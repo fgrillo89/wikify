@@ -83,7 +83,7 @@ class SessionV1(BaseModel):
     strategy: Literal["baseline", "scripted-E", "scripted-M", "scripted-X", "guided"]
     bundle_root: str
     corpus_root: str
-    status: Literal["active", "closed", "failed"] = "active"
+    status: Literal["active", "completed", "failed", "abandoned"] = "active"
     created_at: str
     updated_at: str
     budget: Budget = Field(default_factory=Budget)
@@ -220,23 +220,34 @@ def _lock_path_for(session_path: Path) -> Path:
     return BundlePaths(bundle_root).session_lock_path
 
 
-def acquire_lock(session_path: Path, owner: str, ttl_seconds: int = 3600) -> None:
+def acquire_lock(
+    session_path: Path,
+    owner: str,
+    ttl_seconds: int = 3600,
+    *,
+    force: bool = False,
+) -> dict | None:
     """Acquire the session lock or raise SessionLockHeldError.
 
     A lock whose `expires_at` has passed is treated as stale and silently
-    reclaimed. Otherwise the existing owner holds and acquisition fails.
+    reclaimed. Otherwise the existing owner holds and acquisition fails,
+    unless `force=True` — in which case the existing record is overwritten
+    and returned so the caller can log the displaced owner.
     """
     lock_path = _lock_path_for(session_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    displaced: dict | None = None
     if lock_path.exists():
         try:
             existing = json.loads(lock_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             existing = {}
         if existing and not _lock_is_stale(existing):
-            raise SessionLockHeldError(
-                existing.get("owner", "unknown"), existing.get("acquired_at", "")
-            )
+            if not force:
+                raise SessionLockHeldError(
+                    existing.get("owner", "unknown"), existing.get("acquired_at", "")
+                )
+            displaced = existing
     now_dt = datetime.now(timezone.utc)
     expires_dt = now_dt + timedelta(seconds=ttl_seconds)
     lock_path.write_text(
@@ -251,6 +262,7 @@ def acquire_lock(session_path: Path, owner: str, ttl_seconds: int = 3600) -> Non
         ),
         encoding="utf-8",
     )
+    return displaced
 
 
 def release_lock(session_path: Path) -> None:

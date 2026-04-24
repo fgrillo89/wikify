@@ -140,13 +140,13 @@ def test_cli_init_show_update_checkpoint_close(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     close_payload = json.loads(result.output)
     final = json.loads(session_path.read_text(encoding="utf-8"))
-    assert final["status"] == "closed"
+    assert final["status"] == "completed"
     run_path = Path(close_payload["run_path"])
     assert run_path.exists()
     snapshot = json.loads(run_path.read_text(encoding="utf-8"))
     assert snapshot["schema_version"] == 1
     assert snapshot["strategy"] == "baseline"
-    assert snapshot["status"] == "closed"
+    assert snapshot["status"] == "completed"
     assert snapshot["session_id"] == final["session_id"]
     assert set(snapshot["stages"].keys()) == {"seed_selection", "extract", "write"}
     assert "page_counts" in snapshot
@@ -205,6 +205,74 @@ def test_cli_lock_blocks_update_and_close(tmp_path: Path) -> None:
     assert upd2.exit_code == 0
     clos2 = runner.invoke(app, ["session", "close", "--session", str(session_path)])
     assert clos2.exit_code == 0
+
+
+def test_cli_close_persists_each_terminal_status_distinctly(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    for label in ("completed", "failed", "abandoned"):
+        bundle = tmp_path / f"bundle-{label}"
+        init = runner.invoke(
+            app, ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
+        )
+        sess = Path(json.loads(init.output)["session_path"])
+        result = runner.invoke(
+            app,
+            ["session", "close", "--session", str(sess), "--status", label],
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(sess.read_text(encoding="utf-8"))["status"] == label
+        assert (
+            json.loads(BundlePaths(bundle).run_path.read_text(encoding="utf-8"))["status"]
+            == label
+        )
+
+
+def test_cli_close_rejects_invalid_status(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    init = runner.invoke(
+        app, ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
+    )
+    sess = Path(json.loads(init.output)["session_path"])
+    # "closed" is the old vocabulary and must no longer be accepted.
+    result = runner.invoke(
+        app, ["session", "close", "--session", str(sess), "--status", "closed"]
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_lock_force_overwrites_existing_lock(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    init = runner.invoke(
+        app, ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
+    )
+    sess = Path(json.loads(init.output)["session_path"])
+
+    # Owner A grabs a valid (non-stale) lock.
+    got_a = runner.invoke(
+        app, ["session", "lock", "--session", str(sess), "--owner", "owner-a"]
+    )
+    assert got_a.exit_code == 0
+
+    # Owner B without --force must fail with lock_held.
+    got_b = runner.invoke(
+        app, ["session", "lock", "--session", str(sess), "--owner", "owner-b"]
+    )
+    assert got_b.exit_code == 2
+
+    # Owner B with --force displaces owner A and reports the displaced record.
+    got_b_force = runner.invoke(
+        app,
+        ["session", "lock", "--session", str(sess), "--owner", "owner-b", "--force"],
+    )
+    assert got_b_force.exit_code == 0, got_b_force.output
+    payload = json.loads(got_b_force.output)
+    assert payload["owner"] == "owner-b"
+    assert payload["displaced"]["owner"] == "owner-a"
 
 
 def test_stale_lock_past_ttl_is_reclaimed(tmp_path: Path) -> None:

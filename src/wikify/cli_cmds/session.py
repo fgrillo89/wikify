@@ -144,18 +144,24 @@ def cmd_checkpoint(
 def cmd_close(
     session_path: Path = typer.Option(..., "--session"),
     status: str = typer.Option(
-        "closed", "--status", help="One of: closed, failed, abandoned."
+        "completed",
+        "--status",
+        help="Terminal status: completed | failed | abandoned.",
     ),
     owner: str | None = typer.Option(None, "--owner", help="Override the lock owner string."),
 ) -> None:
-    """Mark the session finished. Does not delete the file. Holds the session lock."""
-    if status not in {"closed", "failed", "abandoned"}:
+    """Mark the session finished. Does not delete the file. Holds the session lock.
+
+    Each terminal status is persisted distinctly so downstream stop-reason
+    analysis can tell a successful run from a failure or an operator
+    abandonment.
+    """
+    if status not in {"completed", "failed", "abandoned"}:
         raise typer.BadParameter(f"invalid status: {status}")
-    mapped = "closed" if status == "closed" else "failed"
     try:
         with session_lock(session_path, owner=_cli_owner(owner)):
             session = load_session(session_path)
-            updated = touch(session.model_copy(update={"status": mapped}))
+            updated = touch(session.model_copy(update={"status": status}))
             save_session(session_path, updated)
             run_path = write_run_snapshot(updated)
     except SessionLockHeldError as exc:
@@ -181,10 +187,25 @@ def cmd_lock(
     session_path: Path = typer.Option(..., "--session"),
     owner: str | None = typer.Option(None, "--owner"),
     ttl_seconds: int = typer.Option(3600, "--ttl-seconds"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing valid lock. Use only to recover from stuck locks.",
+    ),
 ) -> None:
-    """Acquire the session lock explicitly. Fails with exit 2 if already held."""
+    """Acquire the session lock explicitly. Fails with exit 2 if already held.
+
+    `--force` overwrites a valid (non-stale) lock and echoes the displaced
+    owner for audit. Stale locks (past expires_at) are always reclaimed
+    silently, with or without --force.
+    """
     try:
-        acquire_lock(session_path, owner=_cli_owner(owner), ttl_seconds=ttl_seconds)
+        displaced = acquire_lock(
+            session_path,
+            owner=_cli_owner(owner),
+            ttl_seconds=ttl_seconds,
+            force=force,
+        )
     except SessionLockHeldError as exc:
         typer.echo(
             json.dumps(
@@ -199,16 +220,19 @@ def cmd_lock(
         )
         raise typer.Exit(code=2) from exc
     record = read_lock(session_path) or {}
-    typer.echo(
-        json.dumps(
-            {
-                "ok": True,
-                "owner": record.get("owner"),
-                "acquired_at": record.get("acquired_at"),
-                "expires_at": record.get("expires_at"),
-            }
-        )
-    )
+    out = {
+        "ok": True,
+        "owner": record.get("owner"),
+        "acquired_at": record.get("acquired_at"),
+        "expires_at": record.get("expires_at"),
+    }
+    if displaced:
+        out["displaced"] = {
+            "owner": displaced.get("owner"),
+            "acquired_at": displaced.get("acquired_at"),
+            "expires_at": displaced.get("expires_at"),
+        }
+    typer.echo(json.dumps(out))
 
 
 @app.command("unlock")
