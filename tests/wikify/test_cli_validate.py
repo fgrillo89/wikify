@@ -217,6 +217,86 @@ def test_validate_write_fails_on_invalid_response_schema(tmp_path: Path) -> None
     assert any("response" in e["path"] for e in verdict["errors"])
 
 
+def test_validate_write_rejects_empty_used_markers_with_body_markers(tmp_path: Path) -> None:
+    """Regression for PR#30 review finding 1.
+
+    A response with an in-prose [^e1] but an empty used_markers list must
+    fail — the earlier implementation iterated over used_markers and
+    reduced both grounding checks to vacuous passes when it was [].
+    """
+    draft, response = _write_pair(tmp_path)
+    response_data = json.loads(response.read_text(encoding="utf-8"))
+    response_data["used_markers"] = []
+    response.write_text(json.dumps(response_data), encoding="utf-8")
+    result = runner.invoke(
+        app, ["validate", "write", "--draft", str(draft), "--response", str(response)]
+    )
+    assert result.exit_code != 0
+    verdict = json.loads(
+        Path(json.loads(result.output)["validation_path"]).read_text(encoding="utf-8")
+    )
+    assert verdict["structural_checks"]["quote_in_body"] == "fail"
+    codes = {e["code"] for e in verdict["errors"]}
+    assert "undeclared_prose_marker" in codes
+
+
+def test_validate_write_strips_schema_version_envelope_on_both_sides(tmp_path: Path) -> None:
+    """Regression for PR#30 review finding 4.
+
+    A response with a schema_version envelope must validate — earlier
+    implementation only stripped from draft and fed response_data raw,
+    so extra=forbid would reject envelope-carrying responses.
+    """
+    draft, response = _write_pair(tmp_path)
+    response_data = json.loads(response.read_text(encoding="utf-8"))
+    response_data["schema_version"] = 1
+    response.write_text(json.dumps(response_data), encoding="utf-8")
+    result = runner.invoke(
+        app, ["validate", "write", "--draft", str(draft), "--response", str(response)]
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_validate_write_patches_session_on_ok(tmp_path: Path) -> None:
+    """Regression for PR#30 review finding 2 — validate must transition
+    session page entry to status=validated per atoms.md.
+    """
+    # Need a real session for this test.
+    from wikify.paths import BundlePaths
+    from wikify.session import init_session, save_session
+
+    bundle = tmp_path / "bundle"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    session = init_session(bundle_root=bundle, corpus_root=corpus)
+    session_path = BundlePaths(bundle).session_path
+    save_session(session_path, session)
+
+    draft, response = _write_pair(tmp_path, page_id="ALD")
+
+    result = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft),
+            "--response",
+            str(response),
+            "--session",
+            str(session_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["session_patched"] is True
+
+    session_doc = json.loads(session_path.read_text(encoding="utf-8"))
+    ald = next(p for p in session_doc["pages"] if p["page_id"] == "ALD")
+    assert ald["status"] == "validated"
+    assert ald["validation_path"] == payload["validation_path"]
+
+
 def test_validate_write_writes_verdict_at_custom_out_path(tmp_path: Path) -> None:
     draft, response = _write_pair(tmp_path)
     custom = tmp_path / "custom-verdict.json"

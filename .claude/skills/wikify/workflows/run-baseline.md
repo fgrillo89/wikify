@@ -86,10 +86,22 @@ for each planned page in session:
         # session.pages[<id>]. The skill reads the draft, spawns the Task
         # subagent with it, and writes the subagent's WriteResponse JSON
         # to <bundle>/_scratch/response-<id>.json.
-    wikify validate write --draft <bundle>/_scratch/draft-<id>.json --response <bundle>/_scratch/response-<id>.json
-        on ok=false: retry once; then escalate per reference/escalation.md; then mark failed
-    wikify bundle commit-page --session <s> --response <bundle>/_scratch/response-<id>.json
-        # rebuilds _index.json and _wiki_graph.json under the session lock
+    wikify validate write \
+        --draft <bundle>/_scratch/draft-<id>.json \
+        --response <bundle>/_scratch/response-<id>.json \
+        --session <s>
+        # --session is REQUIRED to transition the page entry from
+        # drafted to validated. Without it, bundle commit-page will
+        # reject the page with precondition_not_met.
+        # on ok=false: retry once; then escalate per reference/escalation.md; then mark failed
+    wikify bundle commit-page \
+        --session <s> \
+        --response <bundle>/_scratch/response-<id>.json \
+        --validation <bundle>/_scratch/validation-<id>.json
+        # --validation is REQUIRED. commit-page verifies ok=true AND
+        # session.pages[<id>].status=="validated" before writing the
+        # page file and rebuilding _index.json / _wiki_graph.json under
+        # the session lock.
     wikify session checkpoint --session <s> --label "after-<id>"
 
 wikify session close --session <s>

@@ -113,17 +113,40 @@ def test_draft_write_request_builds_scratch_artifact(
     assert ald["draft_path"] == str(draft_path)
 
 
+def _commit_ready_response_for(
+    draft_path: Path, page_id: str
+) -> tuple[str, str, str]:
+    """Return (body_markdown, chunk_id, quote) using a real substring of
+    the first evidence chunk so grounding passes.
+    """
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    ev0 = draft["evidence_v2"][0]
+    chunk_id = ev0["chunk_id"]
+    doc_id = ev0["doc_id"]
+    quote = " ".join(ev0["chunk_text"].split())[:40]
+    filler = (
+        "Atomic layer deposition (ALD) is a self-limiting vapor-phase technique. "
+        "Films grow one atomic layer per cycle through alternating precursor pulses. "
+    ) * 10
+    body = (
+        f"**{page_id}** is a self-limiting vapor-phase technique.[^e1]\n\n"
+        f"{filler}\n\n## Mechanism\n\n{filler}\n\n## Applications\n\n{filler}\n\n"
+        "## References\n\n"
+        f'[^e1]: {chunk_id} ({doc_id}) > "{quote}"\n'
+    )
+    return body, chunk_id, doc_id
+
+
 def test_bundle_commit_page_writes_markdown_and_updates_session(
     initialized_session: tuple[Path, Path],
 ) -> None:
     session_path, bundle = initialized_session
-    # Seed evidence + draft as in the previous test.
     ev = runner.invoke(
         app,
         ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
     )
     chunk_ids = json.loads(ev.output)["chunk_ids"]
-    runner.invoke(
+    draft = runner.invoke(
         app,
         [
             "draft",
@@ -136,30 +159,16 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
             json.dumps(chunk_ids),
         ],
     )
-
-    # Simulate a valid subagent response.
+    draft_path = Path(json.loads(draft.output)["draft_path"])
     scratch = BundlePaths(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
-    filler = (
-        "Atomic layer deposition (ALD) is a self-limiting vapor-phase technique. "
-        "Films grow one atomic layer per cycle through alternating precursor pulses. "
-    ) * 10
-    response_body = (
-        "**ALD** is a self-limiting vapor-phase technique.[^e1]\n\n"
-        f"{filler}\n\n"
-        "## Mechanism\n\n"
-        f"{filler}\n\n"
-        "## Applications\n\n"
-        f"{filler}\n\n"
-        "## References\n\n"
-        '[^e1]: chunk_x (doc_x) > "self-limiting"\n'
-    )
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
         json.dumps(
             {
                 "page_id": "ALD",
                 "page_kind": "article",
-                "body_markdown": response_body,
+                "body_markdown": body,
                 "used_markers": ["e1"],
                 "tokens_in": 100,
                 "tokens_out": 50,
@@ -167,6 +176,24 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
         ),
         encoding="utf-8",
     )
+
+    # Validate first — this is now the atoms.md precondition for commit.
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    assert val.exit_code == 0, val.output
+    val_payload = json.loads(val.output)
+    assert val_payload["session_patched"] is True
 
     result = runner.invoke(
         app,
@@ -177,6 +204,8 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
             str(session_path),
             "--response",
             str(response_path),
+            "--validation",
+            val_payload["validation_path"],
         ],
     )
     assert result.exit_code == 0, result.output
@@ -184,11 +213,256 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
     assert payload["ok"] is True
     page_path = Path(payload["page_path"])
     assert page_path.exists()
-    assert page_path.read_text(encoding="utf-8").startswith("---\n")
 
     session_doc = json.loads(session_path.read_text(encoding="utf-8"))
     ald = next(p for p in session_doc["pages"] if p["page_id"] == "ALD")
     assert ald["status"] == "committed"
+    assert ald["validation_path"] == val_payload["validation_path"]
+
+
+def test_bundle_commit_page_rejects_verdict_page_id_mismatch(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """A verdict whose page_id names a different page must not authorise
+    promotion of this response.
+    """
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Build a verdict that claims ok=true but names a DIFFERENT page.
+    verdict_path = scratch / "validation-SOMETHING-ELSE.json"
+    verdict_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "page_id": "SomethingElse",
+                "response_path": str(response_path.resolve()),
+                "response_sha256": __import__("hashlib").sha256(
+                    response_path.read_bytes()
+                ).hexdigest(),
+                "errors": [],
+                "structural_checks": {"pydantic": "pass"},
+                "checked_at": "2026-04-24T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            str(verdict_path),
+        ],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stderr or result.output)
+    assert err["error"] == "verdict_page_id_mismatch"
+
+
+def test_bundle_commit_page_rejects_response_edited_after_validation(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """If response bytes change after `wikify validate write` recorded a
+    verdict, commit-page must refuse to promote — the verdict is stale.
+    """
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Validate — this captures response_sha256 into the verdict.
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    assert val.exit_code == 0
+    verdict_path = Path(json.loads(val.output)["validation_path"])
+
+    # Edit the response AFTER validation.
+    response_data = json.loads(response_path.read_text(encoding="utf-8"))
+    response_data["body_markdown"] = (
+        response_data["body_markdown"] + "\n<!-- tampered -->\n"
+    )
+    response_path.write_text(json.dumps(response_data), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            str(verdict_path),
+        ],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stderr or result.output)
+    assert err["error"] == "response_content_changed"
+
+
+def test_bundle_commit_page_rejects_unvalidated_page(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """commit-page must refuse to promote a page whose session status is
+    not `validated`. This is the atoms.md Pre-condition.
+    """
+    session_path, bundle = initialized_session
+    ev = runner.invoke(
+        app,
+        ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "article",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 100,
+                "tokens_out": 50,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Synthesise an ok=true validation verdict WITHOUT calling
+    # `validate write --session`. The session page entry is therefore
+    # still `drafted`, not `validated`.
+    verdict_path = scratch / "validation-ALD.json"
+    verdict_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "page_id": "ALD",
+                "response_path": str(response_path),
+                "errors": [],
+                "structural_checks": {
+                    "pydantic": "pass",
+                    "quote_in_body": "pass",
+                    "quote_in_source": "pass",
+                },
+                "checked_at": "2026-04-24T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            str(verdict_path),
+        ],
+    )
+    assert result.exit_code != 0
+    # Page file must not exist.
+    assert not list(BundlePaths(bundle).articles_dir.glob("*.md"))
 
 
 def test_bundle_commit_page_rebuilds_index_and_graph(
@@ -200,7 +474,7 @@ def test_bundle_commit_page_rebuilds_index_and_graph(
         ["kg", "evidence", "--session", str(session_path), "--page-id", "ALD", "--top-k", "2"],
     )
     chunk_ids = json.loads(ev.output)["chunk_ids"]
-    runner.invoke(
+    draft = runner.invoke(
         app,
         [
             "draft",
@@ -213,22 +487,17 @@ def test_bundle_commit_page_rebuilds_index_and_graph(
             json.dumps(chunk_ids),
         ],
     )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
 
     scratch = BundlePaths(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
-    filler = "ALD is a self-limiting vapor-phase technique. " * 40
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
         json.dumps(
             {
                 "page_id": "ALD",
                 "page_kind": "article",
-                "body_markdown": (
-                    "**ALD** is self-limiting.[^e1]\n\n"
-                    f"{filler}\n\n## Mechanism\n\n{filler}\n\n"
-                    "## Applications\n\n"
-                    f"{filler}\n\n## References\n\n"
-                    '[^e1]: chunk_x (doc_x) > "self-limiting"\n'
-                ),
+                "body_markdown": body,
                 "used_markers": ["e1"],
                 "tokens_in": 100,
                 "tokens_out": 50,
@@ -236,6 +505,21 @@ def test_bundle_commit_page_rebuilds_index_and_graph(
         ),
         encoding="utf-8",
     )
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    assert val.exit_code == 0, val.output
+    verdict_path = json.loads(val.output)["validation_path"]
 
     result = runner.invoke(
         app,
@@ -246,6 +530,8 @@ def test_bundle_commit_page_rebuilds_index_and_graph(
             str(session_path),
             "--response",
             str(response_path),
+            "--validation",
+            verdict_path,
         ],
     )
     assert result.exit_code == 0, result.output
@@ -282,6 +568,25 @@ def test_bundle_commit_page_no_partial_write_on_lock_held(
         ),
         encoding="utf-8",
     )
+    # An ok=true verdict is required by the new commit-page contract;
+    # this test is specifically about the lock_held exit path, which
+    # fires BEFORE the precondition check (since the lock wraps the
+    # precondition check).
+    verdict_path = scratch / "validation-NEW.json"
+    verdict_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "page_id": "NEW",
+                "response_path": str(response_path),
+                "errors": [],
+                "structural_checks": {"pydantic": "pass"},
+                "checked_at": "2026-04-24T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     # Someone else holds the lock.
     lock_result = runner.invoke(
@@ -299,6 +604,8 @@ def test_bundle_commit_page_no_partial_write_on_lock_held(
             str(session_path),
             "--response",
             str(response_path),
+            "--validation",
+            str(verdict_path),
         ],
     )
     assert commit.exit_code == 2

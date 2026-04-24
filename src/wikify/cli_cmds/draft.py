@@ -72,6 +72,13 @@ def cmd_write_request(
     if missing:
         raise typer.BadParameter(f"unknown chunk_ids: {missing[:5]}")
 
+    # Evidence refs carry empty quote by convention — the canonical
+    # quote lands in the subagent's response body as the quoted tail of a
+    # `[^eN]: <chunk_id> (<doc_id>) > "<quote>"` line (see
+    # reference/citation-format.md). `wikify validate write` parses those
+    # body-defined quotes and cross-checks them against chunk_text here;
+    # the request-side quote field is not consulted. The field is retained
+    # to satisfy the frozen WriteRequest schema.
     evidence_refs: list[WriteEvidenceRef] = []
     evidence_v2: list[WriteEvidenceRefV2] = []
     for cid in chunk_ids_list:
@@ -83,7 +90,7 @@ def cmd_write_request(
             WriteEvidenceRefV2(
                 chunk_id=cid,
                 doc_id=chunk.doc_id,
-                quote="",  # subagent fills this with a verbatim substring it will cite
+                quote="",
                 chunk_text=chunk.text,
                 section_type=chunk.section_type,
             )

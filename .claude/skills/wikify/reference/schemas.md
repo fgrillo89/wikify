@@ -65,10 +65,25 @@ Opaque lockfile. Contents: `{owner, acquired_at, expires_at}`. Owned by
 ### `<bundle>/_scratch/draft-<page_id>.json`
 
 The model-facing `WriteRequest` payload — prompt-layer-resolved, evidence-packed.
-Source of truth: `src/wikify/schema.py::WriteRequest`. Carries `schema_version: 1`
-added alongside the existing fields.
+Canonical fields: `src/wikify/schema.py::WriteRequest` (frozen, `extra="forbid"`).
+
+The scratch file also carries a top-level `schema_version: 1` envelope
+field. The envelope is **not** part of the canonical `WriteRequest`
+model — it is stripped by `wikify validate write` before Pydantic
+validation. Skills and downstream tools may rely on the envelope to
+version the on-disk format independently of the Pydantic schema.
 
 Created by: `wikify draft write-request`. Read by: the write subagent.
+
+### `<bundle>/_scratch/response-<page_id>.json`
+
+The subagent's raw `WriteResponse` output. Canonical fields:
+`src/wikify/schema.py::WriteResponse` (frozen, `extra="forbid"`). The
+same `schema_version: 1` envelope convention applies — scratch writers
+may emit it; `wikify validate write` strips it before Pydantic checks.
+
+Created by: the write subagent (skill-driven). Read by: `wikify
+validate write` and `wikify bundle commit-page`.
 
 ### `<bundle>/_scratch/validation-<page_id>.json`
 
@@ -90,9 +105,11 @@ Created by: `wikify validate write`. Read by: the workflow skill.
 
 ## Bundle artifacts
 
-### `<bundle>/pages/<id>.md`
+### `<bundle>/articles/<id>.md` and `<bundle>/people/<id>.md`
 
-Wikipedia-style page markdown with YAML frontmatter.
+Wikipedia-style page markdown with YAML frontmatter. The subdirectory
+is determined by the page `kind`: `article` → `articles/`, `person` →
+`people/` (enforced by `src/wikify/store/wiki_files.py::write_page`).
 
 Frontmatter required fields: `id, kind (article|person), title, aliases, created_at`.
 Body rules: see `write-constraints.md`. Citation format: see `citation-format.md`.
@@ -119,12 +136,26 @@ first mutated.
 ### `<bundle>/_run.json`
 
 Run snapshot flushed on `wikify session close` (and legacy `run_baseline()`).
-Current field-set is the merge gate for schema parity; see `src/wikify/meter.py`
-and `src/wikify/baselines/pipeline.py` for the current keys. No `schema_version`
-field yet — will be added when session closure takes over as the only writer.
+
+**Skill-path writer** (`src/wikify/session.py::write_run_snapshot`): emits
+`schema_version: 1` plus a session-derived field set — `session_id`,
+`strategy`, `status`, `bundle_root`, `corpus_root`, `created_at`,
+`closed_at`, `budget`, `stages`, `config`, `pages`, `n_pages_committed`,
+`n_pages_failed`, `page_counts`, `telemetry_paths`.
+
+**Legacy writer** (`src/wikify/baselines/pipeline.py::run_baseline`): emits
+a different field set today — no `schema_version`; fields include
+`strategy`, `mode="baseline"`, `seed_doc_ids`, `seed_chunks_read`,
+`evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
+`baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
+`n_pages_written`, `write_rejections`, plus `CostMeter` snapshot fields.
+
+Full field-set convergence between the two writers is the named
+**Phase 5 deletion gate** — once the skill path emits a superset of
+legacy fields with the same semantics, `run_baseline()` can be removed.
 
 Owning command: `wikify session close` (skill-driven path);
-`baselines.pipeline.run_baseline` (legacy path).
+`baselines.pipeline.run_baseline` (legacy path, scheduled for deletion).
 
 ### `<bundle>/_calls.jsonl`
 
