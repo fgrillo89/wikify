@@ -45,6 +45,15 @@ Reserved (not required in v1, added in later strategies):
 - `stopping_criteria`, `kpi_snapshot`, `acceptance_policy`, `iteration_index`,
   `recent_gains`, `active_page_id`, `active_chunk_ids`, `transcript_path`, `lock`.
 
+Optional baseline-strategy fields (default to empty/"create"):
+
+- `seed_doc_ids: list[str]` — PageRank+submodular-selected document IDs.
+  Populated by `wikify kg seeds --persist`. Carried into `_run.json` on close.
+- `seed_chunk_ids: list[str]` — abstract-equivalent chunk IDs per seed doc.
+  Populated by `wikify kg seeds --persist`.
+- `iteration: str` — per-iteration identifier for campaign-style reruns.
+  Defaults to `"create"`; scripted/guided strategies bump it.
+
 Owning CLI: `wikify session init/show/update/checkpoint/close`. The agent may
 read the file directly; it may not hand-edit canonical fields — mutations go
 through a CLI subcommand.
@@ -138,10 +147,16 @@ first mutated.
 Run snapshot flushed on `wikify session close` (and legacy `run_baseline()`).
 
 **Skill-path writer** (`src/wikify/session.py::write_run_snapshot`): emits
-`schema_version: 1` plus a session-derived field set — `session_id`,
-`strategy`, `status`, `bundle_root`, `corpus_root`, `created_at`,
-`closed_at`, `budget`, `stages`, `config`, `pages`, `n_pages_committed`,
-`n_pages_failed`, `page_counts`, `telemetry_paths`.
+`schema_version: 1` plus a session-derived field set. Core fields:
+`session_id`, `strategy`, `mode`, `iteration`, `status`, `bundle_root`,
+`corpus_root`, `created_at`, `closed_at`, `timestamp_utc`,
+`budget_target_haiku_eq`, `budget_spent_haiku_eq`, `stages`, `config`,
+`pages`, `n_pages_committed`, `n_pages_failed`, `page_counts`,
+`telemetry_paths`. Legacy-shape overlay fields (for `wikify html` /
+`wikify eval` compatibility): `seed_doc_ids`, `seed_chunks_read`,
+`evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
+`baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
+`n_pages_written`, `write_rejections`.
 
 **Legacy writer** (`src/wikify/baselines/pipeline.py::run_baseline`): emits
 a different field set today — no `schema_version`; fields include

@@ -48,7 +48,8 @@ def test_kg_seeds_returns_deterministic_ids(initialized_session: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert set(payload.keys()) == {"seed_doc_ids", "seed_chunk_ids"}
+    assert set(payload.keys()) == {"seed_doc_ids", "seed_chunk_ids", "persisted"}
+    assert payload["persisted"] is False
     assert isinstance(payload["seed_doc_ids"], list)
     assert isinstance(payload["seed_chunk_ids"], list)
     assert len(payload["seed_doc_ids"]) <= 3
@@ -64,6 +65,28 @@ def test_kg_seeds_returns_deterministic_ids(initialized_session: Path) -> None:
     )
     assert result2.exit_code == 0
     assert json.loads(result2.output) == payload
+
+
+def test_kg_seeds_persist_writes_to_session(initialized_session: Path) -> None:
+    """--persist must patch session.seed_doc_ids and session.seed_chunk_ids."""
+    result = runner.invoke(
+        app,
+        [
+            "kg",
+            "seeds",
+            "--session",
+            str(initialized_session),
+            "--max-seeds",
+            "3",
+            "--persist",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["persisted"] is True
+    session_doc = json.loads(initialized_session.read_text(encoding="utf-8"))
+    assert session_doc["seed_doc_ids"] == payload["seed_doc_ids"]
+    assert session_doc["seed_chunk_ids"] == payload["seed_chunk_ids"]
 
 
 def test_kg_abstracts_returns_metadata_for_known_docs(
