@@ -23,6 +23,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .paths import BundlePaths
+from .types import Role
 
 SCHEMA_VERSION = 1
 
@@ -49,7 +50,7 @@ class PageEntry(BaseModel):
 class Budget(BaseModel):
     model_config = {"extra": "forbid"}
     haiku_eq_target: int = 0
-    haiku_eq_spent: int = 0
+    haiku_eq_spent: float = 0.0
 
 
 class BaselineConfig(BaseModel):
@@ -347,10 +348,16 @@ def write_run_snapshot(session: "SessionV1") -> Path:
         if p.get("status") == "failed"
     ]
 
+    # Per-close run_id so session resume + second close produces a
+    # distinct run_id, matching legacy semantics where every
+    # `run_baseline()` invocation mints a fresh id. Downstream consumers
+    # that join on run_id don't see collisions.
+    run_id = f"{session.session_id}-{session.updated_at}"
+
     snapshot = {
         "schema_version": RUN_SCHEMA_VERSION,
         "session_id": session.session_id,
-        "run_id": session.session_id,
+        "run_id": run_id,
         "strategy": session.strategy,
         "mode": session.strategy,
         "iteration": session.iteration,
@@ -404,6 +411,15 @@ def write_run_snapshot(session: "SessionV1") -> Path:
     }
     run_path = bundle_paths.run_path
     run_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+
+    # Append to _run_history.jsonl so multiple closes on the same
+    # session (resume workflows, campaign iterations) leave an audit
+    # trail instead of clobbering each other. Mirrors
+    # distill/iteration.py's per-iteration history append.
+    history_path = bundle_paths.run_history_path
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(snapshot) + "\n")
     return run_path
 
 
@@ -457,16 +473,32 @@ def _update_agg(agg: dict, record: dict) -> None:
     agg["headroom_sum"] += headroom
 
 
+class UnknownRoleError(ValueError):
+    """A _calls.jsonl record named a role not in the Role enum."""
+
+
+def _initial_by_role() -> dict[str, dict]:
+    """Pre-populate by_role with every legacy Role enum value.
+
+    Matches legacy `CostMeter.__init__` which seeds `self._by_role` with
+    `{r: _Aggregates() for r in Role}`. A write-only run therefore emits
+    all five role keys (four with `{"calls": 0}`) rather than a single
+    `{"writer": ...}` entry — downstream consumers can rely on the key
+    set being stable regardless of which roles were actually exercised.
+    """
+    return {role.value: dict(_EMPTY_AGG) for role in Role}
+
+
 def _aggregate_calls_jsonl(calls_path: Path) -> dict:
     """Read _calls.jsonl and produce the legacy CostMeter.snapshot shape."""
     total = dict(_EMPTY_AGG)
-    by_role: dict[str, dict] = {}
+    by_role: dict[str, dict] = _initial_by_role()
     by_tier: dict[str, dict] = {}
     if not calls_path.is_file():
         return {
             "budget_used_haiku_eq": 0.0,
             "wall_seconds": 0.0,
-            "by_role": {},
+            "by_role": {k: _agg_to_dict(v) for k, v in by_role.items()},
             "by_tier": {},
             "context": {
                 "used_max": 0,
@@ -477,6 +509,7 @@ def _aggregate_calls_jsonl(calls_path: Path) -> dict:
             "calls": 0,
             "cache_hit_rate": 0.0,
         }
+    known_roles = {role.value for role in Role}
     for line in calls_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -485,10 +518,15 @@ def _aggregate_calls_jsonl(calls_path: Path) -> dict:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        _update_agg(total, record)
-        role_key = str(record.get("role", "unknown"))
+        role_key = str(record.get("role", ""))
+        if role_key not in known_roles:
+            raise UnknownRoleError(
+                f"_calls.jsonl record has unknown role {role_key!r}; "
+                f"expected one of {sorted(known_roles)}"
+            )
         tier_key = str(record.get("tier", "unknown"))
-        _update_agg(by_role.setdefault(role_key, dict(_EMPTY_AGG)), record)
+        _update_agg(total, record)
+        _update_agg(by_role[role_key], record)
         _update_agg(by_tier.setdefault(tier_key, dict(_EMPTY_AGG)), record)
     calls = total["calls"]
     return {

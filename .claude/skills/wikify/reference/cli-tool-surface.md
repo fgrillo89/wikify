@@ -83,6 +83,21 @@ wikify kg abstracts --corpus <path> --doc-ids '["doc_1","doc_2"]'
 wikify kg evidence --session <path> --page-id "Atomic Layer Deposition" --top-k 8
 ```
 
+### Meter
+
+```
+wikify meter record --session <path> \
+    --role extractor --tier S \
+    --input-tokens 200 --output-tokens 80
+```
+
+- Use for extract, query, orchestrate, maintenance calls — where the
+  subagent returns token counts and no other CLI records the call.
+- Do **not** use for the writer role: `wikify bundle commit-page`
+  auto-records the write call. Duplicating it double-charges the budget.
+- Exits `3` with `budget_exceeded` when projected spend would push
+  `haiku_eq_spent` past `1.05 × budget_target`.
+
 `wikify kg seeds --persist` acquires the session lock, writes
 `seed_doc_ids` and `seed_chunk_ids` onto the session, and is the
 convention callers use when they expect those fields to appear in the

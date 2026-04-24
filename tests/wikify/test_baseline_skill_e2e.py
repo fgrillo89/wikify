@@ -426,9 +426,14 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "_scratch",
         "_wiki_vectors.npz",
         "_wiki_vectors.ids.json",
-        # Legacy-only conditional fields that the skill path also emits
-        # now are intentionally allowed here; they converge when legacy
-        # and skill paths share the same bundle state.
+        # Appended per session close. Legacy run_baseline does not
+        # append a history file; the skill path does so resume + re-close
+        # produces an audit trail.
+        "_run_history.jsonl",
+        # Populated by wikify bundle commit-page and wikify meter record.
+        # Legacy run_baseline writes this file too, but only when the
+        # meter sees calls; a 0-call legacy run omits it.
+        "_calls.jsonl",
     }
     unexpected = skill_only - allowed_skill_only
     assert not unexpected, f"skill bundle introduced unexpected artifacts: {unexpected}"
@@ -502,3 +507,61 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         rec = json.loads(line)
         missing = expected_call_fields - set(rec.keys())
         assert not missing, f"skill _calls.jsonl record missing fields: {missing}"
+
+    # --- Value-level parity on the meter aggregation ---------------------
+    # Same CallRecord fed through both aggregation paths must yield the
+    # same snapshot numbers. Prove this by feeding legacy's
+    # `_calls.jsonl` into the skill's `_aggregate_calls_jsonl` and
+    # comparing against a legacy meter snapshot computed from the same
+    # records. Only the skill-side aggregator is under test here; values
+    # differ from the standalone legacy_bundle snapshot above only
+    # because legacy aggregates with CostMeter directly in-memory.
+    from wikify.meter import _DEFAULT_TIERS, CostMeter
+    from wikify.session import _aggregate_calls_jsonl
+    from wikify.types import ModelTier, Role
+
+    # Construct a tiny synthetic set of records and aggregate both ways.
+    synthetic_path = tmp_path / "synthetic_calls.jsonl"
+    meter = CostMeter(
+        budget_haiku_eq=1_000_000.0,
+        run_id="parity-probe",
+        events_path=synthetic_path,
+        tiers=_DEFAULT_TIERS,
+    )
+    meter.record(
+        role=Role.WRITER,
+        tier=ModelTier.MEDIUM,
+        input_tokens=500,
+        output_tokens=300,
+        context_cap=200_000,
+        wall_seconds=1.2,
+        cache_hit=False,
+        prompt_hash="probe-a",
+    )
+    meter.record(
+        role=Role.EXTRACTOR,
+        tier=ModelTier.SMALL,
+        input_tokens=100,
+        output_tokens=50,
+        context_cap=200_000,
+        wall_seconds=0.3,
+        cache_hit=True,
+        prompt_hash="probe-b",
+    )
+    legacy_snapshot = meter.snapshot()
+    skill_agg = _aggregate_calls_jsonl(synthetic_path)
+
+    # Core meter numbers must match exactly.
+    assert skill_agg["budget_used_haiku_eq"] == legacy_snapshot["budget_used_haiku_eq"]
+    assert skill_agg["wall_seconds"] == legacy_snapshot["wall_seconds"]
+    assert skill_agg["calls"] == legacy_snapshot["calls"]
+    assert skill_agg["cache_hit_rate"] == legacy_snapshot["cache_hit_rate"]
+    assert skill_agg["context"]["used_max"] == legacy_snapshot["context"]["used_max"]
+    # Each role's haiku_eq aggregates must match.
+    for role_key, legacy_bucket in legacy_snapshot["by_role"].items():
+        skill_bucket = skill_agg["by_role"][role_key]
+        if legacy_bucket.get("calls", 0) == 0:
+            assert skill_bucket["calls"] == 0
+        else:
+            assert skill_bucket["haiku_eq"] == legacy_bucket["haiku_eq"]
+            assert skill_bucket["calls"] == legacy_bucket["calls"]

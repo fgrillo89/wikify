@@ -26,7 +26,7 @@ from ..store.wiki_bundle import load_bundle
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
 from ..types import ModelTier, Role
-from .meter import haiku_eq_for
+from .meter import BudgetExceededError, check_budget_gate, haiku_eq_for
 
 app = typer.Typer(add_completion=False, help="Promote validated drafts into bundle artifacts.")
 
@@ -193,28 +193,99 @@ def cmd_commit_page(
             rebuild_wiki_graph(bundle_paths, wiki_pages)
 
             # Auto-record the write call in _calls.jsonl. The skill
-            # path does not hold a CostMeter instance; this entry is the
-            # skill-side equivalent of legacy meter.record() after a
-            # write dispatch. Tokens come from the response itself;
+            # path does not hold a CostMeter instance; this entry is
+            # the skill-side equivalent of legacy meter.record() after
+            # a write dispatch. Tokens come from the response itself;
             # tier comes from session.config.default_tiers["write"].
+            #
+            # Validation contract (mirrors `wikify meter record`):
+            #   - misconfigured tier: fail loudly, do not silently default
+            #   - negative tokens: reject (would decrement budget)
+            #   - tokens_in > context_cap: reject
+            #   - 1.05x budget overrun: refuse like legacy CostMeter
             write_tier_str = fresh.config.default_tiers.get("write", "M")
             try:
                 write_tier = ModelTier(write_tier_str)
             except ValueError:
-                write_tier = ModelTier.MEDIUM
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "invalid_write_tier",
+                            "tier": write_tier_str,
+                            "message": (
+                                "session.config.default_tiers['write'] is not a "
+                                "valid ModelTier (expected one of S, M, L)"
+                            ),
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=1) from None
+            tokens_in = int(parsed.tokens_in)
+            tokens_out = int(parsed.tokens_out)
+            context_cap = 200_000
+            if tokens_in < 0 or tokens_out < 0:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "negative_tokens",
+                            "tokens_in": tokens_in,
+                            "tokens_out": tokens_out,
+                            "message": (
+                                "WriteResponse.tokens_in/tokens_out must be "
+                                "non-negative; refusing to auto-record"
+                            ),
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            if tokens_in > context_cap:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "context_overrun",
+                            "tokens_in": tokens_in,
+                            "context_cap": context_cap,
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            haiku_eq = haiku_eq_for(write_tier, tokens_in, tokens_out)
+            projected_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
+            try:
+                check_budget_gate(
+                    float(fresh.budget.haiku_eq_target), projected_spent
+                )
+            except BudgetExceededError as exc:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "budget_exceeded",
+                            "spent": exc.spent,
+                            "target": exc.target,
+                            "ratio": exc.ratio,
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=3) from exc
             call_record = CallRecord(
                 role=Role.WRITER,
                 tier=write_tier,
-                input_tokens=int(parsed.tokens_in),
-                output_tokens=int(parsed.tokens_out),
-                context_used=int(parsed.tokens_in),
-                context_cap=200_000,
+                input_tokens=tokens_in,
+                output_tokens=tokens_out,
+                context_used=tokens_in,
+                context_cap=context_cap,
                 wall_seconds=0.0,
                 cache_hit=False,
                 prompt_hash="",
-                haiku_eq=haiku_eq_for(
-                    write_tier, int(parsed.tokens_in), int(parsed.tokens_out)
-                ),
+                haiku_eq=haiku_eq,
             )
             bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
             with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
@@ -228,10 +299,9 @@ def cmd_commit_page(
                     entry["status"] = "committed"
                     entry["validation_path"] = str(validation)
                     break
-            new_spent = int(fresh.budget.haiku_eq_spent + call_record.haiku_eq)
             updated = apply_merge_patch(
                 fresh,
-                {"pages": new_pages, "budget": {"haiku_eq_spent": new_spent}},
+                {"pages": new_pages, "budget": {"haiku_eq_spent": projected_spent}},
             )
             save_session(session_path, touch(updated))
     except SessionLockHeldError as exc:

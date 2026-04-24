@@ -195,15 +195,26 @@ No `schema_version` per-line; the whole file's stability is gated on the
 **Skill-path writers**:
 
 - `wikify meter record` — explicit emission; used by workflows to log
-  extract/query/orchestrate calls the subagent performs.
+  extract/query/orchestrate calls the subagent performs. Callers MUST
+  NOT use this command for the write call — `wikify bundle commit-page`
+  records that automatically. Double-recording is not deduplicated.
 - `wikify bundle commit-page` — auto-records the write call using the
   `WriteResponse.tokens_in` / `tokens_out` fields on successful commit.
+  Refuses to record negative tokens, tokens beyond the declared
+  `context_cap`, or projected spend over 1.05× the session budget
+  target.
 
-Both writers bump `session.budget.haiku_eq_spent` under the session
-lock. `wikify session close` reads this file and folds it into the
+Both writers bump `session.budget.haiku_eq_spent` (stored as `float`)
+under the session lock and honor the legacy `1.05 × budget_target`
+hard-abort gate — a projected overshoot exits the CLI with a
+structured `budget_exceeded` error on stderr and a non-zero exit code.
+`wikify session close` reads this file and folds it into the
 `_run.json` snapshot (see above) in the exact shape legacy
 `CostMeter.snapshot()` emits (`budget_used_haiku_eq`, `wall_seconds`,
 `by_role`, `by_tier`, `context`, `calls` count, `cache_hit_rate`).
+Unknown `role` strings in `_calls.jsonl` are rejected at aggregation
+(`UnknownRoleError`); the legitimate role set is the `Role` enum in
+`src/wikify/types.py`.
 
 ## Corpus artifacts (read-only)
 

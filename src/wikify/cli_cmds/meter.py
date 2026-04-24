@@ -17,6 +17,7 @@ from pathlib import Path
 
 import typer
 
+from ..config import ABORT_RATIO
 from ..meter import _DEFAULT_TIERS, CallRecord
 from ..paths import BundlePaths
 from ..session import (
@@ -28,6 +29,34 @@ from ..session import (
     touch,
 )
 from ..types import ModelTier, Role
+
+
+class BudgetExceededError(RuntimeError):
+    """Projected haiku_eq_spent would exceed 1.05 * budget_target."""
+
+    def __init__(self, spent: float, target: float, ratio: float) -> None:
+        super().__init__(
+            f"budget exceeded: spent={spent:.1f} > {ratio} x target={target:.1f}"
+        )
+        self.spent = spent
+        self.target = target
+        self.ratio = ratio
+
+
+def check_budget_gate(target: float, projected_spent: float) -> None:
+    """Mirror `CostMeter.record`'s 1.05x hard-abort gate.
+
+    Skill-side writers (`wikify meter record`, `wikify bundle commit-page`
+    auto-record) must refuse to record a call that would carry the session
+    past the abort ratio, matching legacy behavior.
+    """
+    if target <= 0:
+        return
+    ceiling = target * ABORT_RATIO
+    if projected_spent > ceiling:
+        raise BudgetExceededError(
+            spent=projected_spent, target=target, ratio=ABORT_RATIO
+        )
 
 app = typer.Typer(add_completion=False, help="Cost-meter telemetry for skill workflows.")
 
@@ -74,10 +103,11 @@ def append_call_record(
     )
     with session_lock(session_path, owner=_cli_owner(owner)):
         fresh = load_session(session_path)
+        new_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
+        check_budget_gate(float(fresh.budget.haiku_eq_target), new_spent)
         bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
         with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
             fh.write(record.to_json() + "\n")
-        new_spent = int(fresh.budget.haiku_eq_spent + haiku_eq)
         updated = apply_merge_patch(fresh, {"budget": {"haiku_eq_spent": new_spent}})
         save_session(session_path, touch(updated))
     return record
@@ -150,6 +180,20 @@ def cmd_record(
             err=True,
         )
         raise typer.Exit(code=2) from exc
+    except BudgetExceededError as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "budget_exceeded",
+                    "spent": exc.spent,
+                    "target": exc.target,
+                    "ratio": exc.ratio,
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=3) from exc
 
     calls_path = BundlePaths(Path(load_session(session_path).bundle_root)).calls_path
     typer.echo(
@@ -165,4 +209,10 @@ def cmd_record(
     )
 
 
-__all__ = ["app", "append_call_record", "haiku_eq_for"]
+__all__ = [
+    "app",
+    "append_call_record",
+    "haiku_eq_for",
+    "check_budget_gate",
+    "BudgetExceededError",
+]
