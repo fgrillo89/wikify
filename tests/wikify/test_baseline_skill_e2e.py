@@ -437,10 +437,12 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
     legacy_run = json.loads((legacy_bundle / "_run.json").read_text(encoding="utf-8"))
     skill_run = json.loads((skill_bundle / "_run.json").read_text(encoding="utf-8"))
 
-    # Overlay fields that the skill path now emits to match legacy shape.
-    # Exact values can differ (canned fakes vs real fixture walk), so we
-    # assert presence and type, not equality.
+    # Every legacy `_run.json` field the skill path must now reproduce.
+    # Values differ (canned fakes vs real fixture walk) so we assert
+    # presence + type, not equality. Field-set parity is the named
+    # Phase 5 deletion gate.
     overlay_fields = {
+        # Baseline / pipeline overlay (Tier 1 item 2):
         "strategy": str,
         "mode": str,
         "iteration": str,
@@ -456,6 +458,15 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "n_pages_written": int,
         "write_rejections": list,
         "timestamp_utc": str,
+        # Meter-derived (Tier 1 item 3, matches CostMeter.snapshot shape):
+        "run_id": str,
+        "budget_used_haiku_eq": (int, float),
+        "wall_seconds": (int, float),
+        "by_role": dict,
+        "by_tier": dict,
+        "context": dict,
+        "calls": int,  # count, not list
+        "cache_hit_rate": (int, float),
     }
     missing_legacy = [k for k in overlay_fields if k not in legacy_run]
     missing_skill = [k for k in overlay_fields if k not in skill_run]
@@ -466,16 +477,28 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
             f"skill _run.json[{key}] has wrong type: {type(skill_run[key])}"
         )
 
-    # Meter-only fields that are still legacy-only. When Tier 1 item 3
-    # closes these should move into `overlay_fields`. Keeping them
-    # enumerated as an explicit parity-diff surface.
-    meter_only = {"run_id", "calls", "spent_haiku_eq", "cache_hits", "context_used_max"}
-    meter_in_legacy = meter_only & set(legacy_run.keys())
-    meter_in_skill = meter_only & set(skill_run.keys())
-    assert meter_in_legacy, "legacy _run.json unexpectedly missing all meter fields"
-    assert not (meter_in_legacy - meter_in_skill - meter_in_legacy) and not (
-        meter_in_skill and meter_in_skill >= meter_in_legacy
-    ), (
-        "Tier 1 item 3 appears done — the skill path now emits meter fields. "
-        "Update the roadmap memory and tighten this parity test to assert value equality."
-    )
+    # context sub-dict must carry the legacy shape.
+    for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
+        assert subkey in skill_run["context"], (
+            f"skill _run.json[context] missing {subkey}"
+        )
+
+    # _calls.jsonl must carry full CallRecord entries on the skill path.
+    calls_jsonl = (skill_bundle / "_calls.jsonl").read_text(encoding="utf-8").splitlines()
+    assert calls_jsonl, "skill path produced no _calls.jsonl records"
+    expected_call_fields = {
+        "role",
+        "tier",
+        "input_tokens",
+        "output_tokens",
+        "context_used",
+        "context_cap",
+        "wall_seconds",
+        "cache_hit",
+        "prompt_hash",
+        "haiku_eq",
+    }
+    for line in calls_jsonl:
+        rec = json.loads(line)
+        missing = expected_call_fields - set(rec.keys())
+        assert not missing, f"skill _calls.jsonl record missing fields: {missing}"

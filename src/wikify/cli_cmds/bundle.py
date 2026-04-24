@@ -10,6 +10,7 @@ from pathlib import Path
 import typer
 
 from ..distill.write_runner import rebuild_wiki_graph
+from ..meter import CallRecord
 from ..models import WikiPage
 from ..paths import BundlePaths
 from ..schema import WriteResponse
@@ -24,6 +25,8 @@ from ..session import (
 from ..store.wiki_bundle import load_bundle
 from ..store.wiki_files import write_page as write_page_file
 from ..store.wiki_index import build_index
+from ..types import ModelTier, Role
+from .meter import haiku_eq_for
 
 app = typer.Typer(add_completion=False, help="Promote validated drafts into bundle artifacts.")
 
@@ -189,15 +192,47 @@ def cmd_commit_page(
             build_index(bundle_paths, wiki_pages).save()
             rebuild_wiki_graph(bundle_paths, wiki_pages)
 
-            # Update session: mark this page committed. page_entry is
-            # guaranteed non-None by the precondition check above.
+            # Auto-record the write call in _calls.jsonl. The skill
+            # path does not hold a CostMeter instance; this entry is the
+            # skill-side equivalent of legacy meter.record() after a
+            # write dispatch. Tokens come from the response itself;
+            # tier comes from session.config.default_tiers["write"].
+            write_tier_str = fresh.config.default_tiers.get("write", "M")
+            try:
+                write_tier = ModelTier(write_tier_str)
+            except ValueError:
+                write_tier = ModelTier.MEDIUM
+            call_record = CallRecord(
+                role=Role.WRITER,
+                tier=write_tier,
+                input_tokens=int(parsed.tokens_in),
+                output_tokens=int(parsed.tokens_out),
+                context_used=int(parsed.tokens_in),
+                context_cap=200_000,
+                wall_seconds=0.0,
+                cache_hit=False,
+                prompt_hash="",
+                haiku_eq=haiku_eq_for(
+                    write_tier, int(parsed.tokens_in), int(parsed.tokens_out)
+                ),
+            )
+            bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
+            with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
+                fh.write(call_record.to_json() + "\n")
+
+            # Update session: mark this page committed + bump spent. page_entry
+            # is guaranteed non-None by the precondition check above.
             new_pages = [p.model_dump(mode="json") for p in fresh.pages]
             for entry in new_pages:
                 if entry["page_id"] == parsed.page_id:
                     entry["status"] = "committed"
                     entry["validation_path"] = str(validation)
                     break
-            updated = apply_merge_patch(fresh, {"pages": new_pages})
+            new_spent = int(fresh.budget.haiku_eq_spent + call_record.haiku_eq)
+            updated = apply_merge_patch(
+                fresh,
+                {"pages": new_pages, "budget": {"haiku_eq_spent": new_spent}},
+            )
             save_session(session_path, touch(updated))
     except SessionLockHeldError as exc:
         typer.echo(
