@@ -91,6 +91,14 @@ class SessionV1(BaseModel):
     pages: list[PageEntry] = Field(default_factory=list)
     config: BaselineConfig = Field(default_factory=BaselineConfig)
     telemetry_paths: TelemetryPaths
+    # Populated by `wikify kg seeds --persist`. Carried forward into
+    # _run.json so the skill-path snapshot can match the legacy
+    # `seed_doc_ids` / `seed_chunks_read` fields on session close.
+    seed_doc_ids: list[str] = Field(default_factory=list)
+    seed_chunk_ids: list[str] = Field(default_factory=list)
+    # Per-iteration counter for campaign-style reruns. Baseline keeps
+    # the default "create"; scripted/guided bump it between iterations.
+    iteration: str = "create"
 
 
 class SchemaVersionMismatchError(RuntimeError):
@@ -288,12 +296,13 @@ RUN_SCHEMA_VERSION = 1
 def write_run_snapshot(session: "SessionV1") -> Path:
     """Flush a final telemetry snapshot to <bundle>/_run.json.
 
-    Called by `wikify session close`. The snapshot is session-derived —
-    it does not include meter-only fields (per-call token counts, cache
-    hit rates) because those live in _calls.jsonl and the skill path
-    does not own a CostMeter. Parity against legacy `run_baseline`
-    output is the future gate for the recorded-transcript test; today
-    this writes a stable, schema_version-stamped minimum.
+    Called by `wikify session close`. The snapshot is session-derived
+    and includes legacy-shape overlay fields so downstream consumers
+    (`wikify html`, `wikify eval`) can read skill-path bundles with no
+    change in shape. Meter-derived fields (`run_id`, `calls`,
+    `spent_haiku_eq`, `cache_hits`, `context_used_max`) still live in
+    _calls.jsonl; closing full legacy parity is Tier 1 item 3 in
+    project_skill_pivot_roadmap.
     """
     bundle_paths = BundlePaths(Path(session.bundle_root))
     bundle_paths.ensure()
@@ -302,17 +311,66 @@ def write_run_snapshot(session: "SessionV1") -> Path:
     for entry in pages:
         status = entry.get("status", "planned")
         counts[status] = counts.get(status, 0) + 1
+
+    # Legacy-shape overlay fields. These mirror run_baseline()'s
+    # snapshot writer so existing downstream consumers work without
+    # rework. Values derived from session state + config + on-disk
+    # scratch artifacts so no CostMeter is required.
+    config = session.config
+    budget_target = float(session.budget.haiku_eq_target or 0)
+    write_fraction = float(config.baseline_write_fraction)
+    extract_fraction = 1.0 - write_fraction
+    extract_budget = budget_target * extract_fraction
+    write_budget = budget_target * write_fraction
+    seed_extract_budget = extract_budget * float(config.abstract_fraction)
+
+    evidence_chunks_read = _gather_evidence_chunks_from_scratch(bundle_paths.scratch_dir)
+
+    skipped_thin_pages = [
+        {"page_id": p["page_id"], "status": p.get("status")}
+        for p in pages
+        if p.get("status") == "failed"
+    ]
+    write_rejections = [
+        {
+            "page_id": p["page_id"],
+            "validation_path": p.get("validation_path"),
+        }
+        for p in pages
+        if p.get("status") == "failed"
+    ]
+
     snapshot = {
         "schema_version": RUN_SCHEMA_VERSION,
         "session_id": session.session_id,
         "strategy": session.strategy,
+        "mode": session.strategy,
+        "iteration": session.iteration,
         "status": session.status,
         "bundle_root": session.bundle_root,
         "corpus_root": session.corpus_root,
         "created_at": session.created_at,
         "closed_at": session.updated_at,
-        "budget_target_haiku_eq": session.budget.haiku_eq_target,
+        "timestamp_utc": session.updated_at,
+        "budget_target_haiku_eq": budget_target,
         "budget_spent_haiku_eq": session.budget.haiku_eq_spent,
+        "seed_doc_ids": list(session.seed_doc_ids),
+        "seed_chunks_read": list(session.seed_chunk_ids),
+        "evidence_chunks_read": evidence_chunks_read,
+        "split_initial": {
+            "extract_haiku_eq": extract_budget,
+            "write_haiku_eq": write_budget,
+            "curate_haiku_eq": 0.0,
+        },
+        "seed_extract_budget": seed_extract_budget,
+        "baseline_write_fraction": write_fraction,
+        "min_evidence_chunks": 0,
+        "skipped_thin_pages": skipped_thin_pages,
+        "n_pages_written": counts.get("committed", 0),
+        "n_pages_committed": counts.get("committed", 0),
+        "n_pages_failed": counts.get("failed", 0),
+        "write_rejections": write_rejections,
+        "page_counts": counts,
         "stages": {
             name: stage.model_dump(mode="json")
             for name, stage in {
@@ -321,16 +379,36 @@ def write_run_snapshot(session: "SessionV1") -> Path:
                 "write": session.stages.write,
             }.items()
         },
-        "config": session.config.model_dump(mode="json"),
+        "config": config.model_dump(mode="json"),
         "pages": pages,
-        "n_pages_committed": counts.get("committed", 0),
-        "n_pages_failed": counts.get("failed", 0),
-        "page_counts": counts,
         "telemetry_paths": session.telemetry_paths.model_dump(mode="json"),
     }
     run_path = bundle_paths.run_path
     run_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
     return run_path
+
+
+def _gather_evidence_chunks_from_scratch(scratch_dir: Path) -> list[str]:
+    """Union of evidence_v2[*].chunk_id across every draft in scratch.
+
+    Preserves insertion order across drafts; duplicates are dropped.
+    Returns empty list when scratch_dir is missing or has no drafts.
+    """
+    if not scratch_dir.is_dir():
+        return []
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for path in sorted(scratch_dir.glob("draft-*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for entry in data.get("evidence_v2", []) or []:
+            cid = entry.get("chunk_id")
+            if cid and cid not in seen:
+                seen.add(cid)
+                ordered.append(cid)
+    return ordered
 
 
 @contextmanager

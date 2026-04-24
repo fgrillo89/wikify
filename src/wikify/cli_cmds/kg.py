@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import typer
@@ -16,7 +17,14 @@ from ..distill.seed import (
     pagerank_normalised,
 )
 from ..paths import CorpusPaths
-from ..session import load_session
+from ..session import (
+    SessionLockHeldError,
+    apply_merge_patch,
+    load_session,
+    save_session,
+    session_lock,
+    touch,
+)
 
 app = typer.Typer(add_completion=False, help="Corpus knowledge-graph queries.")
 
@@ -29,6 +37,15 @@ def _preload(corpus_root: Path):
 def cmd_seeds(
     session_path: Path = typer.Option(..., "--session"),
     max_seeds: int | None = typer.Option(None, "--max-seeds"),
+    persist: bool = typer.Option(
+        False,
+        "--persist",
+        help=(
+            "Store the selected seed_doc_ids and seed_chunk_ids on the session under "
+            "the session lock. Required for `_run.json` to carry seed_doc_ids at close."
+        ),
+    ),
+    owner: str | None = typer.Option(None, "--owner"),
 ) -> None:
     """Emit the greedy seed document and abstract chunk IDs for the session."""
     session = load_session(session_path)
@@ -53,11 +70,39 @@ def cmd_seeds(
         chunk = preloaded.knowledge_graph.source(did).abstract_chunk()
         if chunk is not None:
             seed_chunk_ids.append(chunk["id"])
+
+    if persist:
+        try:
+            with session_lock(session_path, owner=owner or f"wikify-cli/pid-{os.getpid()}"):
+                fresh = load_session(session_path)
+                updated = apply_merge_patch(
+                    fresh,
+                    {
+                        "seed_doc_ids": list(seed_doc_ids),
+                        "seed_chunk_ids": seed_chunk_ids,
+                    },
+                )
+                save_session(session_path, touch(updated))
+        except SessionLockHeldError as exc:
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "lock_held",
+                        "owner": exc.owner,
+                        "acquired_at": exc.acquired_at,
+                    }
+                ),
+                err=True,
+            )
+            raise typer.Exit(code=2) from exc
+
     typer.echo(
         json.dumps(
             {
                 "seed_doc_ids": list(seed_doc_ids),
                 "seed_chunk_ids": seed_chunk_ids,
+                "persisted": persist,
             }
         )
     )

@@ -69,8 +69,9 @@ Constraints the subagent prompt must embed:
 ```
 wikify session init --bundle <b> --corpus <c> --strategy baseline [--budget-target N]
 
-# seed selection
-wikify kg seeds --session <s>
+# seed selection — --persist writes seed_doc_ids and seed_chunk_ids
+# onto the session so they land in the final _run.json snapshot.
+wikify kg seeds --session <s> --persist
 wikify session update --session <s> --patch '{"stages":{"seed_selection":{"status":"done"}}}'
 
 # extract phase

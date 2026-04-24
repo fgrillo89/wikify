@@ -78,9 +78,15 @@ payload on stderr if another owner holds it.
 
 ```
 wikify kg seeds --session <path>                       # seed chunk ids (token-light)
+wikify kg seeds --session <path> --persist             # also write the seeds onto session
 wikify kg abstracts --corpus <path> --doc-ids '["doc_1","doc_2"]'
 wikify kg evidence --session <path> --page-id "Atomic Layer Deposition" --top-k 8
 ```
+
+`wikify kg seeds --persist` acquires the session lock, writes
+`seed_doc_ids` and `seed_chunk_ids` onto the session, and is the
+convention callers use when they expect those fields to appear in the
+final `_run.json` snapshot.
 
 ### Draft / validate / bundle
 
