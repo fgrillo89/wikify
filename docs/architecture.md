@@ -1,8 +1,12 @@
 # Wikify architecture
 
-> **Note:** This document describes the current/legacy system. The redesign
-> target is in `docs/skill-centric-execution-plan.md` (binding brief) and
-> `docs/filesystem-state-design.md` (filesystem and CLI surface).
+> **Note:** This document is being rewritten as part of the skill-centric
+> redesign. The "Repository layout" section reflects the post-W0 package
+> tree; everything else still describes the legacy system (which keeps
+> working through `cli/legacy/*` until Phase C). The binding redesign
+> target is in `docs/skill-centric-execution-plan.md` (binding brief)
+> and `docs/filesystem-state-design.md` (filesystem and CLI surface).
+> Full rewrite lands in Phase D.
 
 ## What the system does
 
@@ -131,30 +135,47 @@ shape `CostMeter.snapshot()` produces: `run_id`,
 
 ## Repository layout
 
+Post-W0 package-per-noun layout. `cli/legacy/*` keeps the legacy CLI
+working until Phase C. Top-level files marked DEL are scheduled for
+Phase C deletion.
+
 ```
 src/wikify/
-├── cli.py                          top-level Typer app
-├── cli_cmds/                       skill-driven sub-apps
-│   ├── _helpers.py                 shared error / lock helpers
-│   ├── session.py
-│   ├── kg.py
-│   ├── extract.py
-│   ├── draft.py
-│   ├── validate.py
-│   ├── bundle.py
-│   └── meter.py
-├── session.py                      SessionV1 + lock + run-snapshot writer
-├── meter.py                        CallRecord + reference CostMeter
-├── schema.py                       canonical Pydantic request/response models
-├── paths.py                        bundle / corpus path conventions
+├── corpus/                         input corpora (read-only during a run)
+│   ├── chunks.py, vectors.py, vectors_meta.py, doc_markdown.py,
+│   │   images_index.py, equations_index.py, bibliography.py
+│   ├── seed.py                     greedy seed selection
+│   ├── field_detect.py             corpus field classification
+│   ├── graph.py                    corpus fluent KG (was citestore/graph.py)
+│   └── graph_build.py              corpus KG construction
+├── citations/                      citation parsing / BibTeX / DOI resolution
+│   ├── db.py, resolver.py, bibtex.py, parse.py, models.py, __main__.py
+├── bundle/                         everything inside one wiki bundle
+│   ├── run/                        execution control (state/events/lock/cost; W2)
+│   ├── concepts/                   in-flight build state
+│   │   └── dossier.py              (W4 adds card/evidence/inbox/claim/tend/canonicalize/schema)
+│   ├── draft/                      per-attempt artifacts
+│   │   └── author_context.py       (W5 adds schema/builder/validator/artifact)
+│   └── wiki/                       committed pages + indices + projections
+│       ├── page.py, index.py, files.py, embeddings.py, page_naming.py
+│       └── graph.py                wiki fluent KG (was store/wiki_graph.py)
 ├── ingest/                         corpus pipeline (parse, chunk, embed, graph)
-├── citestore/                      knowledge-graph fluent API
-├── distill/                        seed selection, dossier, prompts, write_runner
-├── baselines/                      BaselineConfig + evidence helpers
-├── prompts/                        prompt templates loaded by the skill
+├── prompts/                        Python-side prompt templates assembled by DraftBuilder
 ├── render/                         html site renderer
-├── eval/                           metric computations
-└── store/                          page / index / vector / wiki-graph persistence
+├── eval/                           metric computations (M1/M3/M5/M6, GT-P, GT-C)
+├── cli/                            argv glue
+│   ├── __init__.py                 top-level Typer app + noun registrations
+│   ├── __main__.py                 python -m wikify.cli entry point
+│   ├── _io.py                      cli_invoked event capture wrapper
+│   ├── _helpers.py                 shared exit codes, error envelope
+│   └── legacy/                     legacy nouns (session/kg/extract/draft/validate/bundle/meter); DEL in Phase C
+├── api.py                          (W1) Bundle + Corpus context dataclasses
+├── schema.py                       DEL Phase C — splits into bundle/{draft,concepts}/schema.py
+├── session.py                      DEL Phase C — replaced by bundle/run/state.py + bundle/run/lock.py
+├── meter.py                        DEL Phase C — cost math moves to bundle/run/cost.py
+├── paths.py                        DEL Phase C — replaced by api.Bundle/Corpus
+├── baselines/                      DEL Phase C — strategy moves to skill frontmatter
+└── distill/                        DEL Phase C — preload + write_runner are the last residents
 ```
 
 ## Skill pack

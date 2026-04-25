@@ -311,7 +311,8 @@ sits in context as background knowledge without polluting the slash menu.
      reasoning.
    - `src/wikify/distill/` — extract prompts, dossier assembly, write_runner
      contracts, seed selection. Identify deterministic parts that move into
-     `stores/` and prompt-side parts that move into `prompts/`.
+     the package-per-noun homes (`bundle/concepts/`, `bundle/draft/`,
+     `corpus/`) and prompt-side parts that stay in `prompts/`.
    - `src/wikify/schema.py` — `WriteRequest`/`WriteResponse` Pydantic
      contracts. KEEP unless structurally incompatible; never silently
      rewrite.
@@ -374,11 +375,16 @@ sits in context as background knowledge without polluting the slash menu.
      `workflows/run-baseline.md` is rewritten as `wikify-baseline/SKILL.md`
      with body under 500 lines.
 
-6. **Workstream decomposition.** Each workstream owns its own
-   `cli_cmds/<noun>.py`, `stores/<noun>.py`, and one or more skill files.
-   `cli.py` registers nouns alphabetically. Workstreams may not edit other
-   nouns' files except inside a designated cross-cutting workstream (paths,
-   lock, telemetry envelope, shared helpers).
+6. **Workstream decomposition.** Each workstream owns one domain package
+   (`bundle/run/`, `bundle/concepts/`, `bundle/draft/`, `bundle/wiki/`,
+   `corpus/`, `citations/`, etc.) plus its CLI handler in `cli/<noun>.py`
+   and one or more skill files. `cli/__init__.py` registers nouns
+   alphabetically. Workstreams may not edit other nouns' packages except
+   inside a designated cross-cutting workstream (paths/api, telemetry
+   envelope, shared CLI helpers). The package-per-noun layout — including
+   the `bundle/` umbrella for the four bundle-internal packages — is
+   load-bearing; any deviation must justify why the existing structure
+   cannot be reused.
 
 7. **Per-workstream spec:**
    - files/modules owned (full paths)
