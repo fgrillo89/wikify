@@ -240,3 +240,45 @@ change.
 
 None of these block the current pivot phases (A through D). All are
 additive surfaces compatible with the published architecture.
+
+## Appendix: `alexzhang13/rlm` — different layer, brief note
+
+[rlm](https://github.com/alexzhang13/rlm) (3.8k-star Python library) is a
+plug-and-play **inference primitive** for "Recursive Language Models":
+replace `model.completion(prompt)` with `rlm.completion(prompt)` and the
+LM runs inside a sandboxed Python REPL where it has globals
+`context` (the input as a Python variable), `llm_query(prompt)` (plain
+single-shot call), and `rlm_query(prompt)` (recursive child RLM call,
+falls back to `llm_query` at `max_depth`). Sandboxes range from
+in-process `exec()` to Modal/Daytona/Docker/E2B. Depth and budget
+cascade to children: `child = RLM(..., max_timeout=remaining_timeout,
+max_budget=remaining_budget)`.
+
+This is a different layer than wikify. rlm sits at the **LM API layer**
+(one function call, recursive, sandbox-isolated). wikify sits at the
+**workflow layer** (skill prose orchestrates per-step CLI invocations
+and Task subagents). Both share the pattern "the LM programmatically
+controls context decomposition," but at different abstraction levels.
+There is no clean "adopt rlm" play; the substrates are different
+(sandboxed Python REPL vs. Claude Code Task tool + filesystem) and
+adopting rlm would re-introduce LM-controlled mutable execution that
+the pivot deliberately removed.
+
+**One pattern worth carrying over: budget propagation to subagents.**
+Today wikify tracks `haiku_eq_spent` vs `haiku_eq_target` on the
+session but does not surface "remaining" to a subagent's prompt. A
+small refinement (~30 LOC, deferred) is to extend `WriteRequest` with
+a `budget_remaining_haiku_eq` field that `wikify draft write-request`
+populates from `session.budget`, so the writer subagent can self-throttle
+near the ceiling. Mirrors rlm's `remaining_budget = parent − spent` cascade.
+
+Two more rlm patterns are notes for future strategies, not current
+proposals: **depth-bounded recursion** (relevant only if a future
+guided strategy decomposes hard pages into sub-pages), and rlm's
+**multi-client abstraction** in `rlm/clients/` (relevant only if
+wikify ever leaves Claude Code as the runtime, in which case the
+`clients/` shape is a reference for the vendor-portable layer the
+pivot doc claims at its core).
+
+Not worth borrowing: the REPL-as-execution-substrate, in-process
+`exec()`, or rlm itself as a dependency.
