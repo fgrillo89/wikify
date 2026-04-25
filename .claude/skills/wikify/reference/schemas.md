@@ -161,23 +161,14 @@ shape matches legacy `CostMeter.snapshot()`): `run_id`,
 (`used_max`, `used_mean`, `headroom_min`, `headroom_mean`), `calls`
 (integer count), `cache_hit_rate`.
 
-**Legacy writer** (`src/wikify/baselines/pipeline.py::run_baseline`): emits
-the same set of baseline overlay fields plus `CostMeter.snapshot()`
-fields. Missing compared to the skill path: `schema_version`,
-`session_id`, `stages`, `page_counts`, `created_at`, `closed_at` (and
-a few scratch-related paths).
+**Legacy writer**: previously `run_baseline` in the legacy baselines
+pipeline, retired in the skill-pivot. The skill-path writer is now the
+only producer of `_run.json`. Field-set parity with the legacy writer
+was achieved before deletion (overlay + meter sides), so existing
+downstream consumers (`wikify html`, `wikify eval`) read the
+skill-path bundle without changes.
 
-**Phase 5 deletion gate**: field-set parity is now achieved on both
-overlay and meter sides. What remains before retiring `run_baseline()`
-is value-level validation — currently the parity test asserts field
-presence + type across both writers; the next step is a
-recorded-transcript parity test that pins numeric values on canned
-inputs. That work is not strictly required for the deletion itself,
-only for confidence that the skill path reproduces legacy numeric
-behavior.
-
-Owning command: `wikify session close` (skill-driven path);
-`baselines.pipeline.run_baseline` (legacy path, scheduled for deletion).
+Owning command: `wikify session close`.
 
 ### `<bundle>/_calls.jsonl`
 

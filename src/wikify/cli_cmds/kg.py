@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from ..baselines.pipeline import BaselineConfig, select_evidence_chunks_for_page
+from ..baselines.config import BaselineConfig, select_evidence_chunks_for_page
 from ..distill.preload import preload_corpus
 from ..distill.seed import (
     SeedSelectionConfig,
