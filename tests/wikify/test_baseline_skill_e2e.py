@@ -38,7 +38,7 @@ from typer.testing import CliRunner
 
 from wikify.cli import app
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths, CorpusPaths
+from wikify.paths import BundlePaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
@@ -269,51 +269,18 @@ def test_baseline_skill_path_runs_cli_sequence(
     assert bundle_paths.graph_path.exists()
 
 
-def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
+def test_baseline_skill_bundle_emits_documented_artifact_set(
     tmp_path: Path, tiny_corpus: Path
 ) -> None:
-    """Compare the top-level bundle artifact set produced by the skill
-    path against the one produced by legacy ``run_baseline()`` on the
-    same fixture.
-
-    This is a contract lower bound — the skill path must at minimum
-    emit every top-level artifact the legacy path emits, and must not
-    silently introduce new ones the rest of the system doesn't know
-    about. Deeper field-level parity for _run.json and _calls.jsonl is
-    tracked as Tier 1 follow-up work.
+    """Skill-path bundle emits every documented top-level artifact and
+    every legacy `_run.json` field by name + type. The legacy
+    `run_baseline()` Python orchestrator was retired in the
+    skill-pivot legacy-modules-removal pass; the meter-aggregator
+    value-equality probe at the end of this test is the surviving
+    parity contract — both legacy `CostMeter.snapshot()` and the
+    skill `_aggregate_calls_jsonl` are still exercised against
+    identical synthetic CallRecord input.
     """
-    # --- Legacy bundle ----------------------------------------------------
-    from wikify.baselines.pipeline import BaselineConfig, run_baseline
-    from wikify.cache import ExtractCache
-    from wikify.distill.preload import preload_corpus
-    from wikify.distill.strategy import build_strategy
-    from wikify.meter import CostMeter
-
-    from .fakes import FakeExtractor, FakeWriter
-    from .test_baseline_pipeline import _ValidFakeWriter
-
-    legacy_bundle = tmp_path / "legacy-bundle"
-    legacy_paths = BundlePaths(legacy_bundle)
-    cache = ExtractCache(root=tmp_path / "cache")
-    meter = CostMeter(
-        budget_haiku_eq=30_000.0,
-        run_id="legacy-parity",
-        events_path=legacy_paths.calls_path,
-    )
-    preloaded = preload_corpus(CorpusPaths(tiny_corpus))
-    run_baseline(
-        kg=preloaded.knowledge_graph,
-        bundle=legacy_paths,
-        strategy=build_strategy("balanced", seed=0),
-        extractor=FakeExtractor(cache, meter),
-        writer=_ValidFakeWriter(meter),
-        meter=meter,
-        budget_haiku_eq=30_000.0,
-        preloaded=preloaded,
-        config=BaselineConfig(min_evidence_chunks=1),
-    )
-    _ = FakeWriter  # keep the import visible so future parity work can diff.
-
     # --- Skill-path bundle ------------------------------------------------
     skill_bundle = tmp_path / "skill-bundle"
     skill_paths = BundlePaths(skill_bundle)
@@ -393,61 +360,43 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
     )
     runner.invoke(app, ["session", "close", "--session", str(session_path)])
 
-    # --- Compare top-level artifact sets ----------------------------------
-    # Legacy artifacts that the skill-path should reproduce.
-    legacy_top = {p.name for p in legacy_bundle.iterdir()}
+    # --- Documented top-level artifact set --------------------------------
     skill_top = {p.name for p in skill_bundle.iterdir()}
-
-    # Every legacy artifact must exist on the skill path too. Skill-only
-    # additions (_session, _scratch) are allowed because they are
-    # explicitly part of the skill architecture (see schemas.md).
-    legacy_required = {"_run.json", "_index.json", "_wiki_graph.json"}
-    assert legacy_required.issubset(legacy_top), (
-        f"legacy bundle missing expected artifacts: {legacy_required - legacy_top}"
-    )
-    missing_from_skill = legacy_required - skill_top
-    assert not missing_from_skill, (
-        f"skill bundle missing legacy artifacts: {missing_from_skill}"
-    )
-
-    # Articles directory must be present on both (baseline only writes
-    # concept pages, not persons, on this fixture).
-    assert (legacy_bundle / "articles").exists()
-    assert (skill_bundle / "articles").exists()
-
-    # Skill-only additions must match a documented allowlist — either
-    # architectural additions (_session, _scratch per the schemas.md
-    # contract) or bundle-side artifacts listed in paths.py that legacy
-    # only writes conditionally (e.g., _wiki_vectors.* only appears
-    # when rebuild_wiki_graph produces non-empty embeddings).
-    skill_only = skill_top - legacy_top
-    allowed_skill_only = {
+    expected_top = {
+        # Architectural (skill-driven additions per schemas.md):
         "_session",
         "_scratch",
+        "_run_history.jsonl",
+        # Bundle artifacts (legacy parity carried forward):
+        "_run.json",
+        "_index.json",
+        "_index.md",  # human-readable index dumped alongside _index.json
+        "_wiki_graph.json",
+        "_calls.jsonl",
+        # _meta directory created by BundlePaths.ensure().
+        "_meta",
+        # Page-kind subdirectories (BundlePaths.ensure creates both
+        # articles/ and people/, even when one is empty).
+        "articles",
+        "people",
+        # Optional artifacts that surface when rebuild_wiki_graph
+        # produced non-empty embeddings.
         "_wiki_vectors.npz",
         "_wiki_vectors.ids.json",
-        # Appended per session close. Legacy run_baseline does not
-        # append a history file; the skill path does so resume + re-close
-        # produces an audit trail.
-        "_run_history.jsonl",
-        # Populated by wikify bundle commit-page and wikify meter record.
-        # Legacy run_baseline writes this file too, but only when the
-        # meter sees calls; a 0-call legacy run omits it.
-        "_calls.jsonl",
     }
-    unexpected = skill_only - allowed_skill_only
-    assert not unexpected, f"skill bundle introduced unexpected artifacts: {unexpected}"
+    optional = {"_wiki_vectors.npz", "_wiki_vectors.ids.json"}
+    missing = (expected_top - optional) - skill_top
+    assert not missing, f"skill bundle missing required artifacts: {missing}"
+    unexpected = skill_top - expected_top
+    assert not unexpected, f"skill bundle emitted unknown artifacts: {unexpected}"
 
-    # --- _run.json overlay-field parity -----------------------------------
-    legacy_run = json.loads((legacy_bundle / "_run.json").read_text(encoding="utf-8"))
     skill_run = json.loads((skill_bundle / "_run.json").read_text(encoding="utf-8"))
 
-    # Every legacy `_run.json` field the skill path must now reproduce.
-    # Values differ (canned fakes vs real fixture walk) so we assert
-    # presence + type, not equality. Field-set parity is the named
-    # Phase 5 deletion gate.
+    # Every legacy `_run.json` field the skill path now reproduces.
+    # Frozen list — these were the legacy-baseline overlay fields plus
+    # the meter-derived fields that legacy CostMeter.snapshot emits.
     overlay_fields = {
-        # Baseline / pipeline overlay (Tier 1 item 2):
+        # Baseline / pipeline overlay:
         "strategy": str,
         "mode": str,
         "iteration": str,
@@ -463,7 +412,7 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "n_pages_written": int,
         "write_rejections": list,
         "timestamp_utc": str,
-        # Meter-derived (Tier 1 item 3, matches CostMeter.snapshot shape):
+        # Meter-derived (matches CostMeter.snapshot shape):
         "run_id": str,
         "budget_used_haiku_eq": (int, float),
         "wall_seconds": (int, float),
@@ -473,9 +422,7 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "calls": int,  # count, not list
         "cache_hit_rate": (int, float),
     }
-    missing_legacy = [k for k in overlay_fields if k not in legacy_run]
     missing_skill = [k for k in overlay_fields if k not in skill_run]
-    assert not missing_legacy, f"legacy _run.json missing overlay fields: {missing_legacy}"
     assert not missing_skill, f"skill _run.json missing overlay fields: {missing_skill}"
     for key, expected_type in overlay_fields.items():
         assert isinstance(skill_run[key], expected_type), (

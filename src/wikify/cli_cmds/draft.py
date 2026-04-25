@@ -8,7 +8,6 @@ from pathlib import Path
 
 import typer
 
-from ..distill.pipeline import WRITE_PROMPT
 from ..distill.preload import preload_corpus
 from ..paths import BundlePaths, CorpusPaths
 from ..schema import (
@@ -28,6 +27,11 @@ from ..session import (
 from ..types import ModelTier
 
 app = typer.Typer(add_completion=False, help="Build request artifacts for the write subagent.")
+
+# Template name string consumed by the write subagent. Previously resolved
+# through `distill.pipeline.WRITE_PROMPT`; that module was retired in the
+# skill-pivot legacy-modules-removal pass.
+WRITE_PROMPT = "wikify/write"
 
 DRAFT_SCHEMA_VERSION = 1
 
