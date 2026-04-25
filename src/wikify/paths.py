@@ -42,12 +42,9 @@ class CorpusPaths:
 
     @property
     def persona_path(self) -> Path:
-        """Path to the optional cached corpus persona text.
-
-        The persona is generated once via ``wikify persona-generate``
-        and read by ``distill.pipeline.run`` if present. If the file does
-        not exist, the writer falls back to a generic domain-expert persona
-        baked into ``prompts.registry.compose_writer_prompt``.
+        """Path to the optional cached corpus persona text. Read by
+        ``distill.preload`` when present; otherwise the writer falls back
+        to the generic persona in ``prompts.registry.compose_writer_prompt``.
         """
         return self.root / "persona.txt"
 
@@ -109,31 +106,8 @@ class BundlePaths:
         return self.root / "_calls.jsonl"
 
     @property
-    def write_requests_dir(self) -> Path:
-        return self.root / "_write_requests"
-
-    @property
     def meta_dir(self) -> Path:
         return self.root / "_meta"
-
-    @property
-    def coverage_memory_path(self) -> Path:
-        return self.meta_dir / "coverage_memory.json"
-
-    @property
-    def prompt_layers_dir(self) -> Path:
-        return self.meta_dir / "prompt_layers"
-
-    @property
-    def query_log_dir(self) -> Path:
-        return self.meta_dir / "query_log"
-
-    @property
-    def verbalize_log_path(self) -> Path:
-        """Append-only JSONL log of handler reasoning. Populated only when
-        a run is invoked with ``verbalize=True``. Each line:
-        ``{run_id, when, role, rid, page_id|chunk_id, reasoning}``."""
-        return self.meta_dir / "verbalize.jsonl"
 
     @property
     def session_dir(self) -> Path:

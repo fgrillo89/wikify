@@ -30,11 +30,11 @@ from .meter import BudgetExceededError, check_budget_gate, haiku_eq_for
 
 
 def _write_context_cap() -> int:
-    """Match legacy dispatch: `total_context() - response_reserve()`.
+    """Effective context cap for write calls: `total_context() - response_reserve()`.
 
-    Using the hardcoded 200_000 Claude context window would silently
-    inflate every headroom metric by ~80k and break parity with the
-    legacy CostMeter snapshot.
+    Using the raw 200_000 Claude context window would silently inflate
+    every headroom metric by ~80k. The reserve mirrors what the runtime
+    keeps free for the response.
     """
     return total_context() - response_reserve()
 
@@ -182,10 +182,9 @@ def cmd_commit_page(
             haiku_eq = haiku_eq_for(write_tier, tokens_in, tokens_out)
             projected_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
 
-            # Build the CallRecord early so we can append it BEFORE the
-            # budget gate raises — matching legacy CostMeter.record which
-            # appends the breaching record and updates aggregates before
-            # aborting (see src/wikify/meter.py:250-256).
+            # Build the CallRecord and append it BEFORE the budget gate
+            # raises: the breaching call is part of the run and must be
+            # visible in _calls.jsonl even when the gate aborts.
             call_record = CallRecord(
                 role=Role.WRITER,
                 tier=write_tier,

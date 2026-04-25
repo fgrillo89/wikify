@@ -126,7 +126,7 @@ yellow flags ("might duplicate X", "missing entity Y") inline.
 
 **Why rejected:** mutates the canonical response schema, blurs the
 validation gate, and embeds soft signals in a model that's
-`extra="forbid"` and parity-tested against legacy.
+`extra="forbid"`.
 
 **Reframed feature spec:**
 

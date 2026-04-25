@@ -1,9 +1,7 @@
 """Baseline strategy configuration and deterministic helpers.
 
-Replaces the old `baselines.pipeline` module after the legacy
-`run_baseline()` orchestrator was retired in the skill-pivot. The
-skill-driven workflow under `.claude/skills/wikify/workflows/run-baseline.md`
-consumes only these knobs and the per-page evidence-retrieval helper.
+The skill-driven workflow at `.claude/skills/wikify/workflows/run-baseline.md`
+consumes these knobs and the per-page evidence-retrieval helper.
 """
 
 from __future__ import annotations
@@ -17,12 +15,11 @@ class BaselineConfig:
 
     Cost shaves the baseline takes:
 
-    - ``writer_skip_cited_corpus_chunks``: don't pass the knowledge graph
-      to the writer, so cited-corpus-chunk graph walks are skipped. Saves
-      ~5-12k input tokens per write call.
-    - ``writer_max_length_chars``: cap writer output via a planted default
-      ``EditorBrief``. Without this the writer drifts to 2-4k tokens of
-      output; tight cap saves ~30k heq per write at tier M.
+    - ``writer_skip_cited_corpus_chunks``: skip cited-corpus-chunk graph
+      walks when assembling the write request. Saves ~5-12k input tokens
+      per write call.
+    - ``writer_max_length_chars``: cap writer output length. Tight caps
+      save ~30k haiku-eq per write at tier M.
     - ``min_evidence_chunks``: minimum evidence a page must accumulate
       before the writer runs on it. Trades page count for per-page
       substance.
@@ -58,9 +55,7 @@ def select_evidence_chunks_for_page(
 ) -> list[str]:
     """Pull top_k evidence chunks for one page, applying per-source cap.
 
-    Public entry point for the skill-driven `wikify kg evidence` CLI.
-    Preserves the ranking and dedup behaviour from the retired
-    `_select_evidence_chunks` loop body.
+    Backs the skill-driven `wikify kg evidence` CLI.
     """
     seen = set(seen_chunk_ids or set())
     hits = kg.chunks().search(page_title, top_k=top_k * 4)

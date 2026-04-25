@@ -183,9 +183,7 @@ def test_meter_record_rejects_invalid_role_or_tier(tmp_path: Path) -> None:
 
 
 def test_meter_record_enforces_1_05x_budget_abort(tmp_path: Path) -> None:
-    """Regression for PR#32 round 2 finding 2: skill writers must honor the
-    same 1.05x budget ceiling legacy CostMeter enforces.
-    """
+    """`wikify meter record` must hard-abort at 1.05x of budget_target."""
     bundle = tmp_path / "bundle"
     corpus = tmp_path / "corpus"
     corpus.mkdir()
@@ -227,11 +225,10 @@ def test_meter_record_enforces_1_05x_budget_abort(tmp_path: Path) -> None:
     assert result.exit_code == 3, result.output
     err = json.loads(result.stderr or result.output)
     assert err["error"] == "budget_exceeded"
-    # _calls.jsonl MUST carry the breaching record — legacy
-    # CostMeter.record appends before raising, and the skill path
-    # matches that ordering.
+    # _calls.jsonl MUST carry the breaching record: the call is part of
+    # the run and must be visible after the abort.
     calls_path = BundlePaths(bundle).calls_path
-    assert calls_path.exists(), "skill path must append the breaching record like legacy"
+    assert calls_path.exists(), "breaching record must land in _calls.jsonl"
     lines = [ln for ln in calls_path.read_text().splitlines() if ln.strip()]
     assert len(lines) == 1
     breaching = json.loads(lines[0])
@@ -315,10 +312,9 @@ def test_meter_record_accumulates_in_session_close_snapshot(tmp_path: Path) -> N
     assert snapshot["calls"] == 2
     assert snapshot["cache_hit_rate"] == 0.5
     assert snapshot["budget_used_haiku_eq"] > 0
-    # Legacy-shape context sub-dict
     assert snapshot["context"]["used_max"] == 1500
     # by_role is pre-populated with every Role enum value; roles not
-    # exercised this run appear with calls=0 (mirrors legacy CostMeter).
+    # exercised this run appear with calls=0.
     assert {"extractor", "editor"} <= set(snapshot["by_role"].keys())
     assert snapshot["by_role"]["extractor"]["calls"] == 1
     assert snapshot["by_role"]["editor"]["calls"] == 1

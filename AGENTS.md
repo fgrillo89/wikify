@@ -1,39 +1,56 @@
 # Wikify — Agent Contract
 
-Canonical project reference for any agentic runtime. Behavior rules (planning, simplicity, blast radius, corrections, etc.) live in `CLAUDE.md` — read that first.
+Canonical project reference for any agentic runtime. Behavior rules
+(planning, simplicity, blast radius, corrections, etc.) live in
+`CLAUDE.md` — read that first.
 
 ---
 
 ## Read First
 
-1. `docs/architecture.md` — system design
-2. `docs/study-design.md` — baseline / scripted / guided conditions
-3. `docs/strategies.md` — E / M / X strategy science
-4. `docs/metrics.md` — M1–M6, GT-P, GT-C
-5. `docs/test-run-playbook.md` — required before any test run
-6. `docs/distill-test-readiness.md` — current pre-study readiness state
+1. `docs/architecture.md` — system design and CLI surface
+2. `docs/metrics.md` — M1–M6, GT-P, GT-C
+3. `.claude/skills/wikify/workflows/run-baseline.md` — the canonical workflow loop
+4. `.claude/skills/wikify/reference/schemas.md` — durable artifact catalog
 
 ---
 
 ## Product
 
-- **Input**: papers ingested into a corpus (`data/corpora/`).
-- **Process**: distill loop extracts evidence, canonicalises concepts, writes wiki pages, iterates.
-- **Output**: wiki bundle on disk (`data/wikis/`) rendered to static HTML (`_html/`).
+- **Input**: source documents (PDF, DOCX, PPTX, HTML, MD) ingested into a corpus (`data/corpora/`).
+- **Process**: skill-driven workflow seeds pages from the knowledge graph, extracts evidence, canonicalises concepts, writes wiki pages, validates citations.
+- **Output**: wiki bundle on disk (`data/wikis/`) rendered to static HTML by `wikify html`.
 
-Corpus is authoritative evidence. Wiki pages are authoritative human-facing output. Telemetry is first-class — strategies, prompts, and costs are compared over time.
+Corpus is authoritative evidence. Wiki pages are authoritative
+human-facing output. Telemetry (`_run.json`, `_calls.jsonl`) is
+first-class — strategies, prompts, and costs are compared over time.
+
+---
+
+## Runtime model
+
+The agent runtime — Claude Code or any other agent harness — drives
+the workflow. The agent reads skill markdown, calls deterministic CLI
+tools via Bash, and spawns model-calling subagents via Task. Python
+never calls a model SDK directly.
+
+- Skills own the per-iteration loop. `.claude/skills/wikify/workflows/run-baseline.md` documents the page-by-page loop.
+- Files are the agent–backend interface. CLI tools read inputs from named files and write outputs to named files. The agent passes paths, not blobs.
+- Durable state lives on disk. `<bundle>/_session/session.json` carries strategy, budget, stage status, and per-page status across subagent boundaries.
 
 ---
 
 ## Boundaries
 
 - `ingest/` — parse, chunk, embed, graph, citations, manifest.
-- `distill/` — strategy, explorer, pipeline, dossier, write prep.
+- `cli_cmds/` — skill-driven CLI sub-apps (`session`, `kg`, `extract`, `draft`, `validate`, `bundle`, `meter`).
+- `distill/` — seed selection, dossier, prompts, write-side runners.
+- `baselines/` — `BaselineConfig` + per-page evidence helpers.
 - `eval/` — metrics (M1–M6, GT-P, GT-C).
-- `render/html/` — static site generation.
-- `store/` — persistence (wiki index, images index).
-- `prompts/` — layered prompt system.
-- Top-level: `types.py`, `config.py`, `schema.py`, `context.py`, `meter.py`, `cache.py`, `embedding.py`, `dispatch.py`, `models.py`, `paths.py`, `cli.py`.
+- `render/` — static site generation.
+- `store/` — page / index / vector / wiki-graph persistence.
+- `prompts/` — layered prompt templates.
+- Top-level: `types.py`, `config.py`, `schema.py`, `context.py`, `meter.py`, `embedding.py`, `models.py`, `paths.py`, `session.py`, `cli.py`.
 
 Dependency rules:
 - `distill` reads `ingest` outputs; does not touch `eval` or `render`.
@@ -48,8 +65,7 @@ Dependency rules:
 data/
   corpora/    ingested corpora
   wikis/      wiki bundles
-  papers/     input PDFs
-  cache/      extract cache
+  papers/     input source documents
   test_runs/  test run outputs
 ```
 
@@ -57,16 +73,31 @@ data/
 
 ## CLI
 
-All commands run under `uv run python -m`. See `docs/architecture.md` § CLI workflows for full args.
+Two families. Run under `uv run`. Full grammar in
+`.claude/skills/wikify/reference/cli-tool-surface.md`.
+
+**Skill-driven (used by workflow skills):**
 
 ```bash
-wikify.cli ingest   <input> --out <corpus> [--mode additive|sync] [--parser default|docling]
-wikify.cli distill  --strategy {E|M|X} --mode {scripted|guided} --phase {all|extract|write} ...
-wikify.cli campaign --strategy M --iterations 3 ...
-wikify.cli study    --presets <csv> --budgets <csv> --seeds <csv>
-wikify.cli eval     --bundle <> --corpus <>
-wikify.cli html     --bundle <>
-wikify.cli query    --bundle <> "question"
+wikify session  init / show / update / checkpoint / close / lock / unlock
+wikify kg       seeds / abstracts / evidence
+wikify extract  canonicalize
+wikify draft    write-request
+wikify validate write
+wikify bundle   commit-page
+wikify meter    record
+```
+
+**Deterministic, non-model-calling:**
+
+```bash
+wikify ingest        <input> --out <corpus>
+wikify refresh       <corpus>
+wikify field-detect  <corpus>
+wikify trace         <bundle>
+wikify sample-claims <bundle>
+wikify html          <bundle>
+wikify eval          <bundle>
 ```
 
 ---
@@ -75,30 +106,12 @@ wikify.cli query    --bundle <> "question"
 
 | Term | Location | Notes |
 |---|---|---|
-| `StrategyId` (E / M / X) | `types.py` | Explore, Mixed, Exploit |
 | `ModelTier` (S / M / L) | `types.py` | Single tier vocabulary; use `tier.value` for strings |
-| `LevyExplorer` | `distill/explorer.py` | Corpus navigation + action dispatch |
-| `StrategyConfig` | `distill/strategy.py` | Strategy-knob schema (explorer + budget + tiers + seed) |
-| `BudgetAllocator` | `distill/strategy.py` | `StaticBudget`, `AdaptiveBudget` |
-| `RuntimeOverrides` | `distill/strategy.py` | Mutable run-time controls |
-| Mode `scripted` / `guided` | CLI `--mode` | scripted = rules, guided = LLM |
-| Iteration `create` / `refine` / `merge` | CLI `--iteration` | Coverage memory persists across refine |
-| `Dispatch` | `dispatch.py` | Single file-based request / response class |
-
----
-
-## Architecture Style
-
-Classify every new knob before adding it:
-
-- **Strategy** → `StrategyConfig` (changes E/M/X science).
-- **Runtime** → `pipeline.run(...)` / `run_with_preloaded(...)` (changes this run, not E/M/X).
-- **Mode** → `RuntimeOverrides` or mode action schemas (adaptive behaviour during a run).
-- **Adapter** → CLI / skill / MCP wiring, passed inward explicitly.
-
-`StrategyConfig` holds: explorer, budget allocator, tiers, allocation override, seed. It does NOT hold: field guides, artifact templates, mode selection, prompt names, model ids, cache paths, or CLI-only flags.
-
-`ModelTier` is the single vocabulary for S / M / L. Use `tier.value` for cache keys, provenance, or JSON. No `model_id_for_tier()` helper, no parallel `model_id` field.
+| `Role` | `types.py` | extractor / compactor / editor / writer / orchestrator |
+| `BaselineConfig` | `baselines/config.py` | Knobs for the abstract-first baseline |
+| `SessionV1` | `session.py` | Durable on-disk session state |
+| `CallRecord` / `CostMeter` | `meter.py` | Per-call telemetry + reference aggregator |
+| `WriteRequest` / `WriteResponse` | `schema.py` | Frozen Pydantic v2 contracts (`extra="forbid"`) |
 
 ---
 
@@ -111,10 +124,21 @@ Classify every new knob before adding it:
 
 ---
 
+## Citation grounding
+
+- `[^eN]` markers in prose resolve 1:1 to `[^eN]:` definitions in the `## References` block.
+- Each `[^eN]:` definition carries `<chunk_id> (<doc_id>) > "<quote>"`.
+- The `<quote>` is a verbatim substring of the cited chunk's source text. `wikify validate write` enforces this.
+
+A fabricated quote echoed in the body but absent from the source chunk
+fails validation; the page never reaches `pages/`.
+
+---
+
 ## Error Handling
 
-- Per-call `ValidationError` and `QuoteNotInChunkError` are caught, written to `.error.json` next to the request, and skipped so the run continues.
-- Staged `.response.json` must validate against its schema (`ExtractResponse`, `WriteResponse`, …) before being consumed.
+- Validation failures (`ValidationError`, `QuoteNotInChunkError`) surface through `wikify validate write` as `validation-<page_id>.json` with `ok=false`. The skill retries once; on second failure escalates per `reference/escalation.md`; on third marks the page `failed`.
+- Promotion is gated under the session lock. Lock contention exits 2 (`lock_held`); budget overrun exits 3 (`budget_exceeded`); validation/precondition failure exits 1.
 - No bare `except`, no silent `pass`. Failures are logged or re-raised — never hidden.
 
 ---
@@ -127,4 +151,4 @@ Classify every new knob before adding it:
 4. **User-controlled input is ground truth.** Filenames, tags, front matter, passed-in parameters beat inferred values. Validate extractions against them; reject mismatches loudly.
 5. **Per-field merge, not per-record.** When two sources disagree, the winner is decided per field.
 6. **Bidirectional edges are emitted both ways at build time.** Downstream code does not infer the reverse.
-7. **State for cross-run comparison is persisted explicitly.** Static approximations of stateful signals invalidate comparisons (`coverage_gap` residuals persist across refine epochs).
+7. **State for cross-run comparison is persisted explicitly.** Static approximations of stateful signals invalidate comparisons.

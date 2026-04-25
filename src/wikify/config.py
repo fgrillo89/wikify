@@ -29,22 +29,3 @@ TIER_M_OVERHEAD = 100.0
 TIER_L_INPUT = 15.0
 TIER_L_OUTPUT = 75.0
 TIER_L_OVERHEAD = 300.0
-
-# -- dispatch ----------------------------------------------------------------
-# 30 min: absorbs slow handler runs (Claude Code session credit drain,
-# heavy chunks needing multiple verifier iterations) without aborting
-# the harness mid-batch. The harness re-runs from scratch on each
-# invocation; cheap timeouts cost a full restart.
-DISPATCH_TIMEOUT = 1800.0  # seconds to wait for a response file
-POLL_INTERVAL = 0.05  # seconds between polls for response file
-
-# -- explorer ----------------------------------------------------------------
-CHUNKS_PER_LANDED_DOC = 3  # chunks sampled per global-jump document landing
-
-# -- budget ------------------------------------------------------------------
-CURATE_FRACTION = 0.05  # fraction of total budget reserved for curation
-NOVELTY_THRESHOLD = 0.05  # dN/dC below which adaptive schedule shifts to write
-
-# -- query -------------------------------------------------------------------
-MAX_CANDIDATES = 12  # max wiki pages considered per query
-BODY_EXCERPT_CHARS = 600  # characters of page body included in evidence

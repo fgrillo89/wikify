@@ -5,20 +5,14 @@ description: Produce a wiki bundle using the abstract-first source-grounded base
 
 # run-baseline
 
-> **Status**: the CLI families referenced below — `session`, `kg`,
-> `draft`, `validate`, `bundle` — are all implemented. The recorded-
-> transcript parity test against `run_baseline()` is still outstanding
-> and is the gate for deleting the legacy Python path. See
-> `docs/skill-pivot-phase-0-plan.md`.
-
 ## Purpose
 
 Produce a wiki bundle from an ingested corpus using the deterministic
-abstract-first baseline: PageRank + submodular seed selection, tier-S
-extract over seed chunks, deterministic evidence retrieval, tier-M write
-per page. This is the first autoresearch-style vertical slice — lowest
-autonomy, highest determinism. It proves the session + scratch + CLI
-contracts before scripted and guided variants pile on more autonomy.
+abstract-first baseline strategy: PageRank + submodular seed selection,
+tier-S extract over seed chunks, deterministic evidence retrieval,
+tier-M write per page. Lowest autonomy, highest determinism — the
+canonical reference workflow for the skill / CLI / session
+architecture.
 
 ## Inputs
 
@@ -149,8 +143,8 @@ not a stopping criterion (scripted and guided treat it as one).
 - `<bundle>/_scratch/validation-<page_id>.json` — validator verdict
 - `<bundle>/pages/<id>.md` — committed encyclopedic article
 - `<bundle>/_index.json`, `<bundle>/_wiki_graph.json` — rebuilt per commit
-- `<bundle>/_run.json`, `<bundle>/_calls.jsonl` — telemetry (schema parity
-  vs the legacy `run_baseline()` is the merge gate)
+- `<bundle>/_run.json`, `<bundle>/_calls.jsonl` — runtime telemetry
+  consumed by `wikify html` and `wikify eval`
 
 ## Validation
 

@@ -23,9 +23,6 @@ What this test does NOT cover (scoped follow-up work):
 - `stages.*.status` transitions to `done` — the CLI does not yet mutate
   the stages map automatically; that is a separate roadmap item.
 - Retry / escalation / `failed` status arm per `run-baseline.md:116`.
-- `_run.json` field-set parity with legacy `run_baseline()`
-  (seed_doc_ids, split_initial, skipped_thin_pages, write_rejections).
-- `_calls.jsonl` parity via a CostMeter rehydrated from subagent records.
 """
 
 from __future__ import annotations
@@ -273,13 +270,11 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
     tmp_path: Path, tiny_corpus: Path
 ) -> None:
     """Skill-path bundle emits every documented top-level artifact and
-    every legacy `_run.json` field by name + type. The legacy
-    `run_baseline()` Python orchestrator was retired in the
-    skill-pivot legacy-modules-removal pass; the meter-aggregator
-    value-equality probe at the end of this test is the surviving
-    parity contract — both legacy `CostMeter.snapshot()` and the
-    skill `_aggregate_calls_jsonl` are still exercised against
-    identical synthetic CallRecord input.
+    every documented `_run.json` field by name + type. The aggregator
+    correctness probe at the end of this test feeds identical synthetic
+    CallRecords through both `CostMeter.snapshot()` (the reference
+    in-memory aggregator) and the on-disk path used by `wikify session
+    close` (`_aggregate_calls_jsonl`), and asserts they agree.
     """
     # --- Skill-path bundle ------------------------------------------------
     skill_bundle = tmp_path / "skill-bundle"
@@ -363,11 +358,9 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
     # --- Documented top-level artifact set --------------------------------
     skill_top = {p.name for p in skill_bundle.iterdir()}
     expected_top = {
-        # Architectural (skill-driven additions per schemas.md):
         "_session",
         "_scratch",
         "_run_history.jsonl",
-        # Bundle artifacts (legacy parity carried forward):
         "_run.json",
         "_index.json",
         "_index.md",  # human-readable index dumped alongside _index.json
@@ -392,11 +385,9 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
 
     skill_run = json.loads((skill_bundle / "_run.json").read_text(encoding="utf-8"))
 
-    # Every legacy `_run.json` field the skill path now reproduces.
-    # Frozen list — these were the legacy-baseline overlay fields plus
-    # the meter-derived fields that legacy CostMeter.snapshot emits.
+    # Required `_run.json` fields per reference/schemas.md.
     overlay_fields = {
-        # Baseline / pipeline overlay:
+        # Baseline overlay:
         "strategy": str,
         "mode": str,
         "iteration": str,
@@ -412,7 +403,7 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
         "n_pages_written": int,
         "write_rejections": list,
         "timestamp_utc": str,
-        # Meter-derived (matches CostMeter.snapshot shape):
+        # Meter-derived (CostMeter.snapshot() shape):
         "run_id": str,
         "budget_used_haiku_eq": (int, float),
         "wall_seconds": (int, float),
@@ -429,7 +420,7 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
             f"skill _run.json[{key}] has wrong type: {type(skill_run[key])}"
         )
 
-    # context sub-dict must carry the legacy shape.
+    # context sub-dict shape:
     for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
         assert subkey in skill_run["context"], (
             f"skill _run.json[context] missing {subkey}"
@@ -455,23 +446,18 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
         missing = expected_call_fields - set(rec.keys())
         assert not missing, f"skill _calls.jsonl record missing fields: {missing}"
 
-    # --- Value-level parity on the meter aggregation ---------------------
-    # Same CallRecord fed through both aggregation paths must yield the
-    # same snapshot numbers. Prove this by feeding legacy's
-    # `_calls.jsonl` into the skill's `_aggregate_calls_jsonl` and
-    # comparing against a legacy meter snapshot computed from the same
-    # records. Only the skill-side aggregator is under test here; values
-    # differ from the standalone legacy_bundle snapshot above only
-    # because legacy aggregates with CostMeter directly in-memory.
+    # --- Aggregator correctness probe -----------------------------------
+    # The on-disk aggregator (`_aggregate_calls_jsonl`, used by `wikify
+    # session close`) must agree with the in-memory reference aggregator
+    # (`CostMeter.snapshot()`) on identical CallRecord input.
     from wikify.meter import _DEFAULT_TIERS, CostMeter
     from wikify.session import _aggregate_calls_jsonl
     from wikify.types import ModelTier, Role
 
-    # Construct a tiny synthetic set of records and aggregate both ways.
     synthetic_path = tmp_path / "synthetic_calls.jsonl"
     meter = CostMeter(
         budget_haiku_eq=1_000_000.0,
-        run_id="parity-probe",
+        run_id="aggregator-probe",
         events_path=synthetic_path,
         tiers=_DEFAULT_TIERS,
     )
@@ -495,25 +481,25 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
         cache_hit=True,
         prompt_hash="probe-b",
     )
-    legacy_snapshot = meter.snapshot()
-    skill_agg = _aggregate_calls_jsonl(synthetic_path)
+    reference_snapshot = meter.snapshot()
+    on_disk_agg = _aggregate_calls_jsonl(synthetic_path)
 
-    # Core top-level numbers must match exactly.
+    # Top-level scalars must match exactly.
     for key in ("budget_used_haiku_eq", "wall_seconds", "calls", "cache_hit_rate"):
-        assert skill_agg[key] == legacy_snapshot[key], (
-            f"top-level parity mismatch on {key!r}: skill={skill_agg[key]}"
-            f" vs legacy={legacy_snapshot[key]}"
+        assert on_disk_agg[key] == reference_snapshot[key], (
+            f"top-level mismatch on {key!r}: on_disk={on_disk_agg[key]}"
+            f" vs reference={reference_snapshot[key]}"
         )
 
     # context sub-dict: every field must match.
     for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
-        assert skill_agg["context"][subkey] == legacy_snapshot["context"][subkey], (
-            f"context parity mismatch on {subkey!r}: "
-            f"skill={skill_agg['context'][subkey]} "
-            f"vs legacy={legacy_snapshot['context'][subkey]}"
+        assert on_disk_agg["context"][subkey] == reference_snapshot["context"][subkey], (
+            f"context mismatch on {subkey!r}: "
+            f"on_disk={on_disk_agg['context'][subkey]} "
+            f"vs reference={reference_snapshot['context'][subkey]}"
         )
 
-    # by_role: every role bucket must match on every legacy aggregate field.
+    # Per-bucket equality on every aggregate field for non-empty buckets.
     bucket_fields_nonempty = (
         "calls",
         "haiku_eq",
@@ -526,32 +512,31 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
         "headroom_min",
         "headroom_mean",
     )
-    for role_key, legacy_bucket in legacy_snapshot["by_role"].items():
-        skill_bucket = skill_agg["by_role"][role_key]
-        if legacy_bucket.get("calls", 0) == 0:
-            assert skill_bucket == {"calls": 0}, (
+    for role_key, ref_bucket in reference_snapshot["by_role"].items():
+        on_disk_bucket = on_disk_agg["by_role"][role_key]
+        if ref_bucket.get("calls", 0) == 0:
+            assert on_disk_bucket == {"calls": 0}, (
                 f"by_role[{role_key!r}] empty-bucket shape mismatch: "
-                f"skill={skill_bucket}"
+                f"on_disk={on_disk_bucket}"
             )
             continue
         for field_key in bucket_fields_nonempty:
-            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+            assert on_disk_bucket[field_key] == ref_bucket[field_key], (
                 f"by_role[{role_key!r}][{field_key!r}] mismatch: "
-                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+                f"on_disk={on_disk_bucket[field_key]} vs reference={ref_bucket[field_key]}"
             )
 
-    # by_tier: same full-shape assertion.
-    assert set(skill_agg["by_tier"].keys()) == set(legacy_snapshot["by_tier"].keys()), (
-        f"by_tier key-set mismatch: skill={set(skill_agg['by_tier'].keys())}"
-        f" vs legacy={set(legacy_snapshot['by_tier'].keys())}"
+    assert set(on_disk_agg["by_tier"].keys()) == set(reference_snapshot["by_tier"].keys()), (
+        f"by_tier key-set mismatch: on_disk={set(on_disk_agg['by_tier'].keys())}"
+        f" vs reference={set(reference_snapshot['by_tier'].keys())}"
     )
-    for tier_key, legacy_bucket in legacy_snapshot["by_tier"].items():
-        skill_bucket = skill_agg["by_tier"][tier_key]
-        if legacy_bucket.get("calls", 0) == 0:
-            assert skill_bucket == {"calls": 0}
+    for tier_key, ref_bucket in reference_snapshot["by_tier"].items():
+        on_disk_bucket = on_disk_agg["by_tier"][tier_key]
+        if ref_bucket.get("calls", 0) == 0:
+            assert on_disk_bucket == {"calls": 0}
             continue
         for field_key in bucket_fields_nonempty:
-            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+            assert on_disk_bucket[field_key] == ref_bucket[field_key], (
                 f"by_tier[{tier_key!r}][{field_key!r}] mismatch: "
-                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+                f"on_disk={on_disk_bucket[field_key]} vs reference={ref_bucket[field_key]}"
             )

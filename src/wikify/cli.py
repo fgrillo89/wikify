@@ -1,9 +1,11 @@
-"""Thin Typer CLI. Wires the deterministic + skill-driven sub-apps and
-keeps the corpus/eval/render commands. Model-calling subcommands
-(`distill`, `campaign`, `study`, `persona-generate`, `maintenance`,
-`query`) and their dispatch backing have been retired — the
-skill-driven path under `wikify session/kg/extract/draft/validate/
-bundle/meter` replaces them.
+"""Top-level Typer CLI for wikify.
+
+Wires two families of sub-apps:
+
+- Skill-driven: `session`, `kg`, `extract`, `draft`, `validate`, `bundle`,
+  `meter` — coordinated by skill markdown under `.claude/skills/wikify/`.
+- Deterministic, non-model-calling: `ingest`, `refresh`, `field-detect`,
+  `trace`, `sample-claims`, `html`, `eval` — plain Python tools.
 """
 
 import json

@@ -1,8 +1,7 @@
 """Smoke tests for the wikify HTML renderer.
 
-The renderer is the direct port of the legacy ``wikify`` static-site
-generator. These tests synthesise a tiny bundle on disk and assert
-that the rendered HTML resolves wikilinks, stages inline figures into
+These tests synthesise a tiny bundle on disk and assert that the
+rendered HTML resolves wikilinks, stages inline figures into
 ``<out>/assets/``, copies the CSS into ``<out>/static/``, and renders
 ``[^eN]`` evidence markers as proper footnote anchors.
 """

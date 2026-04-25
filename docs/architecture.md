@@ -1,549 +1,186 @@
-# wikify -- architecture
+# Wikify architecture
 
 ## What the system does
 
-1. **Ingest** raw documents (pdf, docx, pptx, html, md) into a normalized
-   corpus on disk: markdown text + extracted images + chunks + embeddings.
-2. **Build a knowledge graph** over the corpus (documents, authors, chunks,
-   citations) for navigation, sampling, and author queries.
-3. **Distill wikis** (concept pages + people pages) from the corpus by letting
-   an agent sample a *fraction* of the corpus, guided by the corpus graph and
-   small models. Wikis cross-link each other.
-4. **Build a wiki graph** over the distilled wikis for navigation, telemetry,
-   and benchmarking.
-5. **Report metrics + telemetry** over runs and over the wiki graph.
+Wikify takes a corpus of source documents (PDF, DOCX, PPTX, HTML, MD)
+and produces an evidence-grounded wiki bundle: encyclopedic article and
+biography pages with citation footnotes that resolve to verbatim
+substrings of source chunks. A persistent on-disk session object
+coordinates the workflow across subagent and process boundaries.
 
-## Three layers, one direction
+## Three layers
 
 ```
 raw files
-   |
-   v
-[ Corpus ]            files on disk + vector store + knowledge graph
-   |
-   v
-[ Wikis ]             markdown files on disk (the source of truth)
-   |
-   v
-[ Wiki graph + metrics ]
+   │
+   ▼  wikify ingest
+[ Corpus ]            normalised markdown + chunks + embeddings + KG
+   │
+   ▼  wikify session/kg/extract/draft/validate/bundle/meter
+[ Wiki bundle ]       pages + indices + session + telemetry
+   │
+   ▼  wikify html / wikify eval
+[ Site / metrics ]    static HTML site, M1/M3/M5/M6 reports
 ```
 
-Hard rules:
+## Runtime model
 
-- `ingest` never reads wikis.
-- `distill` reads the corpus, writes wiki markdown files. Never mutates the
-  corpus.
-- `wikigraph` reads wiki files, never mutates them.
-- `metrics`/`telemetry` read everything, write only into `runs/`.
+The agent runtime — Claude Code or any other agent harness — drives
+the workflow. The agent reads skill markdown, calls deterministic CLI
+tools via Bash, and spawns model-calling subagents via the Task tool.
+Python never calls a model SDK directly.
 
-## Source-of-truth rule
+Three concrete consequences:
 
-Every artifact has exactly one source of truth, and it is the most inspectable
-form possible:
+- **Skills own the per-iteration loop.** `.claude/skills/wikify/workflows/run-baseline.md` documents the page-by-page loop the agent walks.
+- **Files are the agent–backend interface.** Every CLI tool reads inputs from named files (corpus chunks, session.json, scratch artifacts) and writes outputs to named files. The agent passes paths, not blobs.
+- **Durable state lives on disk.** A `<bundle>/_session/session.json` carries strategy, budget, stage status, and per-page status across subagent boundaries; the agent can stop and resume without losing place.
 
-| Artifact         | Source of truth                       | Derived from it                |
-|------------------|---------------------------------------|--------------------------------|
-| Document text    | `corpus/markdown/{doc_id}.md`         | chunks, embeddings             |
-| Document images  | `corpus/images/{doc_id}/`             | (none)                         |
-| Chunks           | `corpus/chunks/{doc_id}.jsonl`        | vector store rows              |
-| Embeddings       | `corpus/vectors.npz` (numpy)          | vector search results          |
-| Knowledge graph  | `corpus/knowledge_graph.json`         | sampling decisions, author queries |
-| **Wiki pages**   | **`wiki/articles/{title}.md` and `wiki/people/{title}.md`** | wiki graph, metrics |
-| Wiki graph       | `wiki/_graph.json`                    | metrics                        |
-| Runs / telemetry | `runs/{run_id}/...`                   | reports                        |
+## CLI surface
 
-The wikis are **markdown files on disk**. They are the product. There is no
-database row that "really" holds the page -- the file is the page.
+Eight families. The agent learns them from `.claude/skills/wikify/reference/cli-tool-surface.md`.
 
-## Data structures
+**Skill-driven (used by workflow skills):**
 
-These are the contracts. Everything else is implementation.
+| Family | Purpose |
+|---|---|
+| `wikify session` | init / show / update / checkpoint / close / lock / unlock the session |
+| `wikify kg` | seeds / abstracts / evidence — corpus knowledge-graph queries |
+| `wikify extract` | canonicalize extracted concepts into `session.pages` entries |
+| `wikify draft` | build a `WriteRequest` scratch artifact for the writer subagent |
+| `wikify validate` | structural + grounding checks on a `WriteResponse` scratch artifact |
+| `wikify bundle` | promote a validated response to `pages/<id>.md` and rebuild indices |
+| `wikify meter` | record per-call telemetry to `_calls.jsonl` and update budget |
 
-### Corpus side
+**Deterministic, non-model-calling:**
 
-- `Document` -- `id`, `source_path`, `kind`, `title`, `metadata`,
-  `markdown_path`, `image_dir`. Carries:
-  - `sections`: list of `DocSection(path, chunk_ids, summary)`
-  - `images`: list of `DocImage(id, path, caption, alt_text, page,
-    near_chunk_ids)` — `near_chunk_ids` is the list of body chunks
-    whose prose mentions the image via inline `Fig. N` / `Table N` /
-    `Scheme N` references, populated at ingest time
-  - `citations`: list of structured reference dicts with
-    `{ord, raw_text, authors, year, title, venue, doi}`
-  - `equations`: list of equation records
-    `{id, latex, type, label, context, char_offset}`. Extracted from
-    the cleaned markdown by `ingest/equations.py` (display, inline,
-    chemical, unicode, image-equation placeholders, named equations
-    like "Ohm's law")
-  - `figure_refs`: list of inline figure / table / scheme caption
-    records `{key, kind, num, sub, caption, section_path,
-    char_offset}`. Extracted from body markdown by
-    `ingest/figure_refs.py` — caption-first, complements the binary
-    image extractor
-  - `similar_to`, `cites`, `cites_same`: doc-level edges populated by
-    the refresh DAG — `_refresh_doc_similarity` + `_refresh_citation_edges`
-    in `ingest/dag.py` (see Pipeline order below)
-- `Chunk` -- `id`, `doc_id`, `ord`, `text`, `char_span`, `section_path`,
-  `section_type`, `equation_ids`. The `equation_ids` field lists every
-  equation bound to this chunk. Binding method depends on the parser:
-  default parser uses `char_offset` / `char_span` overlap; docling
-  HybridChunker uses whitespace-normalized text containment
-  (`use_text_match=True`) because its char_spans don't match
-  markdown offsets.
-  Embedding lives in the vector store, keyed by `chunk.id`.
-- `KnowledgeGraph` (in `citestore/graph.py`) -- typed property graph
-  (`nx.MultiDiGraph`) with Paper, Author, Chunk, Figure, and Equation
-  nodes. Edge types:
-  - `contains`: paper -> chunk
-  - `cites`: paper -> paper (directed)
-  - `cites_same`: paper <-> paper (bibliographic coupling)
-  - `doc_similar`: paper <-> paper (embedding cosine)
-  - `authored_by`: paper -> author (with position)
-  - `collaborated`: author <-> author (co-authorship)
-  - `co_section`: chunk <-> chunk (same doc + same section path)
-  - `CONTAINS_FIGURE`: paper -> figure
-  - `FIGURE_NEAR_CHUNK`: figure -> chunk (inline `Fig. N` references)
-  - `CONTAINS_EQUATION`: paper -> equation
-  - `EQUATION_IN_CHUNK`: equation -> chunk (char_span overlap or text match)
-  Chunk similarity edges (`similar_knn`, `similar_strong`) are removed;
-  vector search via VectorStore replaces them. PageRank is computed at
-  graph build time. Full schema is in `citestore/graph.py`.
-  Equation nodes carry `is_chemical: bool` for filtering:
-  `kg.source(id).math_equations()` / `kg.source(id).chemical_formulas()`.
+| Family | Purpose |
+|---|---|
+| `wikify ingest` | parse + chunk + embed + graph a source directory |
+| `wikify refresh` | rebuild derived corpus artifacts |
+| `wikify field-detect` | detect the corpus field |
+| `wikify trace` | analyse KG exploration traces |
+| `wikify sample-claims` | sample factual claims for human evaluation |
+| `wikify html` | render a wiki bundle to a static site |
+| `wikify eval` | compute M1/M3/M5/M6 metrics |
 
-### Wiki side
+## Bundle artifact contract
 
-- `WikiPage` (in-memory representation of a `.md` file)
-  - `id`, `kind` (`article` | `person`), `title`, `aliases`
-  - `body_markdown` (the human prose, equations as `$$`/`$` LaTeX)
-  - `evidence: list[Evidence]`
-  - `links: list[str]` (other wiki page ids)
-  - `equations: list[dict]` (`{latex, label, kind, context}`,
-    persisted to `.equations.json` sidecar)
-  - `provenance: dict` (run_id, model, sampled_chunks)
-- `Evidence`
-  - `marker`: the footnote label used in the body, e.g. `e1`
-  - `chunk_id`: the corpus chunk this claim came from
-  - `doc_id`: redundant but convenient for display
-  - `quote`: the exact span of text from the chunk that supports the claim
-  - `locator`: optional human-readable locator (page, section, slide)
-- `WikiKnowledgeGraph` (in `store/wiki_graph.py`) -- nodes are wiki page
-  ids; edges:
-  - `links_to` (explicit cross-links from `links`)
-  - `co_evidence` (two pages cite the same chunk)
-  - `same_domain` (clustering over page bodies)
+The full file-level contract lives in
+`.claude/skills/wikify/reference/schemas.md`. In summary:
 
-### Run side
+```
+<bundle>/
+├── articles/<id>.md                       canonical article pages
+├── people/<id>.md                         canonical biography pages
+├── _index.json                            page-level index
+├── _index.md                              human-readable index
+├── _wiki_graph.json                       cite-edge graph between pages
+├── _run.json                              final run snapshot (CostMeter shape)
+├── _run_history.jsonl                     append-only per-close history
+├── _calls.jsonl                           per-model-call telemetry
+├── _session/
+│   ├── session.json                       SessionV1 state
+│   ├── checkpoints/<label>.json           snapshots
+│   └── session.lock                       advisory lock with TTL
+├── _scratch/
+│   ├── extract-<chunk_id>.json            extract subagent output
+│   ├── draft-<page_id>.json               WriteRequest payload
+│   ├── response-<page_id>.json            WriteResponse from writer subagent
+│   ├── validation-<page_id>.json          validator verdict
+│   └── review-<page_id>.json              optional advisory reviews
+└── _meta/                                 corpus-relative metadata
+```
 
-- `Run` -- `id`, `started_at`, `finished_at`, `config_hash`, `stages`,
-  `sampled_chunks`, `pages_touched`, `metrics`.
-- `Stage` -- `name`, `t_start`, `t_end`, `counters`, `cost`.
+Every durable artifact carries a `schema_version` envelope. Pydantic
+models in `src/wikify/schema.py` and `src/wikify/session.py` are the
+executable source of truth.
 
-## Ingest pipeline order
+## Citation grounding
 
-`ingest/pipeline.py::ingest_corpus` runs in this order — order matters
-because the corpus graph depends on populated doc-level edges:
+Every committed page enforces:
 
-1. **Parse + chunk per source** (single-threaded for GPU-bound
-   backends: ``default``, ``marker``, ``docling`` — each loads GPU
-   models and a process pool would duplicate them N×. Parallel for
-   ``lite``). Each source produces
-   `parsed`, `chunks`, `equations`, `figure_refs`. Equations are
-   bound to chunks via `char_span` overlap (default parser) or
-   whitespace-normalized text containment (docling HybridChunker).
-   For docling, bare inline reference numbers are bracketized using
-   the bibliography entry count as the valid range.
-2. **Per-doc persist** in the main process: write markdown + chunks +
-   sidecar JSONs, populate `DocImage.near_chunk_ids` from inline
-   figure references found in chunk prose.
-3. **Embed everything** in one batch through the embedder.
-   GPU-accelerated via DirectML/CUDA when available (auto-detected).
-4. **Refresh DAG** (`ingest/dag.py::REFRESH_DAG`) — wave A fills
-   `Document.similar_to` (`_refresh_doc_similarity`); wave D fills
-   `Document.cites` and `Document.cites_same` (`_refresh_citation_edges`).
-   Both run BEFORE the corpus graph builder, otherwise the saved
-   `knowledge_graph.json` has empty citation edges.
-5. **`build_knowledge_graph`** — builds the unified `KnowledgeGraph`
-   (Paper + Author + Chunk + Figure + Equation nodes, citation +
-   authorship + collaboration + figure-near-chunk + equation-in-chunk
-   edges), computes PageRank, and writes `knowledge_graph.json`. Citation
-   ordinals are stored one-based (`ord_refs[cit.ord + 1]`) to match
-   `[N]` markers in text.
-6. **Topics, image index, equations index, bibliography**.
-7. **Re-save documents** with fully-populated edges + figure metadata.
+- `[^eN]` markers in prose resolve 1:1 to `[^eN]:` definitions in a
+  `## References` block.
+- Each `[^eN]:` definition carries `<chunk_id> (<doc_id>) > "<quote>"`.
+- The `<quote>` is a verbatim substring of the cited chunk's source
+  text — `wikify validate write` enforces this.
 
-## People and articles are separate kinds
+A fabricated quote echoed in the body but absent from the source
+chunk fails validation; the page never reaches `pages/`.
 
-Articles and people are separate `kind`s with separate directories
-(`wiki/articles/` and `wiki/people/`) and separate artifact templates.
-An article page is built from chunks that *describe an idea*; a person
-page is built from chunks that *attribute work to a name* plus document
-metadata.
+## Telemetry contract
 
-Person pages are written by the model just like article pages. Author
-metadata is assembled at ingest/distill time by
-`distill/author_context.py::build_author_context` and attached to
-the `WriteRequest` as `author_context` (primary publications, cited
-works, collaborators, year range, affiliations) for grounding. The
-writer produces biographical prose in Wikipedia voice; the
-"appears in this corpus" phrasing is banned. The writer is robust to
-missing `author_context` (non-author persons mentioned only in chunk
-prose): the lead degrades to `**Name** is credited with [contribution
-grounded in evidence]`.
+The skill path is the only producer of `_run.json` and `_calls.jsonl`.
 
-## Package layout
+`_calls.jsonl` carries one `CallRecord` per line:
+`role, tier, input_tokens, output_tokens, context_used, context_cap,
+wall_seconds, cache_hit, prompt_hash, haiku_eq`.
+
+`_run.json` is the aggregated snapshot at session close, with the
+shape `CostMeter.snapshot()` produces: `run_id`,
+`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`,
+`context {used_max, used_mean, headroom_min, headroom_mean}`, `calls`
+(integer count), `cache_hit_rate`, plus baseline overlay fields
+(`seed_doc_ids`, `seed_chunks_read`, `evidence_chunks_read`,
+`split_initial`, `n_pages_written`, etc.).
+
+## Repository layout
 
 ```
 src/wikify/
-  types.py              # enums (ModelTier, Role, StrategyId) + Protocols
-                        # (Extractor, Compactor, Editor, Writer,
-                        # Orchestrator, Querier)
-  config.py             # all constants
-  schema.py             # Pydantic v2 request/response models
-  context.py            # context envelope + role specs + count_tokens
-  meter.py              # CostMeter: per-call accounting + budget gate
-  cache.py              # ExtractCache: deterministic per-chunk cache
-  embedding.py          # switchable embedding backend
-  dispatch.py           # single Dispatch class (file-based)
-  models.py             # Document, Chunk, Evidence,
-                        # WikiPage, Stage, Run
-  paths.py              # CorpusPaths, BundlePaths
-
-  distill/              # strategies and their primitives
-    strategy.py         # budget allocation + strategy config + run modes
-    explorer.py         # Explorer protocol + LevyExplorer + ExplorerState
-                        # + action dispatch + build_snapshot
-    pipeline.py         # the distillation loop
-    dossier.py          # canonicalization + dossier assembly
-    write_prep.py       # write request building + related + crosslink
-    author_context.py   # build_author_context for person pages
-    persona.py          # persona selection
-    field_detect.py     # field detection heuristics
-    query.py            # corpus query engine
-    maintenance.py      # post-run maintenance
-    iteration.py        # create/refine/merge operations
-    preload.py          # preloaded corpus state
-
-  ingest/               # corpus build
-    parsers/            # one parser per kind; backend selectable via
-                        # --parser <name> on CLI (enum + factory)
-      pdf.py            # uses pymupdf4llm layout engine with
-                        # header=False/footer=False; falls back to
-                        # fitz blocks-mode for scanned PDFs;
-                        # captures TOC via doc.get_toc()
-      docx.py
-      pptx.py
-      html.py
-      markdown.py
-      registry.py       # ParserBackend enum + factory dispatch
-      _sections.py      # section_spans (markdown headings) +
-                        # toc_spans (TOC-driven, used when >=3 entries)
-      _clean.py         # parse-time markdown cleanup; protects
-                        # references-tail from aggressive noise filtering
-    chunker.py          # markdown -> [Chunk]
-    images.py           # save_doc_images (caption-only),
-                        # link_chunks_to_images (populates
-                        # near_chunk_ids), caption_chunks_for
-    figures.py          # binary figure extraction; drops uncaptioned
-                        # images by default; scanned-page fallback
-                        # dedupes by raw page bytes
-    figure_refs.py      # caption-first body extraction
-    equations.py        # display/inline/chemical/unicode/named/image
-    citations.py        # references section detection + structured parse;
-                        # author-anchored fallback for landing-page papers
-    topics.py           # topic extraction (used by GT-C in eval)
-    pipeline.py         # incremental ingest entry point;
-                        # parallel parsing, manifest-based dedup,
-                        # vector reuse, physical stale removal
-    manifest.py         # CorpusManifest, SourceRecord, ChangeSet,
-                        # diff_sources for incremental ingest
-
-  citestore/            # knowledge graph
-    graph.py            # KnowledgeGraph query API
-    graph_build.py      # build_knowledge_graph (Paper + Author + Chunk nodes)
-
-  store/                # disk I/O for corpus and wikis
-    corpus.py           # read documents/chunks/embeddings
-    vectors.py          # thin vector-db wrapper
-    wiki_files.py       # read/write wiki page .md files
-    wiki_index.py       # bundle index (_index.json, _index.md)
-    wiki_graph.py       # WikiKnowledgeGraph
-    images_index.py     # per-corpus image index
-    equations_index.py  # per-corpus equation index (deduplicated)
-    bundle_embeddings.py  # cached page-body embeddings for eval
-
-  eval/                 # metrics and audit
-    bundle.py
-    metrics.py
-    audit.py
-    community.py
-
-  render/html/          # static site renderer
-    templates/
-    static/
-
-  prompts/              # prompt templates
-    registry.py
-    style_guide.md
-    fields/
-    artifact_types/
-
-  cli.py                # thin Typer adapter; one command per verb
+├── cli.py                          top-level Typer app
+├── cli_cmds/                       skill-driven sub-apps
+│   ├── _helpers.py                 shared error / lock helpers
+│   ├── session.py
+│   ├── kg.py
+│   ├── extract.py
+│   ├── draft.py
+│   ├── validate.py
+│   ├── bundle.py
+│   └── meter.py
+├── session.py                      SessionV1 + lock + run-snapshot writer
+├── meter.py                        CallRecord + reference CostMeter
+├── schema.py                       canonical Pydantic request/response models
+├── paths.py                        bundle / corpus path conventions
+├── ingest/                         corpus pipeline (parse, chunk, embed, graph)
+├── citestore/                      knowledge-graph fluent API
+├── distill/                        seed selection, dossier, prompts, write_runner
+├── baselines/                      BaselineConfig + evidence helpers
+├── prompts/                        prompt templates loaded by the skill
+├── render/                         html site renderer
+├── eval/                           metric computations
+└── store/                          page / index / vector / wiki-graph persistence
 ```
 
-Documentation lives alongside the code in `docs/`:
+## Skill pack
 
 ```
-docs/
-  architecture.md       # this file
-  strategies.md         # explorer / schedule / tiering cube
-  study-design.md       # study design: baseline / scripted / guided conditions
-  metrics.md            # M1-M6 + GT-C + GT-P
-  test-run-playbook.md  # reproducible test-run procedure + quality review
+.claude/skills/wikify/
+├── reference/                      facts and contracts the agent loads
+│   ├── schemas.md                  artifact catalog + schema_version policy
+│   ├── cli-tool-surface.md         the eight-family CLI grammar
+│   ├── write-constraints.md        Wikipedia-MoS structural rules
+│   ├── citation-format.md          [^eN] marker grammar
+│   ├── tiers.md                    S/M/L → haiku/sonnet/opus mapping
+│   ├── escalation.md               retry-then-tier-L policy
+│   ├── atoms.md                    compositional atoms with pre/post-conditions
+│   ├── knowledge-graph.md          corpus KG fluent API
+│   ├── wiki-graph.md               wiki KG fluent API
+│   ├── orchestrator.md             action catalog (informational)
+│   └── parameters.md               user-settable parameter reference
+└── workflows/
+    └── run-baseline.md             the baseline workflow loop
 ```
 
-## Dependency direction
+## Design invariants
 
-```
-                        models.py
-                            ^
-                            |
-      types.py  config.py  context.py  schema.py
-            ^       ^          ^          ^
-            |       |          |          |
-         meter.py  cache.py  embedding.py
-                       ^
-                       |
-                   dispatch.py
-                       ^
-                       |
-                   distill/
-                       ^
-                       |
-                    cli.py
-```
-
-Strategy configs in `distill/strategy.py` are data rows over explorer,
-schedule, and tier knobs plus a single factory. They never import dispatch.
-The CLI wires a concrete dispatch into the distill pipeline at run time.
-
-## Coding standards
-
-1. **Functions over namespace classes.** A `class` is justified only by
-   shared mutable state or a real polymorphism need.
-2. **Constructor injection over module-level globals.** Strategies, the
-   cost meter, the cache, the context envelope, and the dispatch are
-   all passed in.
-3. **Modules <= 400 LOC.** Split anything that grows past 600.
-4. **Protocols for real extension points.** `Extractor`, `Compactor`,
-   `Editor`, `Writer`, `Orchestrator`, `Querier`, `Explorer` are
-   `Protocol` classes. Concrete implementations live in their own modules.
-5. **Top-of-file imports.** No lazy imports except for genuinely optional
-   dependencies.
-6. **Enums and dispatch tables over `if/elif` chains** when branching on
-   stable kinds.
-7. **No vendor-specific names in module names or public symbols.** Vendor
-   identity is configuration. The only exception is the binding module file
-   itself.
-8. **No grab-bag helper modules.** Helpers belong in the nearest
-   responsible package.
-9. **Agent-native core.** No core module imports an LLM SDK. The
-   orchestrator supplies model behavior through injected protocols.
-10. **One responsibility per module**, stated in a one-line top-of-file
-    docstring.
-
-## Key types and protocols
-
-The full types live in `models.py` and in `types.py`:
-
-```python
-# types.py
-class Extractor(Protocol):
-    def extract(self, request: ExtractRequest) -> ExtractResponse: ...
-
-class Writer(Protocol):
-    def write(self, request: WriteRequest) -> WriteResponse: ...
-
-class Orchestrator(Protocol):
-    def step(self, state: OrchState) -> OrchAction: ...
-```
-
-`ExtractRequest` carries the `target_chunk` and the `canonical_titles`
-pool, plus per-chunk `equations` (filtered from `Document.equations` via
-`Chunk.equation_ids`) and per-chunk `figure_captions` (combining images
-whose `near_chunk_ids` includes this chunk PLUS `Document.figure_refs`
-in the same top-level section). The Protocol does not expose tokens or
-models -- it exposes *content*. The dispatch is responsible for turning
-content into a model call. The strategy never sees the SDK.
-
-`WriteRequest.figures` is **ranked by relevance**: each candidate image
-gets a score equal to the number of page-evidence chunks present in
-its `near_chunk_ids`, then ties broken by "has any near_chunk_ids"
-(decorative figures sink to the bottom), then by stem for determinism.
-The list is capped at `_PAGE_FIGURES_TOP_K = 8` so the writer prompt
-isn't flooded with figures unrelated to the cited claims.
-
-```python
-# distill/explorer.py
-class Explorer(Protocol):
-    def next_batch(self, state: ExplorerState, k: int) -> list[ChunkRef]: ...
-
-@dataclass(frozen=True)
-class LevyExplorer:
-    local_op: LocalOp
-    global_op: GlobalOp
-    jump_rate: float
-    chunks_per_landed_doc: int = 3
-
-    def next_batch(self, state, k):
-        out = []
-        for _ in range(k):
-            if state.wiki_is_empty or state.rng.random() < self.jump_rate:
-                out.extend(self._global(state))
-            else:
-                out.append(self._local(state))
-        return out
-```
-
-## Operator quick reference
-
-### Environment
-
-```bash
-export WIKIFY_EMBEDDER=fastembed
-export WIKIFY_DISPATCH_DIR=data/dispatch   # default
-```
-
-### Embedder selection
-
-Default is `jinaai/jina-embeddings-v2-small-en` (512-d, 33M params, MTEB ~47).
-The native context window is 8192 tokens but `ModelConfig.max_tokens` is
-capped at 2048 on DirectML because the O(n²) attention activations at
-8k × even modest batch exhaust 8 GB VRAM (the whole point of the cap was
-eliminating OOM on commodity laptop GPUs). Section-level chunking still
-activates — typical section chunks fit well under 2k tokens — but truly
-long sections are split by the embedder's own tokenizer (see below).
-Swap via env var; re-ingest is automatic because `vectors.meta.json`
-fingerprints the model.
-
-```bash
-# Fast (~20x) but short context (512 tok) — chunker paragraph-splits.
-export WIKIFY_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
-
-# Same 512-tok ceiling, higher MTEB than MiniLM.
-export WIKIFY_EMBED_MODEL=BAAI/bge-small-en-v1.5
-
-# Highest MTEB (~62) in this set; long-context but slower.
-export WIKIFY_EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5-Q
-
-# Override per-model default batch_size (see _MODEL_CONFIGS in embedding.py).
-# DirectML-friendly defaults: jina=8, nomic=32, MiniLM/bge=256.
-export WIKIFY_EMBED_BATCH_SIZE=32
-```
-
-**Split-and-mean-pool guard**. `embedding._fe_embed_with` enforces
-`max_tokens` by tokenizing each input with fastembed's internal
-tokenizer and splitting any oversize text into consecutive token-windows
-of size `max_tokens - 2` (CLS/SEP headroom). Piece embeddings are
-mean-pooled and re-normalised before return. Fallback path when the
-tokenizer isn't accessible uses `char_cap = max_tokens * 1.0` — tokens
-≤ chars always, so correctness is preserved at a small efficiency cost.
-
-Benchmark on ald_all_marker (4985 chunks, DirectML RTX 3070 Laptop):
-| model | per-model batch | behaviour on 8 GB DML |
-|---|---|---|
-| MiniLM-L6 | 256 | fastest, paragraph-split only |
-| **jina-v2-small (default)** | **8** | section-level, token-split for oversize |
-| nomic-v1.5-Q | 32 | quantized weights, 2× slower than MiniLM |
-
-### What ingest produces
-
-| Path | Content |
-|------|---------|
-| `markdown/{doc_id}.md` | Cleaned markdown (YAML frontmatter + edges block) |
-| `chunks/{doc_id}.jsonl` | One chunk per line |
-| `docs/{doc_id}.json` | Document record (sections, images, citations, equations) |
-| `images/{doc_slug}/` | Binary figures (caption-only by default) |
-| `vectors.npz` + `.ids.json` + `.meta.json` | Chunk embeddings |
-| `knowledge_graph.json` | Knowledge graph (Paper + Author + Chunk + Figure + Equation nodes) |
-| `topics.json` | Topic vocabulary |
-| `equations.json` | Corpus-wide equation index (deduplicated by normalized LaTeX) |
-| `corpus_papers.bib` | BibTeX for corpus source papers |
-| `cited_works.bib` | BibTeX for referenced works |
-| `citations.json` | Structured citation index |
-| `.citestore.db` | SQLite DOI-metadata cache (persistent across refreshes) |
-
-### DOI resolution
-
-Single entry point: `wikify.util.doi_resolver.resolve_many(dois, cache_path=...)`.
-Every DOI lookup in the pipeline goes through this function — both the
-corpus-paper enrichment (wave D in `refresh`) and the reference-citation
-enrichment (wave B). Do not add a fourth path; extend this one.
-
-Strategy:
-1. `DOICache` lookup at `<corpus>/.citestore.db`. Negative-result rows
-   count as cache hits for 14 days (`DOICache.NEGATIVE_TTL_DAYS`) so
-   failed resolutions don't re-hit the network every refresh; after the
-   TTL they become misses again so newly-registered DOIs get picked up.
-2. For uncached DOIs: CrossRef batch (`/works?filter=doi:A,B,...`,
-   75 DOIs/call, structured JSON output). Rate-limited via
-   `wikify.util.async_limits.with_limiter` + `with_semaphore`.
-3. For DOIs CrossRef missed or returned incomplete records for
-   (title-only, no authors): doi.org content-negotiation fallback
-   (`Accept: application/x-bibtex`, one request per DOI). Covers
-   non-CrossRef registration agents (DataCite / mEDRA / JaLC).
-4. Persist all outcomes — including negatives tagged `source="not-found"` —
-   via `DOICache.put` (which uses `INSERT OR REPLACE`, so a later
-   successful resolution upgrades an earlier negative row).
-
-Async-limit decorators are shared via `wikify.util.async_limits`;
-`citestore/resolver.py` (OpenAlex) and `util/doi_resolver.py` both
-import from there.
-
-### Citation graph wiring
-
-Corpus papers and external cited works are both `source` nodes in the KG
-(kinds `"corpus"` and `"cited"`). `CITES` edges go **both** directions:
-corpus → corpus (when one ingested paper cites another) AND corpus → cited
-(when an ingested paper cites an external work the corpus doesn't hold).
-The latter is essential — without it, every external reference is an
-isolated node and citation reasoning in distill produces empty results.
-Edges are emitted from `Document.citations` during `build_knowledge_graph`,
-matched by bibkey via `citation_index.doc_bibkeys`.
-
-### CLI workflows
-
-```bash
-# Ingest
-uv run python -m wikify.cli ingest <input_dir> --out <corpus_dir>
-
-# Distill (preset)
-uv run python -m wikify.cli distill --preset balanced --budget 1x --seed 0 \
-  --corpus <corpus_dir> --bundle <bundle_dir>
-
-# Distill (manual)
-uv run python -m wikify.cli distill --strategy balanced --mode guided --guided-tools full \
-  --budget 1x --seed 0 --corpus <corpus_dir> --bundle <bundle_dir>
-
-# Study (canonical small-scale comparison)
-uv run python -m wikify.cli study \
-  --presets baseline,balanced,guided \
-  --budgets 0.1x,1x,3x --seeds 0
-
-# Eval
-uv run python -m wikify.cli eval --bundle <bundle_dir> --corpus <corpus_dir>
-
-# HTML
-uv run python -m wikify.cli html --bundle <bundle_dir>
-```
-
-### Troubleshooting
-
-- **Dispatcher hang**: Check skill is enabled, request file exists,
-  response file lands next to it.
-- **Schema validation**: `extra="forbid"` — any unexpected key rejects.
-  Read `schema.py` for canonical shapes.
-- **Budget exhaustion mid-write**: Raise `--budget` or shift
-  `--exploit-fraction`.
-- **Cache miss explosion**: Prompt template or model changed, invalidating
-  cache keys. Check `prompt_hash` stability.
+- The agent runtime is the only place that calls models.
+- Python tools are deterministic, validated, and individually testable.
+- Files are the only interface between the agent and the backend.
+- No hidden state — every coordination point is a named file.
+- Every model-calling step produces a CallRecord in `_calls.jsonl`.
+- Page promotion is gated by structural + grounding validation under
+  the session lock; lock contention or budget overrun produces
+  structured stderr errors with stable exit codes (0 success, 1
+  validation/precondition failure, 2 lock_held, 3 budget_exceeded).
