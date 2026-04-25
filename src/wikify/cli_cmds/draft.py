@@ -27,9 +27,7 @@ from ._helpers import cli_owner, handle_lock_held
 
 app = typer.Typer(add_completion=False, help="Build request artifacts for the write subagent.")
 
-# Template name string consumed by the write subagent. Previously resolved
-# through `distill.pipeline.WRITE_PROMPT`; that module was retired in the
-# skill-pivot legacy-modules-removal pass.
+# Template name string consumed by the write subagent.
 WRITE_PROMPT = "wikify/write"
 
 DRAFT_SCHEMA_VERSION = 1

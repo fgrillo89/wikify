@@ -135,40 +135,38 @@ Owning command: `wikify bundle commit-page` (rebuilds on each commit).
 
 ### `<bundle>/_wiki_graph.json`
 
-Wiki graph of citation edges between pages. Shape defined by
+Wiki graph of citation edges between pages. Built by
 `src/wikify/distill/write_runner.py::rebuild_wiki_graph`. Owning command:
-`wikify bundle commit-page`. `schema_version` to be added when the format is
-first mutated.
+`wikify bundle commit-page`. `schema_version` to be added when the format
+is first mutated.
 
 ## Telemetry artifacts
 
 ### `<bundle>/_run.json`
 
-Run snapshot flushed on `wikify session close` (and legacy `run_baseline()`).
+Run snapshot flushed on `wikify session close`. Written by
+`src/wikify/session.py::write_run_snapshot`.
 
-**Skill-path writer** (`src/wikify/session.py::write_run_snapshot`): emits
-`schema_version: 1` plus full legacy field-set parity. Session-derived
-core fields: `session_id`, `strategy`, `mode`, `iteration`, `status`,
-`bundle_root`, `corpus_root`, `created_at`, `closed_at`, `timestamp_utc`,
-`budget_target_haiku_eq`, `stages`, `config`, `pages`, `n_pages_committed`,
-`n_pages_failed`, `page_counts`, `telemetry_paths`. Baseline overlay
-fields: `seed_doc_ids`, `seed_chunks_read`, `evidence_chunks_read`,
-`split_initial`, `seed_extract_budget`, `baseline_write_fraction`,
-`min_evidence_chunks`, `skipped_thin_pages`, `n_pages_written`,
-`write_rejections`. Meter-derived fields (read from `_calls.jsonl`,
-shape matches legacy `CostMeter.snapshot()`): `run_id`,
-`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`, `context`
-(`used_max`, `used_mean`, `headroom_min`, `headroom_mean`), `calls`
-(integer count), `cache_hit_rate`.
+Fields:
 
-**Legacy writer**: previously `run_baseline` in the legacy baselines
-pipeline, retired in the skill-pivot. The skill-path writer is now the
-only producer of `_run.json`. Field-set parity with the legacy writer
-was achieved before deletion (overlay + meter sides), so existing
-downstream consumers (`wikify html`, `wikify eval`) read the
-skill-path bundle without changes.
+- Envelope and identity: `schema_version`, `session_id`, `run_id`,
+  `strategy`, `mode`, `iteration`, `status`, `bundle_root`,
+  `corpus_root`, `created_at`, `closed_at`, `timestamp_utc`.
+- Budget and run shape: `budget_target_haiku_eq`, `stages`, `config`,
+  `pages`, `n_pages_committed`, `n_pages_failed`, `page_counts`,
+  `telemetry_paths`.
+- Baseline overlay: `seed_doc_ids`, `seed_chunks_read`,
+  `evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
+  `baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
+  `n_pages_written`, `write_rejections`.
+- Meter-derived (aggregated from `_calls.jsonl`, shape matches
+  `CostMeter.snapshot()`): `budget_used_haiku_eq`, `wall_seconds`,
+  `by_role`, `by_tier`, `context` (`used_max`, `used_mean`,
+  `headroom_min`, `headroom_mean`), `calls` (integer count),
+  `cache_hit_rate`.
 
-Owning command: `wikify session close`.
+Owning command: `wikify session close`. The aggregation logic shares
+its math with the reference `CostMeter` in `src/wikify/meter.py`.
 
 ### `<bundle>/_calls.jsonl`
 
@@ -183,12 +181,13 @@ wall_seconds, cache_hit, prompt_hash, haiku_eq
 No `schema_version` per-line; the whole file's stability is gated on the
 `CallRecord` dataclass shape.
 
-**Skill-path writers**:
+**Writers**:
 
-- `wikify meter record` — explicit emission; used by workflows to log
-  extract/query/orchestrate calls the subagent performs. Callers MUST
-  NOT use this command for the write call — `wikify bundle commit-page`
-  records that automatically. Double-recording is not deduplicated.
+- `wikify meter record` — explicit emission used by workflows to log
+  extract / query / orchestrate calls the subagent performs. Callers
+  MUST NOT use this command for the writer role — `wikify bundle
+  commit-page` records that automatically. Double-recording is not
+  deduplicated; the writer role is rejected at the CLI layer.
 - `wikify bundle commit-page` — auto-records the write call using the
   `WriteResponse.tokens_in` / `tokens_out` fields on successful commit.
   Refuses to record negative tokens, tokens beyond the declared
@@ -196,16 +195,15 @@ No `schema_version` per-line; the whole file's stability is gated on the
   target.
 
 Both writers bump `session.budget.haiku_eq_spent` (stored as `float`)
-under the session lock and honor the legacy `1.05 × budget_target`
-hard-abort gate — a projected overshoot exits the CLI with a
-structured `budget_exceeded` error on stderr and a non-zero exit code.
+under the session lock and honor the `1.05 × budget_target` hard-abort
+gate — a projected overshoot exits the CLI with a structured
+`budget_exceeded` error on stderr and exit code 3.
 `wikify session close` reads this file and folds it into the
-`_run.json` snapshot (see above) in the exact shape legacy
-`CostMeter.snapshot()` emits (`budget_used_haiku_eq`, `wall_seconds`,
-`by_role`, `by_tier`, `context`, `calls` count, `cache_hit_rate`).
-Unknown `role` strings in `_calls.jsonl` are rejected at aggregation
-(`UnknownRoleError`); the legitimate role set is the `Role` enum in
-`src/wikify/types.py`.
+`_run.json` snapshot in the shape `CostMeter.snapshot()` produces
+(`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`,
+`context`, `calls` count, `cache_hit_rate`). Unknown `role` strings in
+`_calls.jsonl` are rejected at aggregation (`UnknownRoleError`); the
+legitimate role set is the `Role` enum in `src/wikify/types.py`.
 
 ## Corpus artifacts (read-only)
 

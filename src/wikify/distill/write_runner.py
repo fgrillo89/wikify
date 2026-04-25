@@ -1,9 +1,8 @@
 """Wiki-side graph + vector rebuild on commit.
 
-After the legacy write pass was retired in the skill-pivot, the only
-surviving export from this module is :func:`rebuild_wiki_graph` —
-called by ``wikify bundle commit-page`` after each promoted page so the
-on-disk wiki graph and per-page embeddings stay in sync.
+:func:`rebuild_wiki_graph` is called by ``wikify bundle commit-page``
+after each promoted page so the on-disk wiki graph and per-page
+embeddings stay in sync.
 """
 
 from __future__ import annotations

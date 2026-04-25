@@ -47,13 +47,11 @@ def cmd_canonicalize(
 ) -> None:
     """Dedup and canonicalize extracted concepts; append session.pages entries.
 
-    The skill-path equivalent of legacy `run_baseline()`'s
-    `canonicalize(seed_candidates, existing=[])`. Reads each response,
-    resolves doc_id via the corpus chunks index, calls canonicalize,
-    and patches `session.pages` with one `status=planned` entry per
-    canonical page (carrying kind + aliases). Idempotent: existing
-    entries with the same `page_id` are not duplicated; new aliases
-    merge into the existing entry.
+    Reads each response, resolves doc_id via the corpus chunks index,
+    runs `distill.dossier.canonicalize`, and patches `session.pages`
+    with one `status=planned` entry per canonical page (carrying kind +
+    aliases). Idempotent: existing entries with the same `page_id` are
+    not duplicated; new aliases merge into the existing entry.
     """
     paths_list = json.loads(responses)
     if not isinstance(paths_list, list) or not paths_list:

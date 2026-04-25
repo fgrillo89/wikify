@@ -1,0 +1,1 @@
+- **CLI file exploration design**: Avoid vague "CLI or shell" guidance for skill workflows -> make one path canonical. For wikify skills, wrap `ls`/`rg`/`cat` affordances inside the CLI so bundle reads are constrained, rendered, and logged; keep raw shell tools as debugging escape hatches.

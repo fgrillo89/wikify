@@ -1,8 +1,8 @@
-"""Typed request/response shapes for Extractor / Writer / Orchestrator / Querier.
+"""Typed request/response shapes the skill-driven CLI consumes.
 
-These are the only structures the bindings ever see. They are Pydantic v2
-``BaseModel``s with ``frozen=True`` and ``extra="forbid"``, so a missing
-or extra field aborts the call after one retry.
+These are the canonical Pydantic v2 ``BaseModel``s for the extract and
+write subagent contracts. All are ``frozen=True`` and
+``extra="forbid"``, so a missing or extra field aborts the call.
 """
 
 import re
@@ -150,9 +150,8 @@ class ExtractRequest(BaseModel):
     # chunk_id). Lets the handler decide which figures to attach as
     # evidence without a separate vision pass.
     figure_captions: list[FigureCaption] = Field(default_factory=list)
-    # Verbalization: when true, the handler must include a 1-3 sentence
-    # `reasoning` field in its response explaining what it kept, skipped,
-    # and why. Feeds <bundle>/_meta/verbalize.jsonl for post-hoc review.
+    # When true, the subagent must include a 1-3 sentence `reasoning`
+    # field in its response explaining what it kept, skipped, and why.
     verbalize: bool = False
     # Resolved citation markers from the chunk text.
     # Each dict: {ord, title, authors, year, doi, in_corpus, corpus_doc_id}.
@@ -505,25 +504,16 @@ class WriteRequest(BaseModel):
     model_id: str
     tier: ModelTier
     figures: list[ImageRef] = Field(default_factory=list)
-    # Layered writer-prompt context. Inline strings are the canonical
-    # payload for fake/heuristic bindings. The hash fields allow the
-    # file_dispatch runtime to cache each stable layer once per session
-    # and fetch it from _meta/prompt_layers/<hash>.md instead of
-    # re-sending the full text on every write dispatch. Vendor-neutral:
-    # no Anthropic/OpenAI SDK primitive is used. The cache lives in the
-    # skill runtime (Claude Code session memory).
+    # Layered writer-prompt context. Hash fields let the runtime cache each
+    # stable layer instead of resending the full text on every write call.
     style_guide: str = ""
     field_guide: str = ""
     artifact_template: str = ""
     corpus_persona: str = ""
-    # Content-based hashes for layer cache lookup (sha256[:16], hex).
-    # None when the runtime does not support hash-based delivery.
     style_guide_hash: str | None = None
     field_guide_hash: str | None = None
     artifact_template_hash: str | None = None
     corpus_persona_hash: str | None = None
-    # Editor-writer v2 fields (optional for backwards compatibility)
-    brief: "EditorBrief | None" = None
     evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
     neighbor_summaries: list[dict] = Field(default_factory=list)
     # Person-page grounding context. Present only when page_kind="person" and
@@ -550,10 +540,8 @@ class WriteRequest(BaseModel):
     # LaTeX. Each: {latex, label, kind, context, source_doc_ids}.
     # The writer should use $$ / $ delimiters and return equations it used.
     equations_context: list[dict] = Field(default_factory=list)
-    # Verbalization: when true, the handler must include a 1-3 sentence
-    # `reasoning` field in its response explaining its editorial choices
-    # (why this structure, which evidence was foregrounded, what was
-    # deferred). Feeds <bundle>/_meta/verbalize.jsonl.
+    # When true, the subagent must include a 1-3 sentence `reasoning`
+    # field in its response explaining its editorial choices.
     verbalize: bool = False
 
 
@@ -610,184 +598,3 @@ class WriteResponse(BaseModel):
         return self
 
 
-# --- editor (brief) ------------------------------------------------------
-
-
-class BriefSection(BaseModel):
-    """One section in the editor's brief to the writer."""
-
-    model_config = _STRICT
-
-    heading: str  # e.g. "## Mechanism" or "## Device Performance"
-    instruction: str  # what to write, what to compare
-    evidence_markers: list[str] = Field(default_factory=list)  # e.g. ["e1", "e3"]
-    zone: Literal["established", "contested", "frontier", ""] = ""
-    parameters_to_include: list[str] = Field(default_factory=list)
-
-
-class EditorBrief(BaseModel):
-    """The editor's structured instructions for the writer.
-
-    The editor reads all accumulated dossier material for a concept
-    and produces a brief that tells the writer exactly what to write,
-    what tone to use, which evidence to cite where, and which figures
-    to embed.
-    """
-
-    model_config = _STRICT
-
-    page_id: str
-    title: str
-    article_register: Literal["academic", "applied", "tutorial", "general"] = "academic"
-    tone_guidance: str = ""  # specific tone instructions
-    lead_paragraph_instruction: str = ""  # what the opening should say
-    sections: list[BriefSection] = Field(default_factory=list)
-    comparative_notes: str = ""  # how this differs from related concepts
-    figures_to_embed: list[str] = Field(default_factory=list)  # figure IDs
-    max_length_chars: int = 5000
-    tokens_in: int = 0
-    tokens_out: int = 0
-
-
-# --- orchestrator --------------------------------------------------------
-
-
-class OrchState(BaseModel):
-    """Snapshot of run state for one orchestrator step."""
-
-    model_config = _STRICT
-
-    run_id: str
-    n_pages: int
-    n_candidates: int
-    n_concepts: int = 0
-    n_people: int = 0
-    docs_covered: int = 0
-    docs_total: int = 0
-    index_path: str = ""
-    last_actions: list[str] = Field(default_factory=list)
-    # Sampler snapshot for Phase 3 LLM-as-sampler.
-    # Contains top_gap_chunks, doc_coverage, page_index, content_stats.
-    # ~2-4 kB of JSON; built in LlmPolicy.next_extract before each orch call.
-    sampler_snapshot: dict = Field(default_factory=dict)
-    budget_spent: float = 0.0
-    budget_remaining: float = 0.0
-    novelty_rate: float = 0.0
-    page_summaries: list[dict] = Field(default_factory=list)
-    # Verbalization: see ExtractRequest.verbalize.
-    verbalize: bool = False
-
-
-class OrchAction(BaseModel):
-    model_config = _STRICT
-
-    name: str  # walk_local | jump_uniform | ... | done
-    args: dict = Field(default_factory=dict)
-    tokens_in: int = 0
-    tokens_out: int = 0
-    # Populated only when OrchState.verbalize is true. Empty otherwise.
-    reasoning: str = ""
-
-
-# --- querier -------------------------------------------------------------
-
-
-class QueryEvidence(BaseModel):
-    model_config = _STRICT
-
-    page_id: str
-    page_title: str
-    body_excerpt: str
-    citations: list[str]
-
-    @field_validator("page_id")
-    @classmethod
-    def _page_id_nonempty(cls, v: str) -> str:
-        if not v:
-            raise ValueError("QueryEvidence.page_id must be non-empty str")
-        return v
-
-
-class QueryRequest(BaseModel):
-    model_config = _STRICT
-
-    question: str
-    evidence: list[QueryEvidence]
-    prompt_template: str
-    model_id: str
-    tier: ModelTier
-
-    @field_validator("question")
-    @classmethod
-    def _question_nonempty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("QueryRequest.question must be non-empty str")
-        return v
-
-
-class QueryAnswer(BaseModel):
-    model_config = _STRICT
-
-    text: str
-    citations: list[str]
-    chunks: list[str]
-    follow_ups: list[str] = Field(default_factory=list)
-
-
-class QueryResponse(BaseModel):
-    model_config = _STRICT
-
-    answer: QueryAnswer
-    tokens_in: int = 0
-    tokens_out: int = 0
-
-
-# --- query log -----------------------------------------------------------
-
-
-class EscalationEvent(BaseModel):
-    model_config = _STRICT
-
-    reason: str
-    chunk_ids: list[str] = Field(default_factory=list)
-
-
-class QueryLogEntry(BaseModel):
-    model_config = _STRICT
-
-    id: str
-    question: str
-    asked_at: str  # ISO-8601 timestamp
-    answer_text: str
-    pages_touched: list[str] = Field(default_factory=list)
-    links_followed: list[str] = Field(default_factory=list)
-    escalation_events: list[EscalationEvent] = Field(default_factory=list)
-    model_id: str = ""
-    tier: str = ""
-
-
-# --- maintenance ---------------------------------------------------------
-
-MaintenanceActionKind = Literal["extend_page", "create_page", "add_evidence", "merge_pages"]
-
-
-class MaintenanceAction(BaseModel):
-    model_config = _STRICT
-
-    action: MaintenanceActionKind
-    target_page: str
-    brief: str
-    evidence_additions: list[str] = Field(default_factory=list)
-    rationale: str
-    source_query_id: str = ""
-
-
-class MaintenanceReport(BaseModel):
-    model_config = _STRICT
-
-    run_at: str  # ISO-8601
-    queries_scanned: int
-    actions_dispatched: int
-    actions_applied: int
-    query_logs_deleted: int
-    actions: list[MaintenanceAction] = Field(default_factory=list)

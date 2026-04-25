@@ -111,3 +111,4 @@ Format: `- **Topic**: What went wrong → what to do instead.`
 - **wikify page names**: Use natural Wikipedia-style titles ("Atomic Layer Deposition", not "concept-atomic-layer-deposition"). The `kind` field distinguishes page types; the `id` IS the title.
 - **wikify writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible `[[wikilinks]]` in prose.
 - **wikify person pages**: Person pages are written by the model like article pages. Author metadata is assembled at ingest/distill time and attached as `author_context`. The "appears in this corpus" phrasing is banned. Must be robust to missing `author_context`.
+- **wikify CLI file exploration**: For skill workflows, make the CLI the canonical wrapper around `ls`/`rg`/`cat` behavior so bundle reads are constrained, rendered, and logged. Keep raw shell file tools for debugging, not normal workflow guidance.

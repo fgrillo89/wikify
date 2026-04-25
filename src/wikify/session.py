@@ -98,13 +98,12 @@ class SessionV1(BaseModel):
     pages: list[PageEntry] = Field(default_factory=list)
     config: BaselineConfig = Field(default_factory=BaselineConfig)
     telemetry_paths: TelemetryPaths
-    # Populated by `wikify kg seeds --persist`. Carried forward into
-    # _run.json so the skill-path snapshot can match the legacy
-    # `seed_doc_ids` / `seed_chunks_read` fields on session close.
+    # Populated by `wikify kg seeds --persist`. Carried into _run.json on
+    # session close as `seed_doc_ids` / `seed_chunks_read`.
     seed_doc_ids: list[str] = Field(default_factory=list)
     seed_chunk_ids: list[str] = Field(default_factory=list)
-    # Per-iteration counter for campaign-style reruns. Baseline keeps
-    # the default "create"; scripted/guided bump it between iterations.
+    # Per-iteration counter for campaign-style reruns. Baseline keeps the
+    # default "create"; scripted/guided bump it between iterations.
     iteration: str = "create"
 
 
@@ -301,18 +300,13 @@ RUN_SCHEMA_VERSION = 1
 
 
 def write_run_snapshot(session: "SessionV1") -> Path:
-    """Flush a final telemetry snapshot to <bundle>/_run.json.
+    """Flush the final telemetry snapshot to <bundle>/_run.json.
 
-    Called by `wikify session close`. Aggregates:
-      - session state (strategy, stages, pages, budget, config)
-      - legacy-shape overlay fields derived from config + scratch drafts
-      - meter-derived fields read from <bundle>/_calls.jsonl (Tier 1
-        item 3): run_id, calls, spent_haiku_eq, cache_hits, context_used_max,
-        wall_seconds, input_tokens, output_tokens
-
-    This is the full Phase 5 deletion-gate shape — downstream consumers
-    `wikify html` and `wikify eval` read exactly this envelope whether
-    the bundle came from legacy `run_baseline()` or the skill path.
+    Called by `wikify session close`. Aggregates session state (strategy,
+    stages, pages, budget, config), the baseline overlay fields derived
+    from config + scratch drafts, and meter-derived fields read from
+    <bundle>/_calls.jsonl. `wikify html` and `wikify eval` consume this
+    envelope.
     """
     bundle_paths = BundlePaths(Path(session.bundle_root))
     bundle_paths.ensure()
@@ -322,10 +316,7 @@ def write_run_snapshot(session: "SessionV1") -> Path:
         status = entry.get("status", "planned")
         counts[status] = counts.get(status, 0) + 1
 
-    # Legacy-shape overlay fields. These mirror run_baseline()'s
-    # snapshot writer so existing downstream consumers work without
-    # rework. Values derived from session state + config + on-disk
-    # scratch artifacts so no CostMeter is required.
+    # Baseline overlay fields derived from session state + config + scratch.
     config = session.config
     budget_target = float(session.budget.haiku_eq_target or 0)
     write_fraction = float(config.baseline_write_fraction)
@@ -337,7 +328,7 @@ def write_run_snapshot(session: "SessionV1") -> Path:
     evidence_chunks_read = _gather_evidence_chunks_from_scratch(bundle_paths.scratch_dir)
 
     # Meter aggregates from _calls.jsonl. Absent file is fine for
-    # sessions that never dispatched a model call.
+    # sessions that never recorded a model call.
     meter_fields = _aggregate_calls_jsonl(bundle_paths.calls_path)
 
     skipped_thin_pages = [
@@ -355,10 +346,8 @@ def write_run_snapshot(session: "SessionV1") -> Path:
     ]
 
     # Per-close run_id so session resume + second close produces a
-    # distinct run_id, matching legacy semantics where every
-    # `run_baseline()` invocation mints a fresh id. updated_at is only
-    # second-granularity — a UUID suffix guarantees uniqueness even
-    # when two closes fire in the same second.
+    # distinct id. updated_at is only second-granularity — the UUID
+    # suffix guarantees uniqueness when two closes fire in one second.
     run_id = f"{session.session_id}-{session.updated_at}-{uuid4().hex[:8]}"
 
     snapshot = {
@@ -404,10 +393,9 @@ def write_run_snapshot(session: "SessionV1") -> Path:
         "config": config.model_dump(mode="json"),
         "pages": pages,
         "telemetry_paths": session.telemetry_paths.model_dump(mode="json"),
-        # Meter-derived fields matching legacy CostMeter.snapshot() shape.
-        # Values are aggregated from <bundle>/_calls.jsonl; a session
-        # that never recorded any call sees zeros but the fields are
-        # still present so downstream consumers get a stable envelope.
+        # Meter-derived fields aggregated from <bundle>/_calls.jsonl. A
+        # session that never recorded any call sees zeros, but the fields
+        # are always present so downstream consumers get a stable envelope.
         "budget_used_haiku_eq": meter_fields["budget_used_haiku_eq"],
         "wall_seconds": meter_fields["wall_seconds"],
         "by_role": meter_fields["by_role"],
@@ -445,7 +433,7 @@ _EMPTY_AGG = {
 
 
 def _agg_to_dict(agg: dict) -> dict:
-    """Mirror legacy meter._Aggregates.to_dict() output."""
+    """Render an aggregator dict in `CostMeter.snapshot()` per-bucket shape."""
     calls = agg["calls"]
     if calls == 0:
         return {"calls": 0}
@@ -485,19 +473,18 @@ class UnknownRoleError(ValueError):
 
 
 def _initial_by_role() -> dict[str, dict]:
-    """Pre-populate by_role with every legacy Role enum value.
+    """Pre-populate by_role with every Role enum value.
 
-    Matches legacy `CostMeter.__init__` which seeds `self._by_role` with
-    `{r: _Aggregates() for r in Role}`. A write-only run therefore emits
-    all five role keys (four with `{"calls": 0}`) rather than a single
-    `{"writer": ...}` entry — downstream consumers can rely on the key
-    set being stable regardless of which roles were actually exercised.
+    A write-only run therefore emits all five role keys (four with
+    `{"calls": 0}`) rather than a single `{"writer": ...}` entry —
+    downstream consumers can rely on the key set being stable regardless
+    of which roles were actually exercised.
     """
     return {role.value: dict(_EMPTY_AGG) for role in Role}
 
 
 def _aggregate_calls_jsonl(calls_path: Path) -> dict:
-    """Read _calls.jsonl and produce the legacy CostMeter.snapshot shape."""
+    """Read _calls.jsonl and produce a `CostMeter.snapshot()`-shaped dict."""
     total = dict(_EMPTY_AGG)
     by_role: dict[str, dict] = _initial_by_role()
     by_tier: dict[str, dict] = {}

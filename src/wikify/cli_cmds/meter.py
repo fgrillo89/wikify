@@ -1,12 +1,9 @@
 """wikify meter ... — cost/call telemetry for skill-driven workflows.
 
-Skill workflows record model-call telemetry through this CLI instead of
-going through a long-lived CostMeter instance. Each `wikify meter record`
-call appends one line to `<bundle>/_calls.jsonl` in the same `CallRecord`
-shape the legacy `CostMeter` emits, and updates
-`session.budget.haiku_eq_spent` under the session lock. `wikify session
-close` reads the jsonl and aggregates the meter snapshot into
-`<bundle>/_run.json`.
+Each `wikify meter record` call appends one `CallRecord` line to
+`<bundle>/_calls.jsonl` and updates `session.budget.haiku_eq_spent`
+under the session lock. `wikify session close` reads the jsonl and
+aggregates the meter snapshot into `<bundle>/_run.json`.
 """
 
 from __future__ import annotations
@@ -46,14 +43,8 @@ def check_budget_gate(target: float, projected_spent: float) -> None:
     """Hard-abort gate: refuse the record when projected spend exceeds
     `target * ABORT_RATIO` (default 1.05x).
 
-    Intentional divergence from legacy `CostMeter.record`: on legacy a
-    `budget=0` session aborts on the first nonzero record (the math
-    `haiku_eq > 0 * 1.05 = 0` is always true). That is a nonsensical
-    production configuration — every legacy caller passes a positive
-    budget — but skill-path sessions routinely initialize with
-    `budget_target=0` (e.g., `wikify session init` with no
-    `--budget-target`) to mean "no ceiling". Treat `target <= 0` as
-    "no enforced ceiling" rather than "abort everything"; callers that
+    `target <= 0` means "no enforced ceiling" — sessions initialized
+    without `--budget-target` skip the gate entirely. Callers that
     want real abort behavior must supply a positive target.
     """
     if target <= 0:
@@ -106,10 +97,9 @@ def append_call_record(
     with session_lock(session_path, owner=cli_owner(owner)):
         fresh = load_session(session_path)
         new_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
-        # Append the record + update the aggregate BEFORE the gate raises,
-        # matching legacy CostMeter.record (meter.py:250-256) which writes
-        # the breaching record to _calls.jsonl so the post-run snapshot
-        # shows exactly how the budget was blown.
+        # Append the record + update the aggregate BEFORE the gate raises:
+        # the breaching call is part of the run and must be visible in
+        # _calls.jsonl so the post-run snapshot shows how the budget blew.
         bundle_paths.calls_path.parent.mkdir(parents=True, exist_ok=True)
         with bundle_paths.calls_path.open("a", encoding="utf-8") as fh:
             fh.write(record.to_json() + "\n")
