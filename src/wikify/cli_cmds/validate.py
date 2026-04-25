@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,13 +13,13 @@ from pydantic import ValidationError
 
 from ..schema import WriteRequest, WriteResponse
 from ..session import (
-    SessionLockHeldError,
     apply_merge_patch,
     load_session,
     save_session,
     session_lock,
     touch,
 )
+from ._helpers import cli_owner, handle_lock_held, strip_envelope
 
 app = typer.Typer(add_completion=False, help="Schema and structural validation for drafts.")
 
@@ -233,10 +232,8 @@ def cmd_validate_write(
     response_data = json.loads(response.read_text(encoding="utf-8"))
     # `schema_version` is a scratch-envelope field, not part of the canonical
     # WriteRequest / WriteResponse Pydantic models (which are `extra="forbid"`).
-    # Strip from both before validation so either side can carry the envelope
-    # without tripping model validation.
-    draft_data_clean = {k: v for k, v in draft_data.items() if k != "schema_version"}
-    response_data_clean = {k: v for k, v in response_data.items() if k != "schema_version"}
+    draft_data_clean = strip_envelope(draft_data)
+    response_data_clean = strip_envelope(response_data)
 
     errors: list[dict] = []
     structural_checks = {
@@ -321,11 +318,8 @@ def cmd_validate_write(
 
     session_patched = False
     if ok and session_path is not None:
-        try:
-            with session_lock(
-                session_path,
-                owner=owner or f"wikify-cli/pid-{os.getpid()}",
-            ):
+        with handle_lock_held():
+            with session_lock(session_path, owner=cli_owner(owner)):
                 fresh = load_session(session_path)
                 new_pages = [p.model_dump(mode="json") for p in fresh.pages]
                 found = False
@@ -347,19 +341,6 @@ def cmd_validate_write(
                 updated = apply_merge_patch(fresh, {"pages": new_pages})
                 save_session(session_path, touch(updated))
                 session_patched = True
-        except SessionLockHeldError as exc:
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "error": "lock_held",
-                        "owner": exc.owner,
-                        "acquired_at": exc.acquired_at,
-                    }
-                ),
-                err=True,
-            )
-            raise typer.Exit(code=2) from exc
 
     typer.echo(
         json.dumps(
