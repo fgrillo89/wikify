@@ -103,13 +103,27 @@ wikify meter record --session <path> \
 convention callers use when they expect those fields to appear in the
 final `_run.json` snapshot.
 
+### Extract canonicalize
+
+```
+wikify extract canonicalize --session <path> \
+    --responses '["<scratch>/extract-<chunk_id_1>.json", ...]'
+```
+
+Reads each extract subagent response, dedupes/canonicalizes concepts,
+and appends `session.pages` entries with `status=planned`, `kind`
+(article|person), and `aliases`. Must run after the extract phase and
+before the per-page write loop.
+
 ### Draft / validate / bundle
 
 ```
 wikify draft write-request \
     --session <path> --page-id "<id>" \
+    [--page-kind article|person] \
     --chunk-ids '["chunk_1","chunk_2","chunk_3"]'
     # --chunk-ids is REQUIRED. Typical callers pipe it from `wikify kg evidence`.
+    # --page-kind defaults to "article"; pass "person" for biographical pages.
 
 wikify validate write \
     --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json \

@@ -10,6 +10,7 @@ import typer
 from .cache import ExtractCache
 from .cli_cmds import bundle as bundle_cli
 from .cli_cmds import draft as draft_cli
+from .cli_cmds import extract as extract_cli
 from .cli_cmds import kg as kg_cli
 from .cli_cmds import meter as meter_cli
 from .cli_cmds import session as session_cli
@@ -26,6 +27,7 @@ from .types import ModelTier
 app = typer.Typer(add_completion=False, help="wikify CLI")
 app.add_typer(session_cli.app, name="session")
 app.add_typer(kg_cli.app, name="kg")
+app.add_typer(extract_cli.app, name="extract")
 app.add_typer(draft_cli.app, name="draft")
 app.add_typer(validate_cli.app, name="validate")
 app.add_typer(bundle_cli.app, name="bundle")

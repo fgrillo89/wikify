@@ -285,12 +285,35 @@ def cmd_commit_page(
             # ------------------------------------------------------------
             # Gate cleared — promotion to canonical artifacts runs.
             # ------------------------------------------------------------
-            kind = parsed.page_kind or "article"
+            # Prefer the session's canonicalize-time kind/aliases over
+            # whatever the subagent put on the response. Mismatch is a
+            # contract violation: the canonicalize step is the source
+            # of truth for what kind of page this is.
+            session_kind = page_entry.kind
+            response_kind = parsed.page_kind or session_kind
+            if response_kind and response_kind != session_kind:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "page_kind_mismatch",
+                            "session_kind": session_kind,
+                            "response_page_kind": response_kind,
+                            "message": (
+                                "WriteResponse.page_kind disagrees with "
+                                "session.pages[<id>].kind set at canonicalize "
+                                "time; refusing to commit"
+                            ),
+                        }
+                    ),
+                    err=True,
+                )
+                raise typer.Exit(code=1)
             page = WikiPage(
                 id=parsed.page_id,
-                kind=kind,  # type: ignore[arg-type]
+                kind=session_kind,  # type: ignore[arg-type]
                 title=parsed.page_id,
-                aliases=[],
+                aliases=list(page_entry.aliases),
                 body_markdown=parsed.body_markdown,
                 evidence=[],
                 provenance={

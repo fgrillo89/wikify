@@ -45,6 +45,12 @@ class PageEntry(BaseModel):
     status: Literal["planned", "drafted", "validated", "committed", "failed"] = "planned"
     draft_path: str | None = None
     validation_path: str | None = None
+    # Populated by `wikify extract canonicalize`. `wikify draft
+    # write-request` and `wikify bundle commit-page` consult these so
+    # the agent doesn't have to thread kind/aliases through every
+    # invocation as flags.
+    kind: Literal["article", "person"] = "article"
+    aliases: list[str] = Field(default_factory=list)
 
 
 class Budget(BaseModel):

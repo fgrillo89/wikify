@@ -77,7 +77,7 @@ wikify session update --session <s> --patch '{"stages":{"seed_selection":{"statu
 # extract phase — one Task subagent per seed chunk, tier S. After each
 # subagent returns its ExtractResponse, the skill records the call:
 for each seed_chunk_id:
-    Task subagent (tier S) -> extract-<chunk_id>.json
+    Task subagent (tier S) -> <bundle>/_scratch/extract-<chunk_id>.json
     wikify meter record --session <s> \
         --role extractor --tier S \
         --input-tokens <from response.tokens_in> \
@@ -85,19 +85,30 @@ for each seed_chunk_id:
     # If projected spend would exceed 1.05x budget_target, meter record
     # exits 3 with budget_exceeded — stop the loop; do not retry.
 
+# canonicalize — dedup extracted concepts and append session.pages
+# entries (status=planned). Carries kind (article|person) and aliases
+# so downstream draft / commit don't have to thread them as flags.
+wikify extract canonicalize \
+    --session <s> \
+    --responses '<JSON array of all extract-*.json paths>'
+
 # extract phase
 for each seed chunk_id:
     Task subagent (tier S) -> extract-<chunk_id>.json
 apply canonicalisation (skill or CLI helper) -> session.pages (status=planned)
 
-# write phase
+# write phase — iterate over every status=planned page. The session
+# entry carries kind (article|person) and aliases from canonicalize.
 for each planned page in session:
+    kind=$(wikify session show --session <s> | jq -r '.pages[] | select(.page_id == "<id>") | .kind')
     chunk_ids=$(wikify kg evidence --session <s> --page-id <id> --top-k 8 | jq -c .chunk_ids)
-    wikify draft write-request --session <s> --page-id <id> --chunk-ids "$chunk_ids"
+    wikify draft write-request --session <s> --page-id <id> \
+        --page-kind "$kind" --chunk-ids "$chunk_ids"
         # emits <bundle>/_scratch/draft-<id>.json and records draft_path on
         # session.pages[<id>]. The skill reads the draft, spawns the Task
         # subagent with it, and writes the subagent's WriteResponse JSON
-        # to <bundle>/_scratch/response-<id>.json.
+        # to <bundle>/_scratch/response-<id>.json. The subagent's response
+        # MUST set page_kind to the same value or commit-page rejects.
     wikify validate write \
         --draft <bundle>/_scratch/draft-<id>.json \
         --response <bundle>/_scratch/response-<id>.json \
