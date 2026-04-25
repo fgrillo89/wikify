@@ -1,5 +1,11 @@
 """Happy-path skill-CLI walk for the baseline workflow (structural smoke test).
 
+DEFERRED for the redesign: this test invokes ``wikify draft write-request``
+which W5 retires. The replacement end-to-end test will be written once
+W6 (wiki commit) lands and exercises ``run init`` -> ``work add concept``
+-> ``draft build`` -> writer simulation -> ``draft check`` -> ``wiki commit``.
+The legacy version is preserved as reference but every test is skipped.
+
 Exercises the deterministic CLI families the `run-baseline.md` skill
 drives: `session init/update/close`, `kg evidence`, `draft write-request`,
 `validate write --session`, `bundle commit-page --validation`. The
@@ -39,6 +45,13 @@ from wikify.ingest.pipeline import ingest_corpus
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
+
+pytestmark = pytest.mark.skip(
+    reason=(
+        "Legacy baseline pipeline retired in W5; the v2 replacement lands "
+        "with W6 (wiki commit)."
+    )
+)
 
 
 @pytest.fixture(scope="module")
