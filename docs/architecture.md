@@ -159,16 +159,14 @@ src/wikify/
 .claude/skills/wikify/
 ├── reference/                      facts and contracts the agent loads
 │   ├── schemas.md                  artifact catalog + schema_version policy
-│   ├── cli-tool-surface.md         the eight-family CLI grammar
+│   ├── cli-tool-surface.md         CLI grammar (skill-driven + deterministic)
 │   ├── write-constraints.md        Wikipedia-MoS structural rules
 │   ├── citation-format.md          [^eN] marker grammar
 │   ├── tiers.md                    S/M/L → haiku/sonnet/opus mapping
 │   ├── escalation.md               retry-then-tier-L policy
 │   ├── atoms.md                    compositional atoms with pre/post-conditions
 │   ├── knowledge-graph.md          corpus KG fluent API
-│   ├── wiki-graph.md               wiki KG fluent API
-│   ├── orchestrator.md             action catalog (informational)
-│   └── parameters.md               user-settable parameter reference
+│   └── wiki-graph.md               wiki KG fluent API
 └── workflows/
     └── run-baseline.md             the baseline workflow loop
 ```

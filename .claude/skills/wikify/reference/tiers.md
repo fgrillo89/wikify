@@ -21,16 +21,20 @@ Python. The budget and telemetry in `_run.json` / `_calls.jsonl` use
 
 ## Per-role defaults
 
+The role names in this table are the values of the `Role` enum in
+`src/wikify/types.py` — those are the only strings `wikify meter
+record --role <r>` accepts.
+
 | Role | Default tier | Rationale |
 |---|---|---|
-| extract | S | structured extraction from one chunk, low creative load |
-| write | M | encyclopedic prose, evidence synthesis across a single page |
-| edit | M | targeted revision with preserved structure |
-| compact | S | length reduction without information loss |
-| orchestrate | L | planning decisions with wide context |
-| query | M | cross-page synthesis for end-user answers |
-| maintenance | L | whole-bundle reasoning for cleanup |
-| escalate | L | the fallback tier, regardless of the role that triggered it |
+| extractor | S | structured extraction from one chunk, low creative load |
+| writer | M | encyclopedic prose, evidence synthesis across a single page |
+| editor | M | targeted revision with preserved structure |
+| compactor | S | length reduction without information loss |
+| orchestrator | L | planning decisions with wide context |
+
+`escalate` is not a role; it is a tier-bump on the existing role. See
+`escalation.md`.
 
 ## Override mechanics
 

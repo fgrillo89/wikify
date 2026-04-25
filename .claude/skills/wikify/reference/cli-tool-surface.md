@@ -11,16 +11,28 @@ narrow, composable, typed, and explicit about side effects.
 
 ## Command families
 
-Eight stable families. Do not invent new families.
+Two groups: skill-driven sub-apps used by the workflow loop, and
+deterministic top-level commands. Do not invent new families.
+
+**Skill-driven:**
 
 - `wikify session ...` — create, inspect, mutate, checkpoint, close the run session.
-- `wikify kg ...` — query the corpus knowledge graph (seeds, abstracts, evidence, similar chunks).
-- `wikify draft ...` — build request artifacts the subagent will consume.
-- `wikify validate ...` — structural and schema validation of scratch artifacts.
+- `wikify kg ...` — query the corpus knowledge graph (seeds, abstracts, evidence).
+- `wikify extract ...` — canonicalize extracted concepts into `session.pages` entries.
+- `wikify draft ...` — build request artifacts the write subagent will consume.
+- `wikify validate ...` — structural and grounding validation of scratch artifacts.
 - `wikify bundle ...` — promote validated artifacts into canonical bundle files; rebuild indices.
-- `wikify render ...` — static-site rendering (currently aliased to `wikify html`).
-- `wikify eval ...` — metric computation over a rendered bundle.
-- `wikify ingest ...` — corpus parse/chunk/embed/graph.
+- `wikify meter ...` — append per-call telemetry to `_calls.jsonl` and update the budget.
+
+**Deterministic, non-model-calling:**
+
+- `wikify ingest <input>` — parse / chunk / embed / graph a source directory.
+- `wikify refresh <corpus>` — rebuild derived corpus artifacts.
+- `wikify field-detect <corpus>` — detect the corpus field.
+- `wikify trace <bundle>` — analyse KG exploration traces.
+- `wikify sample-claims <bundle>` — sample factual claims for human evaluation.
+- `wikify html <bundle>` — render a wiki bundle to a static site.
+- `wikify eval <bundle>` — compute M1/M3/M5/M6 metrics.
 
 ## Conventions
 
@@ -91,10 +103,15 @@ wikify meter record --session <path> \
     --input-tokens 200 --output-tokens 80
 ```
 
-- Use for extract, query, orchestrate, maintenance calls — where the
-  subagent returns token counts and no other CLI records the call.
+- `--role` accepts only the values in the `Role` enum
+  (`src/wikify/types.py`): `extractor`, `compactor`, `editor`, `writer`,
+  `orchestrator`. Any other string exits non-zero with a CLI-layer
+  error.
+- Use for extractor / compactor / editor / orchestrator calls — where
+  the subagent returns token counts and no other CLI records the call.
 - Do **not** use for the writer role: `wikify bundle commit-page`
-  auto-records the write call. Duplicating it double-charges the budget.
+  auto-records the write call. Duplicating it double-charges the budget;
+  the CLI rejects `--role writer` explicitly.
 - Exits `3` with `budget_exceeded` when projected spend would push
   `haiku_eq_spent` past `1.05 × budget_target`.
 
@@ -142,7 +159,7 @@ wikify bundle commit-page \
 
 ### Render / eval / ingest
 
-Unchanged from current CLI. Kept as stable entry points.
+Stable top-level entry points; not skill-driven.
 
 ```
 wikify ingest <source>
