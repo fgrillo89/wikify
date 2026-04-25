@@ -36,7 +36,7 @@ Required fields for baseline strategy:
 - `created_at, updated_at: ISO8601`
 - `budget: {haiku_eq_target: int, haiku_eq_spent: int}`
 - `stages: {seed_selection, extract, write}` — each `{status: pending|running|done|failed, started_at: str|null, finished_at: str|null}`
-- `pages: [{page_id, status: planned|drafted|validated|committed|failed, draft_path: str|null, validation_path: str|null}]`
+- `pages: [{page_id, status: planned|drafted|validated|committed|failed, draft_path: str|null, validation_path: str|null, kind: article|person, aliases: list[str]}]`
 - `config: {baseline_write_fraction, abstract_fraction, top_k, default_tiers}`
 - `telemetry_paths: {run_path, calls_path}`
 

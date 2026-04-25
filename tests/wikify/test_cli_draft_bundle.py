@@ -116,14 +116,30 @@ def test_draft_write_request_builds_scratch_artifact(
 def _commit_ready_response_for(
     draft_path: Path, page_id: str
 ) -> tuple[str, str, str]:
-    """Return (body_markdown, chunk_id, quote) using a real substring of
-    the first evidence chunk so grounding passes.
+    """Return (body_markdown, chunk_id, quote) using a verbatim substring
+    of the first evidence chunk so the quote_in_source grounding check
+    passes. We pick a substring directly out of chunk_text without
+    normalising whitespace, so the result is guaranteed to satisfy
+    `quote in chunk_text`.
     """
     draft = json.loads(draft_path.read_text(encoding="utf-8"))
     ev0 = draft["evidence_v2"][0]
     chunk_id = ev0["chunk_id"]
     doc_id = ev0["doc_id"]
-    quote = " ".join(ev0["chunk_text"].split())[:40]
+    chunk_text = ev0["chunk_text"]
+    # Pick the first non-trivial line of chunk_text as the quote. Must be
+    # on a single line because `_REF_DEF_RE` in validate.py is line-anchored,
+    # and must not contain a literal `"` because the citation format wraps
+    # the quote in double quotes.
+    quote = ""
+    for line in chunk_text.splitlines():
+        candidate = line.strip().replace('"', "'")
+        if len(candidate) >= 20:
+            quote = candidate[:40]
+            break
+    if not quote:
+        # Fallback for fixtures with very short lines: collapse and take.
+        quote = " ".join(chunk_text.split())[:40].replace('"', "'")
     filler = (
         "Atomic layer deposition (ALD) is a self-limiting vapor-phase technique. "
         "Films grow one atomic layer per cycle through alternating precursor pulses. "
@@ -613,6 +629,223 @@ def test_bundle_commit_page_no_partial_write_on_lock_held(
     # No NEW.md should have been written.
     new_article = BundlePaths(bundle).articles_dir / "NEW.md"
     assert not new_article.exists(), "partial page write leaked under lock_held"
+
+
+def test_bundle_commit_page_routes_person_to_people_dir(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """Person pages produced by canonicalize must land in <bundle>/people/."""
+    session_path, bundle = initialized_session
+    # Override the seeded page to be a person.
+    runner.invoke(
+        app,
+        [
+            "session",
+            "update",
+            "--session",
+            str(session_path),
+            "--patch",
+            json.dumps(
+                {
+                    "pages": [
+                        {
+                            "page_id": "Stuart Parkin",
+                            "status": "planned",
+                            "kind": "person",
+                            "aliases": ["S. Parkin"],
+                        }
+                    ]
+                }
+            ),
+        ],
+    )
+    ev = runner.invoke(
+        app,
+        [
+            "kg",
+            "evidence",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "Stuart Parkin",
+            "--top-k",
+            "2",
+        ],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "Stuart Parkin",
+            "--page-kind",
+            "person",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-Stuart Parkin.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "Stuart Parkin")
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "Stuart Parkin",
+                "page_kind": "person",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    verdict_path = json.loads(val.output)["validation_path"]
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            verdict_path,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    page_path = Path(json.loads(result.output)["page_path"])
+    assert page_path.parent.name == "people"
+    assert "Stuart Parkin" in page_path.read_text(encoding="utf-8")
+
+
+def test_bundle_commit_page_rejects_kind_mismatch(
+    initialized_session: tuple[Path, Path],
+) -> None:
+    """commit-page must refuse when WriteResponse.page_kind disagrees with
+    the kind canonicalize stored on session.pages.
+    """
+    session_path, bundle = initialized_session
+    runner.invoke(
+        app,
+        [
+            "session",
+            "update",
+            "--session",
+            str(session_path),
+            "--patch",
+            json.dumps(
+                {
+                    "pages": [
+                        {
+                            "page_id": "ALD",
+                            "status": "planned",
+                            "kind": "article",
+                        }
+                    ]
+                }
+            ),
+        ],
+    )
+    ev = runner.invoke(
+        app,
+        [
+            "kg",
+            "evidence",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--top-k",
+            "2",
+        ],
+    )
+    chunk_ids = json.loads(ev.output)["chunk_ids"]
+    draft = runner.invoke(
+        app,
+        [
+            "draft",
+            "write-request",
+            "--session",
+            str(session_path),
+            "--page-id",
+            "ALD",
+            "--page-kind",
+            "article",
+            "--chunk-ids",
+            json.dumps(chunk_ids),
+        ],
+    )
+    draft_path = Path(json.loads(draft.output)["draft_path"])
+    scratch = BundlePaths(bundle).scratch_dir
+    response_path = scratch / "response-ALD.json"
+    body, _, _ = _commit_ready_response_for(draft_path, "ALD")
+    # Subagent disagrees with the session: writes page_kind="person".
+    response_path.write_text(
+        json.dumps(
+            {
+                "page_id": "ALD",
+                "page_kind": "person",
+                "body_markdown": body,
+                "used_markers": ["e1"],
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    val = runner.invoke(
+        app,
+        [
+            "validate",
+            "write",
+            "--draft",
+            str(draft_path),
+            "--response",
+            str(response_path),
+            "--session",
+            str(session_path),
+        ],
+    )
+    verdict_path = json.loads(val.output)["validation_path"]
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            "commit-page",
+            "--session",
+            str(session_path),
+            "--response",
+            str(response_path),
+            "--validation",
+            verdict_path,
+        ],
+    )
+    assert result.exit_code != 0
+    err = json.loads(result.stderr or result.output)
+    assert err["error"] == "page_kind_mismatch"
+    # No page file should have been written on either side.
+    assert not list(BundlePaths(bundle).articles_dir.glob("*.md"))
+    assert not list(BundlePaths(bundle).people_dir.glob("*.md"))
 
 
 def test_bundle_commit_page_rejects_failed_validation(
