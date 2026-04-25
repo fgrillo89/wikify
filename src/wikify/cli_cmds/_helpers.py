@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 
@@ -33,30 +33,38 @@ def cli_owner(override: str | None) -> str:
     return override or f"wikify-cli/pid-{os.getpid()}"
 
 
-def cli_error(code: int, **fields: Any) -> None:
+def cli_error(code: int, **fields: Any) -> NoReturn:
     """Emit a structured JSON error envelope on stderr and exit.
 
     Conventions:
-      - `ok` is forced to False.
+      - `ok` is unconditionally forced to False (callers cannot override it
+        even by accident; the spread happens BEFORE the ok assignment).
       - `error` should be a stable, machine-readable code (snake_case).
-      - Additional fields are passed through as-is.
+      - All other fields are passed through as-is.
 
-    Never returns. Raises `typer.Exit(code)`.
+    Never returns. Always raises `typer.Exit(code)`.
     """
-    payload = {"ok": False, **fields}
-    payload.setdefault("ok", False)
+    payload: dict[str, Any] = {**fields, "ok": False}
     typer.echo(json.dumps(payload), err=True)
     raise typer.Exit(code=code)
 
 
-def lock_held(exc: SessionLockHeldError) -> None:
-    """Emit the canonical lock_held envelope and exit with code 2."""
-    cli_error(
-        2,
-        error="lock_held",
-        owner=exc.owner,
-        acquired_at=exc.acquired_at,
-    )
+def lock_held(exc: SessionLockHeldError) -> NoReturn:
+    """Emit the canonical lock_held envelope and exit with code 2.
+
+    Preserves the original `__cause__` chain (`raise ... from exc`) so the
+    Python traceback retains the SessionLockHeldError as the root cause —
+    matches the pre-helper inline pattern that every cli_cmds/* module
+    used.
+    """
+    payload = {
+        "ok": False,
+        "error": "lock_held",
+        "owner": exc.owner,
+        "acquired_at": exc.acquired_at,
+    }
+    typer.echo(json.dumps(payload), err=True)
+    raise typer.Exit(code=2) from exc
 
 
 @contextmanager
@@ -72,11 +80,17 @@ def handle_lock_held():
 
     Any `SessionLockHeldError` raised inside the inner `session_lock`
     surfaces as the structured stderr envelope and a `typer.Exit(2)`.
+
+    Defensive: if `lock_held()` ever returned without raising (e.g., a
+    test-time monkeypatch that elides the exit), the unreachable
+    `AssertionError` would surface the contract violation rather than
+    let the caller proceed with stale/undefined state.
     """
     try:
         yield
     except SessionLockHeldError as exc:
         lock_held(exc)
+        raise AssertionError("unreachable: lock_held() must not return")  # noqa: TRY004,B904
 
 
 def strip_envelope(data: dict, *fields: str) -> dict:

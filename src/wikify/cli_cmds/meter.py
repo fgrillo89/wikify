@@ -20,7 +20,6 @@ from ..config import ABORT_RATIO
 from ..meter import _DEFAULT_TIERS, CallRecord
 from ..paths import BundlePaths
 from ..session import (
-    SessionLockHeldError,
     apply_merge_patch,
     load_session,
     save_session,
@@ -28,7 +27,7 @@ from ..session import (
     touch,
 )
 from ..types import ModelTier, Role
-from ._helpers import cli_error, cli_owner, lock_held
+from ._helpers import cli_error, cli_owner, handle_lock_held
 
 
 class BudgetExceededError(RuntimeError):
@@ -171,20 +170,19 @@ def cmd_record(
         )
 
     try:
-        record = append_call_record(
-            session_path=session_path,
-            role=role_e,
-            tier=tier_e,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            context_cap=context_cap,
-            wall_seconds=wall_seconds,
-            cache_hit=cache_hit,
-            prompt_hash=prompt_hash,
-            owner=owner,
-        )
-    except SessionLockHeldError as exc:
-        lock_held(exc)
+        with handle_lock_held():
+            record = append_call_record(
+                session_path=session_path,
+                role=role_e,
+                tier=tier_e,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                context_cap=context_cap,
+                wall_seconds=wall_seconds,
+                cache_hit=cache_hit,
+                prompt_hash=prompt_hash,
+                owner=owner,
+            )
     except BudgetExceededError as exc:
         cli_error(
             3,
