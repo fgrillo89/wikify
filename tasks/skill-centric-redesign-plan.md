@@ -2,7 +2,7 @@
 
 This plan satisfies the binding contract in `docs/skill-centric-execution-plan.md`. It enumerates the legacy surface, fixes a preservation inventory, names the final package-per-noun layout (dropping `cli_cmds/`, `store/`, `citestore/`, `distill/`), the final CLI tree, the canonical skill set, twelve disjoint workstreams (W0 mechanical rename + W1–W11), a four-phase legacy-removal sequence, MVP paths, and the first three PRs. The eight load-bearing brief decisions are not relitigated.
 
-Divergences from the brief's prose, all consistent with its load-bearing decisions: the brief suggested `cli_cmds/<noun>.py` + `stores/<noun>.py` — this plan uses a package-per-noun layout instead, so each top-level package owns one domain (file IO, fluent query if any, and the verbs that mutate it). `paths.py` is eliminated; path conventions live on a `Bundle` dataclass in `api.py`. `schema.py` splits per-domain (`draft/schema.py`, `concepts/schema.py`). The build-state package is named `concepts/` (on-disk directory remains `work/`; renaming it is an open call deferred to the user). `prompts/` stays Python-side; it is not moved to the skill tree.
+Divergences from the brief's prose, all consistent with its load-bearing decisions: the brief suggested `cli_cmds/<noun>.py` + `stores/<noun>.py` — this plan uses a package-per-noun layout instead, so each top-level package owns one domain (file IO, fluent query if any, and the verbs that mutate it). The four bundle-internal packages (`run/`, `concepts/`, `draft/`, `wiki/`) live under a shared `bundle/` umbrella because they only exist inside one wiki bundle and that cohesion is worth expressing in the directory tree. `paths.py` is eliminated; path conventions live on a `Bundle` dataclass in `api.py`. `schema.py` splits per-domain (`bundle/draft/schema.py`, `bundle/concepts/schema.py`). The build-state package is named `concepts/` (on-disk directory remains `work/`; renaming it is an open call deferred to the user). `prompts/` stays Python-side; it is not moved to the skill tree.
 
 ## 1. Preservation inventory
 
@@ -11,24 +11,23 @@ Logic that must survive the redesign. Tags: KEEP (move only), REFACTOR (signatur
 | path | role | tag | new home | rationale |
 |---|---|---|---|---|
 | `src/wikify/prompts/` (16 files) | writer / refine / extract / person / field guides / artifact templates | KEEP | `src/wikify/prompts/` (unchanged) — Python-side, assembled by `DraftBuilder` | Different consumer than skills (model input vs agent context); keep file location. |
-| `src/wikify/distill/dossier.py::Dossier` (227+) and `dossier_to_yaml` (372) | structured working memory + YAML serialisation | KEEP | `src/wikify/concepts/dossier.py` | Backs the body of `work.md` ControlCard. |
-| `src/wikify/distill/dossier.py:35 canonicalize()` + `:29 Candidate` | concept candidate merge logic | KEEP | `src/wikify/concepts/canonicalize.py` (new file extracting the function) | Surfaced via `work add concept` and `work tend`. |
-| `src/wikify/distill/author_context.py` (174 lines) | author-context assembly for person pages | KEEP | `src/wikify/draft/author_context.py` | Lives next to the draft assembly that consumes it. |
+| `src/wikify/distill/dossier.py` whole file | Dossier class + canonicalize() + Candidate + DossierStore | KEEP | `src/wikify/bundle/concepts/dossier.py` (W0 moves whole file; W4 splits `canonicalize`+`Candidate` into `bundle/concepts/canonicalize.py`) | Backs `work.md` ControlCard. |
+| `src/wikify/distill/author_context.py` (174 lines) | author-context for person pages | KEEP | `src/wikify/bundle/draft/author_context.py` | Lives next to draft assembly. |
 | `src/wikify/distill/seed.py` | greedy seed selection | KEEP | `src/wikify/corpus/seed.py` | Surfaced via `corpus find --seed`. |
 | `src/wikify/distill/field_detect.py` | field classification | KEEP | `src/wikify/corpus/field_detect.py` | Called from `corpus check`. |
-| `src/wikify/distill/preload.py` | evidence pre-loading | REFACTOR | folded into `draft/builder.py::DraftBuilder.build()` | Caller surface changes; logic preserved. |
-| `src/wikify/distill/write_runner.rebuild_wiki_graph` | post-commit wiki graph + vectors rebuild | KEEP | `src/wikify/wiki/commit.py::rebuild_projections()` | Called by `wiki commit` and `wiki build graph`. |
-| `src/wikify/schema.py` (`WriteRequest`, `WriteResponse`, `WriteEvidenceRef`, `_check_wikipedia_structure`, `_check_figure_mentions`, `QuoteNotInChunkError`, `_split_sections`, `_has_section`) | write-side Pydantic + structural checks | KEEP | `src/wikify/draft/schema.py` | Owned by the draft domain. |
-| `src/wikify/schema.py` (`ExtractRequest`, `ExtractResponse`, `ExtractedConcept`, `FigureCaption`, `Equation`, `Parameter`, `Relationship`, `ImageRef`, `EquationRef`) | extract-side Pydantic | KEEP | `src/wikify/concepts/schema.py` | Owned by the concept-extraction domain. |
+| `src/wikify/distill/preload.py` | evidence pre-loading | REFACTOR | folded into `bundle/draft/builder.py` | Caller surface changes; logic preserved. |
+| `src/wikify/distill/write_runner.rebuild_wiki_graph` | post-commit graph + vectors rebuild | KEEP | `src/wikify/bundle/wiki/commit.py::rebuild_projections()` | Called by `wiki commit` and `wiki build graph`. |
+| `src/wikify/schema.py` (`WriteRequest`, `WriteResponse`, `WriteEvidenceRef`, `_check_wikipedia_structure`, `_check_figure_mentions`, `QuoteNotInChunkError`, `_split_sections`, `_has_section`) | write-side Pydantic + structural checks | KEEP | `src/wikify/bundle/draft/schema.py` | Owned by the draft domain. |
+| `src/wikify/schema.py` (`ExtractRequest`, `ExtractResponse`, `ExtractedConcept`, `FigureCaption`, `Equation`, `Parameter`, `Relationship`, `ImageRef`, `EquationRef`) | extract-side Pydantic | KEEP | `src/wikify/bundle/concepts/schema.py` | Owned by concept-extraction domain. |
 | `src/wikify/baselines/_evidence.select_evidence_chunks_for_page` | per-page evidence helper | KEEP | `src/wikify/corpus/queries.py::select_evidence()` | Pure ranking; corpus-side. |
 | `src/wikify/baselines/config.py::BaselineConfig` | baseline knobs | REPLACE | per-workflow-skill frontmatter (`wikify-baseline/SKILL.md`) | Strategy belongs in skills. |
 | `src/wikify/citestore/graph.py` (807 lines) | corpus fluent KG | KEEP | `src/wikify/corpus/graph.py` | Surfaced through `corpus find/show/list`. |
 | `src/wikify/citestore/{db,resolver,bibtex,parse,models}.py` | citation index, BibTeX, DOI resolution | KEEP | `src/wikify/citations/{db,resolver,bibtex,parse,models}.py` | Standalone — consumed by `ingest/`, unrelated to graph algebra. |
 | `src/wikify/citestore/__main__.py` | debug entry point | REPLACE | deleted; `wikify corpus show` replaces it | CLI surface replaces ad-hoc debug entry. |
-| `src/wikify/store/wiki_graph.py` (450 lines) | wiki fluent KG | KEEP | `src/wikify/wiki/graph.py` | Surfaced through `wiki find`. |
-| `src/wikify/store/wiki_bundle.py` (376) | wiki page parser/writer | KEEP | `src/wikify/wiki/page.py` | Backs `wiki show`/`wiki commit`. |
-| `src/wikify/store/wiki_index.py` (399) | `_index.json` index + aliases | KEEP | `src/wikify/wiki/index.py` | Backs `wiki list` and `wiki commit`. |
-| `src/wikify/store/{wiki_files,bundle_embeddings,page_naming}.py` | wiki page IO + embeddings + slug naming | KEEP | `src/wikify/wiki/{files,embeddings,page_naming}.py` | Backs `wiki commit` and `wiki find`. |
+| `src/wikify/store/wiki_graph.py` (450 lines) | wiki fluent KG | KEEP | `src/wikify/bundle/wiki/graph.py` | Surfaced through `wiki find`. |
+| `src/wikify/store/wiki_bundle.py` (376) | wiki page parser/writer | KEEP | `src/wikify/bundle/wiki/page.py` | Backs `wiki show`/`wiki commit`. |
+| `src/wikify/store/wiki_index.py` (399) | `_index.json` index + aliases | KEEP | `src/wikify/bundle/wiki/index.py` | Backs `wiki list` and `wiki commit`. |
+| `src/wikify/store/{wiki_files,bundle_embeddings,page_naming}.py` | wiki page IO + embeddings + slug naming | KEEP | `src/wikify/bundle/wiki/{files,embeddings,page_naming}.py` | Backs `wiki commit` and `wiki find`. |
 | `src/wikify/store/{corpus,vectors,vectors_meta,doc_markdown,images_index,equations_index,bibliography}.py` | corpus chunk/vector/figure stores | KEEP | `src/wikify/corpus/{chunks,vectors,vectors_meta,doc_markdown,images_index,equations_index,bibliography}.py` | Read by ingest, eval, and `corpus/queries.py`. |
 | `src/wikify/eval/{metrics,community,audit,stats,claim_sampler}.py` | M1/M3/M5/M6 metric math | KEEP | `src/wikify/eval/` (unchanged) | Already cohesive subsystem. |
 | `src/wikify/eval/trace_replay.py` | event log replay | REFACTOR | reads `run/events.jsonl` | Input path changes; logic invariant. |
@@ -36,9 +35,9 @@ Logic that must survive the redesign. Tags: KEEP (move only), REFACTOR (signatur
 | `src/wikify/ingest/` (33 files) | parse/chunk/embed/graph pipeline | KEEP | `src/wikify/ingest/` (unchanged) | Surfaced via `corpus build/refresh`. |
 | `src/wikify/cli_cmds/_helpers.py` | shared error/lock helpers | KEEP | `src/wikify/cli/_helpers.py` | Extended with exit codes 3 (budget) and 4 (stale-claim broken). |
 | `src/wikify/cli_io.py` | Typer wrapper for CLI IO capture | REFACTOR | `src/wikify/cli/_io.py` | Emits `cli_invoked` events into `run/events.jsonl`; writes large IO to `run/io/<event_id>.{stdout,stderr}.txt`. |
-| `src/wikify/session.py` (cost aggregation: `_aggregate_calls_jsonl`, `_initial_by_role`, `_update_agg`, `_agg_to_dict`) | per-role/per-tier cost rollup math | KEEP | `src/wikify/run/cost.py` | Runs on `events.jsonl` filtered to `type == "call"`. |
-| `src/wikify/session.py` (`SessionLockHeldError`) | lock-contention exception | KEEP | `src/wikify/run/lock.py` | Stable error type. |
-| `src/wikify/meter.py` (`TierPrice`, `_coerce_tier`) | tier→price table | KEEP | `src/wikify/run/cost.py` | Used by cost aggregation. |
+| `src/wikify/session.py` (cost aggregation: `_aggregate_calls_jsonl`, `_initial_by_role`, `_update_agg`, `_agg_to_dict`) | per-role/per-tier cost rollup math | KEEP | `src/wikify/bundle/run/cost.py` | Runs on `events.jsonl` filtered to `type == "call"`. |
+| `src/wikify/session.py` (`SessionLockHeldError`) | lock-contention exception | KEEP | `src/wikify/bundle/run/lock.py` | Stable error type. |
+| `src/wikify/meter.py` (`TierPrice`, `_coerce_tier`) | tier→price table | KEEP | `src/wikify/bundle/run/cost.py` | Used by cost aggregation. |
 | `.claude/skills/wikify/reference/{schemas,cli-tool-surface,write-constraints,citation-format,tiers,escalation,knowledge-graph,wiki-graph,atoms}.md` (9 files) | shared agent-side references | KEEP | `.claude/skills/wikify/references/<name>.md` (under new shared mega-skill `SKILL.md`) | `schemas.md` and `cli-tool-surface.md` get content updates in W9; the rest move verbatim. |
 | `.claude/skills/wikify/workflows/run-baseline.md` | baseline workflow doc | REFACTOR | `.claude/skills/wikify-baseline/SKILL.md` (≤500 lines) | Frontmatter introduced; body trimmed. |
 | `tasks/lessons.md`, `CLAUDE.md` corrections | tribal knowledge | KEEP | unchanged | Project memory is cumulative. |
@@ -84,53 +83,52 @@ src/wikify/
 
   citations/                   # standalone — citation parsing, BibTeX, DOI resolution; consumed by ingest only
     __init__.py
-    db.py, resolver.py, bibtex.py, parse.py, models.py     # was citestore/{db,resolver,bibtex,parse,models}.py
+    db.py, resolver.py, bibtex.py, parse.py, models.py    # was citestore/{db,resolver,bibtex,parse,models}.py
 
-  wiki/                        # output: committed pages + indices + projections
+  bundle/                      # everything that lives inside one wiki bundle
     __init__.py
-    page.py                    # was store/wiki_bundle.py
-    page_naming.py             # was store/page_naming.py
-    index.py                   # was store/wiki_index.py
-    files.py                   # was store/wiki_files.py
-    embeddings.py              # was store/bundle_embeddings.py
-    graph.py                   # was store/wiki_graph.py — fluent wiki KG
-    derived.py                 # NEW (W7): derived/index.json, derived/graph.json, derived/vectors.npz
-    queries.py                 # NEW (W6): list/find/show helpers
-    commit.py                  # NEW (W6): promote response.json → wiki page; rebuild_projections()
-
-  concepts/                    # in-flight build-state (operates on the on-disk work/ tree)
-    __init__.py
-    dossier.py                 # was distill/dossier.py (Dossier, DossierEntry, DossierStore)
-    canonicalize.py            # NEW file extracting canonicalize() + Candidate from distill/dossier.py
-    schema.py                  # NEW (W4): split from schema.py — extract-side Pydantic
-    card.py                    # NEW (W4): work.md ControlCard parser/writer
-    evidence.py                # NEW (W4): evidence.jsonl ledger
-    inbox.py                   # NEW (W4): work/inbox/*.jsonl append + merge
-    claim.py                   # NEW (W4): per-concept claim file + TTL/contention
-    tend.py                    # NEW (W4): consolidate inbox, expire claims, regenerate work/index.md
-
-  draft/                       # per-attempt artifacts
-    __init__.py
-    schema.py                  # NEW (W5): split from schema.py — write-side Pydantic
-    author_context.py          # was distill/author_context.py
-    artifact.py                # NEW (W5): parse/write draft.json + response.json + validation.json
-    builder.py                 # NEW (W5): DraftBuilder — assemble draft.json from work + evidence
-    validator.py               # NEW (W5): Validator — schema + structural + quote-grounding
-
-  run/                         # execution control: state, events, lock, cost
-    __init__.py
-    state.py                   # NEW (W2): run/state.json — slim subset of session.py:SessionV1
-    events.py                  # NEW (W2): run/events.jsonl envelope + append + run/io/
-    lock.py                    # NEW (W2): run/lock + per-concept claim contention; SessionLockHeldError
-    cost.py                    # NEW (W2): TierPrice + _Aggregates + _update_agg from session.py + meter.py
-    lifecycle.py               # NEW (W2): init/close orchestration verbs
+    run/                       # execution control: state, events, lock, cost
+      __init__.py
+      state.py                 # NEW (W2): run/state.json — slim subset of session.py:SessionV1
+      events.py                # NEW (W2): run/events.jsonl envelope + append + run/io/
+      lock.py                  # NEW (W2): run/lock + claim contention; SessionLockHeldError
+      cost.py                  # NEW (W2): TierPrice + _Aggregates + _update_agg from session.py + meter.py
+      lifecycle.py             # NEW (W2): init/close orchestration verbs
+    concepts/                  # in-flight build-state (operates on the on-disk work/ tree)
+      __init__.py
+      dossier.py               # was distill/dossier.py (Dossier, Candidate, canonicalize, DossierStore)
+      canonicalize.py          # NEW (W4 only): split out canonicalize()+Candidate from dossier.py
+      schema.py                # NEW (W4): split from schema.py — extract-side Pydantic
+      card.py                  # NEW (W4): work.md ControlCard parser/writer
+      evidence.py              # NEW (W4): evidence.jsonl ledger
+      inbox.py                 # NEW (W4): work/inbox/*.jsonl append + merge
+      claim.py                 # NEW (W4): per-concept claim file + TTL/contention
+      tend.py                  # NEW (W4): consolidate inbox, expire claims, regenerate work/index.md
+    draft/                     # per-attempt artifacts
+      __init__.py
+      schema.py                # NEW (W5): split from schema.py — write-side Pydantic
+      author_context.py        # was distill/author_context.py
+      artifact.py              # NEW (W5): parse/write draft.json + response.json + validation.json
+      builder.py               # NEW (W5): DraftBuilder — assemble draft.json from work + evidence
+      validator.py             # NEW (W5): Validator — schema + structural + quote-grounding
+    wiki/                      # output: committed pages + indices + projections
+      __init__.py
+      page.py                  # was store/wiki_bundle.py
+      page_naming.py           # was store/page_naming.py
+      index.py                 # was store/wiki_index.py
+      files.py                 # was store/wiki_files.py
+      embeddings.py            # was store/bundle_embeddings.py
+      graph.py                 # was store/wiki_graph.py — fluent wiki KG
+      derived.py               # NEW (W7): derived/index.json, derived/graph.json, derived/vectors.npz
+      queries.py               # NEW (W6): list/find/show helpers
+      commit.py                # NEW (W6): promote response.json → wiki page; rebuild_projections()
 
   ingest/                      # corpus building pipeline (already cohesive; 33 files)
   prompts/                     # already cohesive (16 files)
   render/                      # already cohesive (3 files; path resolution updated in W7)
   eval/                        # already cohesive (7 files; trace_replay.py rewired in W8)
 
-  api.py                       # NEW (W1): Bundle + Corpus context dataclasses (replaces paths.py); Bundle.open(path)
+  api.py                       # NEW (W1): Bundle + Corpus context dataclasses (replaces paths.py)
 
   cli/                         # argv glue — calls into the domains above
     __init__.py                # was cli.py — registers nouns
@@ -267,11 +265,11 @@ Workstream ownership:
 |---|---|---|---|---|
 | W0 | `redesign/a-package-skeleton` | mechanical `git mv` of preservation-tagged files; legacy-CLI imports rewired to new homes | none added; existing tests must pass | ruff+pytest clean; no behaviour change |
 | W1 | `redesign/a-paths-and-api` | `api.py` (Bundle+Corpus dataclasses replacing `paths.py`), `cli/migrate.py`, `tests/test_bundle_resolution.py`, `test_migrate_inspect.py` | bundle resolution from CWD; migrate inspect on legacy fixture | new path attrs correct; legacy `paths.py` is a thin shim |
-| W2 | `redesign/a-run` | `run/{state,events,lock,cost,lifecycle}.py`, `cli/run.py`, `cli/_io.py`, `tests/test_events_schema.py`, `test_run_store.py`, `test_cli_run.py`, `test_cli_io_emits_events.py` | events envelope; RunStateV1; lock; cost from events | `run init` → state+events; lock lifecycle |
+| W2 | `redesign/a-run` | `bundle/run/{state,events,lock,cost,lifecycle}.py`, `cli/run.py`, `cli/_io.py`, `tests/test_events_schema.py`, `test_run_store.py`, `test_cli_run.py`, `test_cli_io_emits_events.py` | events envelope; RunStateV1; lock; cost from events | `run init` → state+events; lock lifecycle |
 | W3 | `redesign/a-corpus` | `corpus/queries.py`, `cli/corpus.py`, `tests/test_corpus_queries.py`, `test_cli_corpus.py` | wraps `corpus/graph.py` + `ingest/`; CLI list/find/show/check/build/refresh | `corpus find` columns `score id doc preview`; build/refresh round-trip |
-| W4 | `redesign/a-concepts` | `concepts/{schema,card,evidence,inbox,claim,tend}.py`, `cli/work.py`, `tests/test_concepts_*.py`, `test_work_claim_atomic.py`, `test_work_inbox_append.py` | concept lifecycle on disk; claim/release; deterministic tend | claim TTL enforced; release exit 2 for non-owner; inbox-per-writer survives parallel writes |
-| W5 | `redesign/a-draft` | `draft/{schema,artifact,builder,validator}.py`, `cli/draft.py`, `tests/test_draft_builder.py`, `test_validator.py`, `test_cli_draft.py` | DraftBuilder + Validator; draft.json from work+evidence | `draft check` exit 0 grounded; exit 1 with `QuoteNotInChunkError` |
-| W6 | `redesign/a-wiki` | `wiki/{queries,commit,derived}.py`, `cli/wiki.py`, `tests/test_wiki_commit.py`, `test_cli_wiki.py` | commit gate; build indexes/graph/vectors from existing `wiki/graph.py` helpers | `wiki commit` blocks ungrounded; emits `page_committed` |
+| W4 | `redesign/a-concepts` | `bundle/concepts/{schema,canonicalize,card,evidence,inbox,claim,tend}.py`, `cli/work.py`, `tests/test_concepts_*.py`, `test_work_claim_atomic.py`, `test_work_inbox_append.py` | concept lifecycle on disk; claim/release; deterministic tend; W4 splits canonicalize out of dossier.py | claim TTL enforced; release exit 2 for non-owner; inbox-per-writer survives parallel writes |
+| W5 | `redesign/a-draft` | `bundle/draft/{schema,artifact,builder,validator}.py`, `cli/draft.py`, `tests/test_draft_builder.py`, `test_validator.py`, `test_cli_draft.py` | DraftBuilder + Validator; draft.json from work+evidence | `draft check` exit 0 grounded; exit 1 with `QuoteNotInChunkError` |
+| W6 | `redesign/a-wiki` | `bundle/wiki/{queries,commit,derived}.py`, `cli/wiki.py`, `tests/test_wiki_commit.py`, `test_cli_wiki.py` | commit gate; build indexes/graph/vectors from existing `bundle/wiki/graph.py` helpers | `wiki commit` blocks ungrounded; emits `page_committed` |
 | W7 | `redesign/a-render` | `cli/render.py`, render path rewiring in `render/html/render.py`, `tests/test_render_paths.py` | render reads `wiki/`+`derived/` | renders fixture; output matches snapshot |
 | W8 | `redesign/a-eval` | `cli/eval.py`, `eval/trace_replay.py` rewire, `tests/test_eval_from_events.py`, `test_telemetry_parity.py` | eval reads `events.jsonl` | M1/M3/M5/M6 within tolerance vs legacy |
 | W9 | `redesign/b-skills-canonical-layout` | `.claude/skills/wikify/SKILL.md`+`references/*`, `wikify-baseline/SKILL.md`, 7 atomic SKILL.md, 5 stub workflow SKILL.md, `tests/test_skill_layout.py` | hybrid layout; references one level deep | every SKILL.md ≤500 lines; layout test passes |
@@ -312,7 +310,7 @@ PR 1 — `redesign/a-package-skeleton` (W0). Mechanical rename only.
 
 | concern | detail |
 |---|---|
-| moves | `citestore/graph.py → corpus/graph.py`; `citestore/{db,resolver,bibtex,parse,models,__main__}.py → citations/`; `store/{wiki_bundle→wiki/page, wiki_index→wiki/index, wiki_files→wiki/files, wiki_graph→wiki/graph, bundle_embeddings→wiki/embeddings, page_naming→wiki/page_naming, corpus→corpus/chunks, vectors,vectors_meta,doc_markdown,images_index,equations_index,bibliography → corpus/}`; `distill/{dossier→concepts/dossier, author_context→draft/author_context, seed→corpus/seed, field_detect→corpus/field_detect}`; extract `canonicalize()`+`Candidate` from `concepts/dossier.py` into `concepts/canonicalize.py`; `cli.py→cli/__init__.py`; `cli_io.py→cli/_io.py`; `cli_cmds/* → cli/legacy/*`. Leaves in place: `paths.py`, `schema.py`, `session.py`, `meter.py`, `baselines/`, `distill/{preload,write_runner}.py`, `ingest/`, `prompts/`, `render/`, `eval/`. |
+| moves | `citestore/graph.py → corpus/graph.py`; `citestore/{db,resolver,bibtex,parse,models,__main__}.py → citations/`; `store/{wiki_bundle→bundle/wiki/page, wiki_index→bundle/wiki/index, wiki_files→bundle/wiki/files, wiki_graph→bundle/wiki/graph, bundle_embeddings→bundle/wiki/embeddings, page_naming→bundle/wiki/page_naming}`; `store/{corpus→corpus/chunks, vectors, vectors_meta, doc_markdown, images_index, equations_index, bibliography} → corpus/`; `distill/{dossier→bundle/concepts/dossier, author_context→bundle/draft/author_context, seed→corpus/seed, field_detect→corpus/field_detect}`; `cli.py → cli/__init__.py`; `cli_io.py → cli/_io.py`; `cli_cmds/* → cli/legacy/*`. W0 does NOT split `canonicalize()` out of dossier.py — that happens in W4. Leaves in place: `paths.py`, `schema.py`, `session.py`, `meter.py`, `baselines/`, `distill/{preload,write_runner}.py`, `ingest/`, `prompts/`, `render/`, `eval/`. |
 | import sweeps | `wikify.citestore.*`, `wikify.store.*`, `wikify.distill.{dossier,author_context,seed,field_detect}`, `wikify.cli_io`, `wikify.cli_cmds.*` rewritten to new homes. |
 | scope | no logic changes; no new modules. |
 | verification | ruff + pytest clean; legacy CLI smoke: `wikify session init`, `wikify kg seeds`, `wikify ingest` unchanged. |
