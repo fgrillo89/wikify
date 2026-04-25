@@ -20,6 +20,7 @@ from . import corpus as corpus_cli
 from . import draft as draft_cli_v2
 from . import migrate as migrate_cli
 from . import run as run_cli
+from . import wiki as wiki_cli_v2
 from . import work as work_cli
 from .legacy import bundle as bundle_cli
 from .legacy import extract as extract_cli
@@ -34,11 +35,12 @@ app.add_typer(migrate_cli.app, name="migrate")
 app.add_typer(run_cli.app, name="run")
 app.add_typer(work_cli.app, name="work")
 app.add_typer(draft_cli_v2.app, name="draft")
+app.add_typer(wiki_cli_v2.app, name="wiki")
 app.add_typer(session_cli.app, name="session")
 app.add_typer(kg_cli.app, name="kg")
 app.add_typer(extract_cli.app, name="extract")
 app.add_typer(validate_cli.app, name="validate")
-app.add_typer(bundle_cli.app, name="bundle")
+app.add_typer(bundle_cli.app, name="legacy-bundle")
 app.add_typer(meter_cli.app, name="meter")
 
 
