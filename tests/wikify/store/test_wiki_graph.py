@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from wikify.models import Evidence, WikiPage
-from wikify.store.wiki_graph import (
+from wikify.bundle.wiki.graph import (
     PAGE,
     WikiKnowledgeGraph,
     build_wiki_graph,
@@ -13,6 +12,7 @@ from wikify.store.wiki_graph import (
     load_wiki_graph,
     save_wiki_graph,
 )
+from wikify.models import Evidence, WikiPage
 
 
 def _make_pages() -> list[WikiPage]:

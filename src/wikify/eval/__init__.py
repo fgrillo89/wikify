@@ -12,7 +12,7 @@ Bundle/Page/Evidence types and loading live in ``store.wiki_bundle``.
 See ../metrics.md for the definitions.
 """
 
-from ..store.wiki_bundle import Bundle, Evidence, Page, load_bundle
+from ..bundle.wiki.page import Bundle, Evidence, Page, load_bundle
 from .metrics import (
     GroundingResult,
     HeapsFit,

@@ -9,8 +9,8 @@ The `KnowledgeGraph` is the agent's primary reasoning interface for corpus
 traversal, citation analysis, and scoped vector search. All agent code uses
 this API. NetworkX is internal and never exposed.
 
-Source: `src/wikify/citestore/graph.py`
-Builder: `src/wikify/citestore/graph_build.py`
+Source: `src/wikify/corpus/graph.py`
+Builder: `src/wikify/corpus/graph_build.py`
 
 ## Node types
 

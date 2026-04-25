@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..citestore.parse import parse_citation
+from wikify.citations.parse import parse_citation
 
 if TYPE_CHECKING:
     from ..models import Document
@@ -34,7 +34,7 @@ def _fuse_citations(docs: list[Document]) -> None:
     """Cross-paper evidence fusion: merge metadata for same-work citations."""
     from collections import Counter, defaultdict
 
-    from ..citestore.parse import _is_valid_title, _is_valid_venue, citation_fingerprint
+    from wikify.citations.parse import _is_valid_title, _is_valid_venue, citation_fingerprint
 
     buckets: dict[str, list] = defaultdict(list)
     for doc in docs:
@@ -95,8 +95,9 @@ def enrich_citations(
        of the resolver (doi.org fallback) is suppressed for speed.
     3. Cross-paper evidence fusion
     """
-    from ..citestore.parse import _clean_doi
-    from ..citestore.parse import extract_doi as _extract_doi_from_text
+    from wikify.citations.parse import _clean_doi
+    from wikify.citations.parse import extract_doi as _extract_doi_from_text
+
     from ..util.doi_resolver import resolve_many
 
     # Pass 0: re-extract DOIs from raw_text

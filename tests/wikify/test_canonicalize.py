@@ -1,6 +1,6 @@
 """Tests for distill/canonicalize.py -- person candidate handling."""
 
-from wikify.distill.dossier import Candidate, canonicalize
+from wikify.bundle.work.dossier import Candidate, canonicalize
 from wikify.models import Evidence, WikiPage
 from wikify.schema import ExtractedConcept
 

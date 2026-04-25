@@ -48,7 +48,8 @@ from pathlib import Path
 import httpx
 from aiolimiter import AsyncLimiter
 
-from ..citestore.db import DOICache
+from wikify.citations.db import DOICache
+
 from .async_limits import with_limiter, with_semaphore
 
 logger = logging.getLogger(__name__)

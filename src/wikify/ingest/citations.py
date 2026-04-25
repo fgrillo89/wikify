@@ -179,8 +179,8 @@ def extract_citations(md_text: str, doc_id: str) -> list:
     API resolution.
     Returns ``[]`` if no references section is detected.
     """
-    from ..citestore.models import CitationEntry
-    from ..citestore.parse import extract_doi as extract_doi_from_url
+    from wikify.citations.models import CitationEntry
+    from wikify.citations.parse import extract_doi as extract_doi_from_url
 
     section = _find_refs_section(md_text)
     if section is None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wikify.citestore.bibtex import openalex_to_bibtex
+from wikify.citations.bibtex import openalex_to_bibtex
 
 
 def test_basic_formatting(sample_work_json):

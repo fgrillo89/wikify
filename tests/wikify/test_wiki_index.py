@@ -4,15 +4,15 @@ from unittest.mock import patch
 
 import pytest
 
-from wikify.models import Evidence, WikiPage
-from wikify.paths import BundlePaths
-from wikify.store.wiki_files import write_page
-from wikify.store.wiki_index import (
+from wikify.bundle.wiki.files import write_page
+from wikify.bundle.wiki.index import (
     WikiIndex,
     build_index,
     migrate_concepts_dir,
     rebuild_index,
 )
+from wikify.models import Evidence, WikiPage
+from wikify.paths import BundlePaths
 
 
 def _make_page(pid: str, title: str, aliases: list[str], doc_id: str, links=None):
@@ -75,7 +75,7 @@ def test_atomic_save_keeps_existing_file(bundle):
     idx = WikiIndex.load(bundle)
     original = (bundle.root / "_index.json").read_bytes()
 
-    with patch("wikify.store.wiki_index.os.replace", side_effect=RuntimeError("boom")):
+    with patch("wikify.bundle.wiki.index.os.replace", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             idx.save()
     # original file must still be intact and loadable

@@ -98,7 +98,7 @@ def extract_topics(
 
 
 def write_topics(path: Path, vocab: TopicVocabulary) -> None:
-    from ..store.corpus import atomic_write_text
+    from wikify.corpus.chunks import atomic_write_text
 
     atomic_write_text(path, json.dumps(vocab.to_dict(), indent=2))
 

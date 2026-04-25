@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
+from wikify.bundle.wiki.page import Bundle, Page
+from wikify.bundle.wiki.page import Evidence as BundleEvidence
 from wikify.eval.audit import write_audit
-from wikify.store.wiki_bundle import Bundle, Page
-from wikify.store.wiki_bundle import Evidence as BundleEvidence
 
 
 def _page(

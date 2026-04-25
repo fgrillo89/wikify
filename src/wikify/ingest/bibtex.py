@@ -1102,7 +1102,7 @@ def write_corpus_bibtex(
         entry = _document_entry(enriched)
         entry["ID"] = _unique_bibkey(entry["ID"], seen)
         entries.append(entry)
-    from ..store.corpus import atomic_write_text
+    from wikify.corpus.chunks import atomic_write_text
 
     atomic_write_text(bib_path, _entries_to_bibtex(entries))
     return bib_path
@@ -1123,7 +1123,7 @@ def write_corpus_bibliography(
         doi_lookup=doi_lookup,
     )
 
-    from ..store.corpus import atomic_write_text
+    from wikify.corpus.chunks import atomic_write_text
 
     atomic_write_text(
         corpus.library_bib_path, _entries_to_bibtex(source_entries),

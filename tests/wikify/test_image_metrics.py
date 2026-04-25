@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from wikify.bundle.wiki.page import Bundle, Page
 from wikify.eval.metrics import figure_reference_counts, image_coverage_residual
-from wikify.store.wiki_bundle import Bundle, Page
 
 
 def _make_bundle(body_texts: list[str], run_meta: dict | None = None) -> Bundle:
@@ -49,7 +49,7 @@ def test_image_coverage_residual_returns_float_in_range(monkeypatch):
         return [p.id for p in pages], _embed([p.body_clean for p in pages])
 
     monkeypatch.setattr(
-        "wikify.store.bundle_embeddings.load_or_compute",
+        "wikify.bundle.wiki.embeddings.load_or_compute",
         fake_load_or_compute,
     )
     val = image_coverage_residual(bundle, cap_embeds, _embed)
@@ -71,7 +71,7 @@ def test_image_coverage_residual_no_captions(monkeypatch):
         return [p.id for p in pages], _embed([p.body_clean for p in pages])
 
     monkeypatch.setattr(
-        "wikify.store.bundle_embeddings.load_or_compute",
+        "wikify.bundle.wiki.embeddings.load_or_compute",
         fake_load_or_compute,
     )
     val = image_coverage_residual(bundle, np.empty((0, 4), dtype=np.float32), _embed)
@@ -89,7 +89,7 @@ def test_image_coverage_residual_non_negative(monkeypatch):
         return [p.id for p in pages], vec
 
     monkeypatch.setattr(
-        "wikify.store.bundle_embeddings.load_or_compute",
+        "wikify.bundle.wiki.embeddings.load_or_compute",
         fake_load_or_compute,
     )
     val = image_coverage_residual(bundle, vec, lambda xs: vec)

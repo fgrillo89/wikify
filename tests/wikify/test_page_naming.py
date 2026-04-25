@@ -1,18 +1,18 @@
 """Tests for store.page_naming: natural Wikipedia-style page ids."""
 
-from wikify.models import Evidence, WikiPage
-from wikify.paths import BundlePaths
-from wikify.store.page_naming import (
-    page_filename,
-    page_id_from_title,
-    url_slug,
-)
-from wikify.store.wiki_files import write_page
-from wikify.store.wiki_index import (
+from wikify.bundle.wiki.files import write_page
+from wikify.bundle.wiki.index import (
     WikiIndex,
     build_index,
     migrate_prefixed_page_ids,
 )
+from wikify.bundle.wiki.page_naming import (
+    page_filename,
+    page_id_from_title,
+    url_slug,
+)
+from wikify.models import Evidence, WikiPage
+from wikify.paths import BundlePaths
 
 
 def test_page_id_from_title_basic():

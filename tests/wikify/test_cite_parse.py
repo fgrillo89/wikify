@@ -1,6 +1,6 @@
 """Tests for citestore.parse -- standalone citation text parser."""
 
-from wikify.citestore.parse import (
+from wikify.citations.parse import (
     citation_fingerprint,
     detect_format,
     fuse_cross_paper_evidence,

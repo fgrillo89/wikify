@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
-from wikify.citestore.db import DOICache
+from wikify.citations.db import DOICache
 
 
 def _fake_resolve_many(
@@ -202,7 +202,7 @@ def test_enrich_citations_skip_content_neg_propagates():
     # enrich_citations must forward skip_content_neg to resolve_many.
     # Use a real CitationEntry so to_dict() / heuristic-parse behaviour
     # match production; patch the actual HTTP layers to catch the flag.
-    from wikify.citestore.models import CitationEntry
+    from wikify.citations.models import CitationEntry
     from wikify.ingest import cite_parse
     from wikify.models import Document
     from wikify.util import doi_resolver as _dr

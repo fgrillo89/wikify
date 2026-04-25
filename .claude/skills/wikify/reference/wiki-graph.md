@@ -10,7 +10,7 @@ their relationships, and scoped vector search over page content. Independent
 from the corpus `KnowledgeGraph`; communicates via shared string IDs
 (chunk_id, doc_id).
 
-Source: `src/wikify/store/wiki_graph.py`
+Source: `src/wikify/bundle/wiki/graph.py`
 
 ## Node types
 

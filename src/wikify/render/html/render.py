@@ -25,11 +25,11 @@ from typing import Any, Self
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from wikify.bundle.wiki.index import WikiIndex, _normalize
+from wikify.bundle.wiki.page import Bundle, Page, load_bundle
+from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
 from wikify.paths import BundlePaths
-from wikify.store.page_naming import url_slug
-from wikify.store.wiki_bundle import Bundle, Page, load_bundle
-from wikify.store.wiki_index import WikiIndex, _normalize
 
 WIKI_NAME = "Wikify Simple"
 

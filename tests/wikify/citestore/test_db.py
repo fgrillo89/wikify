@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from wikify.citestore.db import DatabaseManager
-from wikify.citestore.models import Work
+from wikify.citations.db import DatabaseManager
+from wikify.citations.models import Work
 
 
 def _make_work(**overrides) -> Work:

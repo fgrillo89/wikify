@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from .citestore.models import CitationEntry
+    from wikify.citations.models import CitationEntry
 
 DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
 PageKind = Literal["article", "person"]

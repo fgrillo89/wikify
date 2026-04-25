@@ -1,4 +1,11 @@
-"""Functional sweep: assess bib / graph / fluent-API quality on ald_all_marker."""
+"""Functional sweep: assess bib + graph quality on ald_all_marker.
+
+The fluent-API section was removed in W0 of the skill-centric redesign.
+It depended on `wikify.distill.kg_tools`, a module that was never
+created — the section had been broken since the script was written.
+Add a fresh fluent-API diagnostic against `wikify.corpus.graph` if
+that capability is needed again.
+"""
 
 from __future__ import annotations
 
@@ -70,7 +77,7 @@ def audit_bib(name: str, entries: list[dict[str, str]]) -> None:
         1 for e in entries
         if e.get("author") and e["author"].isupper() and len(e["author"]) > 3
     )
-    print(f"\n  hygiene:")
+    print("\n  hygiene:")
     print(f"    missing author: {missing_author}/{len(entries)}")
     print(f"    missing title:  {missing_title}/{len(entries)}")
     print(f"    missing year:   {missing_year}/{len(entries)}")
@@ -104,7 +111,8 @@ def audit_graph(kg_path: Path) -> None:
     # Isolated nodes
     touched = set()
     for e in edges:
-        touched.add(e["source"]); touched.add(e["target"])
+        touched.add(e["source"])
+        touched.add(e["target"])
     isolated = [n for n in nodes if n["id"] not in touched]
     iso_types = Counter(n.get("type", "?") for n in isolated)
     print(f"  isolated nodes: {len(isolated)}  by type: {dict(iso_types)}")
@@ -157,90 +165,6 @@ def audit_graph(kg_path: Path) -> None:
     print(f"\n  chunks without a CONTAINS_CHUNK edge: {len(orphan_chunks)}/{len(chunks)}")
 
 
-def run_fluent(corpus_root: Path) -> None:
-    from wikify.citestore.graph_build import load_knowledge_graph
-    from wikify.distill.kg_tools import get_citations, get_source_info, search_chunks
-    from wikify.embedding import embedder_for
-    from wikify.paths import CorpusPaths
-    from wikify.store.corpus import all_chunks
-    from wikify.store.vectors import load_vectors
-    from wikify.store.vectors_meta import read_meta
-
-    paths = CorpusPaths(root=corpus_root)
-    vs = load_vectors(paths.vectors_path)
-    meta = read_meta(paths.vectors_path)
-    # Use query mode for user-search fidelity.
-    embed = embedder_for(meta.backend, meta.model, mode="query")
-    kg = load_knowledge_graph(paths.knowledge_graph_path, vectors=vs, embed_fn=embed)
-    chunk_text = {c.id: c.text for c in all_chunks(paths)}
-
-    n_src = kg.sources().count()
-    n_auth = kg.authors().count()
-    n_ck = kg.chunks().count()
-    print(f"KG loaded: {n_src} sources, {n_auth} authors, {n_ck} chunks")
-    print(f"Embedder: {meta.backend} / {meta.model} dim={meta.dim}")
-
-    queries = [
-        "thermal atomic layer deposition growth per cycle",
-        "plasma-enhanced ALD of aluminum oxide",
-        "TMA water precursor self-limiting surface reaction",
-        "HfO2 high-k gate dielectric thin film",
-        "memristor resistive switching filament formation",
-        "area-selective ALD inhibitor molecule",
-        "oxygen vacancy neuromorphic synapse",
-    ]
-
-    sub("search_chunks on realistic ALD queries")
-    for q in queries:
-        hits = search_chunks(kg, query=q, top_k=3)
-        print(f"\nQ: {q}")
-        for r in hits:
-            t = chunk_text.get(r["id"], "")
-            preview = re.sub(r"\s+", " ", t)[:180]
-            src = r.get("source_id") or "?"
-            print(f"  [{r['score']:.3f}] {src[:50]} :: {preview}")
-
-    # Compose: author -> papers -> top chunks
-    sub("compose: top-h author -> papers -> top chunk on 'ALD precursor'")
-    auth = kg.authors().top(1, by="h_index").first()
-    if auth:
-        aid = auth["id"]
-        papers = kg.author(aid).sources().collect()
-        print(f"author: {aid}  ({len(papers)} papers)")
-        for p in papers[:3]:
-            print(f"  [{p.get('year')}] {(p.get('title') or p['id'])[:68]}")
-            hits = kg.source(p["id"]).chunks().search("ALD precursor", top_k=1)
-            for h2 in hits:
-                t = chunk_text.get(h2["id"], "")[:160].replace("\n", " ")
-                print(f"    [{h2['score']:.3f}] {t}")
-
-    # Compose: top-PR paper -> references
-    sub("compose: top-PR paper -> outgoing references")
-    top_src = kg.sources(kind="corpus").top(1, by="pagerank").first()
-    if top_src:
-        sid = top_src["id"]
-        print(f"source: {top_src.get('title', sid)[:68]}")
-        refs = get_citations(kg, source_id=sid, direction="references")
-        print(f"  references: {len(refs)}")
-        for r in refs[:5]:
-            print(f"    -> {(r.get('title') or r.get('id'))[:68]}")
-        cited_by = get_citations(kg, source_id=sid, direction="cited_by")
-        print(f"  cited_by: {len(cited_by)}")
-        for r in cited_by[:5]:
-            print(f"    <- {(r.get('title') or r.get('id'))[:68]}")
-
-    # similar_to on one chunk
-    sub("similar_to: seed chunk from a top hit")
-    seed_hits = search_chunks(kg, query="resistive switching mechanism", top_k=1)
-    if seed_hits:
-        seed = seed_hits[0]["id"]
-        print(f"seed: {chunk_text.get(seed, '')[:160]}")
-        sims = kg.chunks().similar_to(seed, top_k=5)
-        for s in sims:
-            t = chunk_text.get(s["id"], "")[:140].replace("\n", " ")
-            print(f"  [{s['score']:.3f}] {t}")
-
-
 def main() -> None:
     h("1. BIBLIOGRAPHY AUDIT")
     audit_bib("corpus_papers.bib", sample_bib(CORPUS / "corpus_papers.bib"))
@@ -248,9 +172,6 @@ def main() -> None:
 
     h("2. KNOWLEDGE GRAPH AUDIT")
     audit_graph(CORPUS / "knowledge_graph.json")
-
-    h("3. FLUENT API / DISTILL QUERIES")
-    run_fluent(CORPUS)
 
 
 if __name__ == "__main__":

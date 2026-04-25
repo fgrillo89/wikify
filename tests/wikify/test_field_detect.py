@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from wikify.distill.field_detect import (
+from wikify.corpus.field_detect import (
     _field_cache_path,
     detect_field,
     detect_field_scores,

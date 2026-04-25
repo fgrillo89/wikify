@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from wikify.ingest.images import save_doc_images
-from wikify.ingest.parsers.registry import RawImage
-from wikify.paths import CorpusPaths
-from wikify.store.images_index import (
+from wikify.corpus.images_index import (
     ImageIndex,
     build_images_index,
     rebuild_images_index,
 )
+from wikify.ingest.images import save_doc_images
+from wikify.ingest.parsers.registry import RawImage
+from wikify.paths import CorpusPaths
 
 PNG_1x1 = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
