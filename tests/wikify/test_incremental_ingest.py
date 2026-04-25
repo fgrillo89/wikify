@@ -11,14 +11,14 @@ from unittest.mock import patch
 
 import pytest
 
-from wikify.ingest.manifest import CorpusManifest
-from wikify.ingest.pipeline import ingest_corpus
-from wikify.store.corpus import (
+from wikify.corpus.chunks import (
     all_chunks,
     list_documents,
     read_knowledge_graph,
     read_vector_store,
 )
+from wikify.ingest.manifest import CorpusManifest
+from wikify.ingest.pipeline import ingest_corpus
 
 # Body filler long enough to survive MIN_CHUNK_ALNUM=30.
 _FILLER = " ".join(["word"] * 20)
@@ -326,7 +326,7 @@ def test_embedder_change_reembeds_all(sources_dir, corpus_dir):
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
     # Tamper with the vectors.meta.json to simulate a different backend
-    from wikify.store.vectors_meta import VectorsMeta, write_meta
+    from wikify.corpus.vectors_meta import VectorsMeta, write_meta
 
     write_meta(paths.vectors_path, VectorsMeta(
         backend="fake_old_backend", dim=999, model="old-model",
@@ -673,7 +673,7 @@ def test_crash_mid_persist_recoverable(sources_dir, corpus_dir):
 
     call_count = [0]
     real_write = __import__(
-        "wikify.store.corpus", fromlist=["write_document"]
+        "wikify.corpus.chunks", fromlist=["write_document"]
     ).write_document
 
     def crash_on_second(paths_arg, doc, markdown, chunks):
@@ -706,7 +706,7 @@ def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
     _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
 
-    from wikify.store.corpus import atomic_write_text
+    from wikify.corpus.chunks import atomic_write_text
 
     call_count = [0]
     real_write = atomic_write_text
@@ -722,7 +722,7 @@ def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
         return real_write(path, content)
 
     with patch(
-        "wikify.store.corpus.atomic_write_text",
+        "wikify.corpus.chunks.atomic_write_text",
         side_effect=crash_during_resave,
     ):
         try:

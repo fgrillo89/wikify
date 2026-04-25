@@ -13,13 +13,14 @@ from ..paths import BundlePaths
 
 def rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
     """Build and persist the wiki knowledge graph + page vectors."""
-    from ..embedding import current_backend, embed_passages, embedder_for
-    from ..store.vectors import save_vectors
-    from ..store.wiki_graph import (
+    from wikify.bundle.wiki.graph import (
         build_wiki_graph,
         build_wiki_vectors,
         save_wiki_graph,
     )
+    from wikify.corpus.vectors import save_vectors
+
+    from ..embedding import current_backend, embed_passages, embedder_for
 
     # Build uses passage embedding (indexing wiki page bodies); the graph
     # stores a query-mode callable because search() encodes user queries.

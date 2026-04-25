@@ -1,11 +1,11 @@
 """Confidence label + score propagation through canonicalize and metrics
 (graphify item 6b)."""
 
-from wikify.distill.dossier import Candidate, canonicalize
+from wikify.bundle.concepts.dossier import Candidate, canonicalize
+from wikify.bundle.wiki.page import Bundle, Page
+from wikify.bundle.wiki.page import Evidence as BundleEvidence
 from wikify.eval.metrics import spectral_gap_modularity
 from wikify.schema import ExtractedConcept
-from wikify.store.wiki_bundle import Bundle, Page
-from wikify.store.wiki_bundle import Evidence as BundleEvidence
 
 
 def _cand(title: str, chunk_id: str, doc_id: str, *, label="extracted", score=1.0) -> Candidate:

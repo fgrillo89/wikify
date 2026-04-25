@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
+from wikify.corpus.doc_markdown import write_doc_markdown
 from wikify.models import Document
 from wikify.paths import CorpusPaths
-from wikify.store.doc_markdown import write_doc_markdown
 
 
 def test_doc_markdown_has_frontmatter_and_edges(tmp_path: Path) -> None:

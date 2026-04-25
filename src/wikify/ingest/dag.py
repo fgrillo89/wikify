@@ -34,8 +34,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
-from ..citestore.graph_build import build_knowledge_graph, save_knowledge_graph
-from ..store.images_index import build_images_index
+from wikify.corpus.graph_build import build_knowledge_graph, save_knowledge_graph
+from wikify.corpus.images_index import build_images_index
+
 from .bibtex import write_corpus_bibliography
 from .coupling import compute_coupling
 from .topics import extract_topics, write_topics
@@ -162,7 +163,7 @@ def _refresh_images_index(ctx: dict) -> None:
 
 
 def _refresh_equations_index(ctx: dict) -> None:
-    from ..store.equations_index import build_equations_index, save_equations_index
+    from wikify.corpus.equations_index import build_equations_index, save_equations_index
 
     idx = build_equations_index(ctx["docs"], ctx["chunks"])
     save_equations_index(ctx["paths"].equations_index_path, idx)
@@ -174,7 +175,7 @@ def _refresh_openalex(ctx: dict) -> None:
         return
     import asyncio
 
-    from ..citestore import AsyncResolver, DatabaseManager
+    from wikify.citations import AsyncResolver, DatabaseManager
 
     all_cits = []
     for doc in ctx["docs"]:
@@ -270,7 +271,7 @@ def _refresh_bibliography(ctx: dict) -> None:
 
 
 def _refresh_knowledge_graph(ctx: dict) -> None:
-    from ..store.bibliography import load_citation_index
+    from wikify.corpus.bibliography import load_citation_index
 
     citation_index = load_citation_index(ctx["paths"])
     kg = build_knowledge_graph(

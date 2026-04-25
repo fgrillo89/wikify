@@ -158,13 +158,13 @@ def audit_graph(kg_path: Path) -> None:
 
 
 def run_fluent(corpus_root: Path) -> None:
-    from wikify.citestore.graph_build import load_knowledge_graph
+    from wikify.corpus.graph_build import load_knowledge_graph
     from wikify.distill.kg_tools import get_citations, get_source_info, search_chunks
     from wikify.embedding import embedder_for
     from wikify.paths import CorpusPaths
-    from wikify.store.corpus import all_chunks
-    from wikify.store.vectors import load_vectors
-    from wikify.store.vectors_meta import read_meta
+    from wikify.corpus.chunks import all_chunks
+    from wikify.corpus.vectors import load_vectors
+    from wikify.corpus.vectors_meta import read_meta
 
     paths = CorpusPaths(root=corpus_root)
     vs = load_vectors(paths.vectors_path)

@@ -5,8 +5,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from wikify.citestore.db import DatabaseManager
-from wikify.citestore.resolver import AsyncResolver, parse_openalex_work
+from wikify.citations.db import DatabaseManager
+from wikify.citations.resolver import AsyncResolver, parse_openalex_work
 
 from .conftest import SAMPLE_OPENALEX_CHILD, SAMPLE_OPENALEX_WORK
 

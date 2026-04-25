@@ -17,7 +17,8 @@ from statistics import mean, median
 
 import numpy as np
 
-from ..store.wiki_bundle import Bundle, Page
+from wikify.bundle.wiki.page import Bundle, Page
+
 from .community import louvain_communities
 from .metrics import _build_g_evidence
 

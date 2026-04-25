@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
+from wikify.corpus.chunks import list_documents
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.store.corpus import list_documents
 
 
 def test_similar_to_populated_on_overlapping_docs(tmp_path: Path) -> None:

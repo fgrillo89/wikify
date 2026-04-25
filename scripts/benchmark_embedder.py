@@ -47,8 +47,8 @@ def _run_one(label: str, model: str, sources: Path, corpus_root: Path) -> dict:
             del sys.modules[mod]
     from wikify.embedding import current_backend
     from wikify.ingest.pipeline import ingest_corpus
-    from wikify.store.corpus import read_chunks
-    from wikify.store.vectors import read_vector_store
+    from wikify.corpus.chunks import read_chunks
+    from wikify.corpus.vectors import read_vector_store
 
     backend = current_backend()
 
@@ -82,9 +82,9 @@ def _run_eval(result: dict, bundle_path: Path, topics: list[str]) -> dict:
             del sys.modules[mod]
     from wikify.embedding import embedder_for
     from wikify.eval.metrics import concept_recall, coverage_residual
-    from wikify.store.corpus import read_chunks
-    from wikify.store.vectors_meta import read_meta
-    from wikify.store.wiki_bundle import load_bundle
+    from wikify.corpus.chunks import read_chunks
+    from wikify.corpus.vectors_meta import read_meta
+    from wikify.bundle.wiki.page import load_bundle
 
     corpus = result["corpus"]
     meta = read_meta(corpus.vectors_path)

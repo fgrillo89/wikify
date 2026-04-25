@@ -17,7 +17,7 @@ a budget.
 
 - **Pre**: session exists with `status=active`, `stages.seed_selection.status=pending`, corpus ingested.
 - **Post**: session `stages.seed_selection.status=done`; selected chunk IDs written to a scratch list or patched into the session.
-- **Realization**: `wikify kg seeds --session <path>` (deterministic; wraps the PageRank + submodular logic in `wikify.distill.seed`).
+- **Realization**: `wikify kg seeds --session <path>` (deterministic; wraps the PageRank + submodular logic in `wikify.corpus.seed`).
 
 ## `extract`
 

@@ -118,7 +118,7 @@ Created by: `wikify validate write`. Read by: the workflow skill.
 
 Wikipedia-style page markdown with YAML frontmatter. The subdirectory
 is determined by the page `kind`: `article` → `articles/`, `person` →
-`people/` (enforced by `src/wikify/store/wiki_files.py::write_page`).
+`people/` (enforced by `src/wikify/bundle/wiki/files.py::write_page`).
 
 Frontmatter required fields: `id, kind (article|person), title, aliases, created_at`.
 Body rules: see `write-constraints.md`. Citation format: see `citation-format.md`.
@@ -129,7 +129,7 @@ Owning CLI: `wikify bundle commit-page`.
 
 ### `<bundle>/_index.json`
 
-Generated index over `pages/`. Shape defined by `src/wikify/store/wiki_index.py`.
+Generated index over `pages/`. Shape defined by `src/wikify/bundle/wiki/index.py`.
 Owning command: `wikify bundle commit-page` (rebuilds on each commit).
 `schema_version` to be added when the index format is first mutated.
 

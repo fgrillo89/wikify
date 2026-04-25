@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from wikify.corpus.chunks import all_chunks, list_documents, read_knowledge_graph, read_vector_store
 from wikify.ingest.manifest import CorpusManifest
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.store.corpus import all_chunks, list_documents, read_knowledge_graph, read_vector_store
 
 _FILLER = " ".join(["word"] * 20)
 

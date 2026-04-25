@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from wikify.citestore.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
+from wikify.corpus.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
 
 
 def _kg() -> KnowledgeGraph:

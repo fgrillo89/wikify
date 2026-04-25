@@ -275,8 +275,9 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
     Non-PDF sources are skipped — their parsers owned metadata from
     pass 3.
     """
-    from ..store.corpus import _doc_from_dict, atomic_write_text
-    from ..store.doc_markdown import write_doc_markdown
+    from wikify.corpus.chunks import _doc_from_dict, atomic_write_text
+    from wikify.corpus.doc_markdown import write_doc_markdown
+
     from .metadata import assemble_pdf_metadata
     from .pipeline import _read_body_from_doc_markdown
 

@@ -21,17 +21,18 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..embedding import embed_passages
-from ..models import Chunk, DocSection, Document
-from ..paths import CorpusPaths
-from ..store.corpus import (
+from wikify.corpus.chunks import (
     write_document,
     write_vector_store,
 )
-from ..store.doc_markdown import write_doc_markdown
-from ..store.vectors import VectorStore
-from ..store.vectors_meta import VectorsMeta
-from ..store.vectors_meta import write_meta as write_vectors_meta
+from wikify.corpus.doc_markdown import write_doc_markdown
+from wikify.corpus.vectors import VectorStore
+from wikify.corpus.vectors_meta import VectorsMeta
+from wikify.corpus.vectors_meta import write_meta as write_vectors_meta
+
+from ..embedding import embed_passages
+from ..models import Chunk, DocSection, Document
+from ..paths import CorpusPaths
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
@@ -611,9 +612,10 @@ def _embed_chunks_incremental(
     """
     import numpy as np
 
+    from wikify.corpus.vectors import load_vectors
+    from wikify.corpus.vectors_meta import read_meta
+
     from ..embedding import current_backend
-    from ..store.vectors import load_vectors
-    from ..store.vectors_meta import read_meta
 
     target_ids = [c.id for c in all_chunks]
     target_set = set(target_ids)
@@ -818,7 +820,7 @@ def _resave_docs(
     paths: CorpusPaths,
     docs: list[Document],
 ) -> None:
-    from ..store.corpus import _doc_to_dict, atomic_write_text
+    from wikify.corpus.chunks import _doc_to_dict, atomic_write_text
 
     for doc in docs:
         atomic_write_text(
@@ -1114,8 +1116,9 @@ def refresh_corpus(
     - ``"crossref"``:  CrossRef batch only; no doi.org fallback (default).
     - ``"full"``:      CrossRef + doi.org fallback (slow on cold caches).
     """
-    from ..store.corpus import all_chunks as load_all_chunks
-    from ..store.corpus import list_documents
+    from wikify.corpus.chunks import all_chunks as load_all_chunks
+    from wikify.corpus.chunks import list_documents
+
     from .dag import REFRESH_DAG, run_dag
 
     timings: dict[str, float] = {}

@@ -12,7 +12,7 @@ import re
 import statistics
 from pathlib import Path
 
-from ..store.wiki_bundle import Page, load_bundle
+from wikify.bundle.wiki.page import Page, load_bundle
 
 # Evidence marker pattern: [^eN] or [^e1][^e2] etc.
 _EVIDENCE_RE = re.compile(r"\[\^[^\]]+\]")

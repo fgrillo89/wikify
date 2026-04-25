@@ -19,15 +19,15 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from wikify.citestore.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
-from wikify.distill.seed import (
+from wikify.corpus.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
+from wikify.corpus.seed import (
     doc_embeddings,
     greedy_seed_select,
     pagerank_normalised,
     select_seeded_bootstrap,
 )
+from wikify.corpus.vectors import VectorStore
 from wikify.models import Chunk
-from wikify.store.vectors import VectorStore
 
 
 def _kg(

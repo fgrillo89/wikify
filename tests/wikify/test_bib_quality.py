@@ -7,7 +7,7 @@ Regression tests for structural issues found during the mvp100 audit:
 - journal fragments in titles
 """
 
-from wikify.citestore.parse import extract_venue_fields, parse_citation
+from wikify.citations.parse import extract_venue_fields, parse_citation
 from wikify.ingest.bibtex import _clean_bib_journal, _clean_bib_title
 
 # ---------------------------------------------------------------------------
@@ -354,10 +354,10 @@ class TestReferenceEntry:
 
     def test_ordinal_one_based_in_kg(self):
         """[1] in text should resolve to the first bibliography entry."""
-        from wikify.citestore.graph_build import build_knowledge_graph
-        from wikify.citestore.models import CitationEntry
+        from wikify.citations.models import CitationEntry
+        from wikify.corpus.graph_build import build_knowledge_graph
+        from wikify.corpus.vectors import VectorStore
         from wikify.models import Chunk, Document
-        from wikify.store.vectors import VectorStore
 
         doc = Document(
             id="test_doc",
