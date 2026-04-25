@@ -179,12 +179,9 @@ def test_run_maintenance_escalation_triggers_add_evidence(tmp_path):
 # --- CLI --help ----------------------------------------------------------
 
 
-def test_maintenance_cli_help():
-    from typer.testing import CliRunner
-
-    from wikify.cli import app
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["maintenance", "--help"])
-    assert result.exit_code == 0
-    assert "--bundle" in result.output
+# NOTE: the `wikify maintenance` CLI verb was retired in the skill-pivot
+# legacy-CLI-removal pass. The maintenance library code (load_query_log,
+# run_maintenance, escalation handling) is still tested above; only the
+# top-level CLI invocation is gone. The library is scheduled for deletion
+# alongside dispatch.py and the rest of the legacy distill pipeline in
+# the next phase of the pivot.
