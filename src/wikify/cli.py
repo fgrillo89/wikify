@@ -382,5 +382,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+def main() -> None:
+    from .cli_io import run_with_io_logging
+
+    run_with_io_logging(app)
+
+
 if __name__ == "__main__":
-    app()
+    main()
