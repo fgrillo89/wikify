@@ -19,6 +19,7 @@ from ..ingest.pipeline import ingest_corpus, refresh_corpus
 from . import corpus as corpus_cli
 from . import migrate as migrate_cli
 from . import run as run_cli
+from . import work as work_cli
 from .legacy import bundle as bundle_cli
 from .legacy import draft as draft_cli
 from .legacy import extract as extract_cli
@@ -31,6 +32,7 @@ app = typer.Typer(add_completion=False, help="wikify CLI")
 app.add_typer(corpus_cli.app, name="corpus")
 app.add_typer(migrate_cli.app, name="migrate")
 app.add_typer(run_cli.app, name="run")
+app.add_typer(work_cli.app, name="work")
 app.add_typer(session_cli.app, name="session")
 app.add_typer(kg_cli.app, name="kg")
 app.add_typer(extract_cli.app, name="extract")
