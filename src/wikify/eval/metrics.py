@@ -17,7 +17,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..store.wiki_bundle import Bundle, Page
+from wikify.bundle.wiki.page import Bundle, Page
+
 from .community import louvain_communities
 from .community import modularity as _nx_modularity
 
@@ -64,8 +65,9 @@ def coverage_residual(
                 "coverage_residual: must supply either an explicit embed callable "
                 "or a CorpusPaths handle so the embedder can be reconstructed"
             )
+        from wikify.corpus.vectors_meta import read_meta
+
         from ..embedding import embedder_for
-        from ..store.vectors_meta import read_meta
 
         meta = read_meta(corpus.vectors_path)
         if meta is None:
@@ -80,7 +82,7 @@ def coverage_residual(
             )
         embed = embedder_for(meta.backend, meta.model)
 
-    from ..store.bundle_embeddings import load_or_compute
+    from wikify.bundle.wiki.embeddings import load_or_compute
 
     _ids, page_embeds = load_or_compute(bundle, bundle.pages, embed)
     if page_embeds.shape[1] != chunk_embeddings.shape[1]:
@@ -119,7 +121,7 @@ def image_coverage_residual(
     """
     if caption_embeddings.shape[0] == 0 or not bundle.pages:
         return 1.0
-    from ..store.bundle_embeddings import load_or_compute
+    from wikify.bundle.wiki.embeddings import load_or_compute
 
     _ids, page_embeds = load_or_compute(bundle, bundle.pages, embed)
     if page_embeds.shape[1] != caption_embeddings.shape[1]:

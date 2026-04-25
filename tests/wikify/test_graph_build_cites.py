@@ -8,8 +8,8 @@ node (when the bibkey resolves to a corpus doc) or the dedicated
 
 from __future__ import annotations
 
-from wikify.citestore.graph_build import build_knowledge_graph
-from wikify.citestore.models import CitationEntry
+from wikify.citations.models import CitationEntry
+from wikify.corpus.graph_build import build_knowledge_graph
 from wikify.models import Document
 
 

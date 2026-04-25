@@ -24,10 +24,10 @@ from pathlib import Path
 
 import pytest
 
+from wikify.corpus.chunks import list_documents
 from wikify.ingest.ingest_steps import INGEST_DAG
 from wikify.ingest.metadata import assemble_pdf_metadata
 from wikify.ingest.pipeline import _read_body_from_doc_markdown, ingest_corpus
-from wikify.store.corpus import list_documents
 
 FIXTURE_PDF = (
     Path(__file__).resolve().parents[1] / "fixtures" / "tiny" / "sample.pdf"

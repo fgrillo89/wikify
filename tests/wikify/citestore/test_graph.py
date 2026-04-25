@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from wikify.citestore.graph import (
+from wikify.corpus.graph import (
     AUTHOR,
     SOURCE,
     KnowledgeGraph,
 )
-from wikify.citestore.graph_build import (
+from wikify.corpus.graph_build import (
     build_knowledge_graph,
     load_knowledge_graph,
     save_knowledge_graph,
 )
+from wikify.corpus.vectors import VectorStore
 from wikify.models import Chunk, DocImage, DocSection, Document
-from wikify.store.vectors import VectorStore
 
 # ---------------------------------------------------------------------------
 # Fixture: small graph with 3 papers, 2 authors, chunks, sections

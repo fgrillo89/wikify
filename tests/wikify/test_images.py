@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from wikify.corpus.chunks import read_doc_images
 from wikify.ingest.images import save_doc_images
 from wikify.ingest.parsers.registry import parse_file
 from wikify.models import Document
-from wikify.store.corpus import read_doc_images
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 
