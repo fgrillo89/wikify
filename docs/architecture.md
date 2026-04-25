@@ -152,13 +152,15 @@ src/wikify/
 │   ├── db.py, resolver.py, bibtex.py, parse.py, models.py, __main__.py
 ├── bundle/                         everything inside one wiki bundle
 │   ├── run/                        execution control (state/events/lock/cost; W2)
-│   ├── concepts/                   in-flight build state
+│   ├── work/                       in-flight build state (matches CLI noun + on-disk dir)
 │   │   └── dossier.py              (W4 adds card/evidence/inbox/claim/tend/canonicalize/schema)
 │   ├── draft/                      per-attempt artifacts
-│   │   └── author_context.py       (W5 adds schema/builder/validator/artifact)
+│   │   ├── author_context.py
+│   │   └── preload.py              (folded into builder.py in W5)
 │   └── wiki/                       committed pages + indices + projections
 │       ├── page.py, index.py, files.py, embeddings.py, page_naming.py
-│       └── graph.py                wiki fluent KG (was store/wiki_graph.py)
+│       ├── graph.py                wiki fluent KG (was store/wiki_graph.py)
+│       └── post_commit.py          (was distill/write_runner.py; absorbed by commit.py in W6)
 ├── ingest/                         corpus pipeline (parse, chunk, embed, graph)
 ├── prompts/                        Python-side prompt templates assembled by DraftBuilder
 ├── render/                         html site renderer
@@ -170,12 +172,12 @@ src/wikify/
 │   ├── _helpers.py                 shared exit codes, error envelope
 │   └── legacy/                     legacy nouns (session/kg/extract/draft/validate/bundle/meter); DEL in Phase C
 ├── api.py                          (W1) Bundle + Corpus context dataclasses
-├── schema.py                       DEL Phase C — splits into bundle/{draft,concepts}/schema.py
+├── schema.py                       DEL Phase C — splits into bundle/{draft,work}/schema.py
 ├── session.py                      DEL Phase C — replaced by bundle/run/state.py + bundle/run/lock.py
 ├── meter.py                        DEL Phase C — cost math moves to bundle/run/cost.py
 ├── paths.py                        DEL Phase C — replaced by api.Bundle/Corpus
-├── baselines/                      DEL Phase C — strategy moves to skill frontmatter
-└── distill/                        DEL Phase C — preload + write_runner are the last residents
+└── baselines/                      DEL Phase C — strategy moves to skill frontmatter
+                                    (distill/ is dissolved entirely in W0; nothing to delete in C)
 ```
 
 ## Skill pack

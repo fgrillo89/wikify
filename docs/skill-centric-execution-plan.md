@@ -311,7 +311,7 @@ sits in context as background knowledge without polluting the slash menu.
      reasoning.
    - `src/wikify/distill/` — extract prompts, dossier assembly, write_runner
      contracts, seed selection. Identify deterministic parts that move into
-     the package-per-noun homes (`bundle/concepts/`, `bundle/draft/`,
+     the package-per-noun homes (`bundle/work/`, `bundle/draft/`,
      `corpus/`) and prompt-side parts that stay in `prompts/`.
    - `src/wikify/schema.py` — `WriteRequest`/`WriteResponse` Pydantic
      contracts. KEEP unless structurally incompatible; never silently
@@ -376,7 +376,7 @@ sits in context as background knowledge without polluting the slash menu.
      with body under 500 lines.
 
 6. **Workstream decomposition.** Each workstream owns one domain package
-   (`bundle/run/`, `bundle/concepts/`, `bundle/draft/`, `bundle/wiki/`,
+   (`bundle/run/`, `bundle/work/`, `bundle/draft/`, `bundle/wiki/`,
    `corpus/`, `citations/`, etc.) plus its CLI handler in `cli/<noun>.py`
    and one or more skill files. `cli/__init__.py` registers nouns
    alphabetically. Workstreams may not edit other nouns' packages except

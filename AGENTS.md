@@ -62,7 +62,7 @@ Top-level packages (post-W0 layout):
 - `citations/` — citation parsing, BibTeX, DOI/Crossref/OpenAlex resolution. Standalone; consumed by `ingest/` only.
 - `bundle/` — everything that lives inside one wiki bundle:
   - `bundle/run/` — execution control (state, events, lock, cost). Populated in W2.
-  - `bundle/concepts/` — in-flight build state (dossier today; card/evidence/inbox/claim/tend/canonicalize land in W4).
+  - `bundle/work/` — in-flight build state (dossier + author_context today; card/evidence/inbox/claim/tend/canonicalize land in W4). Package name matches the CLI noun (`wikify work`) and the on-disk directory (`work/`).
   - `bundle/draft/` — per-attempt artifacts (author_context today; schema/builder/validator/artifact land in W5).
   - `bundle/wiki/` — committed pages, indices, page graph, embeddings, slug naming. `commit.py` and `derived.py` land in W6/W7.
 - `ingest/` — parse, chunk, embed, graph, citations, manifest.
@@ -76,7 +76,7 @@ Top-level packages (post-W0 layout):
   - `cli/legacy/` — Phase A home for the seven legacy nouns (`session`, `kg`, `extract`, `draft`, `validate`, `bundle`, `meter`); deleted in Phase C.
   - `cli/<noun>.py` files for `corpus`, `run`, `work`, `draft`, `wiki`, `render`, `eval`, `migrate` land in W1–W8.
 - `api.py` — `Bundle` and `Corpus` context dataclasses (replace the legacy `paths.py`); lands in W1.
-- Top-level Phase C deletion targets (still on disk during Phase A): `paths.py`, `schema.py`, `session.py`, `meter.py`, `baselines/`, `distill/{__init__,preload,write_runner}.py`.
+- Top-level Phase C deletion targets (still on disk during Phase A): `paths.py`, `schema.py`, `session.py`, `meter.py`, `baselines/`. (`distill/` is dissolved entirely in W0 — see Boundaries above.)
 
 Dependency rules:
 - `corpus/` and `citations/` do not depend on `bundle/`.
