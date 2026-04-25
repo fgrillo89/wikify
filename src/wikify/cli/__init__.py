@@ -16,6 +16,7 @@ import typer
 
 from ..api import Corpus, LegacyBundle
 from ..ingest.pipeline import ingest_corpus, refresh_corpus
+from . import corpus as corpus_cli
 from . import migrate as migrate_cli
 from . import run as run_cli
 from .legacy import bundle as bundle_cli
@@ -27,6 +28,7 @@ from .legacy import session as session_cli
 from .legacy import validate as validate_cli
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
+app.add_typer(corpus_cli.app, name="corpus")
 app.add_typer(migrate_cli.app, name="migrate")
 app.add_typer(run_cli.app, name="run")
 app.add_typer(session_cli.app, name="session")
