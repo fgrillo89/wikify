@@ -3,6 +3,16 @@
 The skill path interacts with Wikify through CLI stdout/stderr. Capturing that
 boundary lets replay tools reconstruct what the model actually saw without
 asking agents to hand-maintain logs.
+
+Two log writers, dispatched on bundle layout:
+
+- :class:`_V2InvocationLog` writes a ``cli_invoked`` :class:`Event` into the
+  v2 bundle's ``run/events.jsonl`` ledger. Large stdout/stderr/stdin spill
+  to ``run/io/<event_id>.{stdin,stdout,stderr}.txt``.
+- :class:`_InvocationLog` keeps the legacy ``_meta/cli_io.jsonl`` shape for
+  v1 bundles still consumed by ``cli/legacy/*``.
+
+Resolution prefers v2 when both layouts are detectable.
 """
 
 from __future__ import annotations
@@ -21,7 +31,9 @@ from uuid import uuid4
 
 from typer import Typer
 
-from ..api import LegacyBundle
+from ..api import Bundle, LayoutMismatchError, LegacyBundle
+from ..bundle.run.events import Event, append_event
+from ..bundle.run.state import load_state
 
 _DISABLE_ENV = "WIKIFY_CLI_IO_LOG"
 _SENSITIVE_FLAG_PARTS = ("key", "token", "secret", "password", "credential")
@@ -154,11 +166,79 @@ class _InvocationLog:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+class _V2InvocationLog:
+    """CLI-IO log writer for v2 bundles. Emits a ``cli_invoked`` Event."""
+
+    def __init__(self, *, argv: Sequence[str], cwd: Path, bundle: Bundle) -> None:
+        self.event_id = uuid4().hex
+        self.argv = list(argv)
+        self.cwd = cwd
+        self.bundle = bundle
+        self.started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.started = time.perf_counter()
+
+        self.io_dir = bundle.io_dir
+        self.io_dir.mkdir(parents=True, exist_ok=True)
+        self.stdin_path = self.io_dir / f"{self.event_id}.stdin.txt"
+        self.stdout_path = self.io_dir / f"{self.event_id}.stdout.txt"
+        self.stderr_path = self.io_dir / f"{self.event_id}.stderr.txt"
+
+    @contextmanager
+    def capture(self):
+        with (
+            self.stdin_path.open("w", encoding="utf-8") as stdin_capture,
+            self.stdout_path.open("w", encoding="utf-8") as stdout_capture,
+            self.stderr_path.open("w", encoding="utf-8") as stderr_capture,
+        ):
+            old_stdin = sys.stdin
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdin = _TeeReader(old_stdin, stdin_capture)
+            sys.stdout = _TeeWriter(old_stdout, stdout_capture)
+            sys.stderr = _TeeWriter(old_stderr, stderr_capture)
+            try:
+                yield
+            finally:
+                sys.stdin = old_stdin
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+
+    def write_event(self, *, exit_code: int) -> None:
+        duration_ms = int((time.perf_counter() - self.started) * 1000)
+        try:
+            state = load_state(self.bundle)
+            run_id = state.run_id
+        except Exception:
+            run_id = ""
+        event = Event(
+            event_id=self.event_id,
+            run_id=run_id,
+            type="cli_invoked",
+            at=self.started_at,
+            actor="cli",
+            stage=None,
+            data={
+                "argv": _redact_argv(self.argv),
+                "cwd": str(self.cwd),
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "stdin_path": str(self.stdin_path),
+                "stdout_path": str(self.stdout_path),
+                "stderr_path": str(self.stderr_path),
+                "stdin_preview": _preview(self.stdin_path),
+                "stdout_preview": _preview(self.stdout_path),
+                "stderr_preview": _preview(self.stderr_path),
+            },
+        )
+        append_event(self.bundle, event)
+
+
 def run_with_io_logging(app: Typer, argv: Sequence[str] | None = None) -> None:
     """Run a Typer app while teeing stdin/stdout/stderr into bundle telemetry.
 
-    Logging is enabled when a bundle can be inferred from `--session`, `--bundle`,
-    or the current working directory. Set `WIKIFY_CLI_IO_LOG=0` to disable.
+    Logging is enabled when a v2 or v1 bundle can be inferred from
+    ``--run``, ``--session``, ``--bundle``, or the current working
+    directory. Set ``WIKIFY_CLI_IO_LOG=0`` to disable.
     """
     effective_argv = list(argv or sys.argv)
     log = _build_invocation_log(effective_argv)
@@ -182,13 +262,44 @@ def run_with_io_logging(app: Typer, argv: Sequence[str] | None = None) -> None:
         log.write_event(exit_code=exit_code)
 
 
-def _build_invocation_log(argv: Sequence[str]) -> _InvocationLog | None:
+def _build_invocation_log(
+    argv: Sequence[str],
+) -> _V2InvocationLog | _InvocationLog | None:
     if os.environ.get(_DISABLE_ENV) == "0":
         return None
-    bundle_root = _resolve_bundle_root(argv[1:], Path.cwd())
-    if bundle_root is None:
+
+    cwd = Path.cwd()
+
+    # Prefer v2: --run flag, --bundle flag pointing at v2, or cwd is v2 root.
+    v2_root = _resolve_v2_bundle_root(argv[1:], cwd)
+    if v2_root is not None:
+        try:
+            v2_bundle = Bundle.open(v2_root)
+        except (LayoutMismatchError, FileNotFoundError):
+            v2_bundle = None
+        if v2_bundle is not None:
+            return _V2InvocationLog(argv=argv, cwd=cwd, bundle=v2_bundle)
+
+    # Fall back to v1.
+    v1_root = _resolve_bundle_root(argv[1:], cwd)
+    if v1_root is None:
         return None
-    return _InvocationLog(argv=argv, cwd=Path.cwd(), bundle=LegacyBundle(bundle_root))
+    return _InvocationLog(argv=argv, cwd=cwd, bundle=LegacyBundle(v1_root))
+
+
+def _resolve_v2_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:
+    """Return a v2 bundle root if --run, --bundle, or cwd resolves to one."""
+    run_path = _option_path(args, "--run")
+    if run_path is not None and (run_path / "run" / "state.json").is_file():
+        return run_path.resolve()
+
+    bundle_path = _option_path(args, "--bundle")
+    if bundle_path is not None and (bundle_path / "run" / "state.json").is_file():
+        return bundle_path.resolve()
+
+    if (cwd / "run" / "state.json").is_file():
+        return cwd.resolve()
+    return None
 
 
 def _resolve_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:
