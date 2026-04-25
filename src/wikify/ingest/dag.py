@@ -175,7 +175,8 @@ def _refresh_openalex(ctx: dict) -> None:
         return
     import asyncio
 
-    from wikify.citations import AsyncResolver, DatabaseManager
+    from wikify.citations.db import DatabaseManager
+    from wikify.citations.resolver import AsyncResolver
 
     all_cits = []
     for doc in ctx["docs"]:
