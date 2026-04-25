@@ -6,12 +6,19 @@ Canonical project reference for any agentic runtime. Behavior rules
 
 ---
 
+> **Note:** This document describes the legacy CLI surface
+> (`session`/`kg`/`extract`/`draft`/`validate`/`bundle`/`meter`). The
+> redesign target is in `docs/skill-centric-execution-plan.md` and
+> `docs/filesystem-state-design.md`.
+
 ## Read First
 
-1. `docs/architecture.md` — system design and CLI surface
-2. `docs/metrics.md` — M1–M6, GT-P, GT-C
-3. `.claude/skills/wikify/workflows/run-baseline.md` — the canonical workflow loop
-4. `.claude/skills/wikify/reference/schemas.md` — durable artifact catalog
+1. `docs/skill-centric-execution-plan.md` — redesign brief (binding)
+2. `docs/filesystem-state-design.md` — target filesystem and CLI surface
+3. `docs/architecture.md` — current/legacy system design
+4. `docs/metrics.md` — M1–M6, GT-P, GT-C
+5. `.claude/skills/wikify/workflows/run-baseline.md` — the canonical workflow loop
+6. `.claude/skills/wikify/reference/schemas.md` — durable artifact catalog
 
 ---
 

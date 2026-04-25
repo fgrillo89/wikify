@@ -1,5 +1,9 @@
 # Wikify architecture
 
+> **Note:** This document describes the current/legacy system. The redesign
+> target is in `docs/skill-centric-execution-plan.md` (binding brief) and
+> `docs/filesystem-state-design.md` (filesystem and CLI surface).
+
 ## What the system does
 
 Wikify takes a corpus of source documents (PDF, DOCX, PPTX, HTML, MD)
