@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import typer
@@ -18,13 +17,13 @@ from ..distill.seed import (
 )
 from ..paths import CorpusPaths
 from ..session import (
-    SessionLockHeldError,
     apply_merge_patch,
     load_session,
     save_session,
     session_lock,
     touch,
 )
+from ._helpers import cli_owner, handle_lock_held
 
 app = typer.Typer(add_completion=False, help="Corpus knowledge-graph queries.")
 
@@ -72,8 +71,8 @@ def cmd_seeds(
             seed_chunk_ids.append(chunk["id"])
 
     if persist:
-        try:
-            with session_lock(session_path, owner=owner or f"wikify-cli/pid-{os.getpid()}"):
+        with handle_lock_held():
+            with session_lock(session_path, owner=cli_owner(owner)):
                 fresh = load_session(session_path)
                 updated = apply_merge_patch(
                     fresh,
@@ -83,19 +82,6 @@ def cmd_seeds(
                     },
                 )
                 save_session(session_path, touch(updated))
-        except SessionLockHeldError as exc:
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "error": "lock_held",
-                        "owner": exc.owner,
-                        "acquired_at": exc.acquired_at,
-                    }
-                ),
-                err=True,
-            )
-            raise typer.Exit(code=2) from exc
 
     typer.echo(
         json.dumps(

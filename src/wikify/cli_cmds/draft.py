@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import typer
@@ -17,7 +16,6 @@ from ..schema import (
 )
 from ..session import (
     PageEntry,
-    SessionLockHeldError,
     apply_merge_patch,
     load_session,
     save_session,
@@ -25,6 +23,7 @@ from ..session import (
     touch,
 )
 from ..types import ModelTier
+from ._helpers import cli_owner, handle_lock_held
 
 app = typer.Typer(add_completion=False, help="Build request artifacts for the write subagent.")
 
@@ -34,10 +33,6 @@ app = typer.Typer(add_completion=False, help="Build request artifacts for the wr
 WRITE_PROMPT = "wikify/write"
 
 DRAFT_SCHEMA_VERSION = 1
-
-
-def _cli_owner(override: str | None) -> str:
-    return override or f"wikify-cli/pid-{os.getpid()}"
 
 
 @app.command("write-request")
@@ -129,24 +124,11 @@ def cmd_write_request(
     # Record the draft path on the session page entry. If the page is not
     # yet in session.pages, append it with status=drafted.
     patch = _session_patch_after_draft(session.pages, page_id, draft_path)
-    try:
-        with session_lock(session_path, owner=_cli_owner(owner)):
+    with handle_lock_held():
+        with session_lock(session_path, owner=cli_owner(owner)):
             fresh = load_session(session_path)
             updated = apply_merge_patch(fresh, patch)
             save_session(session_path, touch(updated))
-    except SessionLockHeldError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "lock_held",
-                    "owner": exc.owner,
-                    "acquired_at": exc.acquired_at,
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
 
     typer.echo(
         json.dumps(

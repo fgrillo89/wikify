@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -12,7 +11,6 @@ import typer
 from ..paths import BundlePaths
 from ..session import (
     SchemaVersionMismatchError,
-    SessionLockHeldError,
     UnknownRoleError,
     acquire_lock,
     apply_merge_patch,
@@ -26,12 +24,7 @@ from ..session import (
     touch,
     write_run_snapshot,
 )
-
-
-def _cli_owner(override: str | None) -> str:
-    if override:
-        return override
-    return f"wikify-cli/pid-{os.getpid()}"
+from ._helpers import cli_error, cli_owner, handle_lock_held
 
 app = typer.Typer(add_completion=False, help="Durable session file for skill workflows.")
 
@@ -109,25 +102,12 @@ def cmd_update(
     else:
         patch_text = patch
     patch_data = json.loads(patch_text)
-    try:
-        with session_lock(session_path, owner=_cli_owner(owner)):
+    with handle_lock_held():
+        with session_lock(session_path, owner=cli_owner(owner)):
             session = load_session(session_path)
             updated = apply_merge_patch(session, patch_data)
             updated = touch(updated)
             save_session(session_path, updated)
-    except SessionLockHeldError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "lock_held",
-                    "owner": exc.owner,
-                    "acquired_at": exc.acquired_at,
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
     typer.echo(json.dumps({"ok": True, "updated_at": updated.updated_at}))
 
 
@@ -160,36 +140,14 @@ def cmd_close(
     if status not in {"completed", "failed", "abandoned"}:
         raise typer.BadParameter(f"invalid status: {status}")
     try:
-        with session_lock(session_path, owner=_cli_owner(owner)):
-            session = load_session(session_path)
-            updated = touch(session.model_copy(update={"status": status}))
-            save_session(session_path, updated)
-            run_path = write_run_snapshot(updated)
-    except SessionLockHeldError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "lock_held",
-                    "owner": exc.owner,
-                    "acquired_at": exc.acquired_at,
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
+        with handle_lock_held():
+            with session_lock(session_path, owner=cli_owner(owner)):
+                session = load_session(session_path)
+                updated = touch(session.model_copy(update={"status": status}))
+                save_session(session_path, updated)
+                run_path = write_run_snapshot(updated)
     except UnknownRoleError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "unknown_role_in_calls_jsonl",
-                    "message": str(exc),
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
+        cli_error(1, error="unknown_role_in_calls_jsonl", message=str(exc))
     typer.echo(
         json.dumps({"ok": True, "status": updated.status, "run_path": str(run_path)})
     )
@@ -212,26 +170,13 @@ def cmd_lock(
     owner for audit. Stale locks (past expires_at) are always reclaimed
     silently, with or without --force.
     """
-    try:
+    with handle_lock_held():
         displaced = acquire_lock(
             session_path,
-            owner=_cli_owner(owner),
+            owner=cli_owner(owner),
             ttl_seconds=ttl_seconds,
             force=force,
         )
-    except SessionLockHeldError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "lock_held",
-                    "owner": exc.owner,
-                    "acquired_at": exc.acquired_at,
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
     record = read_lock(session_path) or {}
     out = {
         "ok": True,

@@ -372,6 +372,43 @@ def test_close_mints_per_close_run_id_and_appends_history(tmp_path: Path) -> Non
     assert hist_run_ids == [first_run_id, second_run_id]
 
 
+def test_cmd_close_surfaces_unknown_role_error_via_cli_envelope(tmp_path: Path) -> None:
+    """Regression for PR#36 review finding 5: when `_aggregate_calls_jsonl`
+    raises `UnknownRoleError` during `wikify session close`, the CLI
+    must catch it and emit the structured envelope rather than crashing
+    with a Python traceback.
+    """
+    session_path = _init_session(tmp_path)
+    bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
+    calls_path = BundlePaths(bundle_root).calls_path
+    calls_path.parent.mkdir(parents=True, exist_ok=True)
+    # Hand-craft a _calls.jsonl line with a role outside the Role enum.
+    calls_path.write_text(
+        json.dumps(
+            {
+                "role": "not-a-real-role",
+                "tier": "M",
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "context_used": 1,
+                "context_cap": 1000,
+                "wall_seconds": 0.0,
+                "cache_hit": False,
+                "prompt_hash": "",
+                "haiku_eq": 1.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["session", "close", "--session", str(session_path)])
+    assert result.exit_code != 0, result.output
+    payload = json.loads(result.stderr or result.output)
+    assert payload["ok"] is False
+    assert payload["error"] == "unknown_role_in_calls_jsonl"
+
+
 def test_aggregate_calls_jsonl_rejects_unknown_role(tmp_path: Path) -> None:
     """Regression for PR#32 round 2 finding 7: unknown role strings in
     _calls.jsonl must fail loudly at aggregation, not silently bucket.

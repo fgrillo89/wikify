@@ -12,7 +12,6 @@ close` reads the jsonl and aggregates the meter snapshot into
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import typer
@@ -21,7 +20,6 @@ from ..config import ABORT_RATIO
 from ..meter import _DEFAULT_TIERS, CallRecord
 from ..paths import BundlePaths
 from ..session import (
-    SessionLockHeldError,
     apply_merge_patch,
     load_session,
     save_session,
@@ -29,6 +27,7 @@ from ..session import (
     touch,
 )
 from ..types import ModelTier, Role
+from ._helpers import cli_error, cli_owner, handle_lock_held
 
 
 class BudgetExceededError(RuntimeError):
@@ -68,10 +67,6 @@ def check_budget_gate(target: float, projected_spent: float) -> None:
 app = typer.Typer(add_completion=False, help="Cost-meter telemetry for skill workflows.")
 
 
-def _cli_owner(override: str | None) -> str:
-    return override or f"wikify-cli/pid-{os.getpid()}"
-
-
 def haiku_eq_for(tier: ModelTier, input_tokens: int, output_tokens: int) -> float:
     return _DEFAULT_TIERS[tier].haiku_eq(input_tokens, output_tokens)
 
@@ -108,7 +103,7 @@ def append_call_record(
         prompt_hash=prompt_hash,
         haiku_eq=haiku_eq,
     )
-    with session_lock(session_path, owner=_cli_owner(owner)):
+    with session_lock(session_path, owner=cli_owner(owner)):
         fresh = load_session(session_path)
         new_spent = float(fresh.budget.haiku_eq_spent) + float(haiku_eq)
         # Append the record + update the aggregate BEFORE the gate raises,
@@ -175,45 +170,27 @@ def cmd_record(
         )
 
     try:
-        record = append_call_record(
-            session_path=session_path,
-            role=role_e,
-            tier=tier_e,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            context_cap=context_cap,
-            wall_seconds=wall_seconds,
-            cache_hit=cache_hit,
-            prompt_hash=prompt_hash,
-            owner=owner,
-        )
-    except SessionLockHeldError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "lock_held",
-                    "owner": exc.owner,
-                    "acquired_at": exc.acquired_at,
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
+        with handle_lock_held():
+            record = append_call_record(
+                session_path=session_path,
+                role=role_e,
+                tier=tier_e,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                context_cap=context_cap,
+                wall_seconds=wall_seconds,
+                cache_hit=cache_hit,
+                prompt_hash=prompt_hash,
+                owner=owner,
+            )
     except BudgetExceededError as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "budget_exceeded",
-                    "spent": exc.spent,
-                    "target": exc.target,
-                    "ratio": exc.ratio,
-                }
-            ),
-            err=True,
+        cli_error(
+            3,
+            error="budget_exceeded",
+            spent=exc.spent,
+            target=exc.target,
+            ratio=exc.ratio,
         )
-        raise typer.Exit(code=3) from exc
 
     calls_path = BundlePaths(Path(load_session(session_path).bundle_root)).calls_path
     typer.echo(
