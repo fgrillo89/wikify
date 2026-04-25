@@ -1,5 +1,6 @@
 """Tests for store.page_naming: natural Wikipedia-style page ids."""
 
+from wikify.api import LegacyBundle
 from wikify.bundle.wiki.files import write_page
 from wikify.bundle.wiki.index import (
     WikiIndex,
@@ -12,7 +13,6 @@ from wikify.bundle.wiki.page_naming import (
     url_slug,
 )
 from wikify.models import Evidence, WikiPage
-from wikify.paths import BundlePaths
 
 
 def test_page_id_from_title_basic():
@@ -48,7 +48,7 @@ def test_round_trip_title_to_filename_to_slug():
 
 
 def test_alias_resolution_case_insensitive(tmp_path):
-    b = BundlePaths(root=tmp_path / "bundle")
+    b = LegacyBundle(root=tmp_path / "bundle")
     b.ensure()
     page = WikiPage(
         id="Atomic Layer Deposition",
@@ -72,7 +72,7 @@ def test_alias_resolution_case_insensitive(tmp_path):
 
 def test_migrate_prefixed_page_ids(tmp_path, monkeypatch):
     monkeypatch.setenv("WIKIFY_SKIP_PAGE_ID_MIGRATION", "1")
-    b = BundlePaths(root=tmp_path / "bundle")
+    b = LegacyBundle(root=tmp_path / "bundle")
     b.ensure()
     legacy = b.articles_dir / "concept-atomic-layer-deposition.md"
     legacy.write_text(

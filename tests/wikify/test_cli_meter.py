@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from wikify.api import LegacyBundle
 from wikify.cli import app
-from wikify.paths import BundlePaths
 
 runner = CliRunner()
 
@@ -72,7 +72,7 @@ def test_meter_record_appends_calls_jsonl_and_updates_budget(tmp_path: Path) -> 
     bundle_root = Path(
         json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"]
     )
-    calls_path = BundlePaths(bundle_root).calls_path
+    calls_path = LegacyBundle(bundle_root).calls_path
     lines = calls_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
@@ -227,7 +227,7 @@ def test_meter_record_enforces_1_05x_budget_abort(tmp_path: Path) -> None:
     assert err["error"] == "budget_exceeded"
     # _calls.jsonl MUST carry the breaching record: the call is part of
     # the run and must be visible after the abort.
-    calls_path = BundlePaths(bundle).calls_path
+    calls_path = LegacyBundle(bundle).calls_path
     assert calls_path.exists(), "breaching record must land in _calls.jsonl"
     lines = [ln for ln in calls_path.read_text().splitlines() if ln.strip()]
     assert len(lines) == 1
@@ -336,7 +336,7 @@ def test_close_mints_per_close_run_id_and_appends_history(tmp_path: Path) -> Non
     # First close.
     runner.invoke(app, ["session", "close", "--session", str(session_path)])
     bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
-    paths = BundlePaths(bundle_root)
+    paths = LegacyBundle(bundle_root)
     first_snapshot = json.loads(paths.run_path.read_text(encoding="utf-8"))
     first_run_id = first_snapshot["run_id"]
 
@@ -376,7 +376,7 @@ def test_cmd_close_surfaces_unknown_role_error_via_cli_envelope(tmp_path: Path) 
     """
     session_path = _init_session(tmp_path)
     bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
-    calls_path = BundlePaths(bundle_root).calls_path
+    calls_path = LegacyBundle(bundle_root).calls_path
     calls_path.parent.mkdir(parents=True, exist_ok=True)
     # Hand-craft a _calls.jsonl line with a role outside the Role enum.
     calls_path.write_text(

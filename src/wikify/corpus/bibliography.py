@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from ..paths import CorpusPaths
+from ..api import Corpus
 
 EMPTY_CITATION_INDEX: dict[str, Any] = {
     "schema_version": 2,
@@ -14,7 +14,7 @@ EMPTY_CITATION_INDEX: dict[str, Any] = {
 }
 
 
-def load_citation_index(corpus: CorpusPaths) -> dict[str, Any]:
+def load_citation_index(corpus: Corpus) -> dict[str, Any]:
     """Load ``citations.json`` without repairing corpus artifacts."""
     if not corpus.citation_index_path.exists():
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in EMPTY_CITATION_INDEX.items()}

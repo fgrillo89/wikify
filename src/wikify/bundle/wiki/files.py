@@ -3,12 +3,12 @@
 import json
 from pathlib import Path
 
+from ...api import LegacyBundle
 from ...models import Evidence, WikiPage
-from ...paths import BundlePaths
 from .page_naming import page_filename
 
 
-def write_page(bundle: BundlePaths, page: WikiPage) -> Path:
+def write_page(bundle: LegacyBundle, page: WikiPage) -> Path:
     bundle.ensure()
     target_dir = bundle.articles_dir if page.kind == "article" else bundle.people_dir
     path = target_dir / page_filename(page.id)

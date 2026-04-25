@@ -14,8 +14,9 @@ from pathlib import Path
 
 import typer
 
+from ..api import Corpus, LegacyBundle
 from ..ingest.pipeline import ingest_corpus, refresh_corpus
-from ..paths import BundlePaths, CorpusPaths
+from . import migrate as migrate_cli
 from .legacy import bundle as bundle_cli
 from .legacy import draft as draft_cli
 from .legacy import extract as extract_cli
@@ -25,6 +26,7 @@ from .legacy import session as session_cli
 from .legacy import validate as validate_cli
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
+app.add_typer(migrate_cli.app, name="migrate")
 app.add_typer(session_cli.app, name="session")
 app.add_typer(kg_cli.app, name="kg")
 app.add_typer(extract_cli.app, name="extract")
@@ -137,7 +139,7 @@ def refresh(
         raise typer.BadParameter(
             f"--cite-resolution must be off|crossref|full, got {cite_resolution!r}"
         )
-    paths = CorpusPaths(root=corpus_dir)
+    paths = Corpus(root=corpus_dir)
     refresh_corpus(
         paths,
         resolve_bibliography_doi=openalex,
@@ -153,7 +155,7 @@ def field_detect_cmd(
     """Auto-detect the most likely field for a corpus and print the top scores."""
     from wikify.corpus.field_detect import detect_field, detect_field_scores
 
-    corpus = CorpusPaths(root=corpus_dir)
+    corpus = Corpus(root=corpus_dir)
     chosen = detect_field(corpus)
     scores = detect_field_scores(corpus)
     typer.echo(f"field: {chosen}")
@@ -170,7 +172,7 @@ def trace(
     """Analyse KG exploration trace from a distill run."""
     from ..eval.trace_replay import exploration_timeline, load_trace, replay_stats
 
-    bundle = BundlePaths(root=bundle_dir)
+    bundle = LegacyBundle(root=bundle_dir)
     trace_path = bundle.meta_dir / "kg_trace.jsonl"
     if not trace_path.exists():
         typer.echo(f"no trace file at {trace_path}")
@@ -228,7 +230,7 @@ def html(
     """Render a wiki bundle to a static HTML site."""
     from ..render.html import build_site
 
-    bundle = BundlePaths(root=bundle_dir)
+    bundle = LegacyBundle(root=bundle_dir)
     target = out_dir if out_dir is not None else (bundle_dir / "_html")
     corpus_root = Path(corpus_dir) if corpus_dir is not None else None
     result = build_site(bundle, target, corpus_root=corpus_root)
@@ -250,7 +252,7 @@ def eval_bundle(
     from ..embedding import embedder_for
     from ..eval import metrics
 
-    corpus = CorpusPaths(root=corpus_dir)
+    corpus = Corpus(root=corpus_dir)
     bundle = load_bundle(bundle_dir)
 
     vs = load_vectors(corpus.vectors_path)

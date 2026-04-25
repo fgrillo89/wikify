@@ -262,14 +262,14 @@ def test_validate_write_patches_session_on_ok(tmp_path: Path) -> None:
     session page entry to status=validated per atoms.md.
     """
     # Need a real session for this test.
-    from wikify.paths import BundlePaths
+    from wikify.api import LegacyBundle
     from wikify.session import init_session, save_session
 
     bundle = tmp_path / "bundle"
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     session = init_session(bundle_root=bundle, corpus_root=corpus)
-    session_path = BundlePaths(bundle).session_path
+    session_path = LegacyBundle(bundle).session_path
     save_session(session_path, session)
 
     draft, response = _write_pair(tmp_path, page_id="ALD")

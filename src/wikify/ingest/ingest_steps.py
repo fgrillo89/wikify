@@ -48,7 +48,7 @@ import json
 import sys
 from pathlib import Path
 
-from ..paths import CorpusPaths
+from ..api import Corpus
 from .dag import Step, Wave
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ async def _ingest_doi_resolve(ctx: dict) -> None:
     if not dois:
         ctx["resolved_metadata"] = {}
         return
-    paths: CorpusPaths = ctx["paths"]
+    paths: Corpus = ctx["paths"]
     cache_path = paths.root / ".citestore.db"
     resolved = await asyncio.to_thread(
         resolve_many, dois, cache_path=cache_path,
@@ -244,7 +244,7 @@ def _ingest_content_parse(ctx: dict) -> None:
     from .pipeline import _stream_parse_and_persist
 
     sources: list[Path] = ctx["sources_to_parse"]
-    paths: CorpusPaths = ctx["paths"]
+    paths: Corpus = ctx["paths"]
     parser_backend: str = ctx.get("parser_backend", "default")
     max_workers = ctx.get("max_workers")
 
@@ -281,7 +281,7 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
     from .metadata import assemble_pdf_metadata
     from .pipeline import _read_body_from_doc_markdown
 
-    paths: CorpusPaths = ctx["paths"]
+    paths: Corpus = ctx["paths"]
     receipts = ctx.get("receipts") or []
     probes: dict[str, _Probe] = ctx.get("probes") or {}
     resolved_by_doi: dict[str, dict] = ctx.get("resolved_metadata") or {}
@@ -384,7 +384,7 @@ INGEST_DAG: list[Wave] = [
 
 def run_ingest_dag(
     sources: list[Path],
-    paths: CorpusPaths,
+    paths: Corpus,
     *,
     max_workers: int | None,
     parser_backend: str,

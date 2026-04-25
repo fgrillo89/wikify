@@ -8,8 +8,8 @@ from pathlib import Path
 
 from wikify.citations.models import CitationEntry
 
+from ..api import Corpus
 from ..models import Chunk, DocImage, Document
-from ..paths import CorpusPaths
 from .vectors import VectorStore, load_vectors, save_vectors
 
 
@@ -27,7 +27,7 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def write_document(paths: CorpusPaths, doc: Document, markdown: str, chunks: list[Chunk]) -> None:
+def write_document(paths: Corpus, doc: Document, markdown: str, chunks: list[Chunk]) -> None:
     paths.ensure()
     atomic_write_text(
         paths.markdown_dir / f"{doc.id}.md", markdown,
@@ -41,7 +41,7 @@ def write_document(paths: CorpusPaths, doc: Document, markdown: str, chunks: lis
     )
 
 
-def list_documents(paths: CorpusPaths) -> list[Document]:
+def list_documents(paths: Corpus) -> list[Document]:
     out: list[Document] = []
     if not paths.docs_dir.exists():
         return out
@@ -50,7 +50,7 @@ def list_documents(paths: CorpusPaths) -> list[Document]:
     return out
 
 
-def read_chunks(paths: CorpusPaths, doc_id: str) -> list[Chunk]:
+def read_chunks(paths: Corpus, doc_id: str) -> list[Chunk]:
     f = paths.chunks_dir / f"{doc_id}.jsonl"
     if not f.exists():
         return []
@@ -61,7 +61,7 @@ def read_chunks(paths: CorpusPaths, doc_id: str) -> list[Chunk]:
     ]
 
 
-def all_chunks(paths: CorpusPaths) -> list[Chunk]:
+def all_chunks(paths: Corpus) -> list[Chunk]:
     out: list[Chunk] = []
     for doc in list_documents(paths):
         out.extend(read_chunks(paths, doc.id))
@@ -69,7 +69,7 @@ def all_chunks(paths: CorpusPaths) -> list[Chunk]:
 
 
 def read_chunks_by_id(
-    corpus: CorpusPaths,
+    corpus: Corpus,
     chunk_ids: Sequence[str],
     limit: int | None = None,
 ) -> list[Chunk]:
@@ -111,15 +111,15 @@ def read_chunks_by_id(
     return result
 
 
-def write_vector_store(paths: CorpusPaths, store: VectorStore) -> None:
+def write_vector_store(paths: Corpus, store: VectorStore) -> None:
     save_vectors(paths.vectors_path, store)
 
 
-def read_vector_store(paths: CorpusPaths) -> VectorStore:
+def read_vector_store(paths: Corpus) -> VectorStore:
     return load_vectors(paths.vectors_path)
 
 
-def write_knowledge_graph(paths: CorpusPaths, kg: object) -> None:
+def write_knowledge_graph(paths: Corpus, kg: object) -> None:
     """Persist a KnowledgeGraph to knowledge_graph.json."""
     from wikify.corpus.graph_build import save_knowledge_graph
 
@@ -127,7 +127,7 @@ def write_knowledge_graph(paths: CorpusPaths, kg: object) -> None:
 
 
 def read_knowledge_graph(
-    paths: CorpusPaths,
+    paths: Corpus,
     vectors: object | None = None,
     embed_fn: object | None = None,
 ) -> object:

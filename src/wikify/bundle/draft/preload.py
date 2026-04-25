@@ -18,16 +18,16 @@ from wikify.corpus.chunks import (
 from wikify.corpus.equations_index import EquationIndex
 from wikify.corpus.images_index import ImageIndex
 
+from ...api import Corpus
 from ...embedding import embedder_for
 from ...models import Chunk, Document
-from ...paths import CorpusPaths
 
 
 @dataclass
 class PreloadedCorpus:
     """All corpus state that is expensive to load and immutable between ingests."""
 
-    corpus_paths: CorpusPaths
+    corpus_paths: Corpus
     docs: list[Document]
     docs_by_id: dict[str, Document]
     chunks: list[Chunk]
@@ -40,7 +40,7 @@ class PreloadedCorpus:
     citation_index: dict
 
 
-def preload_corpus(corpus: CorpusPaths) -> PreloadedCorpus:
+def preload_corpus(corpus: Corpus) -> PreloadedCorpus:
     """Load the corpus once. Returns a ``PreloadedCorpus`` for repeated use."""
     docs = list_documents(corpus)
     docs_by_id: dict[str, Document] = {d.id: d for d in docs}

@@ -13,11 +13,11 @@ Generates the paper note template for the corpus vault.
 import json
 from pathlib import Path
 
+from ..api import Corpus
 from ..models import Document
-from ..paths import CorpusPaths
 
 
-def write_doc_markdown(corpus: CorpusPaths, doc: Document, body: str) -> Path:
+def write_doc_markdown(corpus: Corpus, doc: Document, body: str) -> Path:
     """Overwrite ``<corpus>/markdown/<doc.id>.md`` with an enriched
     Obsidian-friendly rendering.
 

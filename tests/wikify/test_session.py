@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from wikify.api import LegacyBundle
 from wikify.cli import app
-from wikify.paths import BundlePaths
 from wikify.session import (
     SCHEMA_VERSION,
     SchemaVersionMismatchError,
@@ -25,7 +25,7 @@ runner = CliRunner()
 
 def _write_session(bundle: Path, corpus: Path) -> Path:
     session = init_session(bundle_root=bundle, corpus_root=corpus)
-    paths = BundlePaths(bundle)
+    paths = LegacyBundle(bundle)
     save_session(paths.session_path, session)
     return paths.session_path
 
@@ -223,7 +223,7 @@ def test_cli_close_persists_each_terminal_status_distinctly(tmp_path: Path) -> N
         assert result.exit_code == 0, result.output
         assert json.loads(sess.read_text(encoding="utf-8"))["status"] == label
         assert (
-            json.loads(BundlePaths(bundle).run_path.read_text(encoding="utf-8"))["status"]
+            json.loads(LegacyBundle(bundle).run_path.read_text(encoding="utf-8"))["status"]
             == label
         )
 
@@ -276,7 +276,7 @@ def test_cli_lock_force_overwrites_existing_lock(tmp_path: Path) -> None:
 
 
 def test_stale_lock_past_ttl_is_reclaimed(tmp_path: Path) -> None:
-    from wikify.paths import BundlePaths
+    from wikify.api import LegacyBundle
     from wikify.session import acquire_lock
 
     bundle = tmp_path / "bundle"
@@ -290,7 +290,7 @@ def test_stale_lock_past_ttl_is_reclaimed(tmp_path: Path) -> None:
     # Write a stale lock record directly: expired 1 hour ago.
     import json as _json
 
-    paths = BundlePaths(bundle)
+    paths = LegacyBundle(bundle)
     paths.session_lock_path.write_text(
         _json.dumps(
             {
@@ -311,7 +311,7 @@ def test_stale_lock_past_ttl_is_reclaimed(tmp_path: Path) -> None:
 
 
 def test_bundle_paths_exposes_session_layout(tmp_path: Path) -> None:
-    paths = BundlePaths(tmp_path / "bundle")
+    paths = LegacyBundle(tmp_path / "bundle")
     assert paths.session_dir == tmp_path / "bundle" / "_session"
     assert paths.session_path == paths.session_dir / "session.json"
     assert paths.session_checkpoints_dir == paths.session_dir / "checkpoints"

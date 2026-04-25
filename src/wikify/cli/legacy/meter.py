@@ -13,9 +13,9 @@ from pathlib import Path
 
 import typer
 
+from ...api import LegacyBundle
 from ...config import ABORT_RATIO
 from ...meter import _DEFAULT_TIERS, CallRecord
-from ...paths import BundlePaths
 from ...session import (
     apply_merge_patch,
     load_session,
@@ -80,7 +80,7 @@ def append_call_record(
     Raises SessionLockHeldError if another owner holds the lock.
     """
     session = load_session(session_path)
-    bundle_paths = BundlePaths(Path(session.bundle_root))
+    bundle_paths = LegacyBundle(Path(session.bundle_root))
     haiku_eq = haiku_eq_for(tier, input_tokens, output_tokens)
     record = CallRecord(
         role=role,
@@ -182,7 +182,7 @@ def cmd_record(
             ratio=exc.ratio,
         )
 
-    calls_path = BundlePaths(Path(load_session(session_path).bundle_root)).calls_path
+    calls_path = LegacyBundle(Path(load_session(session_path).bundle_root)).calls_path
     typer.echo(
         json.dumps(
             {

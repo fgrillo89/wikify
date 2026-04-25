@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from wikify.api import LegacyBundle
 from wikify.cli import app
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
@@ -48,7 +48,7 @@ def _seed_extract_response(
     concepts: list[dict],
 ) -> Path:
     bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
-    scratch = BundlePaths(bundle_root).scratch_dir
+    scratch = LegacyBundle(bundle_root).scratch_dir
     scratch.mkdir(parents=True, exist_ok=True)
     out = scratch / f"extract-{chunk_id}.json"
     out.write_text(

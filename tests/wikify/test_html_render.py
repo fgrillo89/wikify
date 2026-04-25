@@ -10,7 +10,7 @@ import io
 import sys
 from pathlib import Path
 
-from wikify.paths import BundlePaths
+from wikify.api import LegacyBundle
 from wikify.render.html import build_site
 
 # 1x1 PNG (smallest valid PNG)
@@ -171,8 +171,8 @@ def _make_corpus_with_image(root: Path) -> Path:
     return root
 
 
-def _make_bundle(root: Path) -> BundlePaths:
-    bundle = BundlePaths(root=root)
+def _make_bundle(root: Path) -> LegacyBundle:
+    bundle = LegacyBundle(root=root)
     bundle.ensure()
     (bundle.articles_dir / "Photocatalysis.md").write_text(_PHOTOCAT_BODY, encoding="utf-8")
     (bundle.articles_dir / "Atomic Layer Deposition.md").write_text(_ALD_BODY, encoding="utf-8")
@@ -262,7 +262,7 @@ def test_build_site_copies_css(tmp_path: Path) -> None:
 
 def test_build_site_skips_skeleton_pages(tmp_path: Path) -> None:
     """build_site must omit skeleton pages and log the count to stderr."""
-    bundle = BundlePaths(root=tmp_path / "bundle")
+    bundle = LegacyBundle(root=tmp_path / "bundle")
     bundle.ensure()
 
     # Two pages with real bodies (well above 200 chars).

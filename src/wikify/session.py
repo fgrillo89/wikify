@@ -22,7 +22,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .paths import BundlePaths
+from .api import LegacyBundle
 from .types import Role
 
 SCHEMA_VERSION = 1
@@ -146,7 +146,7 @@ def init_session(
     budget_target_haiku_eq: int = 0,
 ) -> SessionV1:
     """Create the directory layout and return the new SessionV1 (not yet saved)."""
-    paths = BundlePaths(Path(bundle_root))
+    paths = LegacyBundle(Path(bundle_root))
     paths.session_dir.mkdir(parents=True, exist_ok=True)
     paths.session_checkpoints_dir.mkdir(parents=True, exist_ok=True)
     paths.scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -198,7 +198,7 @@ def _merge_patch(target: object, patch: object) -> object:
 
 def checkpoint_session(session_path: Path, label: str) -> Path:
     session = load_session(session_path)
-    paths = BundlePaths(Path(session.bundle_root))
+    paths = LegacyBundle(Path(session.bundle_root))
     paths.session_checkpoints_dir.mkdir(parents=True, exist_ok=True)
     dest = paths.session_checkpoints_dir / f"{label}.json"
     shutil.copyfile(session_path, dest)
@@ -231,7 +231,7 @@ def _lock_is_stale(record: dict) -> bool:
 
 def _lock_path_for(session_path: Path) -> Path:
     bundle_root = Path(json.loads(session_path.read_text(encoding="utf-8"))["bundle_root"])
-    return BundlePaths(bundle_root).session_lock_path
+    return LegacyBundle(bundle_root).session_lock_path
 
 
 def acquire_lock(
@@ -308,7 +308,7 @@ def write_run_snapshot(session: "SessionV1") -> Path:
     <bundle>/_calls.jsonl. `wikify html` and `wikify eval` consume this
     envelope.
     """
-    bundle_paths = BundlePaths(Path(session.bundle_root))
+    bundle_paths = LegacyBundle(Path(session.bundle_root))
     bundle_paths.ensure()
     pages = [p.model_dump(mode="json") for p in session.pages]
     counts = {"planned": 0, "drafted": 0, "validated": 0, "committed": 0, "failed": 0}

@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from wikify.api import LegacyBundle
 from wikify.cli import app
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
@@ -176,7 +176,7 @@ def test_bundle_commit_page_writes_markdown_and_updates_session(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
@@ -262,7 +262,7 @@ def test_bundle_commit_page_rejects_verdict_page_id_mismatch(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
@@ -341,7 +341,7 @@ def test_bundle_commit_page_rejects_response_edited_after_validation(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
@@ -425,7 +425,7 @@ def test_bundle_commit_page_rejects_unvalidated_page(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
@@ -478,7 +478,7 @@ def test_bundle_commit_page_rejects_unvalidated_page(
     )
     assert result.exit_code != 0
     # Page file must not exist.
-    assert not list(BundlePaths(bundle).articles_dir.glob("*.md"))
+    assert not list(LegacyBundle(bundle).articles_dir.glob("*.md"))
 
 
 def test_bundle_commit_page_rebuilds_index_and_graph(
@@ -505,7 +505,7 @@ def test_bundle_commit_page_rebuilds_index_and_graph(
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
 
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     response_path.write_text(
@@ -562,7 +562,7 @@ def test_bundle_commit_page_no_partial_write_on_lock_held(
 ) -> None:
     """Acquiring the lock BEFORE the page write means lock_held leaves no partial state."""
     session_path, bundle = initialized_session
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     scratch.mkdir(parents=True, exist_ok=True)
     response_path = scratch / "response-NEW.json"
     filler = "New page filler prose. " * 80
@@ -627,7 +627,7 @@ def test_bundle_commit_page_no_partial_write_on_lock_held(
     assert commit.exit_code == 2
 
     # No NEW.md should have been written.
-    new_article = BundlePaths(bundle).articles_dir / "NEW.md"
+    new_article = LegacyBundle(bundle).articles_dir / "NEW.md"
     assert not new_article.exists(), "partial page write leaked under lock_held"
 
 
@@ -689,7 +689,7 @@ def test_bundle_commit_page_routes_person_to_people_dir(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-Stuart Parkin.json"
     body, _, _ = _commit_ready_response_for(draft_path, "Stuart Parkin")
     response_path.write_text(
@@ -796,7 +796,7 @@ def test_bundle_commit_page_rejects_kind_mismatch(
         ],
     )
     draft_path = Path(json.loads(draft.output)["draft_path"])
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     response_path = scratch / "response-ALD.json"
     body, _, _ = _commit_ready_response_for(draft_path, "ALD")
     # Subagent disagrees with the session: writes page_kind="person".
@@ -844,15 +844,15 @@ def test_bundle_commit_page_rejects_kind_mismatch(
     err = json.loads(result.stderr or result.output)
     assert err["error"] == "page_kind_mismatch"
     # No page file should have been written on either side.
-    assert not list(BundlePaths(bundle).articles_dir.glob("*.md"))
-    assert not list(BundlePaths(bundle).people_dir.glob("*.md"))
+    assert not list(LegacyBundle(bundle).articles_dir.glob("*.md"))
+    assert not list(LegacyBundle(bundle).people_dir.glob("*.md"))
 
 
 def test_bundle_commit_page_rejects_failed_validation(
     initialized_session: tuple[Path, Path],
 ) -> None:
     session_path, bundle = initialized_session
-    scratch = BundlePaths(bundle).scratch_dir
+    scratch = LegacyBundle(bundle).scratch_dir
     scratch.mkdir(parents=True, exist_ok=True)
     response_path = scratch / "response-X.json"
     # Structurally-valid response so Pydantic doesn't reject the commit

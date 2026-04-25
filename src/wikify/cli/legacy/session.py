@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from ...paths import BundlePaths
+from ...api import LegacyBundle
 from ...session import (
     SchemaVersionMismatchError,
     UnknownRoleError,
@@ -45,7 +45,7 @@ def cmd_init(
         strategy=strategy,
         budget_target_haiku_eq=budget_target,
     )
-    paths = BundlePaths(bundle)
+    paths = LegacyBundle(bundle)
     if paths.session_path.exists():
         raise typer.BadParameter(
             f"session already exists at {paths.session_path}; refusing to overwrite"

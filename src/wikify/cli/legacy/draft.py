@@ -7,8 +7,8 @@ from pathlib import Path
 
 import typer
 
+from ...api import Corpus, LegacyBundle
 from ...bundle.draft.preload import preload_corpus
-from ...paths import BundlePaths, CorpusPaths
 from ...schema import (
     WriteEvidenceRef,
     WriteEvidenceRefV2,
@@ -61,10 +61,10 @@ def cmd_write_request(
         raise typer.BadParameter("--aliases must be a JSON array")
 
     session = load_session(session_path)
-    bundle_paths = BundlePaths(Path(session.bundle_root))
+    bundle_paths = LegacyBundle(Path(session.bundle_root))
     bundle_paths.scratch_dir.mkdir(parents=True, exist_ok=True)
 
-    preloaded = preload_corpus(CorpusPaths(Path(session.corpus_root)))
+    preloaded = preload_corpus(Corpus(Path(session.corpus_root)))
     missing = [cid for cid in chunk_ids_list if cid not in preloaded.chunks_by_id]
     if missing:
         raise typer.BadParameter(f"unknown chunk_ids: {missing[:5]}")

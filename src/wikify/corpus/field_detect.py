@@ -15,7 +15,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from wikify.paths import CorpusPaths
+from wikify.api import Corpus
 from wikify.prompts import available_field_guides
 
 _FIELDS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "fields"
@@ -139,7 +139,7 @@ def _score_topics(topics: list[str], keywords: frozenset[str]) -> int:
     return len(topic_tokens & keywords)
 
 
-def _load_topics(corpus: CorpusPaths) -> list[str]:
+def _load_topics(corpus: Corpus) -> list[str]:
     path = corpus.topics_path
     if not path.exists():
         return []
@@ -154,11 +154,11 @@ def _load_topics(corpus: CorpusPaths) -> list[str]:
     return [str(t) for t in topics if isinstance(t, str)]
 
 
-def _field_cache_path(corpus: CorpusPaths) -> Path:
+def _field_cache_path(corpus: Corpus) -> Path:
     return corpus.root / _FIELD_CACHE_FILENAME
 
 
-def detect_field(corpus: CorpusPaths) -> str:
+def detect_field(corpus: Corpus) -> str:
     """Detect the dominant field for a corpus.
 
     Returns one of ``available_field_guides()``. Falls back to
@@ -179,7 +179,7 @@ def detect_field(corpus: CorpusPaths) -> str:
     return field
 
 
-def _score_corpus(corpus: CorpusPaths) -> tuple[str, list[tuple[str, int]]]:
+def _score_corpus(corpus: Corpus) -> tuple[str, list[tuple[str, int]]]:
     topics = _load_topics(corpus)
     if not topics:
         return "generic", []
@@ -203,7 +203,7 @@ def _score_corpus(corpus: CorpusPaths) -> tuple[str, list[tuple[str, int]]]:
     return top_name, scores
 
 
-def detect_field_scores(corpus: CorpusPaths) -> list[tuple[str, int]]:
+def detect_field_scores(corpus: Corpus) -> list[tuple[str, int]]:
     """Return the raw per-field keyword overlap scores for diagnostics."""
     _, scores = _score_corpus(corpus)
     return scores

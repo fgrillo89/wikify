@@ -30,9 +30,9 @@ from wikify.corpus.vectors import VectorStore
 from wikify.corpus.vectors_meta import VectorsMeta
 from wikify.corpus.vectors_meta import write_meta as write_vectors_meta
 
+from ..api import Corpus
 from ..embedding import embed_passages
 from ..models import Chunk, DocSection, Document
-from ..paths import CorpusPaths
 from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
@@ -200,7 +200,7 @@ def _parse_and_persist_worker(
 ) -> FileReceipt:
     """Parse, chunk, enrich, and persist one source file. Returns a lightweight receipt.
 
-    Runs in a worker process. Reconstructs CorpusPaths from the root string
+    Runs in a worker process. Reconstructs Corpus from the root string
     since dataclasses with Path fields don't pickle reliably across processes.
 
     When ``skip_metadata`` is True (set by the ingest DAG's pass 3) the
@@ -210,7 +210,7 @@ def _parse_and_persist_worker(
     back and runs ``assemble_pdf_metadata`` with DOI-resolved context.
     """
     src = Path(src_str)
-    paths = CorpusPaths(root=Path(corpus_root_str))
+    paths = Corpus(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
     kind, parsed = parse_file(
@@ -408,7 +408,7 @@ def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
 # Derived-artifact health check
 # ---------------------------------------------------------------------------
 
-def _derived_artifacts_missing(paths: CorpusPaths) -> bool:
+def _derived_artifacts_missing(paths: Corpus) -> bool:
     """True if the corpus has docs but is missing key derived artifacts.
 
     Catches the case where ingest completed but refresh crashed or was
@@ -431,7 +431,7 @@ def _derived_artifacts_missing(paths: CorpusPaths) -> bool:
 
 def _recover_completed(
     sources: list[Path],
-    paths: CorpusPaths,
+    paths: Corpus,
 ) -> tuple[list[Path], list[FileReceipt]]:
     """Split sources into (still_to_parse, already_done).
 
@@ -487,7 +487,7 @@ def _recover_completed(
 
 def _stream_parse_and_persist(
     sources: list[Path],
-    paths: CorpusPaths,
+    paths: Corpus,
     max_workers: int | None,
     parser_backend: str = "default",
     skip_metadata: bool = False,
@@ -596,7 +596,7 @@ def _stream_parse_and_persist(
 
 def _embed_chunks_incremental(
     all_chunks: list[Chunk],
-    paths: CorpusPaths,
+    paths: Corpus,
     stale_doc_ids: set[str],
 ) -> VectorStore:
     """Embed chunks, reusing existing vectors for unchanged chunks.
@@ -817,7 +817,7 @@ def _embedder_fingerprint(backend: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _resave_docs(
-    paths: CorpusPaths,
+    paths: Corpus,
     docs: list[Document],
 ) -> None:
     from wikify.corpus.chunks import _doc_to_dict, atomic_write_text
@@ -903,7 +903,7 @@ def _print_timings(timings: dict[str, float], t0: float) -> None:
 
 def _prepare_change_set(
     input_dir: Path,
-    paths: CorpusPaths,
+    paths: Corpus,
     mode: str,
     timings: dict[str, float],
     parser_backend: str = "lite",
@@ -1027,7 +1027,7 @@ def _identify_stale_docs(
     return stale_doc_ids
 
 
-def _read_chunk_ids(paths: CorpusPaths, doc_id: str) -> list[str]:
+def _read_chunk_ids(paths: Corpus, doc_id: str) -> list[str]:
     """Read just the chunk ids from a persisted JSONL file (no text loaded)."""
     p = paths.chunks_dir / f"{doc_id}.jsonl"
     if not p.exists():
@@ -1044,7 +1044,7 @@ def _update_manifest(
     receipts: list[FileReceipt],
     dedup_aliases: list[tuple[str, str, str]],
     change_set,
-    paths: CorpusPaths,
+    paths: Corpus,
     input_dir: Path,
 ) -> None:
     """Register parsed sources and dedup aliases in the manifest."""
@@ -1097,7 +1097,7 @@ def _update_manifest(
 
 
 def refresh_corpus(
-    paths: CorpusPaths,
+    paths: Corpus,
     *,
     stale_doc_ids: set[str] | None = None,
     resolve_bibliography_doi: bool = False,
@@ -1175,7 +1175,7 @@ def ingest_corpus(
     resolve_bibliography_doi: bool = False,
     cite_resolution: str = "crossref",
     dedup_same_stem: bool = True,
-) -> CorpusPaths:
+) -> Corpus:
     """Ingest a directory of sources into a corpus bundle.
 
     Streaming: each source is parsed, enriched, and persisted to disk
@@ -1209,7 +1209,7 @@ def ingest_corpus(
     timings: dict[str, float] = {}
     t0_run = time.monotonic()
 
-    paths = CorpusPaths(root=output_dir)
+    paths = Corpus(root=output_dir)
     paths.ensure()
 
     # 1. Enumerate, diff, dedupe
@@ -1317,7 +1317,7 @@ def ingest_corpus(
     return paths
 
 
-def _remove_doc_artifacts(paths: CorpusPaths, doc_ids: set[str]) -> None:
+def _remove_doc_artifacts(paths: Corpus, doc_ids: set[str]) -> None:
     """Physically delete corpus artifacts for the given doc_ids.
 
     Removes doc JSON, chunks JSONL, markdown, and image directories

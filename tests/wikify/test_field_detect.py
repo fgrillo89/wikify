@@ -3,22 +3,22 @@
 import json
 from pathlib import Path
 
+from wikify.api import Corpus
 from wikify.corpus.field_detect import (
     _field_cache_path,
     detect_field,
     detect_field_scores,
 )
-from wikify.paths import CorpusPaths
 
 
-def _make_corpus(tmp_path: Path, topics: list[str]) -> CorpusPaths:
+def _make_corpus(tmp_path: Path, topics: list[str]) -> Corpus:
     root = tmp_path / "corpus"
     root.mkdir()
     (root / "topics.json").write_text(
         json.dumps({"topics": topics, "declared": topics}),
         encoding="utf-8",
     )
-    return CorpusPaths(root=root)
+    return Corpus(root=root)
 
 
 def test_materials_science_topics_detected(tmp_path: Path) -> None:
@@ -63,5 +63,5 @@ def test_field_cache_written_and_read(tmp_path: Path) -> None:
 def test_missing_topics_returns_generic(tmp_path: Path) -> None:
     root = tmp_path / "empty_corpus"
     root.mkdir()
-    corpus = CorpusPaths(root=root)
+    corpus = Corpus(root=root)
     assert detect_field(corpus) == "generic"
