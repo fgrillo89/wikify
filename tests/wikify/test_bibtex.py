@@ -4,6 +4,7 @@ import json
 
 import bibtexparser
 
+from wikify.api import Corpus
 from wikify.ingest.bibtex import (
     _author_has_prose_residue,
     _clean_author_name,
@@ -16,7 +17,6 @@ from wikify.ingest.bibtex import (
     write_corpus_bibtex,
 )
 from wikify.models import Document
-from wikify.paths import CorpusPaths
 
 
 def _doc(doc_id: str, title: str, authors: list[str], year: int) -> Document:
@@ -115,7 +115,7 @@ def test_write_corpus_bibtex(tmp_path):
         _doc("a_1", "Title A", ["Alice"], 2020),
         _doc("b_2", "Title B", ["Bob"], 2021),
     ]
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     path = write_corpus_bibtex(corpus, docs)
     assert path.exists()
     db = bibtexparser.loads(path.read_text(encoding="utf-8"))
@@ -125,7 +125,7 @@ def test_write_corpus_bibtex(tmp_path):
 def test_write_corpus_bibtex_uses_markdown_publication_fallback(tmp_path):
     doc = _doc("a_1", "Title A", ["Alice"], 2020)
     doc.metadata.pop("doi", None)
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     corpus.ensure()
     md = corpus.markdown_dir / "a_1.md"
     md.write_text(
@@ -158,7 +158,7 @@ def test_write_corpus_bibliography_writes_reference_artifacts(tmp_path):
             ),
         ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     paths = write_corpus_bibliography(corpus, docs)
 
     assert paths["library"].exists()
@@ -196,7 +196,7 @@ def test_citation_index_links_reference_to_source_doc_when_doi_matches(
         ),
     ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     write_corpus_bibliography(corpus, [source, citing])
     index = json.loads(
         corpus.citation_index_path.read_text(encoding="utf-8"),
@@ -221,7 +221,7 @@ def test_unresolved_citations_are_in_index_but_not_in_bib(tmp_path):
         ),
     ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     write_corpus_bibliography(corpus, [doc])
 
     references = bibtexparser.loads(
@@ -256,7 +256,7 @@ def test_crossref_resolved_citation_without_title_is_not_exported(tmp_path):
         },
     ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     write_corpus_bibliography(corpus, [doc])
 
     references = bibtexparser.loads(
@@ -283,7 +283,7 @@ def test_bibliography_preserves_balanced_paren_doi(tmp_path):
         ),
     ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     write_corpus_bibliography(corpus, [doc])
 
     references = bibtexparser.loads(
@@ -325,7 +325,7 @@ def test_dedup_by_doi_across_citations(tmp_path):
         ),
     ]
 
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     write_corpus_bibliography(corpus, [first, second])
 
     references = bibtexparser.loads(

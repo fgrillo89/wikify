@@ -107,7 +107,22 @@ def strip_envelope(data: dict, *fields: str) -> dict:
     return {k: v for k, v in data.items() if k not in blocked}
 
 
+# Canonical CLI exit codes. Use these instead of magic numbers when calling
+# ``cli_error(...)`` so the contract stays grep-able. Mapped per the redesign
+# brief (decision 6 in docs/skill-centric-execution-plan.md).
+EXIT_OK = 0
+EXIT_VALIDATION = 1
+EXIT_LOCK_HELD = 2
+EXIT_BUDGET_EXCEEDED = 3
+EXIT_STALE_CLAIM_BROKEN = 4
+
+
 __all__ = [
+    "EXIT_OK",
+    "EXIT_VALIDATION",
+    "EXIT_LOCK_HELD",
+    "EXIT_BUDGET_EXCEEDED",
+    "EXIT_STALE_CLAIM_BROKEN",
     "cli_owner",
     "cli_error",
     "lock_held",

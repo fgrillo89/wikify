@@ -8,6 +8,7 @@ from pathlib import Path
 
 import typer
 
+from ...api import LegacyBundle
 from ...bundle.wiki.files import write_page as write_page_file
 from ...bundle.wiki.index import build_index
 from ...bundle.wiki.page import load_bundle
@@ -15,7 +16,6 @@ from ...bundle.wiki.post_commit import rebuild_wiki_graph
 from ...context import response_reserve, total_context
 from ...meter import CallRecord
 from ...models import WikiPage
-from ...paths import BundlePaths
 from ...schema import WriteResponse
 from ...session import (
     apply_merge_patch,
@@ -111,7 +111,7 @@ def cmd_commit_page(
             )
 
     session = load_session(session_path)
-    bundle_paths = BundlePaths(Path(session.bundle_root))
+    bundle_paths = LegacyBundle(Path(session.bundle_root))
     bundle_paths.ensure()
 
     # Acquire the lock BEFORE any canonical mutation. Every disk write

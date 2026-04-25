@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from typer import Typer
 
-from ..paths import BundlePaths
+from ..api import LegacyBundle
 
 _DISABLE_ENV = "WIKIFY_CLI_IO_LOG"
 _SENSITIVE_FLAG_PARTS = ("key", "token", "secret", "password", "credential")
@@ -96,7 +96,7 @@ class _TeeReader(io.TextIOBase):
 
 
 class _InvocationLog:
-    def __init__(self, *, argv: Sequence[str], cwd: Path, bundle: BundlePaths) -> None:
+    def __init__(self, *, argv: Sequence[str], cwd: Path, bundle: LegacyBundle) -> None:
         self.event_id = uuid4().hex
         self.argv = list(argv)
         self.cwd = cwd
@@ -188,7 +188,7 @@ def _build_invocation_log(argv: Sequence[str]) -> _InvocationLog | None:
     bundle_root = _resolve_bundle_root(argv[1:], Path.cwd())
     if bundle_root is None:
         return None
-    return _InvocationLog(argv=argv, cwd=Path.cwd(), bundle=BundlePaths(bundle_root))
+    return _InvocationLog(argv=argv, cwd=Path.cwd(), bundle=LegacyBundle(bundle_root))
 
 
 def _resolve_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:

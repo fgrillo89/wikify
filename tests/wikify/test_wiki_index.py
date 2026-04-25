@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from wikify.api import LegacyBundle
 from wikify.bundle.wiki.files import write_page
 from wikify.bundle.wiki.index import (
     WikiIndex,
@@ -12,7 +13,6 @@ from wikify.bundle.wiki.index import (
     rebuild_index,
 )
 from wikify.models import Evidence, WikiPage
-from wikify.paths import BundlePaths
 
 
 def _make_page(pid: str, title: str, aliases: list[str], doc_id: str, links=None):
@@ -37,8 +37,8 @@ def _make_page(pid: str, title: str, aliases: list[str], doc_id: str, links=None
 
 
 @pytest.fixture
-def bundle(tmp_path) -> BundlePaths:
-    b = BundlePaths(root=tmp_path / "bundle")
+def bundle(tmp_path) -> LegacyBundle:
+    b = LegacyBundle(root=tmp_path / "bundle")
     b.ensure()
     pages = [
         _make_page(
@@ -138,7 +138,7 @@ def test_migrate_concepts_dir_roundtrip(tmp_path):
     )
     (old_dir / "Photocatalysis.md").write_text(page_text, encoding="utf-8")
 
-    bundle = BundlePaths(root=root)
+    bundle = LegacyBundle(root=root)
     # Explicit migration.
     assert migrate_concepts_dir(bundle) is True
 
@@ -160,7 +160,7 @@ def test_migrate_concepts_dir_roundtrip(tmp_path):
 
 def test_build_index_excludes_skeleton_pages(tmp_path):
     """build_index must not enumerate pages with body_markdown shorter than 200 chars."""
-    b = BundlePaths(root=tmp_path / "bundle")
+    b = LegacyBundle(root=tmp_path / "bundle")
     b.ensure()
     full_body = (
         "# Real Page\n\n"

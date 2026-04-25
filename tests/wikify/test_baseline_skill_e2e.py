@@ -33,9 +33,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from wikify.api import LegacyBundle
 from wikify.cli import app
 from wikify.ingest.pipeline import ingest_corpus
-from wikify.paths import BundlePaths
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny"
 runner = CliRunner()
@@ -97,7 +97,7 @@ def test_baseline_skill_path_runs_cli_sequence(
     tmp_path: Path, tiny_corpus: Path
 ) -> None:
     bundle = tmp_path / "bundle"
-    bundle_paths = BundlePaths(bundle)
+    bundle_paths = LegacyBundle(bundle)
 
     # 1. session init
     init = runner.invoke(
@@ -278,7 +278,7 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
     """
     # --- Skill-path bundle ------------------------------------------------
     skill_bundle = tmp_path / "skill-bundle"
-    skill_paths = BundlePaths(skill_bundle)
+    skill_paths = LegacyBundle(skill_bundle)
     init = runner.invoke(
         app,
         [
@@ -366,9 +366,9 @@ def test_baseline_skill_bundle_emits_documented_artifact_set(
         "_index.md",  # human-readable index dumped alongside _index.json
         "_wiki_graph.json",
         "_calls.jsonl",
-        # _meta directory created by BundlePaths.ensure().
+        # _meta directory created by LegacyBundle.ensure().
         "_meta",
-        # Page-kind subdirectories (BundlePaths.ensure creates both
+        # Page-kind subdirectories (LegacyBundle.ensure creates both
         # articles/ and people/, even when one is empty).
         "articles",
         "people",

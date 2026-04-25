@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
+from wikify.api import Corpus
 from wikify.corpus.doc_markdown import write_doc_markdown
 from wikify.models import Document
-from wikify.paths import CorpusPaths
 
 
 def test_doc_markdown_has_frontmatter_and_edges(tmp_path: Path) -> None:
-    corpus = CorpusPaths(root=tmp_path / "corpus")
+    corpus = Corpus(root=tmp_path / "corpus")
     corpus.ensure()
     doc = Document(
         id="paper_abc",

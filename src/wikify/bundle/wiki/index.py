@@ -21,8 +21,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...api import LegacyBundle
 from ...models import WikiPage
-from ...paths import BundlePaths
 from .page_naming import page_filename, page_id_from_title
 
 _INDEX_FILENAME = "_index.json"
@@ -176,7 +176,7 @@ class WikiIndex:
         return f"- [{e.title}]({e.path}) — {meta}{aliases}"
 
     @classmethod
-    def load(cls, bundle: BundlePaths) -> "WikiIndex":
+    def load(cls, bundle: LegacyBundle) -> "WikiIndex":
         path = bundle.root / _INDEX_FILENAME
         if not path.exists():
             return cls(bundle_root=bundle.root)
@@ -208,7 +208,7 @@ class WikiIndex:
 # --- builders ------------------------------------------------------------
 
 
-def entry_from_page(page: WikiPage, bundle: BundlePaths) -> IndexEntry:
+def entry_from_page(page: WikiPage, bundle: LegacyBundle) -> IndexEntry:
     sub = "articles" if page.kind == "article" else "people"
     return IndexEntry(
         id=page.id,
@@ -222,7 +222,7 @@ def entry_from_page(page: WikiPage, bundle: BundlePaths) -> IndexEntry:
     )
 
 
-def build_index(bundle: BundlePaths, pages: list[WikiPage]) -> WikiIndex:
+def build_index(bundle: LegacyBundle, pages: list[WikiPage]) -> WikiIndex:
     """Build an index for a freshly-written set of pages.
 
     Skeleton pages (body_markdown shorter than _SKELETON_MIN_BODY_LEN chars)
@@ -236,7 +236,7 @@ def build_index(bundle: BundlePaths, pages: list[WikiPage]) -> WikiIndex:
     return WikiIndex(bundle_root=bundle.root, entries=entries)
 
 
-def rebuild_index(bundle: BundlePaths) -> WikiIndex:
+def rebuild_index(bundle: LegacyBundle) -> WikiIndex:
     """Reconstruct the index by parsing every page file in the bundle.
 
     Used when the index file is missing or stale. Reads only the YAML
@@ -266,7 +266,7 @@ def rebuild_index(bundle: BundlePaths) -> WikiIndex:
     return idx
 
 
-def migrate_concepts_dir(bundle: BundlePaths) -> bool:
+def migrate_concepts_dir(bundle: LegacyBundle) -> bool:
     """Rename the on-disk ``concepts/`` directory to ``articles/`` if needed.
 
     Idempotent: if ``articles/`` already exists (or ``concepts/`` does not
@@ -300,7 +300,7 @@ def migrate_concepts_dir(bundle: BundlePaths) -> bool:
     return True
 
 
-def migrate_prefixed_page_ids(bundle: BundlePaths) -> int:
+def migrate_prefixed_page_ids(bundle: LegacyBundle) -> int:
     """Rename any prefixed ``concept-*.md`` / ``person-*.md`` files in-place
     to their natural-title filename. Returns the number of renames.
 

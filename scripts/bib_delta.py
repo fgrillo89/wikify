@@ -1,4 +1,6 @@
-import io, re, sys
+import io
+import re
+import sys
 from collections import Counter
 from pathlib import Path
 

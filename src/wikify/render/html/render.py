@@ -25,11 +25,11 @@ from typing import Any, Self
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from wikify.api import LegacyBundle
 from wikify.bundle.wiki.index import WikiIndex, _normalize
 from wikify.bundle.wiki.page import Bundle, Page, load_bundle
 from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
-from wikify.paths import BundlePaths
 
 WIKI_NAME = "Wikify Simple"
 
@@ -65,22 +65,22 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 def build_site(
-    bundle: BundlePaths | Bundle,
+    bundle: LegacyBundle | Bundle,
     out_dir: Path,
     *,
     corpus_root: Path | None = None,
 ) -> Path:
     """Render a wikify bundle to a static HTML site under ``out_dir``.
 
-    Accepts either a ``BundlePaths`` (which we then load) or a
+    Accepts either a ``LegacyBundle`` (which we then load) or a
     pre-loaded ``Bundle``. Returns ``out_dir``.
     """
-    if isinstance(bundle, BundlePaths):
+    if isinstance(bundle, LegacyBundle):
         loaded = load_bundle(bundle.root)
         wiki_index = WikiIndex.load(bundle)
     else:
         loaded = bundle
-        wiki_index = WikiIndex.load(BundlePaths(root=loaded.root))
+        wiki_index = WikiIndex.load(LegacyBundle(root=loaded.root))
 
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

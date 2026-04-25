@@ -21,14 +21,15 @@ import json
 import sys
 from pathlib import Path
 
+from wikify.store.corpus import _doc_to_dict, atomic_write_text, list_documents
+
+from wikify.api import Corpus
 from wikify.ingest.metadata import assemble_pdf_metadata
 from wikify.ingest.pipeline import _read_body_from_doc_markdown
-from wikify.paths import CorpusPaths
-from wikify.store.corpus import _doc_to_dict, atomic_write_text, list_documents
 
 
 def reassemble(corpus_dir: Path) -> tuple[int, int, int]:
-    paths = CorpusPaths(root=corpus_dir)
+    paths = Corpus(root=corpus_dir)
     docs = list_documents(paths)
     if not docs:
         print(f"no documents in {corpus_dir}")

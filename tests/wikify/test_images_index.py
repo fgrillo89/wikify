@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from wikify.api import Corpus
 from wikify.corpus.images_index import (
     ImageIndex,
     build_images_index,
@@ -11,7 +12,6 @@ from wikify.corpus.images_index import (
 )
 from wikify.ingest.images import save_doc_images
 from wikify.ingest.parsers.registry import RawImage
-from wikify.paths import CorpusPaths
 
 PNG_1x1 = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -21,8 +21,8 @@ PNG_1x1 = (
 
 
 @pytest.fixture
-def corpus_with_images(tmp_path: Path) -> CorpusPaths:
-    corpus = CorpusPaths(tmp_path / "corpus")
+def corpus_with_images(tmp_path: Path) -> Corpus:
+    corpus = Corpus(tmp_path / "corpus")
     corpus.ensure()
     doc_id = "[2020 Liu] Optimization_ff17142a965a"
     folder = corpus.images_dir / "2020_Liu_Optimization"
@@ -47,7 +47,7 @@ def corpus_with_images(tmp_path: Path) -> CorpusPaths:
     return corpus
 
 
-def test_build_index_round_trip(corpus_with_images: CorpusPaths) -> None:
+def test_build_index_round_trip(corpus_with_images: Corpus) -> None:
     idx = build_images_index(corpus_with_images, doc_ids=[])
     assert len(idx.by_doc) == 2
     # Persisted file exists and reloads to the same shape.
@@ -57,7 +57,7 @@ def test_build_index_round_trip(corpus_with_images: CorpusPaths) -> None:
     assert sum(len(v) for v in reloaded.by_doc.values()) == 4
 
 
-def test_resolve_caption_aliases(corpus_with_images: CorpusPaths) -> None:
+def test_resolve_caption_aliases(corpus_with_images: Corpus) -> None:
     idx = build_images_index(corpus_with_images, doc_ids=[])
     liu = next(k for k in idx.by_doc if "Liu" in k)
     for ref in ("Figure 1", "fig 1", "Figure_01", "figure_01", "Fig. 1", "fig.1"):
@@ -66,7 +66,7 @@ def test_resolve_caption_aliases(corpus_with_images: CorpusPaths) -> None:
         assert hit.id.endswith("/Figure_01"), f"{ref!r} resolved to {hit.id}"
 
 
-def test_resolve_table_label(corpus_with_images: CorpusPaths) -> None:
+def test_resolve_table_label(corpus_with_images: Corpus) -> None:
     idx = build_images_index(corpus_with_images, doc_ids=[])
     yang = next(k for k in idx.by_doc if "Yang" in k)
     hit = idx.resolve(yang, "Table 1")
@@ -74,14 +74,14 @@ def test_resolve_table_label(corpus_with_images: CorpusPaths) -> None:
     assert hit.id.endswith("/Table_01")
 
 
-def test_resolve_unmatched_returns_none(corpus_with_images: CorpusPaths) -> None:
+def test_resolve_unmatched_returns_none(corpus_with_images: Corpus) -> None:
     idx = build_images_index(corpus_with_images, doc_ids=[])
     liu = next(k for k in idx.by_doc if "Liu" in k)
     assert idx.resolve(liu, "Figure 99") is None
     assert idx.resolve("nonexistent_doc", "Figure 1") is None
 
 
-def test_paths_are_relative_to_corpus_root(corpus_with_images: CorpusPaths) -> None:
+def test_paths_are_relative_to_corpus_root(corpus_with_images: Corpus) -> None:
     idx = build_images_index(corpus_with_images, doc_ids=[])
     for recs in idx.by_doc.values():
         for r in recs:
@@ -90,7 +90,7 @@ def test_paths_are_relative_to_corpus_root(corpus_with_images: CorpusPaths) -> N
             assert (corpus_with_images.root / r.sidecar).exists()
 
 
-def test_rebuild_from_sidecars_only(corpus_with_images: CorpusPaths) -> None:
+def test_rebuild_from_sidecars_only(corpus_with_images: Corpus) -> None:
     build_images_index(corpus_with_images, doc_ids=[])
     corpus_with_images.images_index_path.unlink()
     rebuilt = rebuild_images_index(corpus_with_images)

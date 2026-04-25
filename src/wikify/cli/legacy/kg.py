@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from ...api import Corpus
 from ...baselines.config import BaselineConfig, select_evidence_chunks_for_page
 from ...bundle.draft.preload import preload_corpus
 from ...corpus.seed import (
@@ -15,7 +16,6 @@ from ...corpus.seed import (
     greedy_seed_select,
     pagerank_normalised,
 )
-from ...paths import CorpusPaths
 from ...session import (
     apply_merge_patch,
     load_session,
@@ -29,7 +29,7 @@ app = typer.Typer(add_completion=False, help="Corpus knowledge-graph queries.")
 
 
 def _preload(corpus_root: Path):
-    return preload_corpus(CorpusPaths(corpus_root))
+    return preload_corpus(Corpus(corpus_root))
 
 
 @app.command("seeds")

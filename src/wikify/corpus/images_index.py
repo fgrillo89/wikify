@@ -55,7 +55,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..paths import CorpusPaths
+from ..api import Corpus
 
 _LABEL_NORM_RE = re.compile(r"[^a-z0-9]+")
 _LABEL_PARSE_RE = re.compile(
@@ -166,7 +166,7 @@ class ImageIndex:
     # ---- persistence -----------------------------------------------------
 
     @classmethod
-    def load(cls, corpus: CorpusPaths) -> "ImageIndex":
+    def load(cls, corpus: Corpus) -> "ImageIndex":
         path = corpus.images_index_path
         if not path.exists():
             return cls(corpus_root=corpus.root)
@@ -194,7 +194,7 @@ class ImageIndex:
         return cls(corpus_root=corpus.root, by_doc=by_doc, by_alias=by_alias)
 
 
-def build_images_index(corpus: CorpusPaths, doc_ids: list[str]) -> ImageIndex:
+def build_images_index(corpus: Corpus, doc_ids: list[str]) -> ImageIndex:
     """Build the index from already-written sidecar JSONs.
 
     Called at the end of ``ingest_corpus``. Walks each doc's image
@@ -222,12 +222,12 @@ def build_images_index(corpus: CorpusPaths, doc_ids: list[str]) -> ImageIndex:
     return idx
 
 
-def rebuild_images_index(corpus: CorpusPaths) -> ImageIndex:
+def rebuild_images_index(corpus: Corpus) -> ImageIndex:
     """Reconstruct the index by walking every image folder on disk."""
     return build_images_index(corpus, doc_ids=[])
 
 
-def save_images_index(corpus: CorpusPaths, idx: ImageIndex) -> Path:
+def save_images_index(corpus: Corpus, idx: ImageIndex) -> Path:
     payload = {
         "version": 1,
         "by_doc": {
@@ -257,7 +257,7 @@ def save_images_index(corpus: CorpusPaths, idx: ImageIndex) -> Path:
 # ---- internal -----------------------------------------------------------
 
 
-def _records_for_folder(corpus: CorpusPaths, folder: Path) -> list[tuple[str, ImageRecord]]:
+def _records_for_folder(corpus: Corpus, folder: Path) -> list[tuple[str, ImageRecord]]:
     """Read the sidecar JSONs in ``folder`` and return ``(doc_id, ImageRecord)``."""
     out: list[tuple[str, ImageRecord]] = []
     sidecar_files = sorted(folder.glob("*.json"))

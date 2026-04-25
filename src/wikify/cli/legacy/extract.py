@@ -19,9 +19,9 @@ from pathlib import Path
 
 import typer
 
+from ...api import Corpus
 from ...bundle.draft.preload import preload_corpus
 from ...bundle.work.dossier import Candidate, canonicalize
-from ...paths import CorpusPaths
 from ...schema import ExtractResponse
 from ...session import (
     apply_merge_patch,
@@ -69,7 +69,7 @@ def cmd_canonicalize(
         parsed_responses.append(ExtractResponse.model_validate(strip_envelope(data)))
 
     session = load_session(session_path)
-    preloaded = preload_corpus(CorpusPaths(Path(session.corpus_root)))
+    preloaded = preload_corpus(Corpus(Path(session.corpus_root)))
     chunks_by_id = preloaded.chunks_by_id
 
     # Map each (response, concept) -> Candidate.

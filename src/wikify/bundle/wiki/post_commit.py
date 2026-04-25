@@ -7,11 +7,11 @@ embeddings stay in sync.
 
 from __future__ import annotations
 
+from ...api import LegacyBundle
 from ...models import WikiPage
-from ...paths import BundlePaths
 
 
-def rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
+def rebuild_wiki_graph(bundle: LegacyBundle, pages: list[WikiPage]) -> None:
     """Build and persist the wiki knowledge graph + page vectors."""
     from wikify.bundle.wiki.graph import (
         build_wiki_graph,

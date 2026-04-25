@@ -43,7 +43,7 @@ def coverage_residual(
     chunk_embeddings: np.ndarray,  # (n_chunks, d), unit-norm
     embed: Embedder | None = None,
     *,
-    corpus=None,  # CorpusPaths | None
+    corpus=None,  # Corpus | None
 ) -> float:
     """M1. Mean residual distance from each corpus chunk to its nearest
     wiki page body.
@@ -63,7 +63,7 @@ def coverage_residual(
         if corpus is None:
             raise EmbedderMismatch(
                 "coverage_residual: must supply either an explicit embed callable "
-                "or a CorpusPaths handle so the embedder can be reconstructed"
+                "or a Corpus handle so the embedder can be reconstructed"
             )
         from wikify.corpus.vectors_meta import read_meta
 

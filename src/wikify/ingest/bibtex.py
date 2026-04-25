@@ -21,8 +21,8 @@ import bibtexparser
 from bibtexparser.bibdatabase import BibDatabase
 from bibtexparser.bwriter import BibTexWriter
 
+from ..api import Corpus
 from ..models import Document
-from ..paths import CorpusPaths
 from .metadata import (
     extract_authors_from_markdown,
     extract_document_doi,
@@ -780,7 +780,7 @@ def _index_record(
 
 
 def build_citation_index(
-    corpus: CorpusPaths,
+    corpus: Corpus,
     docs: list[Document],
     *,
     resolve_doi: bool = False,
@@ -1082,7 +1082,7 @@ def build_citation_index(
 
 
 def write_corpus_bibtex(
-    corpus: CorpusPaths,
+    corpus: Corpus,
     docs: list[Document],
     *,
     resolve_doi: bool = False,
@@ -1109,7 +1109,7 @@ def write_corpus_bibtex(
 
 
 def write_corpus_bibliography(
-    corpus: CorpusPaths,
+    corpus: Corpus,
     docs: list[Document],
     *,
     resolve_doi: bool = False,
@@ -1190,7 +1190,7 @@ def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
 
 
 def _with_fallback_metadata(
-    corpus: CorpusPaths,
+    corpus: Corpus,
     doc: Document,
     *,
     resolve_doi: bool,
@@ -1468,7 +1468,7 @@ def _merge_external_metadata(
 
 
 
-def _read_doc_markdown(corpus: CorpusPaths, doc: Document) -> str:
+def _read_doc_markdown(corpus: Corpus, doc: Document) -> str:
     candidates = [corpus.markdown_dir / f"{doc.id}.md"]
     if doc.markdown_path:
         candidates.append(Path(doc.markdown_path))
