@@ -426,9 +426,14 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "_scratch",
         "_wiki_vectors.npz",
         "_wiki_vectors.ids.json",
-        # Legacy-only conditional fields that the skill path also emits
-        # now are intentionally allowed here; they converge when legacy
-        # and skill paths share the same bundle state.
+        # Appended per session close. Legacy run_baseline does not
+        # append a history file; the skill path does so resume + re-close
+        # produces an audit trail.
+        "_run_history.jsonl",
+        # Populated by wikify bundle commit-page and wikify meter record.
+        # Legacy run_baseline writes this file too, but only when the
+        # meter sees calls; a 0-call legacy run omits it.
+        "_calls.jsonl",
     }
     unexpected = skill_only - allowed_skill_only
     assert not unexpected, f"skill bundle introduced unexpected artifacts: {unexpected}"
@@ -437,10 +442,12 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
     legacy_run = json.loads((legacy_bundle / "_run.json").read_text(encoding="utf-8"))
     skill_run = json.loads((skill_bundle / "_run.json").read_text(encoding="utf-8"))
 
-    # Overlay fields that the skill path now emits to match legacy shape.
-    # Exact values can differ (canned fakes vs real fixture walk), so we
-    # assert presence and type, not equality.
+    # Every legacy `_run.json` field the skill path must now reproduce.
+    # Values differ (canned fakes vs real fixture walk) so we assert
+    # presence + type, not equality. Field-set parity is the named
+    # Phase 5 deletion gate.
     overlay_fields = {
+        # Baseline / pipeline overlay (Tier 1 item 2):
         "strategy": str,
         "mode": str,
         "iteration": str,
@@ -456,6 +463,15 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
         "n_pages_written": int,
         "write_rejections": list,
         "timestamp_utc": str,
+        # Meter-derived (Tier 1 item 3, matches CostMeter.snapshot shape):
+        "run_id": str,
+        "budget_used_haiku_eq": (int, float),
+        "wall_seconds": (int, float),
+        "by_role": dict,
+        "by_tier": dict,
+        "context": dict,
+        "calls": int,  # count, not list
+        "cache_hit_rate": (int, float),
     }
     missing_legacy = [k for k in overlay_fields if k not in legacy_run]
     missing_skill = [k for k in overlay_fields if k not in skill_run]
@@ -466,16 +482,129 @@ def test_baseline_skill_bundle_top_level_artifacts_match_legacy(
             f"skill _run.json[{key}] has wrong type: {type(skill_run[key])}"
         )
 
-    # Meter-only fields that are still legacy-only. When Tier 1 item 3
-    # closes these should move into `overlay_fields`. Keeping them
-    # enumerated as an explicit parity-diff surface.
-    meter_only = {"run_id", "calls", "spent_haiku_eq", "cache_hits", "context_used_max"}
-    meter_in_legacy = meter_only & set(legacy_run.keys())
-    meter_in_skill = meter_only & set(skill_run.keys())
-    assert meter_in_legacy, "legacy _run.json unexpectedly missing all meter fields"
-    assert not (meter_in_legacy - meter_in_skill - meter_in_legacy) and not (
-        meter_in_skill and meter_in_skill >= meter_in_legacy
-    ), (
-        "Tier 1 item 3 appears done — the skill path now emits meter fields. "
-        "Update the roadmap memory and tighten this parity test to assert value equality."
+    # context sub-dict must carry the legacy shape.
+    for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
+        assert subkey in skill_run["context"], (
+            f"skill _run.json[context] missing {subkey}"
+        )
+
+    # _calls.jsonl must carry full CallRecord entries on the skill path.
+    calls_jsonl = (skill_bundle / "_calls.jsonl").read_text(encoding="utf-8").splitlines()
+    assert calls_jsonl, "skill path produced no _calls.jsonl records"
+    expected_call_fields = {
+        "role",
+        "tier",
+        "input_tokens",
+        "output_tokens",
+        "context_used",
+        "context_cap",
+        "wall_seconds",
+        "cache_hit",
+        "prompt_hash",
+        "haiku_eq",
+    }
+    for line in calls_jsonl:
+        rec = json.loads(line)
+        missing = expected_call_fields - set(rec.keys())
+        assert not missing, f"skill _calls.jsonl record missing fields: {missing}"
+
+    # --- Value-level parity on the meter aggregation ---------------------
+    # Same CallRecord fed through both aggregation paths must yield the
+    # same snapshot numbers. Prove this by feeding legacy's
+    # `_calls.jsonl` into the skill's `_aggregate_calls_jsonl` and
+    # comparing against a legacy meter snapshot computed from the same
+    # records. Only the skill-side aggregator is under test here; values
+    # differ from the standalone legacy_bundle snapshot above only
+    # because legacy aggregates with CostMeter directly in-memory.
+    from wikify.meter import _DEFAULT_TIERS, CostMeter
+    from wikify.session import _aggregate_calls_jsonl
+    from wikify.types import ModelTier, Role
+
+    # Construct a tiny synthetic set of records and aggregate both ways.
+    synthetic_path = tmp_path / "synthetic_calls.jsonl"
+    meter = CostMeter(
+        budget_haiku_eq=1_000_000.0,
+        run_id="parity-probe",
+        events_path=synthetic_path,
+        tiers=_DEFAULT_TIERS,
     )
+    meter.record(
+        role=Role.WRITER,
+        tier=ModelTier.MEDIUM,
+        input_tokens=500,
+        output_tokens=300,
+        context_cap=200_000,
+        wall_seconds=1.2,
+        cache_hit=False,
+        prompt_hash="probe-a",
+    )
+    meter.record(
+        role=Role.EXTRACTOR,
+        tier=ModelTier.SMALL,
+        input_tokens=100,
+        output_tokens=50,
+        context_cap=200_000,
+        wall_seconds=0.3,
+        cache_hit=True,
+        prompt_hash="probe-b",
+    )
+    legacy_snapshot = meter.snapshot()
+    skill_agg = _aggregate_calls_jsonl(synthetic_path)
+
+    # Core top-level numbers must match exactly.
+    for key in ("budget_used_haiku_eq", "wall_seconds", "calls", "cache_hit_rate"):
+        assert skill_agg[key] == legacy_snapshot[key], (
+            f"top-level parity mismatch on {key!r}: skill={skill_agg[key]}"
+            f" vs legacy={legacy_snapshot[key]}"
+        )
+
+    # context sub-dict: every field must match.
+    for subkey in ("used_max", "used_mean", "headroom_min", "headroom_mean"):
+        assert skill_agg["context"][subkey] == legacy_snapshot["context"][subkey], (
+            f"context parity mismatch on {subkey!r}: "
+            f"skill={skill_agg['context'][subkey]} "
+            f"vs legacy={legacy_snapshot['context'][subkey]}"
+        )
+
+    # by_role: every role bucket must match on every legacy aggregate field.
+    bucket_fields_nonempty = (
+        "calls",
+        "haiku_eq",
+        "wall_seconds",
+        "cache_hit_rate",
+        "input_tokens",
+        "output_tokens",
+        "context_used_max",
+        "context_used_mean",
+        "headroom_min",
+        "headroom_mean",
+    )
+    for role_key, legacy_bucket in legacy_snapshot["by_role"].items():
+        skill_bucket = skill_agg["by_role"][role_key]
+        if legacy_bucket.get("calls", 0) == 0:
+            assert skill_bucket == {"calls": 0}, (
+                f"by_role[{role_key!r}] empty-bucket shape mismatch: "
+                f"skill={skill_bucket}"
+            )
+            continue
+        for field_key in bucket_fields_nonempty:
+            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+                f"by_role[{role_key!r}][{field_key!r}] mismatch: "
+                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+            )
+
+    # by_tier: same full-shape assertion.
+    assert set(skill_agg["by_tier"].keys()) == set(legacy_snapshot["by_tier"].keys()), (
+        f"by_tier key-set mismatch: skill={set(skill_agg['by_tier'].keys())}"
+        f" vs legacy={set(legacy_snapshot['by_tier'].keys())}"
+    )
+    for tier_key, legacy_bucket in legacy_snapshot["by_tier"].items():
+        skill_bucket = skill_agg["by_tier"][tier_key]
+        if legacy_bucket.get("calls", 0) == 0:
+            assert skill_bucket == {"calls": 0}
+            continue
+        for field_key in bucket_fields_nonempty:
+            assert skill_bucket[field_key] == legacy_bucket[field_key], (
+                f"by_tier[{tier_key!r}][{field_key!r}] mismatch: "
+                f"skill={skill_bucket[field_key]} vs legacy={legacy_bucket[field_key]}"
+            )

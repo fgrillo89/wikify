@@ -147,27 +147,34 @@ first mutated.
 Run snapshot flushed on `wikify session close` (and legacy `run_baseline()`).
 
 **Skill-path writer** (`src/wikify/session.py::write_run_snapshot`): emits
-`schema_version: 1` plus a session-derived field set. Core fields:
-`session_id`, `strategy`, `mode`, `iteration`, `status`, `bundle_root`,
-`corpus_root`, `created_at`, `closed_at`, `timestamp_utc`,
-`budget_target_haiku_eq`, `budget_spent_haiku_eq`, `stages`, `config`,
-`pages`, `n_pages_committed`, `n_pages_failed`, `page_counts`,
-`telemetry_paths`. Legacy-shape overlay fields (for `wikify html` /
-`wikify eval` compatibility): `seed_doc_ids`, `seed_chunks_read`,
-`evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
-`baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
-`n_pages_written`, `write_rejections`.
+`schema_version: 1` plus full legacy field-set parity. Session-derived
+core fields: `session_id`, `strategy`, `mode`, `iteration`, `status`,
+`bundle_root`, `corpus_root`, `created_at`, `closed_at`, `timestamp_utc`,
+`budget_target_haiku_eq`, `stages`, `config`, `pages`, `n_pages_committed`,
+`n_pages_failed`, `page_counts`, `telemetry_paths`. Baseline overlay
+fields: `seed_doc_ids`, `seed_chunks_read`, `evidence_chunks_read`,
+`split_initial`, `seed_extract_budget`, `baseline_write_fraction`,
+`min_evidence_chunks`, `skipped_thin_pages`, `n_pages_written`,
+`write_rejections`. Meter-derived fields (read from `_calls.jsonl`,
+shape matches legacy `CostMeter.snapshot()`): `run_id`,
+`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`, `context`
+(`used_max`, `used_mean`, `headroom_min`, `headroom_mean`), `calls`
+(integer count), `cache_hit_rate`.
 
 **Legacy writer** (`src/wikify/baselines/pipeline.py::run_baseline`): emits
-a different field set today — no `schema_version`; fields include
-`strategy`, `mode="baseline"`, `seed_doc_ids`, `seed_chunks_read`,
-`evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
-`baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
-`n_pages_written`, `write_rejections`, plus `CostMeter` snapshot fields.
+the same set of baseline overlay fields plus `CostMeter.snapshot()`
+fields. Missing compared to the skill path: `schema_version`,
+`session_id`, `stages`, `page_counts`, `created_at`, `closed_at` (and
+a few scratch-related paths).
 
-Full field-set convergence between the two writers is the named
-**Phase 5 deletion gate** — once the skill path emits a superset of
-legacy fields with the same semantics, `run_baseline()` can be removed.
+**Phase 5 deletion gate**: field-set parity is now achieved on both
+overlay and meter sides. What remains before retiring `run_baseline()`
+is value-level validation — currently the parity test asserts field
+presence + type across both writers; the next step is a
+recorded-transcript parity test that pins numeric values on canned
+inputs. That work is not strictly required for the deletion itself,
+only for confidence that the skill path reproduces legacy numeric
+behavior.
 
 Owning command: `wikify session close` (skill-driven path);
 `baselines.pipeline.run_baseline` (legacy path, scheduled for deletion).
@@ -183,8 +190,31 @@ wall_seconds, cache_hit, prompt_hash, haiku_eq
 ```
 
 No `schema_version` per-line; the whole file's stability is gated on the
-`CallRecord` dataclass shape. Owning command: whichever command calls a model
-(via subagent, the record is emitted by the skill after the subagent returns).
+`CallRecord` dataclass shape.
+
+**Skill-path writers**:
+
+- `wikify meter record` — explicit emission; used by workflows to log
+  extract/query/orchestrate calls the subagent performs. Callers MUST
+  NOT use this command for the write call — `wikify bundle commit-page`
+  records that automatically. Double-recording is not deduplicated.
+- `wikify bundle commit-page` — auto-records the write call using the
+  `WriteResponse.tokens_in` / `tokens_out` fields on successful commit.
+  Refuses to record negative tokens, tokens beyond the declared
+  `context_cap`, or projected spend over 1.05× the session budget
+  target.
+
+Both writers bump `session.budget.haiku_eq_spent` (stored as `float`)
+under the session lock and honor the legacy `1.05 × budget_target`
+hard-abort gate — a projected overshoot exits the CLI with a
+structured `budget_exceeded` error on stderr and a non-zero exit code.
+`wikify session close` reads this file and folds it into the
+`_run.json` snapshot (see above) in the exact shape legacy
+`CostMeter.snapshot()` emits (`budget_used_haiku_eq`, `wall_seconds`,
+`by_role`, `by_tier`, `context`, `calls` count, `cache_hit_rate`).
+Unknown `role` strings in `_calls.jsonl` are rejected at aggregation
+(`UnknownRoleError`); the legitimate role set is the `Role` enum in
+`src/wikify/types.py`.
 
 ## Corpus artifacts (read-only)
 

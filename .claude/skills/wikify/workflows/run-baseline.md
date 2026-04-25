@@ -74,6 +74,17 @@ wikify session init --bundle <b> --corpus <c> --strategy baseline [--budget-targ
 wikify kg seeds --session <s> --persist
 wikify session update --session <s> --patch '{"stages":{"seed_selection":{"status":"done"}}}'
 
+# extract phase — one Task subagent per seed chunk, tier S. After each
+# subagent returns its ExtractResponse, the skill records the call:
+for each seed_chunk_id:
+    Task subagent (tier S) -> extract-<chunk_id>.json
+    wikify meter record --session <s> \
+        --role extractor --tier S \
+        --input-tokens <from response.tokens_in> \
+        --output-tokens <from response.tokens_out>
+    # If projected spend would exceed 1.05x budget_target, meter record
+    # exits 3 with budget_exceeded — stop the loop; do not retry.
+
 # extract phase
 for each seed chunk_id:
     Task subagent (tier S) -> extract-<chunk_id>.json
@@ -102,7 +113,11 @@ for each planned page in session:
         # --validation is REQUIRED. commit-page verifies ok=true AND
         # session.pages[<id>].status=="validated" before writing the
         # page file and rebuilding _index.json / _wiki_graph.json under
-        # the session lock.
+        # the session lock. commit-page AUTO-RECORDS the write call to
+        # _calls.jsonl using response.tokens_in / response.tokens_out —
+        # DO NOT also call `wikify meter record --role writer` for the
+        # same response (double-accounting). Extractor calls go through
+        # `wikify meter record` explicitly in the extract phase above.
     wikify session checkpoint --session <s> --label "after-<id>"
 
 wikify session close --session <s>

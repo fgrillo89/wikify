@@ -23,6 +23,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .paths import BundlePaths
+from .types import Role
 
 SCHEMA_VERSION = 1
 
@@ -49,7 +50,7 @@ class PageEntry(BaseModel):
 class Budget(BaseModel):
     model_config = {"extra": "forbid"}
     haiku_eq_target: int = 0
-    haiku_eq_spent: int = 0
+    haiku_eq_spent: float = 0.0
 
 
 class BaselineConfig(BaseModel):
@@ -296,13 +297,16 @@ RUN_SCHEMA_VERSION = 1
 def write_run_snapshot(session: "SessionV1") -> Path:
     """Flush a final telemetry snapshot to <bundle>/_run.json.
 
-    Called by `wikify session close`. The snapshot is session-derived
-    and includes legacy-shape overlay fields so downstream consumers
-    (`wikify html`, `wikify eval`) can read skill-path bundles with no
-    change in shape. Meter-derived fields (`run_id`, `calls`,
-    `spent_haiku_eq`, `cache_hits`, `context_used_max`) still live in
-    _calls.jsonl; closing full legacy parity is Tier 1 item 3 in
-    project_skill_pivot_roadmap.
+    Called by `wikify session close`. Aggregates:
+      - session state (strategy, stages, pages, budget, config)
+      - legacy-shape overlay fields derived from config + scratch drafts
+      - meter-derived fields read from <bundle>/_calls.jsonl (Tier 1
+        item 3): run_id, calls, spent_haiku_eq, cache_hits, context_used_max,
+        wall_seconds, input_tokens, output_tokens
+
+    This is the full Phase 5 deletion-gate shape — downstream consumers
+    `wikify html` and `wikify eval` read exactly this envelope whether
+    the bundle came from legacy `run_baseline()` or the skill path.
     """
     bundle_paths = BundlePaths(Path(session.bundle_root))
     bundle_paths.ensure()
@@ -326,6 +330,10 @@ def write_run_snapshot(session: "SessionV1") -> Path:
 
     evidence_chunks_read = _gather_evidence_chunks_from_scratch(bundle_paths.scratch_dir)
 
+    # Meter aggregates from _calls.jsonl. Absent file is fine for
+    # sessions that never dispatched a model call.
+    meter_fields = _aggregate_calls_jsonl(bundle_paths.calls_path)
+
     skipped_thin_pages = [
         {"page_id": p["page_id"], "status": p.get("status")}
         for p in pages
@@ -340,9 +348,17 @@ def write_run_snapshot(session: "SessionV1") -> Path:
         if p.get("status") == "failed"
     ]
 
+    # Per-close run_id so session resume + second close produces a
+    # distinct run_id, matching legacy semantics where every
+    # `run_baseline()` invocation mints a fresh id. updated_at is only
+    # second-granularity — a UUID suffix guarantees uniqueness even
+    # when two closes fire in the same second.
+    run_id = f"{session.session_id}-{session.updated_at}-{uuid4().hex[:8]}"
+
     snapshot = {
         "schema_version": RUN_SCHEMA_VERSION,
         "session_id": session.session_id,
+        "run_id": run_id,
         "strategy": session.strategy,
         "mode": session.strategy,
         "iteration": session.iteration,
@@ -382,10 +398,152 @@ def write_run_snapshot(session: "SessionV1") -> Path:
         "config": config.model_dump(mode="json"),
         "pages": pages,
         "telemetry_paths": session.telemetry_paths.model_dump(mode="json"),
+        # Meter-derived fields matching legacy CostMeter.snapshot() shape.
+        # Values are aggregated from <bundle>/_calls.jsonl; a session
+        # that never recorded any call sees zeros but the fields are
+        # still present so downstream consumers get a stable envelope.
+        "budget_used_haiku_eq": meter_fields["budget_used_haiku_eq"],
+        "wall_seconds": meter_fields["wall_seconds"],
+        "by_role": meter_fields["by_role"],
+        "by_tier": meter_fields["by_tier"],
+        "context": meter_fields["context"],
+        "calls": meter_fields["calls"],
+        "cache_hit_rate": meter_fields["cache_hit_rate"],
     }
     run_path = bundle_paths.run_path
     run_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+
+    # Append to _run_history.jsonl so multiple closes on the same
+    # session (resume workflows, campaign iterations) leave an audit
+    # trail instead of clobbering each other. Mirrors
+    # distill/iteration.py's per-iteration history append.
+    history_path = bundle_paths.run_history_path
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(snapshot) + "\n")
     return run_path
+
+
+_EMPTY_AGG = {
+    "calls": 0,
+    "haiku_eq": 0.0,
+    "wall_seconds": 0.0,
+    "cache_hits": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "context_used_max": 0,
+    "context_used_sum": 0,
+    "headroom_min": 1 << 30,
+    "headroom_sum": 0,
+}
+
+
+def _agg_to_dict(agg: dict) -> dict:
+    """Mirror legacy meter._Aggregates.to_dict() output."""
+    calls = agg["calls"]
+    if calls == 0:
+        return {"calls": 0}
+    return {
+        "calls": calls,
+        "haiku_eq": agg["haiku_eq"],
+        "wall_seconds": agg["wall_seconds"],
+        "cache_hit_rate": agg["cache_hits"] / calls,
+        "input_tokens": agg["input_tokens"],
+        "output_tokens": agg["output_tokens"],
+        "context_used_max": agg["context_used_max"],
+        "context_used_mean": agg["context_used_sum"] / calls,
+        "headroom_min": agg["headroom_min"],
+        "headroom_mean": agg["headroom_sum"] / calls,
+    }
+
+
+def _update_agg(agg: dict, record: dict) -> None:
+    agg["calls"] += 1
+    agg["haiku_eq"] += float(record.get("haiku_eq", 0.0) or 0.0)
+    agg["wall_seconds"] += float(record.get("wall_seconds", 0.0) or 0.0)
+    if record.get("cache_hit"):
+        agg["cache_hits"] += 1
+    agg["input_tokens"] += int(record.get("input_tokens", 0) or 0)
+    agg["output_tokens"] += int(record.get("output_tokens", 0) or 0)
+    context_used = int(record.get("context_used", 0) or 0)
+    context_cap = int(record.get("context_cap", 0) or 0)
+    agg["context_used_max"] = max(agg["context_used_max"], context_used)
+    agg["context_used_sum"] += context_used
+    headroom = context_cap - context_used
+    agg["headroom_min"] = min(agg["headroom_min"], headroom)
+    agg["headroom_sum"] += headroom
+
+
+class UnknownRoleError(ValueError):
+    """A _calls.jsonl record named a role not in the Role enum."""
+
+
+def _initial_by_role() -> dict[str, dict]:
+    """Pre-populate by_role with every legacy Role enum value.
+
+    Matches legacy `CostMeter.__init__` which seeds `self._by_role` with
+    `{r: _Aggregates() for r in Role}`. A write-only run therefore emits
+    all five role keys (four with `{"calls": 0}`) rather than a single
+    `{"writer": ...}` entry — downstream consumers can rely on the key
+    set being stable regardless of which roles were actually exercised.
+    """
+    return {role.value: dict(_EMPTY_AGG) for role in Role}
+
+
+def _aggregate_calls_jsonl(calls_path: Path) -> dict:
+    """Read _calls.jsonl and produce the legacy CostMeter.snapshot shape."""
+    total = dict(_EMPTY_AGG)
+    by_role: dict[str, dict] = _initial_by_role()
+    by_tier: dict[str, dict] = {}
+    if not calls_path.is_file():
+        return {
+            "budget_used_haiku_eq": 0.0,
+            "wall_seconds": 0.0,
+            "by_role": {k: _agg_to_dict(v) for k, v in by_role.items()},
+            "by_tier": {},
+            "context": {
+                "used_max": 0,
+                "used_mean": 0,
+                "headroom_min": 0,
+                "headroom_mean": 0,
+            },
+            "calls": 0,
+            "cache_hit_rate": 0.0,
+        }
+    known_roles = {role.value for role in Role}
+    for line in calls_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        role_key = str(record.get("role", ""))
+        if role_key not in known_roles:
+            raise UnknownRoleError(
+                f"_calls.jsonl record has unknown role {role_key!r}; "
+                f"expected one of {sorted(known_roles)}"
+            )
+        tier_key = str(record.get("tier", "unknown"))
+        _update_agg(total, record)
+        _update_agg(by_role[role_key], record)
+        _update_agg(by_tier.setdefault(tier_key, dict(_EMPTY_AGG)), record)
+    calls = total["calls"]
+    return {
+        "budget_used_haiku_eq": total["haiku_eq"],
+        "wall_seconds": total["wall_seconds"],
+        "by_role": {k: _agg_to_dict(v) for k, v in by_role.items()},
+        "by_tier": {k: _agg_to_dict(v) for k, v in by_tier.items()},
+        "context": {
+            "used_max": total["context_used_max"],
+            "used_mean": total["context_used_sum"] / calls if calls else 0,
+            "headroom_min": total["headroom_min"] if calls else 0,
+            "headroom_mean": total["headroom_sum"] / calls if calls else 0,
+        },
+        "calls": calls,
+        "cache_hit_rate": total["cache_hits"] / calls if calls else 0.0,
+    }
 
 
 def _gather_evidence_chunks_from_scratch(scratch_dir: Path) -> list[str]:
