@@ -8,13 +8,13 @@ from pathlib import Path
 import typer
 
 from ...baselines.config import BaselineConfig, select_evidence_chunks_for_page
+from ...bundle.draft.preload import preload_corpus
 from ...corpus.seed import (
     SeedSelectionConfig,
     doc_embeddings,
     greedy_seed_select,
     pagerank_normalised,
 )
-from ...distill.preload import preload_corpus
 from ...paths import CorpusPaths
 from ...session import (
     apply_merge_patch,

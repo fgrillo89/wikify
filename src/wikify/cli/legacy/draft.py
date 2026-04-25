@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from ...distill.preload import preload_corpus
+from ...bundle.draft.preload import preload_corpus
 from ...paths import BundlePaths, CorpusPaths
 from ...schema import (
     WriteEvidenceRef,

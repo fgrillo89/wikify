@@ -165,7 +165,7 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
 # --- Distill preload excludes deleted ---
 
 def test_distill_preload_excludes_deleted(sources_dir, corpus_dir):
-    from wikify.distill.preload import preload_corpus
+    from wikify.bundle.draft.preload import preload_corpus
 
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
     _write_md(sources_dir / "beta.md", "Beta", "Beta body.")

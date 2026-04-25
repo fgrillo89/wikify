@@ -7,8 +7,8 @@ embeddings stay in sync.
 
 from __future__ import annotations
 
-from ..models import WikiPage
-from ..paths import BundlePaths
+from ...models import WikiPage
+from ...paths import BundlePaths
 
 
 def rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
@@ -20,7 +20,7 @@ def rebuild_wiki_graph(bundle: BundlePaths, pages: list[WikiPage]) -> None:
     )
     from wikify.corpus.vectors import save_vectors
 
-    from ..embedding import current_backend, embed_passages, embedder_for
+    from ...embedding import current_backend, embed_passages, embedder_for
 
     # Build uses passage embedding (indexing wiki page bodies); the graph
     # stores a query-mode callable because search() encodes user queries.

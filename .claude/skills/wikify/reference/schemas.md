@@ -136,7 +136,7 @@ Owning command: `wikify bundle commit-page` (rebuilds on each commit).
 ### `<bundle>/_wiki_graph.json`
 
 Wiki graph of citation edges between pages. Built by
-`src/wikify/distill/write_runner.py::rebuild_wiki_graph`. Owning command:
+`src/wikify/bundle/wiki/post_commit.py::rebuild_wiki_graph`. Owning command:
 `wikify bundle commit-page`. `schema_version` to be added when the format
 is first mutated.
 

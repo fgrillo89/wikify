@@ -18,9 +18,9 @@ from wikify.corpus.chunks import (
 from wikify.corpus.equations_index import EquationIndex
 from wikify.corpus.images_index import ImageIndex
 
-from ..embedding import embedder_for
-from ..models import Chunk, Document
-from ..paths import CorpusPaths
+from ...embedding import embedder_for
+from ...models import Chunk, Document
+from ...paths import CorpusPaths
 
 
 @dataclass

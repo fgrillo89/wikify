@@ -11,8 +11,8 @@ import typer
 from ...bundle.wiki.files import write_page as write_page_file
 from ...bundle.wiki.index import build_index
 from ...bundle.wiki.page import load_bundle
+from ...bundle.wiki.post_commit import rebuild_wiki_graph
 from ...context import response_reserve, total_context
-from ...distill.write_runner import rebuild_wiki_graph
 from ...meter import CallRecord
 from ...models import WikiPage
 from ...paths import BundlePaths

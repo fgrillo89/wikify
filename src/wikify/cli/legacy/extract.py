@@ -19,8 +19,8 @@ from pathlib import Path
 
 import typer
 
-from ...bundle.concepts.dossier import Candidate, canonicalize
-from ...distill.preload import preload_corpus
+from ...bundle.draft.preload import preload_corpus
+from ...bundle.work.dossier import Candidate, canonicalize
 from ...paths import CorpusPaths
 from ...schema import ExtractResponse
 from ...session import (
