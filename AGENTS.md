@@ -6,12 +6,26 @@ Canonical project reference for any agentic runtime. Behavior rules
 
 ---
 
+> **Note:** This document is being rewritten as part of the
+> skill-centric redesign. The "Read First" pointers, "Boundaries"
+> map, and "Data Layout" stanzas reflect the post-W0 package layout
+> (`bundle/`, `corpus/`, `citations/`, `cli/`); the "CLI", "Writer
+> / Page Rules", "Citation grounding", "Error Handling", and
+> "Data-Handling Principles" sections still describe the legacy
+> surface (`session`/`kg`/`extract`/`draft`/`validate`/`bundle`/
+> `meter`) which continues to work via `cli/legacy/*` until Phase C.
+> The binding redesign target is in
+> `docs/skill-centric-execution-plan.md` and
+> `docs/filesystem-state-design.md`. Full rewrite lands in Phase D.
+
 ## Read First
 
-1. `docs/architecture.md` — system design and CLI surface
-2. `docs/metrics.md` — M1–M6, GT-P, GT-C
-3. `.claude/skills/wikify/workflows/run-baseline.md` — the canonical workflow loop
-4. `.claude/skills/wikify/reference/schemas.md` — durable artifact catalog
+1. `docs/skill-centric-execution-plan.md` — redesign brief (binding)
+2. `docs/filesystem-state-design.md` — target filesystem and CLI surface
+3. `docs/architecture.md` — current/legacy system design
+4. `docs/metrics.md` — M1–M6, GT-P, GT-C
+5. `.claude/skills/wikify/workflows/run-baseline.md` — the canonical workflow loop
+6. `.claude/skills/wikify/reference/schemas.md` — durable artifact catalog
 
 ---
 
@@ -42,20 +56,33 @@ never calls a model SDK directly.
 
 ## Boundaries
 
+Top-level packages (post-W0 layout):
+
+- `corpus/` — input corpora: chunks, vectors, doc markdown, images, equations, bibliography, fluent KG (`graph.py`/`graph_build.py`), seed selection, field detection. Read-only during a wiki run.
+- `citations/` — citation parsing, BibTeX, DOI/Crossref/OpenAlex resolution. Standalone; consumed by `ingest/` only.
+- `bundle/` — everything that lives inside one wiki bundle:
+  - `bundle/run/` — execution control (state, events, lock, cost). Populated in W2.
+  - `bundle/work/` — in-flight build state (dossier + author_context today; card/evidence/inbox/claim/tend/canonicalize land in W4). Package name matches the CLI noun (`wikify work`) and the on-disk directory (`work/`).
+  - `bundle/draft/` — per-attempt artifacts (author_context today; schema/builder/validator/artifact land in W5).
+  - `bundle/wiki/` — committed pages, indices, page graph, embeddings, slug naming. `commit.py` and `derived.py` land in W6/W7.
 - `ingest/` — parse, chunk, embed, graph, citations, manifest.
-- `cli_cmds/` — skill-driven CLI sub-apps (`session`, `kg`, `extract`, `draft`, `validate`, `bundle`, `meter`).
-- `distill/` — seed selection, dossier, prompts, write-side runners.
-- `baselines/` — `BaselineConfig` + per-page evidence helpers.
-- `eval/` — metrics (M1–M6, GT-P, GT-C).
-- `render/` — static site generation.
-- `store/` — page / index / vector / wiki-graph persistence.
-- `prompts/` — layered prompt templates.
-- Top-level: `types.py`, `config.py`, `schema.py`, `context.py`, `meter.py`, `embedding.py`, `models.py`, `paths.py`, `session.py`, `cli.py`.
+- `eval/` — metrics (M1–M6, GT-P, GT-C); consumes wiki bundles, never mutates them.
+- `render/` — static site generation; consumes wiki bundles, never mutates them.
+- `prompts/` — Python-side prompt templates (writer / extract / refine / artifact / field guides). Assembled by `bundle/draft/builder.py`; not loaded by skills directly.
+- `cli/` — argv glue.
+  - `cli/__init__.py` — top-level Typer app and noun registrations.
+  - `cli/_io.py` — `cli_invoked` event capture wrapper.
+  - `cli/_helpers.py` — exit codes, error envelope.
+  - `cli/legacy/` — Phase A home for the seven legacy nouns (`session`, `kg`, `extract`, `draft`, `validate`, `bundle`, `meter`); deleted in Phase C.
+  - `cli/<noun>.py` files for `corpus`, `run`, `work`, `draft`, `wiki`, `render`, `eval`, `migrate` land in W1–W8.
+- `api.py` — `Bundle` and `Corpus` context dataclasses (replace the legacy `paths.py`); lands in W1.
+- Top-level Phase C deletion targets (still on disk during Phase A): `paths.py`, `schema.py`, `session.py`, `meter.py`, `baselines/`. (`distill/` is dissolved entirely in W0 — see Boundaries above.)
 
 Dependency rules:
-- `distill` reads `ingest` outputs; does not touch `eval` or `render`.
-- `eval` and `render` consume wiki bundles, never modify them.
-- `cli.py` is a thin adapter — dependencies in, business logic out.
+- `corpus/` and `citations/` do not depend on `bundle/`.
+- `bundle/*` packages do not depend on each other directly; cross-bundle coordination goes through `api.Bundle`.
+- `eval/` and `render/` consume wiki bundles, never modify them.
+- `cli/<noun>.py` is a thin adapter — translates argv to one or two domain calls.
 
 ---
 
