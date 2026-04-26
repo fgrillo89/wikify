@@ -34,7 +34,14 @@ def test_build_draft_writes_json(tmp_path: Path) -> None:
         slug,
         [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0", score=0.9)],
     )
-    request = build_draft(bundle, slug=slug, corpus=corpus, task="create")
+    request = build_draft(
+        bundle,
+        slug=slug,
+        corpus=corpus,
+        task="create",
+        model_id="claude-sonnet-4-6",
+        tier="M",
+    )
 
     assert request.page_id == "Atomic Layer Deposition"
     assert request.page_kind == "article"
@@ -51,7 +58,7 @@ def test_build_draft_persists_to_disk(tmp_path: Path) -> None:
         slug,
         [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")],
     )
-    build_draft(bundle, slug=slug, corpus=corpus)
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
 
     p = draft_path(bundle, slug)
     assert p.is_file()
@@ -72,7 +79,7 @@ def test_build_draft_only_active_evidence(tmp_path: Path) -> None:
             EvidenceRecord(chunk_id="paper_0__c0001", doc_id="paper_0", status="archived"),
         ],
     )
-    request = build_draft(bundle, slug=slug, corpus=corpus)
+    request = build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
     assert len(request.evidence_v2) == 1
     assert request.evidence_v2[0].chunk_id == "paper_0__c0000"
 
@@ -84,7 +91,7 @@ def test_build_draft_unknown_concept(tmp_path: Path) -> None:
     bundle = Bundle.open(bundle_dir)
     corpus = _make_corpus(tmp_path / "corpus")
     with pytest.raises(FileNotFoundError, match="work.md"):
-        build_draft(bundle, slug="no-such", corpus=corpus)
+        build_draft(bundle, slug="no-such", corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
 
 
 def test_load_draft_roundtrip(tmp_path: Path) -> None:
@@ -92,7 +99,7 @@ def test_load_draft_roundtrip(tmp_path: Path) -> None:
     append_evidence(
         bundle, slug, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
     )
-    built = build_draft(bundle, slug=slug, corpus=corpus)
+    built = build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
     loaded = load_draft(bundle, slug)
     assert loaded.page_id == built.page_id
     assert loaded.evidence_v2[0].chunk_id == built.evidence_v2[0].chunk_id

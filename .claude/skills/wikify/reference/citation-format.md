@@ -96,6 +96,7 @@ Citation correctness is checked by `src/wikify/schema.py::WriteResponse` via:
 - `_body_has_prose_and_evidence` — ensures the References section exists and has at least one definition.
 - `_check_wikipedia_structure` — ensures every in-prose marker resolves to a definition and vice versa.
 
-The `QuoteNotInChunkError` path (shared with extract) enforces the substring
-rule at promotion time: `wikify validate write` reruns the quote-in-chunk
-check before commit.
+The `QuoteNotInChunkError` path enforces the substring rule at every
+gate: `wikify draft check` produces the canonical `validation.json`
+verdict, and `wikify wiki commit` re-checks under the run lock before
+promoting the page.

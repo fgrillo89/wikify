@@ -8,14 +8,15 @@ The selector ranks candidate documents by the objective::
 where ``coverage_gain`` is computed over mean-pooled non-reference,
 non-caption document embeddings with clipped cosine similarities.
 
-This module owns the ranking only. How many seeds to take, how to
-allocate evidence per seed, and which strategy to run are all skill
-decisions and live in ``.claude/skills/wikify-*/SKILL.md`` — not here.
+This module owns the ranking only. ``pagerank_weight`` and ``max_seeds``
+are caller-supplied — the CLI surface (``corpus find --seed --max
+<n> --pagerank-weight <w>``) carries the defaults so the value is
+explicitly chosen at the agent boundary, not buried in a Python config
+object.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -26,22 +27,6 @@ from ..models import Chunk
 if TYPE_CHECKING:
     from wikify.corpus.graph import KnowledgeGraph
     from wikify.corpus.vectors import VectorStore
-
-
-@dataclass(frozen=True)
-class SeedSelectionConfig:
-    """Knobs for the PageRank-plus-submodular seed selector.
-
-    The selector ranks candidate documents by score; how many to actually
-    extract from is the caller's decision (the extract loop's per-call
-    budget gate is the real backstop). ``max_seeds`` is a hard cap on
-    how many docs the greedy pass will rank — generous defaults are fine
-    because greedy is O(n^2) in doc count and the corpus has at most a
-    few thousand docs.
-    """
-
-    pagerank_weight: float = 0.7
-    max_seeds: int = 64
 
 
 def doc_embeddings(
@@ -117,7 +102,7 @@ def greedy_seed_select(
     doc_embeddings: np.ndarray,
     pr_norm: np.ndarray,
     max_seeds: int,
-    cfg: SeedSelectionConfig | None = None,
+    pagerank_weight: float,
 ) -> list[str]:
     """Greedy submodular: ``pagerank_weight * pr + (1-w) * cov_gain``.
 
@@ -126,7 +111,6 @@ def greedy_seed_select(
     units — callers translate budgets into ``max_seeds`` themselves and
     rely on their own per-call gate to bound real spend.
     """
-    cfg = cfg or SeedSelectionConfig()
     n = len(doc_order)
     if n == 0 or max_seeds <= 0:
         return []
@@ -137,7 +121,7 @@ def greedy_seed_select(
     max_sim_to_s = np.zeros(n, dtype=np.float32)
     selected: list[int] = []
     cap = min(max_seeds, n)
-    pr_w = float(cfg.pagerank_weight)
+    pr_w = float(pagerank_weight)
     cov_w = 1.0 - pr_w
 
     while len(selected) < cap:
@@ -168,22 +152,15 @@ def select_seeded_bootstrap(
     vectors: VectorStore | None,
     kg: KnowledgeGraph,
     max_seeds: int,
-    cfg: SeedSelectionConfig | None = None,
+    pagerank_weight: float,
 ) -> list[str]:
     """End-to-end: pick seed docs and return their canonical abstract chunks.
-
-    Off by default for the main small-scale comparison (see memo). Use
-    this when a follow-on side experiment wants the same explicit seed
-    set across conditions. ``max_seeds`` is a hard cap; the caller is
-    responsible for ensuring downstream extract budget can absorb the
-    seed reads.
 
     The abstract chunk for each seed doc comes from
     ``kg.source(d).abstract_chunk()`` — the canonical reader for the
     ingest-time-tagged abstract. Docs with no body content (no abstract
     tag) are silently skipped.
     """
-    cfg = cfg or SeedSelectionConfig()
     embeds, doc_order = doc_embeddings(chunks, vectors)
     pr_norm = pagerank_normalised(kg, doc_order)
     seed_doc_ids = greedy_seed_select(
@@ -191,7 +168,7 @@ def select_seeded_bootstrap(
         doc_embeddings=embeds,
         pr_norm=pr_norm,
         max_seeds=max_seeds,
-        cfg=cfg,
+        pagerank_weight=pagerank_weight,
     )
     return [
         chunk["id"]

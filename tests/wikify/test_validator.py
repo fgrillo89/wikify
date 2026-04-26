@@ -30,7 +30,7 @@ def _setup(tmp_path: Path) -> tuple[Bundle, Corpus, str]:
     append_evidence(
         bundle, s, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
     )
-    build_draft(bundle, slug=s, corpus=corpus)
+    build_draft(bundle, slug=s, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
     return bundle, corpus, s
 
 

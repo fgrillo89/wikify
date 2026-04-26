@@ -44,7 +44,9 @@ class RunStateV1(BaseModel):
     schema_version: int = SCHEMA_VERSION
     run_id: str
     status: RunStatus = "active"
-    strategy: str = "baseline"
+    # Free-form workflow label (e.g. "baseline", "guided", "free", "query").
+    # Passive metadata for replay + comparison; no Python branches on it.
+    strategy: str = ""
     corpus_path: str
     wiki_path: str = "wiki"
     work_path: str = "work"

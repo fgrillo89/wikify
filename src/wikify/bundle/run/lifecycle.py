@@ -28,7 +28,7 @@ def init_run(
     bundle: Bundle,
     *,
     corpus_path: Path | str,
-    strategy: str = "baseline",
+    strategy: str = "",
     target_haiku_eq: int = 0,
     actor: str = "cli",
     run_id: str | None = None,

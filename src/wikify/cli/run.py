@@ -55,7 +55,14 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
 def cmd_init(
     bundle_dir: Path = typer.Option(..., "--bundle", help="Bundle directory."),
     corpus_dir: Path = typer.Option(..., "--corpus", help="Corpus directory."),
-    strategy: str = typer.Option("baseline", "--strategy"),
+    strategy: str = typer.Option(
+        "",
+        "--strategy",
+        help=(
+            "Free-form workflow label (e.g. baseline | guided | free | query). "
+            "Passive run metadata; the agent picks. No Python branch reads this."
+        ),
+    ),
     target_haiku_eq: int = typer.Option(0, "--target-haiku-eq"),
     fmt: str = typer.Option("text", "--format", help="text | json"),
 ) -> None:
