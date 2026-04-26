@@ -1,10 +1,19 @@
 """``derived/`` projections — rebuildable machine views of the committed wiki.
 
-W6 MVP scope: ``derived/index.json`` listing every committed page.
-``derived/graph.json`` and ``derived/vectors.npz`` are heavier
-projections owned by ``post_commit.rebuild_wiki_graph``; the v2
-``wiki build graph`` / ``wiki build vectors`` verbs invoke that
-helper, so this module defers to it.
+Three projections:
+
+- ``derived/index.json``    list of every committed page (slug + path + kind).
+- ``derived/graph.json``    serialised wiki knowledge graph (cite edges
+                             between pages). Rebuilt via the existing
+                             ``bundle/wiki/graph.py`` helpers.
+- ``derived/vectors.npz``   per-page embeddings, used for ``wiki find``.
+
+The graph + vectors rebuild reads every ``wiki/articles/*.md`` and
+``wiki/people/*.md`` and reconstructs the graph from the
+``[^eN]`` evidence footnotes in each page body. The legacy ``post_commit
+.rebuild_wiki_graph`` helper writes to LegacyBundle paths; the v2
+implementation here reads the same wiki-page parsers but writes to the
+v2 ``derived_*`` accessors.
 """
 
 from __future__ import annotations
@@ -49,3 +58,85 @@ def read_index(bundle: Bundle) -> dict:
     if not bundle.derived_index_path.exists():
         return {"schema_version": 1, "pages": []}
     return json.loads(bundle.derived_index_path.read_text(encoding="utf-8"))
+
+
+def _load_v2_pages(bundle: Bundle) -> list:
+    """Walk wiki/articles/ + wiki/people/ and return parsed WikiPages."""
+    from .page import parse_page
+
+    out: list = []
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+        if not sub.is_dir():
+            continue
+        for p in sorted(sub.glob("*.md")):
+            page = parse_page(p)
+            # ``parse_page`` returns a Page (Bundle-side dataclass);
+            # convert to WikiPage shape for build_wiki_graph.
+            from ...models import Evidence, WikiPage
+
+            evidence = [
+                Evidence(
+                    marker=ev.marker,
+                    chunk_id=ev.chunk_id or "",
+                    doc_id=ev.doc_id or "",
+                    quote=ev.quote or "",
+                )
+                for ev in (page.evidence or [])
+            ]
+            out.append(
+                WikiPage(
+                    id=page.id,
+                    kind=page.kind,
+                    title=page.title,
+                    aliases=list(page.aliases or []),
+                    body_markdown=page.body_clean or "",
+                    evidence=evidence,
+                    links=list(page.links or []),
+                )
+            )
+    return out
+
+
+def rebuild_graph(bundle: Bundle) -> Path:
+    """Rebuild ``derived/graph.json`` from committed pages.
+
+    Calls :func:`bundle.wiki.graph.build_wiki_graph` over the parsed
+    pages and serialises with :func:`save_wiki_graph`. The vectors
+    parameter is None (no embeddings) — vectors are owned by
+    :func:`rebuild_vectors`.
+    """
+    from .graph import build_wiki_graph, save_wiki_graph
+
+    bundle.derived_dir.mkdir(parents=True, exist_ok=True)
+    pages = _load_v2_pages(bundle)
+    wkg = build_wiki_graph(pages, vectors=None, embed_fn=None)
+    save_wiki_graph(bundle.derived_graph_path, wkg)
+    return bundle.derived_graph_path
+
+
+def rebuild_vectors(bundle: Bundle) -> Path:
+    """Rebuild ``derived/vectors.npz`` — per-page embeddings.
+
+    Uses the project's current embedding backend in passage mode.
+    The vectors file is the input the v2 ``wiki find`` semantic-search
+    path will consume.
+    """
+    from ...corpus.vectors import save_vectors
+    from ...embedding import embed_passages
+    from .graph import build_wiki_vectors
+
+    bundle.derived_dir.mkdir(parents=True, exist_ok=True)
+    pages = _load_v2_pages(bundle)
+    if not pages:
+        # No committed pages — write an empty vectors file so callers can
+        # still ``np.load`` without branching.
+        import numpy as _np
+
+        from ...corpus.vectors import VectorStore
+
+        empty = VectorStore(matrix=_np.zeros((0, 0), dtype="float32"), ids=[])
+        save_vectors(bundle.derived_vectors_path, empty)
+        return bundle.derived_vectors_path
+    vectors = build_wiki_vectors(pages, embed_passages)
+    save_vectors(bundle.derived_vectors_path, vectors)
+    return bundle.derived_vectors_path

@@ -4,12 +4,17 @@ Mirrors the bundle-wide ``run/lock`` shape but keyed per concept.
 A worker that wants to mutate a concept folder must hold its claim;
 suggestions can still be appended to the inbox without a claim
 (they only mutate the inbox file, not the concept folder).
+
+Atomicity: the fresh-acquisition path uses ``os.open(O_CREAT|O_EXCL)``
+so two processes cannot both succeed. Stale reclaim and force-override
+use ``os.replace`` and verify the on-disk owner after the replace.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -66,6 +71,31 @@ def read_claim(bundle: Bundle, slug: str) -> dict | None:
         return None
 
 
+def _atomic_create(path: Path, payload: bytes) -> bool:
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(path), flags)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+    return True
+
+
+def _atomic_replace(path: Path, payload: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=".claim-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        if Path(tmp).exists():
+            Path(tmp).unlink()
+        raise
+
+
 def acquire_claim(
     bundle: Bundle,
     slug: str,
@@ -76,25 +106,12 @@ def acquire_claim(
 ) -> dict | None:
     """Acquire the per-concept claim or raise :class:`ClaimHeldError`.
 
-    Returns the displaced record when ``force=True`` overrides a live
-    claim. Stale claims (expires_at past) are silently reclaimed.
+    Race-safe: the fresh-acquisition path uses ``O_EXCL``. Stale
+    reclaim and force-override use ``os.replace`` and verify the
+    on-disk owner. Same-owner re-acquisition refreshes the TTL.
     """
     p = claim_path(bundle, slug)
     p.parent.mkdir(parents=True, exist_ok=True)
-    existing = read_claim(bundle, slug)
-    displaced: dict | None = None
-    if existing and not _is_stale(existing):
-        if existing.get("owner") == owner:
-            # Re-acquire by the same owner refreshes the TTL.
-            pass
-        elif force:
-            displaced = existing
-        else:
-            raise ClaimHeldError(
-                slug,
-                existing.get("owner", "unknown"),
-                existing.get("acquired_at", ""),
-            )
     now = datetime.now(UTC)
     expires = now + timedelta(seconds=ttl_seconds)
     record = {
@@ -105,7 +122,39 @@ def acquire_claim(
         "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ttl_seconds": ttl_seconds,
     }
-    p.write_text(json.dumps(record), encoding="utf-8")
+    payload = json.dumps(record).encode("utf-8")
+
+    # Fast path: no existing claim.
+    if _atomic_create(p, payload):
+        return None
+
+    # Slow path: file exists. Inspect liveness and ownership.
+    existing = read_claim(bundle, slug)
+    if existing and not _is_stale(existing):
+        if existing.get("owner") == owner:
+            # Same owner: refresh TTL via atomic replace.
+            _atomic_replace(p, payload)
+            return None
+        if not force:
+            raise ClaimHeldError(
+                slug,
+                existing.get("owner", "unknown"),
+                existing.get("acquired_at", ""),
+            )
+
+    displaced = (
+        existing
+        if (existing and not _is_stale(existing) and force)
+        else None
+    )
+    _atomic_replace(p, payload)
+    actual = read_claim(bundle, slug) or {}
+    if actual.get("owner") != owner or actual.get("pid") != os.getpid():
+        raise ClaimHeldError(
+            slug,
+            actual.get("owner", "unknown"),
+            actual.get("acquired_at", ""),
+        )
     return displaced
 
 

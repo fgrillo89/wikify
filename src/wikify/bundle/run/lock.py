@@ -5,14 +5,24 @@ layout. Single global lock per run for now (per-concept claims land in
 W4). Stale locks (TTL expired) are silently reclaimed. Live locks held
 by a different owner raise :class:`LockHeldError`, which the CLI
 translates to ``EXIT_LOCK_HELD`` (exit code 2) via ``cli/_helpers.py``.
+
+Atomicity: the fresh-acquisition path uses ``os.open(O_CREAT|O_EXCL)``
+so two processes cannot both succeed. Stale reclaim uses a temp file +
+``os.replace`` and re-reads the on-disk record after the replace to
+detect a lost race; the loser raises ``LockHeldError``. This keeps the
+implementation portable (POSIX + Windows) without a dependency on
+``fcntl``/``msvcrt`` at the cost of an extra read on the stale-reclaim
+path.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from ...api import Bundle
 
@@ -64,6 +74,45 @@ def read_lock(bundle: Bundle) -> dict | None:
         return None
 
 
+def _build_record(owner: str, ttl_seconds: int) -> dict:
+    now = datetime.now(UTC)
+    expires = now + timedelta(seconds=ttl_seconds)
+    return {
+        "owner": owner,
+        "pid": os.getpid(),
+        "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ttl_seconds": ttl_seconds,
+    }
+
+
+def _atomic_create(path: Path, payload: bytes) -> bool:
+    """Create *path* exclusively. Returns True if we created it."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(path), flags)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+    return True
+
+
+def _atomic_replace(path: Path, payload: bytes) -> None:
+    """Replace *path* with *payload* via temp file + ``os.replace``."""
+    fd, tmp = tempfile.mkstemp(prefix=".lock-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        if Path(tmp).exists():
+            Path(tmp).unlink()
+        raise
+
+
 def acquire_lock(
     bundle: Bundle,
     owner: str,
@@ -73,31 +122,37 @@ def acquire_lock(
 ) -> dict | None:
     """Acquire ``<bundle>/run/lock`` or raise :class:`LockHeldError`.
 
-    A lock whose ``expires_at`` (or implied TTL window) has passed is
-    treated as stale and silently reclaimed. ``force=True`` overwrites
-    a live lock and returns the displaced record.
+    Race-safe: the fresh-acquisition path uses ``O_EXCL`` so two
+    processes cannot both succeed. The stale-reclaim path uses
+    ``os.replace`` and verifies the resulting on-disk owner; the
+    loser raises ``LockHeldError``. ``force=True`` overrides a live
+    lock and returns the displaced record.
     """
     bundle.run_dir.mkdir(parents=True, exist_ok=True)
-    displaced: dict | None = None
+    record = _build_record(owner, ttl_seconds)
+    payload = json.dumps(record).encode("utf-8")
+
+    # Fast path: atomic create, no existing lock.
+    if _atomic_create(bundle.lock_path, payload):
+        return None
+
+    # Slow path: file exists. Check liveness.
     existing = read_lock(bundle)
-    if existing and not _is_stale(existing):
-        if not force:
-            raise LockHeldError(
-                existing.get("owner", "unknown"),
-                existing.get("acquired_at", ""),
-            )
-        displaced = existing
-    now = datetime.now(UTC)
-    expires = now + timedelta(seconds=ttl_seconds)
-    record = {
-        "owner": owner,
-        "pid": os.getpid(),
-        "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "ttl_seconds": ttl_seconds,
-    }
-    bundle.lock_path.write_text(json.dumps(record), encoding="utf-8")
-    return displaced
+    if existing and not _is_stale(existing) and not force:
+        raise LockHeldError(
+            existing.get("owner", "unknown"),
+            existing.get("acquired_at", ""),
+        )
+
+    # Either stale or force: atomic replace, then verify we ended up holding it.
+    _atomic_replace(bundle.lock_path, payload)
+    actual = read_lock(bundle) or {}
+    if actual.get("owner") != owner or actual.get("pid") != os.getpid():
+        raise LockHeldError(
+            actual.get("owner", "unknown"),
+            actual.get("acquired_at", ""),
+        )
+    return existing if (force and existing and not _is_stale(existing)) else None
 
 
 def release_lock(bundle: Bundle) -> None:
