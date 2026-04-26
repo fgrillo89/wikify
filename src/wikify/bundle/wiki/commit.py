@@ -15,11 +15,11 @@ Side effects of a successful commit:
    garbage-collected from the concept folder.
 4. A ``page_committed`` event is appended to ``run/events.jsonl``.
 
-The wiki graph + page-vector projections are rebuilt by the legacy
-``post_commit.py::rebuild_wiki_graph`` only when ``ensure_projections``
-is True; the v2 default is False because the workflow can defer the
-rebuild to ``wiki build graph`` so a hot loop does not pay the
-embedding cost on every commit.
+The wiki graph + page-vector projections are rebuilt only when
+``ensure_projections=True`` is passed; the default is False so a
+hot commit loop does not pay the embedding cost. The agent runs
+``wikify wiki build graph`` / ``wikify wiki build vectors`` once at
+the end of a workflow.
 """
 
 from __future__ import annotations
@@ -189,17 +189,18 @@ def commit_page(
 
 
 def rebuild_projections(bundle: Bundle) -> None:
-    """Rebuild ``derived/`` projections from the committed wiki.
+    """Rebuild every ``derived/`` projection from the committed wiki.
 
-    W6 MVP scope: regenerate ``derived/index.json`` with the page list.
-    Full graph + page-vector rebuild (``derived/graph.json`` and
-    ``derived/vectors.npz``) is delegated to ``wiki build graph`` and
-    ``wiki build vectors`` — the full implementation lives in
-    ``post_commit.py``; we leave that as a follow-up.
+    Calls :func:`bundle.wiki.derived.rebuild_index`,
+    :func:`rebuild_graph`, and :func:`rebuild_vectors` in sequence.
+    The vectors rebuild is the most expensive step (per-page
+    embedding); call this only at the end of a workflow.
     """
-    from .derived import rebuild_index
+    from .derived import rebuild_graph, rebuild_index, rebuild_vectors
 
     rebuild_index(bundle)
+    rebuild_graph(bundle)
+    rebuild_vectors(bundle)
 
 
 # --- Page rendering (v2) -----------------------------------------------

@@ -96,3 +96,24 @@ def test_run_lock_releases_on_exception(tmp_path: Path) -> None:
         with run_lock(bundle, owner="a", ttl_seconds=60):
             raise RuntimeError("boom")
     assert read_lock(bundle) is None
+
+
+def test_release_lock_with_owner_no_ops_when_not_owner(tmp_path: Path) -> None:
+    """release_lock(owner=...) must not delete a lock owned by someone else.
+
+    Guards against the post-TTL race where our finally-block fires after
+    another process has already reclaimed the stale lock.
+    """
+    bundle = _v2(tmp_path)
+    acquire_lock(bundle, owner="winner", ttl_seconds=60)
+    release_lock(bundle, owner="loser")  # different owner: must be no-op
+    record = read_lock(bundle)
+    assert record is not None
+    assert record["owner"] == "winner"
+
+
+def test_release_lock_with_owner_unlinks_when_owner_matches(tmp_path: Path) -> None:
+    bundle = _v2(tmp_path)
+    acquire_lock(bundle, owner="a", ttl_seconds=60)
+    release_lock(bundle, owner="a")
+    assert read_lock(bundle) is None

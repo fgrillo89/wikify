@@ -18,6 +18,7 @@ from pathlib import Path
 import typer
 
 from ..api import Bundle, LayoutMismatchError
+from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
 from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
 from ..bundle.wiki.queries import (
@@ -27,7 +28,7 @@ from ..bundle.wiki.queries import (
     list_people,
     show_page,
 )
-from ._helpers import EXIT_VALIDATION, cli_error
+from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Committed wiki layer.")
 
@@ -259,6 +260,14 @@ def cmd_commit(
         )
     except CommitGateError as exc:
         cli_error(EXIT_VALIDATION, error="commit_gate", message=str(exc))
+    except LockHeldError as exc:
+        cli_error(
+            EXIT_LOCK_HELD,
+            error="lock_held",
+            message=str(exc),
+            owner=exc.owner,
+            acquired_at=exc.acquired_at,
+        )
     if fmt == "json":
         typer.echo(
             json.dumps(

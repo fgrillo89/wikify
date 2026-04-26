@@ -155,9 +155,23 @@ def acquire_lock(
     return existing if (force and existing and not _is_stale(existing)) else None
 
 
-def release_lock(bundle: Bundle) -> None:
-    """Remove the lock file unconditionally."""
-    if bundle.lock_path.exists():
+def release_lock(bundle: Bundle, *, owner: str | None = None) -> None:
+    """Remove the lock file if we still own it.
+
+    When ``owner`` is given, the lock is only removed if the on-disk
+    record still names that owner (and our pid). This prevents a
+    finally-block from clobbering a lock that another process reclaimed
+    after our TTL expired. When ``owner`` is ``None``, the lock is
+    removed unconditionally — kept for ``wikify run lock --release``
+    style admin paths that need to break a stuck lock.
+    """
+    if not bundle.lock_path.exists():
+        return
+    if owner is None:
+        bundle.lock_path.unlink()
+        return
+    record = read_lock(bundle) or {}
+    if record.get("owner") == owner and record.get("pid") == os.getpid():
         bundle.lock_path.unlink()
 
 
@@ -174,4 +188,4 @@ def run_lock(bundle: Bundle, owner: str, *, ttl_seconds: int = 3600):
     try:
         yield
     finally:
-        release_lock(bundle)
+        release_lock(bundle, owner=owner)
