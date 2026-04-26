@@ -98,3 +98,21 @@ def test_wiki_check(tmp_path: Path) -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["articles"] == 1
+
+
+def test_wiki_commit_lock_held_returns_exit_2(tmp_path: Path) -> None:
+    """When the bundle lock is held by someone else, `wiki commit` exits 2."""
+    from wikify.bundle.run.lock import acquire_lock
+
+    bundle, slug = _setup_validated(tmp_path)
+    # Pre-acquire the lock as another owner so commit_page contends.
+    acquire_lock(bundle, owner="other-process", ttl_seconds=120)
+    result = runner.invoke(
+        app,
+        ["wiki", "commit", slug, "--run", str(bundle.root), "--format", "json"],
+    )
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"] == "lock_held"
+    assert payload["owner"] == "other-process"

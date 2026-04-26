@@ -10,10 +10,9 @@ Three projections:
 
 The graph + vectors rebuild reads every ``wiki/articles/*.md`` and
 ``wiki/people/*.md`` and reconstructs the graph from the
-``[^eN]`` evidence footnotes in each page body. The legacy ``post_commit
-.rebuild_wiki_graph`` helper writes to LegacyBundle paths; the v2
-implementation here reads the same wiki-page parsers but writes to the
-v2 ``derived_*`` accessors.
+``[^eN]`` evidence footnotes in each page body. The
+``bundle/wiki/graph.py`` helpers do the heavy lifting; this module
+adapts them to the v2 ``derived_*`` paths.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ raw files
    ▼  wikify run / work / draft / wiki  (skill-driven)
 [ Wiki bundle ]       v2 layout: run/, work/, wiki/, derived/
    │
-   ▼  wikify wiki build graph|vectors  +  (W7/W8) wikify render / wikify eval
+   ▼  wikify wiki build graph|vectors  +  wikify render / wikify eval
 [ Site / metrics ]    static HTML site, M1/M3/M5/M6 reports
 ```
 
