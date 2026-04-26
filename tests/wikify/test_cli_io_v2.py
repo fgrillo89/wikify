@@ -145,18 +145,3 @@ def test_v2_takes_precedence_over_v1(tmp_path: Path) -> None:
         assert all('"run", "show"' not in line for line in legacy)
 
 
-def test_legacy_still_works_when_only_v1_marker(tmp_path: Path) -> None:
-    """v1 bundles still log to _meta/cli_io.jsonl when no v2 markers present."""
-    bundle = tmp_path / "bundle"
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    # init via the legacy session path.
-    init = _run_cli(
-        ["session", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
-    )
-    assert init.returncode == 0, init.stderr
-
-    legacy_log = bundle / "_meta" / "cli_io.jsonl"
-    assert legacy_log.is_file()
-    # No v2 events.jsonl should exist.
-    assert not (bundle / "run" / "events.jsonl").exists()

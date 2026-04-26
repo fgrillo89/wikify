@@ -1,24 +1,20 @@
-"""Process-boundary CLI input/output telemetry.
+"""Process-boundary CLI input/output telemetry for v2 bundles.
 
-The skill path interacts with Wikify through CLI stdout/stderr. Capturing that
-boundary lets replay tools reconstruct what the model actually saw without
-asking agents to hand-maintain logs.
+The skill path interacts with Wikify through CLI stdout/stderr.
+Capturing that boundary lets replay tools reconstruct what the model
+actually saw without asking agents to hand-maintain logs.
 
-Two log writers, dispatched on bundle layout:
+When a command runs in (or against) a v2 bundle, a structured
+``cli_invoked`` :class:`Event` lands in ``run/events.jsonl`` and
+large stdout/stderr/stdin spill to
+``run/io/<event_id>.{stdin,stdout,stderr}.txt``.
 
-- :class:`_V2InvocationLog` writes a ``cli_invoked`` :class:`Event` into the
-  v2 bundle's ``run/events.jsonl`` ledger. Large stdout/stderr/stdin spill
-  to ``run/io/<event_id>.{stdin,stdout,stderr}.txt``.
-- :class:`_InvocationLog` keeps the legacy ``_meta/cli_io.jsonl`` shape for
-  v1 bundles still consumed by ``cli/legacy/*``.
-
-Resolution prefers v2 when both layouts are detectable.
+Disable with ``WIKIFY_CLI_IO_LOG=0``.
 """
 
 from __future__ import annotations
 
 import io
-import json
 import os
 import sys
 import time
@@ -31,7 +27,7 @@ from uuid import uuid4
 
 from typer import Typer
 
-from ..api import Bundle, LayoutMismatchError, LegacyBundle
+from ..api import Bundle, LayoutMismatchError
 from ..bundle.run.events import Event, append_event
 from ..bundle.run.state import load_state
 
@@ -107,65 +103,6 @@ class _TeeReader(io.TextIOBase):
         return lines
 
 
-class _InvocationLog:
-    def __init__(self, *, argv: Sequence[str], cwd: Path, bundle: LegacyBundle) -> None:
-        self.event_id = uuid4().hex
-        self.argv = list(argv)
-        self.cwd = cwd
-        self.bundle = bundle
-        self.started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.started = time.perf_counter()
-
-        self.io_dir = bundle.meta_dir / "cli_io"
-        self.io_dir.mkdir(parents=True, exist_ok=True)
-        self.stdin_path = self.io_dir / f"{self.event_id}.stdin.txt"
-        self.stdout_path = self.io_dir / f"{self.event_id}.stdout.txt"
-        self.stderr_path = self.io_dir / f"{self.event_id}.stderr.txt"
-        self.events_path = bundle.meta_dir / "cli_io.jsonl"
-
-    @contextmanager
-    def capture(self):
-        with (
-            self.stdin_path.open("w", encoding="utf-8") as stdin_capture,
-            self.stdout_path.open("w", encoding="utf-8") as stdout_capture,
-            self.stderr_path.open("w", encoding="utf-8") as stderr_capture,
-        ):
-            old_stdin = sys.stdin
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdin = _TeeReader(old_stdin, stdin_capture)
-            sys.stdout = _TeeWriter(old_stdout, stdout_capture)
-            sys.stderr = _TeeWriter(old_stderr, stderr_capture)
-            try:
-                yield
-            finally:
-                sys.stdin = old_stdin
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
-
-    def write_event(self, *, exit_code: int) -> None:
-        duration_ms = int((time.perf_counter() - self.started) * 1000)
-        record = {
-            "schema_version": 1,
-            "event_id": self.event_id,
-            "type": "cli_invoked",
-            "at": self.started_at,
-            "argv": _redact_argv(self.argv),
-            "cwd": str(self.cwd),
-            "exit_code": exit_code,
-            "duration_ms": duration_ms,
-            "stdin_path": str(self.stdin_path),
-            "stdout_path": str(self.stdout_path),
-            "stderr_path": str(self.stderr_path),
-            "stdin_preview": _preview(self.stdin_path),
-            "stdout_preview": _preview(self.stdout_path),
-            "stderr_preview": _preview(self.stderr_path),
-        }
-        self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.events_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
 class _V2InvocationLog:
     """CLI-IO log writer for v2 bundles. Emits a ``cli_invoked`` Event."""
 
@@ -236,9 +173,9 @@ class _V2InvocationLog:
 def run_with_io_logging(app: Typer, argv: Sequence[str] | None = None) -> None:
     """Run a Typer app while teeing stdin/stdout/stderr into bundle telemetry.
 
-    Logging is enabled when a v2 or v1 bundle can be inferred from
-    ``--run``, ``--session``, ``--bundle``, or the current working
-    directory. Set ``WIKIFY_CLI_IO_LOG=0`` to disable.
+    Logging is enabled when a v2 bundle can be inferred from
+    ``--run``, ``--bundle``, or the current working directory. Set
+    ``WIKIFY_CLI_IO_LOG=0`` to disable.
     """
     effective_argv = list(argv or sys.argv)
     log = _build_invocation_log(effective_argv)
@@ -262,29 +199,18 @@ def run_with_io_logging(app: Typer, argv: Sequence[str] | None = None) -> None:
         log.write_event(exit_code=exit_code)
 
 
-def _build_invocation_log(
-    argv: Sequence[str],
-) -> _V2InvocationLog | _InvocationLog | None:
+def _build_invocation_log(argv: Sequence[str]) -> _V2InvocationLog | None:
     if os.environ.get(_DISABLE_ENV) == "0":
         return None
-
     cwd = Path.cwd()
-
-    # Prefer v2: --run flag, --bundle flag pointing at v2, or cwd is v2 root.
     v2_root = _resolve_v2_bundle_root(argv[1:], cwd)
-    if v2_root is not None:
-        try:
-            v2_bundle = Bundle.open(v2_root)
-        except (LayoutMismatchError, FileNotFoundError):
-            v2_bundle = None
-        if v2_bundle is not None:
-            return _V2InvocationLog(argv=argv, cwd=cwd, bundle=v2_bundle)
-
-    # Fall back to v1.
-    v1_root = _resolve_bundle_root(argv[1:], cwd)
-    if v1_root is None:
+    if v2_root is None:
         return None
-    return _InvocationLog(argv=argv, cwd=cwd, bundle=LegacyBundle(v1_root))
+    try:
+        bundle = Bundle.open(v2_root)
+    except (LayoutMismatchError, FileNotFoundError):
+        return None
+    return _V2InvocationLog(argv=argv, cwd=cwd, bundle=bundle)
 
 
 def _resolve_v2_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:
@@ -302,23 +228,6 @@ def _resolve_v2_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:
     return None
 
 
-def _resolve_bundle_root(args: Sequence[str], cwd: Path) -> Path | None:
-    session_path = _option_path(args, "--session")
-    if session_path is not None:
-        root = _bundle_from_session(session_path)
-        if root is not None:
-            return root
-
-    bundle_path = _option_path(args, "--bundle")
-    if bundle_path is not None:
-        return bundle_path.resolve()
-
-    cwd_session = cwd / "_session" / "session.json"
-    if cwd_session.exists():
-        return cwd.resolve()
-    return None
-
-
 def _option_path(args: Sequence[str], name: str) -> Path | None:
     prefix = f"{name}="
     for idx, arg in enumerate(args):
@@ -327,17 +236,6 @@ def _option_path(args: Sequence[str], name: str) -> Path | None:
         if arg.startswith(prefix):
             return Path(arg[len(prefix):])
     return None
-
-
-def _bundle_from_session(session_path: Path) -> Path | None:
-    try:
-        data = json.loads(session_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
-    root = data.get("bundle_root")
-    if not root:
-        return None
-    return Path(root).resolve()
 
 
 def _system_exit_code(exc: SystemExit) -> int:

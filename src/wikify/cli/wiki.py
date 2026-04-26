@@ -19,7 +19,7 @@ import typer
 
 from ..api import Bundle, LayoutMismatchError
 from ..bundle.wiki.commit import CommitGateError, commit_page
-from ..bundle.wiki.derived import rebuild_index
+from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
 from ..bundle.wiki.queries import (
     find_text,
     list_articles,
@@ -189,25 +189,29 @@ def cmd_build(
 ) -> None:
     """Rebuild a derived projection.
 
-    W6 MVP supports only ``indexes``. ``graph`` and ``vectors`` are
-    deferred to a follow-up that wires up the legacy
-    ``post_commit.rebuild_wiki_graph`` helper to the v2 paths.
+    Three kinds:
+
+    - ``indexes``  — derived/index.json (page list)
+    - ``graph``    — derived/graph.json (cite-edge wiki graph)
+    - ``vectors``  — derived/vectors.npz (per-page embeddings)
     """
     bundle = _resolve_bundle(run)
-    if kind != "indexes":
+    if kind == "indexes":
+        p = rebuild_index(bundle)
+    elif kind == "graph":
+        p = rebuild_graph(bundle)
+    elif kind == "vectors":
+        p = rebuild_vectors(bundle)
+    else:
         cli_error(
             EXIT_VALIDATION,
-            error="unsupported_build_kind",
-            message=(
-                f"`wiki build {kind}` is deferred; only `wiki build indexes` "
-                "is wired up in W6"
-            ),
+            error="bad_build_kind",
+            message=f"`wiki build {kind}` not recognised; use indexes|graph|vectors",
         )
-    p = rebuild_index(bundle)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "path": str(p)}))
         return
-    typer.echo(f"index: {p}")
+    typer.echo(f"{kind}: {p}")
 
 
 # --------------------------------------------------------------- check

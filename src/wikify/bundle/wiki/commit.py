@@ -24,6 +24,7 @@ embedding cost on every commit.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from ..draft.artifact import (
     validation_path,
 )
 from ..run.events import Event, append_event
+from ..run.lock import run_lock
 from ..run.state import load_state
 from ..work.card import load_card, save_card
 
@@ -84,15 +86,22 @@ def commit_page(
     slug: str,
     actor: str = "cli",
     ensure_projections: bool = False,
+    owner: str | None = None,
+    lock_ttl_seconds: int = 60,
 ) -> CommitResult:
     """Promote ``slug``'s validated response to the v2 wiki layout.
 
-    Raises :class:`CommitGateError` when the precondition fails.
+    Acquires the bundle ``run/lock`` for the duration of the mutation
+    sequence (write page, update card, gc, emit event) so a parallel
+    process cannot interleave a concurrent commit. Raises
+    :class:`CommitGateError` when the precondition fails;
+    ``LockHeldError`` propagates if another process holds the lock.
     """
     draft_p = draft_path(bundle, slug)
     response_p = response_path(bundle, slug)
     verdict_p = validation_path(bundle, slug)
 
+    # Pre-flight checks (cheap; do not need the lock).
     if not draft_p.is_file():
         raise CommitGateError(f"draft.json missing for {slug}")
     if not response_p.is_file():
@@ -101,67 +110,75 @@ def commit_page(
         raise CommitGateError(
             f"validation.json missing for {slug}; run `wikify draft check` first"
         )
-
     verdict = read_json(verdict_p)
     if not verdict.get("ok"):
         raise CommitGateError(
             f"validation.json for {slug} has ok=false; cannot commit"
         )
 
-    response = read_json(response_p)
-    response.pop("schema_version", None)
+    lock_owner = owner or f"commit-page/pid-{os.getpid()}"
+    with run_lock(bundle, owner=lock_owner, ttl_seconds=lock_ttl_seconds):
+        # Re-read the verdict under the lock so a concurrent invalidation is caught.
+        verdict = read_json(verdict_p)
+        if not verdict.get("ok"):
+            raise CommitGateError(
+                f"validation.json for {slug} has ok=false; cannot commit"
+            )
 
-    page_id = response.get("page_id") or load_card(bundle, slug).page_id
-    page_kind = response.get("page_kind") or load_card(bundle, slug).kind
-    body_markdown = response["body_markdown"]
-    evidence = _parse_evidence_from_body(body_markdown)
+        response = read_json(response_p)
+        response.pop("schema_version", None)
 
-    page = WikiPage(
-        id=page_id,
-        kind=page_kind,
-        title=page_id,
-        aliases=load_card(bundle, slug).aliases,
-        body_markdown=body_markdown,
-        evidence=evidence,
-    )
+        page_id = response.get("page_id") or load_card(bundle, slug).page_id
+        page_kind = response.get("page_kind") or load_card(bundle, slug).kind
+        body_markdown = response["body_markdown"]
+        evidence = _parse_evidence_from_body(body_markdown)
 
-    target_dir = (
-        bundle.wiki_articles_dir if page_kind == "article" else bundle.wiki_people_dir
-    )
-    target_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{slug}.md"
-    page_path = target_dir / filename
-    page_path.write_text(_render_page(page), encoding="utf-8")
+        page = WikiPage(
+            id=page_id,
+            kind=page_kind,
+            title=page_id,
+            aliases=load_card(bundle, slug).aliases,
+            body_markdown=body_markdown,
+            evidence=evidence,
+        )
 
-    # Update concept card.
-    card = load_card(bundle, slug)
-    card.front["status"] = "committed"
-    card.front["wiki_path"] = str(page_path.relative_to(bundle.root)).replace("\\", "/")
-    save_card(bundle, slug, card)
+        target_dir = (
+            bundle.wiki_articles_dir
+            if page_kind == "article"
+            else bundle.wiki_people_dir
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        page_path = target_dir / f"{slug}.md"
+        page_path.write_text(_render_page(page), encoding="utf-8")
 
-    # Garbage-collect per-attempt artifacts.
-    gc_attempt(bundle, slug)
+        card = load_card(bundle, slug)
+        card.front["status"] = "committed"
+        card.front["wiki_path"] = str(
+            page_path.relative_to(bundle.root)
+        ).replace("\\", "/")
+        save_card(bundle, slug, card)
 
-    # Emit event.
-    try:
-        run_id = load_state(bundle).run_id
-    except FileNotFoundError:
-        run_id = ""
-    append_event(
-        bundle,
-        Event(
-            run_id=run_id,
-            type="page_committed",
-            actor=actor,
-            page_id=page_id,
-            data={
-                "path": str(page_path.relative_to(bundle.root)).replace("\\", "/"),
-                "slug": slug,
-                "kind": page_kind,
-                "evidence_count": len(evidence),
-            },
-        ),
-    )
+        gc_attempt(bundle, slug)
+
+        try:
+            run_id = load_state(bundle).run_id
+        except FileNotFoundError:
+            run_id = ""
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id,
+                type="page_committed",
+                actor=actor,
+                page_id=page_id,
+                data={
+                    "path": str(page_path.relative_to(bundle.root)).replace("\\", "/"),
+                    "slug": slug,
+                    "kind": page_kind,
+                    "evidence_count": len(evidence),
+                },
+            ),
+        )
 
     if ensure_projections:
         rebuild_projections(bundle)

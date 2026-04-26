@@ -1,22 +1,16 @@
-"""Shared seed selection for the abstract-first baseline and optional
-seeded bootstrap.
+"""Greedy submodular seed selection — deterministic primitive for any workflow skill.
 
-The same greedy submodular objective is used in two places:
-
-- ``baselines/pipeline.py`` for the canonical baseline's abstract seeding
-  phase, and
-- ``select_seeded_bootstrap`` here, which the standard pipeline can call
-  as an explicit, optional side experiment to seed any condition's first
-  round (off by default for the small-scale comparison; see
-  ``docs/distill-test-readiness.md``).
-
-Objective for candidate doc ``d`` given current seed set ``S``:
+The selector ranks candidate documents by the objective::
 
     score(d | S) = pagerank_weight * pr_norm(d)
                  + (1 - pagerank_weight) * coverage_gain(d | S)
 
-with ``coverage_gain`` defined over mean-pooled non-reference, non-
-caption document embeddings and clipped cosine similarities.
+where ``coverage_gain`` is computed over mean-pooled non-reference,
+non-caption document embeddings with clipped cosine similarities.
+
+This module owns the ranking only. How many seeds to take, how to
+allocate evidence per seed, and which strategy to run are all skill
+decisions and live in ``.claude/skills/wikify-*/SKILL.md`` — not here.
 """
 
 from __future__ import annotations
