@@ -173,7 +173,17 @@ def cmd_find(
     corpus_dir: Path = typer.Option(..., "--corpus"),
     top_k: int = typer.Option(8, "--top-k"),
     seed: bool = typer.Option(False, "--seed", help="Greedy seed selection."),
-    max_seeds: int = typer.Option(20, "--max"),
+    max_seeds: int = typer.Option(
+        20, "--max", help="Max seed docs returned by --seed mode."
+    ),
+    pagerank_weight: float = typer.Option(
+        0.7,
+        "--pagerank-weight",
+        help=(
+            "Trade-off between PageRank prior and submodular coverage gain "
+            "(0.0=coverage only, 1.0=pagerank only). Used only with --seed."
+        ),
+    ),
     text: bool = typer.Option(False, "--text", help="Literal substring grep."),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
@@ -185,7 +195,9 @@ def cmd_find(
     """
     corpus = _open_corpus(corpus_dir)
     if seed:
-        ids = queries.find_seeds(corpus, max_seeds=max_seeds)
+        ids = queries.find_seeds(
+            corpus, max_seeds=max_seeds, pagerank_weight=pagerank_weight
+        )
         if fmt == "json":
             typer.echo(json.dumps({"ok": True, "items": ids}))
             return

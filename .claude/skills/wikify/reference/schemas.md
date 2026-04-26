@@ -1,221 +1,145 @@
 ---
 name: wikify/reference/schemas
-description: Durable artifact catalog and schema_version policy for the wikify agent-backend file contract.
+description: Durable artifact catalog and schema_version policy for the v2 wikify file contract.
 ---
 
-# Schemas
+# Schemas (v2)
 
-Every durable file the agent or CLI produces has a documented schema and a
-monotonically increasing `schema_version` integer. This file is the authoritative
-catalog; Pydantic models in `src/wikify/schema.py` and `src/wikify/session.py` are
-the executable source of truth for shape validation.
+Every durable file the agent or CLI produces has a documented schema
+and a monotonically increasing ``schema_version`` integer. Pydantic
+models in ``src/wikify/`` are the executable source of truth; this
+file is the catalog.
 
 ## Schema_version policy
 
-- Every durable artifact carries `schema_version: int`.
-- Bump on a breaking field change: removed key, renamed key, changed type, changed semantics.
+- Every durable artifact carries ``schema_version: int``.
+- Bump on a breaking field change: removed key, renamed key, changed
+  type, changed semantics.
 - Non-breaking additions (new optional field) do not bump.
-- Skills assert `schema_version == N` before they read an artifact. If the version is ahead, fail fast with `SchemaVersionMismatchError`; do not attempt forward-compatibility in prose.
-- Parity-test transcripts are invalidated on any bump; re-record and diff.
+- Skills assert ``schema_version == N`` before reading. If ahead,
+  fail fast with ``SchemaVersionMismatchError`` rather than guess.
 
-## Session artifacts
+## Run artifacts
 
-### `<bundle>/_session/session.json`
+### ``<bundle>/run/state.json``
 
-Source of truth: `src/wikify/session.py::SessionV1`.
-Current `schema_version`: 1.
+Source of truth: ``src/wikify/bundle/run/state.py::RunStateV1``.
+Current ``schema_version``: 1.
 
-Required fields for baseline strategy:
+Required fields:
 
-- `schema_version: int`
-- `session_id: str`
-- `strategy: "baseline" | "scripted-E" | "scripted-M" | "scripted-X" | "guided"`
-- `bundle_root: str` — absolute path
-- `corpus_root: str` — absolute path
-- `status: "active" | "completed" | "failed" | "abandoned"`
-- `created_at, updated_at: ISO8601`
-- `budget: {haiku_eq_target: int, haiku_eq_spent: int}`
-- `stages: {seed_selection, extract, write}` — each `{status: pending|running|done|failed, started_at: str|null, finished_at: str|null}`
-- `pages: [{page_id, status: planned|drafted|validated|committed|failed, draft_path: str|null, validation_path: str|null, kind: article|person, aliases: list[str]}]`
-- `config: {baseline_write_fraction, abstract_fraction, top_k, default_tiers}`
-- `telemetry_paths: {run_path, calls_path}`
+- ``schema_version: int``
+- ``run_id: str``
+- ``status: "active" | "completed" | "failed" | "abandoned"``
+- ``strategy: str`` — free-form workflow label; the agent picks
+- ``corpus_path: str``, ``wiki_path: str``, ``work_path: str``
+- ``budget: {target_haiku_eq, spent_haiku_eq}``
+- ``stages: dict[str, "pending"|"running"|"done"|"failed"]``
+- ``created_at: str``, ``updated_at: str``
 
-Reserved (not required in v1, added in later strategies):
+Owning CLI: ``wikify run init/show/set/close``. Mutated under
+``run/lock``.
 
-- `stopping_criteria`, `kpi_snapshot`, `acceptance_policy`, `iteration_index`,
-  `recent_gains`, `active_page_id`, `active_chunk_ids`, `transcript_path`, `lock`.
+### ``<bundle>/run/events.jsonl``
 
-Optional baseline-strategy fields (default to empty/"create"):
+Append-only structured event ledger. One JSON object per line.
+Source of truth: ``src/wikify/bundle/run/events.py::Event``.
 
-- `seed_doc_ids: list[str]` — PageRank+submodular-selected document IDs.
-  Populated by `wikify kg seeds --persist`. Carried into `_run.json` on close.
-- `seed_chunk_ids: list[str]` — abstract-equivalent chunk IDs per seed doc.
-  Populated by `wikify kg seeds --persist`.
-- `iteration: str` — per-iteration identifier for campaign-style reruns.
-  Defaults to `"create"`; scripted/guided strategies bump it.
+Required envelope: ``schema_version``, ``event_id``, ``run_id``,
+``type``, ``at``, ``actor``, ``data``. Optional indexing fields:
+``concept_id``, ``page_id``, ``chunk_id``, ``doc_id``, ``stage``.
 
-Owning CLI: `wikify session init/show/update/checkpoint/close`. The agent may
-read the file directly; it may not hand-edit canonical fields — mutations go
-through a CLI subcommand.
+Allowed event types: ``stage_changed``, ``cli_invoked``,
+``concept_created``, ``concept_status_changed``, ``chunk_read``,
+``evidence_added``, ``inbox_suggestion_created``,
+``inbox_consolidated``, ``query_started``, ``wiki_page_read``,
+``query_feedback_created``, ``draft_created``, ``call``,
+``validation_completed``, ``page_committed``, ``page_refined``,
+``budget_exceeded``, ``run_closed``.
 
-### `<bundle>/_session/checkpoints/<label>.json`
+### ``<bundle>/run/lock``
 
-Whole-file snapshot of `session.json` taken by `wikify session checkpoint`.
-Same schema as `session.json`. `schema_version` equals the session's at
-checkpoint time.
+Atomic file lock with TTL. Owned by ``bundle/run/lock.py``.
+Acquisition: ``os.open(O_CREAT|O_EXCL)`` for fresh; ``os.replace``
+for stale-reclaim. Contents: ``{owner, pid, acquired_at,
+expires_at, ttl_seconds}``.
 
-### `<bundle>/_session/session.lock`
+### ``<bundle>/run/io/<event_id>.{stdin,stdout,stderr}.txt``
 
-Opaque lockfile. Contents: `{owner, acquired_at, expires_at}`. Owned by
-`wikify session lock/unlock`. No `schema_version`.
+CLI IO transcripts. Per ``cli_invoked`` event. Captured by
+``src/wikify/cli/_io.py``.
 
-## Scratch artifacts
+## Work artifacts (per concept)
 
-### `<bundle>/_scratch/draft-<page_id>.json`
+### ``<bundle>/work/concepts/<slug>/work.md``
 
-The model-facing `WriteRequest` payload — prompt-layer-resolved, evidence-packed.
-Canonical fields: `src/wikify/schema.py::WriteRequest` (frozen, `extra="forbid"`).
+ControlCard: YAML frontmatter + freeform body. Frontmatter source:
+``src/wikify/bundle/work/card.py::WorkCard``.
 
-The scratch file also carries a top-level `schema_version: 1` envelope
-field. The envelope is **not** part of the canonical `WriteRequest`
-model — it is stripped by `wikify validate write` before Pydantic
-validation. Skills and downstream tools may rely on the envelope to
-version the on-disk format independently of the Pydantic schema.
+Frontmatter fields: ``page_id``, ``kind: article|person``,
+``status``, ``aliases``, ``evidence_chunks``, ``evidence_docs``,
+``new_evidence_since_commit``, ``needs_refine``, ``last_compacted``,
+``wiki_path`` (when committed).
 
-Created by: `wikify draft write-request`. Read by: the write subagent.
+### ``<bundle>/work/concepts/<slug>/evidence.jsonl``
 
-### `<bundle>/_scratch/response-<page_id>.json`
+Append-only evidence ledger. One ``EvidenceRecord`` per line.
+Source: ``src/wikify/bundle/work/evidence.py::EvidenceRecord``.
 
-The subagent's raw `WriteResponse` output. Canonical fields:
-`src/wikify/schema.py::WriteResponse` (frozen, `extra="forbid"`). The
-same `schema_version: 1` envelope convention applies — scratch writers
-may emit it; `wikify validate write` strips it before Pydantic checks.
+Fields: ``chunk_id``, ``doc_id``, ``quote``, ``score``, ``status``
+(``active``|``archived``), ``used_in_page``, ``note``.
 
-Created by: the write subagent (skill-driven). Read by: `wikify
-validate write` and `wikify bundle commit-page`.
+### ``<bundle>/work/concepts/<slug>/.claim``
 
-### `<bundle>/_scratch/validation-<page_id>.json`
+Per-concept advisory claim. Atomic. Source:
+``src/wikify/bundle/work/claim.py``.
 
-Validation verdict for a `WriteResponse` scratch payload.
+### ``<bundle>/work/inbox/{evidence_suggestions, concept_suggestions, merge_suggestions, query_feedback}.jsonl``
 
-```
-{
-  "schema_version": 1,
-  "ok": bool,
-  "page_id": str,
-  "response_path": str,
-  "errors": [{"path": str, "code": str, "message": str}],
-  "structural_checks": {...},   // per-check pass/fail map
-  "checked_at": ISO8601
-}
-```
+Append-only cross-talk channels. Drained by ``wikify work tend``.
+Source: ``src/wikify/bundle/work/inbox.py``.
 
-Created by: `wikify validate write`. Read by: the workflow skill.
+## Per-attempt artifacts (transient, gc'd post-commit)
 
-## Bundle artifacts
+### ``<bundle>/work/concepts/<slug>/draft.json``
 
-### `<bundle>/articles/<id>.md` and `<bundle>/people/<id>.md`
+Model-facing ``WriteRequest`` payload. Canonical:
+``src/wikify/schema.py::WriteRequest``. Carries the
+``schema_version`` envelope. Created by ``wikify draft build``.
 
-Wikipedia-style page markdown with YAML frontmatter. The subdirectory
-is determined by the page `kind`: `article` → `articles/`, `person` →
-`people/` (enforced by `src/wikify/bundle/wiki/files.py::write_page`).
+### ``<bundle>/work/concepts/<slug>/response.json``
 
-Frontmatter required fields: `id, kind (article|person), title, aliases, created_at`.
-Body rules: see `write-constraints.md`. Citation format: see `citation-format.md`.
-No `schema_version` field — the format IS the schema; breaking changes come
-through the render pipeline, not the page file.
+Writer subagent's raw ``WriteResponse``. Canonical:
+``src/wikify/schema.py::WriteResponse``.
 
-Owning CLI: `wikify bundle commit-page`.
+### ``<bundle>/work/concepts/<slug>/validation.json``
 
-### `<bundle>/_index.json`
+Validation verdict. Source:
+``src/wikify/bundle/draft/validator.py``. Fields: ``schema_version``,
+``ok``, ``page_id``, ``response_path``, ``draft_path``, ``errors``,
+``structural_checks``, ``checked_at``.
 
-Generated index over `pages/`. Shape defined by `src/wikify/bundle/wiki/index.py`.
-Owning command: `wikify bundle commit-page` (rebuilds on each commit).
-`schema_version` to be added when the index format is first mutated.
+## Wiki artifacts
 
-### `<bundle>/_wiki_graph.json`
+### ``<bundle>/wiki/articles/<slug>.md`` and ``<bundle>/wiki/people/<slug>.md``
 
-Wiki graph of citation edges between pages. Built by
-`src/wikify/bundle/wiki/post_commit.py::rebuild_wiki_graph`. Owning command:
-`wikify bundle commit-page`. `schema_version` to be added when the format
-is first mutated.
+Wikipedia-style page markdown with YAML frontmatter. Subdirectory is
+determined by ``page_kind``. Frontmatter required: ``id``, ``kind``,
+``title``, ``aliases``. Body rules: ``write-constraints.md``.
+Citation format: ``citation-format.md``. Owning CLI:
+``wikify wiki commit``.
 
-## Telemetry artifacts
+### ``<bundle>/derived/index.json``
 
-### `<bundle>/_run.json`
+Generated index over ``wiki/`` (slugs + paths + kinds). Owning
+command: ``wikify wiki build indexes``.
 
-Run snapshot flushed on `wikify session close`. Written by
-`src/wikify/session.py::write_run_snapshot`.
+### ``<bundle>/derived/graph.json``
 
-Fields:
+Serialised wiki knowledge graph (cite-edge graph). Owning command:
+``wikify wiki build graph``.
 
-- Envelope and identity: `schema_version`, `session_id`, `run_id`,
-  `strategy`, `mode`, `iteration`, `status`, `bundle_root`,
-  `corpus_root`, `created_at`, `closed_at`, `timestamp_utc`.
-- Budget and run shape: `budget_target_haiku_eq`, `stages`, `config`,
-  `pages`, `n_pages_committed`, `n_pages_failed`, `page_counts`,
-  `telemetry_paths`.
-- Baseline overlay: `seed_doc_ids`, `seed_chunks_read`,
-  `evidence_chunks_read`, `split_initial`, `seed_extract_budget`,
-  `baseline_write_fraction`, `min_evidence_chunks`, `skipped_thin_pages`,
-  `n_pages_written`, `write_rejections`.
-- Meter-derived (aggregated from `_calls.jsonl`, shape matches
-  `CostMeter.snapshot()`): `budget_used_haiku_eq`, `wall_seconds`,
-  `by_role`, `by_tier`, `context` (`used_max`, `used_mean`,
-  `headroom_min`, `headroom_mean`), `calls` (integer count),
-  `cache_hit_rate`.
+### ``<bundle>/derived/vectors.npz``
 
-Owning command: `wikify session close`. The aggregation logic shares
-its math with the reference `CostMeter` in `src/wikify/meter.py`.
-
-### `<bundle>/_calls.jsonl`
-
-Append-only model-call log. One JSON record per line with the
-`src/wikify/meter.py::CallRecord` field-set:
-
-```
-role, tier, input_tokens, output_tokens, context_used, context_cap,
-wall_seconds, cache_hit, prompt_hash, haiku_eq
-```
-
-No `schema_version` per-line; the whole file's stability is gated on the
-`CallRecord` dataclass shape.
-
-**Writers**:
-
-- `wikify meter record` — explicit emission used by workflows to log
-  extract / query / orchestrate calls the subagent performs. Callers
-  MUST NOT use this command for the writer role — `wikify bundle
-  commit-page` records that automatically. Double-recording is not
-  deduplicated; the writer role is rejected at the CLI layer.
-- `wikify bundle commit-page` — auto-records the write call using the
-  `WriteResponse.tokens_in` / `tokens_out` fields on successful commit.
-  Refuses to record negative tokens, tokens beyond the declared
-  `context_cap`, or projected spend over 1.05× the session budget
-  target.
-
-Both writers bump `session.budget.haiku_eq_spent` (stored as `float`)
-under the session lock and honor the `1.05 × budget_target` hard-abort
-gate — a projected overshoot exits the CLI with a structured
-`budget_exceeded` error on stderr and exit code 3.
-`wikify session close` reads this file and folds it into the
-`_run.json` snapshot in the shape `CostMeter.snapshot()` produces
-(`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`,
-`context`, `calls` count, `cache_hit_rate`). Unknown `role` strings in
-`_calls.jsonl` are rejected at aggregation (`UnknownRoleError`); the
-legitimate role set is the `Role` enum in `src/wikify/types.py`.
-
-## Corpus artifacts (read-only)
-
-- Raw papers — arbitrary source material.
-- Parsed chunks — produced by `wikify ingest`.
-- Knowledge graph export — produced by `wikify ingest`.
-
-The agent does not write these. Inspection-only.
-
-## Invariants
-
-- The agent does not invent new file types mid-workflow.
-- The agent does not hand-edit canonical session fields with raw shell writes.
-- Promotion from scratch to bundle happens only through a CLI command.
-- Token-light outputs are the default; `--full` flags opt into heavy payloads.
+Per-page embeddings used by ``wiki find`` semantic search. Owning
+command: ``wikify wiki build vectors``.

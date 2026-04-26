@@ -50,20 +50,43 @@ def cmd_build(
     concept: str = typer.Argument(...),
     task: str = typer.Option("create", "--task", help="create | refine"),
     corpus_dir: Path = typer.Option(..., "--corpus"),
+    model_id: str = typer.Option(
+        ...,
+        "--model-id",
+        help="Writer model identifier (e.g. claude-sonnet-4-6). Required.",
+    ),
+    tier: str = typer.Option(
+        ...,
+        "--tier",
+        help="Writer cost tier — S | M | L. Required.",
+    ),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Compile a WriteRequest for *concept* and write draft.json."""
+    """Compile a WriteRequest for *concept* and write draft.json.
+
+    ``--model-id`` and ``--tier`` are required; strategy lives in
+    skills, not Python defaults.
+    """
     bundle = _resolve_bundle(run)
     if task not in {"create", "refine"}:
         cli_error(EXIT_VALIDATION, error="bad_task", task=task)
+    if tier not in {"S", "M", "L"}:
+        cli_error(EXIT_VALIDATION, error="bad_tier", tier=tier)
     if not corpus_dir.is_dir():
         cli_error(
             EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir)
         )
     corpus = Corpus(root=corpus_dir)
     try:
-        request = build_draft(bundle, slug=concept, corpus=corpus, task=task)
+        request = build_draft(
+            bundle,
+            slug=concept,
+            corpus=corpus,
+            task=task,
+            model_id=model_id,
+            tier=tier,
+        )
     except FileNotFoundError as exc:
         cli_error(EXIT_VALIDATION, error="concept_not_found", message=str(exc))
     p = draft_path(bundle, concept)

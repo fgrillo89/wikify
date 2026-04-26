@@ -72,7 +72,7 @@ def _setup_validated(tmp_path: Path) -> tuple[Bundle, str]:
     append_evidence(
         bundle, s, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
     )
-    build_draft(bundle, slug=s, corpus=corpus)
+    build_draft(bundle, slug=s, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
     chunk_text = read_json(draft_path(bundle, s))["evidence_v2"][0]["chunk_text"]
     quote = chunk_text[:30].strip()
     write_json(response_path(bundle, s), _good_response_payload(quote))

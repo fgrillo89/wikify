@@ -1,33 +1,26 @@
-# Wikify architecture
-
-> **Note:** This document is being rewritten as part of the skill-centric
-> redesign. The "Repository layout" section reflects the post-W0 package
-> tree; everything else still describes the legacy system (which keeps
-> working through `cli/legacy/*` until Phase C). The binding redesign
-> target is in `docs/skill-centric-execution-plan.md` (binding brief)
-> and `docs/filesystem-state-design.md` (filesystem and CLI surface).
-> Full rewrite lands in Phase D.
+# Wikify architecture (v2)
 
 ## What the system does
 
 Wikify takes a corpus of source documents (PDF, DOCX, PPTX, HTML, MD)
-and produces an evidence-grounded wiki bundle: encyclopedic article and
-biography pages with citation footnotes that resolve to verbatim
-substrings of source chunks. A persistent on-disk session object
-coordinates the workflow across subagent and process boundaries.
+and produces an evidence-grounded wiki bundle: encyclopedic article
+and biography pages with citation footnotes that resolve to verbatim
+substrings of source chunks. The agent runtime drives the workflow;
+Python provides deterministic primitives only (parse, embed, query,
+gate, persist).
 
 ## Three layers
 
 ```
 raw files
    │
-   ▼  wikify ingest
+   ▼  wikify corpus build
 [ Corpus ]            normalised markdown + chunks + embeddings + KG
    │
-   ▼  wikify session/kg/extract/draft/validate/bundle/meter
-[ Wiki bundle ]       pages + indices + session + telemetry
+   ▼  wikify run / work / draft / wiki  (skill-driven)
+[ Wiki bundle ]       v2 layout: run/, work/, wiki/, derived/
    │
-   ▼  wikify html / wikify eval
+   ▼  wikify wiki build graph|vectors  +  (W7/W8) wikify render / wikify eval
 [ Site / metrics ]    static HTML site, M1/M3/M5/M6 reports
 ```
 
@@ -35,74 +28,81 @@ raw files
 
 The agent runtime — Claude Code or any other agent harness — drives
 the workflow. The agent reads skill markdown, calls deterministic CLI
-tools via Bash, and spawns model-calling subagents via the Task tool.
-Python never calls a model SDK directly.
+tools via Bash, and spawns model-calling subagents via Task. Python
+never calls a model SDK directly.
 
 Three concrete consequences:
 
-- **Skills own the per-iteration loop.** `.claude/skills/wikify/workflows/run-baseline.md` documents the page-by-page loop the agent walks.
-- **Files are the agent–backend interface.** Every CLI tool reads inputs from named files (corpus chunks, session.json, scratch artifacts) and writes outputs to named files. The agent passes paths, not blobs.
-- **Durable state lives on disk.** A `<bundle>/_session/session.json` carries strategy, budget, stage status, and per-page status across subagent boundaries; the agent can stop and resume without losing place.
+- **Skills own strategy.** Loop shape, model tier, budget allocation,
+  stopping criteria all live in `.claude/skills/wikify*/SKILL.md`.
+  Python has no `BaselineConfig` or equivalent that owns these.
+- **Files are the agent–backend interface.** Every CLI tool reads
+  inputs from named files (corpus chunks, evidence ledgers, drafts)
+  and writes outputs to named files. The agent passes paths, not
+  blobs.
+- **Durable state lives on disk.** `<bundle>/run/state.json` carries
+  identity, strategy label, paths, budget, and stage status across
+  subagent boundaries. `<bundle>/run/events.jsonl` is the
+  append-only event ledger.
 
 ## CLI surface
 
-Eight families. The agent learns them from `.claude/skills/wikify/reference/cli-tool-surface.md`.
+Six v2 nouns. All under `uv run`. Full grammar in
+`.claude/skills/wikify/reference/cli-tool-surface.md`.
 
-**Skill-driven (used by workflow skills):**
-
-| Family | Purpose |
+| Noun | Verbs |
 |---|---|
-| `wikify session` | init / show / update / checkpoint / close / lock / unlock the session |
-| `wikify kg` | seeds / abstracts / evidence — corpus knowledge-graph queries |
-| `wikify extract` | canonicalize extracted concepts into `session.pages` entries |
-| `wikify draft` | build a `WriteRequest` scratch artifact for the writer subagent |
-| `wikify validate` | structural + grounding checks on a `WriteResponse` scratch artifact |
-| `wikify bundle` | promote a validated response to `pages/<id>.md` and rebuild indices |
-| `wikify meter` | record per-call telemetry to `_calls.jsonl` and update budget |
+| `wikify corpus` | `build` / `refresh` / `check` / `list` / `find` / `show` |
+| `wikify run` | `init` / `show` / `list events` / `lock` / `unlock` / `close` / `set` |
+| `wikify work` | `list` / `show` / `add concept` / `add evidence` / `add feedback` / `set` / `claim` / `release` / `tend` |
+| `wikify draft` | `build` / `show` / `check` |
+| `wikify wiki` | `list` / `find` / `show` / `build` / `check` / `commit` |
+| `wikify migrate` | `inspect` |
 
-**Deterministic, non-model-calling:**
+Bundle resolution: `--run <bundle>` overrides; otherwise CWD must be a
+v2 bundle root (`run/state.json` present). All mutations are gated by
+`run/lock` (atomic O_CREAT|O_EXCL acquisition with TTL) or per-concept
+`.claim` files. Lock contention exits 2; budget overrun exits 3;
+stale-claim broken by `work tend` exits 4; validation/precondition
+failure exits 1.
 
-| Family | Purpose |
-|---|---|
-| `wikify ingest` | parse + chunk + embed + graph a source directory |
-| `wikify refresh` | rebuild derived corpus artifacts |
-| `wikify field-detect` | detect the corpus field |
-| `wikify trace` | analyse KG exploration traces |
-| `wikify sample-claims` | sample factual claims for human evaluation |
-| `wikify html` | render a wiki bundle to a static site |
-| `wikify eval` | compute M1/M3/M5/M6 metrics |
-
-## Bundle artifact contract
+## v2 bundle artifact contract
 
 The full file-level contract lives in
 `.claude/skills/wikify/reference/schemas.md`. In summary:
 
 ```
 <bundle>/
-├── articles/<id>.md                       canonical article pages
-├── people/<id>.md                         canonical biography pages
-├── _index.json                            page-level index
-├── _index.md                              human-readable index
-├── _wiki_graph.json                       cite-edge graph between pages
-├── _run.json                              final run snapshot (CostMeter shape)
-├── _run_history.jsonl                     append-only per-close history
-├── _calls.jsonl                           per-model-call telemetry
-├── _session/
-│   ├── session.json                       SessionV1 state
-│   ├── checkpoints/<label>.json           snapshots
-│   └── session.lock                       advisory lock with TTL
-├── _scratch/
-│   ├── extract-<chunk_id>.json            extract subagent output
-│   ├── draft-<page_id>.json               WriteRequest payload
-│   ├── response-<page_id>.json            WriteResponse from writer subagent
-│   ├── validation-<page_id>.json          validator verdict
-│   └── review-<page_id>.json              optional advisory reviews
-└── _meta/                                 corpus-relative metadata
+├── run/
+│   ├── state.json                          RunStateV1 (Pydantic)
+│   ├── events.jsonl                        append-only Event ledger
+│   ├── lock                                bundle-wide advisory lock
+│   └── io/
+│       └── <event_id>.{stdin,stdout,stderr}.txt
+├── work/
+│   ├── index.md                            regenerated by `work tend`
+│   ├── inbox/{evidence,concept,merge,query_feedback}_suggestions.jsonl
+│   └── concepts/<slug>/
+│       ├── work.md                         WorkCard (frontmatter + body)
+│       ├── evidence.jsonl                  EvidenceRecord ledger
+│       ├── .claim                          per-concept TTL claim
+│       ├── draft.json                      transient WriteRequest
+│       ├── response.json                   transient WriteResponse
+│       └── validation.json                 transient verdict
+├── wiki/
+│   ├── articles/<slug>.md                  canonical article pages
+│   ├── people/<slug>.md                    canonical biography pages
+│   └── index.md
+└── derived/
+    ├── index.json                          page list projection
+    ├── graph.json                          wiki KG projection
+    └── vectors.npz                         per-page embeddings
 ```
 
 Every durable artifact carries a `schema_version` envelope. Pydantic
-models in `src/wikify/schema.py` and `src/wikify/session.py` are the
-executable source of truth.
+models in `src/wikify/bundle/run/{state,events}.py`,
+`src/wikify/bundle/work/evidence.py`, and `src/wikify/schema.py` are
+the executable source of truth.
 
 ## Citation grounding
 
@@ -112,32 +112,36 @@ Every committed page enforces:
   `## References` block.
 - Each `[^eN]:` definition carries `<chunk_id> (<doc_id>) > "<quote>"`.
 - The `<quote>` is a verbatim substring of the cited chunk's source
-  text — `wikify validate write` enforces this.
+  text — `wikify draft check` enforces this; `wikify wiki commit`
+  re-checks under the run lock.
 
 A fabricated quote echoed in the body but absent from the source
-chunk fails validation; the page never reaches `pages/`.
+chunk fails validation; the page never reaches `wiki/articles/`.
 
 ## Telemetry contract
 
-The skill path is the only producer of `_run.json` and `_calls.jsonl`.
+The agent path is the only producer of `run/events.jsonl`.
 
-`_calls.jsonl` carries one `CallRecord` per line:
-`role, tier, input_tokens, output_tokens, context_used, context_cap,
-wall_seconds, cache_hit, prompt_hash, haiku_eq`.
+`run/events.jsonl` carries one Event per line:
+`schema_version, event_id, run_id, type, at, actor, data` plus
+optional indexing fields (`concept_id`, `page_id`, `chunk_id`,
+`doc_id`, `stage`).
 
-`_run.json` is the aggregated snapshot at session close, with the
-shape `CostMeter.snapshot()` produces: `run_id`,
-`budget_used_haiku_eq`, `wall_seconds`, `by_role`, `by_tier`,
-`context {used_max, used_mean, headroom_min, headroom_mean}`, `calls`
-(integer count), `cache_hit_rate`, plus baseline overlay fields
-(`seed_doc_ids`, `seed_chunks_read`, `evidence_chunks_read`,
-`split_initial`, `n_pages_written`, etc.).
+Allowed event types: `stage_changed`, `cli_invoked`,
+`concept_created`, `concept_status_changed`, `chunk_read`,
+`evidence_added`, `inbox_suggestion_created`, `inbox_consolidated`,
+`query_started`, `wiki_page_read`, `query_feedback_created`,
+`draft_created`, `call`, `validation_completed`, `page_committed`,
+`page_refined`, `budget_exceeded`, `run_closed`.
+
+Cost is computed on demand by
+`src/wikify/bundle/run/cost.py::cost_summary(bundle)` filtering
+`type == "call"`. There is no separate snapshot file —
+`wikify run show --full` recomputes it.
 
 ## Repository layout
 
-Post-W0 package-per-noun layout. `cli/legacy/*` keeps the legacy CLI
-working until Phase C. Top-level files marked DEL are scheduled for
-Phase C deletion.
+Post-Phase-C package-per-noun layout.
 
 ```
 src/wikify/
@@ -147,56 +151,52 @@ src/wikify/
 │   ├── seed.py                     greedy seed selection
 │   ├── field_detect.py             corpus field classification
 │   ├── graph.py                    corpus fluent KG (was citestore/graph.py)
-│   └── graph_build.py              corpus KG construction
+│   ├── graph_build.py
+│   └── queries.py                  read-only helpers (find/show/list/check)
 ├── citations/                      citation parsing / BibTeX / DOI resolution
 │   ├── db.py, resolver.py, bibtex.py, parse.py, models.py, __main__.py
 ├── bundle/                         everything inside one wiki bundle
-│   ├── run/                        execution control (state/events/lock/cost; W2)
-│   ├── work/                       in-flight build state (matches CLI noun + on-disk dir)
-│   │   └── dossier.py              (W4 adds card/evidence/inbox/claim/tend/canonicalize/schema)
-│   ├── draft/                      per-attempt artifacts
-│   │   ├── author_context.py
-│   │   └── preload.py              (folded into builder.py in W5)
-│   └── wiki/                       committed pages + indices + projections
-│       ├── page.py, index.py, files.py, embeddings.py, page_naming.py
-│       ├── graph.py                wiki fluent KG (was store/wiki_graph.py)
-│       └── post_commit.py          (was distill/write_runner.py; absorbed by commit.py in W6)
+│   ├── run/                        state, events, lock, cost, lifecycle
+│   ├── work/                       card, evidence, inbox, claim, tend, dossier, canonicalize, schema
+│   ├── draft/                      schema, artifact, builder, validator, author_context, preload
+│   └── wiki/                       page, index, files, embeddings, page_naming, graph, derived, queries, commit
 ├── ingest/                         corpus pipeline (parse, chunk, embed, graph)
 ├── prompts/                        Python-side prompt templates assembled by DraftBuilder
-├── render/                         html site renderer
-├── eval/                           metric computations (M1/M3/M5/M6, GT-P, GT-C)
+├── render/                         html site renderer (W7 wires the v2 noun)
+├── eval/                           metric computations (W8 wires the v2 noun)
 ├── cli/                            argv glue
 │   ├── __init__.py                 top-level Typer app + noun registrations
 │   ├── __main__.py                 python -m wikify.cli entry point
 │   ├── _io.py                      cli_invoked event capture wrapper
 │   ├── _helpers.py                 shared exit codes, error envelope
-│   └── legacy/                     legacy nouns (session/kg/extract/draft/validate/bundle/meter); DEL in Phase C
-├── api.py                          (W1) Bundle + Corpus context dataclasses
-├── schema.py                       DEL Phase C — splits into bundle/{draft,work}/schema.py
-├── session.py                      DEL Phase C — replaced by bundle/run/state.py + bundle/run/lock.py
-├── meter.py                        DEL Phase C — cost math moves to bundle/run/cost.py
-├── paths.py                        DEL Phase C — replaced by api.Bundle/Corpus
-└── baselines/                      DEL Phase C — strategy moves to skill frontmatter
-                                    (distill/ is dissolved entirely in W0; nothing to delete in C)
+│   └── (corpus, run, work, draft, wiki, migrate).py
+├── api.py                          Bundle + Corpus context dataclasses
+├── schema.py                       Pydantic write-side contracts
+└── (config, context, embedding, models, types).py
 ```
 
 ## Skill pack
 
 ```
 .claude/skills/wikify/
-├── reference/                      facts and contracts the agent loads
-│   ├── schemas.md                  artifact catalog + schema_version policy
-│   ├── cli-tool-surface.md         CLI grammar (skill-driven + deterministic)
-│   ├── write-constraints.md        Wikipedia-MoS structural rules
+├── reference/
+│   ├── schemas.md                  durable artifact catalog
+│   ├── cli-tool-surface.md         v2 CLI grammar
+│   ├── atoms.md                    compositional atoms with pre/post
 │   ├── citation-format.md          [^eN] marker grammar
-│   ├── tiers.md                    S/M/L → haiku/sonnet/opus mapping
+│   ├── tiers.md                    S/M/L → cost mapping (no defaults)
 │   ├── escalation.md               retry-then-tier-L policy
-│   ├── atoms.md                    compositional atoms with pre/post-conditions
+│   ├── write-constraints.md        Wikipedia-MoS rules
 │   ├── knowledge-graph.md          corpus KG fluent API
 │   └── wiki-graph.md               wiki KG fluent API
 └── workflows/
-    └── run-baseline.md             the baseline workflow loop
+    └── run-baseline.md             v2 baseline workflow loop
 ```
+
+The full hybrid Claude-skill layout (one canonical-skill directory
+per atomic + workflow skill) lands in W9 per the implementation
+plan. The current flat `reference/` + `workflows/` tree is kept as
+agent-readable context until then.
 
 ## Design invariants
 
@@ -204,8 +204,10 @@ src/wikify/
 - Python tools are deterministic, validated, and individually testable.
 - Files are the only interface between the agent and the backend.
 - No hidden state — every coordination point is a named file.
-- Every model-calling step produces a CallRecord in `_calls.jsonl`.
+- Strategy lives in skills; Python exposes deterministic primitives only.
+- Every model-calling step produces a `type: "call"` event in `run/events.jsonl`.
 - Page promotion is gated by structural + grounding validation under
-  the session lock; lock contention or budget overrun produces
+  the run lock; lock contention or budget overrun produce
   structured stderr errors with stable exit codes (0 success, 1
-  validation/precondition failure, 2 lock_held, 3 budget_exceeded).
+  validation/precondition failure, 2 lock/claim held, 3 budget
+  exceeded, 4 stale claim broken).

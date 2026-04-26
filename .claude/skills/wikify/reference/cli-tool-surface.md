@@ -1,188 +1,127 @@
 ---
 name: wikify/reference/cli-tool-surface
-description: The wikify CLI command grammar, conventions, and invocation rules for agent-driven workflows.
+description: v2 CLI grammar — six nouns, deterministic verbs only.
 ---
 
-# CLI tool surface
+# CLI tool surface (v2)
 
-The `wikify` CLI is the deterministic edge between the agent and the Python
-backend. It is designed like the Unix tool surface LLMs already handle well:
-narrow, composable, typed, and explicit about side effects.
-
-## Command families
-
-Two groups: skill-driven sub-apps used by the workflow loop, and
-deterministic top-level commands. Do not invent new families.
-
-**Skill-driven:**
-
-- `wikify session ...` — create, inspect, mutate, checkpoint, close the run session.
-- `wikify kg ...` — query the corpus knowledge graph (seeds, abstracts, evidence).
-- `wikify extract ...` — canonicalize extracted concepts into `session.pages` entries.
-- `wikify draft ...` — build request artifacts the write subagent will consume.
-- `wikify validate ...` — structural and grounding validation of scratch artifacts.
-- `wikify bundle ...` — promote validated artifacts into canonical bundle files; rebuild indices.
-- `wikify meter ...` — append per-call telemetry to `_calls.jsonl` and update the budget.
-
-**Deterministic, non-model-calling:**
-
-- `wikify ingest <input>` — parse / chunk / embed / graph a source directory.
-- `wikify refresh <corpus>` — rebuild derived corpus artifacts.
-- `wikify field-detect <corpus>` — detect the corpus field.
-- `wikify trace <bundle>` — analyse KG exploration traces.
-- `wikify sample-claims <bundle>` — sample factual claims for human evaluation.
-- `wikify html <bundle>` — render a wiki bundle to a static site.
-- `wikify eval <bundle>` — compute M1/M3/M5/M6 metrics.
-
-## Conventions
-
-### Stdout and exit codes
-
-- Default stdout is token-light JSON: IDs, summaries, counts. The agent reads it with `Read` or pipes through `jq`.
-- `--full` on read commands opts in to heavy payloads (page bodies, full chunk text, etc.).
-- Exit code `0` = success. Non-zero = a documented failure mode; structured JSON on stderr: `{"error": "<code>", "message": "<human>", "details": {...}}`.
-- A command that would emit more than ~64 KB to stdout writes to a scratch file and returns the path instead. The agent reads the path only if it needs the content in context.
-
-### Session binding
-
-- Every command that mutates durable state takes `--session <path>` explicitly.
-- No command infers the session from the working directory or an environment variable.
-- `wikify session init` is the only command that creates a session file; everything else requires an existing session.
-
-### Locking
-
-- Mutating commands attempt `session lock` implicitly and release on completion.
-- If another actor holds the lock, the command fails fast with exit code `2` (`lock_held`) and a structured error.
-- `wikify session lock --force` exists for stuck locks; use with care — documented in `session.lock` metadata.
-
-### Schema versioning
-
-- Every command that reads a file asserts `schema_version` matches the expected value for its code path.
-- A mismatch exits non-zero with `schema_version_mismatch`. Skills do not paper over this.
-
-### No hidden state
-
-- Every command is a pure function of flags, file paths, corpus files, and explicit session files.
-- No environment-variable-driven behavior (except `WIKIFY_TEST_FAKES` gated test-only injection).
-- No implicit "last run" state.
-
-## Representative invocations
-
-### Session
+The Wikify CLI is six nouns. Each verb is deterministic Python — no
+model SDK calls. Strategy (loop shape, model tier, budget allocation,
+stopping criteria) lives in skill markdown, never in Python defaults.
 
 ```
-wikify session init --bundle <path> --corpus <path> --strategy baseline [--budget-target 5000]
-wikify session show --session <path>                   # token-light JSON
-wikify session show --session <path> --full            # full JSON
-wikify session update --session <path> --patch '{"pages":[{"page_id":"X","status":"drafted"}]}'
-wikify session checkpoint --session <path> --label "after-seed-selection"
-wikify session close --session <path>                  # flushes final _run.json
-wikify session lock --session <path> [--owner <name>] [--ttl-seconds 3600]
-wikify session unlock --session <path>
+wikify <noun> <verb> [args...]
 ```
 
-`session update`, `session close`, `draft write-request`, and `bundle
-commit-page` all acquire the session lock implicitly and exit `2` with a
-structured `{"error": "lock_held", "owner": "...", "acquired_at": "..."}`
-payload on stderr if another owner holds it.
+## Bundle resolution
 
-### KG
+- ``--run <bundle>`` overrides; otherwise the current working
+  directory must be a v2 bundle root (``run/state.json`` present).
+- Mutating verbs acquire ``run/lock`` for the duration. Lock contention
+  exits 2.
+- Per-concept mutations under ``work/concepts/<slug>/`` acquire the
+  concept's ``.claim`` file (TTL-driven; same exit-2 contract).
 
-```
-wikify kg seeds --session <path>                       # seed chunk ids (token-light)
-wikify kg seeds --session <path> --persist             # also write the seeds onto session
-wikify kg abstracts --corpus <path> --doc-ids '["doc_1","doc_2"]'
-wikify kg evidence --session <path> --page-id "Atomic Layer Deposition" --top-k 8
-```
+## Exit codes
 
-### Meter
+- 0 success
+- 1 validation / precondition failure
+- 2 lock or claim held
+- 3 budget exceeded
+- 4 stale claim broken by ``work tend``
 
-```
-wikify meter record --session <path> \
-    --role extractor --tier S \
-    --input-tokens 200 --output-tokens 80
-```
+## Default output
 
-- `--role` accepts only the values in the `Role` enum
-  (`src/wikify/types.py`): `extractor`, `compactor`, `editor`, `writer`,
-  `orchestrator`. Any other string exits non-zero with a CLI-layer
-  error.
-- Use for extractor / compactor / editor / orchestrator calls — where
-  the subagent returns token counts and no other CLI records the call.
-- Do **not** use for the writer role: `wikify bundle commit-page`
-  auto-records the write call. Duplicating it double-charges the budget;
-  the CLI rejects `--role writer` explicitly.
-- Exits `3` with `budget_exceeded` when projected spend would push
-  `haiku_eq_spent` past `1.05 × budget_target`.
+Terse text. Add ``--format json`` for stable automation parsing.
 
-`wikify kg seeds --persist` acquires the session lock, writes
-`seed_doc_ids` and `seed_chunk_ids` onto the session, and is the
-convention callers use when they expect those fields to appear in the
-final `_run.json` snapshot.
+---
 
-### Extract canonicalize
+## ``wikify corpus``
+
+Read-only against a corpus during a wiki run; ``corpus build`` /
+``corpus refresh`` are the only mutating verbs.
 
 ```
-wikify extract canonicalize --session <path> \
-    --responses '["<scratch>/extract-<chunk_id_1>.json", ...]'
+wikify corpus build <source> --out <corpus> [--mode additive|sync]
+                              [--parser default|lite|marker|docling]
+                              [--workers N] [--no-refresh]
+wikify corpus refresh <corpus>
+wikify corpus check   <corpus> [--format text|json]
+wikify corpus list    docs|chunks|files [--corpus <c>] [--doc <d>]
+wikify corpus find    "<query>" [--corpus <c>] [--top-k N] [--text]
+wikify corpus find    --seed [--corpus <c>] [--max N] [--pagerank-weight W]
+wikify corpus show    <handle> [--corpus <c>] [--full]
 ```
 
-Reads each extract subagent response, dedupes/canonicalizes concepts,
-and appends `session.pages` entries with `status=planned`, `kind`
-(article|person), and `aliases`. Must run after the extract phase and
-before the per-page write loop.
+Handles: ``doc:<id>`` or ``chunk:<id>``.
 
-### Draft / validate / bundle
+## ``wikify run``
 
 ```
-wikify draft write-request \
-    --session <path> --page-id "<id>" \
-    [--page-kind article|person] \
-    --chunk-ids '["chunk_1","chunk_2","chunk_3"]'
-    # --chunk-ids is REQUIRED. Typical callers pipe it from `wikify kg evidence`.
-    # --page-kind defaults to "article"; pass "person" for biographical pages.
-
-wikify validate write \
-    --draft <scratch>/draft-<id>.json --response <scratch>/response-<id>.json \
-    --session <path>
-    # --session is REQUIRED for the skill workflow: on ok=true it transitions
-    # session.pages[<id>].status from drafted to validated under the lock.
-
-wikify bundle commit-page \
-    --session <path> --response <scratch>/response-<id>.json \
-    --validation <scratch>/validation-<id>.json
-    # --validation is REQUIRED. commit-page verifies the verdict's ok=true
-    # AND the session page entry is status=validated before writing the
-    # page file and rebuilding <bundle>/_index.json / _wiki_graph.json
-    # under the session lock.
+wikify run init   --bundle <b> --corpus <c> [--strategy <label>]
+                  [--target-haiku-eq N]
+wikify run show   [--run <b>] [--detail|--full] [--format text|json]
+wikify run list   events [--run <b>] [--tail N] [--type <t>]
+wikify run lock   [--run <b>] [--owner <id>] [--ttl-seconds N]
+wikify run unlock [--run <b>]
+wikify run close  [--run <b>] [--status completed|failed|abandoned]
+wikify run set    [--run <b>] [--target-haiku-eq N] [--strategy-note <s>]
 ```
 
-### Render / eval / ingest
+``--strategy`` is a free-form workflow label (``baseline``, ``guided``,
+``free``, ``query``); the agent picks. No Python branch reads it.
 
-Stable top-level entry points; not skill-driven.
+## ``wikify work``
 
 ```
-wikify ingest <source>
-wikify html <bundle>
-wikify eval <bundle>
+wikify work list                        [--run <b>]
+wikify work list claims                 [--run <b>]
+wikify work list inbox                  [--run <b>]
+wikify work list evidence <concept>     [--run <b>]
+wikify work show <concept>              [--run <b>] [--full]
+wikify work add  concept "<title>"      [--run <b>] [--kind article|person]
+                                        [--aliases <json>]
+wikify work add  evidence <concept>     --records <jsonl-path> [--run <b>]
+wikify work add  feedback <kind>        --record <json|jsonl-path> [--run <b>]
+wikify work set  <concept>              [--status <s>] [--needs-refine]
+wikify work claim <concept>             [--owner <id>] [--ttl-seconds N]
+wikify work release <concept>           [--owner <id>]
+wikify work tend
 ```
 
-## Composability
+Feedback kinds: ``evidence`` | ``concept`` | ``merge`` | ``query``.
 
-The agent may freely combine `wikify` commands with `Bash` shell tools (`Glob`,
-`Read`, `jq`, `grep`). Prefer:
+## ``wikify draft``
 
-- plain JSON for single records
-- newline-delimited JSON (`jsonl`) for lists
-- file paths in output over embedded content
+```
+wikify draft build <concept> --task create|refine --corpus <c>
+                             --model-id <id> --tier S|M|L [--run <b>]
+wikify draft show  <concept> [--run <b>] [--full]
+wikify draft check <concept> [--run <b>]
+```
 
-The agent should not pipe large output between commands through stdout. Pass
-paths.
+``--model-id`` and ``--tier`` are required. Strategy lives in skills.
 
-## Failure modes
+## ``wikify wiki``
 
-- Schema violation — non-zero exit, structured error, no partial write.
-- Session inconsistency (missing field, stage out of order) — non-zero exit, first-class error.
-- Lock held — non-zero exit, `lock_held` error code with owner metadata.
-- Output too large for stdout — write to file, return path (exit 0).
-- Empty result — exit 0 with empty array or count 0; not an error.
+```
+wikify wiki list  [articles|people|files] [--run <b>]
+wikify wiki find  "<query>" [--run <b>] [--text]
+wikify wiki show  <handle>   [--run <b>] [--full]
+wikify wiki build indexes|graph|vectors  [--run <b>]
+wikify wiki check                        [--run <b>]
+wikify wiki commit <concept>             [--run <b>] [--ensure-projections]
+```
+
+``wiki commit`` is the gate: refuses unless ``draft.json`` /
+``response.json`` / ``validation.json`` are present and
+``validation.ok`` is true. Acquired ``run/lock`` for the mutation.
+
+## ``wikify migrate``
+
+```
+wikify migrate inspect <bundle> [--format text|json]
+```
+
+Read-only inspection of a v1 (legacy) bundle. Reports presence of
+legacy artifacts.

@@ -40,7 +40,10 @@ Mechanics:
    - The same validator constraints attached to the user prompt.
 2. Use the tier-L subagent's output as the final response for the request.
 3. Record the escalation in a `meta.escalated_from: <default_tier>` field on the response so cost-meter attribution is preserved.
-4. Update the session via `wikify session update --patch '{"pages":[...,"escalated":true]}'` so reruns and telemetry can explain the cost.
+4. Persist the escalation as a `meta.escalated_from` field on
+   `response.json`, and append a free-form note via
+   `wikify work add feedback evidence --record <escalation-note.json>`
+   if the escalation rationale should survive cross-run.
 
 ## Retry vs escalate
 
@@ -58,13 +61,15 @@ in the pre-pivot handler skills.
 
 Every escalation leaves two traces:
 
-- A `CallRecord` entry in `_calls.jsonl` with `tier: "L"` and `role: <original-role>`.
-- A `meta.escalated_from` field on the scratch response JSON.
+- A `type: "call"` event in `run/events.jsonl` with `tier: "L"` and
+  `role: <original-role>` (the per-call cost record).
+- A `meta.escalated_from` field on `response.json` so the verdict
+  shape carries the context.
 
-The workflow may also record escalation counts in `session.budget` or in a
-dedicated `session.escalations: [{page_id, role, reason, at}]` list — this
-list is reserved in the session schema for strategies that care about it
-(guided, scripted-X). Baseline does not track it.
+The workflow may also append an `inbox_suggestion_created` or a
+custom `stage_changed` event to `events.jsonl` if escalation counts
+need to be aggregable for guided/free strategies. Baseline does not
+track this.
 
 ## What escalation does not solve
 

@@ -55,6 +55,8 @@ def test_draft_build(tmp_path: Path) -> None:
             "draft", "build", slug,
             "--run", str(bundle_dir),
             "--corpus", str(corpus_dir),
+            "--model-id", "claude-sonnet-4-6",
+            "--tier", "M",
             "--format", "json",
         ],
     )
@@ -72,6 +74,8 @@ def test_draft_show_after_build(tmp_path: Path) -> None:
             "draft", "build", slug,
             "--run", str(bundle_dir),
             "--corpus", str(corpus_dir),
+            "--model-id", "claude-sonnet-4-6",
+            "--tier", "M",
         ],
     )
     result = runner.invoke(app, ["draft", "show", slug, "--run", str(bundle_dir)])
@@ -138,6 +142,8 @@ def test_draft_check_passes(tmp_path: Path) -> None:
             "draft", "build", slug,
             "--run", str(bundle_dir),
             "--corpus", str(corpus_dir),
+            "--model-id", "claude-sonnet-4-6",
+            "--tier", "M",
         ],
     )
     bundle = Bundle.open(bundle_dir)
@@ -162,6 +168,8 @@ def test_draft_check_fails_on_fabricated_quote(tmp_path: Path) -> None:
             "draft", "build", slug,
             "--run", str(bundle_dir),
             "--corpus", str(corpus_dir),
+            "--model-id", "claude-sonnet-4-6",
+            "--tier", "M",
         ],
     )
     bundle = Bundle.open(bundle_dir)
@@ -183,6 +191,8 @@ def test_draft_check_missing_response(tmp_path: Path) -> None:
             "draft", "build", slug,
             "--run", str(bundle_dir),
             "--corpus", str(corpus_dir),
+            "--model-id", "claude-sonnet-4-6",
+            "--tier", "M",
         ],
     )
     # No response.json written yet.

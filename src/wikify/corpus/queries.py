@@ -109,19 +109,24 @@ def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
     return out
 
 
-def find_seeds(corpus: Corpus, *, max_seeds: int = 20) -> list[str]:
-    """Return the greedy-submodular seed document ids."""
-    from .seed import (
-        SeedSelectionConfig,
-        doc_embeddings,
-        greedy_seed_select,
-        pagerank_normalised,
-    )
+def find_seeds(
+    corpus: Corpus,
+    *,
+    max_seeds: int,
+    pagerank_weight: float,
+) -> list[str]:
+    """Return the greedy-submodular seed document ids.
+
+    Both knobs are caller-supplied; the CLI surface defines the
+    user-facing defaults (``corpus find --seed --max <n>
+    --pagerank-weight <w>``). No defaults live here so callers cannot
+    silently rely on a hidden policy.
+    """
+    from .seed import doc_embeddings, greedy_seed_select, pagerank_normalised
 
     chunks = all_chunks(corpus)
     vs = read_vector_store(corpus)
     kg = read_knowledge_graph(corpus, vectors=vs)
-    cfg = SeedSelectionConfig(max_seeds=max_seeds)
     embeds, doc_order = doc_embeddings(chunks, vs)
     pr_norm = pagerank_normalised(kg, doc_order)
     return list(
@@ -130,7 +135,7 @@ def find_seeds(corpus: Corpus, *, max_seeds: int = 20) -> list[str]:
             doc_embeddings=embeds,
             pr_norm=pr_norm,
             max_seeds=max_seeds,
-            cfg=cfg,
+            pagerank_weight=pagerank_weight,
         )
     )
 

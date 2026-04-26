@@ -131,6 +131,7 @@ def test_greedy_seed_select_prefers_pagerank_when_corpus_is_homogeneous():
         doc_embeddings=embeds,
         pr_norm=pr_norm,
         max_seeds=2,
+        pagerank_weight=0.7,
     )
     # The first pick is the highest PR doc. Once added, all docs have
     # max_sim_to_S = 1, coverage_gain stays zero, so the second pick is
@@ -159,6 +160,7 @@ def test_greedy_seed_select_picks_diverse_docs_when_pagerank_is_flat():
         doc_embeddings=embeds,
         pr_norm=pr_norm,
         max_seeds=2,
+        pagerank_weight=0.7,
     )
     # First pick: tied (everyone has identical PR + identical coverage_gain
     # at S = empty); ties resolved by argmax which returns the first index.
@@ -176,6 +178,7 @@ def test_greedy_seed_select_returns_at_most_max_seeds():
         doc_embeddings=embeds,
         pr_norm=pr_norm,
         max_seeds=3,
+        pagerank_weight=0.7,
     )
     assert len(out) == 3
 
@@ -190,6 +193,7 @@ def test_greedy_seed_select_clamps_max_seeds_to_doc_count():
         doc_embeddings=embeds,
         pr_norm=pr_norm,
         max_seeds=99,
+        pagerank_weight=0.7,
     )
     assert sorted(out) == ["d1", "d2"]
 
@@ -242,9 +246,11 @@ def test_select_seeded_bootstrap_end_to_end_is_deterministic():
     )
     out_a = select_seeded_bootstrap(
         chunks=chunks, vectors=vs, kg=kg, max_seeds=2,
+        pagerank_weight=0.7,
     )
     out_b = select_seeded_bootstrap(
         chunks=chunks, vectors=vs, kg=kg, max_seeds=2,
+        pagerank_weight=0.7,
     )
     assert out_a == out_b
     assert len(out_a) == 2

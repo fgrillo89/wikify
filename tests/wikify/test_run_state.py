@@ -32,7 +32,9 @@ def test_run_state_schema_version_is_one() -> None:
 def test_run_state_defaults() -> None:
     state = RunStateV1(run_id="r-1", corpus_path="x")
     assert state.status == "active"
-    assert state.strategy == "baseline"
+    # ``strategy`` defaults to empty string so the agent must explicitly
+    # supply a label; Python never assumes a workflow.
+    assert state.strategy == ""
     assert state.wiki_path == "wiki"
     assert state.work_path == "work"
     assert state.budget == Budget(target_haiku_eq=0, spent_haiku_eq=0)
