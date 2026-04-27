@@ -1,10 +1,10 @@
 """``run/lock`` — bundle-wide advisory lock with TTL.
 
-Ports the legacy ``session.acquire_lock`` semantics to the v2 bundle
-layout. Single global lock per run for now (per-concept claims land in
-W4). Stale locks (TTL expired) are silently reclaimed. Live locks held
-by a different owner raise :class:`LockHeldError`, which the CLI
-translates to ``EXIT_LOCK_HELD`` (exit code 2) via ``cli/_helpers.py``.
+Single global lock per run; per-concept claims live next to each
+concept's work card. Stale locks (TTL expired) are silently reclaimed.
+Live locks held by a different owner raise :class:`LockHeldError`,
+which the CLI translates to ``EXIT_LOCK_HELD`` (exit code 2) via
+``cli/_helpers.py``.
 
 Atomicity: the fresh-acquisition path uses ``os.open(O_CREAT|O_EXCL)``
 so two processes cannot both succeed. Stale reclaim uses a temp file +

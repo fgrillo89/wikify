@@ -3,9 +3,10 @@
 Docling's ``DocumentConverter`` natively handles PDF, DOCX, PPTX, and
 HTML — all through one interface that returns a ``DoclingDocument`` we
 can lower to markdown + images + sections. This parser exposes
-``.pdf``, ``.docx``, ``.pptx``, ``.html``, ``.htm`` as supported so it
-can replace the legacy ``python-docx`` / ``python-pptx`` / ``trafilatura``
-paths when higher-quality structured output is needed.
+``.pdf``, ``.docx``, ``.pptx``, ``.html``, ``.htm`` as supported, so it
+covers the same set as the per-format ``python-docx`` /
+``python-pptx`` / ``trafilatura`` parsers when higher-quality
+structured output is needed.
 
 PDF still gets the full enrichment pipeline (RT-DETRv2 layout +
 TableFormer + optional formulas/VLM). DOCX / PPTX / HTML use Docling's

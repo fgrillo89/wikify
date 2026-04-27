@@ -550,11 +550,11 @@ _JOURNAL_FILTER_WORDS = {
 
 
 def _reference_entry_from_citation(cit: object) -> dict[str, str] | None:
-    """Build a BibTeX entry from a CitationEntry or legacy dict.
+    """Build a BibTeX entry from a CitationEntry or a raw dict.
 
     Returns None if the citation lacks essential fields (title + authors).
     """
-    # Support both CitationEntry (attr access) and legacy dict
+    # Support both CitationEntry (attr access) and a plain dict.
     _g = getattr(cit, "__getitem__", None)
     if _g:  # dict-like
         d = cit

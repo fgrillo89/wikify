@@ -20,7 +20,7 @@ def test_init_run_creates_state_and_first_event(tmp_path: Path) -> None:
     bundle_dir = _empty(tmp_path)
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     state = init_run(
         bundle,
         corpus_path="data/corpora/foo",
@@ -41,11 +41,11 @@ def test_init_run_creates_state_and_first_event(tmp_path: Path) -> None:
     assert events[0].run_id == state.run_id
 
 
-def test_init_run_creates_v2_layout(tmp_path: Path) -> None:
+def test_init_run_creates_bundle_layout(tmp_path: Path) -> None:
     bundle_dir = _empty(tmp_path)
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="x")
     for sub in ("run", "work", "work/inbox", "work/concepts", "wiki", "wiki/articles", "derived"):
         assert (bundle_dir / sub).is_dir(), f"missing: {sub}"
@@ -55,7 +55,7 @@ def test_close_run_completed(tmp_path: Path) -> None:
     bundle_dir = _empty(tmp_path)
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="x")
     closed = close_run(bundle, status="completed")
 
@@ -69,7 +69,7 @@ def test_close_run_rejects_invalid_status(tmp_path: Path) -> None:
     bundle_dir = _empty(tmp_path)
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="x")
     with pytest.raises(ValueError, match="completed"):
         close_run(bundle, status="bogus")
@@ -80,7 +80,7 @@ def test_close_run_is_idempotent_on_status(tmp_path: Path) -> None:
     bundle_dir = _empty(tmp_path)
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="x")
     close_run(bundle, status="completed")
     close_run(bundle, status="completed")

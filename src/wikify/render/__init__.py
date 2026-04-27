@@ -1,1 +1,1 @@
-"""Renderers that turn a wikify bundle into a browsable site."""
+"""Renderers that turn a wiki bundle into a browsable site."""

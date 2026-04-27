@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/citation-format
+name: wikify/references/citation-format
 description: The [^eN] citation marker and reference-definition format used in all wikify page bodies.
 ---
 

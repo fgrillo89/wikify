@@ -1,4 +1,4 @@
-"""HTML renderer for wikify bundles.
+"""HTML renderer for wiki bundles.
 
 Renders the two page kinds wikify actually emits (concepts and
 people). Public entry point: ``build_site``.

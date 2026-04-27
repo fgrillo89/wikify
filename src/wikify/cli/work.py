@@ -1,4 +1,4 @@
-"""``wikify work ...`` — in-flight build state for v2 bundles.
+"""``wikify work ...`` — in-flight build state for wiki bundles.
 
 Subcommands::
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import typer
 
-from ..api import Bundle, LayoutMismatchError
+from ..api import Bundle
 from ..bundle.work.card import (
     create_concept,
     list_concept_slugs,
@@ -49,16 +49,16 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
     if run_flag is not None:
         try:
             return Bundle.open(run_flag)
-        except (LayoutMismatchError, FileNotFoundError) as exc:
+        except FileNotFoundError as exc:
             cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
     cwd = Path.cwd()
     try:
         return Bundle.open(cwd)
-    except (LayoutMismatchError, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
         cli_error(
             EXIT_VALIDATION,
             error="no_bundle_context",
-            message=f"no v2 bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
+            message=f"no bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
         )
 
 

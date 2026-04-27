@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from ..api import Bundle, Corpus, LayoutMismatchError
+from ..api import Bundle, Corpus
 from ..bundle.draft.artifact import (
     draft_path,
     read_json,
@@ -32,16 +32,16 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
     if run_flag is not None:
         try:
             return Bundle.open(run_flag)
-        except (LayoutMismatchError, FileNotFoundError) as exc:
+        except FileNotFoundError as exc:
             cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
     cwd = Path.cwd()
     try:
         return Bundle.open(cwd)
-    except (LayoutMismatchError, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
         cli_error(
             EXIT_VALIDATION,
             error="no_bundle_context",
-            message=f"no v2 bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
+            message=f"no bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
         )
 
 
@@ -97,14 +97,14 @@ def cmd_build(
                     "ok": True,
                     "draft_path": str(p),
                     "page_id": request.page_id,
-                    "evidence_count": len(request.evidence_v2),
+                    "evidence_count": len(request.evidence),
                 }
             )
         )
         return
     typer.echo(f"draft:    {p}")
     typer.echo(f"page_id:  {request.page_id}")
-    typer.echo(f"evidence: {len(request.evidence_v2)} chunks")
+    typer.echo(f"evidence: {len(request.evidence)} chunks")
 
 
 @app.command("show")
@@ -123,7 +123,7 @@ def cmd_show(
     if fmt == "json":
         if not full:
             # Trim heavy chunk_text fields to keep output token-light.
-            for ev in payload.get("evidence_v2", []):
+            for ev in payload.get("evidence", []):
                 if isinstance(ev, dict) and "chunk_text" in ev:
                     text = ev["chunk_text"]
                     ev["chunk_text"] = text[:500] + "..." if len(text) > 500 else text
@@ -134,9 +134,9 @@ def cmd_show(
     typer.echo(f"page_kind:  {request.page_kind}")
     typer.echo(f"title:      {request.title}")
     typer.echo(f"aliases:    {request.aliases}")
-    typer.echo(f"evidence:   {len(request.evidence_v2)} chunks")
+    typer.echo(f"evidence:   {len(request.evidence)} chunks")
     if full:
-        for i, ev in enumerate(request.evidence_v2):
+        for i, ev in enumerate(request.evidence):
             preview = (ev.chunk_text or "")[:200]
             typer.echo(f"  e{i + 1}: {ev.chunk_id} ({ev.doc_id})")
             typer.echo(f"       quote: {ev.quote}")

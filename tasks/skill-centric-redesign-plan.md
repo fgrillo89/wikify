@@ -1,8 +1,56 @@
 # Skill-centric Wikify redesign — implementation plan
 
-This plan satisfies the binding contract in `docs/skill-centric-execution-plan.md`. It enumerates the legacy surface, fixes a preservation inventory, names the final package-per-noun layout (dropping `cli_cmds/`, `store/`, `citestore/`, `distill/`), the final CLI tree, the canonical skill set, twelve disjoint workstreams (W0 mechanical rename + W1–W11), a four-phase legacy-removal sequence, MVP paths, and the first three PRs. The eight load-bearing brief decisions are not relitigated.
+**Status: executed.** All twelve workstreams (W0–W11) and the four-phase
+legacy-removal sequence have shipped. This document is preserved as the
+record of the plan that was followed and the deliberate deviations from
+the brief.
 
-Divergences from the brief's prose, all consistent with its load-bearing decisions: the brief suggested `cli_cmds/<noun>.py` + `stores/<noun>.py` — this plan uses a package-per-noun layout instead, so each top-level package owns one domain (file IO, fluent query if any, and the verbs that mutate it). The four bundle-internal packages (`run/`, `work/`, `draft/`, `wiki/`) live under a shared `bundle/` umbrella because they only exist inside one wiki bundle and that cohesion is worth expressing in the directory tree. `paths.py` is eliminated; path conventions live on a `Bundle` dataclass in `api.py`. `schema.py` splits per-domain (`bundle/draft/schema.py`, `bundle/work/schema.py`). The build-state package is named `bundle/work/` to match the CLI noun (`wikify work`) and the on-disk directory (`work/`). `prompts/` stays Python-side; it is not moved to the skill tree. `distill/` is dissolved entirely in W0 — `dossier.py` → `bundle/work/`, `author_context.py` → `bundle/draft/`, `seed.py` and `field_detect.py` → `corpus/`, `preload.py` → `bundle/draft/preload.py`, `write_runner.py` → `bundle/wiki/post_commit.py`.
+The final architecture lives in `docs/architecture.md` and
+`docs/filesystem-state-design.md`; the agent contract in `AGENTS.md`;
+and the agent-facing reference in `.claude/skills/wikify/references/`.
+Use those for current behaviour. Use this document for "why is it
+shaped this way?" and for the preservation inventory.
+
+This plan satisfied the binding contract in
+`docs/skill-centric-execution-plan.md`. It enumerated the legacy
+surface, fixed a preservation inventory, named the final
+package-per-noun layout (dropping `cli_cmds/`, `store/`, `citestore/`,
+`distill/`), the final CLI tree, the canonical skill set, twelve
+disjoint workstreams (W0 mechanical rename + W1–W11), a four-phase
+legacy-removal sequence, MVP paths, and the first three PRs. The eight
+load-bearing brief decisions are not relitigated here.
+
+Divergences from the brief's prose, all consistent with its load-bearing
+decisions: the brief suggested `cli_cmds/<noun>.py` + `stores/<noun>.py`
+— this plan uses a package-per-noun layout instead, so each top-level
+package owns one domain (file IO, fluent query if any, and the verbs
+that mutate it). The four bundle-internal packages (`run/`, `work/`,
+`draft/`, `wiki/`) live under a shared `bundle/` umbrella because they
+only exist inside one wiki bundle and that cohesion is worth expressing
+in the directory tree. `paths.py` is eliminated; path conventions live
+on a `Bundle` dataclass in `api.py`. `schema.py` splits per-domain
+(`bundle/draft/schema.py`, `bundle/work/schema.py`). The build-state
+package is named `bundle/work/` to match the CLI noun (`wikify work`)
+and the on-disk directory (`work/`). `prompts/` stays Python-side; it
+is not moved to the skill tree. `distill/` was dissolved entirely in
+W0; the per-file new homes are listed in the preservation inventory
+below.
+
+**Late-stage deviations from this plan, recorded as executed:**
+
+- The `wikify migrate` noun is permanently inspector-only (read-only).
+  The plan originally framed it as "one-shot" with eventual collapse;
+  in practice there is no migration executor and v1 bundles are not
+  promoted to v2 — they remain inspectable and renderable as legacy.
+- `bundle/wiki/post_commit.py` was absorbed by `bundle/wiki/derived.py`
+  during W6/W11, not by `bundle/wiki/commit.py` as the inventory
+  originally tagged it. The projection responsibility now lives next to
+  the derived-artifact code.
+- Render and eval use `--bundle <b>`; the other six commands use
+  `--run <b>`. (Render and eval are downstream consumers and never
+  resolve through `run/state.json`.)
+- `wikify migrate` (the read-only inspector) brings the noun count to
+  eight rather than seven.
 
 ## 1. Preservation inventory
 
@@ -16,11 +64,11 @@ Logic that must survive the redesign. Tags: KEEP (move only), REFACTOR (signatur
 | `src/wikify/distill/seed.py` | greedy seed selection | KEEP | `src/wikify/corpus/seed.py` | Surfaced via `corpus find --seed`. |
 | `src/wikify/distill/field_detect.py` | field classification | KEEP | `src/wikify/corpus/field_detect.py` | Called from `corpus check`. |
 | `src/wikify/distill/preload.py` | evidence pre-loading | REFACTOR | `src/wikify/bundle/draft/preload.py` (W0 moves; W5 folds into `bundle/draft/builder.py`) | Caller surface changes in W5; logic preserved. |
-| `src/wikify/distill/write_runner.rebuild_wiki_graph` | post-commit graph + vectors rebuild | KEEP | `src/wikify/bundle/wiki/post_commit.py::rebuild_wiki_graph` (W0 moves; W6 absorbs into `bundle/wiki/commit.py::rebuild_projections()`) | Called by `wiki commit` and `wiki build graph`. |
+| `src/wikify/distill/write_runner.rebuild_wiki_graph` | post-commit graph + vectors rebuild | KEEP | absorbed into `src/wikify/bundle/wiki/derived.py` (W6/W11) | Called by `wiki commit` and `wiki build graph|vectors`. |
 | `src/wikify/schema.py` (`WriteRequest`, `WriteResponse`, `WriteEvidenceRef`, `_check_wikipedia_structure`, `_check_figure_mentions`, `QuoteNotInChunkError`, `_split_sections`, `_has_section`) | write-side Pydantic + structural checks | KEEP | `src/wikify/bundle/draft/schema.py` | Owned by the draft domain. |
 | `src/wikify/schema.py` (`ExtractRequest`, `ExtractResponse`, `ExtractedConcept`, `FigureCaption`, `Equation`, `Parameter`, `Relationship`, `ImageRef`, `EquationRef`) | extract-side Pydantic | KEEP | `src/wikify/bundle/work/schema.py` | Owned by the work / concept-extraction domain. |
 | `src/wikify/baselines/_evidence.select_evidence_chunks_for_page` | per-page evidence helper | KEEP | `src/wikify/corpus/queries.py::select_evidence()` | Pure ranking; corpus-side. |
-| `src/wikify/baselines/config.py::BaselineConfig` | baseline knobs | REPLACE | per-workflow-skill frontmatter (`wikify-baseline/SKILL.md`) | Strategy belongs in skills. |
+| `src/wikify/baselines/config.py` (legacy strategy controller) | baseline knobs | REPLACE | per-workflow-skill frontmatter (`wikify-baseline/SKILL.md`) | Strategy belongs in skills. |
 | `src/wikify/citestore/graph.py` (807 lines) | corpus fluent KG | KEEP | `src/wikify/corpus/graph.py` | Surfaced through `corpus find/show/list`. |
 | `src/wikify/citestore/{db,resolver,bibtex,parse,models}.py` | citation index, BibTeX, DOI resolution | KEEP | `src/wikify/citations/{db,resolver,bibtex,parse,models}.py` | Standalone — consumed by `ingest/`, unrelated to graph algebra. |
 | `src/wikify/citestore/__main__.py` | debug entry point | REPLACE | deleted; `wikify corpus show` replaces it | CLI surface replaces ad-hoc debug entry. |
@@ -42,7 +90,7 @@ Logic that must survive the redesign. Tags: KEEP (move only), REFACTOR (signatur
 | `.claude/skills/wikify/workflows/run-baseline.md` | baseline workflow doc | REFACTOR | `.claude/skills/wikify-baseline/SKILL.md` (≤500 lines) | Frontmatter introduced; body trimmed. |
 | `tasks/lessons.md`, `CLAUDE.md` corrections | tribal knowledge | KEEP | unchanged | Project memory is cumulative. |
 
-REPLACE entries: `BaselineConfig` (strategy → skills), `citestore/__main__.py` (CLI replaces debug), `distill/__init__.py` + `baselines/__init__.py` + `store/__init__.py` + `cli_cmds/__init__.py` + `citestore/__init__.py` (module aggregators are unnecessary once functions move into specific packages).
+REPLACE entries: the legacy strategy controller class (strategy → skills), the legacy citations debug entry (CLI replaces debug), and the various module aggregators (`__init__.py` for `distill/`, `baselines/`, `store/`, `cli_cmds/`, `citestore/`) — unnecessary once functions move into specific packages.
 
 ## 2. Legacy enumeration and phase tags
 
@@ -290,7 +338,7 @@ Workstream ownership:
 1. `redesign/c-cli-retire-session-kg-meter` — delete `cli/legacy/{session,kg,meter}.py`, `tests/wikify/{test_session,test_cli_kg,test_cli_meter}.py`, deregister sub-apps in `cli/__init__.py`. Cost emission now from `RunStore.append_call()`.
 2. `redesign/c-cli-retire-extract-draft-validate-bundle` — delete `cli/legacy/{extract,draft,validate,bundle}.py` and the corresponding test files (rewrites already landed in W4/W5/W6). Deregister sub-apps.
 3. `redesign/c-store-retire-session-meter` — delete `src/wikify/session.py` and `src/wikify/meter.py` shells (cost math and lock-held already moved to `run/cost.py`/`run/lock.py` by W0/W2).
-4. `redesign/c-baselines-debug-retire` — delete `src/wikify/baselines/` and `src/wikify/citations/__main__.py`. `BaselineConfig` strategy moved to skill frontmatter; the evidence helper was relocated to `corpus/queries.py` in W3. `distill/` is already gone post-W0; `bundle/draft/preload.py` and `bundle/wiki/post_commit.py` are absorbed by `bundle/draft/builder.py` and `bundle/wiki/commit.py` in W5/W6.
+4. `redesign/c-baselines-debug-retire` — delete `src/wikify/baselines/` and `src/wikify/citations/__main__.py`. The strategy controller class was retired; strategy lives in skill frontmatter. The evidence helper was relocated to `corpus/queries.py` in W3. `distill/` is already gone post-W0; `bundle/draft/preload.py` is absorbed by `bundle/draft/builder.py` in W5; the post-commit graph/vectors rebuild lives in `bundle/wiki/derived.py` (W6/W11).
 5. `redesign/c-cli-prune-toplevel-and-paths` — delete `cli/legacy/` entirely (empty after PRs 1–2); delete legacy top-level commands (`trace`, `sample-claims`, `html`, `field-detect`); delete `paths.py` shell now that all callers use `api.Bundle`.
 
 **Phase D — collapse adapters.** PR `redesign/d-collapse-adapters` removes residual shims; documents `migrate inspect`; ships doc rewrites for `architecture.md`, `AGENTS.md`, `filesystem-state-design.md`, `skill-centric-execution-plan.md`.

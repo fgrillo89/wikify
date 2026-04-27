@@ -176,9 +176,7 @@ def select_evidence_chunks(
     top_k: int = 8,
     max_per_source: int = 2,
 ) -> list[str]:
-    """Per-page evidence helper. Mirrors the legacy ``baselines._evidence``
-    function. Returns a list of chunk ids.
-    """
+    """Per-page evidence helper. Returns a list of chunk ids."""
     vs = read_vector_store(corpus)
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for

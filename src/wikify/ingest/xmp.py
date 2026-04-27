@@ -1,8 +1,9 @@
 """Read publisher-injected XMP metadata from a PDF.
 
-Most modern scholarly PDFs ship a Dublin Core + PRISM XMP packet that is
-typically cleaner and richer than the legacy ``/Info`` dict — in particular
-the full author list and the DOI, which ``/Info`` usually omits.
+Most modern scholarly PDFs ship a Dublin Core + PRISM XMP packet that
+is typically cleaner and richer than the older ``/Info`` dict — in
+particular the full author list and the DOI, which ``/Info`` usually
+omits.
 
 ``read_xmp(doc)`` returns a dict with the fields we consume downstream:
 ``title``, ``authors``, ``keywords``, ``doi``, ``venue``, ``volume``,

@@ -131,9 +131,9 @@ def _ingest_metadata_probe(ctx: dict) -> None:
                     xmp_doi = extract_doi(raw) or ""
             finally:
                 doc.close()
-            # Raw-page DOI scan (same helper as the legacy fallback).  This is
-            # what lets pass 4 skip the re-scan: we've done it once here and
-            # pass 2 can resolve against the resulting DOI.
+            # Raw-page DOI scan (same helper used as a per-page fallback).
+            # This is what lets pass 4 skip the re-scan: we've done it once
+            # here and pass 2 can resolve against the resulting DOI.
             if not xmp_doi:
                 md_doi = extract_pdf_doi_fallback(src) or ""
         elif ext == ".docx":
@@ -212,7 +212,8 @@ async def _ingest_doi_resolve(ctx: dict) -> None:
     ``asyncio.to_thread`` — the resolver owns its own event loop and
     we don't want a nested ``asyncio.run``.  Publishes
     ``resolved_metadata: {lower_doi: record}`` into ctx.  Empty dict
-    when nothing to resolve; pass 4 falls back to the legacy chain.
+    when nothing to resolve; pass 4 falls back to the per-doc
+    resolution chain.
     """
     from ..util.doi_resolver import resolve_many
 

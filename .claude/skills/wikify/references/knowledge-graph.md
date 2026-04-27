@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/knowledge-graph
+name: wikify/references/knowledge-graph
 description: Fluent API for the corpus KnowledgeGraph — traversal, citation analysis, scoped vector search.
 ---
 
@@ -417,11 +417,26 @@ kg.disable_trace()
 Each trace entry records: timestamp, caller, method, args, input/output
 counts, and a 5-ID sample. JSONL format, append-only.
 
-Replay via CLI: `wikify trace --bundle ... --format stats|json|timeline`
+The KG trace above is corpus-side only (sampler diagnostics). The
+The cross-cutting run history lives in ``<bundle>/run/events.jsonl``
+and is the source for cost rollup, M5 hit-rate, and replay.
 
-Or programmatically:
+Inspect it with the CLI:
+
+```
+wikify run list events --type call          # call events with cost
+wikify run list events --type chunk_read    # chunks the agent surfaced
+wikify run list events --type page_committed
+```
+
+Programmatic replay takes a ``Bundle`` (not a JSONL path) and
+returns a workflow-shaped rollup:
+
 ```python
+from wikify.api import Bundle
 from wikify.eval.trace_replay import load_trace, replay_stats
-entries = load_trace(path)
-stats = replay_stats(entries)  # per-caller breakdown, queries, visited nodes
+entries = load_trace(Bundle.open(bundle_path))
+stats = replay_stats(entries)
+# stats keys: total_events, events_by_type, events_by_actor,
+#             calls (n_calls + cost rollup), concepts, run_closed.
 ```

@@ -1,4 +1,4 @@
-"""Tests for `wikify wiki ...` v2 CLI."""
+"""Tests for `wikify wiki ...` CLI."""
 
 from __future__ import annotations
 

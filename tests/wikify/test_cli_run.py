@@ -16,7 +16,7 @@ def _bundle_dir(tmp_path: Path) -> Path:
     return tmp_path / "bundle"
 
 
-def test_run_init_creates_v2_layout(tmp_path: Path) -> None:
+def test_run_init_creates_bundle_layout(tmp_path: Path) -> None:
     bundle = _bundle_dir(tmp_path)
     corpus = tmp_path / "corpus"
     corpus.mkdir()
@@ -55,17 +55,23 @@ def test_run_init_json_envelope(tmp_path: Path) -> None:
     assert data["state_path"].endswith("state.json")
 
 
-def test_run_init_rejects_v1_bundle(tmp_path: Path) -> None:
+def test_run_init_rejects_already_initialised_bundle(tmp_path: Path) -> None:
+    """A second run init against the same path must refuse, to avoid
+    overwriting an existing run/state.json silently.
+    """
     bundle = _bundle_dir(tmp_path)
-    bundle.mkdir()
-    (bundle / "_session").mkdir()
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    result = runner.invoke(
+    first = runner.invoke(
         app,
         ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)],
     )
-    assert result.exit_code != 0
+    assert first.exit_code == 0
+    second = runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)],
+    )
+    assert second.exit_code != 0
 
 
 def test_run_show_after_init(tmp_path: Path) -> None:

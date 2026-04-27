@@ -24,7 +24,7 @@ def _setup(tmp_path: Path) -> tuple[Bundle, Corpus, str]:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     s, _ = create_concept(bundle, page_id="Atomic Layer Deposition", aliases=["ALD"])
     corpus = _make_corpus(tmp_path / "corpus")
     append_evidence(
@@ -87,7 +87,7 @@ def test_validate_ok_when_grounded(tmp_path: Path) -> None:
     bundle, _, slug = _setup(tmp_path)
     # Read the corpus chunk to extract a guaranteed-substring quote.
     draft_payload = read_json(draft_path(bundle, slug))
-    chunk_text = draft_payload["evidence_v2"][0]["chunk_text"]
+    chunk_text = draft_payload["evidence"][0]["chunk_text"]
     quote = chunk_text[:30].strip()
     write_json(response_path(bundle, slug), _good_response(slug, chunk_quote=quote))
 
@@ -125,7 +125,7 @@ def test_validate_missing_marker_rejected(tmp_path: Path) -> None:
 
 def test_validate_writes_validation_json(tmp_path: Path) -> None:
     bundle, _, slug = _setup(tmp_path)
-    chunk_text = read_json(draft_path(bundle, slug))["evidence_v2"][0]["chunk_text"]
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
     write_json(
         response_path(bundle, slug),
         _good_response(slug, chunk_quote=chunk_text[:30].strip()),
@@ -141,7 +141,7 @@ def test_validate_writes_validation_json(tmp_path: Path) -> None:
 def test_validate_undeclared_marker_flagged(tmp_path: Path) -> None:
     """Body uses [^e1] but used_markers list is empty: undeclared_prose_marker."""
     bundle, _, slug = _setup(tmp_path)
-    chunk_text = read_json(draft_path(bundle, slug))["evidence_v2"][0]["chunk_text"]
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
     quote = chunk_text[:30].strip()
     response = _good_response(slug, chunk_quote=quote)
     response["used_markers"] = []

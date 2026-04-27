@@ -11,13 +11,13 @@ from wikify.bundle.work.inbox import append_inbox, read_inbox
 from wikify.bundle.work.tend import tend_bundle
 
 
-def _v2(tmp_path: Path) -> Bundle:
+def _bundle(tmp_path: Path) -> Bundle:
     (tmp_path / "run").mkdir(parents=True)
-    return Bundle.open(tmp_path)
+    return Bundle(root=tmp_path)
 
 
 def test_tend_drains_evidence_suggestions(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     append_inbox(
         bundle,
@@ -37,7 +37,7 @@ def test_tend_drains_evidence_suggestions(tmp_path: Path) -> None:
 
 
 def test_tend_skips_evidence_for_unknown_concept(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     append_inbox(
         bundle,
         "evidence_suggestions",
@@ -51,7 +51,7 @@ def test_tend_skips_evidence_for_unknown_concept(tmp_path: Path) -> None:
 
 
 def test_tend_creates_concept_from_suggestion(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     append_inbox(
         bundle,
         "concept_suggestions",
@@ -66,7 +66,7 @@ def test_tend_creates_concept_from_suggestion(tmp_path: Path) -> None:
 
 
 def test_tend_concept_suggestion_idempotent(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     append_inbox(bundle, "concept_suggestions", {"title": "ALD"})
     summary = tend_bundle(bundle)
@@ -75,7 +75,7 @@ def test_tend_concept_suggestion_idempotent(tmp_path: Path) -> None:
 
 
 def test_tend_query_feedback_marks_needs_refine(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     append_inbox(
         bundle,
@@ -89,7 +89,7 @@ def test_tend_query_feedback_marks_needs_refine(tmp_path: Path) -> None:
 
 
 def test_tend_merge_suggestion_marks_both(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     create_concept(bundle, page_id="ALDeposition")
     append_inbox(
@@ -102,7 +102,7 @@ def test_tend_merge_suggestion_marks_both(tmp_path: Path) -> None:
 
 
 def test_tend_summary_includes_index_path(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     summary = tend_bundle(bundle)
     assert summary["index_path"].endswith("index.md")
@@ -110,7 +110,7 @@ def test_tend_summary_includes_index_path(tmp_path: Path) -> None:
 
 
 def test_tend_idempotent(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")
     summary1 = tend_bundle(bundle)
     summary2 = tend_bundle(bundle)

@@ -61,10 +61,9 @@ class Document:
     structural index built once at ingest and cached in
     `corpus/docs/{id}.json`.
 
-    Helpers on top of this (see store/files.py) provide:
-        read_markdown(doc) -> str
-        read_chunks(doc)   -> list[Chunk]
-        get_section(doc, path) -> DocSection
+    Helpers on top of this (see ``corpus/chunks.py``,
+    ``corpus/doc_markdown.py``) provide ``read_chunks(corpus, doc_id)``,
+    ``read_markdown(corpus, doc_id)``, and section/figure lookups.
         get_intro(doc)     -> DocSection | None
         get_abstract(doc)  -> str | None
         get_images(doc)    -> list[DocImage]

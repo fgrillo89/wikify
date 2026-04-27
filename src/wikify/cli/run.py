@@ -1,4 +1,4 @@
-"""``wikify run ...`` — execution control for v2 bundles.
+"""``wikify run ...`` — execution control for wiki bundles.
 
 Subcommands::
 
@@ -10,7 +10,7 @@ Subcommands::
     run close  [--run <b>] [--status completed|failed|abandoned]
 
 ``--run <bundle>`` overrides; otherwise the current working directory
-must be a v2 bundle root (``run/state.json`` present).
+must be a bundle root (``run/state.json`` present).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import typer
 
-from ..api import Bundle, LayoutMismatchError, _detect_layout
+from ..api import Bundle
 from ..bundle.run.events import Event, append_event, iter_events
 from ..bundle.run.lifecycle import close_run, init_run
 from ..bundle.run.lock import LockHeldError, acquire_lock, read_lock, release_lock
@@ -31,21 +31,21 @@ app = typer.Typer(add_completion=False, help="Run-level execution control.")
 
 
 def _resolve_bundle(run_flag: Path | None) -> Bundle:
-    """Resolve ``--run <bundle>`` or fall back to CWD; error on missing v2 marker."""
+    """Resolve ``--run <bundle>`` or fall back to CWD; error on missing marker."""
     if run_flag is not None:
         try:
             return Bundle.open(run_flag)
-        except (LayoutMismatchError, FileNotFoundError) as exc:
+        except FileNotFoundError as exc:
             cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
     cwd = Path.cwd()
     try:
         return Bundle.open(cwd)
-    except (LayoutMismatchError, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
         cli_error(
             EXIT_VALIDATION,
             error="no_bundle_context",
             message=(
-                f"no v2 bundle resolved (cwd={cwd}); pass --run <bundle> "
+                f"no bundle resolved (cwd={cwd}); pass --run <bundle> "
                 f"or cd into a bundle root with run/state.json. cause: {exc}"
             ),
         )
@@ -68,25 +68,27 @@ def cmd_init(
 ) -> None:
     """Create ``run/state.json`` and ``run/events.jsonl`` for a fresh bundle."""
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    layout = _detect_layout(bundle_dir)
-    if layout == "v1":
+    if (bundle_dir / "run" / "state.json").is_file():
         cli_error(
             EXIT_VALIDATION,
-            error="legacy_bundle",
-            message=(
-                f"{bundle_dir} is a v1 bundle; create a fresh directory or use "
-                f"`wikify migrate inspect` first"
-            ),
+            error="bundle_already_initialised",
+            message=f"{bundle_dir} already has run/state.json; refusing to re-init",
         )
-    # Bundle.open requires the marker; create the run/ dir first so .open succeeds.
-    (bundle_dir / "run").mkdir(parents=True, exist_ok=True)
-    bundle = Bundle.open(bundle_dir)
+    # ``init_run`` writes ``run/state.json``; until that happens
+    # ``Bundle.open`` would refuse this directory. Construct the Bundle
+    # dataclass directly — ``run init`` is the privileged bootstrap path.
+    bundle = Bundle(root=bundle_dir)
     state = init_run(
         bundle,
         corpus_path=corpus_dir,
         strategy=strategy,
         target_haiku_eq=target_haiku_eq,
     )
+    # The cli_invoked event for `run init` is emitted by
+    # ``_io.run_with_io_logging``: it detects ``run init --bundle <b>`` at
+    # pre-flight and tees stdin/stdout/stderr into ``<b>/run/io/`` even
+    # though the bundle does not yet exist. The event lands after init
+    # has materialised state.json and events.jsonl.
     if fmt == "json":
         typer.echo(
             json.dumps(

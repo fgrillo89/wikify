@@ -21,15 +21,15 @@ from wikify.bundle.work.claim import (
 )
 
 
-def _v2_with_concept(tmp_path: Path, slug: str = "ald") -> tuple[Bundle, str]:
+def _bundle_with_concept(tmp_path: Path, slug: str = "ald") -> tuple[Bundle, str]:
     (tmp_path / "run").mkdir(parents=True)
-    bundle = Bundle.open(tmp_path)
+    bundle = Bundle(root=tmp_path)
     s, _ = create_concept(bundle, page_id="ALD", slug=slug)
     return bundle, s
 
 
 def test_acquire_writes_claim_file(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a", ttl_seconds=300)
     record = read_claim(bundle, slug)
     assert record is not None
@@ -39,7 +39,7 @@ def test_acquire_writes_claim_file(tmp_path: Path) -> None:
 
 
 def test_release_owner_succeeds(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a")
     assert release_claim(bundle, slug, owner="a") is True
     assert read_claim(bundle, slug) is None
@@ -47,7 +47,7 @@ def test_release_owner_succeeds(tmp_path: Path) -> None:
 
 def test_release_non_owner_rejected(tmp_path: Path) -> None:
     """Release by a non-owner returns False; CLI maps this to exit 2."""
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a", ttl_seconds=600)
     assert release_claim(bundle, slug, owner="b") is False
     # Claim still in place.
@@ -55,7 +55,7 @@ def test_release_non_owner_rejected(tmp_path: Path) -> None:
 
 
 def test_contention_raises_claim_held(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a", ttl_seconds=300)
     with pytest.raises(ClaimHeldError) as exc:
         acquire_claim(bundle, slug, owner="b", ttl_seconds=300)
@@ -64,7 +64,7 @@ def test_contention_raises_claim_held(tmp_path: Path) -> None:
 
 
 def test_same_owner_re_acquire_refreshes_ttl(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a", ttl_seconds=10)
     acquire_claim(bundle, slug, owner="a", ttl_seconds=600)  # no error
     record = read_claim(bundle, slug)
@@ -73,7 +73,7 @@ def test_same_owner_re_acquire_refreshes_ttl(tmp_path: Path) -> None:
 
 
 def test_stale_claim_silently_reclaimed(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     expired_iso = (
         datetime.now(UTC) - timedelta(seconds=30)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -93,7 +93,7 @@ def test_stale_claim_silently_reclaimed(tmp_path: Path) -> None:
 
 
 def test_force_overrides_held_claim(tmp_path: Path) -> None:
-    bundle, slug = _v2_with_concept(tmp_path)
+    bundle, slug = _bundle_with_concept(tmp_path)
     acquire_claim(bundle, slug, owner="a")
     displaced = acquire_claim(bundle, slug, owner="b", force=True)
     assert displaced is not None
@@ -101,7 +101,7 @@ def test_force_overrides_held_claim(tmp_path: Path) -> None:
 
 
 def test_list_claims_returns_active(tmp_path: Path) -> None:
-    bundle, slug1 = _v2_with_concept(tmp_path, slug="ald")
+    bundle, slug1 = _bundle_with_concept(tmp_path, slug="ald")
     create_concept(bundle, page_id="CVD", slug="cvd")
     acquire_claim(bundle, "ald", owner="a")
     acquire_claim(bundle, "cvd", owner="b")
@@ -111,7 +111,7 @@ def test_list_claims_returns_active(tmp_path: Path) -> None:
 
 
 def test_expire_stale_claims_removes_only_expired(tmp_path: Path) -> None:
-    bundle, slug1 = _v2_with_concept(tmp_path, slug="ald")
+    bundle, slug1 = _bundle_with_concept(tmp_path, slug="ald")
     create_concept(bundle, page_id="CVD", slug="cvd")
     # Active live claim
     acquire_claim(bundle, "ald", owner="a", ttl_seconds=600)

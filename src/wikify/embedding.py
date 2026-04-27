@@ -464,10 +464,10 @@ def embedder_for(
 
     Does not consult ``WIKIFY_EMBEDDER``. Caller owns the choice.
     Recognised values: ``"fastembed"`` (default for any non-hash code
-    path) and ``"hash"``. The legacy ``"sentence_transformers"`` value
-    is silently aliased to ``"fastembed"`` so old ``vectors.meta.json``
-    files (which used to record this string) still load with the
-    drop-in ONNX backend on the same model + same dimensionality.
+    path) and ``"hash"``. Older ``vectors.meta.json`` files that record
+    ``"sentence_transformers"`` are silently aliased to ``"fastembed"``
+    so they keep loading on the drop-in ONNX backend at the same model
+    and dimensionality.
 
     ``mode`` selects the task prefix: ``"passage"`` for indexing
     documents, ``"query"`` for search-time queries. ``batch_size``

@@ -15,9 +15,9 @@ from wikify.bundle.work.card import (
 )
 
 
-def _v2(tmp_path: Path) -> Bundle:
+def _bundle(tmp_path: Path) -> Bundle:
     (tmp_path / "run").mkdir(parents=True)
-    return Bundle.open(tmp_path)
+    return Bundle(root=tmp_path)
 
 
 def test_slugify_basic() -> None:
@@ -69,7 +69,7 @@ def test_workcard_serialise_roundtrip() -> None:
 
 
 def test_save_and_load(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     card = WorkCard(front={"page_id": "ALD", "kind": "article"}, body="body\n")
     save_card(bundle, "ald", card)
     loaded = load_card(bundle, "ald")
@@ -78,12 +78,12 @@ def test_save_and_load(tmp_path: Path) -> None:
 
 
 def test_load_card_missing_returns_empty(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     assert load_card(bundle, "no-such").front == {}
 
 
 def test_create_concept_creates_directory(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     slug, card = create_concept(
         bundle, page_id="Atomic Layer Deposition", aliases=["ALD"]
     )
@@ -94,14 +94,14 @@ def test_create_concept_creates_directory(tmp_path: Path) -> None:
 
 
 def test_create_concept_idempotent(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     slug1, _ = create_concept(bundle, page_id="ALD")
     slug2, _ = create_concept(bundle, page_id="ALD")
     assert slug1 == slug2
 
 
 def test_list_concept_slugs_sorted(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="Beta")
     create_concept(bundle, page_id="Alpha")
     create_concept(bundle, page_id="Gamma")
@@ -109,5 +109,5 @@ def test_list_concept_slugs_sorted(tmp_path: Path) -> None:
 
 
 def test_list_concept_slugs_empty(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     assert list_concept_slugs(bundle) == []

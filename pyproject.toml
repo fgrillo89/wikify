@@ -64,6 +64,9 @@ dependencies = [
 [project.optional-dependencies]
 gdrive = ["google-api-python-client>=2.130", "google-auth-oauthlib>=1.2"]
 
+[project.scripts]
+wikify = "wikify.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

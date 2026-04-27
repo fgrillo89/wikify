@@ -1,18 +1,10 @@
 """Tests for store.page_naming: natural Wikipedia-style page ids."""
 
-from wikify.api import LegacyBundle
-from wikify.bundle.wiki.files import write_page
-from wikify.bundle.wiki.index import (
-    WikiIndex,
-    build_index,
-    migrate_prefixed_page_ids,
-)
 from wikify.bundle.wiki.page_naming import (
     page_filename,
     page_id_from_title,
     url_slug,
 )
-from wikify.models import Evidence, WikiPage
 
 
 def test_page_id_from_title_basic():
@@ -47,47 +39,5 @@ def test_round_trip_title_to_filename_to_slug():
     assert slug == "Atomic_Layer_Deposition"
 
 
-def test_alias_resolution_case_insensitive(tmp_path):
-    b = LegacyBundle(root=tmp_path / "bundle")
-    b.ensure()
-    page = WikiPage(
-        id="Atomic Layer Deposition",
-        kind="article",
-        title="Atomic Layer Deposition",
-        aliases=["ALD"],
-        body_markdown=(
-            "# Atomic Layer Deposition\n\n"
-            "Atomic Layer Deposition (ALD) is a vapor-phase thin-film deposition technique "
-            "based on sequential self-limiting surface reactions documented in the "
-            "literature.[^e1]\n\n## References\n\n[^e1]: c1 (d1) > \"q\""
-        ),
-        evidence=[Evidence(marker="e1", chunk_id="c1", doc_id="d1", quote="q")],
-    )
-    write_page(b, page)
-    build_index(b, [page]).save()
-    idx = WikiIndex.load(b)
-    assert idx.resolve_alias("ald") == "Atomic Layer Deposition"
-    assert idx.resolve_alias("Atomic Layer Deposition") == "Atomic Layer Deposition"
 
 
-def test_migrate_prefixed_page_ids(tmp_path, monkeypatch):
-    monkeypatch.setenv("WIKIFY_SKIP_PAGE_ID_MIGRATION", "1")
-    b = LegacyBundle(root=tmp_path / "bundle")
-    b.ensure()
-    legacy = b.articles_dir / "concept-atomic-layer-deposition.md"
-    legacy.write_text(
-        "---\n"
-        "id: concept-atomic-layer-deposition\n"
-        "kind: concept\n"
-        "title: Atomic Layer Deposition\n"
-        "aliases: []\n"
-        "links: []\n"
-        "---\n"
-        "\n# Atomic Layer Deposition\n\nBody.[^e1]\n\n## Evidence\n\n"
-        '[^e1]: c1 (d1) > "q"\n',
-        encoding="utf-8",
-    )
-    n = migrate_prefixed_page_ids(b)
-    assert n == 1
-    assert not legacy.exists()
-    assert (b.articles_dir / "Atomic Layer Deposition.md").exists()

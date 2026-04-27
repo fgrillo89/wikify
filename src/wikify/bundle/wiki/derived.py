@@ -12,7 +12,7 @@ The graph + vectors rebuild reads every ``wiki/articles/*.md`` and
 ``wiki/people/*.md`` and reconstructs the graph from the
 ``[^eN]`` evidence footnotes in each page body. The
 ``bundle/wiki/graph.py`` helpers do the heavy lifting; this module
-adapts them to the v2 ``derived_*`` paths.
+adapts them to the bundle's ``derived_*`` paths.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def read_index(bundle: Bundle) -> dict:
     return json.loads(bundle.derived_index_path.read_text(encoding="utf-8"))
 
 
-def _load_v2_pages(bundle: Bundle) -> list:
+def _load_pages(bundle: Bundle) -> list:
     """Walk wiki/articles/ + wiki/people/ and return parsed WikiPages."""
     from .page import parse_page
 
@@ -107,7 +107,7 @@ def rebuild_graph(bundle: Bundle) -> Path:
     from .graph import build_wiki_graph, save_wiki_graph
 
     bundle.derived_dir.mkdir(parents=True, exist_ok=True)
-    pages = _load_v2_pages(bundle)
+    pages = _load_pages(bundle)
     wkg = build_wiki_graph(pages, vectors=None, embed_fn=None)
     save_wiki_graph(bundle.derived_graph_path, wkg)
     return bundle.derived_graph_path
@@ -117,7 +117,7 @@ def rebuild_vectors(bundle: Bundle) -> Path:
     """Rebuild ``derived/vectors.npz`` — per-page embeddings.
 
     Uses the project's current embedding backend in passage mode.
-    The vectors file is the input the v2 ``wiki find`` semantic-search
+    The vectors file is the input the ``wiki find`` semantic-search
     path will consume.
     """
     from ...corpus.vectors import save_vectors
@@ -125,7 +125,7 @@ def rebuild_vectors(bundle: Bundle) -> Path:
     from .graph import build_wiki_vectors
 
     bundle.derived_dir.mkdir(parents=True, exist_ok=True)
-    pages = _load_v2_pages(bundle)
+    pages = _load_pages(bundle)
     if not pages:
         # No committed pages — write an empty vectors file so callers can
         # still ``np.load`` without branching.

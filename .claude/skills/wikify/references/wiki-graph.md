@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/wiki-graph
+name: wikify/references/wiki-graph
 description: Fluent API for the WikiKnowledgeGraph — page relationships, scoped search, dedup and extend helpers.
 ---
 

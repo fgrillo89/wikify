@@ -1,71 +1,22 @@
 """Bundle + Corpus context types — the only module that knows where things live on disk.
 
-Three frozen dataclasses replace the legacy ``BundlePaths`` / ``CorpusPaths``:
+Two frozen dataclasses:
 
 - :class:`Corpus` — input corpus path conventions (read-only during a wiki run).
-- :class:`Bundle` — v2 wiki-bundle layout (``run/``, ``work/``, ``wiki/``,
-  ``derived/``). Used by every workstream from W2 onwards.
-- :class:`LegacyBundle` — v1 wiki-bundle layout (``_session/``, ``_scratch/``,
-  ``_calls.jsonl``, ``articles/``, ...). Used by ``cli/legacy/*`` and by
-  ``cli/migrate.py``; deleted in Phase D once legacy bundles are migrated.
+- :class:`Bundle` — wiki-bundle layout (``run/``, ``work/``, ``wiki/``,
+  ``derived/``).
 
-Layout enforcement is strict. ``Bundle.open(path)`` requires a v2 marker
-(``run/state.json``) and raises :class:`LayoutMismatchError` otherwise.
-``LegacyBundle.open(path)`` requires a v1 marker (``_session/`` or any v1
-artifact) and raises if the directory looks like v2. Constructing the
-dataclass directly with ``Bundle(root=...)`` skips the check (callers that
-have already validated the layout, e.g. ``run init``, may bypass).
+``Bundle.open(path)`` requires ``run/state.json`` and raises
+``FileNotFoundError`` otherwise. ``run init`` constructs the dataclass
+directly with ``Bundle(root=...)`` while it is materialising the layout
+(``state.json`` does not exist yet at that point); every other caller
+goes through ``Bundle.open``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
-# v2 markers: presence of any of these means the bundle is v2 layout.
-_V2_MARKERS: tuple[str, ...] = (
-    "run/state.json",
-    "run",  # the directory itself is enough once W2 lands; state.json is the strong marker
-)
-
-# v1 markers: presence of any of these means the bundle is v1 layout.
-_V1_MARKERS: tuple[str, ...] = (
-    "_session/session.json",
-    "_session",
-    "_scratch",
-    "_calls.jsonl",
-    "_run.json",
-)
-
-
-class LayoutMismatchError(ValueError):
-    """Raised when a bundle directory does not match the expected layout version."""
-
-    def __init__(self, path: Path, expected: str, found: str) -> None:
-        super().__init__(
-            f"bundle at {path} has layout '{found}', expected '{expected}'"
-        )
-        self.path = path
-        self.expected = expected
-        self.found = found
-
-
-def _detect_layout(root: Path) -> str:
-    """Return ``"v2"``, ``"v1"``, or ``"unknown"`` based on on-disk markers.
-
-    A bundle with both v1 and v2 markers is reported as ``"v2"`` — once
-    the new layout is in place, the v1 artifacts are read-only legacy
-    state that ``migrate inspect`` will surface.
-    """
-    if (root / "run" / "state.json").is_file():
-        return "v2"
-    for marker in _V1_MARKERS:
-        if (root / marker).exists():
-            return "v1"
-    if (root / "run").is_dir():
-        # New bundle being initialised — treat as v2 even before state.json lands.
-        return "v2"
-    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -149,23 +100,26 @@ class Corpus:
 
 @dataclass(frozen=True)
 class Bundle:
-    """v2 wiki-bundle context. Strict — see :func:`open` for the marker check."""
+    """Wiki-bundle context. Strict — see :func:`open` for the marker check."""
 
     root: Path
 
     @classmethod
     def open(cls, path: Path | str) -> Bundle:
-        """Open a v2 bundle. Raises ``LayoutMismatchError`` on a v1 layout.
+        """Open a bundle directory. Raises ``FileNotFoundError`` if the
+        directory is missing or has no ``run/state.json``.
 
-        The ``run/state.json`` file is the canonical v2 marker; the
-        ``run/`` directory alone counts when a bundle is being initialised.
+        ``run init`` is the only caller permitted to skip this check; it
+        constructs ``Bundle(root=...)`` directly while it is creating
+        ``state.json`` for the first time.
         """
         root = Path(path)
         if not root.is_dir():
             raise FileNotFoundError(f"bundle directory not found: {root}")
-        layout = _detect_layout(root)
-        if layout != "v2":
-            raise LayoutMismatchError(root, expected="v2", found=layout)
+        if not (root / "run" / "state.json").is_file():
+            raise FileNotFoundError(
+                f"bundle at {root} has no run/state.json; not a wiki bundle"
+            )
         return cls(root=root)
 
     @property
@@ -240,7 +194,7 @@ class Bundle:
         return self.derived_dir / "vectors.npz"
 
     def ensure(self) -> None:
-        """Create every v2 directory that a fresh run needs."""
+        """Create every directory that a fresh run needs."""
         for p in (
             self.run_dir,
             self.io_dir,
@@ -253,83 +207,3 @@ class Bundle:
             self.derived_dir,
         ):
             p.mkdir(parents=True, exist_ok=True)
-
-
-@dataclass(frozen=True)
-class LegacyBundle:
-    """v1 wiki-bundle context. Used by ``cli/legacy/*`` and by ``cli/migrate.py``.
-
-    Field set is exactly the legacy ``LegacyBundle`` accessors. New code
-    should use :class:`Bundle` instead; this class only exists to keep
-    legacy CLI nouns and the migration helper working until Phase C/D.
-    """
-
-    root: Path
-
-    @classmethod
-    def open(cls, path: Path | str) -> LegacyBundle:
-        """Open a v1 bundle. Raises ``LayoutMismatchError`` on a v2 layout."""
-        root = Path(path)
-        if not root.is_dir():
-            raise FileNotFoundError(f"bundle directory not found: {root}")
-        layout = _detect_layout(root)
-        if layout == "v2":
-            raise LayoutMismatchError(root, expected="v1", found="v2")
-        return cls(root=root)
-
-    @property
-    def articles_dir(self) -> Path:
-        return self.root / "articles"
-
-    @property
-    def people_dir(self) -> Path:
-        return self.root / "people"
-
-    @property
-    def graph_path(self) -> Path:
-        return self.root / "_wiki_graph.json"
-
-    @property
-    def wiki_vectors_path(self) -> Path:
-        return self.root / "_wiki_vectors.npz"
-
-    @property
-    def run_path(self) -> Path:
-        return self.root / "_run.json"
-
-    @property
-    def run_history_path(self) -> Path:
-        return self.root / "_run_history.jsonl"
-
-    @property
-    def calls_path(self) -> Path:
-        return self.root / "_calls.jsonl"
-
-    @property
-    def meta_dir(self) -> Path:
-        return self.root / "_meta"
-
-    @property
-    def session_dir(self) -> Path:
-        return self.root / "_session"
-
-    @property
-    def session_path(self) -> Path:
-        return self.session_dir / "session.json"
-
-    @property
-    def session_checkpoints_dir(self) -> Path:
-        return self.session_dir / "checkpoints"
-
-    @property
-    def session_lock_path(self) -> Path:
-        return self.session_dir / "session.lock"
-
-    @property
-    def scratch_dir(self) -> Path:
-        return self.root / "_scratch"
-
-    def ensure(self) -> None:
-        self.articles_dir.mkdir(parents=True, exist_ok=True)
-        self.people_dir.mkdir(parents=True, exist_ok=True)
-        self.meta_dir.mkdir(parents=True, exist_ok=True)
