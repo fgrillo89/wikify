@@ -51,11 +51,11 @@ Seven nouns. All under `uv run`.
 
 | Noun | One-liner |
 |---|---|
-| `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks. |
+| `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks; open a warm REPL. |
 | `wikify run` | Initialise, lock, set, list events, show, and close a run. |
 | `wikify work` | Manage in-flight build state: concepts, evidence, inbox, claims, tend. |
 | `wikify draft` | Build, show, and check the per-attempt draft/response/validation triple. |
-| `wikify wiki` | List/find/show committed pages; build projections; commit a validated concept. |
+| `wikify wiki` | List/find/show committed pages; open a warm REPL; build projections; commit a validated concept. |
 | `wikify render` | Render a bundle to a static HTML site. |
 | `wikify eval` | Compute M1/M3/M5/M6 (and related) metrics over a bundle. |
 
@@ -178,16 +178,14 @@ src/wikify/
 
 Skills live in `.claude/skills/`. The shared reference skill
 (`.claude/skills/wikify/`) carries project-wide knowledge in
-`references/` (schemas, CLI grammar, citation format, write
-constraints, tier mapping, escalation, knowledge graph, wiki graph).
-Single-action skills (`wikify-corpus`, `wikify-run`, `wikify-work`,
-`wikify-draft`, `wikify-wiki`, `wikify-render`, `wikify-eval`) wrap
-one CLI noun each and run as forked subagents composing CLI verbs via
-Bash. Multi-step workflow skills (`wikify-baseline` plus the
-`wikify-guided-explore`, `wikify-query`, `wikify-refine`,
-`wikify-render-eval`, `wikify-ingest`, `wikify-maintain` stubs)
-dispatch the single-action skills with their own loop and
-parallelism shape.
+`references/` (bundle state, CLI grammar, writing schemas, citation
+format, field guides, exploration patterns, and workflow contracts).
+Core capability skills expose reusable surfaces without owning strategy:
+`wikify-search-corpus`, `wikify-search-wiki`, `wikify-write-page`, and
+`wikify-bundle`. Workflow skills (`wikify-baseline`,
+`wikify-guided-explore`, `wikify-query`, `wikify-refine`) dispatch those
+capabilities with their own loop shape, budget, parallelism, retry
+policy, and stop conditions.
 
 ## Design invariants
 

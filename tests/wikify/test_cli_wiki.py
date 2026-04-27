@@ -116,3 +116,43 @@ def test_wiki_commit_lock_held_returns_exit_2(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["error"] == "lock_held"
     assert payload["owner"] == "other-process"
+
+
+def test_wiki_repl_find_show_and_list(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "repl",
+            "--run", str(bundle.root),
+            "--prompt", "",
+        ],
+        input=(
+            "list articles\n"
+            "find --top-k 1 atomic layer\n"
+            f"show {slug} --full\n"
+            "exit\n"
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    assert "ready bundle=" in result.output
+    assert slug in result.output
+    assert "Atomic Layer Deposition" in result.output
+
+
+def test_wiki_repl_reports_user_errors_and_continues(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "repl",
+            "--run", str(bundle.root),
+            "--prompt", "",
+        ],
+        input="bogus\nlist articles\nexit\n",
+    )
+    assert result.exit_code == 0
+    assert "error: unknown command: bogus; type help" in result.stderr
+    assert slug in result.output

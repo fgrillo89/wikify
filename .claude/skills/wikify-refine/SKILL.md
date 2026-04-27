@@ -1,45 +1,40 @@
 ---
 name: wikify-refine
-description: Drain the work inbox into evidence and merges, then re-write any concept marked `needs_refine`. Use after a `wikify-baseline` pass plus query traffic that produced `query_feedback` records. Status: stub — composition shape only.
-allowed-tools: Bash(wikify *) Skill(wikify-*) Task
+description: Refinement workflow that consolidates bundle inbox feedback, finds concepts marked needs_refine, gathers additional evidence when required, rewrites pages, validates, and commits replacements. Status is stub composition only.
+allowed-tools: Bash(wikify *) Task
 ---
 
-# wikify-refine (stub)
+# wikify-refine
 
-Status: stub — composition shape only. No Python orchestration; the
-agent runs primitives in order.
+Status: stub composition only. This workflow owns refinement thresholds,
+batch policy, and retry/escalation.
 
 ## Intent
 
-Apply accumulated inbox feedback (evidence suggestions, concept
-suggestions, merge suggestions, query feedback) and re-write the
-concepts that became `needs_refine` as a result.
+Apply accumulated inbox feedback and improve committed pages through the
+normal write, validate, and commit gate.
 
 ## Composition
 
-1. `wikify-work` — `work list inbox` to enumerate pending
-   suggestions; `work tend` to consolidate them deterministically
-   (this is what flips the `needs_refine` flag).
-2. `wikify-work` — `work list --status needs_refine` (or grep the
-   `work/index.md`) to find the concepts to refine.
-3. For each concept (parallel up to N):
-   - `wikify-work` — `work claim <slug>`.
-   - `wikify-draft` — `draft build <slug> --task refine`.
-   - Fork writer subagent — produce a refined `response.json`.
-   - `wikify-draft` — `draft check <slug>`.
-   - `wikify-wiki` — `wiki commit <slug>`.
-   - `wikify-work` — `work release <slug>`.
-4. `wikify-wiki` — `wiki build indexes/graph/vectors` after the
-   batch finishes.
+1. Use `wikify-bundle` to list inbox state and run `work tend`.
+2. Use `wikify-bundle` to find concepts marked `needs_refine`.
+3. For each target, optionally use `wikify-search-corpus` to gather more
+   evidence.
+4. Use `wikify-bundle` to claim the concept and build a refine draft.
+5. Use `wikify-write-page` with `refinement-style.md`.
+6. Use `wikify-bundle` to validate, commit, release, and refresh
+   projections.
 
-## Strategy
+## Strategy Owned Here
 
-- Per-batch concurrency, retry policy, and tier escalation are
-  decided here in skill markdown.
-- No new CLI commands.
+- Refinement threshold.
+- Evidence growth policy.
+- Batch concurrency.
+- Retry and escalation policy.
 
 ## References
 
-- [atoms.md](../wikify/references/atoms.md)
-- [escalation.md](../wikify/references/escalation.md)
-- [write-constraints.md](../wikify/references/write-constraints.md)
+- `../wikify-bundle/SKILL.md`
+- `../wikify-search-corpus/SKILL.md`
+- `../wikify-write-page/references/refinement-style.md`
+- `../wikify/references/writing/escalation.md`
