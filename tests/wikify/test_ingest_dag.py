@@ -102,7 +102,7 @@ def test_ingest_dag_end_to_end(tmp_path, monkeypatch):
     # --- Final metadata matches assemble_pdf_metadata on the persisted
     # markdown.  This is the guarantee that pass 4 didn't skip any PDF
     # and that the pass-3/pass-4 split is semantically equivalent to
-    # the legacy single-shot call.
+    # the original single-shot call.
     md_path = paths.markdown_dir / f"{doc.id}.md"
     assert md_path.exists()
     body = _read_body_from_doc_markdown(md_path)

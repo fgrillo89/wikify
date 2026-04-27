@@ -1,4 +1,4 @@
-"""Shared helpers for the v2 CLI nouns.
+"""Shared helpers for the CLI nouns.
 
 - ``cli_error(code, **fields)`` — emit a structured JSON envelope on
   stderr and exit with the given code. Used wherever a CLI handler

@@ -1,12 +1,9 @@
 """Cost aggregation from ``run/events.jsonl``.
 
-The legacy ``meter.py`` carried both per-call recording (now an
-``events.jsonl`` ``type="call"`` event) and aggregation. This module is
-the aggregation half, ported to read from the event ledger.
-
-Cost is in haiku-equivalent units. The :class:`TierPrice` table mirrors
-the legacy ``meter._DEFAULT_TIERS`` so haiku-eq numbers stay comparable
-across the migration.
+Per-call cost is recorded as a ``type="call"`` event in
+``events.jsonl``; this module aggregates those events into per-stage
+and per-model totals. Cost is in haiku-equivalent units; the
+:class:`TierPrice` table maps tiers to their relative price.
 """
 
 from __future__ import annotations

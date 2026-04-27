@@ -9,9 +9,9 @@ from wikify.bundle.run.cost import aggregate, cost_summary, haiku_eq_for
 from wikify.bundle.run.events import Event, append_event
 
 
-def _v2(tmp_path: Path) -> Bundle:
+def _bundle(tmp_path: Path) -> Bundle:
     (tmp_path / "run").mkdir(parents=True)
-    return Bundle.open(tmp_path)
+    return Bundle(root=tmp_path)
 
 
 def test_haiku_eq_increases_with_tier() -> None:
@@ -86,7 +86,7 @@ def test_aggregate_breaks_down_by_tier_and_role() -> None:
 
 
 def test_cost_summary_reads_events_jsonl(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     append_event(
         bundle,
         Event(
@@ -108,7 +108,7 @@ def test_cost_summary_reads_events_jsonl(tmp_path: Path) -> None:
 
 
 def test_cost_summary_empty_when_no_events(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     summary = cost_summary(bundle)
     assert summary["totals"]["calls"] == 0
     assert summary["totals"]["haiku_eq"] == 0.0

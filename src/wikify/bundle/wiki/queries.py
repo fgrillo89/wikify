@@ -1,6 +1,6 @@
 """Read-only wiki query helpers — the surface ``cli/wiki.py`` calls.
 
-Walks the on-disk v2 wiki tree (``wiki/articles/`` + ``wiki/people/``).
+Walks the on-disk wiki tree (``wiki/articles/`` + ``wiki/people/``).
 Heavy graph + page-vector queries (``wiki/graph.py``) stay accessible
 through the underlying fluent KG; this module wires up the file-walk
 queries the CLI uses by default.

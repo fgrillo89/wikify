@@ -1,7 +1,8 @@
 """``run/events.jsonl`` — append-only structured event ledger.
 
-One JSON object per line. Replaces the legacy split between
-``_calls.jsonl`` (cost) and the absent run-history log. Cost is computed
+One JSON object per line. Carries every event the run emits: model
+calls (with cost), stage changes, concept lifecycle, page commits,
+inbox traffic, validation outcomes, run lifecycle. Cost is computed
 on demand by filtering ``type == "call"``.
 
 Schema is defined by :class:`Event` (Pydantic, ``extra="allow"`` for the

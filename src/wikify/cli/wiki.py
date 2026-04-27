@@ -1,4 +1,4 @@
-"""``wikify wiki ...`` — committed wiki layer for v2 bundles.
+"""``wikify wiki ...`` — committed wiki layer for wiki bundles.
 
 Subcommands::
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import typer
 
-from ..api import Bundle, LayoutMismatchError
+from ..api import Bundle
 from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
 from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
@@ -37,16 +37,16 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
     if run_flag is not None:
         try:
             return Bundle.open(run_flag)
-        except (LayoutMismatchError, FileNotFoundError) as exc:
+        except FileNotFoundError as exc:
             cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
     cwd = Path.cwd()
     try:
         return Bundle.open(cwd)
-    except (LayoutMismatchError, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
         cli_error(
             EXIT_VALIDATION,
             error="no_bundle_context",
-            message=f"no v2 bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
+            message=f"no bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
         )
 
 
@@ -131,10 +131,10 @@ def cmd_find(
     text: bool = typer.Option(False, "--text"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Substring grep over committed pages (text mode is the only mode in W6 MVP)."""
+    """Substring grep over committed pages (text mode is the only mode today)."""
     bundle = _resolve_bundle(run)
     if not text:
-        # Default to text mode for W6; full graph + vector query lives in W6+.
+        # Default to text mode; graph + vector queries are a follow-up.
         text = True
     hits = find_text(bundle, query, top_k=top_k)
     if fmt == "json":

@@ -1,4 +1,4 @@
-"""Tests for `wikify eval` — corpus-free metrics over a v2 bundle."""
+"""Tests for `wikify eval` — metrics over a bundle."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _commit_one_article(tmp_path: Path):
 
 def test_eval_writes_default_report(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
-    result = runner.invoke(app, ["eval", "--run", str(bundle.root)])
+    result = runner.invoke(app, ["eval", "--bundle", str(bundle.root)])
     assert result.exit_code == 0, result.output
     report_path = bundle.derived_dir / "eval.json"
     assert report_path.is_file()
@@ -29,6 +29,12 @@ def test_eval_writes_default_report(tmp_path: Path) -> None:
     assert data["schema_version"] == 1
     assert data["n_articles"] == 1
     assert "g_evidence" in data and "g_links" in data
+    # Without --corpus, the corpus-dependent metrics are explicit nulls
+    # plus the unavailable-list naming what was skipped.
+    assert data["M1_coverage_residual"] is None
+    assert data["M6_grounding"] is None
+    assert "M1" in data["corpus_dependent_unavailable"]
+    assert "M6" in data["corpus_dependent_unavailable"]
 
 
 def test_eval_custom_report_path(tmp_path: Path) -> None:
@@ -36,7 +42,7 @@ def test_eval_custom_report_path(tmp_path: Path) -> None:
     custom = tmp_path / "metrics" / "out.json"
     result = runner.invoke(
         app,
-        ["eval", "--run", str(bundle.root), "--report", str(custom)],
+        ["eval", "--bundle", str(bundle.root), "--report", str(custom)],
     )
     assert result.exit_code == 0, result.output
     assert custom.is_file()
@@ -47,7 +53,7 @@ def test_eval_custom_report_path(tmp_path: Path) -> None:
 def test_eval_json_envelope(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
     result = runner.invoke(
-        app, ["eval", "--run", str(bundle.root), "--format", "json"]
+        app, ["eval", "--bundle", str(bundle.root), "--format", "json"]
     )
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)
@@ -62,8 +68,18 @@ def test_eval_on_empty_bundle_returns_zero_articles(tmp_path: Path) -> None:
     runner.invoke(
         app, ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)]
     )
-    result = runner.invoke(app, ["eval", "--run", str(bundle), "--format", "json"])
+    result = runner.invoke(app, ["eval", "--bundle", str(bundle), "--format", "json"])
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)
     assert data["n_articles"] == 0
     assert data["n_people"] == 0
+
+
+def test_eval_corpus_flag_rejects_missing_dir(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    missing = tmp_path / "no-such-corpus"
+    result = runner.invoke(
+        app,
+        ["eval", "--bundle", str(bundle.root), "--corpus", str(missing)],
+    )
+    assert result.exit_code != 0

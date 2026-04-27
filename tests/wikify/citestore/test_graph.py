@@ -617,7 +617,15 @@ class TestTracing:
         kg_with_search.disable_trace()
 
     def test_trace_save_load(self, kg_with_search: KnowledgeGraph, tmp_path: Path):
-        """Trace saves to JSONL and can be loaded."""
+        """Trace saves to JSONL and can be loaded.
+
+        The corpus KG owns its own trace persistence (``corpus/graph.py``);
+        the ``wikify.eval.trace_replay`` aggregator is decoupled from it
+        (it consumes ``run/events.jsonl``, not corpus KG trace files), so
+        this test reads the JSONL directly.
+        """
+        import json as _json
+
         kg_with_search.enable_trace(caller="test")
         kg_with_search.search("topic", top_k=3)
         kg_with_search.sources().collect()
@@ -625,13 +633,14 @@ class TestTracing:
         kg_with_search.save_trace(path)
         assert path.exists()
 
-        from wikify.eval.trace_replay import load_trace, replay_stats
-
-        entries = load_trace(path)
-        assert len(entries) == 2
-        stats = replay_stats(entries)
-        assert stats["total_calls"] == 2
-        assert stats["calls_by_caller"]["test"] == 2
+        lines = [
+            _json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(lines) == 2
+        callers = [d.get("caller") for d in lines]
+        assert callers.count("test") == 2
         kg_with_search.disable_trace()
 
 

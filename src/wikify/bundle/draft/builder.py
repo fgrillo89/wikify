@@ -7,7 +7,7 @@ explicitly. Python never picks a default model.
 
 What this builder DOES populate:
 - page_id / page_kind / title / aliases (from work.md frontmatter)
-- evidence + evidence_v2 (from evidence.jsonl + corpus chunk text)
+- evidence (from evidence.jsonl + corpus chunk text)
 - model_id / tier (caller-supplied)
 
 What is left empty (set by the writer skill before invocation):
@@ -24,7 +24,7 @@ from typing import Literal
 
 from ...api import Bundle, Corpus
 from ...corpus import queries as corpus_queries
-from ...schema import WriteEvidenceRef, WriteEvidenceRefV2, WriteRequest
+from ...schema import WriteEvidenceRef, WriteRequest
 from ...types import ModelTier
 from ..work.card import load_card
 from ..work.evidence import read_evidence
@@ -54,21 +54,13 @@ def build_draft(
     evidence_records = read_evidence(bundle, slug)
     active = [r for r in evidence_records if r.status == "active"]
 
-    legacy_evidence: list[WriteEvidenceRef] = []
-    evidence_v2: list[WriteEvidenceRefV2] = []
+    evidence: list[WriteEvidenceRef] = []
     for rec in active:
-        legacy_evidence.append(
-            WriteEvidenceRef(
-                chunk_id=rec.chunk_id,
-                doc_id=rec.doc_id,
-                quote=rec.quote,
-            )
-        )
         chunk = corpus_queries.get_chunk(corpus, rec.chunk_id)
         chunk_text = chunk.text if chunk is not None else ""
         section_type = chunk.section_type if chunk is not None else ""
-        evidence_v2.append(
-            WriteEvidenceRefV2(
+        evidence.append(
+            WriteEvidenceRef(
                 chunk_id=rec.chunk_id,
                 doc_id=rec.doc_id,
                 quote=rec.quote,
@@ -84,11 +76,10 @@ def build_draft(
         title=card.page_id,
         aliases=card.aliases,
         skeleton="",
-        evidence=legacy_evidence,
         prompt_template="",
         model_id=model_id,
         tier=tier_value,
-        evidence_v2=evidence_v2,
+        evidence=evidence,
     )
 
     payload = request.model_dump(mode="json")

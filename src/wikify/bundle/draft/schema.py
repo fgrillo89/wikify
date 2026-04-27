@@ -1,11 +1,10 @@
-"""Write-side Pydantic — re-exports from the legacy ``wikify.schema`` until Phase C."""
+"""Write-side Pydantic models. Re-exports from ``wikify.schema``."""
 
 from __future__ import annotations
 
 from ...schema import (
     QuoteNotInChunkError,
     WriteEvidenceRef,
-    WriteEvidenceRefV2,
     WriteRequest,
     WriteResponse,
     _check_figure_mentions,
@@ -17,7 +16,6 @@ from ...schema import (
 __all__ = [
     "QuoteNotInChunkError",
     "WriteEvidenceRef",
-    "WriteEvidenceRefV2",
     "WriteRequest",
     "WriteResponse",
     "_check_figure_mentions",

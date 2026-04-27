@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/write-constraints
+name: wikify/references/write-constraints
 description: Wikipedia Manual-of-Style and voice constraints enforced by the write subagent and the WriteResponse validator.
 ---
 
@@ -64,7 +64,7 @@ encyclopedic prose. See `feedback_writing_style` user memory for the rationale.
 - When the request carries `figures`, mention each figure by its label ("as shown in Figure 3") inside the relevant section.
 - On the line IMMEDIATELY after the sentence that references it, embed the figure as `![Figure N](<figure.path>)`.
 - Never group figures at the top. Skip figures that do not fit.
-- Prefer figures whose ID appears in `evidence_v2[i].evidence_figures` — these were flagged by the extractor as directly relevant to the cited concept.
+- Prefer figures whose ID appears in `evidence[i].evidence_figures` — these were flagged by the extractor as directly relevant to the cited concept.
 - The `figures` array is pre-ranked by relevance; walk from the top and stop once every figure that fits has been placed.
 - A figure's `near_chunk_ids` tells you which body chunks discuss it. Prefer the section whose evidence chunks are in this list.
 

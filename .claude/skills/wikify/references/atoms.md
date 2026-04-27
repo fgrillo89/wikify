@@ -1,13 +1,13 @@
 ---
-name: wikify/reference/atoms
-description: Compositional v2 atoms — pre/post-conditions for the deterministic verbs that workflow skills compose.
+name: wikify/references/atoms
+description: Compositional atoms — pre/post-conditions for the deterministic CLI verbs that skills compose into workflows.
 ---
 
-# Atoms (v2)
+# Atoms
 
-Atomic CLI verbs the skill loop composes. Each atom is deterministic
-Python. The skill drives ordering; the atom enforces its own pre /
-post conditions.
+Deterministic CLI verbs the skill loop composes. Each atom is plain
+Python — no model SDK calls. The skill drives ordering; the atom
+enforces its own pre/post conditions.
 
 ## ``corpus find --seed``
 
@@ -96,7 +96,7 @@ run lock).
 
 ## ``run init`` / ``run close``
 
-Bookend a run. ``run init`` creates the v2 layout and the first
+Bookend a run. ``run init`` creates the bundle layout and the first
 ``stage_changed`` event; ``run close`` writes the ``run_closed``
 event with the final status.
 

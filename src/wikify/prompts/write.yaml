@@ -6,7 +6,7 @@ input_schema:
   title: str
   aliases: list[str]
   brief: object
-  evidence_v2: list
+  evidence: list
   neighbor_summaries: list
 output_schema:
   page_id: str
@@ -49,7 +49,7 @@ prompt_template: |
   Each evidence item includes the full chunk text for context. Use the
   chunk text to understand the claim deeply, but cite the specific quote.
 
-  {evidence_v2}
+  {evidence}
 
   ## Citation context
 

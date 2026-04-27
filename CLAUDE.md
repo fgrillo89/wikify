@@ -91,7 +91,8 @@ Before shipping ANY non-trivial change:
 1. **Enumerate every caller and consumer.** Grep across `src/`, `tests/`, `.claude/skills/`. Do not guess — verify.
 2. **Amend every caller in the same commit.** A signature change that leaves callers broken is a bug.
 3. **Delete orphans in the same commit.** Remove imports, variables, and functions your change made unused.
-4. **Name the blast radius in the commit body.** "Touches X, Y, Z; no other callers."
+4. **Sweep path-dependent leftovers.** After renames or refactors, grep active code, tests, prompts, docs, and skills for old names, transitional `v1`/`v2`/`legacy` wording, and stale schema fields. Do not claim cleanup until the scan is clean or every remaining hit is explicitly justified.
+5. **Name the blast radius in the commit body.** "Touches X, Y, Z; no other callers."
 
 ## Python Tooling
 

@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/tiers
+name: wikify/references/tiers
 description: Model tier vocabulary (S/M/L) + haiku-equivalent cost mapping.
 ---
 

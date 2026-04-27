@@ -1,4 +1,4 @@
-"""Tests for `wikify draft ...` v2 CLI."""
+"""Tests for `wikify draft ...` CLI."""
 
 from __future__ import annotations
 
@@ -147,7 +147,7 @@ def test_draft_check_passes(tmp_path: Path) -> None:
         ],
     )
     bundle = Bundle.open(bundle_dir)
-    chunk_text = read_json(draft_path(bundle, slug))["evidence_v2"][0]["chunk_text"]
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
     quote = chunk_text[:30].strip()
     write_json(response_path(bundle, slug), _good_response(slug, quote))
 

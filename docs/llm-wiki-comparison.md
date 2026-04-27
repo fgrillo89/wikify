@@ -1,7 +1,17 @@
 # Comparison: `nashsu/llm_wiki` vs wikify
 
+> **Historical (pre-redesign).** This document was written before the
+> skill-centric redesign retired the `session`/`validate`/`extract`/
+> `bundle`/`migrate` CLI nouns and the `BaselineConfig` Python
+> controller. Commands referenced below in deferred-pattern proposals
+> are written against the pre-redesign surface; re-evaluate them
+> against the current seven nouns (`corpus`, `run`, `work`, `draft`,
+> `wiki`, `render`, `eval`) before scheduling. The analytical
+> comparison itself (the design-philosophy table, the pattern
+> verdicts) is still useful as a learnings record.
+
 A study of [llm_wiki](https://github.com/nashsu/llm_wiki) (3.2k-star Tauri
-desktop app) against the post-pivot wikify CLI, with concrete pattern
+desktop app) against the wikify CLI, with concrete pattern
 proposals scoped against the skill-pivot's published invariants.
 
 This doc records **learnings only** — implementation is deferred.

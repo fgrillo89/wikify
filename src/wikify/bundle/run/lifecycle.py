@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from ...api import Bundle
 from .events import Event, append_event
-from .state import Budget, RunStateV1, load_state, save_state, touch
+from .state import Budget, RunState, load_state, save_state, touch
 
 
 def _utcnow() -> str:
@@ -32,15 +32,15 @@ def init_run(
     target_haiku_eq: int = 0,
     actor: str = "cli",
     run_id: str | None = None,
-) -> RunStateV1:
-    """Create the v2 directory layout, write the initial ``run/state.json``,
+) -> RunState:
+    """Create the bundle directory layout, write the initial ``run/state.json``,
     and emit the first event.
 
-    Returns the created :class:`RunStateV1`. The caller is responsible
+    Returns the created :class:`RunState`. The caller is responsible
     for any subsequent state mutations under the lock.
     """
     bundle.ensure()
-    state = RunStateV1(
+    state = RunState(
         run_id=run_id or _new_run_id(),
         strategy=strategy,
         corpus_path=str(corpus_path),
@@ -65,7 +65,7 @@ def close_run(
     *,
     status: str = "completed",
     actor: str = "cli",
-) -> RunStateV1:
+) -> RunState:
     """Mark the run finished and emit a ``run_closed`` event.
 
     Idempotent on ``status``: closing an already-closed run rewrites

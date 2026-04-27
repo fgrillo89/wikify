@@ -89,7 +89,7 @@ def commit_page(
     owner: str | None = None,
     lock_ttl_seconds: int = 60,
 ) -> CommitResult:
-    """Promote ``slug``'s validated response to the v2 wiki layout.
+    """Promote ``slug``'s validated response to the wiki layout.
 
     Acquires the bundle ``run/lock`` for the duration of the mutation
     sequence (write page, update card, gc, emit event) so a parallel
@@ -203,7 +203,7 @@ def rebuild_projections(bundle: Bundle) -> None:
     rebuild_vectors(bundle)
 
 
-# --- Page rendering (v2) -----------------------------------------------
+# --- Page rendering ----------------------------------------------------
 
 
 def _render_page(page: WikiPage) -> str:

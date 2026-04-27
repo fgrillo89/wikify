@@ -1,9 +1,9 @@
 """Validator — schema + structural + quote-grounding checks for response.json.
 
-Ports the legacy ``cli/legacy/validate.py`` quote-grounding +
-structural-validation logic to the v2 surface. Reads ``draft.json``
-+ ``response.json`` from the concept folder; writes
-``validation.json``.
+Owns the validation logic: schema checks, structural
+checks (``_check_wikipedia_structure`` / ``_check_figure_mentions``),
+and verbatim quote-grounding. Reads ``draft.json`` + ``response.json``
+from the concept folder; writes ``validation.json``.
 
 The verdict has the shape::
 
@@ -98,10 +98,11 @@ def _quote_grounding_errors(
     draft: WriteRequest, response: WriteResponse
 ) -> list[dict]:
     """Verify every ``[^eN]:`` definition in the body is grounded in
-    ``evidence_v2[i].chunk_text``.
+    ``evidence[i].chunk_text``.
 
-    Mirrors ``cli/legacy/validate.py`` exactly so the v1 telemetry
-    parity gate (Phase B) compares like-for-like.
+    Each marker resolves 1:1 to a ``[^eN]:`` definition, the body quote
+    must be a verbatim substring of the evidence chunk's source text,
+    and ``used_markers`` must match the prose markers exactly.
     """
     body_quotes = _parse_ref_quotes(response.body_markdown)
     prose_markers = _parse_prose_markers(response.body_markdown)
@@ -150,12 +151,12 @@ def _quote_grounding_errors(
     checked = prose_markers | declared_markers
     for idx in sorted(checked):
         marker = f"e{idx + 1}"
-        if idx < 0 or idx >= len(draft.evidence_v2):
+        if idx < 0 or idx >= len(draft.evidence):
             errors.append(
                 {
                     "path": f"markers/{marker}",
                     "code": "unknown_marker",
-                    "message": f"marker {marker!r} has no matching evidence_v2 entry",
+                    "message": f"marker {marker!r} has no matching evidence entry",
                 }
             )
             continue
@@ -172,15 +173,15 @@ def _quote_grounding_errors(
                 }
             )
             continue
-        evidence = draft.evidence_v2[idx]
+        evidence = draft.evidence[idx]
         chunk_text = evidence.chunk_text or ""
         if not chunk_text:
             errors.append(
                 {
-                    "path": f"evidence_v2/{idx}/chunk_text",
+                    "path": f"evidence/{idx}/chunk_text",
                     "code": "chunk_text_missing",
                     "message": (
-                        f"evidence_v2[{idx}] has no chunk_text; cannot verify source grounding"
+                        f"evidence[{idx}] has no chunk_text; cannot verify source grounding"
                     ),
                 }
             )
@@ -192,7 +193,7 @@ def _quote_grounding_errors(
                     "code": "quote_not_in_source",
                     "message": (
                         f"body quote for {marker!r} is not a substring of "
-                        f"evidence_v2[{idx}].chunk_text — fabricated or corrupted citation"
+                        f"evidence[{idx}].chunk_text — fabricated or corrupted citation"
                     ),
                 }
             )

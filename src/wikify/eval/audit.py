@@ -7,7 +7,7 @@ claims, and overall bundle/grounding stats. The audit is purely
 descriptive — no thresholds, no pass/fail.
 
 The audit reads ``WikiPage`` confidence info from the per-page sidecar
-``.provenance.json`` files written by ``store/wiki_files.write_page``.
+``.provenance.json`` files emitted alongside each committed page.
 Pages without a sidecar are treated as fully confident (score 1.0,
 label "extracted").
 """

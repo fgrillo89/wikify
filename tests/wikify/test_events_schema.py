@@ -12,9 +12,9 @@ from wikify.api import Bundle
 from wikify.bundle.run.events import Event, append_event, iter_events, read_events
 
 
-def _v2(tmp_path: Path) -> Bundle:
+def _bundle(tmp_path: Path) -> Bundle:
     (tmp_path / "run").mkdir(parents=True)
-    return Bundle.open(tmp_path)
+    return Bundle(root=tmp_path)
 
 
 def test_event_required_fields() -> None:
@@ -57,7 +57,7 @@ def test_event_indexing_fields() -> None:
 
 
 def test_append_then_read(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     e1 = Event(run_id="r-1", type="cli_invoked", actor="cli")
     e2 = Event(run_id="r-1", type="call", actor="writer-1", data={"haiku_eq": 100.0})
     append_event(bundle, e1)
@@ -71,7 +71,7 @@ def test_append_then_read(tmp_path: Path) -> None:
 
 
 def test_iter_events_streams(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     for i in range(5):
         append_event(
             bundle, Event(run_id="r-1", type="stage_changed", actor=f"a-{i}")
@@ -81,7 +81,7 @@ def test_iter_events_streams(tmp_path: Path) -> None:
 
 
 def test_iter_events_skips_corrupt_lines(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     append_event(bundle, Event(run_id="r-1", type="cli_invoked", actor="a"))
     with bundle.events_path.open("a", encoding="utf-8") as fh:
         fh.write("this is not json\n")
@@ -92,13 +92,13 @@ def test_iter_events_skips_corrupt_lines(tmp_path: Path) -> None:
 
 
 def test_read_events_returns_empty_when_no_file(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     assert read_events(bundle) == []
 
 
 def test_appended_events_are_jsonl(tmp_path: Path) -> None:
     """Each event is exactly one line; the file ends in a newline."""
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     append_event(bundle, Event(run_id="r-1", type="cli_invoked", actor="a"))
     append_event(bundle, Event(run_id="r-1", type="stage_changed", actor="a"))
     text = bundle.events_path.read_text(encoding="utf-8")

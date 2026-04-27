@@ -17,16 +17,62 @@ takes the source dir as a positional and writes to ``--out``.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
 
 import typer
 
-from ..api import Corpus
+from ..api import Bundle, Corpus
+from ..bundle.run.events import Event, append_event
+from ..bundle.run.state import load_state
 from ..corpus import queries
 from ..ingest.pipeline import ingest_corpus, refresh_corpus
 from ._helpers import EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Corpus build + read-only queries.")
+
+
+def _resolve_cwd_bundle() -> Bundle | None:
+    """Return the bundle rooted at cwd, or None if cwd is not a bundle.
+
+    ``corpus find`` / ``corpus show`` reveal chunks to the agent; when
+    they run inside a bundle dir, each surfaced chunk is recorded as a
+    ``chunk_read`` event so M5 (eval hit-rate) has a producer.
+    """
+    try:
+        return Bundle.open(Path.cwd())
+    except FileNotFoundError:
+        return None
+
+
+def _emit_chunk_reads(
+    bundle: Bundle | None,
+    chunk_ids: Iterable[str],
+    *,
+    via: str,
+    doc_id: str | None = None,
+) -> None:
+    """Append one ``chunk_read`` event per id when a bundle context exists."""
+    if bundle is None:
+        return
+    try:
+        run_id = load_state(bundle).run_id
+    except Exception:
+        return
+    for cid in chunk_ids:
+        if not cid:
+            continue
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id,
+                type="chunk_read",
+                actor="cli",
+                chunk_id=cid,
+                doc_id=doc_id,
+                data={"via": via},
+            ),
+        )
 
 
 def _open_corpus(corpus_flag: Path | None) -> Corpus:
@@ -206,6 +252,11 @@ def cmd_find(
         return
     if text:
         hits = queries.search_text(corpus, query, top_k=top_k)
+        _emit_chunk_reads(
+            _resolve_cwd_bundle(),
+            (h.get("id", "") for h in hits),
+            via="corpus_find_text",
+        )
         if fmt == "json":
             typer.echo(json.dumps({"ok": True, "items": hits}))
             return
@@ -219,6 +270,11 @@ def cmd_find(
             message="`corpus find` requires a query, --seed, or --text mode",
         )
     hits = queries.search_chunks(corpus, query, top_k=top_k)
+    _emit_chunk_reads(
+        _resolve_cwd_bundle(),
+        (h.get("id", "") for h in hits),
+        via="corpus_find_semantic",
+    )
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "items": hits}))
         return
@@ -279,6 +335,12 @@ def cmd_show(
         chunk = queries.get_chunk(corpus, ident)
         if chunk is None:
             cli_error(EXIT_VALIDATION, error="chunk_not_found", id=ident)
+        _emit_chunk_reads(
+            _resolve_cwd_bundle(),
+            [chunk.id],
+            via="corpus_show_chunk",
+            doc_id=chunk.doc_id,
+        )
         if fmt == "json":
             typer.echo(
                 json.dumps(

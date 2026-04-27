@@ -1,0 +1,41 @@
+{
+  "total_events": 14,
+  "events_by_type": {
+    "cli_invoked": 1,
+    "stage_changed": 1,
+    "concept_created": 2,
+    "evidence_added": 1,
+    "draft_created": 2,
+    "call": 3,
+    "validation_completed": 1,
+    "page_committed": 2,
+    "run_closed": 1
+  },
+  "events_by_actor": {
+    "cli": 11,
+    "writer-subagent": 2,
+    "validator": 1
+  },
+  "calls": {
+    "n_calls": 3,
+    "total_cost_haiku_eq": 7.7,
+    "total_cost_usd": 0.029,
+    "input_tokens": 7500,
+    "output_tokens": 2000,
+    "calls_by_stage": {
+      "draft": 2,
+      "validate": 1
+    },
+    "calls_by_model": {
+      "claude-sonnet-4-6": 1,
+      "claude-haiku-4-5": 2
+    }
+  },
+  "concepts": {
+    "created": 2,
+    "committed_pages": 2,
+    "distinct_concept_ids": 2,
+    "distinct_page_ids": 2
+  },
+  "run_closed": true
+}

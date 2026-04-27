@@ -1,22 +1,33 @@
 ---
-name: wikify/reference/cli-tool-surface
-description: v2 CLI grammar — six nouns, deterministic verbs only.
+name: wikify/references/cli-tool-surface
+description: CLI grammar — seven nouns, deterministic verbs only.
 ---
 
-# CLI tool surface (v2)
+# CLI tool surface
 
-The Wikify CLI is six nouns. Each verb is deterministic Python — no
-model SDK calls. Strategy (loop shape, model tier, budget allocation,
-stopping criteria) lives in skill markdown, never in Python defaults.
+The Wikify CLI is seven nouns: ``corpus``, ``run``, ``work``, ``draft``,
+``wiki``, ``render``, ``eval``. Each verb is deterministic
+Python — no model SDK calls. Strategy (loop shape, model tier, budget
+allocation, stopping criteria) lives in skill markdown, never in Python
+defaults.
 
 ```
 wikify <noun> <verb> [args...]
 ```
 
+## CLI invocation telemetry
+
+When a CLI command runs inside a bundle context, ``cli/_io.py``
+appends a ``cli_invoked`` event to ``run/events.jsonl`` capturing argv,
+cwd, exit code, duration, and previews of stdout/stderr. Large IO
+spills to ``run/io/<event_id>.{stdin,stdout,stderr}.txt``. Events are
+the source of truth — cost rollup, telemetry parity, and trace replay
+all read ``events.jsonl``.
+
 ## Bundle resolution
 
 - ``--run <bundle>`` overrides; otherwise the current working
-  directory must be a v2 bundle root (``run/state.json`` present).
+  directory must be a bundle root (``run/state.json`` present).
 - Mutating verbs acquire ``run/lock`` for the duration. Lock contention
   exits 2.
 - Per-concept mutations under ``work/concepts/<slug>/`` acquire the
@@ -117,11 +128,27 @@ wikify wiki commit <concept>             [--run <b>] [--ensure-projections]
 ``response.json`` / ``validation.json`` are present and
 ``validation.ok`` is true. Acquired ``run/lock`` for the mutation.
 
-## ``wikify migrate``
+## ``wikify render``
 
 ```
-wikify migrate inspect <bundle> [--format text|json]
+wikify render --bundle <b> --format html [--out <dir>] [--corpus <c>]
 ```
 
-Read-only inspection of a v1 (legacy) bundle. Reports presence of
-legacy artifacts.
+Static HTML site generator over the bundle's committed wiki. Reads
+``wiki/articles/`` + ``wiki/people/`` and the ``derived/*``
+projections; writes to ``--out`` (default ``<bundle>/derived/site``).
+Note the flag is ``--bundle``, not ``--run``.
+
+## ``wikify eval``
+
+```
+wikify eval --bundle <b> [--corpus <c>] [--report <path>] [--format text|json]
+```
+
+Compute metrics over the committed wiki. Corpus-free metrics
+(graph-shape, figure references, page counts) always run; M1 coverage
+residual and M6 grounding require ``--corpus``. M5 trace replay reads
+``run/events.jsonl``. ``--report`` defaults to
+``<bundle>/derived/eval.json``. Note the flag is ``--bundle``, not
+``--run``.
+

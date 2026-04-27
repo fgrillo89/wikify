@@ -1,14 +1,14 @@
-"""Static HTML site renderer for a wikify bundle.
+"""Static HTML site renderer for a wiki bundle.
 
 Walks a
 bundle's ``articles/`` and ``people/`` directories, parses each page
 through the canonical ``store.wiki_bundle.parse_page`` parser, runs the
 markdown body through ``python-markdown`` (with the ``footnotes``,
 ``tables``, ``attr_list``, ``def_list``, and ``pymdownx.superfences``
-extensions), resolves ``[[wikilinks]]`` against the bundle's
-``WikiIndex``, copies inline ``![Figure N](path)`` images into the
-output's ``assets/`` tree, and emits one HTML file per page plus an
-index landing page.
+extensions), resolves ``[[wikilinks]]`` against an in-memory
+title/alias map computed from the loaded pages, copies inline
+``![Figure N](path)`` images into the output's ``assets/`` tree, and
+emits one HTML file per page plus an index landing page.
 
 Special pages (random/recent/categories/domain/metrics) are intentionally
 omitted. Categories are derived from ``page_kind`` only.
@@ -25,13 +25,17 @@ from typing import Any, Self
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from wikify.api import LegacyBundle
-from wikify.bundle.wiki.index import WikiIndex, _normalize
-from wikify.bundle.wiki.page import Bundle, Page, load_bundle
+from wikify.bundle.wiki.page import Bundle, Page
 from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
 
 WIKI_NAME = "Wikify Simple"
+
+_NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize(s: str) -> str:
+    return _NORM_RE.sub("-", s.lower()).strip("-")
 
 _MD_EXTENSIONS = [
     "tables",
@@ -65,22 +69,17 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 def build_site(
-    bundle: LegacyBundle | Bundle,
+    bundle: Bundle,
     out_dir: Path,
     *,
     corpus_root: Path | None = None,
 ) -> Path:
-    """Render a wikify bundle to a static HTML site under ``out_dir``.
+    """Render a wiki bundle to a static HTML site under ``out_dir``.
 
-    Accepts either a ``LegacyBundle`` (which we then load) or a
-    pre-loaded ``Bundle``. Returns ``out_dir``.
+    Takes a pre-loaded ``Bundle`` (the wiki-bundle view of
+    ``<bundle>/wiki/``). Returns ``out_dir``.
     """
-    if isinstance(bundle, LegacyBundle):
-        loaded = load_bundle(bundle.root)
-        wiki_index = WikiIndex.load(bundle)
-    else:
-        loaded = bundle
-        wiki_index = WikiIndex.load(LegacyBundle(root=loaded.root))
+    loaded = bundle
 
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -172,13 +171,6 @@ def build_site(
         json.dumps(search_index, ensure_ascii=False),
         encoding="utf-8",
     )
-
-    # Wiki index projection from the bundle, for completeness.
-    if wiki_index is not None and len(wiki_index) > 0:
-        # No-op: WikiIndex is consulted via alias_to_id above. We keep
-        # the load() call so a stale on-disk index is rebuilt as a side
-        # effect.
-        pass
 
     return out_dir
 

@@ -1,7 +1,6 @@
 # Filesystem state design
 
-This note records the proposed simplified file contract for skill-driven
-wikification. It is a design target, not the current implementation.
+This note records the file contract for skill-driven wikification.
 
 ## Goals
 
@@ -584,9 +583,9 @@ python validates and mutates named bundle files
 models only communicate through files
 ```
 
-Do not add Python entry points named after strategies such as
-`run_baseline`, `run_guided`, or `query_improve`. Add atoms that any skill can
-compose.
+Do not add Python entry points named after strategies. Strategy lives in
+skills; Python exposes atoms (CLI verbs and the corresponding fluent API)
+that any skill can compose.
 
 ### Bundle component owners
 
@@ -714,37 +713,35 @@ to disambiguate or constrain scope.
 Run commands:
 
 ```text
-wikify run init --bundle <bundle> --corpus <corpus> --strategy <name>
-wikify run show [--detail|--full]
-wikify run list events [--tail 50]
-wikify run set --corpus <corpus>
-wikify run close [--status completed|failed|abandoned]
-wikify run lock --owner <id>
+wikify run init   --bundle <bundle> --corpus <corpus> [--strategy <name>] [--target-haiku-eq N]
+wikify run show   [--detail|--full] [--format text|json]
+wikify run list   events [--tail 50] [--type <type>]
+wikify run set    [--target-haiku-eq N] [--strategy-note <text>]
+wikify run lock   [--owner <id>] [--ttl-seconds N]
 wikify run unlock
+wikify run close  [--status completed|failed|abandoned]
 ```
 
-Corpus build/read commands:
+The corpus path is fixed at `run init` and recorded in `run/state.json`;
+`run set` cannot change it. Open a fresh bundle if the corpus changes.
+
+Corpus build/read commands (every flag below is on the actual CLI; consult
+`--help` per subcommand for the authoritative set):
 
 ```text
 wikify corpus build <source> --out <corpus> [--mode additive|sync] [--parser default|lite|marker|docling]
 wikify corpus refresh <corpus>
-wikify corpus check [<corpus>]
-wikify corpus list docs [--corpus <corpus>]
-wikify corpus list chunks --doc <doc>
-wikify corpus find "Atomic Layer Deposition" [--top-k 8]
-wikify corpus find "temperature window" --in doc:<doc>
-wikify corpus find "topic C" --in cited-by:<doc>
-wikify corpus find --seed --max 20
-wikify corpus find --near chunk:<chunk> --top-k 10
-wikify corpus find --cites <doc>
-wikify corpus find --cited-by <doc>
-wikify corpus show doc:<doc> [--detail]
-wikify corpus show chunk:<chunk> [--full]
+wikify corpus check   [<corpus>]
+wikify corpus list    docs   [--corpus <corpus>]
+wikify corpus list    chunks --corpus <corpus> --doc <doc>
+wikify corpus find    "Atomic Layer Deposition" --corpus <corpus> [--top-k 8]
+wikify corpus find    "atomic layer deposition" --corpus <corpus> --text
+wikify corpus find    --seed --corpus <corpus> [--max 20] [--pagerank-weight 0.7]
+wikify corpus show    doc:<doc> --corpus <corpus> [--detail]
+wikify corpus show    chunk:<chunk> --corpus <corpus> [--full]
 ```
 
-`corpus build` is the skill-facing ingest pipeline. A legacy flat
-`wikify ingest ...` command may remain as a compatibility alias, but the agent
-skill should learn the noun/verb form.
+`corpus build` is the skill-facing ingest pipeline.
 
 Work commands:
 
@@ -787,11 +784,12 @@ wikify wiki commit <concept>
 ```
 
 Rendering and eval remain downstream deterministic tools. They consume a wiki
-bundle and should never mutate corpus/work state:
+bundle and should never mutate corpus/work state. They use `--bundle <b>`
+since they never resolve through `run/state.json`:
 
 ```text
-wikify render <bundle>
-wikify eval <bundle>
+wikify render --bundle <bundle> --format html [--out <dir>]
+wikify eval --bundle <bundle> [--corpus <corpus>] [--report <path>]
 ```
 
 ### Design rules for atoms
@@ -944,44 +942,51 @@ Resolution order:
 ```
 
 Use `--run` for cross-bundle operations and replay/debugging. Use `--corpus`
-only for standalone corpus inspection outside a wikification run. To change the
-corpus for an active run, use `wikify run set --corpus <corpus>` so the change
-is explicit and logged.
+only for standalone corpus inspection outside a wikification run. The corpus
+path is set once at `run init` and recorded in `run/state.json`; it is not
+mutable through `run set`. If the corpus must change, open a fresh bundle.
 
-Examples:
+Examples (every line below mirrors the actual CLI; consult `--help` for the
+authoritative flag set on each subcommand):
 
 ```text
-wikify run init --bundle <bundle> --corpus <corpus>
+wikify run init --bundle <bundle> --corpus <corpus> [--strategy baseline]
 wikify run show
+wikify run set  --target-haiku-eq 50000
 wikify run close --status completed
 
-wikify corpus build papers/ald --out data/corpora/ald
-wikify corpus check data/corpora/ald
-wikify corpus list docs
-wikify corpus find --seed --max 20
-wikify corpus find "Atomic Layer Deposition" --top-k 8 --out evidence.jsonl
-wikify corpus find "topic C" --in cited-by:doc1
-wikify corpus show chunk:doc1:003 --full
+wikify corpus build papers/ald --out data/corpora/ald [--mode additive|sync]
+wikify corpus refresh data/corpora/ald
+wikify corpus check   data/corpora/ald
+wikify corpus list    docs --corpus data/corpora/ald
+wikify corpus find    --seed --corpus data/corpora/ald --max 20 --pagerank-weight 0.7
+wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --top-k 8
+wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --text
+wikify corpus show    chunk:doc1__c003 --corpus data/corpora/ald --full
 
 wikify work list --status ready
-wikify work show atomic-layer-deposition
-wikify work add concept "Atomic Layer Deposition" --kind article
-wikify work add evidence atomic-layer-deposition --records evidence.jsonl
+wikify work show "Atomic Layer Deposition"
+wikify work add concept  "Atomic Layer Deposition" --kind article --aliases '["ALD"]'
+wikify work add evidence "Atomic Layer Deposition" --records evidence.jsonl
 wikify work add feedback query --record feedback.json
-wikify work set atomic-layer-deposition --status needs_refine
+wikify work set "Atomic Layer Deposition" --status needs_refine
+wikify work claim   "Atomic Layer Deposition" --ttl-seconds 1800
+wikify work release "Atomic Layer Deposition"
 wikify work tend
 
-wikify draft build atomic-layer-deposition --task refine
-wikify draft check atomic-layer-deposition
+wikify draft build "Atomic Layer Deposition" --task create --corpus data/corpora/ald --model-id claude-sonnet-4-6 --tier M
+wikify draft show  "Atomic Layer Deposition" --full
+wikify draft check "Atomic Layer Deposition"
 
-wikify wiki commit atomic-layer-deposition
-wikify wiki show "Atomic Layer Deposition"
-wikify wiki find "ALD vs CVD"
-wikify wiki build indexes
+wikify wiki commit "Atomic Layer Deposition"
+wikify wiki show   "Atomic Layer Deposition" --full
+wikify wiki find   "ALD vs CVD" --text
+wikify wiki build  indexes
+wikify wiki check
+
+wikify render --bundle <bundle> --format html [--out <dir>] [--corpus <corpus>]
+wikify eval   --bundle <bundle> [--corpus <corpus>] [--report <path>]
 ```
-
-The corresponding Python API can use the same nouns and verbs in fluent form.
-This keeps skills, tests, and CLI documentation aligned.
 
 ```python
 from wikify.api import Bundle
@@ -1007,11 +1012,10 @@ not leak into the agent-facing command grammar. For example:
 bundle.corpus.graph.chunk("doc1:003").neighbors(depth=2).rank("pagerank").top(20)
 ```
 
-should be exposed to the agent as a simple query atom:
-
-```text
-wikify corpus find --near chunk:doc1:003 --depth 2 --top-k 20
-```
+should be exposed to the agent as a simple query atom. The flag set
+that ships today is `--top-k`, `--seed --max --pagerank-weight`, and
+`--text`; richer graph traversals go through the fluent corpus KG
+(``wikify.corpus.graph.KnowledgeGraph``) until the CLI surface grows.
 
 ### Corpus query shapes
 
@@ -1067,30 +1071,20 @@ wikify corpus list equations --doc paper_A
 wikify corpus list files
 ```
 
-`corpus find` is the recursive retrieval adapter over the fluent graph API. The
-default form is semantic evidence retrieval:
+`corpus find` exposes three retrieval modes today: semantic evidence
+search (default), greedy submodular seed selection (`--seed`), and a
+literal substring grep (`--text`).
 
 ```text
-wikify corpus find "Atomic Layer Deposition" --top-k 8
-wikify corpus find "memristor switching" --top-k 10
-wikify corpus find "temperature window" --in doc:paper_A
-wikify corpus find "topic C" --in cited-by:paper_A
-wikify corpus find "atomic layer deposition" --text
+wikify corpus find "Atomic Layer Deposition" --corpus <corpus> --top-k 8
+wikify corpus find "atomic layer deposition" --corpus <corpus> --text
+wikify corpus find --seed --corpus <corpus> --max 20 --pagerank-weight 0.7
 ```
 
-Graph retrievals are flags on `find`, not new verbs:
-
-```text
-wikify corpus find --seed --max 20
-wikify corpus find --near chunk:paper_A__c0003__a1b2 --top-k 10
-wikify corpus find --neighbors doc:paper_A --depth 2 --type source
-wikify corpus find --cites paper_A
-wikify corpus find --cited-by paper_A
-wikify corpus find --refs paper_A --ords 1,2,3
-wikify corpus find --authored-by "smith j" --sort year --top-k 20
-wikify corpus find --figures --in doc:paper_A --match "IV curve"
-wikify corpus find --equations --in doc:paper_A --match "Eq. 1"
-```
+Graph-shaped retrievals (cited-by, near-chunk, neighbours, figures,
+equations, authored-by) are not exposed as CLI flags today. Reach for
+the fluent corpus KG (`wikify.corpus.graph.KnowledgeGraph`) when you
+need them.
 
 This maps cleanly to fluent calls:
 
@@ -1105,13 +1099,16 @@ choose a handle, then issue the next command. This mimics `ls` / `grep` / `cat`
 and gives the LLM more control than a large graph DSL.
 
 ```text
-1. corpus find "concept A"
-2. choose a source from the ranked results
-3. corpus find --cited-by <source>
-4. choose citing sources that look relevant
-5. corpus find "topic C" --in docs:<selected>
-6. corpus show chunk:<best-chunk> --full
+1. corpus find "concept A" --corpus <c>
+2. choose a chunk handle from the ranked results
+3. corpus show chunk:<id> --corpus <c> --full
+4. note its doc_id, look at neighbours via the fluent KG when needed
+5. corpus find "concept B" --corpus <c> --top-k 8
+6. corpus show chunk:<best-chunk> --corpus <c> --full
 ```
+
+Cross-document graph traversals (cited-by, neighbours, refs) are not
+yet on the CLI; reach for the fluent corpus KG.
 
 If a traversal is known upfront and too awkward for flags, use a `--scope-file`.
 This is an escape hatch, not the primary agent pattern. The scope file is a

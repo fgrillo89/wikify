@@ -65,7 +65,7 @@ def _setup_validated(tmp_path: Path) -> tuple[Bundle, str]:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="data/corpora/foo")
     s, _ = create_concept(bundle, page_id="Atomic Layer Deposition", aliases=["ALD"])
     corpus = _make_corpus(tmp_path / "corpus")
@@ -73,7 +73,7 @@ def _setup_validated(tmp_path: Path) -> tuple[Bundle, str]:
         bundle, s, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
     )
     build_draft(bundle, slug=s, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
-    chunk_text = read_json(draft_path(bundle, s))["evidence_v2"][0]["chunk_text"]
+    chunk_text = read_json(draft_path(bundle, s))["evidence"][0]["chunk_text"]
     quote = chunk_text[:30].strip()
     write_json(response_path(bundle, s), _good_response_payload(quote))
     validate_response(bundle, s)
@@ -122,7 +122,7 @@ def test_commit_rejects_when_validation_missing(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "run").mkdir()
-    bundle = Bundle.open(bundle_dir)
+    bundle = Bundle(root=bundle_dir)
     init_run(bundle, corpus_path="x")
     s, _ = create_concept(bundle, page_id="ALD")
     with pytest.raises(CommitGateError, match="draft.json"):

@@ -1,8 +1,7 @@
-"""Extract-side Pydantic models — re-exports from the legacy ``wikify.schema``.
+"""Extract-side Pydantic models. Re-exports from ``wikify.schema``.
 
-Phase C will absorb these in-place when ``src/wikify/schema.py`` is
-deleted; until then this module is the structural home (so new code
-imports ``from wikify.bundle.work.schema import ExtractedConcept``).
+This module is the structural home for the extract-side types; new
+code imports ``from wikify.bundle.work.schema import ExtractedConcept``.
 """
 
 from __future__ import annotations

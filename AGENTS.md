@@ -1,4 +1,4 @@
-# Wikify — Agent Contract (v2)
+# Wikify — Agent Contract
 
 Canonical project reference for any agentic runtime. Behaviour rules
 (planning, simplicity, blast radius, corrections, etc.) live in
@@ -8,16 +8,17 @@ Canonical project reference for any agentic runtime. Behaviour rules
 
 ## Read First
 
-1. `docs/skill-centric-execution-plan.md` — redesign brief (binding)
-2. `docs/filesystem-state-design.md` — filesystem and CLI surface
-3. `docs/architecture.md` — current system design
-4. `docs/metrics.md` — M1–M6, GT-P, GT-C
-5. `tasks/skill-centric-redesign-plan.md` — implementation plan
+1. `docs/architecture.md` — architecture (canonical reference)
+2. `docs/filesystem-state-design.md` — filesystem and CLI grammar
+3. `docs/metrics.md` — M1–M6, GT-P, GT-C
+4. `.claude/skills/wikify/references/` — agent-facing reference (schemas,
+   CLI grammar, citation format, write constraints, tiers, escalation,
+   knowledge graph, wiki graph)
 
-The legacy v1 surface (`session`/`kg`/`extract`/`draft write-request`/
-`validate write`/`bundle commit-page`/`meter`) has been retired. Existing
-v1 bundles on disk under `data/wikis/*` remain readable and are reported
-by `wikify migrate inspect`; new runs use the v2 layout exclusively.
+Historical workstream records live under
+`tasks/skill-centric-redesign-plan.md` and
+`docs/skill-centric-execution-plan.md` for design rationale only;
+the current pipeline does not refer to them.
 
 ---
 
@@ -58,17 +59,17 @@ Top-level packages (post-Phase-C layout):
 - `corpus/` — input corpora: chunks, vectors, doc markdown, images, equations, bibliography, fluent KG (`graph.py`/`graph_build.py`), seed selection, field detection. Read-only during a wiki run.
 - `citations/` — citation parsing, BibTeX, DOI/Crossref/OpenAlex resolution. Standalone; consumed by `ingest/` only.
 - `bundle/` — everything that lives inside one wiki bundle:
-  - `bundle/run/` — execution control: `state.py` (RunStateV1), `events.py` (Event envelope + append/iter), `lock.py` (atomic file lock with TTL), `cost.py` (TierPrice + aggregation from events), `lifecycle.py` (init/close).
+  - `bundle/run/` — execution control: `state.py` (RunState), `events.py` (Event envelope + append/iter), `lock.py` (atomic file lock with TTL), `cost.py` (TierPrice + aggregation from events), `lifecycle.py` (init/close).
   - `bundle/work/` — in-flight build state: `card.py` (work.md ControlCard), `evidence.py` (evidence.jsonl ledger), `inbox.py` (cross-talk channels), `claim.py` (per-concept claim files), `tend.py` (consolidate inbox + dedup + index regen), `dossier.py`, `canonicalize.py`.
   - `bundle/draft/` — per-attempt artifacts: `artifact.py` (draft/response/validation IO), `builder.py` (DraftBuilder), `validator.py` (Validator).
-  - `bundle/wiki/` — committed pages + projections: `page.py`, `index.py`, `files.py`, `embeddings.py`, `page_naming.py`, `graph.py` (fluent wiki KG), `commit.py` (the gate), `derived.py` (rebuild_index/graph/vectors), `queries.py` (list/find/show).
+  - `bundle/wiki/` — committed pages + projections: `page.py`, `embeddings.py`, `page_naming.py`, `graph.py` (fluent wiki KG), `commit.py` (the gate), `derived.py` (rebuild_index/graph/vectors), `queries.py` (list/find/show).
 - `ingest/` — corpus pipeline (parse, chunk, embed, graph).
 - `eval/` — metric computations (M1/M3/M5/M6, GT-P, GT-C).
 - `render/` — static site generation.
 - `prompts/` — Python-side prompt templates assembled by DraftBuilder.
-- `cli/` — argv glue: `__init__.py` (Typer app), `__main__.py`, `_io.py` (`cli_invoked` event capture), `_helpers.py` (exit codes, error envelope), and one file per noun (`corpus`, `run`, `work`, `draft`, `wiki`, `migrate`).
-- `api.py` — `Bundle` and `Corpus` context dataclasses.
-- `schema.py` — Pydantic write contracts (`WriteRequest`, `WriteResponse`, structural checks); split between `bundle/draft/schema.py` and `bundle/work/schema.py` re-exports until Phase D.
+- `cli/` — argv glue: `__init__.py` (Typer app), `__main__.py`, `_io.py` (`cli_invoked` event capture), `_helpers.py` (exit codes, error envelope), and one file per noun (`corpus`, `run`, `work`, `draft`, `wiki`, `render`, `eval`).
+- `api.py` — `Bundle` and `Corpus` context dataclasses. A bundle is any directory with a `run/` (and ultimately `run/state.json`); `Bundle.open` enforces that.
+- `bundle/draft/schema.py` and `bundle/work/schema.py` — Pydantic write/extract contracts (`WriteRequest`, `WriteResponse`, structural checks).
 
 Dependency rules:
 
@@ -76,7 +77,7 @@ Dependency rules:
 - `bundle/*` packages do not import each other directly except through `Bundle`.
 - `eval/` and `render/` consume bundle state, never modify it.
 - `cli/<noun>.py` is a thin adapter — translates argv to one or two domain calls.
-- Strategy lives in skills, not Python: no `BaselineConfig` or equivalent class owns budget splits, evidence top-k, model tier, or loop shape. Python exposes deterministic primitives only (`corpus find`, `corpus.queries.select_evidence_chunks`, etc.).
+- Strategy lives in skills, not Python: no Python class owns budget splits, evidence top-k, model tier, or loop shape. Python exposes deterministic primitives only (`corpus find`, `corpus.queries.select_evidence_chunks`, etc.). Workflow shape and stopping criteria live in `.claude/skills/wikify*/SKILL.md`.
 
 ---
 
@@ -85,12 +86,12 @@ Dependency rules:
 ```
 data/
   corpora/    ingested corpora
-  wikis/      wiki bundles (v2 layout: run/, work/, wiki/, derived/)
+  wikis/      wiki bundles (layout: run/, work/, wiki/, derived/)
   papers/     input source documents
   test_runs/  test run outputs
 ```
 
-v2 bundle layout (per-bundle):
+Bundle layout (per-bundle):
 
 ```
 <bundle>/
@@ -124,7 +125,7 @@ v2 bundle layout (per-bundle):
 
 ## CLI
 
-Six v2 nouns. Run under `uv run`. Full grammar in
+Seven nouns. Run under `uv run`. Full grammar in
 `docs/filesystem-state-design.md`.
 
 ```bash
@@ -133,15 +134,44 @@ wikify run     init / show / list events / lock / unlock / close / set
 wikify work    list / show / add concept / add evidence / add feedback / set / claim / release / tend
 wikify draft   build / show / check
 wikify wiki    list / find / show / build / check / commit
-wikify migrate inspect
+wikify render  --bundle <b> --format html [--out <dir>]
+wikify eval    --bundle <b> [--corpus <c>] [--report <p>]
 ```
 
-Bundle resolution: `--run <bundle>` overrides; otherwise CWD must be a
-v2 bundle root (`run/state.json` present). All mutations on a v2 bundle
-are gated by the run lock or per-concept claim.
+Bundle resolution. `corpus`, `run`, `work`, `draft`, and `wiki`
+accept `--run <bundle>`; otherwise the current working directory must
+be a bundle root (with `run/state.json` present). `render` and `eval`
+use `--bundle <bundle>` since they are downstream consumers and never
+resolve through `run/state.json`.
+
+All mutations on a bundle are gated by the run lock or per-concept
+claim.
 
 Exit codes: 0 success, 1 validation/precondition, 2 lock/claim held,
 3 budget exceeded, 4 stale claim broken by `work tend`.
+
+## Skill layout
+
+Skills live in `.claude/skills/`. Three kinds:
+
+- **Shared reference** under `.claude/skills/wikify/` — project-wide
+  background knowledge loaded by every other skill. Carries
+  `references/` for schemas, CLI grammar, citation format, write
+  constraints, tier mapping, escalation, knowledge graph, and wiki
+  graph.
+- **Single-action skills** under `.claude/skills/wikify-<noun>/` (e.g.
+  `wikify-corpus`, `wikify-run`, `wikify-work`, `wikify-draft`,
+  `wikify-wiki`, `wikify-render`, `wikify-eval`) — one CLI noun each;
+  composed into multi-step workflows via Bash and the Skill tool.
+- **Multi-step workflows** under `.claude/skills/wikify-<workflow>/`
+  (e.g. `wikify-baseline`, plus the `wikify-guided-explore`,
+  `wikify-query`, `wikify-refine`, `wikify-render-eval`,
+  `wikify-ingest`, `wikify-maintain` stubs) — encode loop shape,
+  stopping criteria, parallelism, and budget. They contain no
+  model-call logic of their own and must reuse the single-action
+  inventory.
+
+A new strategy is a new workflow skill, not new Python.
 
 ---
 
@@ -151,7 +181,7 @@ Exit codes: 0 success, 1 validation/precondition, 2 lock/claim held,
 |---|---|---|
 | `ModelTier` (S / M / L) | `types.py` | Tier vocabulary; use `tier.value` for strings |
 | `Role` | `types.py` | extractor / compactor / editor / writer / orchestrator |
-| `RunStateV1` | `bundle/run/state.py` | Durable on-disk run state |
+| `RunState` | `bundle/run/state.py` | Durable on-disk run state |
 | `Event` | `bundle/run/events.py` | Append-only events.jsonl envelope |
 | `LockHeldError` | `bundle/run/lock.py` | Run-level lock contention |
 | `ClaimHeldError` | `bundle/work/claim.py` | Per-concept claim contention |
@@ -197,3 +227,4 @@ fails validation; the page never reaches `wiki/`.
 5. **Per-field merge, not per-record.** When two sources disagree, the winner is decided per field.
 6. **Bidirectional edges are emitted both ways at build time.** Downstream code does not infer the reverse.
 7. **State for cross-run comparison is persisted explicitly.** Static approximations of stateful signals invalidate comparisons.
+8. **Refactors are complete or not done.** When a schema, CLI noun, path, or concept is renamed, update code, tests, prompts, docs, and skills in the same change; grep for old names and transitional `v1`/`v2`/`legacy` wording before declaring the work complete.

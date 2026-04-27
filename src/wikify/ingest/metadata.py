@@ -175,7 +175,7 @@ def choose_document_title(
          "untitled" placeholders are caught by ``is_junk_title``.
       3. ``extra_title`` — parser-specific candidate (e.g. Docling's
          ``doc.name``). Optional.
-      4. ``info_title`` — legacy ``/Info`` dict title. Often empty or a
+      4. ``info_title`` — the older ``/Info`` dict title. Often empty or a
          Word save-as artifact.
       5. ``first_heading(md_text)`` when ≥20 chars and not junk. Guards
          against section-label headings ("Conflict of Interest", "1
@@ -234,7 +234,7 @@ def assemble_pdf_metadata(
 
     - Filename (``[YYYY Author] Title.ext`` convention, user-curated)
     - XMP packet (``dc:title``, ``dc:creator``, ``prism:doi``, ...)
-    - ``/Info`` dict (legacy, often sparse)
+    - ``/Info`` dict (the older PDF metadata block, often sparse)
     - Markdown body (DOI, author lines, venue / volume / pages regex,
       summary)
     - Parser-specific signal via ``extra_title_candidate`` (e.g.

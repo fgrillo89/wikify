@@ -27,7 +27,7 @@ and ``Semaphore`` (hard concurrency cap) via the shared decorators in
 | ``False`` —   | 1 → 2 → 3 | ~85% + the DataCite/mEDRA/JaLC tail, plus      |
 | ``full``      |           | title-only CrossRef records completed via      |
 | resolution    |           | doi.org. Slow: one HTTP req per CrossRef miss  |
-| (legacy       |           | at ~8 req/s, so 5k misses ≈ 10 min.            |
+| (the prior    |           | at ~8 req/s, so 5k misses ≈ 10 min.            |
 | default).     |           |                                                |
 +---------------+-----------+------------------------------------------------+
 | ``True`` —    | 1 → 2     | ~85% of scholarly DOIs (CrossRef-registered).  |

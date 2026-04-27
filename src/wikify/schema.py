@@ -229,7 +229,7 @@ class ExtractedConcept(BaseModel):
     evidence_figures: list[str] = Field(default_factory=list)
     confidence: ConfidenceLabel = "extracted"
     score: float = 1.0
-    # Rich dossier fields (v2): optional for backwards compatibility
+    # Rich dossier fields: optional, kept default-empty so older payloads still parse
     definition: str = ""  # one-line definition of the concept
     summary: str = ""  # 2-3 sentence summary of what this chunk says about it
     parameters: list[Parameter] = Field(default_factory=list)
@@ -467,16 +467,7 @@ def _check_wikipedia_structure(body: str, page_kind: str = "") -> None:
 
 
 class WriteEvidenceRef(BaseModel):
-    model_config = _STRICT
-
-    chunk_id: str
-    doc_id: str
-    quote: str
-    locator: str = ""
-
-
-class WriteEvidenceRefV2(BaseModel):
-    """Extended evidence reference carrying full chunk context."""
+    """Evidence reference carrying full chunk context for the writer."""
 
     model_config = _STRICT
 
@@ -499,7 +490,6 @@ class WriteRequest(BaseModel):
     title: str
     aliases: list[str]
     skeleton: str
-    evidence: list[WriteEvidenceRef]
     prompt_template: str
     model_id: str
     tier: ModelTier
@@ -514,7 +504,7 @@ class WriteRequest(BaseModel):
     field_guide_hash: str | None = None
     artifact_template_hash: str | None = None
     corpus_persona_hash: str | None = None
-    evidence_v2: list[WriteEvidenceRefV2] = Field(default_factory=list)
+    evidence: list[WriteEvidenceRef] = Field(default_factory=list)
     neighbor_summaries: list[dict] = Field(default_factory=list)
     # Person-page grounding context. Present only when page_kind="person" and
     # the author appears in the corpus as a primary author. Context-only: never
@@ -529,7 +519,7 @@ class WriteRequest(BaseModel):
     # {corpus_doc_id: [{chunk_id, text}]}
     cited_corpus_chunks: dict = Field(default_factory=dict)
     # YAML-serialised dossier context for the writer. Compact alternative to
-    # repeating the same definition/summary across each evidence_v2 entry.
+    # repeating the same definition/summary across each evidence entry.
     # Empty string when no dossier exists for this page.
     dossier_context_yaml: str = ""
     # Related wiki pages (top-5 by token overlap + Jaccard over evidence doc

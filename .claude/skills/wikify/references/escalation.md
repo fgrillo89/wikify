@@ -1,5 +1,5 @@
 ---
-name: wikify/reference/escalation
+name: wikify/references/escalation
 description: When and how to escalate a subagent call from the default tier to tier L.
 ---
 

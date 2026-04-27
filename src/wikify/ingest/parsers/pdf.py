@@ -21,7 +21,7 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     is skipped and ``ParseResult.metadata`` is returned empty. Used by
     the ingest DAG to decouple content parsing (GPU / CPU-bound, pass 3)
     from metadata fusion (pass 4), which runs after DOI batch resolution
-    (pass 2). The default preserves single-pass legacy behaviour for
+    (pass 2). The default preserves the single-pass behaviour for
     direct ``parse_file`` callers and the ``reassemble_metadata`` script.
     """
     import fitz  # pymupdf

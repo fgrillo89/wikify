@@ -1,9 +1,9 @@
 ---
-name: wikify/reference/schemas
-description: Durable artifact catalog and schema_version policy for the v2 wikify file contract.
+name: wikify/references/schemas
+description: Durable artifact catalog and schema_version policy for the wikify file contract.
 ---
 
-# Schemas (v2)
+# Schemas
 
 Every durable file the agent or CLI produces has a documented schema
 and a monotonically increasing ``schema_version`` integer. Pydantic
@@ -23,7 +23,7 @@ file is the catalog.
 
 ### ``<bundle>/run/state.json``
 
-Source of truth: ``src/wikify/bundle/run/state.py::RunStateV1``.
+Source of truth: ``src/wikify/bundle/run/state.py::RunState``.
 Current ``schema_version``: 1.
 
 Required fields:
@@ -143,3 +143,16 @@ Serialised wiki knowledge graph (cite-edge graph). Owning command:
 
 Per-page embeddings used by ``wiki find`` semantic search. Owning
 command: ``wikify wiki build vectors``.
+
+### ``<bundle>/derived/eval.json``
+
+Default output of ``wikify eval --bundle <b>``. Carries
+``schema_version``, page counts, ``g_evidence`` / ``g_links``
+modularity + spectral gap, and figure-reference rates. Corpus-dependent
+metrics are filled when ``--corpus`` is supplied; otherwise they appear
+as ``unavailable``.
+
+### ``<bundle>/derived/site/``
+
+Default output of ``wikify render --bundle <b> --format html``. Static
+HTML tree generated from ``wiki/`` + ``derived/index.json``.

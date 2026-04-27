@@ -18,13 +18,13 @@ from wikify.bundle.run.lock import (
 )
 
 
-def _v2(tmp_path: Path) -> Bundle:
+def _bundle(tmp_path: Path) -> Bundle:
     (tmp_path / "run").mkdir(parents=True)
-    return Bundle.open(tmp_path)
+    return Bundle(root=tmp_path)
 
 
 def test_acquire_writes_lock(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="a", ttl_seconds=60)
     record = read_lock(bundle)
     assert record is not None
@@ -33,20 +33,20 @@ def test_acquire_writes_lock(tmp_path: Path) -> None:
 
 
 def test_release_removes_lock(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="a")
     release_lock(bundle)
     assert read_lock(bundle) is None
 
 
 def test_release_idempotent(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     release_lock(bundle)  # no-op when no lock
     release_lock(bundle)  # still no-op
 
 
 def test_contention_raises_lock_held(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="a", ttl_seconds=60)
     with pytest.raises(LockHeldError) as exc:
         acquire_lock(bundle, owner="b", ttl_seconds=60)
@@ -55,7 +55,7 @@ def test_contention_raises_lock_held(tmp_path: Path) -> None:
 
 
 def test_force_overrides_held_lock(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="a", ttl_seconds=60)
     displaced = acquire_lock(bundle, owner="b", ttl_seconds=60, force=True)
     assert displaced is not None
@@ -64,7 +64,7 @@ def test_force_overrides_held_lock(tmp_path: Path) -> None:
 
 
 def test_stale_lock_silently_reclaimed(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     # Write an expired lock by hand.
     expired = (datetime.now(UTC) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     bundle.lock_path.write_text(
@@ -84,14 +84,14 @@ def test_stale_lock_silently_reclaimed(tmp_path: Path) -> None:
 
 
 def test_run_lock_context(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     with run_lock(bundle, owner="a", ttl_seconds=60):
         assert read_lock(bundle)["owner"] == "a"
     assert read_lock(bundle) is None
 
 
 def test_run_lock_releases_on_exception(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     with pytest.raises(RuntimeError, match="boom"):
         with run_lock(bundle, owner="a", ttl_seconds=60):
             raise RuntimeError("boom")
@@ -104,7 +104,7 @@ def test_release_lock_with_owner_no_ops_when_not_owner(tmp_path: Path) -> None:
     Guards against the post-TTL race where our finally-block fires after
     another process has already reclaimed the stale lock.
     """
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="winner", ttl_seconds=60)
     release_lock(bundle, owner="loser")  # different owner: must be no-op
     record = read_lock(bundle)
@@ -113,7 +113,7 @@ def test_release_lock_with_owner_no_ops_when_not_owner(tmp_path: Path) -> None:
 
 
 def test_release_lock_with_owner_unlinks_when_owner_matches(tmp_path: Path) -> None:
-    bundle = _v2(tmp_path)
+    bundle = _bundle(tmp_path)
     acquire_lock(bundle, owner="a", ttl_seconds=60)
     release_lock(bundle, owner="a")
     assert read_lock(bundle) is None

@@ -1,7 +1,7 @@
 """``run/state.json`` — the small mutable run-control file.
 
-A slim subset of the legacy ``SessionV1``: identity, strategy, paths,
-budget, stage status, run status. Concept memory belongs in
+Identity, strategy, paths, budget, stage status, run status. Concept
+memory belongs in
 ``work/concepts/<slug>/work.md``, not in run state. Aggregated cost and
 event history are computed on demand from ``run/events.jsonl``; nothing
 about them lives here.
@@ -38,7 +38,7 @@ class Budget(BaseModel):
     spent_haiku_eq: int = 0
 
 
-class RunStateV1(BaseModel):
+class RunState(BaseModel):
     """The contents of ``<bundle>/run/state.json``."""
 
     schema_version: int = SCHEMA_VERSION
@@ -62,10 +62,10 @@ class SchemaVersionMismatchError(RuntimeError):
     """Raised when ``run/state.json`` is at a schema version we cannot read."""
 
 
-def load_state(bundle: Bundle) -> RunStateV1:
+def load_state(bundle: Bundle) -> RunState:
     """Read ``<bundle>/run/state.json`` and return the parsed model."""
     text = bundle.state_path.read_text(encoding="utf-8")
-    data = RunStateV1.model_validate_json(text)
+    data = RunState.model_validate_json(text)
     if data.schema_version != SCHEMA_VERSION:
         raise SchemaVersionMismatchError(
             f"state.json at {bundle.state_path} has schema_version "
@@ -74,7 +74,7 @@ def load_state(bundle: Bundle) -> RunStateV1:
     return data
 
 
-def save_state(bundle: Bundle, state: RunStateV1) -> None:
+def save_state(bundle: Bundle, state: RunState) -> None:
     """Atomically write ``state`` to ``<bundle>/run/state.json``.
 
     The write is via a sibling temp file + ``os.replace`` so a crashed
@@ -96,6 +96,6 @@ def save_state(bundle: Bundle, state: RunStateV1) -> None:
         raise
 
 
-def touch(state: RunStateV1) -> RunStateV1:
+def touch(state: RunState) -> RunState:
     """Return ``state`` with ``updated_at`` set to now."""
     return state.model_copy(update={"updated_at": _utcnow()})

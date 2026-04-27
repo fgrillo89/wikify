@@ -1,9 +1,9 @@
-"""Top-level Typer CLI for wikify (v2).
+"""Top-level Typer CLI for wikify.
 
-Eight noun-verb subapps; no top-level legacy commands. The skill-driven
-agent path is the canonical interface; deterministic Python helpers
-(ingest pipeline, render, eval metrics) are reachable through the
-appropriate noun (``corpus build``, ``render``, ``eval``).
+Seven noun-verb subapps. The skill-driven agent path is the canonical
+interface; deterministic Python helpers (ingest pipeline, render, eval
+metrics) are reachable through the appropriate noun (``corpus build``,
+``render``, ``eval``).
 """
 
 import typer
@@ -11,7 +11,6 @@ import typer
 from . import corpus as corpus_cli
 from . import draft as draft_cli
 from . import eval as eval_cli
-from . import migrate as migrate_cli
 from . import render as render_cli
 from . import run as run_cli
 from . import wiki as wiki_cli
@@ -19,7 +18,6 @@ from . import work as work_cli
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
 app.add_typer(corpus_cli.app, name="corpus")
-app.add_typer(migrate_cli.app, name="migrate")
 app.add_typer(run_cli.app, name="run")
 app.add_typer(work_cli.app, name="work")
 app.add_typer(draft_cli.app, name="draft")

@@ -1,4 +1,4 @@
-"""Tests for `wikify render` — static-site renderer over a v2 bundle."""
+"""Tests for `wikify render` — static-site renderer over a bundle."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def test_render_writes_html_site(tmp_path: Path) -> None:
         app,
         [
             "render",
-            "--run",
+            "--bundle",
             str(bundle.root),
             "--format",
             "html",
@@ -46,7 +46,7 @@ def test_render_writes_html_site(tmp_path: Path) -> None:
 
 def test_render_default_out_under_derived(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
-    result = runner.invoke(app, ["render", "--run", str(bundle.root)])
+    result = runner.invoke(app, ["render", "--bundle", str(bundle.root)])
     assert result.exit_code == 0, result.output
     assert (bundle.derived_dir / "site" / "index.html").is_file()
 
@@ -54,7 +54,7 @@ def test_render_default_out_under_derived(tmp_path: Path) -> None:
 def test_render_rejects_unsupported_format(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
     result = runner.invoke(
-        app, ["render", "--run", str(bundle.root), "--format", "pdf"]
+        app, ["render", "--bundle", str(bundle.root), "--format", "pdf"]
     )
     assert result.exit_code != 0
 
@@ -66,7 +66,7 @@ def test_render_json_envelope(tmp_path: Path) -> None:
         app,
         [
             "render",
-            "--run",
+            "--bundle",
             str(bundle.root),
             "--out",
             str(out),
