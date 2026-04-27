@@ -13,14 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_ROOT = REPO_ROOT / ".claude" / "skills"
 WIKIFY_REFERENCES = SKILLS_ROOT / "wikify" / "references"
 
-ATOMIC_SKILLS = (
-    "wikify-corpus",
-    "wikify-run",
-    "wikify-work",
-    "wikify-draft",
-    "wikify-wiki",
-    "wikify-render",
-    "wikify-eval",
+CORE_SKILLS = (
+    "wikify-search-corpus",
+    "wikify-search-wiki",
+    "wikify-write-page",
+    "wikify-bundle",
 )
 
 # Forbidden substrings in any SKILL.md body. Each entry is a literal that
@@ -81,8 +78,18 @@ def test_old_workflows_dir_is_gone() -> None:
 
 def test_references_dir_present() -> None:
     assert WIKIFY_REFERENCES.is_dir(), "wikify/references/ must exist"
-    # Spot-check a few canonical reference files survived the move.
-    for name in ("atoms.md", "schemas.md", "cli-tool-surface.md"):
+    # Spot-check canonical reference groups.
+    for name in (
+        "bundle/layout.md",
+        "bundle/state.md",
+        "cli/grammar.md",
+        "cli/output-contract.md",
+        "writing/schemas.md",
+        "writing/citation-format.md",
+        "writing/field-guides/generic.md",
+        "exploration/concept-extraction.md",
+        "exploration/sampling-patterns.md",
+    ):
         assert (WIKIFY_REFERENCES / name).is_file(), f"missing reference {name}"
 
 
@@ -112,24 +119,44 @@ def test_no_retired_command_strings_in_any_skill() -> None:
         for pat in RETIRED_PATTERNS:
             if re.search(pat, text):
                 offenders.append(f"{skill_dir.name}/SKILL.md matched {pat!r}")
-    # Also scan references/*.md.
-    for ref in WIKIFY_REFERENCES.glob("*.md"):
+    # Also scan references recursively.
+    for ref in WIKIFY_REFERENCES.rglob("*.md"):
         text = ref.read_text(encoding="utf-8")
         for pat in RETIRED_PATTERNS:
             if re.search(pat, text):
-                offenders.append(f"references/{ref.name} matched {pat!r}")
+                rel = ref.relative_to(WIKIFY_REFERENCES)
+                offenders.append(f"references/{rel} matched {pat!r}")
     assert not offenders, "retired surface leaked: " + "; ".join(offenders)
 
 
-def test_atomic_skills_stay_small() -> None:
-    """Atomic skills should be under ~120 lines; 200 is the slack ceiling."""
-    for name in ATOMIC_SKILLS:
+def test_core_skills_stay_small() -> None:
+    """Core capability skills should remain concise and strategy-free."""
+    for name in CORE_SKILLS:
         skill_md = SKILLS_ROOT / name / "SKILL.md"
-        assert skill_md.is_file(), f"atomic skill {name} missing"
+        assert skill_md.is_file(), f"core skill {name} missing"
         n_lines = len(skill_md.read_text(encoding="utf-8").splitlines())
         assert n_lines <= 200, (
-            f"atomic skill {name}/SKILL.md is {n_lines} lines (> 200 ceiling)"
+            f"core skill {name}/SKILL.md is {n_lines} lines (> 200 ceiling)"
         )
+
+
+def test_old_cli_noun_skills_are_not_discoverable() -> None:
+    """CLI nouns are references now, not independently discoverable skills."""
+    retired = (
+        "wikify-corpus",
+        "wikify-run",
+        "wikify-work",
+        "wikify-draft",
+        "wikify-wiki",
+        "wikify-render",
+        "wikify-eval",
+    )
+    offenders = [
+        name for name in retired if (SKILLS_ROOT / name / "SKILL.md").exists()
+    ]
+    assert not offenders, "retired CLI noun skills still discoverable: " + ", ".join(
+        offenders
+    )
 
 
 def test_baseline_workflow_stays_reasonable() -> None:

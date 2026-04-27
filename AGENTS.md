@@ -152,24 +152,29 @@ Exit codes: 0 success, 1 validation/precondition, 2 lock/claim held,
 
 ## Skill layout
 
-Skills live in `.claude/skills/`. Three kinds:
+Skills live in `.claude/skills/`. Claude Code is the canonical target
+for now; do not hand-maintain a parallel `.agents/skills/` tree.
 
 - **Shared reference** under `.claude/skills/wikify/` — project-wide
   background knowledge loaded by every other skill. Carries
-  `references/` for schemas, CLI grammar, citation format, write
-  constraints, tier mapping, escalation, knowledge graph, and wiki
-  graph.
-- **Single-action skills** under `.claude/skills/wikify-<noun>/` (e.g.
-  `wikify-corpus`, `wikify-run`, `wikify-work`, `wikify-draft`,
-  `wikify-wiki`, `wikify-render`, `wikify-eval`) — one CLI noun each;
-  composed into multi-step workflows via Bash and the Skill tool.
-- **Multi-step workflows** under `.claude/skills/wikify-<workflow>/`
-  (e.g. `wikify-baseline`, plus the `wikify-guided-explore`,
-  `wikify-query`, `wikify-refine`, `wikify-render-eval`,
-  `wikify-ingest`, `wikify-maintain` stubs) — encode loop shape,
-  stopping criteria, parallelism, and budget. They contain no
-  model-call logic of their own and must reuse the single-action
-  inventory.
+  `references/` for bundle state, CLI grammar, writing schemas,
+  citation format, field guides, exploration patterns, and workflow
+  contracts.
+- **Core capability skills** expose reusable surfaces without owning
+  strategy:
+  - `wikify-search-corpus` — corpus CLI read/search and graph traversal
+    patterns.
+  - `wikify-search-wiki` — committed wiki lookup and wiki-to-corpus
+    bridge patterns.
+  - `wikify-write-page` — writer contract, page styles, and optional
+    compaction/editor-brief references.
+  - `wikify-bundle` — mechanical bundle operations: run/work/draft/wiki
+    state, validation, commit, projections, render, eval, locks, events,
+    and failures.
+- **Workflow skills** encode strategy: loop shape, sampling pattern,
+  stopping criteria, parallelism, budget, model tier, and retry policy.
+  Current workflows are `wikify-baseline`, `wikify-guided-explore`,
+  `wikify-query`, and `wikify-refine`.
 
 A new strategy is a new workflow skill, not new Python.
 

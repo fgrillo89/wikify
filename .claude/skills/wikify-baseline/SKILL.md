@@ -1,155 +1,88 @@
 ---
 name: wikify-baseline
-description: Run the baseline Wikify workflow on a bundle. Use when the user asks to build a wiki, run a baseline pass, extract concepts, or grow a fresh bundle from a corpus. Linear single-pass: extract seeds, gather evidence, write each page once, commit, render, eval.
+description: Run the baseline Wikify strategy by composing wikify-search-corpus, wikify-bundle, wikify-write-page, and shared concept-extraction references. Use when building a first-pass wiki from a corpus with a fixed seed and evidence budget.
 allowed-tools: Bash(wikify *) Task
 ---
 
 # wikify-baseline
 
-Single-pass baseline workflow over a corpus. One write per concept.
-No re-entry into concept extraction after the initial seed pass. The
-strategy decisions documented inline live in this skill markdown —
-they are not silent Python defaults; they are choices the agent
-makes before each run and may override by editing this skill.
+Baseline is a strategy workflow. It owns seed count, evidence top-k,
+writer tier, concurrency, retry policy, and stop conditions. Core
+capability skills explain the mechanics.
 
-## Strategy decisions (override here)
+## Strategy Defaults
 
-- Seed budget: `--max 12` for `corpus find --seed`.
-- PageRank weight for seed selection: `--pagerank-weight 0.7`.
-- Evidence top-k per concept: `--top-k 12` for `corpus find`.
-- Writer tier and model: tier `M`, `--model-id claude-sonnet-4-6`.
-- Extractor tier: tier `S` (haiku-class).
-- Per-concept claim TTL: `--ttl-seconds 1800`.
-- Concurrent writers: up to 4 (one per claimed concept).
-- Retry policy: one same-tier retry on validation failure, then one
-  escalation to tier `L`, then mark the concept `failed`. See
-  [escalation.md](../wikify/references/escalation.md).
-- Stop conditions: all seeded concepts reach `committed` or
-  `failed`; or `budget_exceeded` event observed; or
-  `target_haiku_eq` reached.
+- Seed documents: up to 12 from corpus seed ranking.
+- Seed PageRank weight: 0.7.
+- Evidence per concept: top 12 retrieved chunks.
+- Writer tier: M.
+- Extractor tier: S.
+- Concurrent writers: up to 4 claimed concepts.
+- Claim TTL: 1800 seconds.
+- Retry policy: one same-tier retry, then one escalation to L, then
+  mark failed.
 
-## Prerequisites
+## Workflow
 
-- A corpus has been built and is reachable through `--corpus`.
-- A bundle has been initialised:
-  ```
-  wikify run init --bundle <b> --corpus <c> --strategy baseline
-  ```
+1. Use `wikify-bundle` to initialize or open the bundle.
+2. Use `wikify-search-corpus` to get seed documents:
 
-## Loop
+   ```bash
+   wikify corpus find --seed --corpus <corpus> --max 12 --pagerank-weight 0.7
+   ```
 
-### 0. Set bundle context
+3. For each selected seed, use `wikify-search-corpus` to read the
+   workflow-selected text. Baseline may read full seed documents, but a
+   later baseline variant may read only abstracts or introductions.
+4. Use `wikify/references/exploration/concept-extraction.md` to extract
+   candidate concepts from the observed text.
+5. Use `wikify-bundle` to add accepted concepts:
 
-After `run init`, change directory into the bundle once. The remaining
-commands resolve the bundle from the cwd's `run/state.json`, so
-`--run <b>` is omitted below; the corpus path stays explicit because
-the corpus is a separate artifact.
+   ```bash
+   wikify work add concept "<title>" --kind article|person --aliases '<json>'
+   ```
 
-```
-cd <b>
-```
+6. For each accepted concept, use `wikify-search-corpus` to retrieve
+   evidence. Convert retrieval results to the evidence JSONL contract
+   expected by `wikify work add evidence`.
+7. Use `wikify-bundle` to append evidence and claim write targets.
+8. In parallel, for each claimed concept:
 
-If you cannot `cd`, append `--run <b>` to every `work`, `draft`,
-`wiki`, and `run` command, and `--bundle <b>` to `render`/`eval`.
+   ```bash
+   wikify draft build <slug> --task create --corpus <corpus> --model-id <model> --tier M
+   ```
 
-### 1. Seed the corpus
+   Then invoke `wikify-write-page` as the writer subagent. The writer
+   reads `draft.json` and writes `response.json`.
 
-```
-wikify corpus find --seed --corpus <c> --max 12 --pagerank-weight 0.7
-```
+9. Use `wikify-bundle` to validate and commit:
 
-Returns up to 12 doc ids in score order.
+   ```bash
+   wikify draft check <slug>
+   wikify wiki commit <slug>
+   wikify work release <slug>
+   ```
 
-### 2. Extract concepts (once per seed doc)
+10. Use `wikify-bundle` to tend, rebuild projections, render, evaluate,
+    and close.
 
-For each seed doc, fork a tier-S subagent (`Task` with model
-haiku-class) that reads `wikify corpus show doc:<id> --corpus <c> --full`
-and returns an `ExtractResponse` JSON. Persist each extracted concept
-via:
+## Stop Conditions
 
-```
-wikify work add concept "<title>" --kind article|person --aliases '["..."]'
-```
+- Seeded concepts are committed or failed.
+- A budget-exceeded event is observed.
+- The workflow reaches its configured haiku-equivalent budget.
 
-The subagent picks the title (from the doc's abstract or first
-heading) and a provisional kind (`article` for concepts/methods,
-`person` for biographical entries).
+## Does Not Do
 
-### 3. Per concept (parallel up to 4 writers)
-
-For each concept slug, in any order, fork a tier-M subagent that runs
-this sequence:
-
-```
-wikify work claim <slug> --ttl-seconds 1800
-wikify corpus find "<concept title>" --corpus <c> --top-k 12 --format json \
-  | <jsonl writer> > /tmp/ev.jsonl
-wikify work add evidence <slug> --records /tmp/ev.jsonl
-wikify draft build <slug> --task create --corpus <c> \
-                         --model-id claude-sonnet-4-6 --tier M
-# fork writer subagent; it reads draft.json and writes response.json
-wikify draft check <slug>
-wikify wiki commit <slug>
-wikify work release <slug>
-```
-
-If `draft check` exits non-zero, retry once at tier M with a stricter
-prompt; if the second attempt also fails, escalate to tier L per
-[escalation.md](../wikify/references/escalation.md); on the third
-failure mark the concept `failed` (`wikify work set <slug>
---status failed`).
-
-### 4. Tend
-
-```
-wikify work tend
-```
-
-Drains the inbox (cross-talk during write), regenerates
-`work/index.md`, expires stale claims.
-
-### 5. Project, render, eval
-
-```
-wikify wiki build indexes
-wikify wiki build graph
-wikify wiki build vectors
-wikify render --bundle <b> --format html
-wikify eval   --bundle <b> --corpus <c>
-```
-
-Note: `render` and `eval` use `--bundle`, not `--run`.
-
-### 6. Close
-
-```
-wikify run close --status completed
-```
-
-## Stop conditions
-
-- All seed concepts reach `committed` or `failed`, OR
-- `budget_exceeded` event observed in
-  `wikify run list events --type budget_exceeded`, OR
-- `wikify run set --target-haiku-eq` is reached.
-
-## What this workflow does NOT do
-
-- It does not re-extract concepts mid-loop. Use
-  `wikify-guided-explore` for that.
-- It does not refine pages from query feedback. Use `wikify-refine`
-  for that.
-- It does not pre-rebuild `derived/graph.json` or
-  `derived/vectors.npz` between commits. Build them once at the end
-  (step 5).
+- Does not re-enter concept extraction after the initial seed pass.
+- Does not perform query-driven refinement.
+- Does not hide strategy choices in Python.
 
 ## References
 
-- [atoms.md](../wikify/references/atoms.md) — atom contracts.
-- [tiers.md](../wikify/references/tiers.md) — S/M/L mapping.
-- [escalation.md](../wikify/references/escalation.md) — retry/escalate policy.
-- [write-constraints.md](../wikify/references/write-constraints.md) —
-  what the writer must produce.
-- [citation-format.md](../wikify/references/citation-format.md) —
-  the `[^eN]` grammar.
-- [schemas.md](../wikify/references/schemas.md) — file contract.
+- `../wikify-search-corpus/SKILL.md`
+- `../wikify-bundle/SKILL.md`
+- `../wikify-write-page/SKILL.md`
+- `../wikify/references/exploration/concept-extraction.md`
+- `../wikify/references/exploration/sampling-patterns.md`
+- `../wikify/references/writing/escalation.md`

@@ -1,41 +1,40 @@
 ---
 name: wikify-query
-description: Answer a question against a committed Wikify wiki, with corpus fallback, and append `query_feedback` to the inbox so a later refine can act on gaps. Status: stub — composition shape only, no Python orchestration.
-allowed-tools: Bash(wikify *) Skill(wikify-*) Task
+description: Query workflow for answering from the committed Wikify wiki, falling back to corpus search when needed, and recording bundle feedback for later refinement. Status is stub composition only.
+allowed-tools: Bash(wikify *) Task
 ---
 
-# wikify-query (stub)
+# wikify-query
 
-Status: stub — composition shape only. No Python orchestration; the
-agent runs primitives in order.
+Status: stub composition only. This workflow owns answer sufficiency,
+corpus fallback, and feedback emission policy.
 
 ## Intent
 
-Answer a query against an already-committed wiki by composing the
-read-only verbs from `wikify-wiki` and `wikify-corpus`, and recording
-any gap as a `query_feedback` record on the work inbox.
+Answer a user question from committed wiki pages when possible. If the
+wiki is insufficient, search the corpus for grounded facts and append
+structured query feedback so `wikify-refine` can improve the wiki later.
 
 ## Composition
 
-1. `wikify-wiki` — `wiki find "<query>"` then `wiki show <handle>
-   --full` for the top hits. If sufficient, synthesise an answer.
-2. `wikify-corpus` — fallback: `corpus find "<query>"` and
-   `corpus show chunk:<id> --full` for any uncovered facts.
-3. `wikify-work` — `work add feedback query --record <gap.json>` for
-   every uncovered claim, so a later `wikify-refine` (or
-   `wikify-baseline` re-extract) can act on it.
+1. Use `wikify-search-wiki` to find and inspect relevant committed
+   pages.
+2. Decide whether the wiki evidence is sufficient.
+3. If insufficient, use `wikify-search-corpus` to retrieve source
+   evidence for missing claims.
+4. Answer with only supported claims.
+5. Use `wikify-bundle` to append query feedback for missing coverage.
 
-## Strategy
+## Strategy Owned Here
 
-- Synthesiser tier defaults are decided here in skill markdown when
-  this stub is filled out, never in Python.
-- The CLI fallback policy (when to give up on the wiki and go to
-  the corpus) is part of the skill.
-- No new CLI commands are introduced. If a verb does not exist, this
-  workflow does not paper over it.
+- Answer sufficiency rubric.
+- Corpus fallback threshold.
+- Query feedback severity.
+- Synthesis tier.
 
 ## References
 
-- [atoms.md](../wikify/references/atoms.md)
-- [cli-tool-surface.md](../wikify/references/cli-tool-surface.md)
-- [wiki-graph.md](../wikify/references/wiki-graph.md)
+- `references/answer-synthesis.md`
+- `../wikify-search-wiki/SKILL.md`
+- `../wikify-search-corpus/SKILL.md`
+- `../wikify-bundle/SKILL.md`
