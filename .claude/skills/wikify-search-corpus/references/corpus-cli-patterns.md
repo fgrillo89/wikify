@@ -16,10 +16,32 @@ wikify corpus find "<query>" --corpus <corpus> --text
 wikify corpus find --seed --corpus <corpus> [--max N] [--pagerank-weight W]
 wikify corpus show doc:<doc-id> --corpus <corpus> [--full]
 wikify corpus show chunk:<chunk-id> --corpus <corpus> [--full]
+wikify corpus repl --corpus <corpus>
 ```
 
 Use `--format json` only when another deterministic tool must parse the
 output. Prefer terse text for agent inspection.
+
+## Interactive Session
+
+Use `wikify corpus repl --corpus <corpus>` when a workflow needs many
+iterative corpus queries. The process keeps docs/chunks indexed and
+loads the semantic embedder only once after the first semantic `find`.
+
+```text
+find atomic layer deposition HfO2 memristor top=10
+find-papers atomic layer deposition HfO2 memristor top=10
+find --text "atomic layer deposition" top=20
+show chunk:<chunk-id> full
+list docs
+seed max=20
+exit
+```
+
+`find` returns chunks. `find-papers` groups the best matching chunks by
+paper and returns `best_score`, match count, `doc_id`, and
+`best_chunk_id`. Use it when the workflow needs the most relevant full
+paper for a concept before drilling into chunks.
 
 ## Query Shapes
 

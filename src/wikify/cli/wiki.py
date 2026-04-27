@@ -13,6 +13,7 @@ Subcommands::
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import typer
@@ -28,6 +29,7 @@ from ..bundle.wiki.queries import (
     list_people,
     show_page,
 )
+from ..bundle.wiki.session import WikiSearchSession
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Committed wiki layer.")
@@ -282,6 +284,158 @@ def cmd_commit(
         )
         return
     typer.echo(f"committed {result.page_id} -> {result.page_path}")
+
+
+# --------------------------------------------------------------- repl
+
+
+class WikiReplExitError(Exception):
+    """Signal a clean interactive-session exit."""
+
+
+class WikiReplError(Exception):
+    """User-facing wiki REPL command error."""
+
+
+def _pop_wiki_flag(tokens: list[str], name: str) -> bool:
+    if name not in tokens:
+        return False
+    tokens.remove(name)
+    return True
+
+
+def _pop_wiki_int_option(tokens: list[str], name: str, default: int) -> int:
+    if name not in tokens:
+        return default
+    idx = tokens.index(name)
+    try:
+        raw = tokens[idx + 1]
+    except IndexError as exc:
+        raise WikiReplError(f"{name} requires an integer value") from exc
+    del tokens[idx : idx + 2]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise WikiReplError(f"{name} requires an integer value") from exc
+
+
+def _pop_wiki_key_int(tokens: list[str], key: str, default: int) -> int:
+    prefix = f"{key}="
+    for token in list(tokens):
+        if not token.startswith(prefix):
+            continue
+        tokens.remove(token)
+        raw = token[len(prefix):]
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise WikiReplError(f"{key}= requires an integer value") from exc
+    return default
+
+
+def _wiki_repl_help() -> list[str]:
+    return [
+        "commands:",
+        "  find [--top-k N|top=N] <query>",
+        "  show <slug|wiki/articles/file.md> [--full]",
+        "  list [pages|articles|people|files]",
+        "  help",
+        "  exit",
+    ]
+
+
+def _render_wiki_hits(hits: list[dict]) -> list[str]:
+    return [
+        f"{hit['kind']:<8}  {hit['slug']:<32}  {hit['snippet']}"
+        for hit in hits
+    ]
+
+
+def _render_wiki_page(info: dict, *, full: bool) -> list[str]:
+    return [
+        f"slug:  {info['slug']}",
+        f"kind:  {info['kind']}",
+        f"path:  {info['path']}",
+        "---",
+        info["text"] if full else info["text"][:500],
+    ]
+
+
+def _run_wiki_repl_line(session: WikiSearchSession, line: str) -> list[str]:
+    try:
+        tokens = shlex.split(line)
+    except ValueError as exc:
+        raise WikiReplError(str(exc)) from exc
+    if not tokens:
+        return []
+
+    cmd, args = tokens[0], tokens[1:]
+    if cmd in {"exit", "quit"}:
+        raise WikiReplExitError
+    if cmd == "help":
+        return _wiki_repl_help()
+
+    if cmd == "find":
+        top_k = _pop_wiki_int_option(
+            args, "--top-k", _pop_wiki_key_int(args, "top", 20)
+        )
+        _pop_wiki_flag(args, "--text")  # Accepted for parity with one-shot CLI.
+        if not args:
+            raise WikiReplError("find requires a query")
+        hits = session.find_text(" ".join(args), top_k=top_k)
+        return _render_wiki_hits(hits)
+
+    if cmd == "show":
+        full = _pop_wiki_flag(args, "--full") or _pop_wiki_flag(args, "full")
+        if len(args) != 1:
+            raise WikiReplError("show requires exactly one handle")
+        info = session.show(args[0])
+        if info is None:
+            raise WikiReplError(f"page not found: {args[0]}")
+        return _render_wiki_page(info, full=full)
+
+    if cmd == "list":
+        kind = args[0] if args else "pages"
+        if kind == "pages":
+            return [
+                f"{item['kind']:<8}  {item['slug']}"
+                for item in session.list_pages()
+            ]
+        if kind == "articles":
+            return session.list_articles()
+        if kind == "people":
+            return session.list_people()
+        if kind == "files":
+            return session.list_files()
+        raise WikiReplError("list supports pages, articles, people, or files")
+
+    raise WikiReplError(f"unknown command: {cmd}; type help")
+
+
+@app.command("repl")
+def cmd_repl(
+    run: Path | None = typer.Option(None, "--run"),
+    prompt: str = typer.Option("wikify-wiki> ", "--prompt"),
+) -> None:
+    """Open a line-oriented committed-wiki query session."""
+    bundle = _resolve_bundle(run)
+    session = WikiSearchSession(bundle)
+    typer.echo(f"ready bundle={bundle.root} pages={session.n_pages}")
+    while True:
+        try:
+            line = input(prompt)
+        except EOFError:
+            typer.echo("")
+            break
+        try:
+            lines = _run_wiki_repl_line(session, line)
+        except WikiReplExitError:
+            break
+        except WikiReplError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            continue
+        for out in lines:
+            typer.echo(out)
 
 
 __all__ = ["app"]

@@ -739,9 +739,12 @@ wikify corpus find    "atomic layer deposition" --corpus <corpus> --text
 wikify corpus find    --seed --corpus <corpus> [--max 20] [--pagerank-weight 0.7]
 wikify corpus show    doc:<doc> --corpus <corpus> [--detail]
 wikify corpus show    chunk:<chunk> --corpus <corpus> [--full]
+wikify corpus repl    --corpus <corpus>
 ```
 
 `corpus build` is the skill-facing ingest pipeline.
+Inside `corpus repl`, `find` returns chunks and `find-papers` returns
+papers ranked by their best matching chunks.
 
 Work commands:
 
@@ -778,6 +781,7 @@ wikify wiki find --co-evidence "Atomic Layer Deposition"
 wikify wiki find --orphans
 wikify wiki find --overlaps "Atomic Layer Deposition"
 wikify wiki show "Atomic Layer Deposition" [--full]
+wikify wiki repl
 wikify wiki build indexes|graph|vectors
 wikify wiki check
 wikify wiki commit <concept>

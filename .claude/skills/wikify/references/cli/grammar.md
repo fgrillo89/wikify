@@ -15,7 +15,7 @@ wikify eval
 Common verbs:
 
 ```text
-init, show, list, find, add, set, build, check, commit, tend, close
+init, show, list, find, repl, add, set, build, check, commit, tend, close
 ```
 
 Use actual `--help` output as the source of truth for flags. Do not add

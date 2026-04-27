@@ -13,7 +13,9 @@ surface; it does not decide whether to refine, expand, or stop.
 
 - List committed pages and wiki files.
 - Show a page compactly or with `--full`.
-- Search by title, alias, body text, or semantic page content.
+- Open `wikify wiki repl --run <bundle>` for iterative committed-page
+  search without repeating the bundle path.
+- Search committed page text by title, alias, or body phrase.
 - Inspect links, backlinks, co-evidence, overlaps, thin pages, or
   orphan pages when the current CLI exposes those views.
 - Bridge from a committed page back to corpus evidence by using titles,
@@ -35,6 +37,7 @@ wikify wiki list --run <bundle>
 wikify wiki find "ALD vs CVD" --run <bundle> --top-k 5
 wikify wiki find "atomic layer deposition" --run <bundle> --text
 wikify wiki show "Atomic Layer Deposition" --run <bundle> --full
+wikify wiki repl --run <bundle>
 wikify wiki check --run <bundle>
 ```
 

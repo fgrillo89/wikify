@@ -17,8 +17,13 @@ decide what to explore next.
 - Show one handle with compact output by default and `--full` only when
   the workflow needs the full text.
 - Run semantic search for topic, concept, and evidence queries.
+- Rank papers by aggregating the chunks that best match a query
+  (`find-papers`) before drilling into the best chunk or document.
 - Run exact text search for phrases, acronyms, section labels,
   equations, and citation markers.
+- Open `wikify corpus repl --corpus <corpus>` for iterative search so
+  docs/chunks stay indexed and the semantic embedder is loaded only
+  once per session.
 - Find seed documents through the CLI's centrality/PageRank seed
   selection.
 - Traverse graph affordances exposed through corpus handles and flags:
@@ -43,6 +48,7 @@ wikify corpus find "atomic layer deposition" --corpus <corpus> --top-k 8
 wikify corpus find "HfO2" --corpus <corpus> --text
 wikify corpus show chunk:<chunk-id> --corpus <corpus> --full
 wikify corpus show doc:<doc-id> --corpus <corpus> --full
+wikify corpus repl --corpus <corpus>
 ```
 
 If the CLI exposes graph flags for the active branch, prefer recursive

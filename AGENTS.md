@@ -129,11 +129,11 @@ Seven nouns. Run under `uv run`. Full grammar in
 `docs/filesystem-state-design.md`.
 
 ```bash
-wikify corpus  build / refresh / check / list / find / show
+wikify corpus  build / refresh / check / list / find / show / repl
 wikify run     init / show / list events / lock / unlock / close / set
 wikify work    list / show / add concept / add evidence / add feedback / set / claim / release / tend
 wikify draft   build / show / check
-wikify wiki    list / find / show / build / check / commit
+wikify wiki    list / find / show / repl / build / check / commit
 wikify render  --bundle <b> --format html [--out <dir>]
 wikify eval    --bundle <b> [--corpus <c>] [--report <p>]
 ```

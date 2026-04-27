@@ -140,3 +140,59 @@ def test_corpus_show_bad_handle(tmp_path: Path) -> None:
         app, ["corpus", "show", "bogus", "--corpus", str(corpus.root)]
     )
     assert result.exit_code != 0
+
+
+def test_corpus_repl_text_find_and_show(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "repl",
+            "--corpus", str(corpus.root),
+            "--prompt", "",
+        ],
+        input=(
+            "list docs\n"
+            "find --text --top-k 1 atomic layer\n"
+            "show chunk:paper_0__c0000 --full\n"
+            "exit\n"
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    assert "ready corpus=" in result.output
+    assert "paper_0" in result.output
+    assert "paper_0__c0000" in result.output
+    assert "atomic layer deposition" in result.output
+
+
+def test_corpus_repl_find_papers_text(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "repl",
+            "--corpus", str(corpus.root),
+            "--prompt", "",
+        ],
+        input="find-papers --text top=2 atomic layer\nexit\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "n=2" in result.output
+    assert "paper_0" in result.output
+    assert "best=paper_0__c0000" in result.output
+
+
+def test_corpus_repl_reports_user_errors_and_continues(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "repl",
+            "--corpus", str(corpus.root),
+            "--prompt", "",
+        ],
+        input="bogus\nlist docs\nexit\n",
+    )
+    assert result.exit_code == 0
+    assert "error: unknown command: bogus; type help" in result.stderr
+    assert "paper_0" in result.output

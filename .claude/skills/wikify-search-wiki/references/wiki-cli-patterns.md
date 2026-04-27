@@ -9,6 +9,7 @@ inspect pages and projections without mutating work state.
 wikify wiki list [articles|people|files] [--run <bundle>] [--format text|json]
 wikify wiki find "<query>" [--run <bundle>] [--top-k N] [--text]
 wikify wiki show <handle> [--run <bundle>] [--full] [--format text|json]
+wikify wiki repl [--run <bundle>]
 wikify wiki check [--run <bundle>] [--format text|json]
 ```
 
@@ -19,9 +20,22 @@ read-only search skill.
 
 - Exact title or alias lookup.
 - Body text search with `--text`.
-- Semantic page search.
+- Committed page text search.
 - Coverage inspection through `wiki check`.
 - Relationship inspection when exposed by CLI flags.
+
+## Interactive Session
+
+Use `wikify wiki repl --run <bundle>` for iterative committed-page
+inspection. The process keeps the page index warm and avoids repeating
+`--run` on every command.
+
+```text
+list articles
+find atomic layer deposition top=10
+show atomic-layer-deposition full
+exit
+```
 
 ## Full Page Discipline
 

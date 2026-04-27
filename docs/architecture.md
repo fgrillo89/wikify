@@ -51,11 +51,11 @@ Seven nouns. All under `uv run`.
 
 | Noun | One-liner |
 |---|---|
-| `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks. |
+| `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks; open a warm REPL. |
 | `wikify run` | Initialise, lock, set, list events, show, and close a run. |
 | `wikify work` | Manage in-flight build state: concepts, evidence, inbox, claims, tend. |
 | `wikify draft` | Build, show, and check the per-attempt draft/response/validation triple. |
-| `wikify wiki` | List/find/show committed pages; build projections; commit a validated concept. |
+| `wikify wiki` | List/find/show committed pages; open a warm REPL; build projections; commit a validated concept. |
 | `wikify render` | Render a bundle to a static HTML site. |
 | `wikify eval` | Compute M1/M3/M5/M6 (and related) metrics over a bundle. |
 
