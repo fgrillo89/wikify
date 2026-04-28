@@ -34,8 +34,29 @@ from ..corpus.handles import (
 )
 from ..corpus.session import CorpusSearchSession
 from ..ingest.pipeline import ingest_corpus, refresh_corpus
-from ._format import format_row, resolve_format
+from ._format import FormatError, format_row, resolve_format
 from ._helpers import EXIT_VALIDATION, cli_error
+
+
+def _resolve_format_or_error(fmt: str) -> str:
+    """Wrap :func:`resolve_format` so unknown values surface as a clean envelope."""
+    try:
+        return resolve_format(fmt)
+    except FormatError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_format", message=str(exc))
+
+
+def _resolve_simple_format(fmt: str, *, allowed: tuple[str, ...] = ("text", "json")) -> str:
+    """Validate the small text|json picker used by ``schema``/``check``/``list``."""
+    if fmt not in allowed:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_format",
+            message=(
+                f"unknown --format {fmt!r}; expected one of {', '.join(allowed)}"
+            ),
+        )
+    return fmt
 
 app = typer.Typer(add_completion=False, help="Corpus build + read-only queries.")
 
@@ -192,6 +213,7 @@ def cmd_check(
 ) -> None:
     """Report corpus health: doc/chunk counts, derived artifacts, field."""
     corpus = _resolve_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     summary = queries.check_corpus(corpus)
     if fmt == "json":
         typer.echo(json.dumps(summary))
@@ -220,6 +242,7 @@ def cmd_list_docs(
 ) -> None:
     """Print every doc id in the corpus."""
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     ids = queries.list_doc_ids(corpus)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "items": ids}))
@@ -236,6 +259,7 @@ def cmd_list_chunks(
 ) -> None:
     """Print chunk ids for one document."""
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     chunks = queries.list_chunks_for_doc(corpus, doc_id)
     ids = [c.id for c in chunks]
     if fmt == "json":
@@ -252,6 +276,7 @@ def cmd_list_files(
 ) -> None:
     """Print every file under the corpus root, relative."""
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     files = queries.list_files(corpus)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "items": files}))
@@ -326,7 +351,7 @@ def cmd_find(
       where ``pr`` is the corpus PageRank.
     """
     corpus = _resolve_corpus(corpus_dir)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
     if explain:
         _emit_find_explain(
             corpus,
@@ -731,6 +756,7 @@ def cmd_show(
     full ids; ambiguous suffixes are reported with the candidate list.
     """
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     try:
         kind, ident = queries.parse_handle(handle)
     except ValueError as exc:
@@ -950,7 +976,7 @@ _CORPUS_SCHEMA: dict = {
         "--seed":      "Greedy submodular seed selection.",
         "--text":      "Literal substring grep over chunk text.",
     },
-    "formats": ["auto", "quiet", "compact", "table", "json"],
+    "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
         "Short forms: doc/chunk/equation accept the trailing 8-12 hex; "
         "figure accepts <doc-short>/<stem>. Author accepts case-insensitive "
@@ -970,6 +996,7 @@ def cmd_schema(
     Run this once to learn the available verbs and relations without
     grepping source.
     """
+    fmt = _resolve_simple_format(fmt)
     if fmt == "json":
         typer.echo(json.dumps(_CORPUS_SCHEMA, indent=2))
         return
@@ -1059,7 +1086,7 @@ def cmd_traverse(
       where ``kind`` is ``math`` / ``chem`` / ``named``.
     """
     corpus = _resolve_corpus(corpus_dir)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
     rank_resolved: str | None = rank or None
     top_k_resolved: int | None = top_k if top_k > 0 else None
 

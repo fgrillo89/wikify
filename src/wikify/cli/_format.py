@@ -1,38 +1,52 @@
 """Output format selection for corpus and wiki CLI surfaces.
 
-Four formats:
+Three concrete formats plus an ``auto`` sentinel:
 
 - ``quiet``    one short handle per line; nothing else. Pipe-safe.
 - ``compact``  tab-separated columns: score / metric / handle / title.
-                Default for TTY stdout; columns vary by command.
-- ``table``    aligned columns + header. Human-friendly.
 - ``json``     existing JSON shape (per-command schema).
 
-When ``--format`` is left as the sentinel ``auto``, the actual mode is
-``compact`` if stdout is a TTY else ``quiet``. This is what makes
-``corpus find ... | corpus traverse ...`` work without flags.
+``auto`` resolves to:
+
+1. The value of ``WIKIFY_CLI_FORMAT`` if set to a concrete format.
+   Lets agents force compact for inspection without per-call flags.
+2. ``compact`` when stdout is a TTY.
+3. ``quiet`` otherwise (pipe-safe — keeps ``find ... | traverse ...`` working).
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Iterable
 
-# Columns for compact/table mode. Each column is (header, width_hint).
-# Widths are advisory — ``compact`` always emits tab-separated text.
-FormatChoice = str  # Literal["auto", "quiet", "compact", "table", "json"]
+FormatChoice = str  # Literal["auto", "quiet", "compact", "json"]
 
-VALID_FORMATS: tuple[str, ...] = ("auto", "quiet", "compact", "table", "json")
+CONCRETE_FORMATS: tuple[str, ...] = ("quiet", "compact", "json")
+VALID_FORMATS: tuple[str, ...] = ("auto", *CONCRETE_FORMATS)
+
+_ENV_FORMAT = "WIKIFY_CLI_FORMAT"
+
+
+class FormatError(ValueError):
+    """Raised when ``--format`` is set to a value outside :data:`VALID_FORMATS`."""
 
 
 def resolve_format(choice: str) -> str:
-    """Map ``auto`` to ``compact`` (TTY) or ``quiet`` (pipe). Pass through others."""
+    """Resolve ``--format`` to a concrete format name.
+
+    Raises :class:`FormatError` (a ``ValueError`` subclass) for unknown
+    values; CLI handlers catch it and translate to a structured envelope.
+    """
     if choice not in VALID_FORMATS:
-        raise ValueError(
+        raise FormatError(
             f"unknown --format {choice!r}; expected one of {', '.join(VALID_FORMATS)}"
         )
     if choice != "auto":
         return choice
+    env_choice = os.environ.get(_ENV_FORMAT)
+    if env_choice in CONCRETE_FORMATS:
+        return env_choice
     return "compact" if sys.stdout.isatty() else "quiet"
 
 
@@ -41,4 +55,10 @@ def format_row(columns: Iterable[str]) -> str:
     return "\t".join(str(c) for c in columns)
 
 
-__all__ = ["VALID_FORMATS", "format_row", "resolve_format"]
+__all__ = [
+    "CONCRETE_FORMATS",
+    "VALID_FORMATS",
+    "FormatError",
+    "format_row",
+    "resolve_format",
+]

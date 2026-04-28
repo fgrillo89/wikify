@@ -32,8 +32,16 @@ from ..bundle.wiki.queries import (
     traverse_page,
 )
 from ..bundle.wiki.session import WikiSearchSession
-from ._format import format_row, resolve_format
+from ._format import FormatError, format_row, resolve_format
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
+
+
+def _resolve_format_or_error(fmt: str) -> str:
+    """Wrap :func:`resolve_format` so unknown values surface as a clean envelope."""
+    try:
+        return resolve_format(fmt)
+    except FormatError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_format", message=str(exc))
 
 app = typer.Typer(add_completion=False, help="Committed wiki layer.")
 
@@ -170,7 +178,7 @@ def cmd_find(
         # Default to text mode; graph + vector queries are a follow-up.
         text = True
     hits = find_text(bundle, query, top_k=top_k)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
     if fmt_resolved == "json":
         typer.echo(json.dumps({"ok": True, "items": hits}))
         return
@@ -446,7 +454,7 @@ def cmd_traverse(
     - evidence rows: ``chunk-handle \\t doc-handle \\t quote``.
     """
     bundle = _resolve_bundle(run)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
     if to not in _PAGE_RELATIONS:
         cli_error(
             EXIT_VALIDATION,

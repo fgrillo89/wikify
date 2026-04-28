@@ -204,7 +204,7 @@ def _load_fe(model: str | None) -> None:
         active = ", ".join(session.get_providers())
     except Exception:  # noqa: BLE001 - best-effort diagnostic only
         pass
-    if active:
+    if active and os.environ.get("WIKIFY_EMBED_VERBOSE") == "1":
         print(f"[embed] model={name} providers={active}", file=sys.stderr)
 
     _assert_not_silent_cpu_fallback(name, providers)
@@ -274,10 +274,11 @@ def _assert_not_silent_cpu_fallback(
             f"WIKIFY_EMBED_MODEL={alt!r} and retry, or set "
             f"WIKIFY_EMBED_SKIP_HEALTH_CHECK=1 to bypass this check.",
         )
-    print(
-        f"[embed] health check OK ({elapsed*1000:.0f} ms)",
-        file=sys.stderr,
-    )
+    if os.environ.get("WIKIFY_EMBED_VERBOSE") == "1":
+        print(
+            f"[embed] health check OK ({elapsed*1000:.0f} ms)",
+            file=sys.stderr,
+        )
 
 
 def _resolve_batch_size(model: str | None, override: int | None) -> int:
