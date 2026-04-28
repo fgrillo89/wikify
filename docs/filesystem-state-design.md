@@ -729,20 +729,45 @@ Corpus build/read commands (every flag below is on the actual CLI; consult
 `--help` per subcommand for the authoritative set):
 
 ```text
-wikify corpus build <source> --out <corpus> [--mode additive|sync] [--parser default|lite|marker|docling]
-wikify corpus refresh <corpus>
-wikify corpus check   [<corpus>]
-wikify corpus list    docs   [--corpus <corpus>]
-wikify corpus list    chunks --corpus <corpus> --doc <doc>
-wikify corpus find    "Atomic Layer Deposition" --corpus <corpus> [--top-k 8]
-wikify corpus find    "atomic layer deposition" --corpus <corpus> --text
-wikify corpus find    --seed --corpus <corpus> [--max 20] [--pagerank-weight 0.7]
-wikify corpus show    doc:<doc> --corpus <corpus> [--detail]
-wikify corpus show    chunk:<chunk> --corpus <corpus> [--full]
-wikify corpus repl    --corpus <corpus>
+wikify corpus build    <source> --out <corpus> [--mode additive|sync] [--parser default|lite|marker|docling]
+wikify corpus refresh  <corpus>
+wikify corpus schema   [--format text|json]
+wikify corpus check    [<corpus>] [--format text|json]
+wikify corpus list     docs|chunks|files [--corpus <c>] [--doc <doc>]
+wikify corpus find     "<query>" [--corpus <c>] [--top-k N] \
+                       [--by chunk|paper|author] \
+                       [--rank semantic|citation_count|pagerank|h_index|n_papers] \
+                       [--format auto|quiet|compact|json] [--explain]
+wikify corpus find     "<query>" [--corpus <c>] --text
+wikify corpus find     --seed [--corpus <c>] [--max 20] [--pagerank-weight 0.7]
+wikify corpus show     <doc:|chunk:|figure:|equation:|author:><id> [--corpus <c>] [--full]
+wikify corpus traverse <handle> --to <relation> [--corpus <c>] \
+                       [--rank citation_count|pagerank|h_index|n_papers] [--top-k N] \
+                       [--format auto|quiet|compact|json] [--explain]
+wikify corpus repl     [--corpus <c>]
 ```
 
 `corpus build` is the skill-facing ingest pipeline.
+
+`--corpus` is optional everywhere a read command accepts it.
+Resolution order: explicit flag → `WIKIFY_CORPUS` env → walk up from
+cwd looking for a directory with `manifest.json` and `docs/`.
+
+Run `wikify corpus schema` to self-discover the available node types,
+edge kinds, traverse relations, and rank metrics. `--explain` on
+`find`/`traverse` prints the resolved fluent-chain pseudocode without
+executing.
+
+Traverse relations:
+
+- `doc:` → `cited-by | references | chunks | figures | equations | authors`
+- `chunk:` → `source | cited-in-corpus | figures | equations`
+- `author:` → `sources | coauthors`
+
+Output is handles by default when stdout is piped, so multi-hop
+queries compose with shell pipes (no special multi-hop CLI syntax
+required).
+
 Inside `corpus repl`, `find` returns chunks and `find-papers` returns
 papers ranked by their best matching chunks.
 

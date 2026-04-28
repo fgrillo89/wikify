@@ -12,14 +12,20 @@ surface; it does not decide whether to refine, expand, or stop.
 ## Capability Surface
 
 - List committed pages and wiki files.
-- Show a page compactly or with `--full`.
+- Show a page compactly or with `--full`. Page handles accept exact
+  slugs OR a unique case-insensitive prefix, so partial titles work
+  when unambiguous.
 - Open `wikify wiki repl --run <bundle>` for iterative committed-page
   search without repeating the bundle path.
 - Search committed page text by title, alias, or body phrase.
-- Inspect links, backlinks, co-evidence, overlaps, thin pages, or
-  orphan pages when the current CLI exposes those views.
-- Bridge from a committed page back to corpus evidence by using titles,
-  aliases, evidence docs, and quoted claims as corpus probes.
+- `wikify wiki traverse <slug> --to <relation>` walks one wiki hop:
+  `links` (outgoing), `linked-by` (incoming), `co-evidence` (pages
+  sharing source docs), `evidence` (emits `chunk:` handles for the
+  corpus). Output is handles — pipe directly into another `traverse`
+  or into `wikify corpus show`/`corpus traverse`.
+- `--format quiet` prints handles only; default for piped stdout.
+- Bridge from a committed page back to corpus evidence by piping
+  `wiki traverse ... --to evidence --format quiet` into corpus tools.
 
 ## Default Loop
 
@@ -37,6 +43,11 @@ wikify wiki list --run <bundle>
 wikify wiki find "ALD vs CVD" --run <bundle> --top-k 5
 wikify wiki find "atomic layer deposition" --run <bundle> --text
 wikify wiki show "Atomic Layer Deposition" --run <bundle> --full
+wikify wiki traverse "Atomic Layer Deposition" --to links \
+    --top-k 10 --run <bundle>
+wikify wiki traverse "Atomic Layer Deposition" --to evidence \
+    --format quiet --run <bundle> \
+  | xargs -I {} wikify wiki show {} --run <bundle>   # bridge to corpus
 wikify wiki repl --run <bundle>
 wikify wiki check --run <bundle>
 ```
