@@ -58,6 +58,16 @@ def _resolve_simple_format(fmt: str, *, allowed: tuple[str, ...] = ("text", "jso
         )
     return fmt
 
+
+def _validate_positive_int(name: str, value: int) -> None:
+    """Reject ``--top-k 0``, ``--max 0`` and negative values with a clean envelope."""
+    if value <= 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_int",
+            message=f"--{name} must be > 0; got {value}",
+        )
+
 app = typer.Typer(add_completion=False, help="Corpus build + read-only queries.")
 
 
@@ -394,6 +404,8 @@ def cmd_find(
     """
     corpus = _resolve_corpus(corpus_dir)
     fmt_resolved = _resolve_format_or_error(fmt)
+    _validate_positive_int("top-k", top_k)
+    _validate_positive_int("max", max_seeds)
     if explain:
         _emit_find_explain(
             corpus,
@@ -663,12 +675,22 @@ def _emit_paper_rows(
 
 
 def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> None:
-    """Print author rows in the chosen format."""
+    """Print author rows in the chosen format.
+
+    With ``score_key`` set (semantic-search-by-author mode), the
+    ``n_papers`` value carries the per-query match count, not the
+    author's total. To keep the column self-describing we render it as
+    ``n_match=`` in compact mode; the JSON shape stays as ``n_papers``
+    (with an extra ``n_match`` mirror field added in search mode).
+    """
+    in_search_mode = score_key is not None
     if fmt == "json":
-        items = [
-            {**r, "handle": format_handle("author", str(r.get("key", "")))}
-            for r in rows
-        ]
+        items = []
+        for r in rows:
+            item = {**r, "handle": format_handle("author", str(r.get("key", "")))}
+            if in_search_mode:
+                item["n_match"] = int(r.get("n_papers", 0))
+            items.append(item)
         typer.echo(json.dumps({"ok": True, "items": items}))
         return
     if fmt == "quiet":
@@ -678,18 +700,19 @@ def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> N
     for r in rows:
         h = int(r.get("h_index", 0))
         cites = int(r.get("citation_count", 0))
-        n_papers = int(r.get("n_papers", 0))
+        n_count = int(r.get("n_papers", 0))
         score = r.get(score_key) if score_key else None
         score_col = f"{float(score):.3f}" if score is not None else "."
+        n_col = f"n_match={n_count}" if in_search_mode else f"n_papers={n_count}"
         cols = [
             score_col,
             f"h={h}",
             f"cites={cites}",
-            f"n_papers={n_papers}",
+            n_col,
             format_handle("author", str(r.get("key", ""))),
             str(r.get("name", "") or ""),
         ]
-        if score_key is None:
+        if not in_search_mode:
             cols = cols[1:]  # drop the score placeholder for metric-only lists
         typer.echo(format_row(cols))
 
@@ -779,7 +802,9 @@ def _emit_traverse_explain(
         suffix += f" -> top({top_k or 'unbounded'}, by={rank!r})"
     elif top_k:
         suffix += f" -> take({top_k})"
-    typer.echo(f"chain:  {handle}.{to.replace('-', '_')}(){suffix}")
+    kind, _, ident = handle.partition(":")
+    entry = {"doc": "source", "chunk": "chunk", "author": "author"}.get(kind, kind)
+    typer.echo(f"chain:  kg.{entry}({ident!r}).{to.replace('-', '_')}(){suffix}")
 
 
 # ---------------------------------------------------------------- show
@@ -1179,6 +1204,12 @@ def cmd_traverse(
     """
     corpus = _resolve_corpus(corpus_dir)
     fmt_resolved = _resolve_format_or_error(fmt)
+    if top_k < 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_top_k",
+            message=f"--top-k must be >= 0 (0 means unlimited); got {top_k}",
+        )
     rank_resolved: str | None = rank or None
     top_k_resolved: int | None = top_k if top_k > 0 else None
 

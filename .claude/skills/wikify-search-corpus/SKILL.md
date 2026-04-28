@@ -27,7 +27,7 @@ resolved fluent-chain pseudocode (e.g. `chunks().search('X', top_k=30)
 .group_by_doc().resort_by('citation_count').take(3)`) without
 executing. Useful when you're unsure what a flag combination will do.
 
-## Step 1: resolve the corpus once
+## Step 1: resolve the corpus + set agent-friendly defaults
 
 `--corpus` is optional. Resolution order:
 
@@ -35,13 +35,20 @@ executing. Useful when you're unsure what a flag combination will do.
 2. `WIKIFY_CORPUS` environment variable.
 3. Walk up from cwd looking for a directory with `manifest.json` and `docs/`.
 
-The cleanest pattern:
+**Set both env vars at session start.** Without `WIKIFY_CLI_FORMAT`,
+`--format auto` resolves to `quiet` for non-TTY callers (every agent
+shell), so every `find` / `traverse` returns bare handles with no
+titles, scores, or citation counts:
 
 ```bash
 export WIKIFY_CORPUS=data/corpora/<my-corpus>
+export WIKIFY_CLI_FORMAT=compact   # rich rows by default; pipes still work
 ```
 
-Examples below omit `--corpus` because `WIKIFY_CORPUS` is set.
+Examples below omit `--corpus`, `--format`, and stderr noise.
+
+Embedder banners are silent by default. Set `WIKIFY_EMBED_VERBOSE=1`
+when debugging GPU-provider fallback or model loading.
 
 ## Step 2: cheatsheet — most common questions
 
@@ -121,7 +128,9 @@ few citations.
   with candidates.
 - **Output formats** (`--format auto|quiet|compact|json`): `quiet`
   emits handles only and is the default when stdout is piped;
-  `compact` is tab-separated columns for TTY; `json` for tooling.
+  `compact` is tab-separated columns; `json` for tooling. `auto`
+  consults `WIKIFY_CLI_FORMAT` (env override), then falls back to
+  `compact` for TTY / `quiet` for pipe.
 - **Traverse relations**:
   - doc: `cited-by`, `references`, `chunks`, `figures`, `equations`, `authors`
   - chunk: `source`, `cited-in-corpus`, `figures`, `equations`
@@ -142,56 +151,15 @@ few citations.
 5. Narrow or broaden based on the result.
 6. Pull full text only after choosing the handle.
 
-## Examples (omitting `--corpus`; `WIKIFY_CORPUS` is set)
-
-```bash
-# Discover the surface.
-wikify corpus schema
-
-# Search.
-wikify corpus find "atomic layer deposition" --top-k 8
-wikify corpus find "atomic layer deposition" --by paper --rank citation_count --top-k 3
-wikify corpus find "HfO2" --text
-wikify corpus find --seed --max 12
-
-# Authors.
-wikify corpus find --by author --rank h_index --top-k 5
-wikify corpus find "memristor" --by author --top-k 5
-wikify corpus show author:sungjun_kim
-wikify corpus traverse author:sungjun_kim --to sources --rank citation_count
-wikify corpus traverse author:sungjun_kim --to coauthors --rank h_index
-
-# Drill into one paper.
-wikify corpus show doc:<short>
-wikify corpus show doc:<short> --full
-wikify corpus traverse doc:<short> --to authors --rank h_index
-wikify corpus traverse doc:<short> --to cited-by --rank citation_count --top-k 5
-wikify corpus traverse doc:<short> --to figures
-wikify corpus traverse doc:<short> --to equations --top-k 5
-
-# Drill into one chunk.
-wikify corpus show chunk:<short> --full
-wikify corpus traverse chunk:<short> --to cited-in-corpus --rank citation_count
-wikify corpus traverse chunk:<short> --to figures
-
-# Media.
-wikify corpus show figure:<short>/<stem>
-wikify corpus show equation:<short>
-
-# Interactive session.
-wikify corpus repl
-```
-
 ## Does not do
 
-- Does not mutate a bundle.
-- Does not add concepts or evidence.
-- Does not choose an exploration strategy.
+- Does not mutate a bundle, add concepts, or pick an exploration strategy.
 - Does not decide whether evidence is sufficient for writing.
 
 ## References
 
-- `references/corpus-cli-patterns.md` — full grammar, format columns, handle rules.
+- `references/corpus-cli-patterns.md` — full grammar, format columns,
+  handle rules, **environment variables**, complete worked examples.
 - `references/corpus-recursive-search.md` — multi-hop pipelines.
 - `references/corpus-graph-traversals.md` — relation catalogue + recipes.
 - `../wikify/references/cli/grammar.md` — shared CLI grammar.

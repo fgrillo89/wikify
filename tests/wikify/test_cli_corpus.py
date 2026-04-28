@@ -428,6 +428,48 @@ def test_corpus_show_bad_handle(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_corpus_show_handles_windows_crlf_handle(tmp_path: Path) -> None:
+    """Handles received from a `--format quiet` pipe on Windows include `\\r`.
+
+    `parse_handle` must strip surrounding whitespace so the documented
+    `traverse … | xargs traverse …` pattern works on every platform.
+    """
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        ["corpus", "show", "doc:paper_0\r", "--corpus", str(corpus.root)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Title 0" in result.output
+
+
+def test_corpus_find_rejects_zero_top_k(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "0",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "bad_int" in (result.output + result.stderr)
+
+
+def test_corpus_find_rejects_negative_top_k(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "-3",
+        ],
+    )
+    assert result.exit_code != 0
+
+
 def test_corpus_repl_text_find_and_show(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c")
     result = runner.invoke(

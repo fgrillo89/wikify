@@ -17,7 +17,7 @@ available."
 Append `--explain` to any `find` or `traverse` to print the resolved
 fluent-chain pseudocode and exit without executing.
 
-## Step 1 — set the corpus once
+## Step 1 — set the corpus once and pick a default format
 
 `--corpus` is **optional**. Resolution order:
 
@@ -25,13 +25,20 @@ fluent-chain pseudocode and exit without executing.
 2. `WIKIFY_CORPUS` environment variable.
 3. Walk up from cwd looking for a directory with `manifest.json` and `docs/`.
 
-The cleanest pattern for a session:
-
 ```bash
 export WIKIFY_CORPUS=data/corpora/<name>
+export WIKIFY_CLI_FORMAT=compact   # rich rows for non-TTY agents
 ```
 
-Examples below assume this is set, so they omit `--corpus`.
+`--format auto` (the default) resolves through these steps:
+
+1. `WIKIFY_CLI_FORMAT` if it's `compact` / `quiet` / `json`.
+2. `compact` when stdout is a TTY.
+3. `quiet` (handle-only, pipe-safe) otherwise.
+
+Without the env var, agent shells (which are not TTYs) get `quiet` and
+never see scores, citation counts, or titles. Set it once at session
+start.
 
 ## Idiom — empty query + `--rank` = "rank everything by metric"
 
@@ -93,9 +100,15 @@ return an error listing the candidates.
 ## Output Formats
 
 - ``quiet``    one short handle per line; nothing else. Pipe-safe.
-- ``compact``  tab-separated columns (default when stdout is a TTY).
+- ``compact``  tab-separated columns. Default for TTY; recommended
+                via ``WIKIFY_CLI_FORMAT=compact`` for agent shells.
 - ``json``     existing JSON shape, for tooling.
-- ``auto``     compact if stdout is a TTY, quiet if piped.
+- ``auto``     ``WIKIFY_CLI_FORMAT`` if set, else ``compact`` for TTY,
+                else ``quiet``.
+
+Unknown ``--format`` values now produce a structured ``bad_format``
+error envelope, not a Python traceback. ``--top-k`` must be ``> 0``
+(``--top-k 0`` and negative values are rejected).
 
 ### Compact Column Meanings
 
@@ -109,7 +122,8 @@ return an error listing the candidates.
 | ``traverse`` figure result      | ``page=N`` ``figure-handle`` ``caption`` ``path`` |
 | ``traverse`` equation result    | ``kind`` ``label`` ``equation-handle`` ``latex`` |
 | ``traverse`` author result      | ``h=N`` ``cites=N`` ``n_papers=N`` ``author-handle`` ``name`` |
-| ``find --by author``            | ``score`` ``h=N`` ``cites=N`` ``n_papers=N`` ``author-handle`` ``name`` |
+| ``find --by author "<query>"``  | ``score`` ``h=N`` ``cites=N`` ``n_match=N`` ``author-handle`` ``name`` |
+| ``find --by author --rank …`` (no query) | ``h=N`` ``cites=N`` ``n_papers=N`` ``author-handle`` ``name`` |
 
 Where:
 
@@ -201,3 +215,52 @@ paper for a concept before drilling into chunks.
 
 Do not open full documents or chunks by default. Use previews to choose
 a handle first. Then call `show --full` on the specific selected handle.
+
+## Environment Variables
+
+| Env var                | Effect                                                              |
+|------------------------|---------------------------------------------------------------------|
+| ``WIKIFY_CORPUS``        | Default corpus path (skip ``--corpus``).                              |
+| ``WIKIFY_CLI_FORMAT``    | ``compact`` / ``quiet`` / ``json`` — overrides ``--format auto`` for non-TTY callers (every agent shell). |
+| ``WIKIFY_EMBED_VERBOSE`` | ``1`` to re-enable the embedder model + health-check banners on stderr. Default off. |
+| ``WIKIFY_QUIET``         | ``1`` to suppress informational hints (e.g. the "0 markers resolved" hint from ``traverse <chunk> --to cited-in-corpus``). |
+
+## Worked Examples
+
+```bash
+# Discover the surface.
+wikify corpus schema
+
+# Search.
+wikify corpus find "atomic layer deposition" --top-k 8
+wikify corpus find "atomic layer deposition" --by paper --rank citation_count --top-k 3
+wikify corpus find "HfO2" --text
+wikify corpus find --seed --max 12
+
+# Authors.
+wikify corpus find --by author --rank h_index --top-k 5
+wikify corpus find "memristor" --by author --top-k 5
+wikify corpus show author:sungjun_kim
+wikify corpus traverse author:sungjun_kim --to sources --rank citation_count
+wikify corpus traverse author:sungjun_kim --to coauthors --rank h_index
+
+# Drill into one paper.
+wikify corpus show doc:<short>
+wikify corpus show doc:<short> --full
+wikify corpus traverse doc:<short> --to authors --rank h_index
+wikify corpus traverse doc:<short> --to cited-by --rank citation_count --top-k 5
+wikify corpus traverse doc:<short> --to figures
+wikify corpus traverse doc:<short> --to equations --top-k 5
+
+# Drill into one chunk.
+wikify corpus show chunk:<short> --full
+wikify corpus traverse chunk:<short> --to cited-in-corpus --rank citation_count
+wikify corpus traverse chunk:<short> --to figures
+
+# Media.
+wikify corpus show figure:<short>/<stem>
+wikify corpus show equation:<short>
+
+# Interactive session.
+wikify corpus repl
+```

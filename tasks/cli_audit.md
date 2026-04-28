@@ -82,29 +82,41 @@ Take-aways:
   `'chunk:paper_A__c0001'` (test-fixture form). Update to suggest
   real-corpus form `'doc:<short-hex>'`.
 
-### Batch 3 — planned
+### Batch 3 — landed
 
-- **#9 `cited-in-corpus` silent-zero** — when the marker parser finds
-  ords but `references(ords=…)` resolves zero, the user sees an empty
-  result with no signal. Add an opt-in stderr hint: "0 of N markers
-  resolved (e.g. ords=…); references may be out-of-corpus or
-  unindexed."
-- **#10 Author search "n_papers" overload** — in `find --by author
-  "<query>"`, the `n_papers=` column is the per-query match count, but
-  the same column in `find --by author --rank n_papers` is the author's
-  total. Same name, different semantics. Rename per-query column to
-  `n_match=` for clarity.
-- **#11 `--format json` shape redundancy** — `find --format json`
-  returns full long ids alongside short handles for every chunk row.
-  Drop the long ids from JSON output (handle + bare hex `id` are
-  enough); keep behind `--long` for callers that need joins on full id.
-- **#12 Skill auto-format guidance** — current docs say
-  "auto = compact for TTY else quiet". Agents are *never* on a TTY, so
-  auto = quiet always for them. Document `WIKIFY_CLI_FORMAT=compact` as
-  the standard agent-session export.
-- **#13 Cited-in-corpus traverse loads KG twice** — `get_chunk()` loads
-  it once to resolve the chunk; then `traverse_chunk` loads it again.
-  Pass through.
+- **#9 `cited-in-corpus` silent-zero hint**: when markers parse but
+  resolve to 0 in-corpus refs, `traverse <chunk> --to cited-in-corpus`
+  now writes a stderr hint with the parsed ords. Suppress with
+  `WIKIFY_QUIET=1`.
+- **#10 Author search column rename**: `find --by author "<query>"`
+  now emits `n_match=N` (per-query match count) instead of overloading
+  `n_papers=`. Metric-only mode keeps `n_papers=` (author total). The
+  JSON shape adds an explicit `n_match` field in search mode while
+  retaining `n_papers` for back-compat.
+- **#12 Skill auto-format guidance**: SKILL/cli-patterns now teach
+  `export WIKIFY_CLI_FORMAT=compact` at session start; auto resolution
+  consults the env var before TTY detection.
+- **#14 Windows `\r\n` pipe bug** (NEW; surfaced during round 2): the
+  documented `traverse … --format quiet | xargs traverse …` pattern
+  failed on Windows because Python's text-mode stdout writes `\r\n`,
+  xargs strips `\n` only, leaving `<handle>\r` which fails resolution.
+  Force `newline=""` on the CLI's UTF-8 stdio reconfig + strip
+  whitespace in `parse_handle`. Multi-hop pipes now work cross-platform.
+- **#15 `--top-k` validation** (NEW): `--top-k 0` silently returned
+  empty results; `--top-k -1` returned 3 (Python slice quirk). Reject
+  both via `_validate_positive_int` with `bad_int` envelope.
+- **Cosmetic**: `traverse --explain` now prints the actual fluent
+  chain (`kg.source('X').cited_by() -> top(...)`) instead of a
+  string-concat approximation.
+
+### Batch 4 — deferred
+
+- **#11 `--format json` long-id redundancy** — defer; depends on
+  callers (eval pipeline, render). Touch in a follow-up that audits
+  every JSON consumer.
+- **#13 `cited-in-corpus` double KG load** — defer; meaningful win
+  needs a long-lived KG cache (the REPL has it; one-shot CLI doesn't).
+  That's a bigger architectural change.
 
 ## Ingestion / citation issues (out of scope; deferred)
 
@@ -141,9 +153,13 @@ See repeated runs in audit walkthrough; raw lines emitted by
 `scripts/profile_corpus_cli.py` (one JSON per call). Not retained as a
 separate file — measurements summarised in the table above.
 
-## Skill changes (planned in Batch 3)
+## Skill changes — landed
 
-- Add a Step 0.5 to `wikify-search-corpus/SKILL.md`: instruct agents
-  to `export WIKIFY_CLI_FORMAT=compact` for inspection sessions, and
-  `WIKIFY_EMBED_VERBOSE=0` (now default) to keep stderr clean.
-- Update the cheatsheet's `--format` paragraph to drop `table`.
+- `wikify-search-corpus/SKILL.md`: Step 1 teaches both
+  `WIKIFY_CORPUS` and `WIKIFY_CLI_FORMAT=compact` at session start.
+  Capability surface paragraph documents the new env-resolution order.
+  SKILL trimmed back under the 200-line ceiling by moving worked
+  examples and the env-var table into `references/corpus-cli-patterns.md`.
+- `references/corpus-cli-patterns.md`: explicit env-var table,
+  worked examples, `n_match=` vs `n_papers=` column documentation,
+  bad-format envelope note, `--top-k` validation note.

@@ -339,7 +339,13 @@ def get_equation(corpus: Corpus, eq_id: str) -> dict | None:
 
 
 def parse_handle(handle: str) -> tuple[str, str]:
-    """Split a ``kind:id`` handle. Raise ``ValueError`` if malformed."""
+    """Split a ``kind:id`` handle. Raise ``ValueError`` if malformed.
+
+    Trims surrounding whitespace (and ``\\r`` from Windows ``\\r\\n``
+    line endings), so handles produced by ``--format quiet`` survive
+    being piped through ``xargs`` on any platform.
+    """
+    handle = handle.strip()
     if ":" not in handle:
         raise ValueError(
             f"handle must be 'kind:id' (e.g. 'doc:5f92b0389ccd', "
@@ -347,7 +353,7 @@ def parse_handle(handle: str) -> tuple[str, str]:
             f"'author:sungjun_kim'); got {handle!r}"
         )
     kind, _, ident = handle.partition(":")
-    return kind, ident
+    return kind, ident.strip()
 
 
 # ------------------------------------------------------------------- find
@@ -671,6 +677,8 @@ def traverse_chunk(
             backend, [chunk.doc_id], rank=rank, top_k=top_k, corpus=corpus
         )
     if relation == "cited-in-corpus":
+        import sys
+
         from .graph import parse_citation_markers
 
         ords = parse_citation_markers(chunk.text)
@@ -679,9 +687,26 @@ def traverse_chunk(
         if chunk.doc_id not in backend.G:
             return []
         result = kg.source(chunk.doc_id).references(ords=ords)
-        return _materialize_traversal(
+        rows = _materialize_traversal(
             backend, result.ids(), rank=rank, top_k=top_k, corpus=corpus
         )
+        # Silent-zero is hostile: agents cannot tell whether the chunk
+        # has no markers or every marker was out-of-corpus. When
+        # markers exist but resolved zero, hint on stderr (suppressible
+        # via WIKIFY_QUIET=1).
+        if not rows:
+            import os
+
+            if os.environ.get("WIKIFY_QUIET") != "1":
+                preview = ",".join(str(o) for o in ords[:8])
+                more = f" (+{len(ords) - 8})" if len(ords) > 8 else ""
+                print(
+                    f"hint: chunk has {len(ords)} citation marker(s) "
+                    f"[{preview}{more}] but none resolved to in-corpus refs; "
+                    f"references may be out-of-corpus or unindexed",
+                    file=sys.stderr,
+                )
+        return rows
     if relation in {"figures", "equations"}:
         # Build a chunk-scoped QueryBuilder directly (no public entry point
         # for a single chunk, but the constructor is the documented internal

@@ -20,23 +20,35 @@ from . import work as work_cli
 
 
 def _force_utf8_stdio() -> None:
-    """Reconfigure stdout/stderr to UTF-8 so non-ASCII titles don't crash on Windows.
+    """Reconfigure stdout/stderr to UTF-8 + Unix line endings on Windows.
 
-    The corpus contains titles with characters like ``‐`` (unicode
-    hyphen) that are unrepresentable in cp1252, the default encoding for
-    Windows console PYTHONIOENCODING. Without this, ``corpus find`` and
-    ``corpus show`` raise ``UnicodeEncodeError`` mid-stream when piping
-    or printing such titles.
+    Two reasons:
+
+    - The corpus contains titles with characters like ``‐`` (unicode
+      hyphen) that are unrepresentable in cp1252 (Windows default).
+      Without UTF-8, ``corpus find`` / ``corpus show`` raise
+      ``UnicodeEncodeError`` mid-stream when printing such titles.
+    - Default Windows text-mode stdout translates ``\\n`` to ``\\r\\n``.
+      That breaks the ``traverse … --format quiet | xargs traverse …``
+      pattern documented in the search skill: ``xargs`` strips the
+      ``\\n`` but not the ``\\r``, so each handle becomes
+      ``doc:abc123\\r`` and resolves to ``handle_not_found``. Force
+      ``newline=""`` so quiet output is byte-identical across platforms.
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
         try:
-            reconfigure(encoding="utf-8", errors="replace")
-        except (OSError, ValueError):
-            # Stream may already be wrapped (e.g., test runners) — skip.
-            pass
+            reconfigure(encoding="utf-8", errors="replace", newline="")
+        except (OSError, ValueError, TypeError):
+            # Stream may already be wrapped (test runners) or the
+            # implementation may not accept newline=. UTF-8 alone is
+            # still worth attempting.
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
 
 
 _force_utf8_stdio()
