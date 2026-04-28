@@ -133,6 +133,31 @@ def _slug_to_page_id(bundle: Bundle, slug: str) -> str | None:
     return None
 
 
+def _page_id_to_slug_map(bundle: Bundle) -> dict[str, str]:
+    """Reverse map ``page.id -> filename slug`` for handle round-tripping.
+
+    Page-typed traverse outputs (``links``, ``linked-by``, ``co-evidence``)
+    must emit handles that ``wiki show`` can resolve, and ``show``
+    resolves by filename slug. The graph keys by frontmatter ``id``,
+    so we walk the article + person dirs once and build the inverse.
+    """
+    from .page import parse_page
+
+    out: dict[str, str] = {}
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+        if not sub.is_dir():
+            continue
+        for p in sorted(sub.glob("*.md")):
+            try:
+                pid = parse_page(p).id
+            except (OSError, ValueError):
+                continue
+            # First-seen wins; duplicate ids across kinds shouldn't exist
+            # but if they do, articles take precedence by iteration order.
+            out.setdefault(pid, p.stem)
+    return out
+
+
 def traverse_page(
     bundle: Bundle,
     *,
@@ -170,6 +195,12 @@ def traverse_page(
         result = qb.co_evidence()
     else:  # evidence
         result = qb.evidence()
+    # Page-typed rows must round-trip through `wiki show`, which resolves
+    # by filename slug. Build the id->slug map once per call.
+    id_to_slug = (
+        _page_id_to_slug_map(bundle)
+        if relation in {"links", "linked-by", "co-evidence"} else {}
+    )
     rows: list[dict] = []
     for nid in result.ids():
         if not backend.has_node(nid):
@@ -180,7 +211,7 @@ def traverse_page(
             rows.append({
                 "id": nid,
                 "type": "page",
-                "slug": nid,
+                "slug": id_to_slug.get(nid, nid),
                 "kind": attrs.get("kind", ""),
                 "title": attrs.get("title", ""),
                 "n_links": int(attrs.get("n_links", 0) or 0),
