@@ -27,8 +27,14 @@ from ..api import Bundle, Corpus
 from ..bundle.run.events import Event, append_event
 from ..bundle.run.state import load_state
 from ..corpus import queries
+from ..corpus.handles import (
+    AmbiguousHandleError,
+    HandleNotFoundError,
+    format_handle,
+)
 from ..corpus.session import CorpusSearchSession
 from ..ingest.pipeline import ingest_corpus, refresh_corpus
+from ._format import format_row, resolve_format
 from ._helpers import EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Corpus build + read-only queries.")
@@ -77,20 +83,66 @@ def _emit_chunk_reads(
         )
 
 
+def _looks_like_corpus(path: Path) -> bool:
+    """Heuristic: a directory with ``manifest.json`` and ``docs/`` is a corpus."""
+    return (
+        path.is_dir()
+        and (path / "manifest.json").is_file()
+        and (path / "docs").is_dir()
+    )
+
+
+def _autodetect_corpus(start: Path | None = None) -> Path | None:
+    """Walk up from *start* (default cwd) looking for a corpus root."""
+    cur = (start or Path.cwd()).resolve()
+    for cand in (cur, *cur.parents):
+        if _looks_like_corpus(cand):
+            return cand
+    return None
+
+
+def _resolve_corpus(corpus_flag: Path | None) -> Corpus:
+    """Resolve a corpus path: explicit flag > ``WIKIFY_CORPUS`` env > cwd walk-up."""
+    import os
+
+    if corpus_flag is not None:
+        if not corpus_flag.is_dir():
+            cli_error(
+                EXIT_VALIDATION,
+                error="not_a_directory",
+                message=f"corpus path is not a directory: {corpus_flag}",
+            )
+        return Corpus(root=corpus_flag)
+
+    env_path = os.environ.get("WIKIFY_CORPUS")
+    if env_path:
+        p = Path(env_path)
+        if p.is_dir():
+            return Corpus(root=p)
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_wikify_corpus_env",
+            message=f"WIKIFY_CORPUS={env_path!r} is not a directory",
+        )
+
+    detected = _autodetect_corpus()
+    if detected is not None:
+        return Corpus(root=detected)
+
+    cli_error(
+        EXIT_VALIDATION,
+        error="corpus_required",
+        message=(
+            "no corpus resolved. Pass --corpus <path>, set WIKIFY_CORPUS, "
+            "or run from inside a corpus directory (one containing "
+            "manifest.json and docs/)."
+        ),
+    )
+
+
+# Back-compat alias retained for callers that already imported it.
 def _open_corpus(corpus_flag: Path | None) -> Corpus:
-    if corpus_flag is None:
-        cli_error(
-            EXIT_VALIDATION,
-            error="corpus_required",
-            message="--corpus <path> is required for this command",
-        )
-    if not corpus_flag.is_dir():
-        cli_error(
-            EXIT_VALIDATION,
-            error="not_a_directory",
-            message=f"corpus path is not a directory: {corpus_flag}",
-        )
-    return Corpus(root=corpus_flag)
+    return _resolve_corpus(corpus_flag)
 
 
 # ------------------------------------------------------------ build/refresh
@@ -133,17 +185,13 @@ def cmd_refresh(
 
 @app.command("check")
 def cmd_check(
-    corpus_dir: Path = typer.Argument(..., help="Corpus directory."),
+    corpus_dir: Path | None = typer.Argument(
+        None, help="Corpus directory. Optional; falls back to WIKIFY_CORPUS or cwd."
+    ),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Report corpus health: doc/chunk counts, derived artifacts, field."""
-    if not corpus_dir.is_dir():
-        cli_error(
-            EXIT_VALIDATION,
-            error="not_a_directory",
-            message=f"corpus path is not a directory: {corpus_dir}",
-        )
-    corpus = Corpus(root=corpus_dir)
+    corpus = _resolve_corpus(corpus_dir)
     summary = queries.check_corpus(corpus)
     if fmt == "json":
         typer.echo(json.dumps(summary))
@@ -167,7 +215,7 @@ app.add_typer(list_app, name="list")
 
 @list_app.command("docs")
 def cmd_list_docs(
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Print every doc id in the corpus."""
@@ -182,7 +230,7 @@ def cmd_list_docs(
 
 @list_app.command("chunks")
 def cmd_list_chunks(
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     doc_id: str = typer.Option(..., "--doc"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
@@ -199,7 +247,7 @@ def cmd_list_chunks(
 
 @list_app.command("files")
 def cmd_list_files(
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Print every file under the corpus root, relative."""
@@ -218,7 +266,7 @@ def cmd_list_files(
 @app.command("find")
 def cmd_find(
     query: str = typer.Argument("", help="Query string. Empty for --seed mode."),
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     top_k: int = typer.Option(8, "--top-k"),
     seed: bool = typer.Option(False, "--seed", help="Greedy seed selection."),
     max_seeds: int = typer.Option(
@@ -233,58 +281,438 @@ def cmd_find(
         ),
     ),
     text: bool = typer.Option(False, "--text", help="Literal substring grep."),
-    fmt: str = typer.Option("text", "--format"),
+    by: str = typer.Option(
+        "chunk",
+        "--by",
+        help="Aggregate by chunk (default) or paper.",
+    ),
+    rank: str = typer.Option(
+        "semantic",
+        "--rank",
+        help="Ranking metric: semantic | citation_count | pagerank.",
+    ),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help=(
+            "Output format: auto (compact for TTY / quiet for pipe), "
+            "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Print the resolved fluent-chain pseudocode and exit.",
+    ),
 ) -> None:
     """Search the corpus.
 
-    With ``--seed``, return the greedy submodular seed doc list.
-    With ``--text``, do a literal substring grep over chunk text.
-    Otherwise do semantic search and return ranked chunks.
+    Modes:
+
+    - ``--seed`` returns the greedy submodular seed doc list.
+    - ``--text`` does a literal substring grep over chunk text.
+    - Otherwise semantic search; ``--by paper`` aggregates to documents
+      and ``--rank citation_count|pagerank`` reorders the result.
+
+    Compact output columns:
+
+    - chunks (``--by chunk``):  ``score \\t cites=N \\t chunk-handle \\t doc-handle``
+      where ``score`` is the semantic cosine (0..1, higher=closer; ``.``
+      under ``--text``) and ``cites`` is the parent doc's in-corpus
+      citation count.
+    - papers (``--by paper``):  ``score \\t cites=N \\t n=K \\t doc-handle \\t title``
+      where ``n`` is how many chunks of that paper matched the query.
+    - seeds / metric-only ranking: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
+      where ``pr`` is the corpus PageRank.
     """
-    corpus = _open_corpus(corpus_dir)
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = resolve_format(fmt)
+    if explain:
+        _emit_find_explain(
+            corpus,
+            query=query,
+            seed=seed,
+            text=text,
+            by=by,
+            rank=rank,
+            top_k=top_k,
+            max_seeds=max_seeds,
+            pagerank_weight=pagerank_weight,
+        )
+        return
     if seed:
         ids = queries.find_seeds(
             corpus, max_seeds=max_seeds, pagerank_weight=pagerank_weight
         )
-        if fmt == "json":
-            typer.echo(json.dumps({"ok": True, "items": ids}))
-            return
-        for did in ids:
-            typer.echo(did)
+        metrics = queries.doc_metrics(corpus, ids)
+        _emit_doc_rows(
+            [
+                {
+                    "doc_id": did,
+                    "title": _doc_title(corpus, did),
+                    "citation_count": metrics.get(did, {}).get("citation_count", 0),
+                    "pagerank": metrics.get(did, {}).get("pagerank", 0.0),
+                    "score": None,
+                }
+                for did in ids
+            ],
+            fmt=fmt_resolved,
+        )
         return
+
+    if rank not in {"semantic", "citation_count", "pagerank", "h_index", "n_papers"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank",
+            message=(
+                f"unknown --rank {rank!r}; expected "
+                f"semantic | citation_count | pagerank | h_index | n_papers"
+            ),
+        )
+    if by not in {"chunk", "paper", "author"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_by",
+            message=f"unknown --by {by!r}; expected chunk | paper | author",
+        )
+    # --by chunk has no aggregation step, so a graph-metric rank can't be
+    # applied. Reject loudly rather than silently honour --rank semantic.
+    if by == "chunk" and rank != "semantic":
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                f"--rank {rank!r} only applies when chunks are aggregated "
+                f"to a parent doc/author. Use --by paper or --by author, "
+                f"or drop --rank to keep semantic order."
+            ),
+        )
+    # --by author only meaningfully reranks by author-typed metrics.
+    if by == "author" and rank == "pagerank":
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                "--rank pagerank does not apply to authors; use "
+                "h_index | citation_count | n_papers."
+            ),
+        )
+    # --by paper only meaningfully reranks by source-typed metrics.
+    if by == "paper" and rank in {"h_index", "n_papers"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                f"--rank {rank!r} does not apply to papers; use "
+                f"citation_count | pagerank, or switch --by author."
+            ),
+        )
+
+    # Pure metric ranking — ignore query, return top docs by graph metric.
+    if rank in {"citation_count", "pagerank"} and not query and by != "author":
+        rows = queries.rank_docs(corpus, by=rank, top_k=top_k)
+        _emit_doc_rows(
+            [{**r, "score": None} for r in rows],
+            fmt=fmt_resolved,
+        )
+        return
+
+    # Author-only modes: top authors by metric, or authors by query.
+    if by == "author":
+        if not query:
+            metric = rank if rank in {"h_index", "citation_count", "n_papers"} else "h_index"
+            rows = queries.rank_authors(corpus, by=metric, top_k=top_k)
+            _emit_author_rows(rows, fmt=fmt_resolved, score_key=None)
+            return
+        rows = queries.search_authors(corpus, query, top_k=top_k)
+        _emit_author_rows(rows, fmt=fmt_resolved, score_key="best_score")
+        return
+
+    # When re-ranking by graph metric, semantic top_k is too narrow:
+    # the most-cited paper that mentions the query may sit lower in the
+    # semantic ranking. Widen the candidate pool then truncate after rank.
+    paper_pool = top_k if rank == "semantic" else max(top_k * 5, 30)
+
     if text:
+        if by == "paper":
+            papers = queries.search_papers(
+                corpus, query, top_k=paper_pool, text=True
+            )
+            _emit_paper_rows(corpus, papers, fmt=fmt_resolved, rank=rank, top_k=top_k)
+            return
         hits = queries.search_text(corpus, query, top_k=top_k)
         _emit_chunk_reads(
             _resolve_cwd_bundle(),
             (h.get("id", "") for h in hits),
             via="corpus_find_text",
         )
-        if fmt == "json":
-            typer.echo(json.dumps({"ok": True, "items": hits}))
-            return
-        for h in hits:
-            typer.echo(f"{h['id']}  {h['doc_id']}  {h['preview']}")
+        _emit_chunk_rows(corpus, hits, fmt=fmt_resolved, score_key=None)
         return
+
     if not query:
         cli_error(
             EXIT_VALIDATION,
             error="missing_query",
             message="`corpus find` requires a query, --seed, or --text mode",
         )
+
+    if by == "paper":
+        papers = queries.search_papers(corpus, query, top_k=paper_pool)
+        _emit_paper_rows(corpus, papers, fmt=fmt_resolved, rank=rank, top_k=top_k)
+        return
+
     hits = queries.search_chunks(corpus, query, top_k=top_k)
     _emit_chunk_reads(
         _resolve_cwd_bundle(),
         (h.get("id", "") for h in hits),
         via="corpus_find_semantic",
     )
+    _emit_chunk_rows(corpus, hits, fmt=fmt_resolved, score_key="score")
+
+
+def _doc_title(corpus: Corpus, doc_id: str) -> str:
+    doc = queries.get_doc(corpus, doc_id)
+    return (doc.title or "") if doc is not None else ""
+
+
+def _emit_chunk_rows(
+    corpus: Corpus,
+    hits: list[dict],
+    *,
+    fmt: str,
+    score_key: str | None,
+) -> None:
+    """Print chunk-level search results in the chosen format."""
+    doc_ids_in_order: list[str] = []
+    seen: set[str] = set()
+    for h in hits:
+        did = str(h.get("doc_id") or h.get("source_id") or "")
+        if did and did not in seen:
+            seen.add(did)
+            doc_ids_in_order.append(did)
+    metrics = queries.doc_metrics(corpus, doc_ids_in_order)
     if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "items": hits}))
+        items = []
+        for h in hits:
+            did = str(h.get("doc_id") or h.get("source_id") or "")
+            items.append(
+                {
+                    **h,
+                    "chunk_handle": format_handle("chunk", str(h.get("id", ""))),
+                    "doc_handle": format_handle("doc", did) if did else "",
+                    "citation_count": metrics.get(did, {}).get("citation_count", 0),
+                }
+            )
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for h in hits:
+            typer.echo(format_handle("chunk", str(h.get("id", ""))))
         return
     for h in hits:
-        score = h.get("score", 0.0)
-        cid = h.get("id", "?")
-        did = h.get("doc_id") or h.get("source_id") or "?"
-        typer.echo(f"{score:.3f}  {cid}  {did}")
+        cid = str(h.get("id", ""))
+        did = str(h.get("doc_id") or h.get("source_id") or "")
+        cites = metrics.get(did, {}).get("citation_count", 0)
+        score_val = h.get(score_key) if score_key else None
+        score_col = f"{float(score_val):.3f}" if score_val is not None else "."
+        typer.echo(
+            format_row([
+                score_col,
+                f"cites={cites}",
+                format_handle("chunk", cid),
+                format_handle("doc", did) if did else "",
+            ])
+        )
+
+
+def _emit_paper_rows(
+    corpus: Corpus,
+    papers: list[dict],
+    *,
+    fmt: str,
+    rank: str,
+    top_k: int,
+) -> None:
+    """Print paper-aggregated results, optionally re-ranked by metric."""
+    doc_ids = [str(p.get("doc_id", "")) for p in papers]
+    metrics = queries.doc_metrics(corpus, doc_ids)
+    enriched = []
+    for p in papers:
+        did = str(p.get("doc_id", ""))
+        m = metrics.get(did, {})
+        enriched.append(
+            {
+                **p,
+                "citation_count": m.get("citation_count", 0),
+                "pagerank": m.get("pagerank", 0.0),
+            }
+        )
+    if rank == "citation_count":
+        enriched.sort(
+            key=lambda r: (
+                -int(r.get("citation_count", 0)),
+                -float(r.get("best_score", 0.0)),
+                str(r.get("doc_id", "")),
+            )
+        )
+    elif rank == "pagerank":
+        enriched.sort(
+            key=lambda r: (
+                -float(r.get("pagerank", 0.0)),
+                -float(r.get("best_score", 0.0)),
+                str(r.get("doc_id", "")),
+            )
+        )
+    enriched = enriched[:top_k]
+    if fmt == "json":
+        items = [
+            {
+                **r,
+                "doc_handle": format_handle("doc", str(r.get("doc_id", ""))),
+                "best_chunk_handle": format_handle("chunk", str(r.get("best_chunk_id", ""))),
+            }
+            for r in enriched
+        ]
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for r in enriched:
+            typer.echo(format_handle("doc", str(r.get("doc_id", ""))))
+        return
+    for r in enriched:
+        score = float(r.get("best_score", 0.0))
+        cites = int(r.get("citation_count", 0))
+        n_ch = int(r.get("n_chunks", 0))
+        title = str(r.get("title", "") or "")
+        typer.echo(
+            format_row([
+                f"{score:.3f}",
+                f"cites={cites}",
+                f"n={n_ch}",
+                format_handle("doc", str(r.get("doc_id", ""))),
+                title,
+            ])
+        )
+
+
+def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> None:
+    """Print author rows in the chosen format."""
+    if fmt == "json":
+        items = [
+            {**r, "handle": format_handle("author", str(r.get("key", "")))}
+            for r in rows
+        ]
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for r in rows:
+            typer.echo(format_handle("author", str(r.get("key", ""))))
+        return
+    for r in rows:
+        h = int(r.get("h_index", 0))
+        cites = int(r.get("citation_count", 0))
+        n_papers = int(r.get("n_papers", 0))
+        score = r.get(score_key) if score_key else None
+        score_col = f"{float(score):.3f}" if score is not None else "."
+        cols = [
+            score_col,
+            f"h={h}",
+            f"cites={cites}",
+            f"n_papers={n_papers}",
+            format_handle("author", str(r.get("key", ""))),
+            str(r.get("name", "") or ""),
+        ]
+        if score_key is None:
+            cols = cols[1:]  # drop the score placeholder for metric-only lists
+        typer.echo(format_row(cols))
+
+
+def _emit_doc_rows(rows: list[dict], *, fmt: str) -> None:
+    """Print doc-only rows (seed mode and metric-only ranking)."""
+    if fmt == "json":
+        items = [
+            {**r, "doc_handle": format_handle("doc", str(r.get("doc_id", "")))}
+            for r in rows
+        ]
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for r in rows:
+            typer.echo(format_handle("doc", str(r.get("doc_id", ""))))
+        return
+    for r in rows:
+        cites = int(r.get("citation_count", 0))
+        pr = float(r.get("pagerank", 0.0))
+        title = str(r.get("title", "") or "")
+        typer.echo(
+            format_row([
+                f"cites={cites}",
+                f"pr={pr:.4f}",
+                format_handle("doc", str(r.get("doc_id", ""))),
+                title,
+            ])
+        )
+
+
+# ---------------------------------------------------------------- explain helpers
+
+
+def _emit_find_explain(
+    corpus: Corpus,
+    *,
+    query: str,
+    seed: bool,
+    text: bool,
+    by: str,
+    rank: str,
+    top_k: int,
+    max_seeds: int,
+    pagerank_weight: float,
+) -> None:
+    """Print a fluent-chain-style description of what `find` would do."""
+    typer.echo(f"corpus: {corpus.root}")
+    if seed:
+        chain = (
+            f"greedy_seed_select(max={max_seeds}, pagerank_weight={pagerank_weight}) "
+            f"-> top docs"
+        )
+    elif text:
+        chain = (
+            f"all_chunks().filter(text contains {query!r}).take({top_k})"
+            + (f" -> group_by_doc().take({top_k})" if by == "paper" else "")
+        )
+    elif rank in {"citation_count", "pagerank"} and not query:
+        chain = f"sources().top({top_k}, by={rank!r})"
+    else:
+        pool = top_k if rank == "semantic" else max(top_k * 5, 30)
+        if by == "paper":
+            chain = (
+                f"chunks().search({query!r}, top_k={pool}) "
+                f"-> group_by_doc()"
+                + (f" -> resort_by({rank!r})" if rank != "semantic" else "")
+                + f" -> take({top_k})"
+            )
+        else:
+            chain = f"chunks().search({query!r}, top_k={top_k})"
+    typer.echo(f"chain:  {chain}")
+
+
+def _emit_traverse_explain(
+    corpus: Corpus,
+    *,
+    handle: str,
+    to: str,
+    rank: str,
+    top_k: int,
+) -> None:
+    """Print a fluent-chain description of a traverse call."""
+    typer.echo(f"corpus: {corpus.root}")
+    suffix = ""
+    if rank:
+        suffix += f" -> top({top_k or 'unbounded'}, by={rank!r})"
+    elif top_k:
+        suffix += f" -> take({top_k})"
+    typer.echo(f"chain:  {handle}.{to.replace('-', '_')}(){suffix}")
 
 
 # ---------------------------------------------------------------- show
@@ -292,12 +720,16 @@ def cmd_find(
 
 @app.command("show")
 def cmd_show(
-    handle: str = typer.Argument(..., help="doc:<id> or chunk:<id>"),
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    handle: str = typer.Argument(..., help="doc:<id> or chunk:<id> (short or full)"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     full: bool = typer.Option(False, "--full"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Dereference one handle and print its content."""
+    """Dereference one handle and print its content.
+
+    Handles accept short hash suffixes (``doc:5f92b0389ccd``) as well as
+    full ids; ambiguous suffixes are reported with the candidate list.
+    """
     corpus = _open_corpus(corpus_dir)
     try:
         kind, ident = queries.parse_handle(handle)
@@ -305,7 +737,15 @@ def cmd_show(
         cli_error(EXIT_VALIDATION, error="bad_handle", message=str(exc))
 
     if kind == "doc":
-        doc = queries.get_doc(corpus, ident)
+        try:
+            doc = queries.get_doc(corpus, ident)
+        except AmbiguousHandleError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="ambiguous_handle",
+                message=str(exc),
+                matches=exc.matches,
+            )
         if doc is None:
             cli_error(EXIT_VALIDATION, error="doc_not_found", id=ident)
         meta = doc.metadata or {}
@@ -334,7 +774,15 @@ def cmd_show(
         return
 
     if kind == "chunk":
-        chunk = queries.get_chunk(corpus, ident)
+        try:
+            chunk = queries.get_chunk(corpus, ident)
+        except AmbiguousHandleError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="ambiguous_handle",
+                message=str(exc),
+                matches=exc.matches,
+            )
         if chunk is None:
             cli_error(EXIT_VALIDATION, error="chunk_not_found", id=ident)
         _emit_chunk_reads(
@@ -367,11 +815,429 @@ def cmd_show(
             typer.echo(chunk.text[:500])
         return
 
+    if kind == "figure":
+        try:
+            fig = queries.get_figure(corpus, ident)
+        except AmbiguousHandleError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="ambiguous_handle",
+                message=str(exc),
+                matches=exc.matches,
+            )
+        if fig is None:
+            cli_error(EXIT_VALIDATION, error="figure_not_found", id=ident)
+        if fmt == "json":
+            typer.echo(json.dumps({"ok": True, **fig}))
+            return
+        typer.echo(f"id:        {fig['id']}")
+        typer.echo(f"doc:       {fig['source_id']}")
+        if fig.get("page") is not None:
+            typer.echo(f"page:      {fig['page']}")
+        typer.echo(f"path:      {fig['path']}")
+        typer.echo(f"caption:   {fig['caption']}")
+        if fig["near_chunk_ids"]:
+            handles = [
+                format_handle("chunk", cid) for cid in fig["near_chunk_ids"][:5]
+            ]
+            typer.echo(f"near:      {' '.join(handles)}")
+        return
+
+    if kind == "author":
+        try:
+            au = queries.get_author(corpus, ident)
+        except AmbiguousHandleError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="ambiguous_handle",
+                message=str(exc),
+                matches=exc.matches,
+            )
+        if au is None:
+            cli_error(EXIT_VALIDATION, error="author_not_found", id=ident)
+        if fmt == "json":
+            typer.echo(json.dumps({"ok": True, **au}))
+            return
+        typer.echo(f"key:       {au['key']}")
+        if au["name"]:
+            typer.echo(f"name:      {au['name']}")
+        typer.echo(f"h_index:   {au['h_index']}")
+        typer.echo(f"cites:     {au['citation_count']}")
+        typer.echo(f"n_papers:  {au['n_papers']}")
+        if au["top_coauthors"]:
+            typer.echo("coauthors:")
+            for ca in au["top_coauthors"]:
+                handle = format_handle("author", ca["key"])
+                name = ca.get("name", "") or ""
+                typer.echo(
+                    f"  h={ca['h_index']:<3d} cites={ca['citation_count']:<4d} "
+                    f"{handle}  {name}"
+                )
+        return
+
+    if kind == "equation":
+        try:
+            eq = queries.get_equation(corpus, ident)
+        except AmbiguousHandleError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="ambiguous_handle",
+                message=str(exc),
+                matches=exc.matches,
+            )
+        if eq is None:
+            cli_error(EXIT_VALIDATION, error="equation_not_found", id=ident)
+        if fmt == "json":
+            typer.echo(json.dumps({"ok": True, **eq}))
+            return
+        typer.echo(f"id:        {eq['id']}")
+        typer.echo(f"doc:       {eq['source_id']}")
+        typer.echo(f"kind:      {eq['kind']}")
+        typer.echo(f"chemical:  {eq['is_chemical']}")
+        if eq["label"]:
+            typer.echo(f"label:     {eq['label']}")
+        typer.echo("---")
+        typer.echo(eq["latex"])
+        return
+
     cli_error(
         EXIT_VALIDATION,
         error="bad_handle_kind",
-        message=f"unknown handle kind {kind!r}; use doc:<id> or chunk:<id>",
+        message=(
+            f"unknown handle kind {kind!r}; use doc:<id>, chunk:<id>, "
+            f"figure:<id>, or equation:<id>"
+        ),
     )
+
+
+# ---------------------------------------------------------------- schema
+
+
+_CORPUS_SCHEMA: dict = {
+    "node_types": {
+        "source": "A document. Handle: doc:<id-or-short>.",
+        "chunk": "A text chunk inside a doc. Handle: chunk:<id-or-short>.",
+        "author": "A paper author. Handle: author:<lastname-initials key>.",
+        "section": "A section of a doc.",
+        "figure": "An image with caption. Handle: figure:<doc-short>/<stem>.",
+        "equation": "A math or chemical equation. Handle: equation:<id>.",
+    },
+    "edge_kinds": [
+        "CITES",            # source -> source
+        "AUTHORED_BY",      # source -> author
+        "COLLABORATED",     # author <-> author
+        "CONTAINS_SECTION", # source -> section
+        "CONTAINS_CHUNK",   # source -> chunk
+        "CHUNK_IN_SECTION", # chunk -> section
+        "CONTAINS_FIGURE",  # source -> figure
+        "CONTAINS_EQUATION",# source -> equation
+        "FIGURE_NEAR_CHUNK",# figure <-> chunk
+        "EQUATION_IN_CHUNK",# equation -> chunk
+    ],
+    "traverse_relations": {
+        "doc": ["cited-by", "references", "chunks", "figures", "equations", "authors"],
+        "chunk": ["source", "cited-in-corpus", "figures", "equations"],
+        "author": ["sources", "coauthors"],
+    },
+    "rank_metrics": {
+        "source": ["citation_count", "pagerank"],
+        "author": ["h_index", "citation_count", "n_papers"],
+    },
+    "find_modes": {
+        "--by chunk":  "Rank chunks (default).",
+        "--by paper":  "Aggregate chunk hits to papers.",
+        "--by author": "Aggregate chunk hits to authors.",
+        "--seed":      "Greedy submodular seed selection.",
+        "--text":      "Literal substring grep over chunk text.",
+    },
+    "formats": ["auto", "quiet", "compact", "table", "json"],
+    "handle_resolution": (
+        "Short forms: doc/chunk/equation accept the trailing 8-12 hex; "
+        "figure accepts <doc-short>/<stem>. Author accepts case-insensitive "
+        "unique prefix. Ambiguous matches return an error with candidates."
+    ),
+}
+
+
+@app.command("schema")
+def cmd_schema(
+    fmt: str = typer.Option(
+        "text", "--format", help="Output format: text | json."
+    ),
+) -> None:
+    """Self-describe the corpus CLI surface: nodes, edges, relations, metrics.
+
+    Run this once to learn the available verbs and relations without
+    grepping source.
+    """
+    if fmt == "json":
+        typer.echo(json.dumps(_CORPUS_SCHEMA, indent=2))
+        return
+    typer.echo("Node types:")
+    for k, v in _CORPUS_SCHEMA["node_types"].items():
+        typer.echo(f"  {k:10s}  {v}")
+    typer.echo("")
+    typer.echo("Edge kinds:")
+    for kind in _CORPUS_SCHEMA["edge_kinds"]:
+        typer.echo(f"  {kind}")
+    typer.echo("")
+    typer.echo("Traverse relations (corpus traverse <handle> --to <relation>):")
+    for handle_kind, rels in _CORPUS_SCHEMA["traverse_relations"].items():
+        typer.echo(f"  {handle_kind+':':<8s} {' | '.join(rels)}")
+    typer.echo("")
+    typer.echo("Rank metrics:")
+    for over, metrics in _CORPUS_SCHEMA["rank_metrics"].items():
+        typer.echo(f"  over {over+'s:':<8s} {' | '.join(metrics)}")
+    typer.echo("")
+    typer.echo("find modes:")
+    for k, v in _CORPUS_SCHEMA["find_modes"].items():
+        typer.echo(f"  {k:14s} {v}")
+    typer.echo("")
+    typer.echo(f"Formats: {' | '.join(_CORPUS_SCHEMA['formats'])}")
+    typer.echo("")
+    typer.echo(f"Handles: {_CORPUS_SCHEMA['handle_resolution']}")
+
+
+# ---------------------------------------------------------------- traverse
+
+
+_DOC_RELATIONS = {
+    "cited-by", "references", "chunks", "figures", "equations", "authors",
+}
+_CHUNK_RELATIONS = {"source", "cited-in-corpus", "figures", "equations"}
+_AUTHOR_RELATIONS = {"sources", "coauthors"}
+
+
+@app.command("traverse")
+def cmd_traverse(
+    handle: str = typer.Argument(..., help="doc:<id> or chunk:<id> (short or full)"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    to: str = typer.Option(
+        ...,
+        "--to",
+        help=(
+            "Relation to traverse. doc handles: cited-by | references | "
+            "chunks | figures | equations. chunk handles: source | "
+            "cited-in-corpus | figures | equations."
+        ),
+    ),
+    rank: str = typer.Option(
+        "",
+        "--rank",
+        help="Optional rank for source results: citation_count | pagerank.",
+    ),
+    top_k: int = typer.Option(0, "--top-k", help="Limit (0 = no limit)."),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help=(
+            "Output format: auto (compact for TTY / quiet for pipe), "
+            "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Print the resolved fluent-chain pseudocode and exit.",
+    ),
+) -> None:
+    """Traverse one hop from a handle and print the resulting handles.
+
+    The result is always handles (one per line in ``quiet`` mode) so it
+    pipes directly into ``corpus show`` or another ``corpus traverse``
+    call. ``--rank`` only applies when the relation produces sources.
+
+    Compact output columns:
+
+    - source rows:   ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
+      where ``cites`` is in-corpus citation count and ``pr`` is PageRank.
+    - chunk rows:    ``chunk-handle \\t doc-handle``.
+    - figure rows:   ``page=N \\t figure-handle \\t caption \\t path``
+      The ``path`` is corpus-relative; agents may pass it directly to
+      Read for visual ingestion or compose a markdown image link.
+    - equation rows: ``kind \\t label \\t equation-handle \\t latex``
+      where ``kind`` is ``math`` / ``chem`` / ``named``.
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = resolve_format(fmt)
+    rank_resolved: str | None = rank or None
+    top_k_resolved: int | None = top_k if top_k > 0 else None
+
+    if explain:
+        _emit_traverse_explain(
+            corpus, handle=handle, to=to, rank=rank, top_k=top_k
+        )
+        return
+
+    try:
+        kind, ident = queries.parse_handle(handle)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_handle", message=str(exc))
+
+    try:
+        if kind == "doc":
+            if to not in _DOC_RELATIONS:
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="bad_relation",
+                    message=(
+                        f"unknown doc relation {to!r}; expected "
+                        f"{' | '.join(sorted(_DOC_RELATIONS))}"
+                    ),
+                )
+            full_id = queries.resolve_doc_id(corpus, ident)
+            rows = queries.traverse_doc(
+                corpus,
+                doc_id=full_id,
+                relation=to,
+                rank=rank_resolved,
+                top_k=top_k_resolved,
+            )
+        elif kind == "author":
+            if to not in _AUTHOR_RELATIONS:
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="bad_relation",
+                    message=(
+                        f"unknown author relation {to!r}; expected "
+                        f"{' | '.join(sorted(_AUTHOR_RELATIONS))}"
+                    ),
+                )
+            full_key = queries.resolve_author_key(corpus, ident)
+            rows = queries.traverse_author(
+                corpus,
+                key=full_key,
+                relation=to,
+                rank=rank_resolved,
+                top_k=top_k_resolved,
+            )
+        elif kind == "chunk":
+            if to not in _CHUNK_RELATIONS:
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="bad_relation",
+                    message=(
+                        f"unknown chunk relation {to!r}; expected "
+                        f"{' | '.join(sorted(_CHUNK_RELATIONS))}"
+                    ),
+                )
+            full_id = queries.resolve_chunk_id(corpus, ident)
+            rows = queries.traverse_chunk(
+                corpus,
+                chunk_id=full_id,
+                relation=to,
+                rank=rank_resolved,
+                top_k=top_k_resolved,
+            )
+        else:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_handle_kind",
+                message=f"unknown handle kind {kind!r}; use doc:<id> or chunk:<id>",
+            )
+    except AmbiguousHandleError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
+    except HandleNotFoundError as exc:
+        cli_error(EXIT_VALIDATION, error="handle_not_found", message=str(exc))
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_relation", message=str(exc))
+
+    _emit_traverse_rows(rows, fmt=fmt_resolved)
+
+
+_HANDLE_KIND_BY_TYPE = {
+    "chunk": "chunk",
+    "figure": "figure",
+    "equation": "equation",
+    "author": "author",
+}
+
+
+def _emit_traverse_rows(rows: list[dict], *, fmt: str) -> None:
+    """Print traverse output. Type per row determines handle kind."""
+    if fmt == "json":
+        items = []
+        for r in rows:
+            ntype = r.get("type", "source")
+            handle_kind = _HANDLE_KIND_BY_TYPE.get(ntype, "doc")
+            items.append({**r, "handle": format_handle(handle_kind, str(r.get("id", "")))})
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for r in rows:
+            ntype = r.get("type", "source")
+            handle_kind = _HANDLE_KIND_BY_TYPE.get(ntype, "doc")
+            typer.echo(format_handle(handle_kind, str(r.get("id", ""))))
+        return
+    for r in rows:
+        ntype = r.get("type", "source")
+        if ntype == "chunk":
+            cid = str(r.get("id", ""))
+            did = str(r.get("doc_id", ""))
+            typer.echo(
+                format_row([
+                    format_handle("chunk", cid),
+                    format_handle("doc", did) if did else "",
+                ])
+            )
+        elif ntype == "figure":
+            page = r.get("page")
+            page_col = f"page={page}" if page is not None else "page=?"
+            caption = str(r.get("caption", "") or "").replace("\n", " ")[:120]
+            path = str(r.get("path", "") or "")
+            typer.echo(
+                format_row([
+                    page_col,
+                    format_handle("figure", str(r.get("id", ""))),
+                    caption,
+                    path,
+                ])
+            )
+        elif ntype == "equation":
+            kind_col = (
+                "chem" if r.get("is_chemical")
+                else (str(r.get("kind", "") or "math"))
+            )
+            label = str(r.get("label", "") or "")
+            latex = str(r.get("latex", "") or "").replace("\n", " ")[:120]
+            typer.echo(
+                format_row([
+                    kind_col,
+                    label,
+                    format_handle("equation", str(r.get("id", ""))),
+                    latex,
+                ])
+            )
+        elif ntype == "author":
+            h = int(r.get("h_index", 0))
+            cites = int(r.get("citation_count", 0))
+            n_papers = int(r.get("n_papers", 0))
+            typer.echo(
+                format_row([
+                    f"h={h}",
+                    f"cites={cites}",
+                    f"n_papers={n_papers}",
+                    format_handle("author", str(r.get("id", ""))),
+                    str(r.get("name", "") or ""),
+                ])
+            )
+        else:
+            cites = int(r.get("citation_count", 0))
+            pr = float(r.get("pagerank", 0.0))
+            title = str(r.get("title", "") or "")
+            typer.echo(
+                format_row([
+                    f"cites={cites}",
+                    f"pr={pr:.4f}",
+                    format_handle("doc", str(r.get("id", ""))),
+                    title,
+                ])
+            )
 
 
 # ---------------------------------------------------------------- repl
@@ -655,7 +1521,7 @@ def _run_repl_line(
 
 @app.command("repl")
 def cmd_repl(
-    corpus_dir: Path = typer.Option(..., "--corpus"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
     prompt: str = typer.Option("wikify-corpus> ", "--prompt"),
 ) -> None:
     """Open a line-oriented corpus query session.

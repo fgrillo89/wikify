@@ -23,24 +23,42 @@ from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
 from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
 from ..bundle.wiki.queries import (
+    AmbiguousSlugError,
     find_text,
     list_articles,
     list_files,
     list_people,
     show_page,
+    traverse_page,
 )
 from ..bundle.wiki.session import WikiSearchSession
+from ._format import format_row, resolve_format
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Committed wiki layer.")
 
 
 def _resolve_bundle(run_flag: Path | None) -> Bundle:
+    """Resolve a bundle: explicit ``--run`` > ``WIKIFY_BUNDLE`` env > cwd."""
+    import os
+
     if run_flag is not None:
         try:
             return Bundle.open(run_flag)
         except FileNotFoundError as exc:
             cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
+
+    env_path = os.environ.get("WIKIFY_BUNDLE")
+    if env_path:
+        try:
+            return Bundle.open(Path(env_path))
+        except FileNotFoundError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_wikify_bundle_env",
+                message=f"WIKIFY_BUNDLE={env_path!r} is not a bundle: {exc}",
+            )
+
     cwd = Path.cwd()
     try:
         return Bundle.open(cwd)
@@ -48,7 +66,10 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
         cli_error(
             EXIT_VALIDATION,
             error="no_bundle_context",
-            message=f"no bundle resolved (cwd={cwd}); pass --run <bundle>. cause: {exc}",
+            message=(
+                f"no bundle resolved (cwd={cwd}). Pass --run <bundle>, set "
+                f"WIKIFY_BUNDLE, or run from inside a bundle. cause: {exc}"
+            ),
         )
 
 
@@ -131,19 +152,34 @@ def cmd_find(
     run: Path | None = typer.Option(None, "--run"),
     top_k: int = typer.Option(20, "--top-k"),
     text: bool = typer.Option(False, "--text"),
-    fmt: str = typer.Option("text", "--format"),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help=(
+            "Output format: auto (compact for TTY / quiet for pipe), "
+            "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
 ) -> None:
-    """Substring grep over committed pages (text mode is the only mode today)."""
+    """Substring grep over committed pages (text mode is the only mode today).
+
+    Compact output columns: ``kind \\t page-handle \\t snippet``.
+    """
     bundle = _resolve_bundle(run)
     if not text:
         # Default to text mode; graph + vector queries are a follow-up.
         text = True
     hits = find_text(bundle, query, top_k=top_k)
-    if fmt == "json":
+    fmt_resolved = resolve_format(fmt)
+    if fmt_resolved == "json":
         typer.echo(json.dumps({"ok": True, "items": hits}))
         return
+    if fmt_resolved == "quiet":
+        for h in hits:
+            typer.echo(f"page:{h['slug']}")
+        return
     for h in hits:
-        typer.echo(f"{h['kind']:<8}  {h['slug']:<32}  {h['snippet']}")
+        typer.echo(format_row([h["kind"], f"page:{h['slug']}", h["snippet"]]))
 
 
 # --------------------------------------------------------------- show
@@ -157,7 +193,16 @@ def cmd_show(
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     bundle = _resolve_bundle(run)
-    info = show_page(bundle, handle=handle)
+    handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
+    try:
+        info = show_page(bundle, handle=handle_clean)
+    except AmbiguousSlugError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
     if info is None:
         cli_error(EXIT_VALIDATION, error="page_not_found", handle=handle)
     if fmt == "json":
@@ -284,6 +329,202 @@ def cmd_commit(
         )
         return
     typer.echo(f"committed {result.page_id} -> {result.page_path}")
+
+
+# --------------------------------------------------------------- schema
+
+
+_WIKI_SCHEMA: dict = {
+    "node_types": {
+        "page": "A committed wiki page (article or person). Handle: page:<slug>.",
+        "evidence": "An evidence entry attached to a page (chunk_id + doc_id + quote).",
+    },
+    "edge_kinds": [
+        "LINKS_TO",       # page -> page
+        "CO_EVIDENCE",    # page <-> page (shared evidence doc_id)
+        "HAS_EVIDENCE",   # page -> evidence
+        "SIMILAR",        # page <-> page (cosine over body embeddings)
+    ],
+    "traverse_relations": {
+        "page": ["links", "linked-by", "co-evidence", "evidence"],
+    },
+    "rank_metrics": {
+        "page": ["n_links", "n_evidence"],
+    },
+    "find_modes": {
+        "--text": "Substring grep over committed page bodies (only mode today).",
+    },
+    "formats": ["auto", "quiet", "compact", "json"],
+    "handle_resolution": (
+        "Slugs are natural Wikipedia-style titles. Exact match wins; "
+        "case-insensitive unique prefix is also accepted. Relative paths "
+        "like 'wiki/articles/<slug>.md' work too."
+    ),
+}
+
+
+@app.command("schema")
+def cmd_schema(
+    fmt: str = typer.Option(
+        "text", "--format", help="Output format: text | json."
+    ),
+) -> None:
+    """Self-describe the wiki CLI surface: nodes, edges, relations, metrics."""
+    if fmt == "json":
+        typer.echo(json.dumps(_WIKI_SCHEMA, indent=2))
+        return
+    typer.echo("Node types:")
+    for k, v in _WIKI_SCHEMA["node_types"].items():
+        typer.echo(f"  {k:10s}  {v}")
+    typer.echo("")
+    typer.echo("Edge kinds:")
+    for kind in _WIKI_SCHEMA["edge_kinds"]:
+        typer.echo(f"  {kind}")
+    typer.echo("")
+    typer.echo("Traverse relations (wiki traverse <handle> --to <relation>):")
+    for handle_kind, rels in _WIKI_SCHEMA["traverse_relations"].items():
+        typer.echo(f"  {handle_kind+':':<8s} {' | '.join(rels)}")
+    typer.echo("")
+    typer.echo("Rank metrics:")
+    for over, metrics in _WIKI_SCHEMA["rank_metrics"].items():
+        typer.echo(f"  over {over+'s:':<8s} {' | '.join(metrics)}")
+    typer.echo("")
+    typer.echo("find modes:")
+    for k, v in _WIKI_SCHEMA["find_modes"].items():
+        typer.echo(f"  {k:14s} {v}")
+    typer.echo("")
+    typer.echo(f"Formats: {' | '.join(_WIKI_SCHEMA['formats'])}")
+    typer.echo("")
+    typer.echo(f"Handles: {_WIKI_SCHEMA['handle_resolution']}")
+
+
+# --------------------------------------------------------------- traverse
+
+
+_PAGE_RELATIONS = {"links", "linked-by", "co-evidence", "evidence"}
+
+
+@app.command("traverse")
+def cmd_traverse(
+    handle: str = typer.Argument(..., help="page:<slug> or <slug> (exact or unique prefix)"),
+    run: Path | None = typer.Option(None, "--run"),
+    to: str = typer.Option(
+        ...,
+        "--to",
+        help=(
+            "Relation: links | linked-by | co-evidence | evidence. "
+            "evidence emits chunk handles for the corpus."
+        ),
+    ),
+    rank: str = typer.Option(
+        "",
+        "--rank",
+        help="Optional rank for page results: n_links | n_evidence.",
+    ),
+    top_k: int = typer.Option(0, "--top-k", help="Limit (0 = no limit)."),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help=(
+            "Output format: auto (compact for TTY / quiet for pipe), "
+            "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
+) -> None:
+    """Traverse one hop from a wiki page handle.
+
+    Page-typed relations (``links``, ``linked-by``, ``co-evidence``)
+    emit ``page:<slug>`` handles. The ``evidence`` relation emits
+    ``chunk:<id>`` handles so the result pipes into ``corpus show`` or
+    ``corpus traverse``.
+
+    Compact output columns:
+
+    - page rows: ``links=N \\t ev=N \\t page-handle \\t title``
+      where ``links`` is outgoing-link count and ``ev`` is evidence
+      count for the page.
+    - evidence rows: ``chunk-handle \\t doc-handle \\t quote``.
+    """
+    bundle = _resolve_bundle(run)
+    fmt_resolved = resolve_format(fmt)
+    if to not in _PAGE_RELATIONS:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_relation",
+            message=(
+                f"unknown wiki relation {to!r}; expected "
+                f"{' | '.join(sorted(_PAGE_RELATIONS))}"
+            ),
+        )
+
+    handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
+    try:
+        info = show_page(bundle, handle=handle_clean)
+    except AmbiguousSlugError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
+    if info is None:
+        cli_error(EXIT_VALIDATION, error="page_not_found", handle=handle)
+    slug = info["slug"]
+
+    try:
+        rows = traverse_page(
+            bundle,
+            slug=slug,
+            relation=to,
+            rank=(rank or None),
+            top_k=(top_k if top_k > 0 else None),
+        )
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_rank", message=str(exc))
+
+    _emit_wiki_traverse_rows(rows, fmt=fmt_resolved)
+
+
+def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
+    if fmt == "json":
+        items: list[dict] = []
+        for r in rows:
+            ntype = r.get("type", "")
+            if ntype == "page":
+                items.append({**r, "handle": f"page:{r.get('slug', r.get('id', ''))}"})
+            elif ntype == "evidence":
+                items.append({**r, "handle": f"chunk:{r.get('chunk_id', '')}"})
+            else:
+                items.append(r)
+        typer.echo(json.dumps({"ok": True, "items": items}))
+        return
+    if fmt == "quiet":
+        for r in rows:
+            ntype = r.get("type", "")
+            if ntype == "page":
+                typer.echo(f"page:{r.get('slug', r.get('id', ''))}")
+            elif ntype == "evidence":
+                cid = str(r.get("chunk_id", ""))
+                if cid:
+                    typer.echo(f"chunk:{cid}")
+        return
+    for r in rows:
+        ntype = r.get("type", "")
+        if ntype == "page":
+            slug = str(r.get("slug", r.get("id", "")))
+            typer.echo(
+                format_row([
+                    f"links={r.get('n_links', 0)}",
+                    f"ev={r.get('n_evidence', 0)}",
+                    f"page:{slug}",
+                    str(r.get("title", "") or ""),
+                ])
+            )
+        elif ntype == "evidence":
+            cid = str(r.get("chunk_id", ""))
+            did = str(r.get("doc_id", ""))
+            quote = str(r.get("quote", "") or "").replace("\n", " ")[:120]
+            typer.echo(format_row([f"chunk:{cid}", f"doc:{did}", quote]))
 
 
 # --------------------------------------------------------------- repl

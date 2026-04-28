@@ -89,6 +89,92 @@ def test_wiki_build_indexes(tmp_path: Path) -> None:
     assert "path" in data
 
 
+def test_wiki_traverse_page_handles_round_trip_when_slug_differs_from_id(
+    tmp_path: Path,
+) -> None:
+    """Page-typed traverse output must use file slug, not graph page id.
+
+    `wiki show` resolves by filename. If `traverse ... --to links` emits
+    `page:<page_id>` and `page_id` differs from the file slug, the
+    pipeline `traverse ... --format quiet | xargs wiki show` breaks.
+    """
+    # Set up a minimal bundle by hand: state.json + two committed pages
+    # where slug != frontmatter id.
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    (bundle_dir / "run" / "state.json").write_text(
+        json.dumps({"run_id": "test", "corpus_path": "data/corpora/foo"}),
+        encoding="utf-8",
+    )
+    articles_dir = bundle_dir / "wiki" / "articles"
+    articles_dir.mkdir(parents=True)
+    custom_id = "concept-ald"
+    target_slug = "Atomic Layer Deposition"
+    other_slug = "Memristor"
+    (articles_dir / f"{target_slug}.md").write_text(
+        f"---\nid: {custom_id}\nkind: article\n"
+        f"title: Atomic Layer Deposition\n---\n\n# ALD\n\nBody.\n",
+        encoding="utf-8",
+    )
+    (articles_dir / f"{other_slug}.md").write_text(
+        "---\nid: Memristor\nkind: article\ntitle: Memristor\n"
+        f"links: [{custom_id}]\n---\n\n# Memristor\n\nLinks to ALD.\n",
+        encoding="utf-8",
+    )
+
+    # Build the graph.
+    build = runner.invoke(
+        app, ["wiki", "build", "graph", "--run", str(bundle_dir)]
+    )
+    assert build.exit_code == 0, build.output
+
+    # Traverse: who links to the ALD page (via slug input)? Memristor.
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "traverse", target_slug,
+            "--run", str(bundle_dir),
+            "--to", "linked-by",
+            "--format", "quiet",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    handles = [line.strip() for line in result.output.splitlines() if line.strip()]
+    assert handles, f"expected at least one linked-by result, got: {result.output!r}"
+    # Output must be the filename slug, not the frontmatter id.
+    assert f"page:{other_slug}" in handles
+
+    # Round-trip: every emitted handle must resolve via `wiki show`.
+    for handle in handles:
+        show_result = runner.invoke(
+            app,
+            ["wiki", "show", handle, "--run", str(bundle_dir)],
+        )
+        assert show_result.exit_code == 0, (handle, show_result.output)
+
+
+def test_wiki_traverse_resolves_slug_to_page_id(tmp_path: Path) -> None:
+    """Slug-passed-to-graph-keyed-by-id was returning empty. Regression test."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+    runner.invoke(app, ["wiki", "build", "graph", "--run", str(bundle.root)])
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "traverse", slug,
+            "--run", str(bundle.root),
+            "--to", "evidence",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    # The committed page has one evidence chunk attached at fixture time.
+    assert len(data["items"]) >= 1
+    assert any("chunk_id" in item for item in data["items"])
+
+
 def test_wiki_check(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])

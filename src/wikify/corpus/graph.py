@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-_MARKER_RE = re.compile(r"\[(\d+(?:\s*[-,]\s*\d+)*)\]")
+_MARKER_RE = re.compile(r"\[(\d+(?:\s*[-‐-―,]\s*\d+)*)\]")
 
 if TYPE_CHECKING:
     import networkx as nx
@@ -43,13 +43,16 @@ def parse_citation_markers(text: str) -> list[int]:
     a RefLookup or any corpus state.
     """
     nums: list[int] = []
+    # Range separators: hyphen plus the unicode dash family ‐‑‒–—― (U+2010..U+2015).
+    range_seps = "-‐‑‒–—―"
+    range_re = re.compile(rf"[{range_seps}]")
     for m in _MARKER_RE.finditer(text):
         for part in m.group(1).split(","):
             part = part.strip()
-            if "-" in part:
-                a, b = part.split("-", 1)
+            split = range_re.split(part, maxsplit=1)
+            if len(split) == 2:
                 try:
-                    nums.extend(range(int(a.strip()), int(b.strip()) + 1))
+                    nums.extend(range(int(split[0].strip()), int(split[1].strip()) + 1))
                 except ValueError:
                     pass
             else:
