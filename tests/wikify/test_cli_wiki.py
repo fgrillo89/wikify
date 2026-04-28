@@ -89,6 +89,28 @@ def test_wiki_build_indexes(tmp_path: Path) -> None:
     assert "path" in data
 
 
+def test_wiki_traverse_resolves_slug_to_page_id(tmp_path: Path) -> None:
+    """Slug-passed-to-graph-keyed-by-id was returning empty. Regression test."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+    runner.invoke(app, ["wiki", "build", "graph", "--run", str(bundle.root)])
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "traverse", slug,
+            "--run", str(bundle.root),
+            "--to", "evidence",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    # The committed page has one evidence chunk attached at fixture time.
+    assert len(data["items"]) >= 1
+    assert any("chunk_id" in item for item in data["items"])
+
+
 def test_wiki_check(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])

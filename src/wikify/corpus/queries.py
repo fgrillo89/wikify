@@ -217,13 +217,14 @@ def get_author(corpus: Corpus, key: str) -> dict | None:
         ca = g.nodes.get(cid, {})
         coauthor_rows.append({
             "key": cid,
+            "name": ca.get("display_name", "") or ca.get("name", "") or "",
             "h_index": int(ca.get("h_index", 0) or 0),
             "citation_count": int(ca.get("citation_count", 0) or 0),
         })
     coauthor_rows.sort(key=lambda r: (-r["h_index"], -r["citation_count"], r["key"]))
     return {
         "key": full,
-        "name": attrs.get("name", "") or "",
+        "name": attrs.get("display_name", "") or attrs.get("name", "") or "",
         "h_index": int(attrs.get("h_index", 0) or 0),
         "citation_count": int(attrs.get("citation_count", 0) or 0),
         "n_papers": sources.count(),
@@ -248,7 +249,7 @@ def rank_authors(
         n_papers = len(kg._backend._sources_of.get(nid, set()))
         rows.append({
             "key": nid,
-            "name": attrs.get("name", "") or "",
+            "name": attrs.get("display_name", "") or attrs.get("name", "") or "",
             "h_index": int(attrs.get("h_index", 0) or 0),
             "citation_count": int(attrs.get("citation_count", 0) or 0),
             "n_papers": n_papers,
@@ -289,7 +290,11 @@ def search_authors(
                 author_key,
                 {
                     "key": author_key,
-                    "name": g.nodes.get(author_key, {}).get("name", "") or "",
+                    "name": (
+                        g.nodes.get(author_key, {}).get("display_name", "")
+                        or g.nodes.get(author_key, {}).get("name", "")
+                        or ""
+                    ),
                     "best_score": score,
                     "n_papers": 0,
                     "h_index": int(g.nodes.get(author_key, {}).get("h_index", 0) or 0),
@@ -745,7 +750,7 @@ def _materialize_traversal(
             rows.append({
                 "id": nid,
                 "type": "author",
-                "name": attrs.get("name", "") or "",
+                "name": attrs.get("display_name", "") or attrs.get("name", "") or "",
                 "h_index": int(attrs.get("h_index", 0) or 0),
                 "citation_count": int(attrs.get("citation_count", 0) or 0),
                 "n_papers": n_papers,

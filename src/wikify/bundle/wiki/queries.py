@@ -110,6 +110,29 @@ def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
 _WIKI_RELATIONS = {"links", "linked-by", "co-evidence", "evidence"}
 
 
+def _slug_to_page_id(bundle: Bundle, slug: str) -> str | None:
+    """Resolve a filename slug to the page's frontmatter ``id``.
+
+    The wiki graph keys nodes by ``page.id`` (from frontmatter, falling
+    back to the filename stem). When ``id`` differs from the slug the
+    CLI passes (e.g. legacy ``id: concept-photocatalysis`` for slug
+    ``Photocatalysis``), graph lookups by slug miss. This helper finds
+    the on-disk page whose stem matches *slug* and returns its real id.
+    """
+    from .page import parse_page
+
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+        if not sub.is_dir():
+            continue
+        candidate = sub / f"{slug}.md"
+        if candidate.is_file():
+            try:
+                return parse_page(candidate).id
+            except (OSError, ValueError):
+                return slug
+    return None
+
+
 def traverse_page(
     bundle: Bundle,
     *,
@@ -135,9 +158,10 @@ def traverse_page(
         return []
     wkg = load_wiki_graph(graph_path)
     backend = wkg._backend
-    if not backend.has_node(slug):
+    page_id = _slug_to_page_id(bundle, slug)
+    if page_id is None or not backend.has_node(page_id):
         return []
-    qb = wkg.page(slug)
+    qb = wkg.page(page_id)
     if relation == "links":
         result = qb.links()
     elif relation == "linked-by":

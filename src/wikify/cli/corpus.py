@@ -375,6 +375,38 @@ def cmd_find(
             error="bad_by",
             message=f"unknown --by {by!r}; expected chunk | paper | author",
         )
+    # --by chunk has no aggregation step, so a graph-metric rank can't be
+    # applied. Reject loudly rather than silently honour --rank semantic.
+    if by == "chunk" and rank != "semantic":
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                f"--rank {rank!r} only applies when chunks are aggregated "
+                f"to a parent doc/author. Use --by paper or --by author, "
+                f"or drop --rank to keep semantic order."
+            ),
+        )
+    # --by author only meaningfully reranks by author-typed metrics.
+    if by == "author" and rank == "pagerank":
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                "--rank pagerank does not apply to authors; use "
+                "h_index | citation_count | n_papers."
+            ),
+        )
+    # --by paper only meaningfully reranks by source-typed metrics.
+    if by == "paper" and rank in {"h_index", "n_papers"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_rank_by_combo",
+            message=(
+                f"--rank {rank!r} does not apply to papers; use "
+                f"citation_count | pagerank, or switch --by author."
+            ),
+        )
 
     # Pure metric ranking — ignore query, return top docs by graph metric.
     if rank in {"citation_count", "pagerank"} and not query and by != "author":
@@ -835,9 +867,11 @@ def cmd_show(
         if au["top_coauthors"]:
             typer.echo("coauthors:")
             for ca in au["top_coauthors"]:
+                handle = format_handle("author", ca["key"])
+                name = ca.get("name", "") or ""
                 typer.echo(
                     f"  h={ca['h_index']:<3d} cites={ca['citation_count']:<4d} "
-                    f"author:{ca['key']}"
+                    f"{handle}  {name}"
                 )
         return
 

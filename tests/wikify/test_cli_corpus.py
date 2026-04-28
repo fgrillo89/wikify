@@ -294,6 +294,68 @@ def test_corpus_find_explain(tmp_path: Path) -> None:
     assert "atomic layer" in result.output
 
 
+def test_corpus_find_chunk_with_metric_rank_errors(tmp_path: Path) -> None:
+    """--by chunk silently ignored --rank citation_count; now rejects."""
+    corpus = _make_corpus(tmp_path / "c")
+    from wikify.ingest.pipeline import refresh_corpus
+    refresh_corpus(corpus)
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--by", "chunk", "--rank", "citation_count",
+            "--top-k", "2",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "bad_rank_by_combo" in (result.output + result.stderr)
+
+
+def test_corpus_find_paper_with_h_index_rank_errors(tmp_path: Path) -> None:
+    """h_index applies to authors, not papers."""
+    corpus = _make_corpus(tmp_path / "c")
+    from wikify.ingest.pipeline import refresh_corpus
+    refresh_corpus(corpus)
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--by", "paper", "--rank", "h_index",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_corpus_author_display_name_uses_display_name_attr(
+    tmp_path: Path,
+) -> None:
+    """Graph stores display_name, not name. Regression test."""
+    corpus = _make_corpus(tmp_path / "c")
+    from wikify.ingest.pipeline import refresh_corpus
+    refresh_corpus(corpus)
+    # Fixture authors are e.g. "author_0" — _author_key normalises and the
+    # display_name is the original. Run `find --by author` and check the
+    # name column is populated, not blank.
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find",
+            "--corpus", str(corpus.root),
+            "--by", "author", "--rank", "h_index", "--top-k", "5",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["items"], "expected at least one author"
+    # At least one row should have a non-empty name (display_name).
+    assert any(item.get("name") for item in data["items"]), (
+        f"all authors have blank name; items={data['items']}"
+    )
+
+
 def test_corpus_find_paper_by_citation_count(tmp_path: Path) -> None:
     """`--by paper --rank citation_count` returns docs ranked by metric."""
     corpus = _make_corpus(tmp_path / "c")
