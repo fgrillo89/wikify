@@ -4,6 +4,48 @@ The corpus is the authoritative evidence layer. During a wiki run,
 corpus access is read-only unless a workflow explicitly runs ingest or
 refresh outside the bundle.
 
+## Step 0 — discover the surface
+
+```bash
+wikify corpus schema
+```
+
+Lists node types, edge kinds, traverse relations grouped by handle
+kind, and rank metrics. Refer here, not source code, for "what's
+available."
+
+Append `--explain` to any `find` or `traverse` to print the resolved
+fluent-chain pseudocode and exit without executing.
+
+## Step 1 — set the corpus once
+
+`--corpus` is **optional**. Resolution order:
+
+1. Explicit `--corpus <path>` flag.
+2. `WIKIFY_CORPUS` environment variable.
+3. Walk up from cwd looking for a directory with `manifest.json` and `docs/`.
+
+The cleanest pattern for a session:
+
+```bash
+export WIKIFY_CORPUS=data/corpora/<name>
+```
+
+Examples below assume this is set, so they omit `--corpus`.
+
+## Idiom — empty query + `--rank` = "rank everything by metric"
+
+`find` with no query and `--rank <graph-metric>` ranks the whole
+corpus / population by that metric. Works for `--by chunk` (default —
+emits docs), `--by paper`, and `--by author`. With a query, `--rank`
+re-orders the semantic top-K by the metric instead.
+
+```bash
+wikify corpus find --rank citation_count --top-k 10           # most-cited paper
+wikify corpus find --by author --rank h_index --top-k 10      # highest h-index
+wikify corpus find "X" --by paper --rank citation_count       # most-cited about X
+```
+
 ## Common Commands
 
 ```bash
@@ -25,18 +67,8 @@ wikify corpus traverse <handle> --to <relation> [--corpus <c>] \
 wikify corpus repl [--corpus <c>]
 ```
 
-``--corpus`` is **optional**. Resolution order:
-
-1. Explicit ``--corpus <path>`` flag.
-2. ``WIKIFY_CORPUS`` environment variable.
-3. Walk up from cwd looking for a directory with ``manifest.json`` and ``docs/``.
-
-Missing-everywhere produces a clear error listing all three options.
-
-Run ``wikify corpus schema`` once per session to learn the full grammar
-without grepping source. Add ``--explain`` to any ``find`` or
-``traverse`` call to print the resolved fluent-chain pseudocode without
-executing.
+Missing-corpus-everywhere produces a clear error listing all three
+resolution options.
 
 ## Handles
 
