@@ -342,8 +342,9 @@ def parse_handle(handle: str) -> tuple[str, str]:
     """Split a ``kind:id`` handle. Raise ``ValueError`` if malformed."""
     if ":" not in handle:
         raise ValueError(
-            f"handle must be 'kind:id' (e.g. 'doc:paper_A' or "
-            f"'chunk:paper_A__c0001'); got {handle!r}"
+            f"handle must be 'kind:id' (e.g. 'doc:5f92b0389ccd', "
+            f"'chunk:499c6728', 'figure:5f92.../fig_002', "
+            f"'author:sungjun_kim'); got {handle!r}"
         )
     kind, _, ident = handle.partition(":")
     return kind, ident

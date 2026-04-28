@@ -239,16 +239,31 @@ app.add_typer(list_app, name="list")
 def cmd_list_docs(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     fmt: str = typer.Option("text", "--format"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Emit full internal ids instead of short doc handles.",
+    ),
 ) -> None:
-    """Print every doc id in the corpus."""
+    """Print every doc handle in the corpus.
+
+    Defaults to short handles (``doc:<short>``) — directly usable as
+    arguments to ``corpus show`` / ``corpus traverse``. ``--long``
+    restores the legacy behaviour of emitting bare full internal ids.
+    """
     corpus = _open_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
     ids = queries.list_doc_ids(corpus)
     if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "items": ids}))
+        if long:
+            typer.echo(json.dumps({"ok": True, "items": ids}))
+        else:
+            typer.echo(
+                json.dumps({"ok": True, "items": [format_handle("doc", d) for d in ids]})
+            )
         return
     for did in ids:
-        typer.echo(did)
+        typer.echo(did if long else format_handle("doc", did))
 
 
 @list_app.command("chunks")
@@ -256,17 +271,44 @@ def cmd_list_chunks(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     doc_id: str = typer.Option(..., "--doc"),
     fmt: str = typer.Option("text", "--format"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Emit full internal ids instead of short chunk handles.",
+    ),
 ) -> None:
-    """Print chunk ids for one document."""
+    """Print chunk handles for one document.
+
+    ``--doc`` accepts the short or full doc handle. Output defaults to
+    short ``chunk:<short>`` handles; ``--long`` restores bare full ids.
+    """
     corpus = _open_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
-    chunks = queries.list_chunks_for_doc(corpus, doc_id)
+    try:
+        full_doc = queries.resolve_doc_id(corpus, doc_id)
+    except AmbiguousHandleError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
+    except HandleNotFoundError:
+        cli_error(EXIT_VALIDATION, error="doc_not_found", id=doc_id)
+    chunks = queries.list_chunks_for_doc(corpus, full_doc)
     ids = [c.id for c in chunks]
     if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "items": ids}))
+        if long:
+            typer.echo(json.dumps({"ok": True, "items": ids}))
+        else:
+            typer.echo(
+                json.dumps(
+                    {"ok": True, "items": [format_handle("chunk", c) for c in ids]}
+                )
+            )
         return
     for cid in ids:
-        typer.echo(cid)
+        typer.echo(cid if long else format_handle("chunk", cid))
 
 
 @list_app.command("files")
@@ -748,12 +790,22 @@ def cmd_show(
     handle: str = typer.Argument(..., help="doc:<id> or chunk:<id> (short or full)"),
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     full: bool = typer.Option(False, "--full"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Print the full internal id alongside the short handle.",
+    ),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Dereference one handle and print its content.
 
     Handles accept short hash suffixes (``doc:5f92b0389ccd``) as well as
     full ids; ambiguous suffixes are reported with the candidate list.
+
+    The ``id:`` line emits the canonical short handle (``doc:<short>``)
+    so an agent can copy it straight back into ``corpus show`` /
+    ``corpus traverse``. Pass ``--long`` to additionally print the full
+    internal id used by ingestion.
     """
     corpus = _open_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
@@ -776,20 +828,21 @@ def cmd_show(
             cli_error(EXIT_VALIDATION, error="doc_not_found", id=ident)
         meta = doc.metadata or {}
         if fmt == "json":
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "id": doc.id,
-                        "title": doc.title,
-                        "kind": doc.kind,
-                        "metadata": meta,
-                        "n_chunks": doc.n_chunks,
-                    }
-                )
-            )
+            payload = {
+                "ok": True,
+                "id": format_handle("doc", doc.id),
+                "title": doc.title,
+                "kind": doc.kind,
+                "metadata": meta,
+                "n_chunks": doc.n_chunks,
+            }
+            if long:
+                payload["full_id"] = doc.id
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:       {doc.id}")
+        typer.echo(f"id:       {format_handle('doc', doc.id)}")
+        if long:
+            typer.echo(f"full_id:  {doc.id}")
         typer.echo(f"title:    {doc.title or ''}")
         typer.echo(f"kind:     {doc.kind}")
         typer.echo(f"chunks:   {doc.n_chunks}")
@@ -818,20 +871,23 @@ def cmd_show(
             doc_id=chunk.doc_id,
         )
         if fmt == "json":
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "id": chunk.id,
-                        "doc_id": chunk.doc_id,
-                        "section_path": list(chunk.section_path or []),
-                        "text": chunk.text if full else chunk.text[:500],
-                    }
-                )
-            )
+            payload = {
+                "ok": True,
+                "id": format_handle("chunk", chunk.id),
+                "doc_id": format_handle("doc", chunk.doc_id),
+                "section_path": list(chunk.section_path or []),
+                "text": chunk.text if full else chunk.text[:500],
+            }
+            if long:
+                payload["full_id"] = chunk.id
+                payload["full_doc_id"] = chunk.doc_id
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:           {chunk.id}")
-        typer.echo(f"doc:          {chunk.doc_id}")
+        typer.echo(f"id:           {format_handle('chunk', chunk.id)}")
+        typer.echo(f"doc:          {format_handle('doc', chunk.doc_id)}")
+        if long:
+            typer.echo(f"full_id:      {chunk.id}")
+            typer.echo(f"full_doc_id:  {chunk.doc_id}")
         typer.echo(f"section_path: {chunk.section_path}")
         if full:
             typer.echo("---")
@@ -854,10 +910,25 @@ def cmd_show(
         if fig is None:
             cli_error(EXIT_VALIDATION, error="figure_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **fig}))
+            payload = {
+                "ok": True,
+                **fig,
+                "id": format_handle("figure", fig["id"]),
+                "doc_id": format_handle("doc", fig["source_id"]),
+                "near_chunk_ids": [
+                    format_handle("chunk", cid) for cid in fig["near_chunk_ids"]
+                ],
+            }
+            if long:
+                payload["full_id"] = fig["id"]
+                payload["full_doc_id"] = fig["source_id"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:        {fig['id']}")
-        typer.echo(f"doc:       {fig['source_id']}")
+        typer.echo(f"id:        {format_handle('figure', fig['id'])}")
+        typer.echo(f"doc:       {format_handle('doc', fig['source_id'])}")
+        if long:
+            typer.echo(f"full_id:   {fig['id']}")
+            typer.echo(f"full_doc_id: {fig['source_id']}")
         if fig.get("page") is not None:
             typer.echo(f"page:      {fig['page']}")
         typer.echo(f"path:      {fig['path']}")
@@ -882,9 +953,18 @@ def cmd_show(
         if au is None:
             cli_error(EXIT_VALIDATION, error="author_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **au}))
+            payload = {
+                "ok": True,
+                **au,
+                "id": format_handle("author", au["key"]),
+            }
+            if long:
+                payload["full_key"] = au["key"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"key:       {au['key']}")
+        typer.echo(f"id:        {format_handle('author', au['key'])}")
+        if long:
+            typer.echo(f"full_key:  {au['key']}")
         if au["name"]:
             typer.echo(f"name:      {au['name']}")
         typer.echo(f"h_index:   {au['h_index']}")
@@ -914,10 +994,22 @@ def cmd_show(
         if eq is None:
             cli_error(EXIT_VALIDATION, error="equation_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **eq}))
+            payload = {
+                "ok": True,
+                **eq,
+                "id": format_handle("equation", eq["id"]),
+                "doc_id": format_handle("doc", eq["source_id"]),
+            }
+            if long:
+                payload["full_id"] = eq["id"]
+                payload["full_doc_id"] = eq["source_id"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:        {eq['id']}")
-        typer.echo(f"doc:       {eq['source_id']}")
+        typer.echo(f"id:        {format_handle('equation', eq['id'])}")
+        typer.echo(f"doc:       {format_handle('doc', eq['source_id'])}")
+        if long:
+            typer.echo(f"full_id:   {eq['id']}")
+            typer.echo(f"full_doc_id: {eq['source_id']}")
         typer.echo(f"kind:      {eq['kind']}")
         typer.echo(f"chemical:  {eq['is_chemical']}")
         if eq["label"]:

@@ -50,6 +50,23 @@ def test_corpus_list_docs_json(tmp_path: Path) -> None:
         ["corpus", "list", "docs", "--corpus", str(corpus.root), "--format", "json"],
     )
     assert result.exit_code == 0
+    # Default: short handles so the items are pipeable directly into
+    # `corpus show` / `corpus traverse`.
+    assert json.loads(result.output)["items"] == ["doc:paper_0", "doc:paper_1"]
+
+
+def test_corpus_list_docs_json_long(tmp_path: Path) -> None:
+    """`--long` recovers the legacy bare-internal-id JSON shape."""
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "list", "docs",
+            "--corpus", str(corpus.root),
+            "--format", "json", "--long",
+        ],
+    )
+    assert result.exit_code == 0
     assert json.loads(result.output)["items"] == ["paper_0", "paper_1"]
 
 
@@ -123,10 +140,11 @@ def test_corpus_show_doc_short_handle(tmp_path: Path) -> None:
 
 def test_corpus_show_doc_unique_suffix(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c", n_docs=3)
-    # `_2` only matches paper_2 (suffix-match tier).
+    # `2` only matches paper_2 via the `_<short>` suffix tier — agents
+    # pass the short fragment, not a leading underscore.
     result = runner.invoke(
         app,
-        ["corpus", "show", "doc:_2", "--corpus", str(corpus.root)],
+        ["corpus", "show", "doc:2", "--corpus", str(corpus.root)],
     )
     assert result.exit_code == 0
     assert "Title 2" in result.output
