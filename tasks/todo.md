@@ -281,3 +281,40 @@ hybrid scoring.
   - Until that lands, downstream CLI consumers can detect the failure
     by checking `title` against the blocklist; nothing in the new
     `find`/`traverse` plumbing depends on title quality.
+
+- **`show doc:` does not surface the abstract.** Returns metadata only
+  (title, year, author count, chunk count). Getting the abstract
+  requires traversing to chunks, picking the first text chunk (skip
+  figure-caption chunks), and `show chunk: --full`. That's 3+ calls
+  for a one-liner question. Fix: either include chunk `c0000` body in
+  `show doc:` by default, or add `show doc: --abstract` (and/or
+  `--full` to dump all chunk bodies).
+
+- **Asymmetric handle shorthand.** Figures support `figure:<doc>/<stem>`
+  but chunks have no doc-scoped shorthand — only the bare 8-hex hash
+  or the full `<doc>__c<N>__<hash>` id. When the bare hash collides
+  across docs (see next item), the agent has to fall back to the
+  long form. Fix: support `chunk:<doc-short>/<chunk-short>` so the
+  doc context disambiguates without typing the full id.
+
+- **Duplicate ingest stubs split a paper across two `doc:` records.**
+  `ald_all_marker` contains both
+  `doc:6aabb4d6e88f` ("[2022 Chen] Performance Optimization of ALD
+  HfOx Memristor...") and `doc:edc7c1e42c51` ("[2022 Chen]" — bare
+  bracketed-citation title, no body). They share chunk hashes
+  (`c0000__757428a8` resolves ambiguously), and equations end up
+  attached to the stub doc rather than the real paper. Fix on
+  **ingest**: detect title patterns like `[YYYY Author]` with no
+  trailing descriptive text and either merge into the matching
+  full-title doc or refuse to create the stub. Add a `corpus check`
+  warning that flags docs whose title is just a bracketed citation.
+
+- **Equation extractor over-ingests markdown table delimiters.** In
+  `doc:6aabb4d6e88f` (and presumably across the corpus), 14 of 17
+  "equations" are table-cell fragments like `| Yes | 3 V/-2.5 V |`,
+  `| No | 7 |`, `[8]`. Only ~3 are real (`V_SET/V_RESET`, `S→L`,
+  `S→H`). Fix in the marker / equation classifier: reject candidates
+  that are pure pipe-delimited table syntax, that are bare
+  bracket-number citations (`[8]`), or that lack any LaTeX/operator
+  content. Add a `corpus check` rule that warns when a doc's
+  inline-equation count is dominated by pipe-prefixed strings.

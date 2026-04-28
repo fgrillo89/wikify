@@ -36,14 +36,20 @@ Examples below assume this is set, so they omit `--corpus`.
 ## Idiom — empty query + `--rank` = "rank everything by metric"
 
 `find` with no query and `--rank <graph-metric>` ranks the whole
-corpus / population by that metric. Works for `--by chunk` (default —
-emits docs), `--by paper`, and `--by author`. With a query, `--rank`
-re-orders the semantic top-K by the metric instead.
+population by that metric. Population must be specified explicitly:
+`--by paper` for source-typed metrics (`citation_count`, `pagerank`)
+or `--by author` for author-typed metrics (`h_index`,
+`citation_count`, `n_papers`). `--by chunk` (default) is rejected with
+a graph-metric rank — chunks have no metric to rank by; the CLI tells
+you to switch to `--by paper` or `--by author`.
+
+With a query, `--rank` re-orders the semantic top-K by the metric
+instead of ranking the whole population.
 
 ```bash
-wikify corpus find --rank citation_count --top-k 10           # most-cited paper
-wikify corpus find --by author --rank h_index --top-k 10      # highest h-index
-wikify corpus find "X" --by paper --rank citation_count       # most-cited about X
+wikify corpus find --by paper  --rank citation_count --top-k 10   # most-cited paper
+wikify corpus find --by author --rank h_index        --top-k 10   # highest h-index
+wikify corpus find "X" --by paper --rank citation_count           # most-cited about X
 ```
 
 ## Common Commands

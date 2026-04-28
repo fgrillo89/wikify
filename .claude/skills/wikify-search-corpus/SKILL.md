@@ -48,8 +48,8 @@ Examples below omit `--corpus` because `WIKIFY_CORPUS` is set.
 | Question                                            | Command |
 |-----------------------------------------------------|---------|
 | **Search & ranking**                                | |
-| Most-cited paper in corpus                          | `find --rank citation_count --top-k 10` |
-| Most central paper (PageRank)                       | `find --rank pagerank --top-k 10` |
+| Most-cited paper in corpus                          | `find --by paper --rank citation_count --top-k 10` |
+| Most central paper (PageRank)                       | `find --by paper --rank pagerank --top-k 10` |
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
@@ -68,7 +68,7 @@ Examples below omit `--corpus` because `WIKIFY_CORPUS` is set.
 | Most-cited papers citing this paper                 | `traverse doc:<short> --to cited-by --rank citation_count` |
 | Bibliography of this paper (in-corpus targets)      | `traverse doc:<short> --to references` |
 | In-corpus refs marked inside a chunk's text         | `traverse chunk:<short> --to cited-in-corpus` |
-| Papers by authors who cite this paper (3-hop pipe)  | `traverse doc:X --to cited-by -F quiet \| xargs -I {} traverse {} --to authors -F quiet \| sort -u \| xargs -I {} traverse {} --to sources -F quiet \| sort -u` |
+| Papers by authors who cite this paper (3-hop pipe)  | `traverse doc:X --to cited-by --format quiet \| xargs -I {} traverse {} --to authors --format quiet \| sort -u \| xargs -I {} traverse {} --to sources --format quiet \| sort -u` |
 | **Structure & media**                               | |
 | Chunks of a paper                                   | `traverse doc:<short> --to chunks` |
 | Figures of a paper                                  | `traverse doc:<short> --to figures` |
@@ -87,22 +87,27 @@ Examples below omit `--corpus` because `WIKIFY_CORPUS` is set.
 | Learn the full surface                              | `schema` |
 | Preview what a command would do                     | append `--explain` to any `find` / `traverse` |
 
-(`-F` is the short form of `--format`. `quiet` mode prints handles
-only — pipe-safe.)
+`--format quiet` prints handles only — pipe-safe and the default when
+stdout is piped.
 
 ## Idiom: empty query + `--rank` = "rank everything by metric"
 
-`find` with no query string and `--rank <graph-metric>` returns the
-corpus's top-K by that metric. Works for `--by chunk` (default — the
-top docs are emitted), `--by paper`, and `--by author`. This is how
-"who's most cited in this corpus?" becomes one line:
+`find` with no query string and `--rank <graph-metric>` ranks the whole
+population by that metric. Population must be specified explicitly: use
+`--by paper` for source-typed metrics (`citation_count`, `pagerank`) or
+`--by author` for author-typed metrics (`h_index`, `citation_count`,
+`n_papers`). `--by chunk` (the default) is **rejected** with metric
+ranks — chunks have no graph-metric to rank by; ask for papers or
+authors instead.
 
 ```bash
-wikify corpus find --by author --rank citation_count --top-k 5
-wikify corpus find --rank pagerank --top-k 10
+wikify corpus find --by paper  --rank citation_count --top-k 10
+wikify corpus find --by paper  --rank pagerank        --top-k 10
+wikify corpus find --by author --rank h_index         --top-k 10
+wikify corpus find --by author --rank citation_count  --top-k 10
 ```
 
-When a query is supplied, `--rank <metric>` *re-ranks* the semantic
+When a query is supplied, `--rank <metric>` *re-orders* the semantic
 top-K by that metric instead — useful for "most cited paper that
 discusses X" where pure semantic top-1 might be a recent paper with
 few citations.
