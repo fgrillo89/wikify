@@ -60,6 +60,7 @@ def _shape_show_item(
     *,
     section_index: list[dict] | None = None,
     text_segments: list[dict] | None = None,
+    body_text: str | None = None,
 ) -> dict:
     kind = result["handle_kind"]
     data = result["data"]
@@ -68,6 +69,7 @@ def _shape_show_item(
             data,
             section_index=section_index,
             text_segments=text_segments,
+            body_text=body_text,
         )
     if kind == "chunk":
         return chunk_item(data, full=bool(result.get("full")))
@@ -78,6 +80,28 @@ def _shape_show_item(
     if kind == "author":
         return author_item(data)
     raise RuntimeError(f"unknown handle_kind {kind!r}")
+
+
+def _flatten_segments(segments: list[dict]) -> str:
+    """Join segments into one ordered body string, ``## <section>`` headers inlined.
+
+    Section headers come from the last element of ``section_path`` when
+    available; an empty path is rendered as a bare body block. Two
+    blank lines separate sections so a downstream Markdown parser
+    treats them as distinct.
+    """
+    parts: list[str] = []
+    for seg in segments:
+        path = seg.get("section_path") or []
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        if path:
+            header = path[-1] if len(path) == 1 else " > ".join(path)
+            parts.append(f"## {header}\n\n{text}")
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
 
 
 def _handle_query_error(exc: queries.QueryError) -> dict:
@@ -213,7 +237,8 @@ def build_server() -> FastMCP:
     @srv.tool()
     async def corpus_show(handle: str, full: bool = False,
                           include_text: bool = False,
-                          sections: list[str] | None = None) -> dict:
+                          sections: list[str] | None = None,
+                          mode: str = "sections") -> dict:
         """Dereference one handle and return its content.
 
         For chunk handles, ``full=True`` returns the full chunk text.
@@ -221,11 +246,20 @@ def build_server() -> FastMCP:
         For doc handles, the result always carries the document's
         ``abstract`` (when available) and a ``meta.sections`` index so
         the agent sees the structure without an extra call. Set
-        ``include_text=True`` to also include the body, grouped by
-        section in document order, under ``meta.text``. ``sections``
-        filters which sections to include (case-insensitive
-        prefix-or-substring match against ``section_path[0]``); leave
-        unset to include everything when ``include_text`` is on.
+        ``include_text=True`` to also include the body in document
+        order. ``mode`` controls the shape:
+
+        - ``"sections"`` (default): ``meta.text`` is a list of
+          ``{section_path, text, chunk_handles, ord_range}`` segments
+          — best when you may want only a subset.
+        - ``"full"``: ``meta.body`` is one string with section headers
+          inlined (``## <section>``), best for "summarise this paper".
+
+        ``sections`` filters which sections to include
+        (case-insensitive substring match; leading numbering like
+        ``"I."``, ``"3.2"``, ``"A."`` is stripped before comparison).
+        On no match, ``notes`` echo the available section paths so the
+        caller can recover.
 
         Figure / equation / author handles are always returned in full.
         """
@@ -233,6 +267,11 @@ def build_server() -> FastMCP:
             corpus = context.require_corpus()
         except context.ContextError as exc:
             return err("no_corpus_bound", str(exc))
+        if mode not in {"sections", "full"}:
+            return err(
+                "bad_mode",
+                f"unknown mode {mode!r}; expected 'sections' | 'full'",
+            )
         try:
             result = queries.show(corpus, handle=handle, full=full)
         except queries.QueryError as exc:
@@ -242,6 +281,7 @@ def build_server() -> FastMCP:
 
         section_index: list[dict] | None = None
         text_segments: list[dict] | None = None
+        body_text: str | None = None
         notes: list[str] = []
         if result["handle_kind"] == "doc":
             doc = result["data"]
@@ -250,7 +290,6 @@ def build_server() -> FastMCP:
                 text = queries.read_doc_text(
                     corpus, doc.id, sections=sections,
                 )
-                text_segments = text["segments"]
                 if sections:
                     matched = text["matched_section_paths"]
                     if not matched:
@@ -266,12 +305,17 @@ def build_server() -> FastMCP:
                             "matched sections: "
                             + " | ".join(" > ".join(p) for p in matched)
                         )
+                if mode == "full":
+                    body_text = _flatten_segments(text["segments"])
+                else:
+                    text_segments = text["segments"]
         return ok(
             "corpus_show_result",
             items=[_shape_show_item(
                 result,
                 section_index=section_index,
                 text_segments=text_segments,
+                body_text=body_text,
             )],
             notes=notes or None,
         )

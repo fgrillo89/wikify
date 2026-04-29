@@ -50,6 +50,17 @@ handles return `ambiguous_handle` with a match list, and so on.
   ``corpus_image(handle="figure:...")`` to also pull the binary into
   the model's context as an MCP ImageContent block. The figure item's
   ``meta.image_tool`` field advertises the call.
+- ``corpus_show(handle="doc:...", include_text=True, mode="full")``
+  returns the body as one ordered string (with ``## <section>``
+  headers inlined) under ``meta.body``, instead of segmented under
+  ``meta.text``. Best for "summarise this paper"; use the default
+  ``mode="sections"`` when you may only want a subset.
+- **References from a paragraph**:
+  ``corpus_traverse(handle="chunk:<short>", to="cited-in-corpus")``
+  parses the citation markers in that chunk's text and returns the
+  in-corpus sources they resolve to. Pair with
+  ``corpus_show chunk:<short> --full`` to read the surrounding prose,
+  then traverse its citations to follow an argument.
 - `corpus_find` paper rows now carry `meta.best_chunk_section` so the
   agent can tell whether a hit came from the abstract vs. references
   without an extra `corpus_show chunk:`.

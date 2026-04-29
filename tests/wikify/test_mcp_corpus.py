@@ -281,6 +281,50 @@ async def test_corpus_show_doc_section_filter(tmp_path: Path) -> None:
     assert any("matched sections" in n for n in res["notes"])
 
 
+async def test_corpus_show_doc_full_mode_returns_one_string(
+    tmp_path: Path,
+) -> None:
+    """mode='full' flattens the body to one ordered string with section headers."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(
+        handle="doc:paper_0", include_text=True, mode="full",
+    )
+    item = res["items"][0]
+    body = item["meta"]["body"]
+    assert isinstance(body, str)
+    assert "## intro" in body
+    assert "## body" in body
+    assert body.index("## intro") < body.index("## body")
+    # mode='full' replaces the segmented view; no meta.text in this mode.
+    assert "text" not in item["meta"]
+
+
+async def test_corpus_show_doc_full_mode_respects_section_filter(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(
+        handle="doc:paper_0", include_text=True, mode="full",
+        sections=["intro"],
+    )
+    body = res["items"][0]["meta"]["body"]
+    assert "## intro" in body
+    assert "## body" not in body
+
+
+async def test_corpus_show_rejects_unknown_mode(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(handle="doc:paper_0", mode="bogus")
+    assert res["ok"] is False
+    assert res["code"] == "bad_mode"
+
+
 async def test_corpus_show_doc_section_filter_no_match_echoes_available(
     tmp_path: Path,
 ) -> None:

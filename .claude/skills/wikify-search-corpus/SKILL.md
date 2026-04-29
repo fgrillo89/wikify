@@ -20,13 +20,22 @@ domain helpers.
 
 High-leverage parameters worth knowing:
 
-- `corpus_show(handle="doc:<short>", include_text=True, sections=["intro"])`
-  returns the paper body in one call. Without `include_text`, the
-  result still carries `meta.sections` and `abstract`.
+- `corpus_show(handle="doc:<short>", include_text=True, mode="full")`
+  returns the body as one ordered string in `meta.body` with
+  `## <section>` headers inlined — best for "summarise this paper".
+  Default `mode="sections"` returns segmented `meta.text`. `sections`
+  filters either mode; mismatch echoes available paths in `notes`.
 - `corpus_find(by="paper", field="title")` does literal substring
   search on `Document.title` — use for "title mentions X".
 - `corpus_traverse(handle="doc:...", to="chunks")` returns chunks in
   document order with `section_path` + `ord` on each row.
+- `corpus_traverse(handle="chunk:...", to="cited-in-corpus")` returns
+  the in-corpus references the markers in that paragraph's text point
+  to — use to follow an argument from a specific paragraph to its
+  sources.
+- `corpus_image(handle="figure:...")` returns the figure binary as an
+  MCP ImageContent block so the model can see the figure during
+  reasoning.
 
 See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`
 for setup, the tool↔CLI map, URI patterns, and CLI fallback.

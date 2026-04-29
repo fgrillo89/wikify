@@ -91,14 +91,14 @@ def doc_item(doc: Document, *,
              best_chunk_id: str | None = None,
              n_match_chunks: int | None = None,
              section_index: list[dict] | None = None,
-             text_segments: list[dict] | None = None) -> dict:
+             text_segments: list[dict] | None = None,
+             body_text: str | None = None) -> dict:
     """Build an envelope item for a :class:`Document`.
 
-    ``section_index`` (when provided) goes under ``meta.sections`` so
-    the agent sees the doc structure without an extra round-trip.
-    ``text_segments`` (when provided) is a list of ``{section_path,
-    text, chunk_handles, ord_range}`` produced by ``read_doc_text``;
-    placed under ``meta.text``.
+    ``section_index`` goes under ``meta.sections``. Exactly one of
+    ``text_segments`` (segmented body, list under ``meta.text``) or
+    ``body_text`` (flattened body, string under ``meta.body``) may be
+    set, depending on the caller's mode; both default to ``None``.
     """
     meta: dict[str, Any] = {
         "kind": doc.kind,
@@ -127,6 +127,8 @@ def doc_item(doc: Document, *,
             }
             for seg in text_segments
         ]
+    if body_text is not None:
+        meta["body"] = body_text
     abstract = (doc.abstract or "").strip()
     preview = abstract or (doc.title or "")
     item = {
