@@ -12,10 +12,13 @@ Covers the fixes for:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from wikify.ingest.bibtex import _clean_author_name
 from wikify.ingest.metadata import (
     _parse_author_line,
     _strip_trailing_affiliation_letter,
+    choose_document_title,
     clean_filename_title,
     is_junk_title,
     parse_authors,
@@ -272,3 +275,45 @@ class TestParseAuthorLineArtifacts:
             # No name should end with a single-letter affiliation marker.
             last_token = name.split()[-1]
             assert len(last_token) > 1 or last_token.endswith("."), name
+
+
+# ---------------------------------------------------------------------------
+# choose_document_title — filename underscores must round-trip as spaces
+# ---------------------------------------------------------------------------
+
+
+class TestChooseDocumentTitleUnderscores:
+    """In the ``[YYYY Author] Title.ext`` filename convention,
+    underscores stand for spaces. Without an explicit underscore->space
+    map, ``clean_markdown`` (called inside ``choose_document_title``)
+    treats `_word_` as italic markup and eats the underscores along
+    with the inner text — so ``Memristor-The_missing_circuit_element``
+    used to collapse to ``Memristor-Themissingcircuit_element``.
+    """
+
+    def test_filename_underscores_become_spaces_for_chua(self):
+        chosen = choose_document_title(
+            "",
+            Path("[1971 Chua] Memristor-The_missing_circuit_element.docx"),
+        )
+        assert chosen == "Memristor-The missing circuit element"
+
+    def test_filename_underscores_no_eaten_words(self):
+        chosen = choose_document_title(
+            "",
+            Path(
+                "[2020 Smith] Conductive_Filament_Dynamics_in_HfO2.docx",
+            ),
+        )
+        # Every word from the filename must survive — no italic-collapse.
+        for word in ("Conductive", "Filament", "Dynamics", "HfO2"):
+            assert word in chosen, (word, chosen)
+
+    def test_already_spaced_filename_unchanged(self):
+        # Filenames that already use spaces must round-trip without
+        # gaining or losing whitespace.
+        chosen = choose_document_title(
+            "",
+            Path("[2020 Smith] Some Already Spaced Title.docx"),
+        )
+        assert chosen == "Some Already Spaced Title"

@@ -190,6 +190,15 @@ def choose_document_title(
     fn_year, fn_author, fn_title = parse_filename(getattr(path, "name", str(path)))
     fn_clean = clean_filename_title(getattr(path, "name", str(path)))
 
+    # In the `[YYYY Author] Title.ext` filename convention, underscores
+    # are word separators (filename-friendly substitute for spaces). Map
+    # them back before passing through clean_markdown — otherwise
+    # `Memristor-The_missing_circuit_element` gets eaten by the markdown-
+    # italic regex `_(.+?)_` and collapses to
+    # `Memristor-Themissingcircuit_element`.
+    if fn_title:
+        fn_title = fn_title.replace("_", " ")
+
     # (candidate_text, min_length_for_acceptance). We still accept a
     # shorter-but-non-junk candidate in pass 2 if nothing longer passes.
     candidates: list[tuple[str, int]] = [
