@@ -10,6 +10,31 @@ Use this skill to inspect and search an existing corpus. It teaches the
 available corpus read operations and traversal patterns; it does not
 decide what to explore next.
 
+## MCP mode
+
+If the wikify MCP server is configured (look for
+`mcp__wikify__corpus_schema` in the available tools), prefer the MCP
+tools for repeated agent reads:
+
+- `mcp__wikify__corpus_find` instead of `wikify corpus find`
+- `mcp__wikify__corpus_traverse` instead of `wikify corpus traverse`
+- `mcp__wikify__corpus_show` instead of `wikify corpus show`
+- `mcp__wikify__corpus_sample` instead of `wikify corpus sample`
+- `mcp__wikify__corpus_schema` instead of `wikify corpus schema`
+
+Validation rules and result content are identical (both adapters call
+the same domain helpers). Tool responses include `resource_uri` on
+every item; fetch the resource (`wikify://corpus/docs/...` etc.) when
+you've picked a handle and want the full record.
+
+If the MCP server is not configured, use the CLI verbs documented
+below. See the shared MCP references
+(`../wikify/references/mcp/setup.md`,
+`../wikify/references/mcp/tool-map.md`,
+`../wikify/references/mcp/resources.md`,
+`../wikify/references/mcp/fallback.md`) for setup, the tool-to-CLI
+map, resource URI patterns, and fallback procedure.
+
 ## Step 0: discover the surface
 
 Run once per session:
