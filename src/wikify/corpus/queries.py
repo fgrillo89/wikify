@@ -541,7 +541,16 @@ def find_seeds(
 
 
 def check_corpus(corpus: Corpus) -> dict:
-    """Lightweight corpus health summary used by ``corpus check``."""
+    """Lightweight corpus health summary used by ``corpus check``.
+
+    Reports doc/chunk counts, derived-artifact presence, detected
+    field, and citation-marker indexing coverage. The marker coverage
+    field surfaces a real ingestion gap: ``traverse <chunk> --to
+    cited-in-corpus`` only works for sources whose ``ord_refs`` index
+    was built at ingest time. Low coverage means most chunks resolve
+    zero in-corpus refs even when their parent docs have known
+    references.
+    """
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
     out: dict = {
@@ -560,6 +569,28 @@ def check_corpus(corpus: Corpus) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
+    # Citation-marker indexing coverage: % of in-corpus source nodes
+    # with a populated per-ordinal reference index. Cheap (one KG load,
+    # one pass over node attrs).
+    if out["has_knowledge_graph"] and out["has_vectors"]:
+        try:
+            vs = read_vector_store(corpus)
+            kg = read_knowledge_graph(corpus, vectors=vs)
+            backend = kg._backend
+            sources_in_corpus = {d.id for d in docs}
+            with_ord = sum(
+                1
+                for sid in sources_in_corpus
+                if backend._ord_refs.get(sid)
+            )
+            out["sources_with_ord_refs"] = with_ord
+            out["ord_refs_coverage_pct"] = (
+                round(100.0 * with_ord / len(sources_in_corpus), 1)
+                if sources_in_corpus else 0.0
+            )
+        except Exception as exc:
+            out["ord_refs_coverage_pct"] = None
+            out["ord_refs_error"] = str(exc)
     return out
 
 

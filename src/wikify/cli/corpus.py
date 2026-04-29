@@ -236,6 +236,13 @@ def cmd_check(
     typer.echo(f"manifest:    {summary['has_manifest']}")
     if summary.get("field"):
         typer.echo(f"field:       {summary['field']}")
+    if "ord_refs_coverage_pct" in summary:
+        cov = summary["ord_refs_coverage_pct"]
+        with_ord = summary.get("sources_with_ord_refs", 0)
+        typer.echo(
+            f"cite_index:  {with_ord}/{summary['n_docs']} docs "
+            f"({cov}% coverage for `cited-in-corpus`)"
+        )
 
 
 # --------------------------------------------------------------- list

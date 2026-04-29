@@ -109,16 +109,28 @@ Take-aways:
   chain (`kg.source('X').cited_by() -> top(...)`) instead of a
   string-concat approximation.
 
-### Batch 4 — deferred
+### Batch 4 — landed
 
-- **#11 `--format json` long-id redundancy** — defer; depends on
-  callers (eval pipeline, render). Touch in a follow-up that audits
-  every JSON consumer.
-- **#13 `cited-in-corpus` double KG load** — defer; meaningful win
-  needs a long-lived KG cache (the REPL has it; one-shot CLI doesn't).
-  That's a bigger architectural change.
+- **`corpus check` cite-index coverage**: the silent-zero pattern in
+  `cited-in-corpus` traced to a real ingestion gap — only 55/208 docs
+  in the ALD corpus (26.4%) have a populated `_ord_refs` index, so
+  the marker → in-corpus reference lookup fails for the rest.
+  `corpus check` now reports
+  `cite_index: 55/208 docs (26.4% coverage for cited-in-corpus)` so
+  the gap is discoverable without diving into the source.
+
+### Deferred (out of scope for this PR)
+
+- **#11 `--format json` long-id redundancy** — depends on callers
+  (eval pipeline, render). Audit every JSON consumer separately.
+- **#13 `cited-in-corpus` double KG load** — meaningful win needs a
+  long-lived KG cache; the REPL has it, one-shot CLI doesn't. Bigger
+  architectural change.
 
 ## Ingestion / citation issues (out of scope; deferred)
+
+Surface these in a separate ticket. Each is reproducible against
+`data/corpora/ald_all_marker`.
 
 - **I-1 Word-Document title leak** — many docs have `title: Word
   Document` even though the slug carries `[1971 Chua] Memristor-…`.
@@ -146,6 +158,19 @@ Take-aways:
   inbound count from his single 1971 paper). That's high but plausible
   for a foundational paper. No bug, but worth verifying author key
   normalization handles "L. O. Chua" vs "Chua" vs "Leon Chua".
+- **I-7 Per-ordinal reference index missing for ~74% of corpus** —
+  only **55 of 208** docs in the ALD corpus have a populated
+  `_ord_refs` node attribute. The `references(ords=…)` query (used by
+  `traverse <chunk> --to cited-in-corpus`) reads exclusively from this
+  index, so `cited-in-corpus` returns silent zero for ~74% of papers
+  even when their bibliography contains in-corpus targets and the
+  chunk text contains valid markers like `[20]`. Confirmed against
+  doc:517c627e1393 (HfO2 Chandrasekaran 2019) which has 40 in-corpus
+  references but `len(_ord_refs[doc]) == 0`. Likely an ingest-pipeline
+  regression: the per-ord index gets attached only when a particular
+  code path runs, and the bulk of the corpus was ingested before that
+  path existed (or it skips certain doc kinds). `corpus check` now
+  prints `cite_index: N/M docs (P% coverage)` so this is discoverable.
 
 ## Profiling log
 
