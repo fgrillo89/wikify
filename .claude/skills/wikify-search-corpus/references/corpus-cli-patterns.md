@@ -72,7 +72,7 @@ wikify corpus find "<query>" [--corpus <c>] [--top-k N] \
     [--rank semantic|citation_count|pagerank|h_index|n_papers] \
     [--format auto|quiet|compact|json] [--explain]
 wikify corpus find "<query>" [--corpus <c>] --text
-wikify corpus find --seed [--corpus <c>] [--max N] [--pagerank-weight W]
+wikify corpus sample [--corpus <c>] [--max N] [--strategy diverse] [--pagerank-weight W]
 wikify corpus show <handle> [--corpus <c>] [--full]
 wikify corpus traverse <handle> --to <relation> [--corpus <c>] \
     [--rank citation_count|pagerank|h_index|n_papers] [--top-k N] \
@@ -116,7 +116,7 @@ error envelope, not a Python traceback. ``--top-k`` must be ``> 0``
 |---|---|
 | ``find --by chunk`` (default)   | ``score`` ``cites=N`` ``chunk-handle`` ``doc-handle`` |
 | ``find --by paper``             | ``score`` ``cites=N`` ``n=K`` ``doc-handle`` ``title`` |
-| ``find --seed`` / metric-only ranking | ``cites=N`` ``pr=X.XXXX`` ``doc-handle`` ``title`` |
+| ``sample`` / metric-only ranking | ``cites=N`` ``pr=X.XXXX`` ``doc-handle`` ``title`` |
 | ``traverse`` source result      | ``cites=N`` ``pr=X.XXXX`` ``doc-handle`` ``title`` |
 | ``traverse`` chunk result       | ``chunk-handle`` ``doc-handle`` |
 | ``traverse`` figure result      | ``page=N`` ``figure-handle`` ``caption`` ``path`` |
@@ -192,7 +192,7 @@ find-papers atomic layer deposition HfO2 memristor top=10
 find --text "atomic layer deposition" top=20
 show chunk:<chunk-id> full
 list docs
-seed max=20
+sample max=20
 exit
 ```
 
@@ -206,7 +206,7 @@ paper for a concept before drilling into chunks.
 - Concept query: subject name, alias, method, material, device, person.
 - Exact phrase query: acronym, equation label, material formula,
   section heading, quoted term.
-- Seed query: `find --seed` to expose central corpus entry points.
+- Sampling: `corpus sample` to expose central, mutually-distinct corpus entry points without a query.
 - Evidence query: concept title plus a missing aspect, for example
   `"atomic layer deposition temperature window"`.
 - Disambiguation query: title plus field or source context.
@@ -235,7 +235,7 @@ wikify corpus schema
 wikify corpus find "atomic layer deposition" --top-k 8
 wikify corpus find "atomic layer deposition" --by paper --rank citation_count --top-k 3
 wikify corpus find "HfO2" --text
-wikify corpus find --seed --max 12
+wikify corpus sample --max 12
 
 # Authors.
 wikify corpus find --by author --rank h_index --top-k 5

@@ -506,20 +506,31 @@ def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
     return out
 
 
-def find_seeds(
+def sample_docs(
     corpus: Corpus,
     *,
-    max_seeds: int,
-    pagerank_weight: float,
+    max_docs: int,
+    strategy: str = "diverse",
+    pagerank_weight: float = 0.7,
 ) -> list[str]:
-    """Return the greedy-submodular seed document ids.
+    """Sample doc ids from the corpus by strategy.
 
-    Both knobs are caller-supplied; the CLI surface defines the
-    user-facing defaults (``corpus find --seed --max <n>
-    --pagerank-weight <w>``). No defaults live here so callers cannot
-    silently rely on a hidden policy.
+    ``strategy="diverse"`` runs greedy-submodular selection blending
+    PageRank prior and coverage gain over mean-pooled doc embeddings.
+    Future strategies (``"random"``, ``"pagerank"``,
+    ``"stratified"``) will surface here without changing callers.
+
+    Knobs are caller-supplied; the CLI surface
+    (``corpus sample --max <n> --strategy <name>
+    --pagerank-weight <w>``) carries the user-facing defaults so the
+    value is explicit at the agent boundary.
     """
-    from .seed import doc_embeddings, greedy_seed_select, pagerank_normalised
+    if strategy != "diverse":
+        raise ValueError(
+            f"unknown sampling strategy {strategy!r}; only 'diverse' is "
+            f"implemented today (future: 'random', 'pagerank')"
+        )
+    from .sampling import doc_embeddings, pagerank_normalised, sample_diverse
 
     chunks = all_chunks(corpus)
     vs = read_vector_store(corpus)
@@ -527,11 +538,11 @@ def find_seeds(
     embeds, doc_order = doc_embeddings(chunks, vs)
     pr_norm = pagerank_normalised(kg, doc_order)
     return list(
-        greedy_seed_select(
+        sample_diverse(
             doc_order=doc_order,
             doc_embeddings=embeds,
             pr_norm=pr_norm,
-            max_seeds=max_seeds,
+            max_docs=max_docs,
             pagerank_weight=pagerank_weight,
         )
     )

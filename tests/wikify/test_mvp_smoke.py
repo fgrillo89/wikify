@@ -15,11 +15,11 @@ without ever calling an LLM:
 
 Notes:
 
-- The ``corpus find --seed`` step from the spec is replaced by a
-  hard-coded concept title because the seed selector requires a fully
-  embedded corpus (vectors.npz + knowledge_graph.json) which is out of
-  scope for a deterministic, no-LLM smoke test. The check is documented
-  in this docstring rather than skipped silently.
+- The ``corpus sample`` step from the spec is replaced by a
+  hard-coded concept title because the diverse-sample selector requires
+  a fully embedded corpus (vectors.npz + knowledge_graph.json) which is
+  out of scope for a deterministic, no-LLM smoke test. The check is
+  documented in this docstring rather than skipped silently.
 - ``draft build`` is a deterministic Python step that just compiles a
   ``WriteRequest`` from on-disk evidence; no model is called. The smoke
   test then writes the synthetic ``response.json`` directly. ``draft
@@ -115,7 +115,7 @@ def test_baseline_lifecycle_runs_end_to_end(tmp_path: Path) -> None:
     assert bundle.events_path.is_file()
 
     # 2. work add concept (hard-coded title — see module docstring on why
-    # we skip ``corpus find --seed``).
+    # we skip ``corpus sample``).
     _invoke(
         "work", "add", "concept", PAGE_TITLE,
         "--run", str(bundle_root),
