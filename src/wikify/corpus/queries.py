@@ -339,14 +339,21 @@ def get_equation(corpus: Corpus, eq_id: str) -> dict | None:
 
 
 def parse_handle(handle: str) -> tuple[str, str]:
-    """Split a ``kind:id`` handle. Raise ``ValueError`` if malformed."""
+    """Split a ``kind:id`` handle. Raise ``ValueError`` if malformed.
+
+    Trims surrounding whitespace (and ``\\r`` from Windows ``\\r\\n``
+    line endings), so handles produced by ``--format quiet`` survive
+    being piped through ``xargs`` on any platform.
+    """
+    handle = handle.strip()
     if ":" not in handle:
         raise ValueError(
-            f"handle must be 'kind:id' (e.g. 'doc:paper_A' or "
-            f"'chunk:paper_A__c0001'); got {handle!r}"
+            f"handle must be 'kind:id' (e.g. 'doc:5f92b0389ccd', "
+            f"'chunk:499c6728', 'figure:5f92.../fig_002', "
+            f"'author:sungjun_kim'); got {handle!r}"
         )
     kind, _, ident = handle.partition(":")
-    return kind, ident
+    return kind, ident.strip()
 
 
 # ------------------------------------------------------------------- find
@@ -533,8 +540,18 @@ def find_seeds(
 # ------------------------------------------------------------------- check
 
 
-def check_corpus(corpus: Corpus) -> dict:
-    """Lightweight corpus health summary used by ``corpus check``."""
+def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
+    """Lightweight corpus health summary used by ``corpus check``.
+
+    Reports doc/chunk counts, derived-artifact presence, and detected
+    field. The default form does **not** load the knowledge graph
+    (~18MB JSON for the ALD corpus, ~6s wall-clock) so the call stays
+    fast. Pass ``full=True`` to also report citation-marker indexing
+    coverage (``traverse <chunk> --to cited-in-corpus`` requires
+    sources with populated ``ord_refs``); this triggers a full KG
+    parse via ``json.load`` + a streaming pass over the ``nodes``
+    array.
+    """
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
     out: dict = {
@@ -553,7 +570,44 @@ def check_corpus(corpus: Corpus) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
+    if full and out["has_knowledge_graph"]:
+        try:
+            out.update(_ord_refs_coverage(corpus, docs))
+        except Exception as exc:
+            out["ord_refs_coverage_pct"] = None
+            out["ord_refs_error"] = str(exc)
     return out
+
+
+def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
+    """Count in-corpus source nodes with a populated ``ord_refs`` attribute.
+
+    Reads ``knowledge_graph.json`` directly via ``json.load`` and
+    iterates the ``nodes`` array — avoids the full NetworkX backend
+    construction that the regular KG load performs. Roughly 6x faster
+    than a full ``read_knowledge_graph`` on the ALD reference corpus.
+    """
+    import json as _json
+
+    with corpus.knowledge_graph_path.open(encoding="utf-8") as fh:
+        kg_blob = _json.load(fh)
+    in_corpus_ids = {d.id for d in docs}
+    with_ord = 0
+    for node in kg_blob.get("nodes", []):
+        if node.get("type") != "source":
+            continue
+        if node.get("id") not in in_corpus_ids:
+            continue
+        ord_refs = node.get("ord_refs") or {}
+        if ord_refs:
+            with_ord += 1
+    n = len(in_corpus_ids)
+    return {
+        "sources_with_ord_refs": with_ord,
+        "ord_refs_coverage_pct": (
+            round(100.0 * with_ord / n, 1) if n else 0.0
+        ),
+    }
 
 
 # ---------------------------------------------------------------- traverse
@@ -670,6 +724,8 @@ def traverse_chunk(
             backend, [chunk.doc_id], rank=rank, top_k=top_k, corpus=corpus
         )
     if relation == "cited-in-corpus":
+        import sys
+
         from .graph import parse_citation_markers
 
         ords = parse_citation_markers(chunk.text)
@@ -678,9 +734,26 @@ def traverse_chunk(
         if chunk.doc_id not in backend.G:
             return []
         result = kg.source(chunk.doc_id).references(ords=ords)
-        return _materialize_traversal(
+        rows = _materialize_traversal(
             backend, result.ids(), rank=rank, top_k=top_k, corpus=corpus
         )
+        # Silent-zero is hostile: agents cannot tell whether the chunk
+        # has no markers or every marker was out-of-corpus. When
+        # markers exist but resolved zero, hint on stderr (suppressible
+        # via WIKIFY_QUIET=1).
+        if not rows:
+            import os
+
+            if os.environ.get("WIKIFY_QUIET") != "1":
+                preview = ",".join(str(o) for o in ords[:8])
+                more = f" (+{len(ords) - 8})" if len(ords) > 8 else ""
+                print(
+                    f"hint: chunk has {len(ords)} citation marker(s) "
+                    f"[{preview}{more}] but none resolved to in-corpus refs; "
+                    f"references may be out-of-corpus or unindexed",
+                    file=sys.stderr,
+                )
+        return rows
     if relation in {"figures", "equations"}:
         # Build a chunk-scoped QueryBuilder directly (no public entry point
         # for a single chunk, but the constructor is the documented internal

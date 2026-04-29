@@ -60,9 +60,11 @@ def resolve(short: str, candidates: Iterable[str]) -> str:
     Resolution rules, in order:
 
     1. Exact match wins.
-    2. Otherwise: any candidate whose short_id == short.
-    3. Otherwise: any candidate ending with ``_<short>`` (suffix match).
-    4. Otherwise: any candidate ending with ``<short>`` (loose suffix).
+    2. Otherwise: any candidate whose ``short_id`` equals *short*.
+    3. Otherwise: any candidate ending with ``_<short>`` (delimited
+       suffix). The leading underscore is required so a one-or-two-char
+       short like ``"5"`` does not match every id whose hex hash
+       happens to end in ``5``.
 
     Raises ``HandleNotFoundError`` on zero matches and
     ``AmbiguousHandleError`` on multiple matches at the same tier.
@@ -80,20 +82,14 @@ def resolve(short: str, candidates: Iterable[str]) -> str:
     if len(by_short) > 1:
         raise AmbiguousHandleError(short, by_short)
 
-    # Tier 3: ends with _<short>.
+    # Tier 3: ends with _<short>. The underscore is the explicit
+    # delimiter — required so short strings cannot bleed into adjacent
+    # characters (e.g. ``"5"`` matching ``..._a8b15``).
     underscore = [c for c in cands if c.endswith("_" + short)]
     if len(underscore) == 1:
         return underscore[0]
     if len(underscore) > 1:
         raise AmbiguousHandleError(short, underscore)
-
-    # Tier 4: ends with <short>. Last resort, useful for chunk ids whose
-    # hash trails after a non-underscore separator.
-    suffix = [c for c in cands if c.endswith(short)]
-    if len(suffix) == 1:
-        return suffix[0]
-    if len(suffix) > 1:
-        raise AmbiguousHandleError(short, suffix)
 
     raise HandleNotFoundError(short)
 

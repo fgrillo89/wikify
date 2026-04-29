@@ -24,8 +24,6 @@ from pathlib import Path
 import typer
 
 from ..api import Bundle, Corpus
-from ..bundle.run.events import Event, append_event
-from ..bundle.run.state import load_state
 from ..corpus import queries
 from ..corpus.handles import (
     AmbiguousHandleError,
@@ -33,9 +31,47 @@ from ..corpus.handles import (
     format_handle,
 )
 from ..corpus.session import CorpusSearchSession
-from ..ingest.pipeline import ingest_corpus, refresh_corpus
-from ._format import format_row, resolve_format
+from ._format import FormatError, format_row, resolve_format
 from ._helpers import EXIT_VALIDATION, cli_error
+
+# ``wikify.ingest.pipeline`` (~250ms) and ``wikify.bundle.run.events``
+# (~300ms) are deferred to first use — neither is needed for the
+# read-only `find`/`show`/`traverse` commands that dominate agent
+# usage. ``ingest_corpus`` / ``refresh_corpus`` are imported inside
+# `cmd_build` / `cmd_refresh`; ``Event`` / ``append_event`` /
+# ``load_state`` are imported inside `_emit_chunk_reads` (which
+# returns early when there is no bundle context).
+
+
+def _resolve_format_or_error(fmt: str) -> str:
+    """Wrap :func:`resolve_format` so unknown values surface as a clean envelope."""
+    try:
+        return resolve_format(fmt)
+    except FormatError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_format", message=str(exc))
+
+
+def _resolve_simple_format(fmt: str, *, allowed: tuple[str, ...] = ("text", "json")) -> str:
+    """Validate the small text|json picker used by ``schema``/``check``/``list``."""
+    if fmt not in allowed:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_format",
+            message=(
+                f"unknown --format {fmt!r}; expected one of {', '.join(allowed)}"
+            ),
+        )
+    return fmt
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    """Reject ``--top-k 0``, ``--max 0`` and negative values with a clean envelope."""
+    if value <= 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_int",
+            message=f"--{name} must be > 0; got {value}",
+        )
 
 app = typer.Typer(add_completion=False, help="Corpus build + read-only queries.")
 
@@ -63,6 +99,10 @@ def _emit_chunk_reads(
     """Append one ``chunk_read`` event per id when a bundle context exists."""
     if bundle is None:
         return
+    # Lazy: ~300ms of jsonschema/etc. only paid when inside a bundle.
+    from ..bundle.run.events import Event, append_event
+    from ..bundle.run.state import load_state
+
     try:
         run_id = load_state(bundle).run_id
     except Exception:
@@ -162,6 +202,8 @@ def cmd_build(
     no_refresh: bool = typer.Option(False, "--no-refresh"),
 ) -> None:
     """Parse, chunk, embed, and graph an input directory."""
+    from ..ingest.pipeline import ingest_corpus
+
     paths = ingest_corpus(
         source,
         out,
@@ -178,6 +220,8 @@ def cmd_refresh(
     corpus_dir: Path = typer.Argument(...),
 ) -> None:
     """Rebuild derived corpus artifacts (embeddings, graph, topics, ...)."""
+    from ..ingest.pipeline import refresh_corpus
+
     paths = Corpus(root=corpus_dir)
     refresh_corpus(paths)
     typer.echo(f"refresh complete: {paths.root}")
@@ -189,10 +233,25 @@ def cmd_check(
         None, help="Corpus directory. Optional; falls back to WIKIFY_CORPUS or cwd."
     ),
     fmt: str = typer.Option("text", "--format"),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help=(
+            "Also compute citation-marker indexing coverage "
+            "(requires loading knowledge_graph.json — slower)."
+        ),
+    ),
 ) -> None:
-    """Report corpus health: doc/chunk counts, derived artifacts, field."""
+    """Report corpus health: doc/chunk counts, derived artifacts, field.
+
+    The default form stays under ~2s by skipping the knowledge-graph
+    load. Pass ``--full`` to also report ``cite_index`` coverage (% of
+    in-corpus sources whose ``ord_refs`` is populated — relevant for
+    ``traverse <chunk> --to cited-in-corpus``).
+    """
     corpus = _resolve_corpus(corpus_dir)
-    summary = queries.check_corpus(corpus)
+    fmt = _resolve_simple_format(fmt)
+    summary = queries.check_corpus(corpus, full=full)
     if fmt == "json":
         typer.echo(json.dumps(summary))
         return
@@ -204,6 +263,13 @@ def cmd_check(
     typer.echo(f"manifest:    {summary['has_manifest']}")
     if summary.get("field"):
         typer.echo(f"field:       {summary['field']}")
+    if "ord_refs_coverage_pct" in summary:
+        cov = summary["ord_refs_coverage_pct"]
+        with_ord = summary.get("sources_with_ord_refs", 0)
+        typer.echo(
+            f"cite_index:  {with_ord}/{summary['n_docs']} docs "
+            f"({cov}% coverage for `cited-in-corpus`)"
+        )
 
 
 # --------------------------------------------------------------- list
@@ -217,15 +283,31 @@ app.add_typer(list_app, name="list")
 def cmd_list_docs(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     fmt: str = typer.Option("text", "--format"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Emit full internal ids instead of short doc handles.",
+    ),
 ) -> None:
-    """Print every doc id in the corpus."""
+    """Print every doc handle in the corpus.
+
+    Defaults to short handles (``doc:<short>``) — directly usable as
+    arguments to ``corpus show`` / ``corpus traverse``. ``--long``
+    restores the legacy behaviour of emitting bare full internal ids.
+    """
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     ids = queries.list_doc_ids(corpus)
     if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "items": ids}))
+        if long:
+            typer.echo(json.dumps({"ok": True, "items": ids}))
+        else:
+            typer.echo(
+                json.dumps({"ok": True, "items": [format_handle("doc", d) for d in ids]})
+            )
         return
     for did in ids:
-        typer.echo(did)
+        typer.echo(did if long else format_handle("doc", did))
 
 
 @list_app.command("chunks")
@@ -233,16 +315,44 @@ def cmd_list_chunks(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     doc_id: str = typer.Option(..., "--doc"),
     fmt: str = typer.Option("text", "--format"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Emit full internal ids instead of short chunk handles.",
+    ),
 ) -> None:
-    """Print chunk ids for one document."""
+    """Print chunk handles for one document.
+
+    ``--doc`` accepts the short or full doc handle. Output defaults to
+    short ``chunk:<short>`` handles; ``--long`` restores bare full ids.
+    """
     corpus = _open_corpus(corpus_dir)
-    chunks = queries.list_chunks_for_doc(corpus, doc_id)
+    fmt = _resolve_simple_format(fmt)
+    try:
+        full_doc = queries.resolve_doc_id(corpus, doc_id)
+    except AmbiguousHandleError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
+    except HandleNotFoundError:
+        cli_error(EXIT_VALIDATION, error="doc_not_found", id=doc_id)
+    chunks = queries.list_chunks_for_doc(corpus, full_doc)
     ids = [c.id for c in chunks]
     if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "items": ids}))
+        if long:
+            typer.echo(json.dumps({"ok": True, "items": ids}))
+        else:
+            typer.echo(
+                json.dumps(
+                    {"ok": True, "items": [format_handle("chunk", c) for c in ids]}
+                )
+            )
         return
     for cid in ids:
-        typer.echo(cid)
+        typer.echo(cid if long else format_handle("chunk", cid))
 
 
 @list_app.command("files")
@@ -252,6 +362,7 @@ def cmd_list_files(
 ) -> None:
     """Print every file under the corpus root, relative."""
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     files = queries.list_files(corpus)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "items": files}))
@@ -326,7 +437,9 @@ def cmd_find(
       where ``pr`` is the corpus PageRank.
     """
     corpus = _resolve_corpus(corpus_dir)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    _validate_positive_int("top-k", top_k)
+    _validate_positive_int("max", max_seeds)
     if explain:
         _emit_find_explain(
             corpus,
@@ -596,12 +709,22 @@ def _emit_paper_rows(
 
 
 def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> None:
-    """Print author rows in the chosen format."""
+    """Print author rows in the chosen format.
+
+    With ``score_key`` set (semantic-search-by-author mode), the
+    ``n_papers`` value carries the per-query match count, not the
+    author's total. To keep the column self-describing we render it as
+    ``n_match=`` in compact mode; the JSON shape stays as ``n_papers``
+    (with an extra ``n_match`` mirror field added in search mode).
+    """
+    in_search_mode = score_key is not None
     if fmt == "json":
-        items = [
-            {**r, "handle": format_handle("author", str(r.get("key", "")))}
-            for r in rows
-        ]
+        items = []
+        for r in rows:
+            item = {**r, "handle": format_handle("author", str(r.get("key", "")))}
+            if in_search_mode:
+                item["n_match"] = int(r.get("n_papers", 0))
+            items.append(item)
         typer.echo(json.dumps({"ok": True, "items": items}))
         return
     if fmt == "quiet":
@@ -611,18 +734,19 @@ def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> N
     for r in rows:
         h = int(r.get("h_index", 0))
         cites = int(r.get("citation_count", 0))
-        n_papers = int(r.get("n_papers", 0))
+        n_count = int(r.get("n_papers", 0))
         score = r.get(score_key) if score_key else None
         score_col = f"{float(score):.3f}" if score is not None else "."
+        n_col = f"n_match={n_count}" if in_search_mode else f"n_papers={n_count}"
         cols = [
             score_col,
             f"h={h}",
             f"cites={cites}",
-            f"n_papers={n_papers}",
+            n_col,
             format_handle("author", str(r.get("key", ""))),
             str(r.get("name", "") or ""),
         ]
-        if score_key is None:
+        if not in_search_mode:
             cols = cols[1:]  # drop the score placeholder for metric-only lists
         typer.echo(format_row(cols))
 
@@ -712,7 +836,9 @@ def _emit_traverse_explain(
         suffix += f" -> top({top_k or 'unbounded'}, by={rank!r})"
     elif top_k:
         suffix += f" -> take({top_k})"
-    typer.echo(f"chain:  {handle}.{to.replace('-', '_')}(){suffix}")
+    kind, _, ident = handle.partition(":")
+    entry = {"doc": "source", "chunk": "chunk", "author": "author"}.get(kind, kind)
+    typer.echo(f"chain:  kg.{entry}({ident!r}).{to.replace('-', '_')}(){suffix}")
 
 
 # ---------------------------------------------------------------- show
@@ -723,14 +849,25 @@ def cmd_show(
     handle: str = typer.Argument(..., help="doc:<id> or chunk:<id> (short or full)"),
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     full: bool = typer.Option(False, "--full"),
+    long: bool = typer.Option(
+        False,
+        "--long",
+        help="Print the full internal id alongside the short handle.",
+    ),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Dereference one handle and print its content.
 
     Handles accept short hash suffixes (``doc:5f92b0389ccd``) as well as
     full ids; ambiguous suffixes are reported with the candidate list.
+
+    The ``id:`` line emits the canonical short handle (``doc:<short>``)
+    so an agent can copy it straight back into ``corpus show`` /
+    ``corpus traverse``. Pass ``--long`` to additionally print the full
+    internal id used by ingestion.
     """
     corpus = _open_corpus(corpus_dir)
+    fmt = _resolve_simple_format(fmt)
     try:
         kind, ident = queries.parse_handle(handle)
     except ValueError as exc:
@@ -750,20 +887,21 @@ def cmd_show(
             cli_error(EXIT_VALIDATION, error="doc_not_found", id=ident)
         meta = doc.metadata or {}
         if fmt == "json":
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "id": doc.id,
-                        "title": doc.title,
-                        "kind": doc.kind,
-                        "metadata": meta,
-                        "n_chunks": doc.n_chunks,
-                    }
-                )
-            )
+            payload = {
+                "ok": True,
+                "id": format_handle("doc", doc.id),
+                "title": doc.title,
+                "kind": doc.kind,
+                "metadata": meta,
+                "n_chunks": doc.n_chunks,
+            }
+            if long:
+                payload["full_id"] = doc.id
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:       {doc.id}")
+        typer.echo(f"id:       {format_handle('doc', doc.id)}")
+        if long:
+            typer.echo(f"full_id:  {doc.id}")
         typer.echo(f"title:    {doc.title or ''}")
         typer.echo(f"kind:     {doc.kind}")
         typer.echo(f"chunks:   {doc.n_chunks}")
@@ -792,20 +930,23 @@ def cmd_show(
             doc_id=chunk.doc_id,
         )
         if fmt == "json":
-            typer.echo(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "id": chunk.id,
-                        "doc_id": chunk.doc_id,
-                        "section_path": list(chunk.section_path or []),
-                        "text": chunk.text if full else chunk.text[:500],
-                    }
-                )
-            )
+            payload = {
+                "ok": True,
+                "id": format_handle("chunk", chunk.id),
+                "doc_id": format_handle("doc", chunk.doc_id),
+                "section_path": list(chunk.section_path or []),
+                "text": chunk.text if full else chunk.text[:500],
+            }
+            if long:
+                payload["full_id"] = chunk.id
+                payload["full_doc_id"] = chunk.doc_id
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:           {chunk.id}")
-        typer.echo(f"doc:          {chunk.doc_id}")
+        typer.echo(f"id:           {format_handle('chunk', chunk.id)}")
+        typer.echo(f"doc:          {format_handle('doc', chunk.doc_id)}")
+        if long:
+            typer.echo(f"full_id:      {chunk.id}")
+            typer.echo(f"full_doc_id:  {chunk.doc_id}")
         typer.echo(f"section_path: {chunk.section_path}")
         if full:
             typer.echo("---")
@@ -828,10 +969,25 @@ def cmd_show(
         if fig is None:
             cli_error(EXIT_VALIDATION, error="figure_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **fig}))
+            payload = {
+                "ok": True,
+                **fig,
+                "id": format_handle("figure", fig["id"]),
+                "doc_id": format_handle("doc", fig["source_id"]),
+                "near_chunk_ids": [
+                    format_handle("chunk", cid) for cid in fig["near_chunk_ids"]
+                ],
+            }
+            if long:
+                payload["full_id"] = fig["id"]
+                payload["full_doc_id"] = fig["source_id"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:        {fig['id']}")
-        typer.echo(f"doc:       {fig['source_id']}")
+        typer.echo(f"id:        {format_handle('figure', fig['id'])}")
+        typer.echo(f"doc:       {format_handle('doc', fig['source_id'])}")
+        if long:
+            typer.echo(f"full_id:   {fig['id']}")
+            typer.echo(f"full_doc_id: {fig['source_id']}")
         if fig.get("page") is not None:
             typer.echo(f"page:      {fig['page']}")
         typer.echo(f"path:      {fig['path']}")
@@ -856,9 +1012,18 @@ def cmd_show(
         if au is None:
             cli_error(EXIT_VALIDATION, error="author_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **au}))
+            payload = {
+                "ok": True,
+                **au,
+                "id": format_handle("author", au["key"]),
+            }
+            if long:
+                payload["full_key"] = au["key"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"key:       {au['key']}")
+        typer.echo(f"id:        {format_handle('author', au['key'])}")
+        if long:
+            typer.echo(f"full_key:  {au['key']}")
         if au["name"]:
             typer.echo(f"name:      {au['name']}")
         typer.echo(f"h_index:   {au['h_index']}")
@@ -888,10 +1053,22 @@ def cmd_show(
         if eq is None:
             cli_error(EXIT_VALIDATION, error="equation_not_found", id=ident)
         if fmt == "json":
-            typer.echo(json.dumps({"ok": True, **eq}))
+            payload = {
+                "ok": True,
+                **eq,
+                "id": format_handle("equation", eq["id"]),
+                "doc_id": format_handle("doc", eq["source_id"]),
+            }
+            if long:
+                payload["full_id"] = eq["id"]
+                payload["full_doc_id"] = eq["source_id"]
+            typer.echo(json.dumps(payload))
             return
-        typer.echo(f"id:        {eq['id']}")
-        typer.echo(f"doc:       {eq['source_id']}")
+        typer.echo(f"id:        {format_handle('equation', eq['id'])}")
+        typer.echo(f"doc:       {format_handle('doc', eq['source_id'])}")
+        if long:
+            typer.echo(f"full_id:   {eq['id']}")
+            typer.echo(f"full_doc_id: {eq['source_id']}")
         typer.echo(f"kind:      {eq['kind']}")
         typer.echo(f"chemical:  {eq['is_chemical']}")
         if eq["label"]:
@@ -950,7 +1127,7 @@ _CORPUS_SCHEMA: dict = {
         "--seed":      "Greedy submodular seed selection.",
         "--text":      "Literal substring grep over chunk text.",
     },
-    "formats": ["auto", "quiet", "compact", "table", "json"],
+    "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
         "Short forms: doc/chunk/equation accept the trailing 8-12 hex; "
         "figure accepts <doc-short>/<stem>. Author accepts case-insensitive "
@@ -970,6 +1147,7 @@ def cmd_schema(
     Run this once to learn the available verbs and relations without
     grepping source.
     """
+    fmt = _resolve_simple_format(fmt)
     if fmt == "json":
         typer.echo(json.dumps(_CORPUS_SCHEMA, indent=2))
         return
@@ -1059,7 +1237,13 @@ def cmd_traverse(
       where ``kind`` is ``math`` / ``chem`` / ``named``.
     """
     corpus = _resolve_corpus(corpus_dir)
-    fmt_resolved = resolve_format(fmt)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    if top_k < 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_top_k",
+            message=f"--top-k must be >= 0 (0 means unlimited); got {top_k}",
+        )
     rank_resolved: str | None = rank or None
     top_k_resolved: int | None = top_k if top_k > 0 else None
 
