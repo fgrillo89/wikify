@@ -807,14 +807,14 @@ def build_citation_index(
     #
     # DOI content negotiation is the long pole in wave D (1 HTTP RTT per
     # doc * 200+ docs). Pre-fetch all DOIs concurrently (10-way semaphore)
-    # before the serial enrichment loop so ``_with_fallback_metadata`` can
+    # before the serial enrichment loop so ``enrich_doc_metadata`` can
     # look up results from the batch cache instead of blocking on
     # individual requests. ~10x speed-up on corpora with many DOIs.
     batch_cache: dict[str, dict[str, object]] = {}
     if resolve_doi and doi_lookup is None:
         # Prefetch DOIs from both explicit metadata AND the pymupdf fallback
         # for PDF-kind docs lacking a DOI. Doing the fallback up-front here
-        # (instead of lazily inside _with_fallback_metadata) means every
+        # (instead of lazily inside enrich_doc_metadata) means every
         # discovered DOI hits the async batch path, not the sync one-off.
         from .metadata import extract_pdf_doi_fallback
 
@@ -843,7 +843,7 @@ def build_citation_index(
                 return batch_cache[key]
             # DOI discovered at refresh time that wasn't in the initial
             # prefetch (rare; only when extract_document_doi inside
-            # _with_fallback_metadata finds a DOI neither in metadata
+            # enrich_doc_metadata finds a DOI neither in metadata
             # nor in pymupdf's scan). Route through the shared resolver.
             from ..util.doi_resolver import resolve_one
 
@@ -854,7 +854,7 @@ def build_citation_index(
         doi_lookup = _cached_lookup
 
     enriched_docs = [
-        _with_fallback_metadata(
+        enrich_doc_metadata(
             corpus, doc,
             resolve_doi=resolve_doi,
             doi_lookup=doi_lookup,
@@ -1094,7 +1094,7 @@ def write_corpus_bibtex(
     seen: dict[str, int] = {}
     entries: list[dict[str, str]] = []
     for doc in docs:
-        enriched = _with_fallback_metadata(
+        enriched = enrich_doc_metadata(
             corpus, doc,
             resolve_doi=resolve_doi,
             doi_lookup=doi_lookup,
@@ -1189,7 +1189,7 @@ def _metadata_from_bibtex_entry(bibtex_text: str) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def _with_fallback_metadata(
+def enrich_doc_metadata(
     corpus: Corpus,
     doc: Document,
     *,
@@ -1245,6 +1245,11 @@ def _with_fallback_metadata(
         chosen = choose_document_title(text, source_path)
         if chosen and not _title_needs_fallback(chosen):
             title = _clean_title(chosen)
+            # Keep metadata in sync so persistent JSON sidecars (which
+            # serialise both doc.title and metadata.title) carry the
+            # cleaned value, and so the DOI sync below sees a clean
+            # baseline.
+            metadata["title"] = title
     if text and needs_authors:
         from .metadata import validate_authors_against_filename
 
@@ -1294,8 +1299,17 @@ def _with_fallback_metadata(
     # doc.title, but _merge_external_metadata writes to metadata["title"].
     # Without this sync, a DOI-returned title silently fails to reach the
     # bibtex entry even though it's in the metadata dict.
+    #
+    # Guard against pulling a junk metadata title back over a locally-
+    # cleaned title (the original sync silently undid the filename->title
+    # cleanup whenever the source's stored metadata.title was a Word
+    # placeholder, since metadata.title started equal to doc.title).
     meta_title = _as_text(metadata.get("title"))
-    if meta_title and meta_title != title:
+    if (
+        meta_title
+        and meta_title != title
+        and not _title_needs_fallback(meta_title)
+    ):
         title = _clean_title(meta_title)
 
     if metadata == original_metadata and title == doc.title:

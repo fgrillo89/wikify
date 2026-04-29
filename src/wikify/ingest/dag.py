@@ -37,7 +37,7 @@ from typing import Awaitable, Callable, Literal
 from wikify.corpus.graph_build import build_knowledge_graph, save_knowledge_graph
 from wikify.corpus.images_index import build_images_index
 
-from .bibtex import write_corpus_bibliography
+from .bibtex import enrich_doc_metadata, write_corpus_bibliography
 from .coupling import compute_coupling
 from .topics import extract_topics, write_topics
 
@@ -260,9 +260,33 @@ def _refresh_cite_heuristics(ctx: dict) -> None:
     )
 
 
+def _refresh_doc_enrichment(ctx: dict) -> None:
+    """Apply title/author/DOI/venue fallbacks to every doc and persist
+    the enriched list back into ``ctx["docs"]``.
+
+    Without this, the title fallback (``"Word Document"`` placeholder ->
+    filename-derived title) only reaches the bibtex writer's local copy,
+    so the knowledge graph and persisted ``docs/<id>.json`` records keep
+    the raw placeholder. Running this step before bibliography / KG
+    build / doc resave makes every downstream consumer see the cleaned
+    metadata.
+    """
+    resolve_doi = True
+    ctx["docs"] = [
+        enrich_doc_metadata(
+            ctx["paths"], doc,
+            resolve_doi=resolve_doi,
+            doi_lookup=None,
+        )
+        for doc in ctx["docs"]
+    ]
+
+
 def _refresh_bibliography(ctx: dict) -> None:
-    # DOI enrichment for source papers always runs (free, no API key).
-    # OpenAlex is the optional step gated by --openalex.
+    # ``ctx["docs"]`` was already enriched in the dedicated
+    # ``doc_enrichment`` wave; ``write_corpus_bibliography`` re-runs the
+    # enrichment defensively (idempotent for already-clean docs) so it
+    # remains correct when called outside the DAG.
     resolve_doi = True
     write_corpus_bibliography(
         ctx["paths"],
@@ -318,7 +342,17 @@ REFRESH_DAG: list[Wave] = [
             Step("openalex", _refresh_openalex),
         ],
     ),
-    # Wave D: citation graph + bibliography (depend on enriched citations)
+    # Wave C': metadata enrichment (title/author/venue/DOI fallback).
+    # Must run before Wave D so bibliography, KG build (Wave E), and
+    # doc resave (Wave F) all see cleaned doc records.
+    Wave(
+        label="wave C' (doc metadata enrichment)",
+        steps=[
+            Step("doc_enrichment", _refresh_doc_enrichment),
+        ],
+    ),
+    # Wave D: citation graph + bibliography (depend on enriched citations
+    # and enriched doc metadata).
     Wave(
         label="wave D (edges+bibliography)",
         steps=[
