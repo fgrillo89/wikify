@@ -1361,6 +1361,14 @@ def _title_needs_fallback(title: str) -> bool:
         return True
     if clean.isupper():
         return True
+    # Underscores never appear in clean English titles (the bib-side
+    # cleanup path always converts them to spaces). A surviving "_" in
+    # `doc.title` is the signature of the historical underscore-eating
+    # bug in `clean_markdown` (PR #62 fixed forward but couldn't heal
+    # already-persisted titles like
+    # ``Memristor-Themissingcircuit_element``). Re-derive on next refresh.
+    if "_" in clean:
+        return True
     # Delegate placeholder detection ("Word Document", "Untitled", section
     # headers like "1 Introduction", repository banners, markdown links) to
     # the shared is_junk_title vocabulary so refresh fixes are picked up on
