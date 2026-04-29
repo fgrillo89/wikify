@@ -1,18 +1,18 @@
 # MCP tool map
 
 MCP tools and their CLI equivalents. Both adapters call into the same
-domain APIs (`wikify.corpus.queries` for Phase 1); behaviour and
-validation rules match exactly.
+domain APIs (`wikify.corpus.queries` today); behaviour and validation
+rules match exactly.
 
 For argument enumeration, call `mcp__wikify__corpus_schema` instead of
 listing flags here. The schema is the single source of truth and is
 kept in step with the underlying primitives.
 
-## Phase 1 — corpus
+## Corpus tools
 
 | MCP tool                          | CLI equivalent                              |
 |-----------------------------------|---------------------------------------------|
-| `mcp__wikify__context_show`       | `wikify mcp serve --corpus ... --bundle ...` (launch-time) |
+| `mcp__wikify__context_show`       | `wikify corpus check` (folded in: corpus health is part of the snapshot when bound) |
 | `mcp__wikify__context_set`        | (CLI re-runs `wikify mcp serve` with new env) |
 | `mcp__wikify__corpus_find`        | `wikify corpus find`                        |
 | `mcp__wikify__corpus_traverse`    | `wikify corpus traverse`                    |
@@ -20,12 +20,34 @@ kept in step with the underlying primitives.
 | `mcp__wikify__corpus_sample`      | `wikify corpus sample`                      |
 | `mcp__wikify__corpus_schema`      | `wikify corpus schema`                      |
 
-`corpus_find`, `corpus_traverse`, and `corpus_show` validation rules
-mirror the CLI exactly: `--by chunk --rank citation_count` is rejected
-on both surfaces, ambiguous handles return `ambiguous_handle` with a
-match list, and so on.
+Listing maps onto search/traverse: "all docs ranked by citation_count"
+is `corpus_find(by="paper", rank="citation_count")`; "chunks of one
+doc" is `corpus_traverse(handle="doc:<short>", to="chunks")`. The
+chunk traverse output is in document order and carries
+``section_path`` + ``ord`` on every row, so the agent can pick the
+introduction (or any other section) without N+1 round-trips.
+
+Validation rules mirror the CLI exactly: `by="chunk"` +
+`rank="citation_count"` is rejected on both surfaces, ambiguous
+handles return `ambiguous_handle` with a match list, and so on.
+
+## High-leverage parameters
+
+- `corpus_find(field="title")` — title-only literal search, valid with
+  `by="paper"`. Use for "papers whose title mentions X" rather than
+  "papers whose body discusses X".
+- `corpus_show(handle="doc:<short>", include_text=True, sections=["intro"])`
+  — return the paper body grouped by section in document order in one
+  call. Without `include_text`, the result still carries `meta.sections`
+  (a cheap section index) and `abstract` for the "is this the right
+  paper?" decision.
+- `corpus_find` paper rows now carry `meta.best_chunk_section` so the
+  agent can tell whether a hit came from the abstract vs. references
+  without an extra `corpus_show chunk:`.
 
 ## Response shape
+
+## Response shape (envelope)
 
 Tools return a lightweight envelope::
 

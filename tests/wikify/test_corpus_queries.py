@@ -292,3 +292,81 @@ def test_traverse_rejects_bad_handle_kind(tmp_path: Path) -> None:
     with pytest.raises(queries.QueryError) as exc:
         queries.traverse(corpus, handle="figure:foo/bar", to="chunks")
     assert exc.value.code == "bad_handle_kind"
+
+
+def test_traverse_doc_chunks_returns_document_order_with_section(
+    tmp_path: Path,
+) -> None:
+    """doc -> chunks must be ordered by ``ord`` and carry section_path."""
+    corpus = _make_corpus(tmp_path / "c")
+    rows = queries.traverse_doc(
+        corpus, doc_id="paper_0", relation="chunks",
+    )
+    assert [r["ord"] for r in rows] == sorted(r["ord"] for r in rows)
+    assert all("section_path" in r for r in rows)
+
+
+def test_search_papers_by_title_is_case_insensitive_substring(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    rows = queries.search_papers_by_title(corpus, "title 1", top_k=5)
+    assert [r["doc_id"] for r in rows] == ["paper_1"]
+
+
+def test_find_field_title_dispatches_to_title_search(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = queries.find(
+        corpus, query="title 0", by="paper", rank="semantic",
+        top_k=5, field="title",
+    )
+    assert result["kind"] == "papers"
+    assert result["scored"] is False
+    assert [r["doc_id"] for r in result["rows"]] == ["paper_0"]
+
+
+def test_find_field_title_rejects_non_paper_by(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(
+            corpus, query="x", by="chunk", rank="semantic",
+            top_k=5, field="title",
+        )
+    assert exc.value.code == "bad_field_by_combo"
+
+
+def test_find_field_title_rejects_empty_query(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(
+            corpus, query="", by="paper", rank="semantic",
+            top_k=5, field="title",
+        )
+    assert exc.value.code == "missing_query"
+
+
+def test_read_doc_text_groups_consecutive_chunks_by_section(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    segments = queries.read_doc_text(corpus, "paper_0")
+    # The fixture chunks alternate section_path = ['intro'] then ['body'];
+    # both should appear in document order.
+    assert [s["section_path"] for s in segments] == [["intro"], ["body"]]
+    assert all("text" in s and "chunk_ids" in s for s in segments)
+
+
+def test_read_doc_text_section_filter(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    intro = queries.read_doc_text(corpus, "paper_0", sections=["intro"])
+    assert len(intro) == 1
+    assert intro[0]["section_path"] == ["intro"]
+
+
+def test_doc_section_index(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    idx = queries.doc_section_index(corpus, "paper_0")
+    paths = [s["section_path"] for s in idx]
+    assert ["intro"] in paths
+    assert ["body"] in paths
+    assert all(s["n_chunks"] >= 1 for s in idx)

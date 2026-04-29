@@ -12,28 +12,24 @@ decide what to explore next.
 
 ## MCP mode
 
-If the wikify MCP server is configured (look for
-`mcp__wikify__corpus_schema` in the available tools), prefer the MCP
-tools for repeated agent reads:
+If `mcp__wikify__corpus_schema` is in the tool list, prefer MCP tools
+over CLI verbs for repeated reads (`corpus_find`, `corpus_traverse`,
+`corpus_show`, `corpus_sample`, `corpus_schema`, `context_show`).
+Validation and data are identical — both adapters call the same
+domain helpers.
 
-- `mcp__wikify__corpus_find` instead of `wikify corpus find`
-- `mcp__wikify__corpus_traverse` instead of `wikify corpus traverse`
-- `mcp__wikify__corpus_show` instead of `wikify corpus show`
-- `mcp__wikify__corpus_sample` instead of `wikify corpus sample`
-- `mcp__wikify__corpus_schema` instead of `wikify corpus schema`
+High-leverage parameters worth knowing:
 
-Validation rules and result content are identical (both adapters call
-the same domain helpers). Tool responses include `resource_uri` on
-every item; fetch the resource (`wikify://corpus/docs/...` etc.) when
-you've picked a handle and want the full record.
+- `corpus_show(handle="doc:<short>", include_text=True, sections=["intro"])`
+  returns the paper body in one call. Without `include_text`, the
+  result still carries `meta.sections` and `abstract`.
+- `corpus_find(by="paper", field="title")` does literal substring
+  search on `Document.title` — use for "title mentions X".
+- `corpus_traverse(handle="doc:...", to="chunks")` returns chunks in
+  document order with `section_path` + `ord` on each row.
 
-If the MCP server is not configured, use the CLI verbs documented
-below. See the shared MCP references
-(`../wikify/references/mcp/setup.md`,
-`../wikify/references/mcp/tool-map.md`,
-`../wikify/references/mcp/resources.md`,
-`../wikify/references/mcp/fallback.md`) for setup, the tool-to-CLI
-map, resource URI patterns, and fallback procedure.
+See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`
+for setup, the tool↔CLI map, URI patterns, and CLI fallback.
 
 ## Step 0: discover the surface
 
@@ -83,6 +79,7 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited paper in corpus                          | `find --by paper --rank citation_count --top-k 10` |
 | Most central paper (PageRank)                       | `find --by paper --rank pagerank --top-k 10` |
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
+| Paper whose **title** mentions X                    | `find "X" --by paper --field title` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
 | Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |

@@ -89,8 +89,17 @@ def doc_item(doc: Document, *,
              score: float | None = None,
              rank: dict | None = None,
              best_chunk_id: str | None = None,
-             n_match_chunks: int | None = None) -> dict:
-    """Build an envelope item for a :class:`Document`."""
+             n_match_chunks: int | None = None,
+             section_index: list[dict] | None = None,
+             text_segments: list[dict] | None = None) -> dict:
+    """Build an envelope item for a :class:`Document`.
+
+    ``section_index`` (when provided) goes under ``meta.sections`` so
+    the agent sees the doc structure without an extra round-trip.
+    ``text_segments`` (when provided) is a list of ``{section_path,
+    text, chunk_handles, ord_range}`` produced by ``read_doc_text``;
+    placed under ``meta.text``.
+    """
     meta: dict[str, Any] = {
         "kind": doc.kind,
         "n_chunks": doc.n_chunks,
@@ -104,16 +113,35 @@ def doc_item(doc: Document, *,
             meta["year"] = doc.metadata["year"]
         if "authors" in doc.metadata:
             meta["n_authors"] = len(doc.metadata.get("authors") or [])
-    return {
+    if section_index is not None:
+        meta["sections"] = section_index
+    if text_segments is not None:
+        meta["text"] = [
+            {
+                "section_path": seg["section_path"],
+                "text": seg["text"],
+                "chunk_handles": [
+                    format_handle("chunk", cid) for cid in seg["chunk_ids"]
+                ],
+                "ord_range": seg["ord_range"],
+            }
+            for seg in text_segments
+        ]
+    abstract = (doc.abstract or "").strip()
+    preview = abstract or (doc.title or "")
+    item = {
         "handle": format_handle("doc", doc.id),
         "type": "doc",
         "title": doc.title or "",
         "score": score,
         "rank": rank,
         "resource_uri": doc_uri(doc.id),
-        "preview": (doc.title or "")[:_PREVIEW_CHARS],
+        "preview": preview[:_PREVIEW_CHARS],
         "meta": meta,
     }
+    if abstract:
+        item["abstract"] = abstract
+    return item
 
 
 def doc_row_item(row: dict, *, score: float | None = None) -> dict:
@@ -131,10 +159,14 @@ def doc_row_item(row: dict, *, score: float | None = None) -> dict:
         meta["best_chunk_handle"] = format_handle(
             "chunk", str(row["best_chunk_id"])
         )
+    if "best_chunk_section" in row:
+        meta["best_chunk_section"] = list(row["best_chunk_section"] or [])
     if "chunk_ids" in row:
         meta["matched_chunk_handles"] = [
             format_handle("chunk", str(cid)) for cid in row.get("chunk_ids", [])
         ]
+    if "match_offset" in row:
+        meta["title_match_offset"] = int(row["match_offset"])
     if score is None and "best_score" in row:
         score = float(row["best_score"])
     return {
@@ -279,6 +311,13 @@ def traverse_row_item(row: dict) -> dict:
     if ntype == "chunk":
         chunk_id = str(row.get("id", ""))
         doc_id = str(row.get("doc_id", ""))
+        meta: dict[str, Any] = {
+            "doc_handle": format_handle("doc", doc_id) if doc_id else "",
+        }
+        if "section_path" in row:
+            meta["section_path"] = list(row.get("section_path") or [])
+        if "ord" in row and row.get("ord") is not None:
+            meta["ord"] = int(row["ord"])
         return {
             "handle": format_handle("chunk", chunk_id),
             "type": "chunk",
@@ -287,9 +326,7 @@ def traverse_row_item(row: dict) -> dict:
             "rank": None,
             "resource_uri": chunk_uri(chunk_id),
             "preview": "",
-            "meta": {
-                "doc_handle": format_handle("doc", doc_id) if doc_id else "",
-            },
+            "meta": meta,
         }
     if ntype == "figure":
         return figure_item({

@@ -39,8 +39,8 @@ uses multiple entries (e.g. `wikify-ald`, `wikify-cvd`).
 
 ## Verifying the server
 
-After editing `.mcp.json`, reload Claude Code and confirm the seven
-Phase 1 tools are visible:
+After editing `.mcp.json`, reload Claude Code and confirm the wikify
+tools are visible:
 
 - `mcp__wikify__context_show`
 - `mcp__wikify__context_set`

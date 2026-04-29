@@ -1,8 +1,8 @@
-"""MCP layer tests for the Phase 1 corpus surface.
+"""MCP layer tests for the corpus surface.
 
-Owns three concerns that are unique to the MCP adapter:
+Three concerns that are unique to the MCP adapter:
 
-- tool registration: ``build_server`` exposes the planned seven tools.
+- tool registration: ``build_server`` exposes the corpus tools.
 - envelope shape: every tool returns ``{ok, kind, items, notes, next}``
   (or ``{ok=False, code, message}`` on error).
 - parity: tool ``items`` align with the underlying ``queries.*``
@@ -44,7 +44,7 @@ def _tool(srv, name):
 # ----------------------------------------------------------- registration
 
 
-def test_build_server_registers_phase_1_tools() -> None:
+def test_build_server_registers_corpus_tools() -> None:
     srv = server.build_server()
     names = {t.name for t in srv._tool_manager.list_tools()}
     assert names == {
@@ -234,3 +234,118 @@ async def test_corpus_schema_resource(tmp_path: Path) -> None:
     import json as _json
     data = _json.loads(payload)
     assert data == queries.SCHEMA
+
+
+# ----------------------------------------------------- doc text + section index
+
+
+async def test_corpus_show_doc_carries_section_index(tmp_path: Path) -> None:
+    """corpus_show on a doc returns the section structure for cheap navigation."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(handle="doc:paper_0")
+    item = res["items"][0]
+    assert item["type"] == "doc"
+    sections = item["meta"]["sections"]
+    assert any(s["section_path"] == ["intro"] for s in sections)
+    assert any(s["section_path"] == ["body"] for s in sections)
+
+
+async def test_corpus_show_doc_include_text_returns_grouped_body(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(
+        handle="doc:paper_0", include_text=True,
+    )
+    item = res["items"][0]
+    text_blocks = item["meta"]["text"]
+    assert [b["section_path"] for b in text_blocks] == [["intro"], ["body"]]
+    assert all("atomic layer deposition" in b["text"] for b in text_blocks)
+
+
+async def test_corpus_show_doc_section_filter(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(
+        handle="doc:paper_0", include_text=True, sections=["intro"],
+    )
+    text_blocks = res["items"][0]["meta"]["text"]
+    assert len(text_blocks) == 1
+    assert text_blocks[0]["section_path"] == ["intro"]
+
+
+# ------------------------------------------------------------- title search
+
+
+async def test_corpus_find_field_title(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="Title 0", by="paper", field="title", top_k=5,
+    )
+    assert res["ok"] is True
+    assert len(res["items"]) == 1
+    assert res["items"][0]["title"] == "Title 0"
+
+
+async def test_corpus_find_field_title_rejects_chunk_by(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="x", by="chunk", field="title",
+    )
+    assert res["ok"] is False
+    assert res["code"] == "bad_field_by_combo"
+
+
+# ------------------------------------------------------- traversal enrichment
+
+
+async def test_corpus_traverse_chunks_carries_section_and_ord(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_traverse")(
+        handle="doc:paper_0", to="chunks",
+    )
+    assert res["ok"] is True
+    items = res["items"]
+    assert all(it["type"] == "chunk" for it in items)
+    assert all("section_path" in it["meta"] for it in items)
+    assert [it["meta"]["ord"] for it in items] == sorted(
+        it["meta"]["ord"] for it in items
+    )
+
+
+# -------------------------------------------------- context_show health summary
+
+
+async def test_context_show_includes_health_when_corpus_bound(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "context_show")()
+    snap = res["items"][0]
+    assert snap["corpus_bound"] is True
+    assert "health" in snap
+    assert snap["health"]["n_docs"] == 2
+    assert snap["health"]["n_chunks"] == 4
+
+
+async def test_context_show_omits_health_when_unbound() -> None:
+    srv = server.build_server()
+    res = await _tool(srv, "context_show")()
+    snap = res["items"][0]
+    assert snap["corpus_bound"] is False
+    assert "health" not in snap

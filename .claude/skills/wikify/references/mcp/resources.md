@@ -5,7 +5,7 @@ previews + a `resource_uri` field; resources resolve a URI to the full
 record. Use them when you've decided which handle to inspect — never
 to enumerate.
 
-## URI patterns (Phase 1)
+## URI patterns
 
 | URI template                                       | Returns |
 |----------------------------------------------------|---------|

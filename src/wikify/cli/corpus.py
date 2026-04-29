@@ -393,6 +393,15 @@ def cmd_find(
         "--rank",
         help="Ranking metric: semantic | citation_count | pagerank.",
     ),
+    field: str = typer.Option(
+        "chunk_text",
+        "--field",
+        help=(
+            "Search field: chunk_text (default) or title. "
+            "--field title runs a literal substring on Document.title; "
+            "valid only with --by paper."
+        ),
+    ),
     fmt: str = typer.Option(
         "auto",
         "--format",
@@ -445,7 +454,8 @@ def cmd_find(
 
     try:
         result = queries.find(
-            corpus, query=query, by=by, rank=rank, top_k=top_k, text=text
+            corpus, query=query, by=by, rank=rank, top_k=top_k,
+            text=text, field=field,
         )
     except queries.QueryError as exc:
         cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)

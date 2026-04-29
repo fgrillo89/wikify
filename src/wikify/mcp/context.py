@@ -1,8 +1,8 @@
 """Server-scoped corpus/bundle binding for the MCP adapter.
 
-The MCP server is a single warm process bound to one corpus and at
-most one bundle (per ``tasks/mcp_plan.md``). Multi-corpus comparisons
-are out of scope; if needed, configure multiple ``mcpServers`` entries.
+One MCP server holds one corpus and at most one bundle. For
+multi-corpus comparison, configure multiple ``mcpServers`` entries
+in ``.mcp.json``.
 
 Binding modes:
 

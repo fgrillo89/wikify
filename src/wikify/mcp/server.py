@@ -1,13 +1,13 @@
 """FastMCP server: tool + resource registration for the corpus surface.
 
-Phase 1 ships the corpus tools (``corpus_find``, ``corpus_traverse``,
-``corpus_show``, ``corpus_sample``, ``corpus_schema``) and the
-``context_show`` / ``context_set`` binding helpers, plus the
-``wikify://corpus/...`` resource templates. Wiki, bundle, mutations,
-and ingest/render/eval ship in later phases.
+Tools: ``context_show`` / ``context_set`` for binding;
+``corpus_find`` / ``corpus_traverse`` / ``corpus_show`` /
+``corpus_sample`` / ``corpus_schema`` for read-side corpus access.
+Resources: ``wikify://corpus/{docs,chunks,figures,equations,authors}/...``
+plus ``wikify://schemas/corpus``.
 
 All tools call into :mod:`wikify.corpus.queries` — the same domain
-APIs the CLI calls — so behavior parity is enforced by construction.
+APIs the CLI calls — so behaviour parity is enforced by construction.
 """
 
 from __future__ import annotations
@@ -55,11 +55,20 @@ def _shape_find_items(result: dict) -> list[dict]:
     return []
 
 
-def _shape_show_item(result: dict) -> dict:
+def _shape_show_item(
+    result: dict,
+    *,
+    section_index: list[dict] | None = None,
+    text_segments: list[dict] | None = None,
+) -> dict:
     kind = result["handle_kind"]
     data = result["data"]
     if kind == "doc":
-        return doc_item(data)
+        return doc_item(
+            data,
+            section_index=section_index,
+            text_segments=text_segments,
+        )
     if kind == "chunk":
         return chunk_item(data, full=bool(result.get("full")))
     if kind == "figure":
@@ -98,8 +107,22 @@ def build_server() -> FastMCP:
 
     @srv.tool()
     async def context_show() -> dict:
-        """Show the current corpus/bundle binding."""
-        return ok("context", items=[context.snapshot()])
+        """Show the current corpus/bundle binding plus a corpus health summary.
+
+        When a corpus is bound, the snapshot also carries doc/chunk
+        counts, derived-artifact presence, and detected field. This
+        folds in the use case of ``wikify corpus check`` so the agent
+        does not need a separate tool call to verify the binding is
+        usable.
+        """
+        snap = context.snapshot()
+        corpus = context.get_corpus()
+        if corpus is not None:
+            try:
+                snap["health"] = queries.check_corpus(corpus, full=False)
+            except Exception as exc:
+                snap["health_error"] = str(exc)
+        return ok("context", items=[snap])
 
     @srv.tool()
     async def context_set(corpus_path: str | None = None,
@@ -126,15 +149,24 @@ def build_server() -> FastMCP:
     @srv.tool()
     async def corpus_find(query: str = "", by: str = "chunk",
                           rank: str = "semantic", top_k: int = 8,
-                          text: bool = False) -> dict:
+                          text: bool = False,
+                          field: str = "chunk_text") -> dict:
         """Search the corpus.
 
         ``by`` is ``chunk`` | ``paper`` | ``author``. ``rank`` is
-        ``semantic`` (default) or one of the graph metrics advertised
-        by ``corpus_schema`` (``citation_count``, ``pagerank``,
-        ``h_index``, ``n_papers``). With no query and a graph metric,
-        the whole population is ranked. ``text=True`` switches to a
-        literal substring grep.
+        ``semantic`` (default) or a graph metric (``citation_count``,
+        ``pagerank``, ``h_index``, ``n_papers``). With no query and a
+        graph metric, the whole population is ranked.
+
+        ``text=True`` switches the chunk match from semantic to literal
+        substring grep. ``field='title'`` runs a literal substring
+        search over ``Document.title`` instead — use with ``by='paper'``
+        for "papers whose title mentions X" (vs. "papers whose body
+        mentions X" via the default ``field='chunk_text'``).
+
+        Paper rows include ``best_chunk_section`` so the agent can tell
+        whether a hit came from the abstract vs. references without
+        another round-trip.
         """
         try:
             corpus = context.require_corpus()
@@ -143,7 +175,7 @@ def build_server() -> FastMCP:
         try:
             result = queries.find(
                 corpus, query=query, by=by, rank=rank,
-                top_k=top_k, text=text,
+                top_k=top_k, text=text, field=field,
             )
         except queries.QueryError as exc:
             return _handle_query_error(exc)
@@ -179,11 +211,23 @@ def build_server() -> FastMCP:
                   notes=[f"handle_kind={result['handle_kind']}"])
 
     @srv.tool()
-    async def corpus_show(handle: str, full: bool = False) -> dict:
+    async def corpus_show(handle: str, full: bool = False,
+                          include_text: bool = False,
+                          sections: list[str] | None = None) -> dict:
         """Dereference one handle and return its content.
 
-        ``full=True`` returns full chunk text on chunk handles; doc /
-        figure / equation / author payloads are always full.
+        For chunk handles, ``full=True`` returns the full chunk text.
+
+        For doc handles, the result always carries the document's
+        ``abstract`` (when available) and a ``meta.sections`` index so
+        the agent sees the structure without an extra call. Set
+        ``include_text=True`` to also include the body, grouped by
+        section in document order, under ``meta.text``. ``sections``
+        filters which sections to include (case-insensitive
+        prefix-or-substring match against ``section_path[0]``); leave
+        unset to include everything when ``include_text`` is on.
+
+        Figure / equation / author handles are always returned in full.
         """
         try:
             corpus = context.require_corpus()
@@ -195,7 +239,24 @@ def build_server() -> FastMCP:
             return _handle_query_error(exc)
         except (AmbiguousHandleError, HandleNotFoundError) as exc:
             return _handle_handle_lookup_error(exc)
-        return ok("corpus_show_result", items=[_shape_show_item(result)])
+
+        section_index: list[dict] | None = None
+        text_segments: list[dict] | None = None
+        if result["handle_kind"] == "doc":
+            doc = result["data"]
+            section_index = queries.doc_section_index(corpus, doc.id)
+            if include_text:
+                text_segments = queries.read_doc_text(
+                    corpus, doc.id, sections=sections,
+                )
+        return ok(
+            "corpus_show_result",
+            items=[_shape_show_item(
+                result,
+                section_index=section_index,
+                text_segments=text_segments,
+            )],
+        )
 
     @srv.tool()
     async def corpus_sample(strategy: str = "diverse", max_docs: int = 20,
