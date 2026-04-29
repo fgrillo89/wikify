@@ -7,3 +7,4 @@
 - **Drop dead duplication on rename**: When renaming `WriteEvidenceRefV2 -> WriteEvidenceRef`, the old `WriteEvidenceRef` (small form) was kept alive though no consumer read it. Rename + grep-for-callers + delete-orphan in the same change.
 - **Don't ship dead commands in canonical docs**: `docs/filesystem-state-design.md` listed `wikify run set --corpus` and `corpus find --out/--in/...` flags that the actual CLI rejects. Doc examples must be derived from `--help` output, not aspiration.
 - **Skill primitives must not smuggle workflows**: Bundle/setup/helper skills should expose unit operations and contracts, not bundled strategy choices like exploration order, readiness thresholds, or writer fanout. Workflow skills own those decisions.
+- **MCP should not blindly mirror CLI verbs**: For Wikify, expose expressive corpus/wiki primitives plus resources, keep workflows in skills, and keep CLI as a first-class sibling adapter rather than describing it as legacy.

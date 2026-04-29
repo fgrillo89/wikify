@@ -1,225 +1,72 @@
-# MCP Server — implementation plan for all wikify surfaces
+# MCP Server implementation plan for Wikify
 
-## Why MCP (not HTTP daemon)
+## Position
 
-The HTTP/curl daemon approach proven in the spike (closed PR #57)
-solved server-side latency but left the bash round-trip in place: every
-agent call still spawned a Python interpreter (~165ms floor). MCP
-eliminates the bash layer entirely — Claude Code calls
-`mcp__wikify__corpus_find(...)` as a native tool with sub-50ms
-dispatch and structured args/responses.
+MCP is the agent-native access layer for Wikify. It should make corpus
+and wiki exploration faster, more structured, and easier to compose in
+Claude Code without turning workflow strategy into Python.
 
-Additional wins MCP gives that the HTTP daemon did not:
+The CLI does not become legacy. The durable split is:
 
-- **No env-var dance** — `.mcp.json` checked into the repo configures
-  the server per-project; no `wikify corpus serve &` ritual at session
-  start.
-- **No process lifecycle problems** — Claude Code owns the server
-  process; spawned at session open, killed at session close. No idle
-  timeouts, no stale pid files, no per-corpus locking.
-- **Structured tool args/responses** — typed via JSONSchema, no shell
-  quoting, no manual parsing of CLI output.
-- **One unified surface** — corpus + wiki + bundle work + ingest live
-  in one server process sharing the warm corpus + wiki state.
+- Domain APIs are canonical for behavior: `corpus.queries`,
+  `bundle.wiki.queries`, bundle/work/draft/run modules, ingest, render,
+  and eval.
+- CLI is the human, script, CI, debug, and fallback surface.
+- MCP is the preferred agent transport when a server is configured.
+- Skills remain the strategy layer. They decide exploration order,
+  stopping criteria, budgets, retries, model tiers, and parallelism.
 
-## Scope: every wikify CLI surface, not just corpus
+No new behavior should live only in the CLI adapter or only in the MCP
+adapter. If a primitive matters, move it into the domain API and expose
+it through both surfaces when relevant.
 
-Today's CLI is 7 noun-verb subapps + ingest invoked under
-`corpus build`. The MCP server exposes all of them as tools, grouped
-by namespace. Inventory (verb counts):
+## Design goals
 
-| Namespace  | CLI verbs                                                          | MCP fit                  |
-|------------|--------------------------------------------------------------------|--------------------------|
-| `corpus`   | build, refresh, check, list[docs/chunks/files], find, show, traverse, schema, sample, repl | all tool-able except repl |
-| `ingest`   | (currently invoked via `corpus build` / `corpus refresh`)          | first-class tools        |
-| `wiki`     | list[articles/people/files], find, show, build, check, commit, schema, traverse, repl | all tool-able except repl |
-| `work`     | list[claims/inbox/evidence], show, add[concept/evidence/feedback], set, claim, release, tend | all tool-able            |
-| `draft`    | build, show, check                                                 | all tool-able            |
-| `run`      | init, show, events, lock, unlock, close, set                       | all tool-able            |
-| `render`   | (single render command)                                            | tool-able                |
-| `eval`     | (single eval command)                                              | tool-able                |
+1. Expose the most expressive corpus query surface to the agent.
+   Recursive graph traversal, sampling, ranking, filtering, evidence
+   discovery, author/source/media lookup, and schema discovery are the
+   core of Wikify.
+2. Keep workflow strategy out of tools. MCP tools are deterministic
+   operations; workflow skills compose them.
+3. Use resources for addressable knowledge objects. Search and traverse
+   tools should return handles, summaries, scores, and resource URIs;
+   full content is fetched through resources when needed.
+4. Keep response schemas lightweight. Return predictable envelopes and
+   common fields, but do not overfit strict Pydantic-style contracts for
+   every row shape.
+5. Keep CLI and MCP readable together. Skills should document MCP calls
+   next to CLI equivalents, not maintain separate strategy logic.
 
-Total expected tools: **~40-50**. Use MCP deferred-loading (only the
-~5-8 most-called are eager; rest load on demand) to keep
-always-loaded context overhead under 2K tokens.
+## Why MCP, not an HTTP daemon
 
-## Architecture
+The HTTP/curl daemon spike solved server-side latency but kept the
+shell round trip: every agent call still spawned a Python interpreter
+or required curl command construction. MCP removes that layer. Claude
+Code can call `mcp__wikify__corpus_find(...)` as a native tool with
+typed arguments and a long-lived warm process.
 
-### Bundle context = MCP server unit
+Additional wins:
 
-A wikify bundle implies its corpus (the bundle records which corpus it
-was built against). The natural unit for one MCP server is **one bundle
-context = one corpus + one bundle's wiki/work state**. All tools share
-warm corpus indexes + warm wiki graph + cached bundle state.
+- `.mcp.json` configures the server per project.
+- Claude Code owns process lifecycle.
+- Tool arguments avoid shell quoting.
+- Responses can include resource links.
+- One warm process can share corpus indexes, wiki graph, and bundle
+  context.
 
-```json
-{
-  "mcpServers": {
-    "wikify-ald-attempt-1": {
-      "command": "wikify",
-      "args": ["mcp", "serve"],
-      "env": {
-        "WIKIFY_CORPUS": "data/corpora/ald_all_marker",
-        "WIKIFY_BUNDLE": "bundles/ald-2026-04-29"
-      }
-    }
-  }
-}
-```
+Use stdio transport for Claude Code first. HTTP/SSE is out of scope
+until a non-Claude consumer needs it.
 
-Multi-corpus / multi-bundle setups: configure multiple MCP servers in
-`.mcp.json`; each is its own warm process. Claude sees them as
-separate namespaces (`mcp__wikify-ald__corpus_find` vs
-`mcp__wikify-ml__corpus_find`).
+## Server context
 
-### Two binding modes
+The natural server unit is one working context:
 
-1. **Launch-time (default)** — `WIKIFY_CORPUS` (and optionally
-   `WIKIFY_BUNDLE`) read at boot; server warms immediately; tools are
-   ready when Claude initialises.
-2. **Runtime (fallback)** — server starts unbound; `corpus_set(path)`
-   and `bundle_set(path)` tools available; agent binds explicitly.
-   Useful when the project has multiple corpora and the agent picks
-   which to work on mid-session.
+- one corpus, and optionally
+- one bundle that records or implies that corpus.
 
-Hybrid: env wins if set; tool overrides at runtime.
-
-### Transport: stdio (not HTTP)
-
-MCP defaults to stdio (parent/child JSON-RPC). Claude pipes requests
-to the server's stdin and reads responses from stdout. Latency
-benefit over HTTP: no network stack, no port management, no firewall
-surface. The Python MCP SDK (`mcp` package on PyPI) handles this; we
-write tool decorators, the SDK handles the wire.
-
-### Implementation: Python MCP SDK (not FastAPI)
-
-`mcp` package is the official SDK. ~50 LOC of decorators replaces
-~150 LOC of FastAPI handlers, and we don't need the
-HTTP/uvicorn/MCP-adapter triple stack. FastAPI buys us OpenAPI +
-validation + async — but the MCP SDK already gives us JSONSchema
-generation from type hints + async support.
-
-Rough server skeleton:
-
-```python
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from wikify.api import Bundle, Corpus
-from wikify.corpus import queries
-
-srv = Server("wikify")
-_corpus: Corpus | None = None
-_bundle: Bundle | None = None
-
-@srv.tool()
-async def corpus_find(
-    query: str = "",
-    top_k: int = 8,
-    by: str = "chunk",
-    rank: str = "semantic",
-    text: bool = False,
-) -> list[dict]:
-    """Semantic / text / metric-ranked search over corpus chunks."""
-    return queries.search_chunks(_require_corpus(), query, top_k=top_k)
-
-# ... ~40 more @srv.tool() decorators wrapping queries.* / wiki.* / etc.
-
-async def main() -> None:
-    global _corpus, _bundle
-    if "WIKIFY_CORPUS" in os.environ:
-        _corpus = Corpus(root=Path(os.environ["WIKIFY_CORPUS"]))
-        _warm_corpus(_corpus)
-    if "WIKIFY_BUNDLE" in os.environ:
-        _bundle = Bundle.open(Path(os.environ["WIKIFY_BUNDLE"]))
-    async with stdio_server() as (r, w):
-        await srv.run(r, w, srv.create_initialization_options())
-```
-
-The CLI entry point gains one verb: `wikify mcp serve`.
-
-## Tool surface (per namespace)
-
-### corpus_* (highest priority — most-called)
-
-| Tool                | Wraps                                        | Eager / Deferred |
-|---------------------|----------------------------------------------|------------------|
-| `corpus_find`       | `queries.search_chunks` / `search_papers` / `search_authors` / `find_seeds` (now `sample`) | eager |
-| `corpus_show`       | `queries.get_doc/chunk/figure/equation/author` | eager           |
-| `corpus_traverse`   | `queries.traverse_doc/chunk/author`           | eager           |
-| `corpus_check`      | `queries.check_corpus`                        | deferred         |
-| `corpus_schema`     | static dict from `cli/corpus.py`              | deferred         |
-| `corpus_list_docs`  | `queries.list_doc_ids`                        | deferred         |
-| `corpus_list_chunks`| `queries.list_chunks_for_doc`                 | deferred         |
-| `corpus_sample`     | `queries.sample_docs` (new — see below)       | deferred         |
-| `corpus_set`        | rebind warm corpus to a new path              | deferred         |
-
-### wiki_* (read-side mirrors corpus)
-
-| Tool                | Wraps                                          |
-|---------------------|------------------------------------------------|
-| `wiki_find`         | bundle.wiki search                             |
-| `wiki_show`         | bundle.wiki page show                          |
-| `wiki_traverse`     | bundle.wiki page traverse (links/backlinks/evidence) |
-| `wiki_list_articles`| bundle.wiki page enumeration                   |
-| `wiki_list_people`  | bundle.wiki person-page enumeration            |
-| `wiki_check`        | wiki coverage / thin pages                     |
-| `wiki_schema`       | wiki traverse relations + node types           |
-| `wiki_commit`       | commit a draft → wiki (mutation)               |
-| `wiki_build`        | rebuild wiki index from committed pages        |
-
-### work_* (bundle-state mutations)
-
-| Tool                  | Wraps                                |
-|-----------------------|--------------------------------------|
-| `work_list_claims`    | open claims                          |
-| `work_list_inbox`     | new feedback / bundle inbox          |
-| `work_list_evidence`  | per-page evidence                    |
-| `work_show`           | bundle status snapshot               |
-| `work_add_concept`    | enqueue a new concept                |
-| `work_add_evidence`   | attach evidence to a concept         |
-| `work_add_feedback`   | append refinement feedback           |
-| `work_set`            | mutate work state field              |
-| `work_claim`          | claim a concept (lock)               |
-| `work_release`        | release a claim                      |
-| `work_tend`           | sweep stale claims                   |
-
-### draft_* / run_* / render / eval
-
-Direct mirrors of existing CLI verbs. Mostly mutation; latency matters
-less, ergonomics matter (typed args, structured errors).
-
-### ingest_* (NEW — promoted out of `corpus build/refresh`)
-
-Today ingest is invoked via `corpus build` / `corpus refresh`. Promote
-to first-class:
-
-| Tool                 | Wraps                                                |
-|----------------------|------------------------------------------------------|
-| `ingest_corpus`      | `ingest.pipeline.ingest_corpus` (full pipeline)      |
-| `ingest_refresh`     | `ingest.pipeline.refresh_corpus` (derived artifacts) |
-| `ingest_check`       | manifest health, parser consistency                  |
-| `ingest_step`        | run a single named step (parser / chunker / embed / graph) |
-| `ingest_status`      | progress / last-success snapshot                     |
-
-Phase 4 territory — ingest is a heavy long-running operation; will need
-a streaming response mode (the SDK supports yielding tool progress).
-
-## Lifecycle: bundle context
-
-The MCP server's lifecycle aligns with the agent's bundle-work
-session. Per the bundle-context model:
-
-- **Spawn**: Claude Code reads `.mcp.json` at session open; spawns the
-  server. Server reads env, binds corpus + bundle, warms KG/embedder
-  in a background task so first tool call doesn't block.
-- **Run**: tools execute, share warm state. Bundle mutations are
-  serialised through the existing lock layer (`bundle/run/state.py`,
-  `bundle/run/events.py`).
-- **Shutdown**: Claude Code SIGTERMs at session close. Server flushes
-  any in-flight events, exits.
-
-Per-bundle `.mcp.json` example for an agent working on ALD:
+This matches agent work: a session usually explores one corpus and one
+wiki bundle at a time. Multi-corpus or multi-bundle comparisons should
+use multiple MCP server entries in `.mcp.json`.
 
 ```json
 {
@@ -229,101 +76,474 @@ Per-bundle `.mcp.json` example for an agent working on ALD:
       "args": ["mcp", "serve"],
       "env": {
         "WIKIFY_CORPUS": "data/corpora/ald_all_marker",
-        "WIKIFY_BUNDLE": "bundles/ald-attempt-1"
+        "WIKIFY_BUNDLE": "data/wikis/ald-attempt-1"
       }
     }
   }
 }
 ```
 
-Multi-bundle (e.g. comparing two builds):
+Binding modes:
+
+- Launch-time binding: `WIKIFY_CORPUS` and `WIKIFY_BUNDLE` are read at
+  server boot.
+- Runtime binding: `context_set(corpus_path=..., bundle_path=...)`
+  binds or rebinds explicitly.
+
+Launch-time binding is the default. Runtime binding is a fallback for
+sessions that choose a corpus or bundle mid-run.
+
+## Tool surface principle
+
+Do not mirror every CLI verb as a first pass. A large tool inventory
+bloats the agent context and makes the surface harder to choose from.
+Start with the high-frequency, high-leverage primitives and grow only
+when a workflow repeatedly needs a missing operation.
+
+The first MCP surface should be read-heavy:
+
+- corpus query and graph traversal,
+- corpus object retrieval,
+- corpus sampling,
+- corpus schema/discovery,
+- wiki search, index, show, and traverse,
+- bundle context/status inspection.
+
+Bundle mutations, ingest, render, and eval should come later because
+they need stronger locking, idempotency, dry-run behavior, progress
+reporting, and structured failure handling.
+
+## Core corpus tools
+
+The corpus tools must cover all tasks currently taught by
+`.claude/skills/wikify-search-corpus/references/corpus-cli-patterns.md`
+and `corpus-graph-traversals.md`. This is the most important part of
+the MCP plan.
+
+### `corpus_find`
+
+Expressive search over chunks, papers, and authors.
+
+Inputs:
+
+- `query`: optional text query.
+- `by`: `chunk`, `paper`, or `author`.
+- `rank`: `semantic`, `citation_count`, `pagerank`, `h_index`,
+  `n_papers`, or other metrics advertised by `corpus_schema`.
+- `text`: exact/text-search mode.
+- `top_k`.
+- optional filters as they become domain-backed: doc ids, author ids,
+  year range, tags, section, source file, field, venue.
+- optional output controls: include preview text, include best chunk,
+  include matched chunk count, include media refs.
+
+Rules:
+
+- With no query plus a graph metric, rank the whole selected
+  population.
+- Reject invalid metric/population combinations with a clear error.
+- Return compact rows with handles and resource URIs, not full blobs by
+  default.
+
+### `corpus_traverse`
+
+Graph traversal from a handle to related objects.
+
+Inputs:
+
+- `source`: `doc:...`, `chunk:...`, `author:...`, `figure:...`, or
+  `equation:...` as supported by the graph.
+- `to`: relation name advertised by `corpus_schema`.
+- `top_k`: `0` may mean unlimited only where the domain API supports
+  it.
+- `rank`: relation-compatible ranking metric.
+- optional traversal controls: direction, depth, relation path, visited
+  set, include paths, include edge metadata.
+
+This tool is the agent workhorse for recursive exploration. It should
+support patterns such as:
+
+- paper -> cited-by -> papers -> chunks,
+- paper -> references -> papers -> authors,
+- chunk -> figures/equations -> source paper,
+- author -> sources -> cited-by -> coauthors,
+- sampled papers -> chunks -> evidence candidates.
+
+The tool should return enough metadata to continue traversal without
+requiring full object reads.
+
+### `corpus_show`
+
+Fetch one addressable corpus object by handle.
+
+Inputs:
+
+- `handle`.
+- `full`: false by default.
+- `include`: optional list such as `text`, `abstract`, `metadata`,
+  `figures`, `equations`, `chunks`, `bibliography`.
+
+The default should be preview-sized. Full text is explicit.
+
+### `corpus_sample`
+
+Query-free entry point selection.
+
+Inputs:
+
+- `population`: `docs`, `chunks`, or `authors` if supported.
+- `strategy`: `diverse`, `top`, `random`, `stratified`, or other
+  names advertised by `corpus_schema`.
+- strategy parameters such as `max`, `pagerank_weight`, seed, year
+  ranges, or strata.
+
+Sampling is a primitive, not a workflow. A workflow decides whether the
+sample is enough, which sampled items to read, and whether to iterate.
+
+### `corpus_schema`
+
+Self-describe the corpus query surface:
+
+- handle kinds,
+- node types,
+- edge/relation names,
+- allowed `find` populations,
+- rank metrics and compatible populations,
+- traversal relations and compatible source handle kinds,
+- sampling strategies and their arguments,
+- available filters.
+
+The schema is an agent-facing discovery aid. Keep it readable and
+compact.
+
+### `context_show` and `context_set`
+
+Show and update the current corpus/bundle binding:
+
+- corpus path,
+- bundle path,
+- corpus manifest summary,
+- wiki index availability,
+- warm/cache status.
+
+## Wiki tools
+
+The wiki MCP surface should mirror the read-side needs of wiki skills,
+with the wiki index as a first-class resource.
+
+### `wiki_index`
+
+Return committed wiki index information:
+
+- article pages,
+- person pages,
+- redirects/aliases if present,
+- link graph summary,
+- stale/thin/missing projections if available,
+- resource URIs for individual pages.
+
+This gives the agent a cheap map of the current wiki before deciding
+whether to search, show, traverse, or refine.
+
+### `wiki_find`
+
+Search committed wiki pages by title, body text, links, or page kind.
+Return page handles/slugs, titles, kinds, score, summary, and resource
+URI.
+
+### `wiki_show`
+
+Fetch one page by slug or id. Default to metadata and preview; full
+Markdown is explicit.
+
+### `wiki_traverse`
+
+Traverse wiki graph relations such as links, backlinks, people,
+evidence, and source chunks. This tool should not assume a mature wiki
+exists. If the wiki is empty, return an empty result with a clear
+`empty_wiki` note, not a failure.
+
+### `wiki_schema`
+
+Self-describe page kinds, traversal relations, and index fields.
+
+## Resources
+
+Resources are how agents should read full objects after a search or
+traversal chooses a handle. Tools should return `resource_uri` fields
+wherever possible.
+
+Initial resources:
+
+- `wikify://corpus/docs/{doc_handle}`
+- `wikify://corpus/chunks/{chunk_handle}`
+- `wikify://corpus/figures/{figure_handle}`
+- `wikify://corpus/equations/{equation_handle}`
+- `wikify://corpus/authors/{author_handle}`
+- `wikify://wiki/index`
+- `wikify://wiki/pages/{slug}`
+- `wikify://wiki/people/{slug}`
+- `wikify://bundle/status`
+- `wikify://bundle/work/{concept_slug}`
+- `wikify://schemas/corpus`
+- `wikify://schemas/wiki`
+
+Resource reads should be read-only and preview-oriented unless the URI
+explicitly names a full object. Large resources can expose sections or
+pagination later if needed.
+
+## Lightweight response contract
+
+Use a small common envelope instead of rigid per-tool schemas:
 
 ```json
 {
-  "mcpServers": {
-    "wikify-baseline": { "command": "wikify", "args": ["mcp", "serve"], "env": {"WIKIFY_BUNDLE": "bundles/baseline"}},
-    "wikify-guided":   { "command": "wikify", "args": ["mcp", "serve"], "env": {"WIKIFY_BUNDLE": "bundles/guided"}}
-  }
+  "ok": true,
+  "kind": "corpus_find_result",
+  "items": [
+    {
+      "handle": "doc:514791d621fa",
+      "type": "doc",
+      "title": "Atomic layer deposition ...",
+      "score": 0.83,
+      "rank": {"citation_count": 12, "pagerank": 0.0042},
+      "resource_uri": "wikify://corpus/docs/doc:514791d621fa",
+      "preview": "..."
+    }
+  ],
+  "next": null,
+  "notes": []
 }
 ```
 
-## Testing strategy
+Guidelines:
 
-Three layers, no duplication:
+- Keep `ok`, `kind`, `items`, `notes`, and `next` stable.
+- Use common item fields when possible: `handle`, `type`, `title`,
+  `score`, `rank`, `resource_uri`, `preview`, `meta`.
+- Put shape-specific data under `meta` rather than forcing every row
+  into one strict schema.
+- Errors use the same envelope with `ok: false`, `code`, `message`,
+  and optional `details`.
 
-1. **Inner-API tests (existing)** — `test_corpus_queries.py`,
-   `test_bundle_*.py`. Data-correctness lives here. Both CLI and MCP
-   wrap these; one test set covers both surfaces.
-2. **CLI tests (existing, retained)** — `test_cli_corpus.py` etc.
-   Cover format selection, env routing, structured envelopes, exit
-   codes. CLI-specific concerns; humans + bash scripts still consume.
-3. **MCP tests (new)** — `test_mcp_corpus.py`,
-   `test_mcp_wiki.py`, etc. Use the `mcp` SDK's in-process test
-   harness. Verify each tool wraps the inner API correctly + returns
-   the documented schema. ~10-15 tests per namespace, ~150-300 lines
-   per file.
+This gives the agent enough structure to compose calls without making
+the API brittle.
 
-Forcing-function side benefit: building the MCP surface pushes any
-inline CLI logic (re-ranking, formatting, envelope construction) down
-into `queries.*` / `bundle.*`, where both surfaces can call it. Net
-code goes down, not up.
+## Skills and MCP
+
+Skills remain the prompt/workflow layer. MCP is referenced in skills as
+an access mode, not as a replacement for the skill.
+
+Add shared references under `.claude/skills/wikify/references/mcp/`:
+
+- `setup.md`: `.mcp.json`, launch-time binding, runtime binding,
+  troubleshooting.
+- `tool-map.md`: MCP tools and their CLI equivalents.
+- `resources.md`: URI patterns and when to read resources.
+- `fallback.md`: how to detect MCP availability and use CLI instead.
+
+Capability skills should include a short "MCP mode" section:
+
+- `wikify-search-corpus`: prefer `corpus_find`, `corpus_traverse`,
+  `corpus_show`, `corpus_sample`, and `corpus_schema` for repeated
+  reads; list CLI equivalents for fallback.
+- `wikify-search-wiki`: prefer `wiki_index`, `wiki_find`,
+  `wiki_show`, `wiki_traverse`, and `wiki_schema`.
+- `wikify-bundle`: start with read-only context/status resources;
+  mutating tools remain CLI-first until Phase 3.
+
+Workflow skills should not duplicate MCP tool documentation. They
+should say which capability skill to use and what decisions the
+workflow owns. Example:
+
+```text
+Use wikify-search-corpus for evidence discovery. If MCP is configured,
+use corpus_sample -> corpus_show/corpus_traverse -> corpus_find and
+read selected resource URIs. Otherwise use the CLI equivalents from
+the same capability skill.
+```
+
+Do not create MCP prompt templates for baseline/guided/refine in the
+server. Those remain Claude skills because they are strategy and
+orchestration, not deterministic backend operations.
+
+## CLI relationship
+
+The CLI remains first-class for four reasons:
+
+1. Humans need an inspectable interface with `--help`, `schema`,
+   readable errors, and shell-friendly output.
+2. Tests and CI need a process boundary that catches packaging,
+   argument parsing, env resolution, exit code, and format regressions.
+3. Scripts, notebooks, and non-MCP agent runtimes still need a stable
+   automation surface.
+4. CLI commands are the fallback path when Claude Code has no MCP
+   server configured.
+
+The CLI should get thinner over time, not deprecated. Re-ranking,
+traversal, sampling, object lookup, and validation logic should live in
+domain APIs. The CLI formats and exits; MCP returns envelopes and
+resources. Both wrap the same implementation.
+
+Skill docs should therefore show MCP as preferred for repeated agent
+queries and CLI as the portable equivalent. Do not describe the CLI as
+"legacy" or "old".
+
+## Implementation sketch
+
+Use the official Python MCP SDK and add one CLI verb:
+
+```bash
+wikify mcp serve
+```
+
+Skeleton:
+
+```python
+from pathlib import Path
+import os
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
+from wikify.api import Bundle, Corpus
+from wikify.corpus import queries
+
+srv = Server("wikify")
+_corpus: Corpus | None = None
+_bundle: Bundle | None = None
+
+
+@srv.tool()
+async def corpus_find(
+    query: str = "",
+    by: str = "chunk",
+    rank: str = "semantic",
+    top_k: int = 8,
+    text: bool = False,
+) -> dict:
+    corpus = require_corpus()
+    rows = queries.find(corpus, query=query, by=by, rank=rank, top_k=top_k, text=text)
+    return envelope("corpus_find_result", rows)
+
+
+async def main() -> None:
+    global _corpus, _bundle
+    if "WIKIFY_CORPUS" in os.environ:
+        _corpus = Corpus(root=Path(os.environ["WIKIFY_CORPUS"]))
+    if "WIKIFY_BUNDLE" in os.environ:
+        _bundle = Bundle.open(Path(os.environ["WIKIFY_BUNDLE"]))
+    async with stdio_server() as (read, write):
+        await srv.run(read, write, srv.create_initialization_options())
+```
+
+The actual implementation should not call CLI functions. It should call
+the same domain helpers the CLI calls.
 
 ## Phasing
 
-- **Phase 0 (prereq, this branch's follow-up)** — CLI completion.
-  `find --seed` → `corpus sample [--strategy diverse|...]`. Removes
-  the seed-specific wording so the MCP tool surface gets the right
-  noun (`corpus_sample`, not `corpus_seed`). Gets the CLI to a stable
-  shape before MCP locks the tool names.
-- **Phase 1** — corpus MCP. ~10 tools wrapping `queries.*`. Ships
-  the SDK integration end-to-end + the in-process test harness.
-  Smallest viable; agent still uses bash for non-corpus calls.
-- **Phase 2** — wiki MCP. Same pattern; smaller payload.
-- **Phase 3** — work / draft / run MCP. Mutation surface; mostly
-  ergonomic + structured-error wins.
-- **Phase 4** — ingest MCP. Streaming progress for long-running
-  builds.
-- **Phase 5** — render / eval MCP. Last because they're called
-  least.
+### Phase 0: finalize CLI/query prerequisites
 
-Per phase: skill files updated to teach the MCP surface alongside
-(not replacing) the CLI. The skill auto-detects MCP availability and
-prefers it; falls back to bash CLI when no MCP server is configured.
+- Finish `corpus sample` as the query-free entry point primitive.
+- Remove stale `find --seed` references from active docs and skills.
+- Ensure `corpus schema` describes find populations, rank compatibility,
+  traversal relations, and sampling strategies.
+- Move any inline CLI query logic into `corpus.queries`.
 
-## Skill updates needed
+### Phase 1: corpus MCP and resources
 
-Each `wikify-*` skill file gets an MCP-mode section:
+Ship:
 
-- `wikify-search-corpus` — Phase 1
-- `wikify-search-wiki` — Phase 2
-- `wikify-bundle` — Phase 3
-- `wikify-ingest` (new) — Phase 4
+- `wikify mcp serve`.
+- `context_show`, `context_set`.
+- `corpus_find`, `corpus_traverse`, `corpus_show`,
+  `corpus_sample`, `corpus_schema`.
+- corpus resources for docs, chunks, figures, equations, authors.
+- tests proving parity with `corpus.queries`, not shell output.
+- skill reference docs for MCP setup, tool map, resources, and
+  fallback.
 
-The shared `wikify` skill grows a top-level "MCP setup" reference
-documenting the `.mcp.json` shape and the `corpus_set` / `bundle_set`
-tools.
+This phase should make recursive graph exploration pleasant enough for
+real wiki-writing workflows.
 
-## Out of scope (deferred to future plans)
+### Phase 2: wiki MCP and wiki resources
 
-- HTTP/SSE transport (in addition to stdio) — only matters if non-
-  Claude consumers (web UI, scripts) want the server.
-- Multi-tenant single server holding many corpora — not worth the
-  cache eviction complexity; per-corpus servers are cheap.
-- Background warming of multiple bundles per server — same reason.
-- Persistent KG cache across server restarts (e.g. pickle file) —
-  Phase 6 if startup cost becomes a real complaint.
+Ship:
+
+- `wiki_index`, `wiki_find`, `wiki_show`, `wiki_traverse`,
+  `wiki_schema`.
+- `wikify://wiki/index`, page, and people resources.
+- empty-wiki behavior that returns an empty result with a useful note.
+- updates to `wikify-search-wiki`.
+
+### Phase 3: bundle read-side MCP
+
+Ship read-only bundle context first:
+
+- `bundle_status` or `work_show`.
+- resources for bundle status and concept work cards.
+- event summary/read helpers if needed by workflows.
+
+Do not introduce mutations until lock, claim, dry-run, idempotency, and
+error semantics are designed.
+
+### Phase 4: controlled mutations
+
+Add mutating work/draft/wiki/run tools only where they improve agent
+workflow materially:
+
+- work add concept/evidence/feedback,
+- claim/release/tend,
+- draft build/check,
+- wiki commit/build/check,
+- run init/close/set where useful.
+
+Requirements:
+
+- existing lock/claim layer is enforced,
+- mutations are idempotent where possible,
+- errors use stable codes,
+- high-risk operations support dry-run when meaningful.
+
+### Phase 5: ingest, render, eval
+
+Add long-running and low-frequency operations last:
+
+- ingest corpus/refresh/check/status,
+- render,
+- eval.
+
+Ingest likely needs progress reporting or event polling. Keep it out of
+the first MCP release.
+
+## Testing strategy
+
+Three layers:
+
+1. Domain API tests remain the source of data-correctness.
+2. CLI tests remain for argument parsing, env routing, output formats,
+   exit codes, and human/script compatibility.
+3. MCP tests verify tool registration, argument validation, envelope
+   shape, resource reads, and parity with domain API calls.
+
+Add workflow-level smoke tests only after Phase 1 and Phase 2 are
+stable: one corpus exploration loop and one empty-wiki search/traverse
+loop.
+
+## Out of scope
+
+- HTTP/SSE transport.
+- One multi-tenant server holding many corpora.
+- Background warming of many bundles per server.
+- Persistent cache files across MCP restarts.
+- MCP-hosted workflow prompts. Workflows remain skills.
 
 ## Decision log
 
-- **Chose MCP SDK over FastAPI**: SDK handles stdio + JSONSchema; less
-  code, fewer deps.
-- **Chose bundle-context (not corpus-only) as server unit**: covers
-  all 7 namespaces in one warm process, matches how agents actually
-  work (one bundle at a time).
-- **Chose launch-time binding (not auto-spawn)**: Claude Code owns the
-  lifecycle via `.mcp.json`; no pid files, no idle timeouts, no
-  cross-session locking.
-- **Chose deferred tool loading**: keeps always-loaded context
-  overhead under 2K tokens; the 5-8 most-called tools are eager.
-- **Chose to retain the CLI**: humans, bash scripts, and the existing
-  test suite all consume it. MCP is additive.
+- Chose MCP SDK over FastAPI for the Claude Code path.
+- Chose context-bound servers over one multi-tenant process.
+- Chose expressive corpus tools over one-tool-per-CLI-verb mirroring.
+- Chose resources for full object reads.
+- Chose lightweight envelopes over rigid per-row schemas.
+- Chose skills, not MCP prompts, for workflows.
+- Chose CLI as first-class sibling adapter, not legacy baggage.
