@@ -314,3 +314,72 @@ def test_enrichment_self_heals_underscore_compressed_titles(tmp_path: Path) -> N
     assert "_" not in enriched.title, enriched.title
     assert "missing" in enriched.title
     assert "circuit" in enriched.title
+
+
+def test_enrichment_self_heals_concatenated_xmp_titles(tmp_path: Path) -> None:
+    """Some source PDFs ship XMP/info titles with whitespace stripped
+    (e.g. ``SwitchingdynamicsandcomputingapplicationsofmemristorsAnoverview``).
+    These slip through every other heuristic — no underscores, no
+    placeholder vocabulary, mixed case, normal length — but a single
+    >30-char alphabetical run is the dead giveaway.
+
+    Re-derivation must succeed via the filename path when the source's
+    ``[YYYY Author] Title.ext`` filename uses underscores as word
+    separators."""
+    corpus = Corpus(root=tmp_path / "corpus")
+    doc = Document(
+        id="paper_under_test",
+        source_path=(
+            "[2017 Duan] Switching_dynamics_and_computing_applications"
+            "_of_memristors_An_overview.pdf"
+        ),
+        kind="pdf",
+        title="SwitchingdynamicsandcomputingapplicationsofmemristorsAnoverview",
+        metadata={
+            "title": (
+                "SwitchingdynamicsandcomputingapplicationsofmemristorsAnoverview"
+            ),
+            "authors": ["Duan"],
+            "year": 2017,
+        },
+        markdown_path="markdown/paper_under_test.md",
+        image_dir="images/paper_under_test/",
+        sections=[],
+        images=[],
+        equations=[],
+        cites=[],
+        n_chunks=1,
+        n_tokens=10,
+    )
+    _write_markdown(corpus, doc, "Some body without a heading.\n")
+
+    ctx = {"paths": corpus, "docs": [doc]}
+    _refresh_doc_enrichment(ctx)
+
+    enriched = ctx["docs"][0]
+    # No long unbroken alpha run survives.
+    assert all(
+        sum(1 for c in tok if c.isalpha()) <= 30
+        for tok in enriched.title.split()
+    ), enriched.title
+    # Filename-derived words are present, with spaces.
+    assert "Switching" in enriched.title
+    assert "dynamics" in enriched.title
+    assert "memristors" in enriched.title
+
+
+def test_concatenated_detector_does_not_flag_clean_long_titles() -> None:
+    """Real titles with proper word boundaries must not trip the
+    concatenated detector — even when individual words are long
+    chemistry compounds."""
+    from wikify.ingest.bibtex import _title_needs_fallback
+
+    clean_titles = [
+        "Memristor-The missing circuit element",
+        "The missing memristor found",
+        "Atomic Layer Deposition of Polytetrafluoroethylene precursors",
+        "Tetraethylorthosilicate as a precursor for thin-film growth",
+        "Switching dynamics and computing applications of memristors: An overview",
+    ]
+    for title in clean_titles:
+        assert not _title_needs_fallback(title), title
