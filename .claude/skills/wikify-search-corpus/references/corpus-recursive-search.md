@@ -73,11 +73,11 @@ wikify corpus show doc:<short> --corpus <c> --full
 wikify corpus find "atomic layer deposition" --corpus <c> --top-k 8
 ```
 
-### Seed Document To Concept Candidates
+### Sample Documents To Concept Candidates
 
 ```bash
-wikify corpus find --seed --corpus <c> --max 3
-wikify corpus show doc:<seed-short> --corpus <c> --full
+wikify corpus sample --corpus <c> --max 3
+wikify corpus show doc:<sampled-short> --corpus <c> --full
 ```
 
 The workflow decides whether to read the full document, abstract,

@@ -4,11 +4,14 @@ Commands::
 
     corpus build <source> --out <corpus> [--mode additive|sync] [--parser ...]
     corpus refresh <corpus>
-    corpus check [<corpus>]
+    corpus check [<corpus>] [--full]
     corpus list [docs|chunks|files] [--corpus <c>] [--doc <d>]
-    corpus find "<query>" [--top-k <n>] [--text]
-    corpus find --seed [--max <n>]
-    corpus show <handle> [--detail|--full]
+    corpus find "<query>" [--top-k <n>] [--text] [--by chunk|paper|author]
+    corpus sample [--max <n>] [--strategy diverse] [--pagerank-weight W]
+    corpus show <handle> [--full]
+    corpus traverse <handle> --to <relation>
+    corpus schema
+    corpus repl
 
 ``--corpus`` overrides; otherwise required for read commands. ``build``
 takes the source dir as a positional and writes to ``--out``.
@@ -376,21 +379,9 @@ def cmd_list_files(
 
 @app.command("find")
 def cmd_find(
-    query: str = typer.Argument("", help="Query string. Empty for --seed mode."),
+    query: str = typer.Argument("", help="Query string. Required unless --text mode."),
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     top_k: int = typer.Option(8, "--top-k"),
-    seed: bool = typer.Option(False, "--seed", help="Greedy seed selection."),
-    max_seeds: int = typer.Option(
-        20, "--max", help="Max seed docs returned by --seed mode."
-    ),
-    pagerank_weight: float = typer.Option(
-        0.7,
-        "--pagerank-weight",
-        help=(
-            "Trade-off between PageRank prior and submodular coverage gain "
-            "(0.0=coverage only, 1.0=pagerank only). Used only with --seed."
-        ),
-    ),
     text: bool = typer.Option(False, "--text", help="Literal substring grep."),
     by: str = typer.Option(
         "chunk",
@@ -420,10 +411,12 @@ def cmd_find(
 
     Modes:
 
-    - ``--seed`` returns the greedy submodular seed doc list.
     - ``--text`` does a literal substring grep over chunk text.
     - Otherwise semantic search; ``--by paper`` aggregates to documents
       and ``--rank citation_count|pagerank`` reorders the result.
+
+    For query-less corpus sampling (the old ``--seed`` mode), use
+    ``corpus sample`` — it owns the strategy + knobs surface.
 
     Compact output columns:
 
@@ -433,43 +426,20 @@ def cmd_find(
       citation count.
     - papers (``--by paper``):  ``score \\t cites=N \\t n=K \\t doc-handle \\t title``
       where ``n`` is how many chunks of that paper matched the query.
-    - seeds / metric-only ranking: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
+    - metric-only ranking: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
       where ``pr`` is the corpus PageRank.
     """
     corpus = _resolve_corpus(corpus_dir)
     fmt_resolved = _resolve_format_or_error(fmt)
     _validate_positive_int("top-k", top_k)
-    _validate_positive_int("max", max_seeds)
     if explain:
         _emit_find_explain(
             corpus,
             query=query,
-            seed=seed,
             text=text,
             by=by,
             rank=rank,
             top_k=top_k,
-            max_seeds=max_seeds,
-            pagerank_weight=pagerank_weight,
-        )
-        return
-    if seed:
-        ids = queries.find_seeds(
-            corpus, max_seeds=max_seeds, pagerank_weight=pagerank_weight
-        )
-        metrics = queries.doc_metrics(corpus, ids)
-        _emit_doc_rows(
-            [
-                {
-                    "doc_id": did,
-                    "title": _doc_title(corpus, did),
-                    "citation_count": metrics.get(did, {}).get("citation_count", 0),
-                    "pagerank": metrics.get(did, {}).get("pagerank", 0.0),
-                    "score": None,
-                }
-                for did in ids
-            ],
-            fmt=fmt_resolved,
         )
         return
 
@@ -566,7 +536,10 @@ def cmd_find(
         cli_error(
             EXIT_VALIDATION,
             error="missing_query",
-            message="`corpus find` requires a query, --seed, or --text mode",
+            message=(
+                "`corpus find` requires a query (or --text mode). For "
+                "query-less sampling, use `corpus sample`."
+            ),
         )
 
     if by == "paper":
@@ -581,6 +554,87 @@ def cmd_find(
         via="corpus_find_semantic",
     )
     _emit_chunk_rows(corpus, hits, fmt=fmt_resolved, score_key="score")
+
+
+@app.command("sample")
+def cmd_sample(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    max_docs: int = typer.Option(
+        20, "--max", help="Maximum number of docs to sample (must be > 0)."
+    ),
+    strategy: str = typer.Option(
+        "diverse",
+        "--strategy",
+        help=(
+            "Sampling strategy. Today: 'diverse' (greedy submodular over "
+            "PageRank + coverage). Future: 'random', 'pagerank'."
+        ),
+    ),
+    pagerank_weight: float = typer.Option(
+        0.7,
+        "--pagerank-weight",
+        help=(
+            "Trade-off between PageRank prior and submodular coverage gain "
+            "(0.0=coverage only, 1.0=pagerank only). Used by 'diverse'."
+        ),
+    ),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help=(
+            "Output format: auto (compact for TTY / quiet for pipe), "
+            "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Print the resolved fluent-chain pseudocode and exit.",
+    ),
+) -> None:
+    """Sample diverse / representative documents without a query.
+
+    Replaces the old ``corpus find --seed`` mode. Use this to bootstrap
+    exploration when you don't have a query but want a small set of
+    central, mutually-distinct corpus entry points.
+
+    Compact output columns: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
+    (in-corpus citation count, PageRank, doc handle, title).
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    _validate_positive_int("max", max_docs)
+    if explain:
+        _emit_sample_explain(
+            corpus,
+            strategy=strategy,
+            max_docs=max_docs,
+            pagerank_weight=pagerank_weight,
+        )
+        return
+    try:
+        ids = queries.sample_docs(
+            corpus,
+            max_docs=max_docs,
+            strategy=strategy,
+            pagerank_weight=pagerank_weight,
+        )
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_strategy", message=str(exc))
+    metrics = queries.doc_metrics(corpus, ids)
+    _emit_doc_rows(
+        [
+            {
+                "doc_id": did,
+                "title": _doc_title(corpus, did),
+                "citation_count": metrics.get(did, {}).get("citation_count", 0),
+                "pagerank": metrics.get(did, {}).get("pagerank", 0.0),
+                "score": None,
+            }
+            for did in ids
+        ],
+        fmt=fmt_resolved,
+    )
 
 
 def _doc_title(corpus: Corpus, doc_id: str) -> str:
@@ -752,7 +806,7 @@ def _emit_author_rows(rows: list[dict], *, fmt: str, score_key: str | None) -> N
 
 
 def _emit_doc_rows(rows: list[dict], *, fmt: str) -> None:
-    """Print doc-only rows (seed mode and metric-only ranking)."""
+    """Print doc-only rows (sampling and metric-only ranking)."""
     if fmt == "json":
         items = [
             {**r, "doc_handle": format_handle("doc", str(r.get("doc_id", "")))}
@@ -785,22 +839,14 @@ def _emit_find_explain(
     corpus: Corpus,
     *,
     query: str,
-    seed: bool,
     text: bool,
     by: str,
     rank: str,
     top_k: int,
-    max_seeds: int,
-    pagerank_weight: float,
 ) -> None:
     """Print a fluent-chain-style description of what `find` would do."""
     typer.echo(f"corpus: {corpus.root}")
-    if seed:
-        chain = (
-            f"greedy_seed_select(max={max_seeds}, pagerank_weight={pagerank_weight}) "
-            f"-> top docs"
-        )
-    elif text:
+    if text:
         chain = (
             f"all_chunks().filter(text contains {query!r}).take({top_k})"
             + (f" -> group_by_doc().take({top_k})" if by == "paper" else "")
@@ -819,6 +865,20 @@ def _emit_find_explain(
         else:
             chain = f"chunks().search({query!r}, top_k={top_k})"
     typer.echo(f"chain:  {chain}")
+
+
+def _emit_sample_explain(
+    corpus: Corpus,
+    *,
+    strategy: str,
+    max_docs: int,
+    pagerank_weight: float,
+) -> None:
+    typer.echo(f"corpus: {corpus.root}")
+    typer.echo(
+        f"chain:  sample_{strategy}(max_docs={max_docs}, "
+        f"pagerank_weight={pagerank_weight}) -> top docs"
+    )
 
 
 def _emit_traverse_explain(
@@ -1124,8 +1184,10 @@ _CORPUS_SCHEMA: dict = {
         "--by chunk":  "Rank chunks (default).",
         "--by paper":  "Aggregate chunk hits to papers.",
         "--by author": "Aggregate chunk hits to authors.",
-        "--seed":      "Greedy submodular seed selection.",
         "--text":      "Literal substring grep over chunk text.",
+    },
+    "sample_strategies": {
+        "diverse": "Greedy submodular: PageRank prior + coverage gain over doc embeddings.",
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
@@ -1169,6 +1231,10 @@ def cmd_schema(
     typer.echo("")
     typer.echo("find modes:")
     for k, v in _CORPUS_SCHEMA["find_modes"].items():
+        typer.echo(f"  {k:14s} {v}")
+    typer.echo("")
+    typer.echo("sample strategies (corpus sample --strategy):")
+    for k, v in _CORPUS_SCHEMA["sample_strategies"].items():
         typer.echo(f"  {k:14s} {v}")
     typer.echo("")
     typer.echo(f"Formats: {' | '.join(_CORPUS_SCHEMA['formats'])}")
@@ -1442,6 +1508,19 @@ def _pop_flag(tokens: list[str], name: str) -> bool:
     return True
 
 
+def _pop_str_option(tokens: list[str], name: str, default: str | None = None) -> str | None:
+    """Like ``_pop_int_option`` but for free-form strings."""
+    if name not in tokens:
+        return default
+    idx = tokens.index(name)
+    try:
+        raw = tokens[idx + 1]
+    except IndexError as exc:
+        raise ReplError(f"{name} requires a value") from exc
+    del tokens[idx : idx + 2]
+    return raw
+
+
 def _pop_int_option(tokens: list[str], name: str, default: int) -> int:
     if name not in tokens:
         return default
@@ -1575,7 +1654,8 @@ def _repl_help() -> list[str]:
         "  show <doc:id|chunk:id> [--full]",
         "  list docs",
         "  list chunks --doc <doc_id>|doc=<doc_id>",
-        "  seed [--max N|max=N] [--pagerank-weight W|pagerank_weight=W]",
+        "  sample [--max N|max=N] [--strategy diverse|strategy=diverse]"
+        " [--pagerank-weight W|pagerank_weight=W]",
         "  help",
         "  exit",
     ]
@@ -1685,20 +1765,27 @@ def _run_repl_line(
             return session.list_chunks(doc_id), [], "corpus_repl_list_chunks"
         raise ReplError("list supports docs or chunks")
 
-    if cmd == "seed":
-        max_seeds = _pop_int_option(args, "--max", _pop_key_int(args, "max", 20))
+    if cmd == "sample":
+        max_docs = _pop_int_option(args, "--max", _pop_key_int(args, "max", 20))
+        strategy = _pop_str_option(
+            args, "--strategy", _pop_key_value(args, "strategy") or "diverse"
+        )
         pagerank_weight = _pop_float_option(
             args,
             "--pagerank-weight",
             _pop_key_float(args, "pagerank_weight", 0.7),
         )
         if args:
-            raise ReplError(f"unknown seed args: {' '.join(args)}")
-        return (
-            session.find_seeds(max_seeds=max_seeds, pagerank_weight=pagerank_weight),
-            [],
-            "corpus_repl_seed",
-        )
+            raise ReplError(f"unknown sample args: {' '.join(args)}")
+        try:
+            ids = session.sample_docs(
+                max_docs=max_docs,
+                strategy=strategy,
+                pagerank_weight=pagerank_weight,
+            )
+        except ValueError as exc:
+            raise ReplError(str(exc)) from exc
+        return ids, [], "corpus_repl_sample"
 
     raise ReplError(f"unknown command: {cmd}; type help")
 

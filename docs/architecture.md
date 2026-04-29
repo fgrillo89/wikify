@@ -149,7 +149,7 @@ src/wikify/
 |-- corpus/                         input corpora (read-only during a run)
 |   |-- chunks.py, vectors.py, vectors_meta.py, doc_markdown.py
 |   |-- images_index.py, equations_index.py, bibliography.py
-|   |-- seed.py                     greedy seed selection
+|   |-- sampling.py                 diverse document sampling (`corpus sample`)
 |   |-- field_detect.py             corpus field classification
 |   |-- graph.py, graph_build.py    corpus fluent KG
 |   `-- queries.py                  read-only helpers (find/show/list/check)

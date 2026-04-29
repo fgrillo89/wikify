@@ -524,3 +524,159 @@ def test_corpus_repl_reports_user_errors_and_continues(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "error: unknown command: bogus; type help" in result.stderr
     assert "paper_0" in result.output
+
+
+# ----------------------------------------------------------------- sample
+#
+# `corpus sample` requires vectors.npz + knowledge_graph.json (the
+# diverse-strategy selector loads both). The bare `_make_corpus`
+# fixture deliberately omits these — they are exercised end-to-end by
+# `test_baseline_sampling.py`. The tests below cover the CLI surface
+# itself: validation gates, the strategy-rejection envelope, --explain,
+# and the JSON/quiet emitters via a monkeypatched `queries.sample_docs`.
+
+
+def test_corpus_sample_explain_short_circuits_before_loading(
+    tmp_path: Path,
+) -> None:
+    """`--explain` must print the resolved chain and exit without
+    touching vectors/KG, so it works on an unembedded corpus."""
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "5",
+            "--strategy", "diverse",
+            "--pagerank-weight", "0.7",
+            "--explain",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "sample_diverse(max_docs=5" in result.output
+    assert "pagerank_weight=0.7" in result.output
+
+
+def test_corpus_sample_rejects_zero_max(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "0",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"] == "bad_int"
+    assert "--max must be > 0" in payload["message"]
+
+
+def test_corpus_sample_rejects_negative_max(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "-3",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0
+    payload = json.loads(result.stderr)
+    assert payload["error"] == "bad_int"
+
+
+def test_corpus_sample_rejects_unknown_strategy(tmp_path: Path) -> None:
+    """Strategy validation lives in `queries.sample_docs` and runs
+    before any vector/KG load, so it surfaces cleanly even on an
+    unembedded fixture corpus."""
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "5",
+            "--strategy", "random",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0
+    payload = json.loads(result.stderr)
+    assert payload["error"] == "bad_strategy"
+    assert "random" in payload["message"]
+
+
+def test_corpus_sample_emits_json_envelope_and_doc_handles(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """JSON output is `{"ok": True, "items": [...]}` with `doc_handle`
+    derived from each sampled doc id. Patches the queries layer so the
+    test does not need an embedded corpus."""
+    from wikify.cli import corpus as cli_corpus
+
+    corpus = _make_corpus(tmp_path / "c")
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "sample_docs",
+        lambda corpus, **kw: ["paper_0", "paper_1"],
+    )
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "doc_metrics",
+        lambda corpus, ids: {
+            did: {"citation_count": 7, "pagerank": 0.0123} for did in ids
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "2",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    handles = [item["doc_handle"] for item in payload["items"]]
+    assert handles == ["doc:paper_0", "doc:paper_1"]
+    assert payload["items"][0]["citation_count"] == 7
+    assert payload["items"][0]["pagerank"] == 0.0123
+
+
+def test_corpus_sample_quiet_emits_one_handle_per_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from wikify.cli import corpus as cli_corpus
+
+    corpus = _make_corpus(tmp_path / "c")
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "sample_docs",
+        lambda corpus, **kw: ["paper_0", "paper_1"],
+    )
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "doc_metrics",
+        lambda corpus, ids: {did: {} for did in ids},
+    )
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "2",
+            "--format", "quiet",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["doc:paper_0", "doc:paper_1"]

@@ -622,7 +622,7 @@ wiki bundle.
 - load chunks by id
 - retrieve/search evidence
 - expose graph neighborhoods
-- expose seed selection primitives
+- expose document sampling primitives
 
 It must not mutate wiki or work state. In a bundle run, corpus commands are
 read-only unless explicitly running the outer `corpus build` / `corpus refresh`
@@ -739,7 +739,7 @@ wikify corpus find     "<query>" [--corpus <c>] [--top-k N] \
                        [--rank semantic|citation_count|pagerank|h_index|n_papers] \
                        [--format auto|quiet|compact|json] [--explain]
 wikify corpus find     "<query>" [--corpus <c>] --text
-wikify corpus find     --seed [--corpus <c>] [--max 20] [--pagerank-weight 0.7]
+wikify corpus sample   [--corpus <c>] [--max N] [--strategy diverse] [--pagerank-weight W]
 wikify corpus show     <doc:|chunk:|figure:|equation:|author:><id> [--corpus <c>] [--full]
 wikify corpus traverse <handle> --to <relation> [--corpus <c>] \
                        [--rank citation_count|pagerank|h_index|n_papers] [--top-k N] \
@@ -844,7 +844,7 @@ wikify eval --bundle <bundle> [--corpus <corpus>] [--report <path>]
 Baseline:
 
 ```text
-corpus find --seed
+corpus sample
   -> extractor agents write extract outputs
   -> work add concept
   -> corpus find "<concept>"
@@ -988,7 +988,7 @@ wikify corpus build papers/ald --out data/corpora/ald [--mode additive|sync]
 wikify corpus refresh data/corpora/ald
 wikify corpus check   data/corpora/ald
 wikify corpus list    docs --corpus data/corpora/ald
-wikify corpus find    --seed --corpus data/corpora/ald --max 20 --pagerank-weight 0.7
+wikify corpus sample  --corpus data/corpora/ald --max 20 --pagerank-weight 0.7
 wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --top-k 8
 wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --text
 wikify corpus show    chunk:doc1__c003 --corpus data/corpora/ald --full
@@ -1042,8 +1042,9 @@ bundle.corpus.graph.chunk("doc1:003").neighbors(depth=2).rank("pagerank").top(20
 ```
 
 should be exposed to the agent as a simple query atom. The flag set
-that ships today is `--top-k`, `--seed --max --pagerank-weight`, and
-`--text`; richer graph traversals go through the fluent corpus KG
+that ships today is `--top-k`, the `corpus sample` verb (`--max
+--strategy --pagerank-weight`), and `--text`; richer graph traversals
+go through the fluent corpus KG
 (``wikify.corpus.graph.KnowledgeGraph``) until the CLI surface grows.
 
 ### Corpus query shapes
@@ -1100,14 +1101,15 @@ wikify corpus list equations --doc paper_A
 wikify corpus list files
 ```
 
-`corpus find` exposes three retrieval modes today: semantic evidence
-search (default), greedy submodular seed selection (`--seed`), and a
-literal substring grep (`--text`).
+`corpus find` exposes two retrieval modes today: semantic evidence
+search (default) and literal substring grep (`--text`). Query-free
+diverse-document sampling lives in its own verb, `corpus sample`
+(formerly `corpus find --seed`).
 
 ```text
-wikify corpus find "Atomic Layer Deposition" --corpus <corpus> --top-k 8
-wikify corpus find "atomic layer deposition" --corpus <corpus> --text
-wikify corpus find --seed --corpus <corpus> --max 20 --pagerank-weight 0.7
+wikify corpus find   "Atomic Layer Deposition" --corpus <corpus> --top-k 8
+wikify corpus find   "atomic layer deposition" --corpus <corpus> --text
+wikify corpus sample --corpus <corpus> --max 20 --strategy diverse --pagerank-weight 0.7
 ```
 
 Graph-shaped retrievals (cited-by, near-chunk, neighbours, figures,

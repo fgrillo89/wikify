@@ -1,19 +1,19 @@
 ---
 name: wikify-baseline
-description: Run the baseline Wikify strategy by composing wikify-search-corpus, wikify-bundle, wikify-write-page, and shared concept-extraction references. Use when building a first-pass wiki from a corpus with a fixed seed and evidence budget.
+description: Run the baseline Wikify strategy by composing wikify-search-corpus, wikify-bundle, wikify-write-page, and shared concept-extraction references. Use when building a first-pass wiki from a corpus with a fixed sample and evidence budget.
 allowed-tools: Bash(wikify *) Task
 ---
 
 # wikify-baseline
 
-Baseline is a strategy workflow. It owns seed count, evidence top-k,
+Baseline is a strategy workflow. It owns sample count, evidence top-k,
 writer tier, concurrency, retry policy, and stop conditions. Core
 capability skills explain the mechanics.
 
 ## Strategy Defaults
 
-- Seed documents: up to 12 from corpus seed ranking.
-- Seed PageRank weight: 0.7.
+- Sampled documents: up to 12 via `corpus sample --strategy diverse`.
+- Sample PageRank weight: 0.7.
 - Evidence per concept: top 12 retrieved chunks.
 - Writer tier: M.
 - Extractor tier: S.
@@ -25,14 +25,14 @@ capability skills explain the mechanics.
 ## Workflow
 
 1. Use `wikify-bundle` to initialize or open the bundle.
-2. Use `wikify-search-corpus` to get seed documents:
+2. Use `wikify-search-corpus` to sample diverse documents:
 
    ```bash
-   wikify corpus find --seed --corpus <corpus> --max 12 --pagerank-weight 0.7
+   wikify corpus sample --corpus <corpus> --max 12 --pagerank-weight 0.7
    ```
 
-3. For each selected seed, use `wikify-search-corpus` to read the
-   workflow-selected text. Baseline may read full seed documents, but a
+3. For each sampled document, use `wikify-search-corpus` to read the
+   workflow-selected text. Baseline may read full documents, but a
    later baseline variant may read only abstracts or introductions.
 4. Use `wikify/references/exploration/concept-extraction.md` to extract
    candidate concepts from the observed text.
@@ -68,13 +68,13 @@ capability skills explain the mechanics.
 
 ## Stop Conditions
 
-- Seeded concepts are committed or failed.
+- All concepts from the initial sample pass are committed or failed.
 - A budget-exceeded event is observed.
 - The workflow reaches its configured haiku-equivalent budget.
 
 ## Does Not Do
 
-- Does not re-enter concept extraction after the initial seed pass.
+- Does not re-enter concept extraction after the initial sample pass.
 - Does not perform query-driven refinement.
 - Does not hide strategy choices in Python.
 

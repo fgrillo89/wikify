@@ -1,6 +1,6 @@
 ---
 name: wikify-search-corpus
-description: Explain and use the Wikify corpus CLI as the read/search surface over the corpus fluent API. Use when probing corpus documents, chunks, authors, citations, figures, equations, seed documents, semantic search, text search, paper-level ranking by citation count, or recursive graph traversals. This skill is read-only and does not decide an exploration strategy.
+description: Explain and use the Wikify corpus CLI as the read/search surface over the corpus fluent API. Use when probing corpus documents, chunks, authors, citations, figures, equations, sampling diverse entry points, semantic search, text search, paper-level ranking by citation count, or recursive graph traversals. This skill is read-only and does not decide an exploration strategy.
 allowed-tools: Bash(wikify corpus *)
 ---
 
@@ -60,7 +60,7 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
-| Diverse corpus entry points (PageRank + coverage)   | `find --seed --max 12` |
+| Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |
 | **Authors**                                         | |
 | Most-cited author                                   | `find --by author --rank citation_count` |
 | Most-prolific author                                | `find --by author --rank n_papers` |
