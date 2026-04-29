@@ -1703,6 +1703,35 @@ def _run_repl_line(
     raise ReplError(f"unknown command: {cmd}; type help")
 
 
+@app.command("serve")
+def cmd_serve(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    port: int = typer.Option(
+        0, "--port", help="TCP port to bind on 127.0.0.1 (0 = OS-assigned)."
+    ),
+) -> None:
+    """Start an HTTP server hosting the corpus CLI in a single warm process.
+
+    Bound to one corpus. The first stdout line is
+    ``WIKIFY_CORPUS_SERVER=http://127.0.0.1:<port>`` so callers can
+    capture it. The recommended pattern is::
+
+        export WIKIFY_CORPUS_SERVER=$( \
+            wikify corpus serve | head -1 | cut -d= -f2- )
+
+    Set ``WIKIFY_CORPUS_SERVER`` in subsequent shells to route every
+    ``wikify corpus …`` call through this server, collapsing
+    per-call latency from ~1.2-5s to ~10-100ms once warm.
+
+    Foreground only in this phase — background it via your shell
+    (``wikify corpus serve --corpus X &``) or a process manager.
+    """
+    from ..serve import run_server
+
+    corpus = _resolve_corpus(corpus_dir)
+    run_server(corpus.root, port=port if port > 0 else None)
+
+
 @app.command("repl")
 def cmd_repl(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
