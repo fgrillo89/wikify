@@ -111,13 +111,30 @@ Take-aways:
 
 ### Batch 4 — landed
 
-- **`corpus check` cite-index coverage**: the silent-zero pattern in
-  `cited-in-corpus` traced to a real ingestion gap — only 55/208 docs
-  in the ALD corpus (26.4%) have a populated `_ord_refs` index, so
-  the marker → in-corpus reference lookup fails for the rest.
-  `corpus check` now reports
+- **`corpus check` cite-index coverage** behind `--full`: the
+  silent-zero pattern in `cited-in-corpus` traced to a real ingestion
+  gap — only 55/208 docs in the ALD corpus (26.4%) have a populated
+  `_ord_refs` index. `corpus check --full` now reports
   `cite_index: 55/208 docs (26.4% coverage for cited-in-corpus)` so
-  the gap is discoverable without diving into the source.
+  the gap is discoverable. Default `corpus check` stays fast — the
+  initial implementation regressed it from 1.62s → 7.4s by loading
+  the full 18MB KG; gated behind `--full` and reimplemented as a
+  streaming `json.load` pass over `nodes` (1.77s for `--full` —
+  faster than the initial regression by 4x).
+
+### Batch 5 — landed
+
+- **Lazy `wikify.bundle.run.events` import** (~300ms): `cli/corpus.py`
+  was paying the jsonschema/event-validation import cost on every
+  call, even though `_emit_chunk_reads` returns early when the cwd
+  isn't a bundle (the common case for agent calls). Deferred to
+  inside `_emit_chunk_reads`. Saves ~100ms wall-clock on cold
+  `corpus show` (1.36s → 1.25s).
+- **Lazy `wikify.ingest.pipeline` import** (~250ms): only `corpus
+  build` and `corpus refresh` need it; deferred into those handlers.
+  Doesn't move `--help` because the other 6 subapps share the heavy
+  core, but removes the cost from any `corpus build` argument-parse
+  failure path.
 
 ### Deferred (out of scope for this PR)
 

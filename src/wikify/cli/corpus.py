@@ -24,8 +24,6 @@ from pathlib import Path
 import typer
 
 from ..api import Bundle, Corpus
-from ..bundle.run.events import Event, append_event
-from ..bundle.run.state import load_state
 from ..corpus import queries
 from ..corpus.handles import (
     AmbiguousHandleError,
@@ -33,9 +31,16 @@ from ..corpus.handles import (
     format_handle,
 )
 from ..corpus.session import CorpusSearchSession
-from ..ingest.pipeline import ingest_corpus, refresh_corpus
 from ._format import FormatError, format_row, resolve_format
 from ._helpers import EXIT_VALIDATION, cli_error
+
+# ``wikify.ingest.pipeline`` (~250ms) and ``wikify.bundle.run.events``
+# (~300ms) are deferred to first use — neither is needed for the
+# read-only `find`/`show`/`traverse` commands that dominate agent
+# usage. ``ingest_corpus`` / ``refresh_corpus`` are imported inside
+# `cmd_build` / `cmd_refresh`; ``Event`` / ``append_event`` /
+# ``load_state`` are imported inside `_emit_chunk_reads` (which
+# returns early when there is no bundle context).
 
 
 def _resolve_format_or_error(fmt: str) -> str:
@@ -94,6 +99,10 @@ def _emit_chunk_reads(
     """Append one ``chunk_read`` event per id when a bundle context exists."""
     if bundle is None:
         return
+    # Lazy: ~300ms of jsonschema/etc. only paid when inside a bundle.
+    from ..bundle.run.events import Event, append_event
+    from ..bundle.run.state import load_state
+
     try:
         run_id = load_state(bundle).run_id
     except Exception:
@@ -193,6 +202,8 @@ def cmd_build(
     no_refresh: bool = typer.Option(False, "--no-refresh"),
 ) -> None:
     """Parse, chunk, embed, and graph an input directory."""
+    from ..ingest.pipeline import ingest_corpus
+
     paths = ingest_corpus(
         source,
         out,
@@ -209,6 +220,8 @@ def cmd_refresh(
     corpus_dir: Path = typer.Argument(...),
 ) -> None:
     """Rebuild derived corpus artifacts (embeddings, graph, topics, ...)."""
+    from ..ingest.pipeline import refresh_corpus
+
     paths = Corpus(root=corpus_dir)
     refresh_corpus(paths)
     typer.echo(f"refresh complete: {paths.root}")
@@ -220,11 +233,25 @@ def cmd_check(
         None, help="Corpus directory. Optional; falls back to WIKIFY_CORPUS or cwd."
     ),
     fmt: str = typer.Option("text", "--format"),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help=(
+            "Also compute citation-marker indexing coverage "
+            "(requires loading knowledge_graph.json — slower)."
+        ),
+    ),
 ) -> None:
-    """Report corpus health: doc/chunk counts, derived artifacts, field."""
+    """Report corpus health: doc/chunk counts, derived artifacts, field.
+
+    The default form stays under ~2s by skipping the knowledge-graph
+    load. Pass ``--full`` to also report ``cite_index`` coverage (% of
+    in-corpus sources whose ``ord_refs`` is populated — relevant for
+    ``traverse <chunk> --to cited-in-corpus``).
+    """
     corpus = _resolve_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
-    summary = queries.check_corpus(corpus)
+    summary = queries.check_corpus(corpus, full=full)
     if fmt == "json":
         typer.echo(json.dumps(summary))
         return

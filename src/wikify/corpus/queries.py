@@ -540,16 +540,17 @@ def find_seeds(
 # ------------------------------------------------------------------- check
 
 
-def check_corpus(corpus: Corpus) -> dict:
+def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     """Lightweight corpus health summary used by ``corpus check``.
 
-    Reports doc/chunk counts, derived-artifact presence, detected
-    field, and citation-marker indexing coverage. The marker coverage
-    field surfaces a real ingestion gap: ``traverse <chunk> --to
-    cited-in-corpus`` only works for sources whose ``ord_refs`` index
-    was built at ingest time. Low coverage means most chunks resolve
-    zero in-corpus refs even when their parent docs have known
-    references.
+    Reports doc/chunk counts, derived-artifact presence, and detected
+    field. The default form does **not** load the knowledge graph
+    (~18MB JSON for the ALD corpus, ~6s wall-clock) so the call stays
+    fast. Pass ``full=True`` to also report citation-marker indexing
+    coverage (``traverse <chunk> --to cited-in-corpus`` requires
+    sources with populated ``ord_refs``); this triggers a full KG
+    parse via ``json.load`` + a streaming pass over the ``nodes``
+    array.
     """
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
@@ -569,29 +570,44 @@ def check_corpus(corpus: Corpus) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
-    # Citation-marker indexing coverage: % of in-corpus source nodes
-    # with a populated per-ordinal reference index. Cheap (one KG load,
-    # one pass over node attrs).
-    if out["has_knowledge_graph"] and out["has_vectors"]:
+    if full and out["has_knowledge_graph"]:
         try:
-            vs = read_vector_store(corpus)
-            kg = read_knowledge_graph(corpus, vectors=vs)
-            backend = kg._backend
-            sources_in_corpus = {d.id for d in docs}
-            with_ord = sum(
-                1
-                for sid in sources_in_corpus
-                if backend._ord_refs.get(sid)
-            )
-            out["sources_with_ord_refs"] = with_ord
-            out["ord_refs_coverage_pct"] = (
-                round(100.0 * with_ord / len(sources_in_corpus), 1)
-                if sources_in_corpus else 0.0
-            )
+            out.update(_ord_refs_coverage(corpus, docs))
         except Exception as exc:
             out["ord_refs_coverage_pct"] = None
             out["ord_refs_error"] = str(exc)
     return out
+
+
+def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
+    """Count in-corpus source nodes with a populated ``ord_refs`` attribute.
+
+    Reads ``knowledge_graph.json`` directly via ``json.load`` and
+    iterates the ``nodes`` array — avoids the full NetworkX backend
+    construction that the regular KG load performs. Roughly 6x faster
+    than a full ``read_knowledge_graph`` on the ALD reference corpus.
+    """
+    import json as _json
+
+    with corpus.knowledge_graph_path.open(encoding="utf-8") as fh:
+        kg_blob = _json.load(fh)
+    in_corpus_ids = {d.id for d in docs}
+    with_ord = 0
+    for node in kg_blob.get("nodes", []):
+        if node.get("type") != "source":
+            continue
+        if node.get("id") not in in_corpus_ids:
+            continue
+        ord_refs = node.get("ord_refs") or {}
+        if ord_refs:
+            with_ord += 1
+    n = len(in_corpus_ids)
+    return {
+        "sources_with_ord_refs": with_ord,
+        "ord_refs_coverage_pct": (
+            round(100.0 * with_ord / n, 1) if n else 0.0
+        ),
+    }
 
 
 # ---------------------------------------------------------------- traverse
