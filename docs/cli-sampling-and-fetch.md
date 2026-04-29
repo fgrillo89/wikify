@@ -1,10 +1,16 @@
 # CLI: sampling and fetch
 
 Spec for three related improvements to the corpus CLI. Each section is
-independently implementable; together they generalise the current
+independently implementable; together they generalise the original
 `corpus find --seed` into a small, composable sampling/fetch surface.
 
-Status: design only. Not yet implemented.
+Status: partial. Section 1 has shipped in skeleton form as the
+top-level verb `wikify corpus sample --strategy diverse --max N
+--pagerank-weight W` (PR #58, replacing the old `find --seed` entry
+point). The richer strategy/population/filter matrix below
+(`top|random|weighted|periphery|stratified`, populations beyond
+`docs`, filters) is still spec. Sections 2 and 3 are unchanged: design
+only, not yet implemented.
 
 ## 1. Generalise `--seed` into a `sample` verb
 
@@ -123,15 +129,20 @@ wikify corpus sample docs --strategy stratified --by year \
 
 ### Migration from `find --seed`
 
-- `find --seed --max N --pagerank-weight W` becomes a thin wrapper
-  that prints a deprecation warning to stderr and forwards to
-  `sample docs --strategy submodular --pagerank-weight W --top-k N`.
-- Skill docs in `.claude/skills/wikify-search-corpus/` migrate to
-  `sample`. The `--seed` form remains documented as deprecated for
-  one release.
-- The fluent helper `corpus.queries.find_seeds` stays; `sample`
-  dispatches to it for the submodular strategy. New strategies live
-  in a new `corpus/sampling.py` module.
+What actually shipped (PR #58) was the simpler, breaking variant:
+
+- `find --seed` was removed outright; no deprecated alias. The fluent
+  helper `corpus.queries.find_seeds` was renamed to
+  `corpus.queries.sample_docs`, and the strategy implementation moved
+  to a new `corpus/sampling.py` module.
+- The CLI surface is `wikify corpus sample [--max N] [--strategy
+  diverse] [--pagerank-weight W]`. Strategy names are flat
+  (`diverse`, future `random`/`pagerank`/`stratified`); there is no
+  `--strategy submodular --population docs` decomposition yet.
+- Skill docs in `.claude/skills/wikify-search-corpus/` were migrated
+  to `corpus sample` in the same PR.
+
+The richer matrix below remains spec.
 
 ### Open questions
 
