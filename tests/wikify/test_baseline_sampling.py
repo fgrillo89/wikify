@@ -1,14 +1,10 @@
-"""Regression tests for the abstract-first baseline's seed selection.
+"""Regression tests for the abstract-first baseline's corpus sampling.
 
-Validates the explicit greedy submodular objective described in
-``docs/distill-test-readiness.md``: ``0.7 * pr_norm(d) + 0.3 *
-coverage_gain(d | S)`` over corpus-citation PageRank and mean-pooled
-document embeddings.
-
-The seed-selection logic is also the canonical implementation for the
-optional seeded-bootstrap helper in ``distill/seed.py`` — keeping it
-in one place is what lets us turn seeded bootstrap on later as a side
-experiment without forking the math.
+Validates the explicit greedy submodular objective: ``0.7 * pr_norm(d)
++ 0.3 * coverage_gain(d | S)`` over corpus-citation PageRank and
+mean-pooled document embeddings — implemented as the ``"diverse"``
+strategy in :mod:`wikify.corpus.sampling` and surfaced via
+``corpus sample --strategy diverse``.
 """
 
 from __future__ import annotations
@@ -20,11 +16,11 @@ import numpy as np
 import pytest
 
 from wikify.corpus.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
-from wikify.corpus.seed import (
+from wikify.corpus.sampling import (
     doc_embeddings,
-    greedy_seed_select,
     pagerank_normalised,
-    select_seeded_bootstrap,
+    sample_diverse,
+    sample_doc_abstracts,
 )
 from wikify.corpus.vectors import VectorStore
 from wikify.models import Chunk
@@ -120,17 +116,17 @@ def test_doc_embeddings_skip_captions_and_references():
     assert np.allclose(embeds, expected, atol=1e-6)
 
 
-def test_greedy_seed_select_prefers_pagerank_when_corpus_is_homogeneous():
+def test_sample_diverse_prefers_pagerank_when_corpus_is_homogeneous():
     """When all docs have identical embeddings, coverage_gain is 0 and the
     objective collapses to PageRank ranking."""
     doc_order = ["d1", "d2", "d3"]
     embeds = _normed(np.ones((3, 4), dtype=np.float32))
     pr_norm = np.array([0.1, 0.9, 0.4], dtype=np.float32)
-    out = greedy_seed_select(
+    out = sample_diverse(
         doc_order=doc_order,
         doc_embeddings=embeds,
         pr_norm=pr_norm,
-        max_seeds=2,
+        max_docs=2,
         pagerank_weight=0.7,
     )
     # The first pick is the highest PR doc. Once added, all docs have
@@ -140,7 +136,7 @@ def test_greedy_seed_select_prefers_pagerank_when_corpus_is_homogeneous():
     assert out[1] == "d3"
 
 
-def test_greedy_seed_select_picks_diverse_docs_when_pagerank_is_flat():
+def test_sample_diverse_picks_diverse_docs_when_pagerank_is_flat():
     """When PR is flat, the coverage term decides — picks should span the
     embedding space rather than cluster on one side."""
     doc_order = ["a1", "a2", "b1"]
@@ -155,11 +151,11 @@ def test_greedy_seed_select_picks_diverse_docs_when_pagerank_is_flat():
         )
     )
     pr_norm = np.array([0.5, 0.5, 0.5], dtype=np.float32)
-    out = greedy_seed_select(
+    out = sample_diverse(
         doc_order=doc_order,
         doc_embeddings=embeds,
         pr_norm=pr_norm,
-        max_seeds=2,
+        max_docs=2,
         pagerank_weight=0.7,
     )
     # First pick: tied (everyone has identical PR + identical coverage_gain
@@ -168,31 +164,31 @@ def test_greedy_seed_select_picks_diverse_docs_when_pagerank_is_flat():
     assert out[1] == "b1"
 
 
-def test_greedy_seed_select_returns_at_most_max_seeds():
-    """``max_seeds`` is the only cap; no token-cost calibration in play."""
+def test_sample_diverse_returns_at_most_max_docs():
+    """``max_docs`` is the only cap; no token-cost calibration in play."""
     doc_order = [f"d{i}" for i in range(10)]
     embeds = _normed(np.eye(10, dtype=np.float32))
     pr_norm = np.linspace(0.0, 1.0, 10, dtype=np.float32)
-    out = greedy_seed_select(
+    out = sample_diverse(
         doc_order=doc_order,
         doc_embeddings=embeds,
         pr_norm=pr_norm,
-        max_seeds=3,
+        max_docs=3,
         pagerank_weight=0.7,
     )
     assert len(out) == 3
 
 
-def test_greedy_seed_select_clamps_max_seeds_to_doc_count():
+def test_sample_diverse_clamps_max_docs_to_doc_count():
     """Asking for more seeds than docs returns the whole corpus."""
     doc_order = ["d1", "d2"]
     embeds = _normed(np.eye(2, dtype=np.float32))
     pr_norm = np.array([0.4, 0.6], dtype=np.float32)
-    out = greedy_seed_select(
+    out = sample_diverse(
         doc_order=doc_order,
         doc_embeddings=embeds,
         pr_norm=pr_norm,
-        max_seeds=99,
+        max_docs=99,
         pagerank_weight=0.7,
     )
     assert sorted(out) == ["d1", "d2"]
@@ -221,14 +217,14 @@ def _long_chunk(cid, doc_id, ord_, *, section_type="body", n_chars=400, n_words=
     )
 
 
-# abstract-picker tests live in test_abstract_tagger.py now (the
-# canonical implementation has moved to ingest-time tagging).
-# This file keeps only the tests for greedy seed selection itself
-# plus an end-to-end check on select_seeded_bootstrap.
+# Abstract-picker tests live in test_abstract_tagger.py now (the
+# canonical implementation has moved to ingest-time tagging). This
+# file keeps the diverse-sampling math tests plus an end-to-end check
+# on sample_doc_abstracts.
 
 
-def test_select_seeded_bootstrap_end_to_end_is_deterministic():
-    """select_seeded_bootstrap returns each seed doc's canonical
+def test_sample_doc_abstracts_end_to_end_is_deterministic():
+    """sample_doc_abstracts returns each sampled doc's canonical
     abstract chunk via the fluent KG API. The KG is pre-tagged
     (one ``section_type='abstract'`` chunk per doc) — that's the
     post-ingest invariant the picker depends on."""
@@ -244,12 +240,12 @@ def test_select_seeded_bootstrap_end_to_end_is_deterministic():
         {"d1": 0.1, "d2": 0.6, "d3": 0.3},
         abstract_chunks={"d1": "d1#c0", "d2": "d2#c0", "d3": "d3#c0"},
     )
-    out_a = select_seeded_bootstrap(
-        chunks=chunks, vectors=vs, kg=kg, max_seeds=2,
+    out_a = sample_doc_abstracts(
+        chunks=chunks, vectors=vs, kg=kg, max_docs=2,
         pagerank_weight=0.7,
     )
-    out_b = select_seeded_bootstrap(
-        chunks=chunks, vectors=vs, kg=kg, max_seeds=2,
+    out_b = sample_doc_abstracts(
+        chunks=chunks, vectors=vs, kg=kg, max_docs=2,
         pagerank_weight=0.7,
     )
     assert out_a == out_b

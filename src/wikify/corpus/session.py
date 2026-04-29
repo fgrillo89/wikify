@@ -97,10 +97,17 @@ class CorpusSearchSession:
         pool = chunk_pool or max(top_k * 5, top_k)
         return self._rank_docs_from_hits(self.search_text(needle, top_k=pool), top_k)
 
-    def find_seeds(self, *, max_seeds: int, pagerank_weight: float) -> list[str]:
-        return queries.find_seeds(
+    def sample_docs(
+        self,
+        *,
+        max_docs: int,
+        strategy: str = "diverse",
+        pagerank_weight: float = 0.7,
+    ) -> list[str]:
+        return queries.sample_docs(
             self.corpus,
-            max_seeds=max_seeds,
+            max_docs=max_docs,
+            strategy=strategy,
             pagerank_weight=pagerank_weight,
         )
 

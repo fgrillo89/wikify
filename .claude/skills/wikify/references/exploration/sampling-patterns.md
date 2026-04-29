@@ -5,7 +5,8 @@ strategies.
 
 ## pagerank-entrypoint
 
-Start from central documents returned by corpus seed ranking. Useful for
+Start from central documents returned by ``wikify corpus sample``
+(``--strategy diverse`` blends PageRank with coverage). Useful for
 first-pass baselines.
 
 ## abstract-first
@@ -16,8 +17,8 @@ concepts cheaply.
 
 ## citation-neighborhood
 
-Traverse cited and citing papers from seed sources. Useful for finding
-communities around a method or concept.
+Traverse cited and citing papers from sampled or query-found sources.
+Useful for finding communities around a method or concept.
 
 ## topic-vocabulary
 

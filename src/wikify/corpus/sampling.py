@@ -1,6 +1,7 @@
-"""Greedy submodular seed selection — deterministic primitive for any workflow skill.
+"""Corpus sampling primitives — strategy-keyed selectors for workflow skills.
 
-The selector ranks candidate documents by the objective::
+A *sample* is a small set of documents picked from the corpus without a
+query. The default ``diverse`` strategy ranks candidates by::
 
     score(d | S) = pagerank_weight * pr_norm(d)
                  + (1 - pagerank_weight) * coverage_gain(d | S)
@@ -8,11 +9,15 @@ The selector ranks candidate documents by the objective::
 where ``coverage_gain`` is computed over mean-pooled non-reference,
 non-caption document embeddings with clipped cosine similarities.
 
-This module owns the ranking only. ``pagerank_weight`` and ``max_seeds``
-are caller-supplied — the CLI surface (``corpus find --seed --max
-<n> --pagerank-weight <w>``) carries the defaults so the value is
-explicitly chosen at the agent boundary, not buried in a Python config
-object.
+This module owns the ranking only. Knobs (``pagerank_weight``,
+``max_docs``, future strategy params) are caller-supplied — the CLI
+surface (``corpus sample --max <n> --pagerank-weight <w>``) carries
+the defaults so the value is explicitly chosen at the agent boundary,
+not buried in a Python config object.
+
+Designed to grow — additional strategies (``random``, ``pagerank``,
+``stratified``) plug into :func:`sample_docs` without changing the
+public surface.
 """
 
 from __future__ import annotations
@@ -96,23 +101,23 @@ def pagerank_normalised(kg: KnowledgeGraph, doc_order: list[str]) -> np.ndarray:
     return (raw - lo) / (hi - lo)
 
 
-def greedy_seed_select(
+def sample_diverse(
     *,
     doc_order: list[str],
     doc_embeddings: np.ndarray,
     pr_norm: np.ndarray,
-    max_seeds: int,
+    max_docs: int,
     pagerank_weight: float,
 ) -> list[str]:
     """Greedy submodular: ``pagerank_weight * pr + (1-w) * cov_gain``.
 
-    Returns up to ``max_seeds`` doc ids ordered by selection (highest
+    Returns up to ``max_docs`` doc ids ordered by selection (highest
     score first). The selector does not know about budgets in token
-    units — callers translate budgets into ``max_seeds`` themselves and
+    units — callers translate budgets into ``max_docs`` themselves and
     rely on their own per-call gate to bound real spend.
     """
     n = len(doc_order)
-    if n == 0 or max_seeds <= 0:
+    if n == 0 or max_docs <= 0:
         return []
 
     sims = doc_embeddings @ doc_embeddings.T
@@ -120,7 +125,7 @@ def greedy_seed_select(
 
     max_sim_to_s = np.zeros(n, dtype=np.float32)
     selected: list[int] = []
-    cap = min(max_seeds, n)
+    cap = min(max_docs, n)
     pr_w = float(pagerank_weight)
     cov_w = 1.0 - pr_w
 
@@ -146,32 +151,42 @@ def greedy_seed_select(
     return [doc_order[i] for i in selected]
 
 
-def select_seeded_bootstrap(
+def sample_doc_abstracts(
     *,
     chunks: list[Chunk],
     vectors: VectorStore | None,
     kg: KnowledgeGraph,
-    max_seeds: int,
+    max_docs: int,
     pagerank_weight: float,
+    strategy: str = "diverse",
 ) -> list[str]:
-    """End-to-end: pick seed docs and return their canonical abstract chunks.
+    """End-to-end: sample docs and return their canonical abstract chunks.
 
-    The abstract chunk for each seed doc comes from
+    The abstract chunk for each sampled doc comes from
     ``kg.source(d).abstract_chunk()`` — the canonical reader for the
     ingest-time-tagged abstract. Docs with no body content (no abstract
     tag) are silently skipped.
+
+    ``strategy`` is forwarded to :func:`sample_docs`. Default is
+    ``"diverse"``; future strategies (``"random"``, ``"pagerank"``)
+    will be selectable here without breaking callers.
     """
+    if strategy != "diverse":
+        raise ValueError(
+            f"unknown sampling strategy {strategy!r}; only 'diverse' is "
+            f"implemented today (future: 'random', 'pagerank')"
+        )
     embeds, doc_order = doc_embeddings(chunks, vectors)
     pr_norm = pagerank_normalised(kg, doc_order)
-    seed_doc_ids = greedy_seed_select(
+    sampled_doc_ids = sample_diverse(
         doc_order=doc_order,
         doc_embeddings=embeds,
         pr_norm=pr_norm,
-        max_seeds=max_seeds,
+        max_docs=max_docs,
         pagerank_weight=pagerank_weight,
     )
     return [
         chunk["id"]
-        for did in seed_doc_ids
+        for did in sampled_doc_ids
         if (chunk := kg.source(did).abstract_chunk()) is not None
     ]
