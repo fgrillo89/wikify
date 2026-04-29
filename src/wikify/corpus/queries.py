@@ -1,7 +1,8 @@
 """Read-only corpus query helpers — the surface ``cli/corpus.py`` calls.
 
-Wraps the existing fluent KG (``corpus/graph.py``), the seed selector
-(``corpus/seed.py``), and the on-disk corpus loaders (``corpus/chunks.py``)
+Wraps the existing fluent KG (``corpus/graph.py``), the document
+sampler (``corpus/sampling.py``), and the on-disk corpus loaders
+(``corpus/chunks.py``)
 into one cohesive module that the CLI can drive without sprinkling
 imports across handlers.
 

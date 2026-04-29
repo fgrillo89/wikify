@@ -107,8 +107,10 @@ return an error listing the candidates.
                 else ``quiet``.
 
 Unknown ``--format`` values now produce a structured ``bad_format``
-error envelope, not a Python traceback. ``--top-k`` must be ``> 0``
-(``--top-k 0`` and negative values are rejected).
+error envelope, not a Python traceback. For ``find`` and ``sample``,
+``--top-k`` / ``--max`` must be ``> 0`` (``0`` and negative values are
+rejected). For ``traverse``, ``--top-k 0`` is allowed and means
+*unlimited*; only negative values are rejected.
 
 ### Compact Column Meanings
 

@@ -56,7 +56,7 @@ never calls a model SDK directly.
 
 Top-level packages (post-Phase-C layout):
 
-- `corpus/` — input corpora: chunks, vectors, doc markdown, images, equations, bibliography, fluent KG (`graph.py`/`graph_build.py`), seed selection, field detection. Read-only during a wiki run.
+- `corpus/` — input corpora: chunks, vectors, doc markdown, images, equations, bibliography, fluent KG (`graph.py`/`graph_build.py`), diverse document sampling (`sampling.py`), field detection. Read-only during a wiki run.
 - `citations/` — citation parsing, BibTeX, DOI/Crossref/OpenAlex resolution. Standalone; consumed by `ingest/` only.
 - `bundle/` — everything that lives inside one wiki bundle:
   - `bundle/run/` — execution control: `state.py` (RunState), `events.py` (Event envelope + append/iter), `lock.py` (atomic file lock with TTL), `cost.py` (TierPrice + aggregation from events), `lifecycle.py` (init/close).
