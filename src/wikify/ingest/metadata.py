@@ -162,14 +162,20 @@ def choose_document_title(
     xmp_title: str = "",
     info_title: str = "",
     extra_title: str = "",
+    bib_title: str = "",
 ) -> str:
     """Pick the document title from available signals, preferring authoritative
     sources over heuristics.
 
     Priority:
       1. ``fn_title`` from ``[YYYY Author] Real Title.ext`` filename convention.
-         User-curated, directly authoritative. Use when ≥20 chars and not
+         User-curated, directly authoritative. Use when >=20 chars and not
          flagged by ``is_junk_title``.
+      1b. ``bib_title`` — title written to ``corpus_papers.bib`` by a
+         prior refresh. Reflects DOI-resolved + bib-cleaned truth from
+         the previous pipeline run; consulted right after the filename
+         so a clean prior-run title can heal a stuck-state ``doc.title``
+         that survives the heuristic junk filters.
       2. ``xmp_title`` — publisher-injected XMP ``dc:title`` when present.
          Clean on modern PDFs; garbled manuscript IDs ("acs_nn_nn-...") and
          "untitled" placeholders are caught by ``is_junk_title``.
@@ -203,6 +209,7 @@ def choose_document_title(
     # shorter-but-non-junk candidate in pass 2 if nothing longer passes.
     candidates: list[tuple[str, int]] = [
         (clean_markdown(fn_title or ""), 20),
+        (clean_markdown(bib_title or ""), 20),
         (clean_markdown(xmp_title or ""), 20),
         (clean_markdown(extra_title or ""), 20),
         (clean_markdown(info_title or ""), 20),

@@ -1081,6 +1081,46 @@ def build_citation_index(
 # ---------------------------------------------------------------------------
 
 
+def read_existing_bib_titles(corpus: Corpus) -> dict[str, str]:
+    """Map ``doc.id -> title`` from the existing ``corpus_papers.bib``.
+
+    Used by the refresh DAG to let title resolution always contend with
+    the bib written by the previous run. Returns an empty dict on first
+    ingest (no bib yet) or when the bib is unreadable — every caller
+    treats absence as "no opinion" and falls back to the existing
+    derivation chain.
+
+    Lookup uses ``doc.id`` directly: the bibtex writer sanitises the id
+    for the BibTeX ``ID`` field, but stores the original ``doc.id``
+    inside the citation index. We invert by computing
+    ``_sanitize_id(doc.id)`` for each known doc, which loses the
+    ``a``/``b``/``c`` dedup suffixes — acceptable because the missed
+    entries simply fall back to the heuristic chain.
+    """
+    if not corpus.library_bib_path.exists():
+        return {}
+    try:
+        text = corpus.library_bib_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        db = bibtexparser.loads(text)
+    except Exception:  # noqa: BLE001 - parser is third-party
+        return {}
+    return {
+        entry["ID"]: entry["title"]
+        for entry in db.entries
+        if entry.get("ID") and entry.get("title")
+    }
+
+
+def bib_title_for_doc(bib_titles: dict[str, str], doc: Document) -> str:
+    """Look up the bib title for a doc using the sanitised id."""
+    if not bib_titles or not doc.id:
+        return ""
+    return bib_titles.get(_sanitize_id(doc.id), "")
+
+
 def write_corpus_bibtex(
     corpus: Corpus,
     docs: list[Document],
@@ -1195,12 +1235,22 @@ def enrich_doc_metadata(
     *,
     resolve_doi: bool,
     doi_lookup: Callable[[str], dict[str, object]] | None,
+    bib_titles: dict[str, str] | None = None,
 ) -> Document:
-    """Fill missing bibliographic fields from markdown and optional DOI."""
+    """Fill missing bibliographic fields from markdown and optional DOI.
+
+    ``bib_titles`` is an optional precomputed ``{doc.id -> bib title}``
+    map (see :func:`read_existing_bib_titles`) from a prior refresh's
+    ``corpus_papers.bib``. When supplied, the bib title is treated as a
+    high-priority candidate that can heal stuck-state titles surviving
+    the other junk heuristics.
+    """
     original_metadata = dict(doc.metadata or {})
     metadata = dict(original_metadata)
     source_path = Path(doc.source_path) if doc.source_path else Path()
     _, fn_author, _ = parse_filename(source_path.name)
+
+    bib_title = bib_title_for_doc(bib_titles or {}, doc)
 
     if metadata.get("doi"):
         metadata["doi"] = _clean_doi(metadata.get("doi"))
@@ -1218,7 +1268,16 @@ def enrich_doc_metadata(
     )
     needs_doi = not metadata.get("doi")
     needs_authors = _authors_need_fallback(metadata, fn_author)
-    needs_title = _title_needs_fallback(doc.title)
+    # The bib title forces re-evaluation when it disagrees with the
+    # current title and is itself non-junk. This is what "title
+    # resolution always contends with bibtex" means: a clean bib title
+    # from a prior refresh always gets a chance to override a current
+    # title that the heuristics would otherwise accept.
+    needs_title = _title_needs_fallback(doc.title) or bool(
+        bib_title
+        and bib_title != doc.title
+        and not _title_needs_fallback(bib_title)
+    )
     # If we have a DOI, don't early-return even when every local field
     # looks "present" — the DOI-authoritative merge needs to run so
     # junk-but-non-empty values (ISSN lines in the venue slot, etc.)
@@ -1237,12 +1296,13 @@ def enrich_doc_metadata(
     text = _read_doc_markdown(corpus, doc)
     title = doc.title
 
-    if text and needs_title:
+    if needs_title:
         from .metadata import choose_document_title
 
-        # Filename-first priority: `[YYYY Author] Real Title.ext` is
-        # authoritative. Heuristic heading extraction is the fallback.
-        chosen = choose_document_title(text, source_path)
+        # Filename-first priority with bibtex as a strong adjacent
+        # candidate. ``choose_document_title`` walks the priority list
+        # and returns the first non-junk candidate.
+        chosen = choose_document_title(text, source_path, bib_title=bib_title)
         if chosen and not _title_needs_fallback(chosen):
             title = _clean_title(chosen)
             # Keep metadata in sync so persistent JSON sidecars (which

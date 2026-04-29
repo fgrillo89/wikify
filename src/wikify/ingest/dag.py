@@ -37,7 +37,11 @@ from typing import Awaitable, Callable, Literal
 from wikify.corpus.graph_build import build_knowledge_graph, save_knowledge_graph
 from wikify.corpus.images_index import build_images_index
 
-from .bibtex import enrich_doc_metadata, write_corpus_bibliography
+from .bibtex import (
+    enrich_doc_metadata,
+    read_existing_bib_titles,
+    write_corpus_bibliography,
+)
 from .coupling import compute_coupling
 from .topics import extract_topics, write_topics
 
@@ -270,13 +274,21 @@ def _refresh_doc_enrichment(ctx: dict) -> None:
     the raw placeholder. Running this step before bibliography / KG
     build / doc resave makes every downstream consumer see the cleaned
     metadata.
+
+    The previous run's ``corpus_papers.bib`` is loaded once and passed
+    in as ``bib_titles`` so title resolution always contends with bib —
+    a clean bib title from a prior refresh can heal stuck-state titles
+    that survive every other heuristic. No loop risk: the bib is read
+    at the start of this wave and rewritten at the end of Wave D.
     """
     resolve_doi = True
+    bib_titles = read_existing_bib_titles(ctx["paths"])
     ctx["docs"] = [
         enrich_doc_metadata(
             ctx["paths"], doc,
             resolve_doi=resolve_doi,
             doi_lookup=None,
+            bib_titles=bib_titles,
         )
         for doc in ctx["docs"]
     ]

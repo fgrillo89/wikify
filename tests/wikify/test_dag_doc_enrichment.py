@@ -181,6 +181,92 @@ def test_doc_enrichment_step_runs_before_bibliography_in_refresh_dag() -> None:
         )
 
 
+def test_bib_title_overrides_stuck_doc_title(tmp_path: Path) -> None:
+    """When ``corpus_papers.bib`` from a prior refresh has a clean title
+    that disagrees with the current ``doc.title``, the bib value must
+    win — even when the current title would otherwise pass every junk
+    heuristic. This is the "title resolution always contends with bib"
+    contract."""
+    from wikify.ingest.bibtex import enrich_doc_metadata
+
+    corpus = Corpus(root=tmp_path / "corpus")
+    corpus.ensure()
+    doc = Document(
+        id="paper_under_test",
+        # No underscores, no placeholder vocabulary, mixed case, > 10
+        # chars: this current title would NOT be flagged by any of the
+        # other junk heuristics. Only the bib disagreement triggers
+        # re-evaluation.
+        source_path="some-source.docx",
+        kind="docx",
+        title="Switchingdynamicsandcomputingapplicationsofmemristors",
+        metadata={
+            "title": "Switchingdynamicsandcomputingapplicationsofmemristors",
+            "authors": ["Duan"],
+            "year": 2017,
+        },
+        markdown_path="markdown/paper_under_test.md",
+        image_dir="images/paper_under_test/",
+        sections=[],
+        images=[],
+        equations=[],
+        cites=[],
+        n_chunks=1,
+        n_tokens=10,
+    )
+    _write_markdown(corpus, doc, "Some body without a heading.\n")
+
+    bib_titles = {
+        "paper_under_test": (
+            "Switching dynamics and computing applications of memristors: An overview"
+        ),
+    }
+
+    enriched = enrich_doc_metadata(
+        corpus, doc,
+        resolve_doi=False, doi_lookup=None,
+        bib_titles=bib_titles,
+    )
+
+    assert enriched.title == (
+        "Switching dynamics and computing applications of memristors: An overview"
+    )
+    assert enriched.metadata["title"] == enriched.title
+
+
+def test_bib_title_does_not_override_clean_filename_title(tmp_path: Path) -> None:
+    """When the filename gives a clean title, it must continue to win
+    over the bib title — the bib is a strong adjacent candidate, not a
+    blanket override of filename."""
+    from wikify.ingest.bibtex import enrich_doc_metadata
+
+    corpus = Corpus(root=tmp_path / "corpus")
+    fn_title = "Memristor Architectures for Neuromorphic Computing"
+    doc = _doc_with_junk_title(f"[2020 Smith] {fn_title}.docx")
+    _write_markdown(corpus, doc, f"# {fn_title}\n\nBody.\n")
+
+    bib_titles = {doc.id: "Some Less Authoritative Bib Title String"}
+
+    enriched = enrich_doc_metadata(
+        corpus, doc,
+        resolve_doi=False, doi_lookup=None,
+        bib_titles=bib_titles,
+    )
+
+    assert enriched.title == fn_title
+
+
+def test_read_existing_bib_titles_returns_empty_when_no_bib(tmp_path: Path) -> None:
+    """First-ingest path: no bib file yet -> empty dict, no error.
+
+    Guards against the bib-loader being called eagerly on first ingest
+    where ``corpus_papers.bib`` does not exist."""
+    from wikify.ingest.bibtex import read_existing_bib_titles
+
+    corpus = Corpus(root=tmp_path / "corpus")
+    assert read_existing_bib_titles(corpus) == {}
+
+
 def test_enrichment_self_heals_underscore_compressed_titles(tmp_path: Path) -> None:
     """A doc whose stored title is an underscore-compressed leftover (the
     historical broken state, e.g. ``Memristor-Themissingcircuit_element``)
