@@ -179,3 +179,52 @@ def test_doc_enrichment_step_runs_before_bibliography_in_refresh_dag() -> None:
             f"{downstream!r} must run after doc_enrichment, but DAG has "
             f"order: {step_order}"
         )
+
+
+def test_enrichment_self_heals_underscore_compressed_titles(tmp_path: Path) -> None:
+    """A doc whose stored title is an underscore-compressed leftover (the
+    historical broken state, e.g. ``Memristor-Themissingcircuit_element``)
+    must be re-derived from the filename on the next refresh.
+
+    Without this, corpora ingested before PR #62 stay stuck because the
+    compressed string passes every other junk-detection rule (10+ chars,
+    not all-caps, not in the placeholder vocabulary) and the enrichment
+    early-outs."""
+    corpus = Corpus(root=tmp_path / "corpus")
+    doc = Document(
+        id="paper_under_test",
+        source_path="[1971 Chua] Memristor-The_missing_circuit_element.docx",
+        kind="docx",
+        # The historical broken state. Note: this string is non-empty,
+        # 35 chars, mixed case, contains no [YYYY] prefix — every other
+        # heuristic accepts it.
+        title="Memristor-Themissingcircuit_element",
+        metadata={
+            "title": "Memristor-Themissingcircuit_element",
+            "authors": ["Chua"],
+            "year": 1971,
+        },
+        markdown_path="markdown/paper_under_test.md",
+        image_dir="images/paper_under_test/",
+        sections=[],
+        images=[],
+        equations=[],
+        cites=[],
+        n_chunks=1,
+        n_tokens=10,
+    )
+    _write_markdown(
+        corpus, doc,
+        # No body heading: forces the fallback to derive the title from
+        # the filename, which is the exact path the original bug broke.
+        "Some unrelated body text without a markdown heading.\n",
+    )
+
+    ctx = {"paths": corpus, "docs": [doc]}
+    _refresh_doc_enrichment(ctx)
+
+    enriched = ctx["docs"][0]
+    # Healed: no surviving underscores.
+    assert "_" not in enriched.title, enriched.title
+    assert "missing" in enriched.title
+    assert "circuit" in enriched.title
