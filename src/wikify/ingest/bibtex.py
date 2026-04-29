@@ -1421,6 +1421,19 @@ def _title_needs_fallback(title: str) -> bool:
         return True
     if clean.isupper():
         return True
+    # Concatenated-alpha-run detector: a single whitespace-free token
+    # whose alphabetical run exceeds 30 chars is a near-certain
+    # indicator of space-stripped XMP/info metadata, e.g.
+    # ``SwitchingdynamicsandcomputingapplicationsofmemristorsAnoverview``.
+    # Real English words top out around 24 chars
+    # (``Pneumonoultramicroscopic...``); the threshold leaves headroom
+    # for chemistry compounds like ``Tetraethylorthosilicate`` (23) and
+    # ``Polytetrafluoroethylene`` (23) while still catching every real
+    # concatenated-title we have seen in the corpus.
+    for token in clean.split():
+        alpha_run = sum(1 for c in token if c.isalpha())
+        if alpha_run > 30:
+            return True
     # Underscores never appear in clean English titles (the bib-side
     # cleanup path always converts them to spaces). A surviving "_" in
     # `doc.title` is the signature of the historical underscore-eating
