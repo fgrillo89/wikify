@@ -699,3 +699,82 @@ class TestBuildKnowledgeGraph:
     def test_collaborated_edges(self, kg: KnowledgeGraph):
         """Co-authorship from shared papers."""
         assert "jones k" in set(kg.author("smith j").coauthors().ids())
+
+
+# ---------------------------------------------------------------------------
+# top() preserves metric order through terminals and same-id-space filters
+# ---------------------------------------------------------------------------
+
+
+class TestTopOrdering:
+    """`top(N, by=metric)` must hand the metric ranking to terminals
+    (`collect`/`ids`/`first`) and to filters that narrow the same
+    id-space (`where`/`match`/`since`/`of_type`/`with_boilerplate`).
+    Traversals that change the id-space (`cited_by`/`chunks`/etc.)
+    drop the order — there is no defined ranking across a different
+    node type.
+
+    Fixture papers (citation_count): paper_B=2, paper_A=1, paper_C=0.
+    Fixture papers (year):           paper_C=2021, paper_A=2020, paper_B=2019.
+    """
+
+    def test_collect_preserves_metric_order_by_citation_count(
+        self, kg: KnowledgeGraph,
+    ):
+        rows = kg.sources(kind="corpus").top(3, by="citation_count").collect()
+        assert [r["id"] for r in rows] == ["paper_B", "paper_A", "paper_C"]
+
+    def test_collect_preserves_metric_order_by_year(self, kg: KnowledgeGraph):
+        rows = kg.sources(kind="corpus").top(3, by="year").collect()
+        assert [r["id"] for r in rows] == ["paper_C", "paper_A", "paper_B"]
+
+    def test_ids_preserves_metric_order(self, kg: KnowledgeGraph):
+        ids = kg.sources(kind="corpus").top(3, by="citation_count").ids()
+        assert ids == ["paper_B", "paper_A", "paper_C"]
+
+    def test_first_returns_metric_max_not_alphabetic_min(
+        self, kg: KnowledgeGraph,
+    ):
+        # Alphabetical min of {paper_A, paper_B, paper_C} is paper_A.
+        # Top-by-year.first() must return paper_C (2021), not paper_A.
+        first = kg.sources(kind="corpus").top(3, by="year").first()
+        assert first["id"] == "paper_C"
+
+    def test_top_one_first_unchanged(self, kg: KnowledgeGraph):
+        # Regression guard for the n=1 case (which already worked).
+        first = kg.sources(kind="corpus").top(1, by="pagerank").first()
+        assert first["id"] == "paper_B"
+
+    def test_order_propagates_through_where(self, kg: KnowledgeGraph):
+        # top by year, then narrow with where(kind=corpus): metric order
+        # must survive the filter.
+        rows = kg.sources().top(3, by="year").where(kind="corpus").collect()
+        assert [r["id"] for r in rows] == ["paper_C", "paper_A", "paper_B"]
+
+    def test_order_propagates_through_since(self, kg: KnowledgeGraph):
+        # top 3 by year then since(2020) drops paper_B; ordering survives.
+        rows = kg.sources(kind="corpus").top(3, by="year").since(2020).collect()
+        assert [r["id"] for r in rows] == ["paper_C", "paper_A"]
+
+    def test_order_propagates_through_match(self, kg: KnowledgeGraph):
+        rows = (
+            kg.sources(kind="corpus")
+            .top(3, by="year")
+            .match("title", "paper")
+            .collect()
+        )
+        assert [r["id"] for r in rows] == ["paper_C", "paper_A", "paper_B"]
+
+    def test_order_propagates_through_of_type(self, kg: KnowledgeGraph):
+        rows = kg.sources(kind="corpus").top(3, by="year").of_type(SOURCE).collect()
+        assert [r["id"] for r in rows] == ["paper_C", "paper_A", "paper_B"]
+
+    def test_order_dropped_after_traversal(self, kg: KnowledgeGraph):
+        # cited_by() returns a different id-space; the metric order is
+        # not meaningful. Result is alphabetically sorted.
+        ids = kg.sources(kind="corpus").top(3, by="pagerank").cited_by().ids()
+        assert ids == sorted(ids)
+
+    def test_order_dropped_after_chunks_traversal(self, kg: KnowledgeGraph):
+        ids = kg.sources(kind="corpus").top(3, by="year").chunks().ids()
+        assert ids == sorted(ids)

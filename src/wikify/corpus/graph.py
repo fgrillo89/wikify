@@ -221,7 +221,7 @@ class QueryBuilder:
     existing builder.
     """
 
-    __slots__ = ("_kg", "_ids", "_type", "_include_boilerplate")
+    __slots__ = ("_kg", "_ids", "_type", "_include_boilerplate", "_order")
 
     def __init__(
         self,
@@ -230,11 +230,27 @@ class QueryBuilder:
         node_type: str | None = None,
         *,
         include_boilerplate: bool = False,
+        order: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         self._kg = kg
         self._ids = frozenset(node_ids)
         self._type = node_type
         self._include_boilerplate = include_boilerplate
+        # Optional metric-rank order, set by `top()` and propagated by
+        # filters that narrow the same id-space (`where`/`match`/`since`/
+        # `of_type`/`with_boilerplate`). Traversals that change the
+        # id-space (cited_by, chunks, etc.) drop it — there is no
+        # meaningful order across a different node type.
+        self._order = tuple(order) if order is not None else None
+
+    def _ordered_ids(self) -> list[str]:
+        """Return ids as a list, in metric-rank order if `_order` is set,
+        else alphabetically. Boilerplate filter is applied either way.
+        """
+        filtered = self._filter_boilerplate(self._ids)
+        if self._order is not None:
+            return [nid for nid in self._order if nid in filtered]
+        return sorted(filtered)
 
     # ---- Boilerplate filter ----
 
@@ -243,6 +259,7 @@ class QueryBuilder:
         return QueryBuilder(
             self._kg, set(self._ids), self._type,
             include_boilerplate=True,
+            order=self._order,
         )
 
     def _filter_boilerplate(self, ids: set[str] | frozenset[str]) -> set[str]:
@@ -390,7 +407,7 @@ class QueryBuilder:
                     break
             if match:
                 result.add(nid)
-        return QueryBuilder(self._kg, result, self._type)
+        return QueryBuilder(self._kg, result, self._type, order=self._order)
 
     def of_type(self, kind: str) -> QueryBuilder:
         """Filter by node type."""
@@ -399,7 +416,7 @@ class QueryBuilder:
             nid for nid in self._ids
             if nid in backend.G and backend.G.nodes[nid].get("type") == kind
         }
-        return QueryBuilder(self._kg, result, kind)
+        return QueryBuilder(self._kg, result, kind, order=self._order)
 
     def match(self, field: str, query: str) -> QueryBuilder:
         """Filter nodes where `field` contains `query` (case-insensitive substring)."""
@@ -410,7 +427,7 @@ class QueryBuilder:
             if nid in backend.G
             and q in str(backend.G.nodes[nid].get(field, "")).lower()
         }
-        return QueryBuilder(self._kg, result, self._type)
+        return QueryBuilder(self._kg, result, self._type, order=self._order)
 
     def since(self, year: int) -> QueryBuilder:
         """Filter sources by year >= N."""
@@ -419,10 +436,17 @@ class QueryBuilder:
             nid for nid in self._ids
             if nid in backend.G and (backend.G.nodes[nid].get("year") or 0) >= year
         }
-        return QueryBuilder(self._kg, result, self._type)
+        return QueryBuilder(self._kg, result, self._type, order=self._order)
 
     def top(self, n: int, by: str) -> QueryBuilder:
-        """Top N by a metric (pagerank, year, citation_count, h_index)."""
+        """Top N by a metric (pagerank, year, citation_count, h_index).
+
+        The returned builder remembers the metric ranking. Terminals
+        (`collect`/`ids`/`first`) honour it; same-id-space filters
+        (`where`/`match`/`since`/`of_type`/`with_boilerplate`) propagate
+        it; traversals that change the id-space (`cited_by`/`chunks`
+        /etc.) drop it.
+        """
         backend = self._kg._backend
         scored: list[tuple[float, str]] = []
         for nid in self._ids:
@@ -437,8 +461,10 @@ class QueryBuilder:
                 val = float(attrs.get(by, 0) or 0)
             scored.append((val, nid))
         scored.sort(key=lambda t: -t[0])
-        result = {nid for _, nid in scored[:n]}
-        return QueryBuilder(self._kg, result, self._type)
+        ordered = [nid for _, nid in scored[:n]]
+        return QueryBuilder(
+            self._kg, set(ordered), self._type, order=ordered,
+        )
 
     # ---- Vector search (scoped to current set) ----
 
@@ -577,34 +603,43 @@ class QueryBuilder:
     # ---- Terminals (execute and return) ----
 
     def collect(self) -> list[dict]:
-        """Materialize all nodes as dicts."""
+        """Materialize all nodes as dicts.
+
+        Order: metric-rank if `top()` was called upstream, else
+        alphabetical by node id.
+        """
         backend = self._kg._backend
-        ids = self._filter_boilerplate(self._ids)
-        result = [
-            backend.node(nid) for nid in sorted(ids)
-            if backend.has_node(nid)
-        ]
+        ordered = self._ordered_ids()
+        result = [backend.node(nid) for nid in ordered if backend.has_node(nid)]
         self._kg._trace.log(
-            "collect", {}, len(ids), len(result),
+            "collect", {}, len(ordered), len(result),
             [r["id"] for r in result[:5]],
         )
         return result
 
     def ids(self) -> list[str]:
-        """Return just the node IDs."""
-        return sorted(self._filter_boilerplate(self._ids))
+        """Return just the node IDs.
+
+        Order: metric-rank if `top()` was called upstream, else
+        alphabetical.
+        """
+        return self._ordered_ids()
 
     def count(self) -> int:
         """Count matches."""
         return len(self._filter_boilerplate(self._ids))
 
     def first(self) -> dict | None:
-        """First result or None."""
-        ids = self._filter_boilerplate(self._ids)
-        if not ids:
+        """First result or None.
+
+        With `top()` upstream, returns the highest-ranked node;
+        otherwise the alphabetically-first node.
+        """
+        ordered = self._ordered_ids()
+        if not ordered:
             return None
-        nid = min(ids)
         backend = self._kg._backend
+        nid = ordered[0]
         return backend.node(nid) if backend.has_node(nid) else None
 
     def exists(self) -> bool:
