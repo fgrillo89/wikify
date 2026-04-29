@@ -349,18 +349,92 @@ def test_read_doc_text_groups_consecutive_chunks_by_section(
     tmp_path: Path,
 ) -> None:
     corpus = _make_corpus(tmp_path / "c")
-    segments = queries.read_doc_text(corpus, "paper_0")
-    # The fixture chunks alternate section_path = ['intro'] then ['body'];
-    # both should appear in document order.
+    out = queries.read_doc_text(corpus, "paper_0")
+    segments = out["segments"]
     assert [s["section_path"] for s in segments] == [["intro"], ["body"]]
     assert all("text" in s and "chunk_ids" in s for s in segments)
+    assert out["available_section_paths"] == [["intro"], ["body"]]
 
 
 def test_read_doc_text_section_filter(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c")
-    intro = queries.read_doc_text(corpus, "paper_0", sections=["intro"])
-    assert len(intro) == 1
-    assert intro[0]["section_path"] == ["intro"]
+    out = queries.read_doc_text(corpus, "paper_0", sections=["intro"])
+    assert [s["section_path"] for s in out["segments"]] == [["intro"]]
+    assert out["matched_section_paths"] == [["intro"]]
+
+
+def test_read_doc_text_section_filter_tolerates_numbering(
+    tmp_path: Path,
+) -> None:
+    """Filter must hit ``"V. SUMMARY"``-style headings from a token like 'summary'."""
+    import json as _json
+
+    from wikify.api import Corpus
+    root = tmp_path / "c"
+    corpus = Corpus(root=root)
+    corpus.ensure()
+    (corpus.docs_dir / "p.json").write_text(_json.dumps({
+        "id": "p", "source_path": "src/p.md", "kind": "md", "title": "P",
+        "metadata": {}, "markdown_path": "markdown/p.md",
+        "image_dir": "images/p/", "sections": [], "images": [],
+        "abstract": "", "tldr": "", "n_chunks": 2, "n_tokens": 50,
+        "citations": [], "equations": [], "figure_refs": [],
+        "similar_to": [], "cites": [], "cites_same": [],
+    }), encoding="utf-8")
+    chunks = [
+        {"id": "p__c0", "doc_id": "p", "ord": 0, "text": "intro text",
+         "char_span": [0, 10], "section_path": ["I. INTRODUCTION"],
+         "section_type": "body", "equation_ids": [], "is_boilerplate": False},
+        {"id": "p__c1", "doc_id": "p", "ord": 1, "text": "summary text",
+         "char_span": [10, 22], "section_path": ["V. SUMMARY"],
+         "section_type": "body", "equation_ids": [], "is_boilerplate": False},
+    ]
+    (corpus.chunks_dir / "p.jsonl").write_text(
+        "\n".join(_json.dumps(c) for c in chunks), encoding="utf-8",
+    )
+    (corpus.markdown_dir / "p.md").write_text("# P", encoding="utf-8")
+    (corpus.manifest_path).write_text("{}", encoding="utf-8")
+
+    out = queries.read_doc_text(corpus, "p", sections=["summary"])
+    assert [s["section_path"] for s in out["segments"]] == [["V. SUMMARY"]]
+    out_intro = queries.read_doc_text(corpus, "p", sections=["introduction"])
+    assert [s["section_path"] for s in out_intro["segments"]] == [["I. INTRODUCTION"]]
+
+
+def test_read_doc_text_skips_image_caption_chunks(tmp_path: Path) -> None:
+    """Figure-caption chunks (``__image__`` section) must not appear in body text."""
+    import json as _json
+
+    from wikify.api import Corpus
+    root = tmp_path / "c"
+    corpus = Corpus(root=root)
+    corpus.ensure()
+    (corpus.docs_dir / "p.json").write_text(_json.dumps({
+        "id": "p", "source_path": "src/p.md", "kind": "md", "title": "P",
+        "metadata": {}, "markdown_path": "markdown/p.md",
+        "image_dir": "images/p/", "sections": [], "images": [],
+        "abstract": "", "tldr": "", "n_chunks": 2, "n_tokens": 50,
+        "citations": [], "equations": [], "figure_refs": [],
+        "similar_to": [], "cites": [], "cites_same": [],
+    }), encoding="utf-8")
+    chunks = [
+        {"id": "p__c0", "doc_id": "p", "ord": 0, "text": "real body",
+         "char_span": [0, 9], "section_path": ["Body"],
+         "section_type": "body", "equation_ids": [], "is_boilerplate": False},
+        {"id": "p__c1", "doc_id": "p", "ord": 1, "text": "Figure 1: caption stub",
+         "char_span": [9, 30], "section_path": ["__image__"],
+         "section_type": "body", "equation_ids": [], "is_boilerplate": False},
+    ]
+    (corpus.chunks_dir / "p.jsonl").write_text(
+        "\n".join(_json.dumps(c) for c in chunks), encoding="utf-8",
+    )
+    (corpus.markdown_dir / "p.md").write_text("# P", encoding="utf-8")
+    (corpus.manifest_path).write_text("{}", encoding="utf-8")
+
+    out = queries.read_doc_text(corpus, "p")
+    assert [s["section_path"] for s in out["segments"]] == [["Body"]]
+    # The caption chunk is not in available_section_paths either.
+    assert ["__image__"] not in out["available_section_paths"]
 
 
 def test_doc_section_index(tmp_path: Path) -> None:

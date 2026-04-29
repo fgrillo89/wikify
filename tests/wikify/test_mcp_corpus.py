@@ -55,6 +55,7 @@ def test_build_server_registers_corpus_tools() -> None:
         "corpus_show",
         "corpus_sample",
         "corpus_schema",
+        "corpus_image",
     }
 
 
@@ -277,6 +278,24 @@ async def test_corpus_show_doc_section_filter(tmp_path: Path) -> None:
     text_blocks = res["items"][0]["meta"]["text"]
     assert len(text_blocks) == 1
     assert text_blocks[0]["section_path"] == ["intro"]
+    assert any("matched sections" in n for n in res["notes"])
+
+
+async def test_corpus_show_doc_section_filter_no_match_echoes_available(
+    tmp_path: Path,
+) -> None:
+    """Empty filter result must surface the available sections in notes."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(
+        handle="doc:paper_0", include_text=True, sections=["nonexistent"],
+    )
+    assert res["items"][0]["meta"]["text"] == []
+    msg = " ".join(res["notes"])
+    assert "matched no sections" in msg
+    # Available sections from the fixture are 'intro' and 'body'.
+    assert "intro" in msg and "body" in msg
 
 
 # ------------------------------------------------------------- title search
@@ -349,3 +368,107 @@ async def test_context_show_omits_health_when_unbound() -> None:
     snap = res["items"][0]
     assert snap["corpus_bound"] is False
     assert "health" not in snap
+
+
+# ----------------------------------------------------- corpus_image tool
+
+
+def _seed_png(path: Path) -> bytes:
+    """Write a minimal 1x1 PNG to *path* and return its bytes."""
+    import struct
+    import zlib
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data)
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+    idat = _chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00\x00"))
+    iend = _chunk(b"IEND", b"")
+    payload = sig + ihdr + idat + iend
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return payload
+
+
+def _stub_get_figure(monkeypatch, fig_path_rel: str) -> None:
+    """Bypass the KG load path: ``queries.get_figure`` returns a fixed dict."""
+    def _fake(corpus, fig_id):
+        return {
+            "id": fig_id,
+            "source_id": "paper_0",
+            "caption": "stub caption",
+            "page": 1,
+            "path": fig_path_rel,
+            "near_chunk_ids": [],
+        }
+    monkeypatch.setattr(queries, "get_figure", _fake)
+
+
+async def test_corpus_image_returns_image_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """corpus_image returns an MCP ImageContent block, not bytes-as-text."""
+    corpus = _make_corpus(tmp_path / "c")
+    expected = _seed_png(corpus.root / "images" / "paper_0" / "fig_001.png")
+    _stub_get_figure(monkeypatch, "images/paper_0/fig_001.png")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    result = await _tool(srv, "corpus_image")(handle="figure:paper_0/fig_001")
+    # FastMCP returns the Image helper directly; the SDK converts it to
+    # an ImageContent block at call_tool time. Test the helper output
+    # since the unit test bypasses call_tool's content-block wrapping.
+    from mcp.server.fastmcp import Image
+    assert isinstance(result, Image)
+    block = result.to_image_content()
+    assert block.type == "image"
+    assert block.mimeType == "image/png"
+    import base64
+    assert base64.b64decode(block.data) == expected
+
+
+async def test_corpus_image_rejects_non_figure_handle(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_image")(handle="doc:paper_0")
+    assert isinstance(res, dict)
+    assert res["ok"] is False
+    assert res["code"] == "bad_handle_kind"
+
+
+async def test_corpus_image_missing_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    _stub_get_figure(monkeypatch, "images/paper_0/missing.png")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_image")(handle="figure:paper_0/missing")
+    assert res["ok"] is False
+    assert res["code"] == "image_missing_on_disk"
+
+
+def test_corpus_image_registered_in_tool_list() -> None:
+    srv = server.build_server()
+    names = {t.name for t in srv._tool_manager.list_tools()}
+    assert "corpus_image" in names
+
+
+async def test_figure_item_advertises_image_tool(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """corpus_show on a figure handle hints at the corpus_image tool."""
+    corpus = _make_corpus(tmp_path / "c")
+    _seed_png(corpus.root / "images" / "paper_0" / "fig_001.png")
+    _stub_get_figure(monkeypatch, "images/paper_0/fig_001.png")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_show")(handle="figure:paper_0/fig_001")
+    item = res["items"][0]
+    assert item["resource_uri"] == "wikify://corpus/figures/paper_0/fig_001"
+    hint = item["meta"]["image_tool"]
+    assert hint["name"] == "corpus_image"
+    assert hint["args"]["handle"] == "figure:paper_0/fig_001"

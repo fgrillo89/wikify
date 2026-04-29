@@ -19,6 +19,7 @@ kept in step with the underlying primitives.
 | `mcp__wikify__corpus_show`        | `wikify corpus show`                        |
 | `mcp__wikify__corpus_sample`      | `wikify corpus sample`                      |
 | `mcp__wikify__corpus_schema`      | `wikify corpus schema`                      |
+| `mcp__wikify__corpus_image`       | `wikify corpus show figure:...` then Read on the printed `path` (CLI fallback) |
 
 Listing maps onto search/traverse: "all docs ranked by citation_count"
 is `corpus_find(by="paper", rank="citation_count")`; "chunks of one
@@ -38,9 +39,17 @@ handles return `ambiguous_handle` with a match list, and so on.
   "papers whose body discusses X".
 - `corpus_show(handle="doc:<short>", include_text=True, sections=["intro"])`
   — return the paper body grouped by section in document order in one
-  call. Without `include_text`, the result still carries `meta.sections`
-  (a cheap section index) and `abstract` for the "is this the right
-  paper?" decision.
+  call. Body excludes figure-caption stubs (``__image__``),
+  references, acknowledgments, appendices, and boilerplate so it
+  reads as prose. Section filter is forgiving: ``sections=["summary"]``
+  matches ``"V. SUMMARY"``; numbering and case are stripped before
+  comparison. When no section matches, the response ``notes`` echo
+  every available section path.
+- Figures live in ``corpus_traverse doc -> figures`` and
+  ``corpus_show figure:<handle>`` (metadata) — call
+  ``corpus_image(handle="figure:...")`` to also pull the binary into
+  the model's context as an MCP ImageContent block. The figure item's
+  ``meta.image_tool`` field advertises the call.
 - `corpus_find` paper rows now carry `meta.best_chunk_section` so the
   agent can tell whether a hit came from the abstract vs. references
   without an extra `corpus_show chunk:`.

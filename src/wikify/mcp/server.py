@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 
 from ..corpus import queries
 from ..corpus.handles import (
@@ -242,13 +242,30 @@ def build_server() -> FastMCP:
 
         section_index: list[dict] | None = None
         text_segments: list[dict] | None = None
+        notes: list[str] = []
         if result["handle_kind"] == "doc":
             doc = result["data"]
             section_index = queries.doc_section_index(corpus, doc.id)
             if include_text:
-                text_segments = queries.read_doc_text(
+                text = queries.read_doc_text(
                     corpus, doc.id, sections=sections,
                 )
+                text_segments = text["segments"]
+                if sections:
+                    matched = text["matched_section_paths"]
+                    if not matched:
+                        available = " | ".join(
+                            " > ".join(p) for p in text["available_section_paths"]
+                        ) or "(none)"
+                        notes.append(
+                            "section filter matched no sections; "
+                            f"available: {available}"
+                        )
+                    else:
+                        notes.append(
+                            "matched sections: "
+                            + " | ".join(" > ".join(p) for p in matched)
+                        )
         return ok(
             "corpus_show_result",
             items=[_shape_show_item(
@@ -256,6 +273,7 @@ def build_server() -> FastMCP:
                 section_index=section_index,
                 text_segments=text_segments,
             )],
+            notes=notes or None,
         )
 
     @srv.tool()
@@ -302,6 +320,54 @@ def build_server() -> FastMCP:
     async def corpus_schema() -> dict:
         """Self-describe the corpus query surface."""
         return ok("corpus_schema", items=[queries.SCHEMA])
+
+    @srv.tool()
+    async def corpus_image(handle: str):
+        """Fetch the binary image for a ``figure:`` handle.
+
+        Returns the raw image bytes as an MCP ImageContent block, so
+        the model can see the figure during reasoning. The
+        ``corpus_show`` tool returns figure metadata (caption, page,
+        path) — call this after picking a handle to also pull the
+        pixels.
+
+        On error returns a regular envelope (``ok=False, code=...``)
+        instead of raising, so the agent gets a structured failure.
+        """
+        from pathlib import Path as _Path
+
+        try:
+            corpus = context.require_corpus()
+        except context.ContextError as exc:
+            return err("no_corpus_bound", str(exc))
+        try:
+            kind, ident = queries.parse_handle(handle)
+        except ValueError as exc:
+            return err("bad_handle", str(exc))
+        if kind != "figure":
+            return err(
+                "bad_handle_kind",
+                f"corpus_image expects a figure: handle; got {kind!r}",
+            )
+        try:
+            fig = queries.get_figure(corpus, ident)
+        except (AmbiguousHandleError, HandleNotFoundError) as exc:
+            return _handle_handle_lookup_error(exc)
+        if fig is None:
+            return err("figure_not_found", f"figure not found: {ident}")
+        rel = (fig.get("path") or "").replace("\\", "/")
+        if not rel:
+            return err(
+                "image_path_missing",
+                f"figure {ident} has no on-disk path",
+            )
+        path = _Path(corpus.root) / rel
+        if not path.is_file():
+            return err(
+                "image_missing_on_disk",
+                f"image file does not exist: {path}",
+            )
+        return Image(path=path)
 
     # ------------------------------------------------------------ resources
 

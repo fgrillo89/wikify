@@ -17,6 +17,8 @@ See ``corpus/handles.py`` for the resolution semantics.
 
 from __future__ import annotations
 
+import re
+
 from ..api import Corpus
 from ..models import Chunk, Document
 from .chunks import (
@@ -944,66 +946,155 @@ def _materialize_traversal(
 # --------------------------------------------------------- evidence helper
 
 
+# Strip leading section numbering ("3.", "3.2", "I.", "IV.", "A.") so
+# that ``sections=["introduction"]`` matches a chunk whose
+# ``section_path`` is ``["I. INTRODUCTION"]``. Anchored at the start.
+_LEADING_NUMERIC_RE = re.compile(
+    r"^\s*(?:[ivxlcdm]+\.|[a-z]\.|\d+(?:\.\d+)*\.?)\s*",
+    re.IGNORECASE,
+)
+
+
+def _normalize_section_token(s: str) -> str:
+    """Lowercase, strip leading numbering, collapse whitespace.
+
+    ``"I. INTRODUCTION"`` -> ``"introduction"``. ``"3.2 Photoactivity"``
+    -> ``"photoactivity"``. ``"Summary"`` -> ``"summary"``.
+    """
+    out = (s or "").lower().strip()
+    out = _LEADING_NUMERIC_RE.sub("", out)
+    return out.strip()
+
+
+def _section_matches(path: list[str], wanted: list[str]) -> bool:
+    """True if any element of *path* matches any wanted token.
+
+    Match is bidirectional substring after normalisation, so
+    ``wanted=['summary']`` hits ``["V. SUMMARY"]`` and
+    ``wanted=['intro']`` hits ``["1. Introduction"]``. Also matches
+    against the joined ``"a > b > c"`` form so deep paths work.
+    """
+    if not path:
+        return False
+    norm_parts = [_normalize_section_token(p) for p in path]
+    norm_joined = " > ".join(norm_parts)
+    norm_wanted = [_normalize_section_token(w) for w in wanted if w]
+    for w in norm_wanted:
+        if not w:
+            continue
+        if w in norm_joined or norm_joined.startswith(w):
+            return True
+        for p in norm_parts:
+            if w in p or p.startswith(w) or w.startswith(p) and p:
+                return True
+    return False
+
+
+def _is_caption_chunk(chunk) -> bool:
+    """Figure-caption chunks are tagged ``section_path[0] == '__image__'``."""
+    path = chunk.section_path or []
+    return bool(path) and path[0] == "__image__"
+
+
+def _doc_body_chunks(corpus: Corpus, doc_id: str) -> list:
+    """Body chunks of one doc — boilerplate, captions, references stripped.
+
+    Mirrors the filters the rest of the pipeline already applies (see
+    ``ingest.config.SKIP_SECTION_TYPES`` and ``abstract_tagger`` for
+    the canonical list). Centralising the filter here keeps the agent
+    surface in lockstep with what the writer pipeline considers prose.
+    """
+    from ..ingest.config import SKIP_SECTION_TYPES
+
+    return sorted(
+        (
+            c for c in read_chunks(corpus, doc_id)
+            if not c.is_boilerplate
+            and c.section_type not in SKIP_SECTION_TYPES
+            and not _is_caption_chunk(c)
+        ),
+        key=lambda c: c.ord,
+    )
+
+
 def read_doc_text(
     corpus: Corpus,
     doc_id: str,
     *,
     sections: list[str] | None = None,
-) -> list[dict]:
+) -> dict:
     """Return the body of one document as ordered text segments.
 
     Reads chunks in document order (by ``ord``), groups consecutive
     chunks that share the same ``section_path`` into one segment, and
-    optionally filters by section path-prefix match.
+    optionally filters by section name (case-insensitive, leading
+    numbering tolerated, substring match against any path element).
 
-    Each returned dict carries ``section_path``, ``text``,
-    ``chunk_ids`` (in order), and ``ord_range`` (``[first_ord,
-    last_ord]``). Boilerplate chunks are skipped (consistent with the
-    KG default).
+    Returns ``{"segments": [...], "available_section_paths": [...],
+    "matched_section_paths": [...]}``. Each segment carries
+    ``section_path``, ``text``, ``chunk_ids`` (in order), and
+    ``ord_range``. Figure captions (``__image__`` section), boilerplate,
+    references, acknowledgments, and appendices are excluded so the
+    body reads as prose; figure captions live in ``corpus_traverse
+    doc -> figures`` and ``corpus_show figure:...``.
+
+    ``available_section_paths`` lists every section the doc has (after
+    filtering); ``matched_section_paths`` lists which the caller's
+    ``sections`` filter actually hit. An empty filter result returns
+    ``segments=[]`` with both lists populated so the caller can tell
+    "wrong key" from "no content".
     """
-    chunks = sorted(
-        (c for c in read_chunks(corpus, doc_id) if not c.is_boilerplate),
-        key=lambda c: c.ord,
-    )
+    body = _doc_body_chunks(corpus, doc_id)
+    available = _ordered_unique_paths(body)
+
     if sections:
-        wanted = [s.lower() for s in sections]
+        kept = [c for c in body if _section_matches(list(c.section_path or []), sections)]
+    else:
+        kept = body
+    matched = _ordered_unique_paths(kept)
 
-        def _matches(path: list[str]) -> bool:
-            if not path:
-                return False
-            head = (path[0] or "").lower()
-            return any(head.startswith(w) or w in head for w in wanted)
-
-        chunks = [c for c in chunks if _matches(list(c.section_path or []))]
-
-    out: list[dict] = []
-    for c in chunks:
+    segments: list[dict] = []
+    for c in kept:
         path = list(c.section_path or [])
-        if out and out[-1]["section_path"] == path:
-            tail = out[-1]
+        if segments and segments[-1]["section_path"] == path:
+            tail = segments[-1]
             tail["text"] = (tail["text"] + "\n\n" + c.text).strip()
             tail["chunk_ids"].append(c.id)
             tail["ord_range"][1] = c.ord
         else:
-            out.append({
+            segments.append({
                 "section_path": path,
                 "text": c.text,
                 "chunk_ids": [c.id],
                 "ord_range": [c.ord, c.ord],
             })
-    return out
+    return {
+        "segments": segments,
+        "available_section_paths": available,
+        "matched_section_paths": matched,
+    }
+
+
+def _ordered_unique_paths(chunks: list) -> list[list[str]]:
+    seen: list[list[str]] = []
+    seen_set: set[tuple[str, ...]] = set()
+    for c in chunks:
+        path = tuple(c.section_path or [])
+        if path not in seen_set:
+            seen_set.add(path)
+            seen.append(list(path))
+    return seen
 
 
 def doc_section_index(corpus: Corpus, doc_id: str) -> list[dict]:
     """Return ``[{section_path, n_chunks, ord_range}]`` for one doc.
 
-    Cheap structural overview the agent can read before deciding whether
-    to fetch full text. Excludes boilerplate chunks.
+    Cheap structural overview the agent can read before deciding
+    whether to fetch full text. Same filter as :func:`read_doc_text`:
+    drops boilerplate, figure-caption (``__image__``), references,
+    acknowledgments, and appendix chunks.
     """
-    chunks = sorted(
-        (c for c in read_chunks(corpus, doc_id) if not c.is_boilerplate),
-        key=lambda c: c.ord,
-    )
+    chunks = _doc_body_chunks(corpus, doc_id)
     out: list[dict] = []
     for c in chunks:
         path = list(c.section_path or [])

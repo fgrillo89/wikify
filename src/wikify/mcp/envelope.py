@@ -226,8 +226,9 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
 def figure_item(fig: dict) -> dict:
     fig_id = str(fig.get("id", ""))
     doc_id = str(fig.get("source_id", ""))
+    handle = format_handle("figure", fig_id)
     return {
-        "handle": format_handle("figure", fig_id),
+        "handle": handle,
         "type": "figure",
         "title": str(fig.get("caption", "") or "")[:_PREVIEW_CHARS],
         "score": None,
@@ -242,6 +243,10 @@ def figure_item(fig: dict) -> dict:
                 format_handle("chunk", cid)
                 for cid in fig.get("near_chunk_ids", [])
             ],
+            # Hint to the agent: call corpus_image(handle) to pull the
+            # binary into the conversation context. Resources alone are
+            # not auto-fetched by Claude Code.
+            "image_tool": {"name": "corpus_image", "args": {"handle": handle}},
         },
     }
 
