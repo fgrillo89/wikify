@@ -17,6 +17,8 @@ See ``corpus/handles.py`` for the resolution semantics.
 
 from __future__ import annotations
 
+import re
+
 from ..api import Corpus
 from ..models import Chunk, Document
 from .chunks import (
@@ -379,6 +381,36 @@ def search_chunks(corpus: Corpus, query: str, *, top_k: int = 8) -> list[dict]:
     return list(kg.chunks().search(query, top_k=top_k))
 
 
+def search_papers_by_title(
+    corpus: Corpus,
+    query: str,
+    *,
+    top_k: int | None = 8,
+) -> list[dict]:
+    """Title-only paper search: literal substring on ``Document.title``.
+
+    Use when the user wants "papers about X in the title" rather than
+    "papers whose body discusses X" (which is what the chunk-aggregated
+    :func:`search_papers` returns). Case-insensitive substring; rows
+    sorted by leftmost match offset, then by title length, then by id.
+    """
+    needle = query.lower()
+    rows: list[dict] = []
+    for doc in list_documents(corpus):
+        title = doc.title or ""
+        idx = title.lower().find(needle)
+        if idx < 0:
+            continue
+        rows.append({
+            "doc_id": doc.id,
+            "title": title,
+            "match_offset": idx,
+            "title_len": len(title),
+        })
+    rows.sort(key=lambda r: (r["match_offset"], r["title_len"], r["doc_id"]))
+    return rows[:top_k] if top_k is not None else rows
+
+
 def search_papers(
     corpus: Corpus,
     query: str,
@@ -646,6 +678,29 @@ def traverse_doc(
     For source-typed results, ``rank`` may be ``citation_count`` or
     ``pagerank``; ``top_k`` limits the result.
     """
+    if relation == "chunks":
+        # Bypass the graph backend so the output order is deterministic
+        # (document order by ``ord``) and rows carry section_path + ord
+        # — both needed by the agent to filter without an N+1 round-trip.
+        # Reading from chunks/<doc>.jsonl also avoids loading the
+        # vector store / KG when the agent only wants paper structure.
+        chunks = sorted(
+            (c for c in read_chunks(corpus, doc_id) if not c.is_boilerplate),
+            key=lambda c: c.ord,
+        )
+        rows = [
+            {
+                "id": c.id,
+                "type": "chunk",
+                "doc_id": c.doc_id,
+                "ord": c.ord,
+                "section_path": list(c.section_path or []),
+            }
+            for c in chunks
+        ]
+        if top_k is not None:
+            rows = rows[:top_k]
+        return rows
     vs = read_vector_store(corpus)
     kg = read_knowledge_graph(corpus, vectors=vs)
     backend = kg._backend
@@ -656,8 +711,6 @@ def traverse_doc(
         result = qb.cited_by()
     elif relation == "references":
         result = qb.references()
-    elif relation == "chunks":
-        result = qb.chunks()
     elif relation == "figures":
         result = qb.figures()
     elif relation == "equations":
@@ -893,6 +946,184 @@ def _materialize_traversal(
 # --------------------------------------------------------- evidence helper
 
 
+# Strip leading section numbering ("3.", "3.2", "I.", "IV.", "A.") so
+# that ``sections=["introduction"]`` matches a chunk whose
+# ``section_path`` is ``["I. INTRODUCTION"]``. Anchored at the start.
+_LEADING_NUMERIC_RE = re.compile(
+    r"^\s*(?:[ivxlcdm]+\.|[a-z]\.|\d+(?:\.\d+)*\.?)\s*",
+    re.IGNORECASE,
+)
+
+
+def _normalize_section_token(s: str) -> str:
+    """Lowercase, strip leading numbering, collapse whitespace.
+
+    ``"I. INTRODUCTION"`` -> ``"introduction"``. ``"3.2 Photoactivity"``
+    -> ``"photoactivity"``. ``"Summary"`` -> ``"summary"``.
+    """
+    out = (s or "").lower().strip()
+    out = _LEADING_NUMERIC_RE.sub("", out)
+    return out.strip()
+
+
+def _section_matches(path: list[str], wanted: list[str]) -> bool:
+    """True if any element of *path* matches any wanted token.
+
+    Match is bidirectional substring after normalisation, so
+    ``wanted=['summary']`` hits ``["V. SUMMARY"]`` and
+    ``wanted=['intro']`` hits ``["1. Introduction"]``. Also matches
+    against the joined ``"a > b > c"`` form so deep paths work.
+    """
+    if not path:
+        return False
+    norm_parts = [_normalize_section_token(p) for p in path]
+    norm_joined = " > ".join(norm_parts)
+    norm_wanted = [_normalize_section_token(w) for w in wanted if w]
+    for w in norm_wanted:
+        if not w:
+            continue
+        if w in norm_joined or norm_joined.startswith(w):
+            return True
+        for p in norm_parts:
+            if w in p or p.startswith(w) or w.startswith(p) and p:
+                return True
+    return False
+
+
+def _is_caption_chunk(chunk) -> bool:
+    """Figure-caption chunks are tagged ``section_path[0] == '__image__'``."""
+    path = chunk.section_path or []
+    return bool(path) and path[0] == "__image__"
+
+
+def _doc_body_chunks(corpus: Corpus, doc_id: str) -> list:
+    """Body chunks of one doc — boilerplate, captions, references stripped.
+
+    Mirrors the filters the rest of the pipeline already applies (see
+    ``ingest.config.SKIP_SECTION_TYPES`` and ``abstract_tagger`` for
+    the canonical list). Centralising the filter here keeps the agent
+    surface in lockstep with what the writer pipeline considers prose.
+    """
+    from ..ingest.config import SKIP_SECTION_TYPES
+
+    return sorted(
+        (
+            c for c in read_chunks(corpus, doc_id)
+            if not c.is_boilerplate
+            and c.section_type not in SKIP_SECTION_TYPES
+            and not _is_caption_chunk(c)
+        ),
+        key=lambda c: c.ord,
+    )
+
+
+def read_doc_text(
+    corpus: Corpus,
+    doc_id: str,
+    *,
+    sections: list[str] | None = None,
+) -> dict:
+    """Return the body of one document as ordered text segments.
+
+    Reads chunks in document order (by ``ord``), groups consecutive
+    chunks that share the same ``section_path`` into one segment, and
+    optionally filters by section name (case-insensitive, leading
+    numbering tolerated, substring match against any path element).
+
+    Returns ``{"segments": [...], "available_section_paths": [...],
+    "matched_section_paths": [...]}``. Each segment carries
+    ``section_path``, ``text``, ``chunk_ids`` (in order), and
+    ``ord_range``. Figure captions (``__image__`` section), boilerplate,
+    references, acknowledgments, and appendices are excluded so the
+    body reads as prose; figure captions live in ``corpus_traverse
+    doc -> figures`` and ``corpus_show figure:...``.
+
+    ``available_section_paths`` lists every section the doc has (after
+    filtering); ``matched_section_paths`` lists which the caller's
+    ``sections`` filter actually hit. An empty filter result returns
+    ``segments=[]`` with both lists populated so the caller can tell
+    "wrong key" from "no content".
+    """
+    body = _doc_body_chunks(corpus, doc_id)
+    available = _ordered_unique_paths(body)
+
+    if sections:
+        kept = [c for c in body if _section_matches(list(c.section_path or []), sections)]
+    else:
+        kept = body
+    matched = _ordered_unique_paths(kept)
+
+    segments: list[dict] = []
+    for c in kept:
+        path = list(c.section_path or [])
+        if segments and segments[-1]["section_path"] == path:
+            tail = segments[-1]
+            tail["text"] = (tail["text"] + "\n\n" + c.text).strip()
+            tail["chunk_ids"].append(c.id)
+            tail["ord_range"][1] = c.ord
+        else:
+            segments.append({
+                "section_path": path,
+                "text": c.text,
+                "chunk_ids": [c.id],
+                "ord_range": [c.ord, c.ord],
+            })
+    return {
+        "segments": segments,
+        "available_section_paths": available,
+        "matched_section_paths": matched,
+    }
+
+
+def _ordered_unique_paths(chunks: list) -> list[list[str]]:
+    seen: list[list[str]] = []
+    seen_set: set[tuple[str, ...]] = set()
+    for c in chunks:
+        path = tuple(c.section_path or [])
+        if path not in seen_set:
+            seen_set.add(path)
+            seen.append(list(path))
+    return seen
+
+
+def doc_section_index(corpus: Corpus, doc_id: str) -> list[dict]:
+    """Return ``[{section_path, n_chunks, ord_range}]`` for one doc.
+
+    Cheap structural overview the agent can read before deciding
+    whether to fetch full text. Same filter as :func:`read_doc_text`:
+    drops boilerplate, figure-caption (``__image__``), references,
+    acknowledgments, and appendix chunks.
+    """
+    chunks = _doc_body_chunks(corpus, doc_id)
+    out: list[dict] = []
+    for c in chunks:
+        path = list(c.section_path or [])
+        if out and out[-1]["section_path"] == path:
+            tail = out[-1]
+            tail["n_chunks"] += 1
+            tail["ord_range"][1] = c.ord
+        else:
+            out.append({
+                "section_path": path,
+                "n_chunks": 1,
+                "ord_range": [c.ord, c.ord],
+            })
+    return out
+
+
+def chunk_section(corpus: Corpus, chunk_id: str) -> list[str] | None:
+    """Return the ``section_path`` of one chunk, or ``None`` if missing.
+
+    Used to enrich paper-search rows with ``best_chunk_section`` so the
+    agent can tell whether a hit came from the abstract vs. references
+    without an extra round-trip.
+    """
+    chunk = get_chunk(corpus, chunk_id)
+    if chunk is None:
+        return None
+    return list(chunk.section_path or [])
+
+
 def select_evidence_chunks(
     corpus: Corpus,
     *,
@@ -922,3 +1153,449 @@ def select_evidence_chunks(
         if len(out) >= top_k:
             break
     return out
+
+
+# ----------------------------------------------------- orchestrators (CLI + MCP)
+
+
+class QueryError(ValueError):
+    """Validation error from :func:`find` / :func:`traverse` / :func:`show`.
+
+    Carries a stable ``code`` so adapters can surface a structured error
+    (CLI: ``cli_error(code=...)``; MCP: ``{"ok": False, "code": ...}``).
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+_DOC_RELATIONS = {
+    "cited-by", "references", "chunks", "figures", "equations", "authors",
+}
+_CHUNK_RELATIONS = {"source", "cited-in-corpus", "figures", "equations"}
+_AUTHOR_RELATIONS = {"sources", "coauthors"}
+
+_SOURCE_RANKS = {"citation_count", "pagerank"}
+_AUTHOR_RANKS = {"h_index", "citation_count", "n_papers"}
+_FIND_RANKS = {"semantic", *_SOURCE_RANKS, *_AUTHOR_RANKS}
+
+
+SCHEMA: dict = {
+    "node_types": {
+        "source": "A document. Handle: doc:<id-or-short>.",
+        "chunk": "A text chunk inside a doc. Handle: chunk:<id-or-short>.",
+        "author": "A paper author. Handle: author:<lastname-initials key>.",
+        "section": "A section of a doc.",
+        "figure": "An image with caption. Handle: figure:<doc-short>/<stem>.",
+        "equation": "A math or chemical equation. Handle: equation:<id>.",
+    },
+    "edge_kinds": [
+        "CITES",
+        "AUTHORED_BY",
+        "COLLABORATED",
+        "CONTAINS_SECTION",
+        "CONTAINS_CHUNK",
+        "CHUNK_IN_SECTION",
+        "CONTAINS_FIGURE",
+        "CONTAINS_EQUATION",
+        "FIGURE_NEAR_CHUNK",
+        "EQUATION_IN_CHUNK",
+    ],
+    "traverse_relations": {
+        "doc": sorted(_DOC_RELATIONS),
+        "chunk": sorted(_CHUNK_RELATIONS),
+        "author": sorted(_AUTHOR_RELATIONS),
+    },
+    "rank_metrics": {
+        "source": sorted(_SOURCE_RANKS),
+        "author": sorted(_AUTHOR_RANKS),
+    },
+    "find_modes": {
+        "--by chunk":  "Rank chunks (default).",
+        "--by paper":  "Aggregate chunk hits to papers.",
+        "--by author": "Aggregate chunk hits to authors.",
+        "--text":      "Literal substring grep over chunk text.",
+        "--field title": (
+            "Literal substring search over Document.title. Use with "
+            "--by paper for 'paper whose title mentions X'."
+        ),
+    },
+    "sample_strategies": {
+        "diverse": (
+            "Greedy submodular: PageRank prior + coverage gain over doc "
+            "embeddings."
+        ),
+    },
+    "formats": ["auto", "quiet", "compact", "json"],
+    "handle_resolution": (
+        "Doc/equation handles use the trailing hex hash from the id "
+        "(8+ chars). Figures use <doc-short>/<stem>. Author handles use "
+        "the lowercase 'first_last' key with case-insensitive unique "
+        "prefix. Chunk handles are content-derived (chunk text hashes), "
+        "so identical chunk text across docs (figure captions, "
+        "boilerplate) collides. When a short chunk handle is ambiguous, "
+        "either pass the full id or pair it with a doc handle "
+        "(e.g. via 'corpus_traverse doc:<short> --to chunks' to list "
+        "chunks of one doc and pick by ord/section_path)."
+    ),
+}
+
+
+_FIND_FIELDS = {"chunk_text", "title"}
+
+
+def _validate_find_params(*, query: str, by: str, rank: str, top_k: int,
+                          field: str) -> None:
+    if top_k <= 0:
+        raise QueryError("bad_top_k", f"top_k must be > 0; got {top_k}")
+    if field not in _FIND_FIELDS:
+        raise QueryError(
+            "bad_field",
+            f"unknown field {field!r}; expected "
+            f"{' | '.join(sorted(_FIND_FIELDS))}",
+        )
+    if rank not in _FIND_RANKS:
+        raise QueryError(
+            "bad_rank",
+            f"unknown rank {rank!r}; expected "
+            f"{' | '.join(sorted(_FIND_RANKS))}",
+        )
+    if by not in {"chunk", "paper", "author"}:
+        raise QueryError(
+            "bad_by", f"unknown by {by!r}; expected chunk | paper | author"
+        )
+    if field == "title" and by != "paper":
+        raise QueryError(
+            "bad_field_by_combo",
+            f"field='title' only applies with by='paper'; got by={by!r}",
+        )
+    if by == "chunk" and rank != "semantic":
+        raise QueryError(
+            "bad_rank_by_combo",
+            f"rank {rank!r} only applies when chunks are aggregated to a "
+            f"parent doc/author. Use by='paper' or by='author', or drop "
+            f"rank to keep semantic order.",
+        )
+    if by == "author" and rank == "pagerank":
+        raise QueryError(
+            "bad_rank_by_combo",
+            "rank 'pagerank' does not apply to authors; use h_index | "
+            "citation_count | n_papers.",
+        )
+    if by == "paper" and rank in {"h_index", "n_papers"}:
+        raise QueryError(
+            "bad_rank_by_combo",
+            f"rank {rank!r} does not apply to papers; use citation_count "
+            f"| pagerank, or switch to by='author'.",
+        )
+
+
+def _attach_best_chunk_section(corpus: Corpus, papers: list[dict]) -> list[dict]:
+    """Add ``best_chunk_section`` to each paper row, when ``best_chunk_id`` is set.
+
+    Lets the agent tell whether the hit came from the abstract or the
+    references without an extra ``corpus_show chunk:<id>`` round-trip.
+    """
+    by_doc: dict[str, dict] = {}
+    for p in papers:
+        cid = str(p.get("best_chunk_id", "") or "")
+        did = str(p.get("doc_id", "") or "")
+        if not cid or not did:
+            continue
+        cache = by_doc.setdefault(did, {})
+        if "_chunks" not in cache:
+            cache["_chunks"] = {c.id: c for c in read_chunks(corpus, did)}
+        chunk = cache["_chunks"].get(cid)
+        if chunk is not None:
+            p["best_chunk_section"] = list(chunk.section_path or [])
+    return papers
+
+
+def _rerank_papers(
+    corpus: Corpus,
+    papers: list[dict],
+    *,
+    rank: str,
+    top_k: int,
+) -> list[dict]:
+    """Attach citation_count + pagerank, optionally re-sort, truncate to top_k."""
+    doc_ids = [str(p.get("doc_id", "")) for p in papers]
+    metrics = doc_metrics(corpus, doc_ids)
+    enriched: list[dict] = []
+    for p in papers:
+        did = str(p.get("doc_id", ""))
+        m = metrics.get(did, {})
+        enriched.append(
+            {
+                **p,
+                "citation_count": m.get("citation_count", 0),
+                "pagerank": m.get("pagerank", 0.0),
+            }
+        )
+    if rank == "citation_count":
+        enriched.sort(
+            key=lambda r: (
+                -int(r.get("citation_count", 0)),
+                -float(r.get("best_score", 0.0)),
+                str(r.get("doc_id", "")),
+            )
+        )
+    elif rank == "pagerank":
+        enriched.sort(
+            key=lambda r: (
+                -float(r.get("pagerank", 0.0)),
+                -float(r.get("best_score", 0.0)),
+                str(r.get("doc_id", "")),
+            )
+        )
+    enriched = enriched[:top_k]
+    return _attach_best_chunk_section(corpus, enriched)
+
+
+def find(
+    corpus: Corpus,
+    *,
+    query: str,
+    by: str = "chunk",
+    rank: str = "semantic",
+    top_k: int = 8,
+    text: bool = False,
+    field: str = "chunk_text",
+) -> dict:
+    """Validate + dispatch ``find``. Returns ``{kind, rows, scored}``.
+
+    ``kind`` is one of:
+
+    - ``"chunks"``     — chunk rows ``{id, doc_id, score?, preview?}``.
+    - ``"papers"``     — paper rows with ``citation_count``/``pagerank``
+      attached and re-ranked when ``rank`` is a graph metric.
+    - ``"authors"``    — author rows from rank/search.
+    - ``"docs"``       — pure metric ranking with no query.
+
+    ``scored`` is True when rows carry a query score (``"score"`` for
+    chunks, ``"best_score"`` for papers/authors).
+
+    ``field`` selects what to search:
+
+    - ``"chunk_text"`` (default): search chunk text and aggregate per
+      ``by``.
+    - ``"title"``: literal substring search over ``Document.title``.
+      Only valid with ``by="paper"`` and a non-empty query.
+    """
+    _validate_find_params(
+        query=query, by=by, rank=rank, top_k=top_k, field=field,
+    )
+
+    if field == "title":
+        if not query:
+            raise QueryError(
+                "missing_query",
+                "find with field='title' requires a non-empty query.",
+            )
+        rows = search_papers_by_title(
+            corpus,
+            query,
+            top_k=(top_k if rank == "semantic" else None),
+        )
+        if rank in _SOURCE_RANKS:
+            rows = _rerank_papers(corpus, rows, rank=rank, top_k=top_k)
+        return {
+            "kind": "papers",
+            "rows": rows,
+            "scored": False,
+        }
+
+    # Pure metric ranking — ignore query, return top docs by graph metric.
+    if rank in _SOURCE_RANKS and not query and by != "author":
+        return {
+            "kind": "docs",
+            "rows": rank_docs(corpus, by=rank, top_k=top_k),
+            "scored": False,
+        }
+
+    # Author-only modes: top authors by metric, or authors by query.
+    if by == "author":
+        if not query:
+            metric = rank if rank in _AUTHOR_RANKS else "h_index"
+            return {
+                "kind": "authors",
+                "rows": rank_authors(corpus, by=metric, top_k=top_k),
+                "scored": False,
+            }
+        return {
+            "kind": "authors",
+            "rows": search_authors(corpus, query, top_k=top_k),
+            "scored": True,
+        }
+
+    # Widen the candidate pool when re-ranking by graph metric so the
+    # most-cited paper that mentions the query isn't dropped at the
+    # semantic top-K boundary.
+    paper_pool = top_k if rank == "semantic" else max(top_k * 5, 30)
+
+    if text:
+        if by == "paper":
+            papers = search_papers(corpus, query, top_k=paper_pool, text=True)
+            return {
+                "kind": "papers",
+                "rows": _rerank_papers(corpus, papers, rank=rank, top_k=top_k),
+                "scored": True,
+            }
+        return {
+            "kind": "chunks",
+            "rows": search_text(corpus, query, top_k=top_k),
+            "scored": False,
+        }
+
+    if not query:
+        raise QueryError(
+            "missing_query",
+            "find requires a query (or text=True). For query-less sampling, "
+            "call sample_docs.",
+        )
+
+    if by == "paper":
+        papers = search_papers(corpus, query, top_k=paper_pool)
+        return {
+            "kind": "papers",
+            "rows": _rerank_papers(corpus, papers, rank=rank, top_k=top_k),
+            "scored": True,
+        }
+
+    return {
+        "kind": "chunks",
+        "rows": search_chunks(corpus, query, top_k=top_k),
+        "scored": True,
+    }
+
+
+def traverse(
+    corpus: Corpus,
+    *,
+    handle: str,
+    to: str,
+    rank: str | None = None,
+    top_k: int | None = None,
+) -> dict:
+    """Validate + dispatch ``traverse``. Returns ``{handle_kind, rows}``.
+
+    ``handle_kind`` is the parsed handle's leading kind (``doc``,
+    ``chunk``, ``author``). ``rows`` are the heterogeneous traversal
+    rows from :func:`traverse_doc` / :func:`traverse_chunk` /
+    :func:`traverse_author`.
+    """
+    if top_k is not None and top_k < 0:
+        raise QueryError(
+            "bad_top_k", f"top_k must be >= 0 (0 means unlimited); got {top_k}"
+        )
+    try:
+        kind, ident = parse_handle(handle)
+    except ValueError as exc:
+        raise QueryError("bad_handle", str(exc)) from exc
+
+    top_k_effective = top_k if (top_k is not None and top_k > 0) else None
+
+    if kind == "doc":
+        if to not in _DOC_RELATIONS:
+            raise QueryError(
+                "bad_relation",
+                f"unknown doc relation {to!r}; expected "
+                f"{' | '.join(sorted(_DOC_RELATIONS))}",
+            )
+        full_id = resolve_doc_id(corpus, ident)
+        rows = traverse_doc(
+            corpus, doc_id=full_id, relation=to,
+            rank=rank or None, top_k=top_k_effective,
+        )
+        return {"handle_kind": "doc", "rows": rows}
+
+    if kind == "author":
+        if to not in _AUTHOR_RELATIONS:
+            raise QueryError(
+                "bad_relation",
+                f"unknown author relation {to!r}; expected "
+                f"{' | '.join(sorted(_AUTHOR_RELATIONS))}",
+            )
+        full_key = resolve_author_key(corpus, ident)
+        rows = traverse_author(
+            corpus, key=full_key, relation=to,
+            rank=rank or None, top_k=top_k_effective,
+        )
+        return {"handle_kind": "author", "rows": rows}
+
+    if kind == "chunk":
+        if to not in _CHUNK_RELATIONS:
+            raise QueryError(
+                "bad_relation",
+                f"unknown chunk relation {to!r}; expected "
+                f"{' | '.join(sorted(_CHUNK_RELATIONS))}",
+            )
+        full_id = resolve_chunk_id(corpus, ident)
+        rows = traverse_chunk(
+            corpus, chunk_id=full_id, relation=to,
+            rank=rank or None, top_k=top_k_effective,
+        )
+        return {"handle_kind": "chunk", "rows": rows}
+
+    raise QueryError(
+        "bad_handle_kind",
+        f"unknown handle kind {kind!r}; use doc:<id> | chunk:<id> | author:<key>",
+    )
+
+
+def show(corpus: Corpus, *, handle: str, full: bool = False) -> dict:
+    """Resolve a handle and return its content.
+
+    Returns ``{"handle_kind": "...", "data": ...}`` where ``data`` is:
+
+    - ``Document`` for ``doc:`` handles,
+    - ``Chunk`` for ``chunk:`` handles (full text vs preview gated by
+      ``full``),
+    - ``dict`` for ``figure:`` / ``equation:`` / ``author:`` (existing
+      ``get_*`` payload shapes).
+
+    The ``full`` flag only affects chunk text trimming; doc/figure/etc.
+    are always returned in their full primitive shape.
+    """
+    try:
+        kind, ident = parse_handle(handle)
+    except ValueError as exc:
+        raise QueryError("bad_handle", str(exc)) from exc
+
+    if kind == "doc":
+        doc = get_doc(corpus, ident)
+        if doc is None:
+            raise QueryError("doc_not_found", f"doc not found: {ident}")
+        return {"handle_kind": "doc", "data": doc}
+
+    if kind == "chunk":
+        chunk = get_chunk(corpus, ident)
+        if chunk is None:
+            raise QueryError("chunk_not_found", f"chunk not found: {ident}")
+        return {"handle_kind": "chunk", "data": chunk, "full": bool(full)}
+
+    if kind == "figure":
+        fig = get_figure(corpus, ident)
+        if fig is None:
+            raise QueryError("figure_not_found", f"figure not found: {ident}")
+        return {"handle_kind": "figure", "data": fig}
+
+    if kind == "equation":
+        eq = get_equation(corpus, ident)
+        if eq is None:
+            raise QueryError("equation_not_found", f"equation not found: {ident}")
+        return {"handle_kind": "equation", "data": eq}
+
+    if kind == "author":
+        au = get_author(corpus, ident)
+        if au is None:
+            raise QueryError("author_not_found", f"author not found: {ident}")
+        return {"handle_kind": "author", "data": au}
+
+    raise QueryError(
+        "bad_handle_kind",
+        f"unknown handle kind {kind!r}; use doc:<id>, chunk:<id>, "
+        f"figure:<id>, equation:<id>, or author:<key>",
+    )

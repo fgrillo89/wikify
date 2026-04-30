@@ -1,12 +1,16 @@
 # MCP Server implementation plan for Wikify
 
+Status: corpus tools are implemented on the MCP branch. This plan is
+the current roadmap for extending that surface to wiki, bundle, and
+mutation workflows.
+
 ## Position
 
 MCP is the agent-native access layer for Wikify. It should make corpus
 and wiki exploration faster, more structured, and easier to compose in
 Claude Code without turning workflow strategy into Python.
 
-The CLI does not become legacy. The durable split is:
+The CLI remains first-class. The durable split is:
 
 - Domain APIs are canonical for behavior: `corpus.queries`,
   `bundle.wiki.queries`, bundle/work/draft/run modules, ingest, render,
@@ -350,7 +354,8 @@ Capability skills should include a short "MCP mode" section:
 - `wikify-search-wiki`: prefer `wiki_index`, `wiki_find`,
   `wiki_show`, `wiki_traverse`, and `wiki_schema`.
 - `wikify-bundle`: start with read-only context/status resources;
-  mutating tools remain CLI-first until Phase 3.
+  mutating tools remain CLI-first until controlled MCP mutation tools
+  exist.
 
 Workflow skills should not duplicate MCP tool documentation. They
 should say which capability skill to use and what decisions the
@@ -380,14 +385,13 @@ The CLI remains first-class for four reasons:
 4. CLI commands are the fallback path when Claude Code has no MCP
    server configured.
 
-The CLI should get thinner over time, not deprecated. Re-ranking,
+The CLI should get thinner over time without being replaced. Re-ranking,
 traversal, sampling, object lookup, and validation logic should live in
 domain APIs. The CLI formats and exits; MCP returns envelopes and
 resources. Both wrap the same implementation.
 
 Skill docs should therefore show MCP as preferred for repeated agent
-queries and CLI as the portable equivalent. Do not describe the CLI as
-"legacy" or "old".
+queries and CLI as the portable equivalent.
 
 ## Implementation sketch
 
@@ -440,19 +444,19 @@ async def main() -> None:
 The actual implementation should not call CLI functions. It should call
 the same domain helpers the CLI calls.
 
-## Phasing
+## Roadmap
 
-### Phase 0: finalize CLI/query prerequisites
+### Completed foundation
 
-- Finish `corpus sample` as the query-free entry point primitive.
-- Remove stale `find --seed` references from active docs and skills.
-- Ensure `corpus schema` describes find populations, rank compatibility,
+- `corpus sample` is the query-free entry point primitive.
+- Active docs and skills use the current sampling primitive.
+- `corpus schema` describes find populations, rank compatibility,
   traversal relations, and sampling strategies.
-- Move any inline CLI query logic into `corpus.queries`.
+- CLI query logic is centralized in `corpus.queries`.
 
-### Phase 1: corpus MCP and resources
+### Current branch: corpus MCP and resources
 
-Ship:
+Implemented surface:
 
 - `wikify mcp serve`.
 - `context_show`, `context_set`.
@@ -460,13 +464,12 @@ Ship:
   `corpus_sample`, `corpus_schema`.
 - corpus resources for docs, chunks, figures, equations, authors.
 - tests proving parity with `corpus.queries`, not shell output.
-- skill reference docs for MCP setup, tool map, resources, and
-  fallback.
+- skill reference docs for MCP setup, tool map, resources, and fallback.
 
-This phase should make recursive graph exploration pleasant enough for
+This surface should make recursive graph exploration pleasant enough for
 real wiki-writing workflows.
 
-### Phase 2: wiki MCP and wiki resources
+### Next: wiki MCP and wiki resources
 
 Ship:
 
@@ -476,7 +479,7 @@ Ship:
 - empty-wiki behavior that returns an empty result with a useful note.
 - updates to `wikify-search-wiki`.
 
-### Phase 3: bundle read-side MCP
+### Then: bundle read-side MCP
 
 Ship read-only bundle context first:
 
@@ -487,7 +490,7 @@ Ship read-only bundle context first:
 Do not introduce mutations until lock, claim, dry-run, idempotency, and
 error semantics are designed.
 
-### Phase 4: controlled mutations
+### Later: controlled mutations
 
 Add mutating work/draft/wiki/run tools only where they improve agent
 workflow materially:
@@ -505,7 +508,7 @@ Requirements:
 - errors use stable codes,
 - high-risk operations support dry-run when meaningful.
 
-### Phase 5: ingest, render, eval
+### Last: ingest, render, eval
 
 Add long-running and low-frequency operations last:
 
@@ -526,9 +529,8 @@ Three layers:
 3. MCP tests verify tool registration, argument validation, envelope
    shape, resource reads, and parity with domain API calls.
 
-Add workflow-level smoke tests only after Phase 1 and Phase 2 are
-stable: one corpus exploration loop and one empty-wiki search/traverse
-loop.
+Add workflow-level smoke tests after corpus and wiki MCP are stable:
+one corpus exploration loop and one empty-wiki search/traverse loop.
 
 ## Out of scope
 
@@ -546,4 +548,4 @@ loop.
 - Chose resources for full object reads.
 - Chose lightweight envelopes over rigid per-row schemas.
 - Chose skills, not MCP prompts, for workflows.
-- Chose CLI as first-class sibling adapter, not legacy baggage.
+- Chose CLI as first-class sibling adapter.

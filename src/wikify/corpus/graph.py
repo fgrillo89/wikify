@@ -82,7 +82,7 @@ EQUATION = "equation"
 
 @dataclass
 class NetworkXBackend:
-    """Phase 1 backend: NetworkX graph + inverted dict indexes."""
+    """NetworkX graph backend with inverted dict indexes."""
 
     G: nx.MultiDiGraph
 

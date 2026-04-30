@@ -7,7 +7,7 @@
   ``--owner`` CLI flag.
 - ``strip_envelope(data, *fields)`` — drop scratch envelope keys
   (``schema_version`` by default) before Pydantic validation.
-- ``EXIT_*`` constants per the redesign brief decision 6.
+- ``EXIT_*`` constants for the stable CLI error contract.
 """
 
 from __future__ import annotations
@@ -51,8 +51,7 @@ def strip_envelope(data: dict, *fields: str) -> dict:
 
 
 # Canonical CLI exit codes. Use these instead of magic numbers when calling
-# ``cli_error(...)`` so the contract stays grep-able. Mapped per the redesign
-# brief (decision 6 in docs/skill-centric-execution-plan.md).
+# ``cli_error(...)`` so the contract stays grep-able.
 EXIT_OK = 0
 EXIT_VALIDATION = 1
 EXIT_LOCK_HELD = 2

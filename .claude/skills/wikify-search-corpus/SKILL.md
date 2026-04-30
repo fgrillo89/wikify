@@ -1,7 +1,7 @@
 ---
 name: wikify-search-corpus
 description: Explain and use the Wikify corpus CLI as the read/search surface over the corpus fluent API. Use when probing corpus documents, chunks, authors, citations, figures, equations, sampling diverse entry points, semantic search, text search, paper-level ranking by citation count, or recursive graph traversals. This skill is read-only and does not decide an exploration strategy.
-allowed-tools: Bash(wikify corpus *)
+allowed-tools: Bash(wikify corpus *) mcp__wikify__context_show mcp__wikify__context_set mcp__wikify__corpus_find mcp__wikify__corpus_traverse mcp__wikify__corpus_show mcp__wikify__corpus_sample mcp__wikify__corpus_schema mcp__wikify__corpus_image
 ---
 
 # wikify-search-corpus
@@ -9,6 +9,36 @@ allowed-tools: Bash(wikify corpus *)
 Use this skill to inspect and search an existing corpus. It teaches the
 available corpus read operations and traversal patterns; it does not
 decide what to explore next.
+
+## MCP mode
+
+If `mcp__wikify__corpus_schema` is in the tool list, prefer MCP tools
+over CLI verbs for repeated reads (`corpus_find`, `corpus_traverse`,
+`corpus_show`, `corpus_sample`, `corpus_schema`, `context_show`).
+Validation and data are identical — both adapters call the same
+domain helpers.
+
+High-leverage parameters worth knowing:
+
+- `corpus_show(handle="doc:<short>", include_text=True, mode="full")`
+  returns the body as one ordered string in `meta.body` with
+  `## <section>` headers inlined — best for "summarise this paper".
+  Default `mode="sections"` returns segmented `meta.text`. `sections`
+  filters either mode; mismatch echoes available paths in `notes`.
+- `corpus_find(by="paper", field="title")` does literal substring
+  search on `Document.title` — use for "title mentions X".
+- `corpus_traverse(handle="doc:...", to="chunks")` returns chunks in
+  document order with `section_path` + `ord` on each row.
+- `corpus_traverse(handle="chunk:...", to="cited-in-corpus")` returns
+  the in-corpus references the markers in that paragraph's text point
+  to — use to follow an argument from a specific paragraph to its
+  sources.
+- `corpus_image(handle="figure:...")` returns the figure binary as an
+  MCP ImageContent block so the model can see the figure during
+  reasoning.
+
+See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`
+for setup, the tool↔CLI map, URI patterns, and CLI fallback.
 
 ## Step 0: discover the surface
 
@@ -58,6 +88,7 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited paper in corpus                          | `find --by paper --rank citation_count --top-k 10` |
 | Most central paper (PageRank)                       | `find --by paper --rank pagerank --top-k 10` |
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
+| Paper whose **title** mentions X                    | `find "X" --by paper --field title` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
 | Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |

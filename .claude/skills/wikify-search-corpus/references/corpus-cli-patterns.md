@@ -106,7 +106,7 @@ return an error listing the candidates.
 - ``auto``     ``WIKIFY_CLI_FORMAT`` if set, else ``compact`` for TTY,
                 else ``quiet``.
 
-Unknown ``--format`` values now produce a structured ``bad_format``
+Unknown ``--format`` values produce a structured ``bad_format``
 error envelope, not a Python traceback. For ``find`` and ``sample``,
 ``--top-k`` / ``--max`` must be ``> 0`` (``0`` and negative values are
 rejected). For ``traverse``, ``--top-k 0`` is allowed and means

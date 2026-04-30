@@ -1,13 +1,14 @@
 ---
 name: wikify-refine
-description: Refinement workflow that consolidates bundle inbox feedback, finds concepts marked needs_refine, gathers additional evidence when required, rewrites pages, validates, and commits replacements. Status is stub composition only.
+description: Refinement workflow that consolidates bundle inbox feedback, finds concepts marked needs_refine, gathers additional evidence when required, rewrites pages, validates, and commits replacements. Use when refinement threshold, batch, and retry policies are supplied.
 allowed-tools: Bash(wikify *) Task
 ---
 
 # wikify-refine
 
-Status: stub composition only. This workflow owns refinement thresholds,
-batch policy, and retry/escalation.
+This workflow owns refinement thresholds, batch policy, and
+retry/escalation. Run it only with explicit target selection and retry
+rules.
 
 ## Intent
 

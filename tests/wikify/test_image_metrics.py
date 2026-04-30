@@ -1,4 +1,4 @@
-"""Tests for Phase 4 image metrics: image_coverage_residual and figure_reference_counts."""
+"""Tests for image coverage and figure reference metrics."""
 
 import math
 from pathlib import Path

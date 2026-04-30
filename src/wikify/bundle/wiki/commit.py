@@ -1,10 +1,8 @@
 """``wiki commit`` — promote a validated response to the canonical wiki page.
 
-The commit gate enforces the contract from
-``docs/skill-centric-execution-plan.md``: a page only reaches
-``wiki/articles/<slug>.md`` (or ``wiki/people/<slug>.md``) once
-``validation.json`` for that response has ``ok=true`` and the
-quote-grounding check has passed.
+The commit gate only allows a page to reach ``wiki/articles/<slug>.md``
+or ``wiki/people/<slug>.md`` after ``validation.json`` for that
+response has ``ok=true`` and the quote-grounding check has passed.
 
 Side effects of a successful commit:
 

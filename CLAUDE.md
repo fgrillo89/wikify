@@ -47,11 +47,13 @@ All comparisons must run under the same pipeline contract and telemetry.
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: For multi-step changes, keep a visible checklist in
+   the conversation or in a task-specific plan file under `tasks/`
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
+5. **Document Results**: Record durable results in the relevant task
+   file only when the workstream needs a persistent record
 6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
 
 ## Communication Style
@@ -113,3 +115,4 @@ Format: `- **Topic**: What went wrong → what to do instead.`
 - **wikify writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible `[[wikilinks]]` in prose.
 - **wikify person pages**: Person pages are written by the model like article pages. Author metadata is assembled at ingest/distill time and attached as `author_context`. The "appears in this corpus" phrasing is banned. Must be robust to missing `author_context`.
 - **wikify CLI file exploration**: For skill workflows, make the CLI the canonical wrapper around `ls`/`rg`/`cat` behavior so bundle reads are constrained, rendered, and logged. Keep raw shell file tools for debugging, not normal workflow guidance.
+- **No meta-references in code or docstrings**: Never write "per `tasks/foo.md`", "Phase 1 ships X", "see `tasks/mcp_plan.md`", "in this phase", "in later phases", or any pointer to plan/todo/temp docs inside source comments, docstrings, or shipped skill docs. Plans rot fast and the reference is dead the moment the plan moves. Describe what the code IS and DOES, not what session/plan motivated it. Historical framing belongs in commit messages and the labelled history docs (`tasks/lessons.md`, `tasks/skill-centric-redesign-plan.md`); everything else must read as if the plan never existed. Pre-existing internal "phase 1/phase 2" labels that describe an algorithm's stages (e.g. `bibtex.py`, `resolver.py`) are fine — those describe code, not project planning.

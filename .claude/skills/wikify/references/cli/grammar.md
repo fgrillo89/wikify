@@ -1,6 +1,6 @@
 # CLI Grammar
 
-Seven nouns are the stable agent-facing grammar:
+Seven workflow nouns are the stable file/state grammar:
 
 ```text
 wikify corpus
@@ -10,6 +10,12 @@ wikify draft
 wikify wiki
 wikify render
 wikify eval
+```
+
+The MCP server control noun is separate from the workflow grammar:
+
+```text
+wikify mcp serve
 ```
 
 Common verbs:

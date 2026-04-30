@@ -13,6 +13,7 @@ import typer
 from . import corpus as corpus_cli
 from . import draft as draft_cli
 from . import eval as eval_cli
+from . import mcp as mcp_cli
 from . import render as render_cli
 from . import run as run_cli
 from . import wiki as wiki_cli
@@ -62,6 +63,7 @@ app.add_typer(draft_cli.app, name="draft")
 app.add_typer(wiki_cli.app, name="wiki")
 app.add_typer(render_cli.app, name="render")
 app.add_typer(eval_cli.app, name="eval")
+app.add_typer(mcp_cli.app, name="mcp")
 
 
 def main() -> None:

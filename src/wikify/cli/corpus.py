@@ -393,6 +393,15 @@ def cmd_find(
         "--rank",
         help="Ranking metric: semantic | citation_count | pagerank.",
     ),
+    field: str = typer.Option(
+        "chunk_text",
+        "--field",
+        help=(
+            "Search field: chunk_text (default) or title. "
+            "--field title runs a literal substring on Document.title; "
+            "valid only with --by paper."
+        ),
+    ),
     fmt: str = typer.Option(
         "auto",
         "--format",
@@ -443,117 +452,39 @@ def cmd_find(
         )
         return
 
-    if rank not in {"semantic", "citation_count", "pagerank", "h_index", "n_papers"}:
-        cli_error(
-            EXIT_VALIDATION,
-            error="bad_rank",
-            message=(
-                f"unknown --rank {rank!r}; expected "
-                f"semantic | citation_count | pagerank | h_index | n_papers"
-            ),
+    try:
+        result = queries.find(
+            corpus, query=query, by=by, rank=rank, top_k=top_k,
+            text=text, field=field,
         )
-    if by not in {"chunk", "paper", "author"}:
-        cli_error(
-            EXIT_VALIDATION,
-            error="bad_by",
-            message=f"unknown --by {by!r}; expected chunk | paper | author",
-        )
-    # --by chunk has no aggregation step, so a graph-metric rank can't be
-    # applied. Reject loudly rather than silently honour --rank semantic.
-    if by == "chunk" and rank != "semantic":
-        cli_error(
-            EXIT_VALIDATION,
-            error="bad_rank_by_combo",
-            message=(
-                f"--rank {rank!r} only applies when chunks are aggregated "
-                f"to a parent doc/author. Use --by paper or --by author, "
-                f"or drop --rank to keep semantic order."
-            ),
-        )
-    # --by author only meaningfully reranks by author-typed metrics.
-    if by == "author" and rank == "pagerank":
-        cli_error(
-            EXIT_VALIDATION,
-            error="bad_rank_by_combo",
-            message=(
-                "--rank pagerank does not apply to authors; use "
-                "h_index | citation_count | n_papers."
-            ),
-        )
-    # --by paper only meaningfully reranks by source-typed metrics.
-    if by == "paper" and rank in {"h_index", "n_papers"}:
-        cli_error(
-            EXIT_VALIDATION,
-            error="bad_rank_by_combo",
-            message=(
-                f"--rank {rank!r} does not apply to papers; use "
-                f"citation_count | pagerank, or switch --by author."
-            ),
-        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
 
-    # Pure metric ranking — ignore query, return top docs by graph metric.
-    if rank in {"citation_count", "pagerank"} and not query and by != "author":
-        rows = queries.rank_docs(corpus, by=rank, top_k=top_k)
+    kind = result["kind"]
+    rows = result["rows"]
+    if kind == "docs":
         _emit_doc_rows(
-            [{**r, "score": None} for r in rows],
-            fmt=fmt_resolved,
+            [{**r, "score": None} for r in rows], fmt=fmt_resolved
         )
         return
-
-    # Author-only modes: top authors by metric, or authors by query.
-    if by == "author":
-        if not query:
-            metric = rank if rank in {"h_index", "citation_count", "n_papers"} else "h_index"
-            rows = queries.rank_authors(corpus, by=metric, top_k=top_k)
-            _emit_author_rows(rows, fmt=fmt_resolved, score_key=None)
-            return
-        rows = queries.search_authors(corpus, query, top_k=top_k)
-        _emit_author_rows(rows, fmt=fmt_resolved, score_key="best_score")
+    if kind == "authors":
+        score_key = "best_score" if result.get("scored") else None
+        _emit_author_rows(rows, fmt=fmt_resolved, score_key=score_key)
         return
-
-    # When re-ranking by graph metric, semantic top_k is too narrow:
-    # the most-cited paper that mentions the query may sit lower in the
-    # semantic ranking. Widen the candidate pool then truncate after rank.
-    paper_pool = top_k if rank == "semantic" else max(top_k * 5, 30)
-
-    if text:
-        if by == "paper":
-            papers = queries.search_papers(
-                corpus, query, top_k=paper_pool, text=True
-            )
-            _emit_paper_rows(corpus, papers, fmt=fmt_resolved, rank=rank, top_k=top_k)
-            return
-        hits = queries.search_text(corpus, query, top_k=top_k)
-        _emit_chunk_reads(
-            _resolve_cwd_bundle(),
-            (h.get("id", "") for h in hits),
-            via="corpus_find_text",
-        )
-        _emit_chunk_rows(corpus, hits, fmt=fmt_resolved, score_key=None)
+    if kind == "papers":
+        _emit_paper_rows(corpus, rows, fmt=fmt_resolved, rank=rank, top_k=top_k)
         return
-
-    if not query:
-        cli_error(
-            EXIT_VALIDATION,
-            error="missing_query",
-            message=(
-                "`corpus find` requires a query (or --text mode). For "
-                "query-less sampling, use `corpus sample`."
-            ),
-        )
-
-    if by == "paper":
-        papers = queries.search_papers(corpus, query, top_k=paper_pool)
-        _emit_paper_rows(corpus, papers, fmt=fmt_resolved, rank=rank, top_k=top_k)
-        return
-
-    hits = queries.search_chunks(corpus, query, top_k=top_k)
+    # kind == "chunks"
+    via = (
+        "corpus_find_text" if text else "corpus_find_semantic"
+    )
     _emit_chunk_reads(
         _resolve_cwd_bundle(),
-        (h.get("id", "") for h in hits),
-        via="corpus_find_semantic",
+        (h.get("id", "") for h in rows),
+        via=via,
     )
-    _emit_chunk_rows(corpus, hits, fmt=fmt_resolved, score_key="score")
+    score_key = "score" if result.get("scored") else None
+    _emit_chunk_rows(corpus, rows, fmt=fmt_resolved, score_key=score_key)
 
 
 @app.command("sample")
@@ -567,7 +498,7 @@ def cmd_sample(
         "--strategy",
         help=(
             "Sampling strategy. Today: 'diverse' (greedy submodular over "
-            "PageRank + coverage). Future: 'random', 'pagerank'."
+            "PageRank + coverage)."
         ),
     ),
     pagerank_weight: float = typer.Option(
@@ -594,9 +525,8 @@ def cmd_sample(
 ) -> None:
     """Sample diverse / representative documents without a query.
 
-    Replaces the old ``corpus find --seed`` mode. Use this to bootstrap
-    exploration when you don't have a query but want a small set of
-    central, mutually-distinct corpus entry points.
+    Use this to bootstrap exploration when you don't have a query but
+    want a small set of central, mutually-distinct corpus entry points.
 
     Compact output columns: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
     (in-corpus citation count, PageRank, doc handle, title).
@@ -929,22 +859,21 @@ def cmd_show(
     corpus = _open_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
     try:
-        kind, ident = queries.parse_handle(handle)
-    except ValueError as exc:
-        cli_error(EXIT_VALIDATION, error="bad_handle", message=str(exc))
+        result = queries.show(corpus, handle=handle, full=full)
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
+    except AmbiguousHandleError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="ambiguous_handle",
+            message=str(exc),
+            matches=exc.matches,
+        )
+
+    kind = result["handle_kind"]
 
     if kind == "doc":
-        try:
-            doc = queries.get_doc(corpus, ident)
-        except AmbiguousHandleError as exc:
-            cli_error(
-                EXIT_VALIDATION,
-                error="ambiguous_handle",
-                message=str(exc),
-                matches=exc.matches,
-            )
-        if doc is None:
-            cli_error(EXIT_VALIDATION, error="doc_not_found", id=ident)
+        doc = result["data"]
         meta = doc.metadata or {}
         if fmt == "json":
             payload = {
@@ -972,17 +901,7 @@ def cmd_show(
         return
 
     if kind == "chunk":
-        try:
-            chunk = queries.get_chunk(corpus, ident)
-        except AmbiguousHandleError as exc:
-            cli_error(
-                EXIT_VALIDATION,
-                error="ambiguous_handle",
-                message=str(exc),
-                matches=exc.matches,
-            )
-        if chunk is None:
-            cli_error(EXIT_VALIDATION, error="chunk_not_found", id=ident)
+        chunk = result["data"]
         _emit_chunk_reads(
             _resolve_cwd_bundle(),
             [chunk.id],
@@ -1017,17 +936,7 @@ def cmd_show(
         return
 
     if kind == "figure":
-        try:
-            fig = queries.get_figure(corpus, ident)
-        except AmbiguousHandleError as exc:
-            cli_error(
-                EXIT_VALIDATION,
-                error="ambiguous_handle",
-                message=str(exc),
-                matches=exc.matches,
-            )
-        if fig is None:
-            cli_error(EXIT_VALIDATION, error="figure_not_found", id=ident)
+        fig = result["data"]
         if fmt == "json":
             payload = {
                 "ok": True,
@@ -1060,17 +969,7 @@ def cmd_show(
         return
 
     if kind == "author":
-        try:
-            au = queries.get_author(corpus, ident)
-        except AmbiguousHandleError as exc:
-            cli_error(
-                EXIT_VALIDATION,
-                error="ambiguous_handle",
-                message=str(exc),
-                matches=exc.matches,
-            )
-        if au is None:
-            cli_error(EXIT_VALIDATION, error="author_not_found", id=ident)
+        au = result["data"]
         if fmt == "json":
             payload = {
                 "ok": True,
@@ -1101,17 +1000,7 @@ def cmd_show(
         return
 
     if kind == "equation":
-        try:
-            eq = queries.get_equation(corpus, ident)
-        except AmbiguousHandleError as exc:
-            cli_error(
-                EXIT_VALIDATION,
-                error="ambiguous_handle",
-                message=str(exc),
-                matches=exc.matches,
-            )
-        if eq is None:
-            cli_error(EXIT_VALIDATION, error="equation_not_found", id=ident)
+        eq = result["data"]
         if fmt == "json":
             payload = {
                 "ok": True,
@@ -1137,65 +1026,8 @@ def cmd_show(
         typer.echo(eq["latex"])
         return
 
-    cli_error(
-        EXIT_VALIDATION,
-        error="bad_handle_kind",
-        message=(
-            f"unknown handle kind {kind!r}; use doc:<id>, chunk:<id>, "
-            f"figure:<id>, or equation:<id>"
-        ),
-    )
-
 
 # ---------------------------------------------------------------- schema
-
-
-_CORPUS_SCHEMA: dict = {
-    "node_types": {
-        "source": "A document. Handle: doc:<id-or-short>.",
-        "chunk": "A text chunk inside a doc. Handle: chunk:<id-or-short>.",
-        "author": "A paper author. Handle: author:<lastname-initials key>.",
-        "section": "A section of a doc.",
-        "figure": "An image with caption. Handle: figure:<doc-short>/<stem>.",
-        "equation": "A math or chemical equation. Handle: equation:<id>.",
-    },
-    "edge_kinds": [
-        "CITES",            # source -> source
-        "AUTHORED_BY",      # source -> author
-        "COLLABORATED",     # author <-> author
-        "CONTAINS_SECTION", # source -> section
-        "CONTAINS_CHUNK",   # source -> chunk
-        "CHUNK_IN_SECTION", # chunk -> section
-        "CONTAINS_FIGURE",  # source -> figure
-        "CONTAINS_EQUATION",# source -> equation
-        "FIGURE_NEAR_CHUNK",# figure <-> chunk
-        "EQUATION_IN_CHUNK",# equation -> chunk
-    ],
-    "traverse_relations": {
-        "doc": ["cited-by", "references", "chunks", "figures", "equations", "authors"],
-        "chunk": ["source", "cited-in-corpus", "figures", "equations"],
-        "author": ["sources", "coauthors"],
-    },
-    "rank_metrics": {
-        "source": ["citation_count", "pagerank"],
-        "author": ["h_index", "citation_count", "n_papers"],
-    },
-    "find_modes": {
-        "--by chunk":  "Rank chunks (default).",
-        "--by paper":  "Aggregate chunk hits to papers.",
-        "--by author": "Aggregate chunk hits to authors.",
-        "--text":      "Literal substring grep over chunk text.",
-    },
-    "sample_strategies": {
-        "diverse": "Greedy submodular: PageRank prior + coverage gain over doc embeddings.",
-    },
-    "formats": ["auto", "quiet", "compact", "json"],
-    "handle_resolution": (
-        "Short forms: doc/chunk/equation accept the trailing 8-12 hex; "
-        "figure accepts <doc-short>/<stem>. Author accepts case-insensitive "
-        "unique prefix. Ambiguous matches return an error with candidates."
-    ),
-}
 
 
 @app.command("schema")
@@ -1210,46 +1042,40 @@ def cmd_schema(
     grepping source.
     """
     fmt = _resolve_simple_format(fmt)
+    schema = queries.SCHEMA
     if fmt == "json":
-        typer.echo(json.dumps(_CORPUS_SCHEMA, indent=2))
+        typer.echo(json.dumps(schema, indent=2))
         return
     typer.echo("Node types:")
-    for k, v in _CORPUS_SCHEMA["node_types"].items():
+    for k, v in schema["node_types"].items():
         typer.echo(f"  {k:10s}  {v}")
     typer.echo("")
     typer.echo("Edge kinds:")
-    for kind in _CORPUS_SCHEMA["edge_kinds"]:
+    for kind in schema["edge_kinds"]:
         typer.echo(f"  {kind}")
     typer.echo("")
     typer.echo("Traverse relations (corpus traverse <handle> --to <relation>):")
-    for handle_kind, rels in _CORPUS_SCHEMA["traverse_relations"].items():
+    for handle_kind, rels in schema["traverse_relations"].items():
         typer.echo(f"  {handle_kind+':':<8s} {' | '.join(rels)}")
     typer.echo("")
     typer.echo("Rank metrics:")
-    for over, metrics in _CORPUS_SCHEMA["rank_metrics"].items():
+    for over, metrics in schema["rank_metrics"].items():
         typer.echo(f"  over {over+'s:':<8s} {' | '.join(metrics)}")
     typer.echo("")
     typer.echo("find modes:")
-    for k, v in _CORPUS_SCHEMA["find_modes"].items():
+    for k, v in schema["find_modes"].items():
         typer.echo(f"  {k:14s} {v}")
     typer.echo("")
     typer.echo("sample strategies (corpus sample --strategy):")
-    for k, v in _CORPUS_SCHEMA["sample_strategies"].items():
+    for k, v in schema["sample_strategies"].items():
         typer.echo(f"  {k:14s} {v}")
     typer.echo("")
-    typer.echo(f"Formats: {' | '.join(_CORPUS_SCHEMA['formats'])}")
+    typer.echo(f"Formats: {' | '.join(schema['formats'])}")
     typer.echo("")
-    typer.echo(f"Handles: {_CORPUS_SCHEMA['handle_resolution']}")
+    typer.echo(f"Handles: {schema['handle_resolution']}")
 
 
 # ---------------------------------------------------------------- traverse
-
-
-_DOC_RELATIONS = {
-    "cited-by", "references", "chunks", "figures", "equations", "authors",
-}
-_CHUNK_RELATIONS = {"source", "cited-in-corpus", "figures", "equations"}
-_AUTHOR_RELATIONS = {"sources", "coauthors"}
 
 
 @app.command("traverse")
@@ -1310,8 +1136,6 @@ def cmd_traverse(
             error="bad_top_k",
             message=f"--top-k must be >= 0 (0 means unlimited); got {top_k}",
         )
-    rank_resolved: str | None = rank or None
-    top_k_resolved: int | None = top_k if top_k > 0 else None
 
     if explain:
         _emit_traverse_explain(
@@ -1320,71 +1144,15 @@ def cmd_traverse(
         return
 
     try:
-        kind, ident = queries.parse_handle(handle)
-    except ValueError as exc:
-        cli_error(EXIT_VALIDATION, error="bad_handle", message=str(exc))
-
-    try:
-        if kind == "doc":
-            if to not in _DOC_RELATIONS:
-                cli_error(
-                    EXIT_VALIDATION,
-                    error="bad_relation",
-                    message=(
-                        f"unknown doc relation {to!r}; expected "
-                        f"{' | '.join(sorted(_DOC_RELATIONS))}"
-                    ),
-                )
-            full_id = queries.resolve_doc_id(corpus, ident)
-            rows = queries.traverse_doc(
-                corpus,
-                doc_id=full_id,
-                relation=to,
-                rank=rank_resolved,
-                top_k=top_k_resolved,
-            )
-        elif kind == "author":
-            if to not in _AUTHOR_RELATIONS:
-                cli_error(
-                    EXIT_VALIDATION,
-                    error="bad_relation",
-                    message=(
-                        f"unknown author relation {to!r}; expected "
-                        f"{' | '.join(sorted(_AUTHOR_RELATIONS))}"
-                    ),
-                )
-            full_key = queries.resolve_author_key(corpus, ident)
-            rows = queries.traverse_author(
-                corpus,
-                key=full_key,
-                relation=to,
-                rank=rank_resolved,
-                top_k=top_k_resolved,
-            )
-        elif kind == "chunk":
-            if to not in _CHUNK_RELATIONS:
-                cli_error(
-                    EXIT_VALIDATION,
-                    error="bad_relation",
-                    message=(
-                        f"unknown chunk relation {to!r}; expected "
-                        f"{' | '.join(sorted(_CHUNK_RELATIONS))}"
-                    ),
-                )
-            full_id = queries.resolve_chunk_id(corpus, ident)
-            rows = queries.traverse_chunk(
-                corpus,
-                chunk_id=full_id,
-                relation=to,
-                rank=rank_resolved,
-                top_k=top_k_resolved,
-            )
-        else:
-            cli_error(
-                EXIT_VALIDATION,
-                error="bad_handle_kind",
-                message=f"unknown handle kind {kind!r}; use doc:<id> or chunk:<id>",
-            )
+        result = queries.traverse(
+            corpus,
+            handle=handle,
+            to=to,
+            rank=(rank or None),
+            top_k=top_k or None,
+        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
     except AmbiguousHandleError as exc:
         cli_error(
             EXIT_VALIDATION,
@@ -1397,7 +1165,7 @@ def cmd_traverse(
     except ValueError as exc:
         cli_error(EXIT_VALIDATION, error="bad_relation", message=str(exc))
 
-    _emit_traverse_rows(rows, fmt=fmt_resolved)
+    _emit_traverse_rows(result["rows"], fmt=fmt_resolved)
 
 
 _HANDLE_KIND_BY_TYPE = {

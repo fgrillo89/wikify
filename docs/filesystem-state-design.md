@@ -1041,11 +1041,11 @@ not leak into the agent-facing command grammar. For example:
 bundle.corpus.graph.chunk("doc1:003").neighbors(depth=2).rank("pagerank").top(20)
 ```
 
-should be exposed to the agent as a simple query atom. The flag set
-that ships today is `--top-k`, the `corpus sample` verb (`--max
---strategy --pagerank-weight`), and `--text`; richer graph traversals
-go through the fluent corpus KG
-(``wikify.corpus.graph.KnowledgeGraph``) until the CLI surface grows.
+should be exposed to the agent as a simple query atom. The current
+agent-facing surface includes `corpus find`, `corpus sample`, `corpus
+traverse`, `corpus show`, and `corpus schema`; recursive graph work
+composes those primitives with the fluent corpus KG concepts exposed
+by `corpus schema`.
 
 ### Corpus query shapes
 
@@ -1101,10 +1101,9 @@ wikify corpus list equations --doc paper_A
 wikify corpus list files
 ```
 
-`corpus find` exposes two retrieval modes today: semantic evidence
+`corpus find` exposes two retrieval modes: semantic evidence
 search (default) and literal substring grep (`--text`). Query-free
-diverse-document sampling lives in its own verb, `corpus sample`
-(formerly `corpus find --seed`).
+diverse-document sampling lives in its own verb, `corpus sample`.
 
 ```text
 wikify corpus find   "Atomic Layer Deposition" --corpus <corpus> --top-k 8
@@ -1113,9 +1112,9 @@ wikify corpus sample --corpus <corpus> --max 20 --strategy diverse --pagerank-we
 ```
 
 Graph-shaped retrievals (cited-by, near-chunk, neighbours, figures,
-equations, authored-by) are not exposed as CLI flags today. Reach for
-the fluent corpus KG (`wikify.corpus.graph.KnowledgeGraph`) when you
-need them.
+equations, authored-by) are exposed through one-hop `corpus traverse`
+relations. Run `wikify corpus schema` for the current relation set and
+compose recursive traversals by piping handles between calls.
 
 This maps cleanly to fluent calls:
 

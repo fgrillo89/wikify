@@ -16,9 +16,8 @@ Canonical project reference for any agentic runtime. Behaviour rules
    knowledge graph, wiki graph)
 
 Historical workstream records live under
-`tasks/skill-centric-redesign-plan.md` and
-`docs/skill-centric-execution-plan.md` for design rationale only;
-the current pipeline does not refer to them.
+`tasks/skill-centric-redesign-plan.md` for design rationale only; the
+current pipeline does not refer to them.
 
 ---
 
@@ -67,7 +66,8 @@ Top-level packages (post-Phase-C layout):
 - `eval/` — metric computations (M1/M3/M5/M6, GT-P, GT-C).
 - `render/` — static site generation.
 - `prompts/` — Python-side prompt templates assembled by DraftBuilder.
-- `cli/` — argv glue: `__init__.py` (Typer app), `__main__.py`, `_io.py` (`cli_invoked` event capture), `_helpers.py` (exit codes, error envelope), and one file per noun (`corpus`, `run`, `work`, `draft`, `wiki`, `render`, `eval`).
+- `cli/` — argv glue: `__init__.py` (Typer app), `__main__.py`, `_io.py` (`cli_invoked` event capture), `_helpers.py` (exit codes, error envelope), and one file per noun (`corpus`, `run`, `work`, `draft`, `wiki`, `render`, `eval`, `mcp`).
+- `mcp/` — stdio MCP adapter for agent-native corpus access; wraps the same domain APIs as the CLI.
 - `api.py` — `Bundle` and `Corpus` context dataclasses. A bundle is any directory with a `run/` (and ultimately `run/state.json`); `Bundle.open` enforces that.
 - `bundle/draft/schema.py` and `bundle/work/schema.py` — Pydantic write/extract contracts (`WriteRequest`, `WriteResponse`, structural checks).
 
@@ -125,7 +125,7 @@ Bundle layout (per-bundle):
 
 ## CLI
 
-Seven nouns. Run under `uv run`. Full grammar in
+Seven workflow nouns plus the MCP server control noun. Run under `uv run`. Full grammar in
 `docs/filesystem-state-design.md`.
 
 ```bash
@@ -136,6 +136,7 @@ wikify draft   build / show / check
 wikify wiki    list / find / show / repl / build / check / commit
 wikify render  --bundle <b> --format html [--out <dir>]
 wikify eval    --bundle <b> [--corpus <c>] [--report <p>]
+wikify mcp     serve [--corpus <c>] [--bundle <b>]
 ```
 
 Bundle resolution. `corpus`, `run`, `work`, `draft`, and `wiki`
@@ -233,3 +234,4 @@ fails validation; the page never reaches `wiki/`.
 6. **Bidirectional edges are emitted both ways at build time.** Downstream code does not infer the reverse.
 7. **State for cross-run comparison is persisted explicitly.** Static approximations of stateful signals invalidate comparisons.
 8. **Refactors are complete or not done.** When a schema, CLI noun, path, or concept is renamed, update code, tests, prompts, docs, and skills in the same change; grep for old names and transitional `v1`/`v2`/`legacy` wording before declaring the work complete.
+9. **No meta-references in shipped code or docstrings.** Never write "per `tasks/foo.md`", "Phase 1 ships X", "in this phase", "see the MCP plan", or any pointer to plan/todo/temp docs inside source comments, docstrings, or skill docs. Plan files rot fast and the reference is dead the moment the plan moves. Describe what the code IS and DOES; historical framing belongs in commit messages and explicitly labelled history docs (`tasks/lessons.md`, `tasks/skill-centric-redesign-plan.md`). Internal "phase 1/phase 2" labels that describe an algorithm's stages are fine — they describe code, not project planning.
