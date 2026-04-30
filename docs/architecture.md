@@ -45,9 +45,10 @@ Three concrete consequences:
   subagent boundaries. `<bundle>/run/events.jsonl` is the
   append-only event ledger.
 
-## CLI surface
+## CLI And MCP Surface
 
-Seven nouns. All under `uv run`.
+Seven workflow nouns plus the MCP server control noun. All under
+`uv run`.
 
 | Noun | One-liner |
 |---|---|
@@ -58,6 +59,7 @@ Seven nouns. All under `uv run`.
 | `wikify wiki` | List/find/show committed pages; open a warm REPL; build projections; commit a validated concept. |
 | `wikify render` | Render a bundle to a static HTML site. |
 | `wikify eval` | Compute M1/M3/M5/M6 (and related) metrics over a bundle. |
+| `wikify mcp` | Start the stdio MCP server used by agent runtimes. |
 
 Bundle resolution. Most commands accept `--run <bundle>`; otherwise
 the current working directory must be a bundle root (with
@@ -169,7 +171,8 @@ src/wikify/
 |   |-- __main__.py                 python -m wikify.cli entry point
 |   |-- _io.py                      cli_invoked event capture wrapper
 |   |-- _helpers.py                 shared exit codes, error envelope
-|   `-- (corpus, run, work, draft, wiki, render, eval).py
+|   `-- (corpus, run, work, draft, wiki, render, eval, mcp).py
+|-- mcp/                            MCP adapter, envelopes, resources, context binding
 |-- api.py                          Bundle + Corpus context dataclasses
 `-- (config, context, embedding, models, types).py
 ```

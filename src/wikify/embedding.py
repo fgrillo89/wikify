@@ -39,8 +39,8 @@ import numpy as np
 HASH_DIM = 128
 # Fastembed uses the fully-qualified HuggingFace name for the model.
 # jina-v2-small-en is the default: 33M params, 8192-token window, 512-d.
-# Long context is the whole point of Phase 2 section-level chunking; with
-# MiniLM (512-tok window) the chunker falls back to paragraph-splitting.
+# Long context is the point of section-level chunking; with MiniLM
+# (512-tok window) the chunker falls back to paragraph-splitting.
 # ~5x slower than MiniLM on DirectML RTX 3070 (27s vs 5s on mvp20's 886
 # chunks) — acceptable on a laptop, and still a small model class. Swap to
 # MiniLM for speed or nomic-Q for higher MTEB via WIKIFY_EMBED_MODEL.

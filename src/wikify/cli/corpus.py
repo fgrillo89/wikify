@@ -498,7 +498,7 @@ def cmd_sample(
         "--strategy",
         help=(
             "Sampling strategy. Today: 'diverse' (greedy submodular over "
-            "PageRank + coverage). Future: 'random', 'pagerank'."
+            "PageRank + coverage)."
         ),
     ),
     pagerank_weight: float = typer.Option(
@@ -525,9 +525,8 @@ def cmd_sample(
 ) -> None:
     """Sample diverse / representative documents without a query.
 
-    Replaces the old ``corpus find --seed`` mode. Use this to bootstrap
-    exploration when you don't have a query but want a small set of
-    central, mutually-distinct corpus entry points.
+    Use this to bootstrap exploration when you don't have a query but
+    want a small set of central, mutually-distinct corpus entry points.
 
     Compact output columns: ``cites=N \\t pr=X.XXXX \\t doc-handle \\t title``
     (in-corpus citation count, PageRank, doc handle, title).

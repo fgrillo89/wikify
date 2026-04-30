@@ -32,8 +32,9 @@ capability skills explain the mechanics.
    ```
 
 3. For each sampled document, use `wikify-search-corpus` to read the
-   workflow-selected text. Baseline may read full documents, but a
-   later baseline variant may read only abstracts or introductions.
+   workflow-selected text. This baseline reads full documents unless
+   the run configuration narrows the read scope to abstracts or
+   introductions.
 4. Use `wikify/references/exploration/concept-extraction.md` to extract
    candidate concepts from the observed text.
 5. Use `wikify-bundle` to add accepted concepts:

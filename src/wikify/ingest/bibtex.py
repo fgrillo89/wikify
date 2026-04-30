@@ -803,10 +803,11 @@ def build_citation_index(
     source_seen: dict[str, int] = {}
     ref_seen: dict[str, int] = {}
 
-    # Phase 1: enrich docs and build source entries.
+    # Enrich docs and build source entries.
     #
-    # DOI content negotiation is the long pole in wave D (1 HTTP RTT per
-    # doc * 200+ docs). Pre-fetch all DOIs concurrently (10-way semaphore)
+    # DOI content negotiation is the long pole for larger corpora
+    # (1 HTTP RTT per doc * 200+ docs). Pre-fetch all DOIs concurrently
+    # (10-way semaphore)
     # before the serial enrichment loop so ``enrich_doc_metadata`` can
     # look up results from the batch cache instead of blocking on
     # individual requests. ~10x speed-up on corpora with many DOIs.
@@ -988,7 +989,7 @@ def build_citation_index(
             entry=entry, doc_id=doc.id,
         )
 
-    # Phase 2: process citations from each doc
+    # Process citations from each doc.
     from .citations import repair_doi
 
     for doc in enriched_docs:

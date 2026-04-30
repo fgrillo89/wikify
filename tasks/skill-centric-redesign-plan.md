@@ -11,8 +11,12 @@ and the agent-facing reference in `.claude/skills/wikify/references/`.
 Use those for current behaviour. Use this document for "why is it
 shaped this way?" and for the preservation inventory.
 
+The sections below are historical; planned commands or nouns mentioned
+there are not current unless they also appear in `docs/architecture.md`
+and `AGENTS.md`.
+
 This plan satisfied the binding contract in
-`docs/skill-centric-execution-plan.md`. It enumerated the legacy
+the deleted execution brief. It enumerated the legacy
 surface, fixed a preservation inventory, named the final
 package-per-noun layout (dropping `cli_cmds/`, `store/`, `citestore/`,
 `distill/`), the final CLI tree, the canonical skill set, twelve
@@ -61,7 +65,7 @@ Logic that must survive the redesign. Tags: KEEP (move only), REFACTOR (signatur
 | `src/wikify/prompts/` (16 files) | writer / refine / extract / person / field guides / artifact templates | KEEP | `src/wikify/prompts/` (unchanged) — Python-side, assembled by `DraftBuilder` | Different consumer than skills (model input vs agent context); keep file location. |
 | `src/wikify/distill/dossier.py` whole file | Dossier class + canonicalize() + Candidate + DossierStore | KEEP | `src/wikify/bundle/work/dossier.py` (W0 moves whole file; W4 splits `canonicalize`+`Candidate` into `bundle/work/canonicalize.py`) | Backs `work.md` ControlCard. |
 | `src/wikify/distill/author_context.py` (174 lines) | author-context for person pages | KEEP | `src/wikify/bundle/draft/author_context.py` | Lives next to draft assembly. |
-| `src/wikify/distill/seed.py` | greedy seed selection | KEEP | `src/wikify/corpus/seed.py` | Surfaced via `corpus find --seed`. |
+| `src/wikify/distill/seed.py` | greedy seed selection | KEEP | `src/wikify/corpus/seed.py` | Surfaced via `corpus sample`. |
 | `src/wikify/distill/field_detect.py` | field classification | KEEP | `src/wikify/corpus/field_detect.py` | Called from `corpus check`. |
 | `src/wikify/distill/preload.py` | evidence pre-loading | REFACTOR | `src/wikify/bundle/draft/preload.py` (W0 moves; W5 folds into `bundle/draft/builder.py`) | Caller surface changes in W5; logic preserved. |
 | `src/wikify/distill/write_runner.rebuild_wiki_graph` | post-commit graph + vectors rebuild | KEEP | absorbed into `src/wikify/bundle/wiki/derived.py` (W6/W11) | Called by `wiki commit` and `wiki build graph|vectors`. |
@@ -212,7 +216,7 @@ wikify corpus refresh <corpus>
 wikify corpus check [<corpus>]
 wikify corpus list [docs|chunks|authors|figures|equations|files] [--corpus <c>]
 wikify corpus find "<query>" [--top-k <n>] [--in <handle>] [--text]
-wikify corpus find --seed [--max <n>]
+wikify corpus sample [--max <n>]
 wikify corpus find --near <handle> [--top-k <n>] [--depth <n>]
 wikify corpus find --cites|--cited-by <doc>
 wikify corpus find --neighbors <handle> [--depth <n>]
@@ -261,7 +265,7 @@ Atomic skill specs:
 
 | skill | responsibility | tier | CLI atoms | inputs | outputs |
 |---|---|---|---|---|---|
-| `wikify-extract-concepts` | scan corpus seeds and emit ExtractResponse → `work add concept` | M (sonnet) | `corpus find --seed`, `corpus show chunk:`, `work add concept` | seed budget, kind filter | `concept_created` events, `work/concepts/<slug>/work.md` |
+| `wikify-extract-concepts` | scan corpus seeds and emit ExtractResponse → `work add concept` | M (sonnet) | `corpus sample`, `corpus show chunk:`, `work add concept` | seed budget, kind filter | `concept_created` events, `work/concepts/<slug>/work.md` |
 | `wikify-gather-evidence` | for one claimed concept, retrieve and append evidence | S (haiku) | `corpus find`, `corpus find --near`, `work add evidence`, `work claim/release` | concept slug, top-k | `evidence_added` events, evidence.jsonl |
 | `wikify-write-page` | from `draft.json`, produce create-task `response.json` | M; escalates L | `draft show`, writer call | concept slug | `response.json`, `call` events |
 | `wikify-refine-page` | refine-task draft → refined `response.json` | M; escalates L | `wiki show --full`, `draft show`, writer call | concept slug | `response.json`, `call` events |
@@ -322,7 +326,7 @@ Workstream ownership:
 | W8 | `redesign/a-eval` | `cli/eval.py`, `eval/trace_replay.py` rewire, `tests/test_eval_from_events.py`, `test_telemetry_parity.py` | eval reads `events.jsonl` | M1/M3/M5/M6 within tolerance vs legacy |
 | W9 | `redesign/b-skills-canonical-layout` | `.claude/skills/wikify/SKILL.md`+`references/*`, `wikify-baseline/SKILL.md`, 7 atomic SKILL.md, 5 stub workflow SKILL.md, `tests/test_skill_layout.py` | hybrid layout; references one level deep | every SKILL.md ≤500 lines; layout test passes |
 | W10 | `redesign/c-*` (5 PRs in §7) | deletes `cli/legacy/*`, `session.py`/`meter.py` shells, `paths.py` shell, `baselines/`, `citations/__main__.py`, legacy tests | legacy tests deleted | ruff+pytest clean; legacy nouns deregistered |
-| W11 | `redesign/d-collapse-adapters` | residual shim removal, `migrate inspect` doc, doc rewrites for `architecture.md`, `AGENTS.md`, `filesystem-state-design.md`, `skill-centric-execution-plan.md` | none | adapters gone; helpers documented |
+| W11 | `redesign/d-collapse-adapters` | residual shim removal, `migrate inspect` doc, doc rewrites for `architecture.md`, `AGENTS.md`, and `filesystem-state-design.md` | none | adapters gone; helpers documented |
 
 ## 7. Phased legacy-removal plan
 
@@ -341,14 +345,14 @@ Workstream ownership:
 4. `redesign/c-baselines-debug-retire` — delete `src/wikify/baselines/` and `src/wikify/citations/__main__.py`. The strategy controller class was retired; strategy lives in skill frontmatter. The evidence helper was relocated to `corpus/queries.py` in W3. `distill/` is already gone post-W0; `bundle/draft/preload.py` is absorbed by `bundle/draft/builder.py` in W5; the post-commit graph/vectors rebuild lives in `bundle/wiki/derived.py` (W6/W11).
 5. `redesign/c-cli-prune-toplevel-and-paths` — delete `cli/legacy/` entirely (empty after PRs 1–2); delete legacy top-level commands (`trace`, `sample-claims`, `html`, `field-detect`); delete `paths.py` shell now that all callers use `api.Bundle`.
 
-**Phase D — collapse adapters.** PR `redesign/d-collapse-adapters` removes residual shims; documents `migrate inspect`; ships doc rewrites for `architecture.md`, `AGENTS.md`, `filesystem-state-design.md`, `skill-centric-execution-plan.md`.
+**Phase D — collapse adapters.** PR `redesign/d-collapse-adapters` removes residual shims; documents `migrate inspect`; ships doc rewrites for `architecture.md`, `AGENTS.md`, and `filesystem-state-design.md`.
 
 ## 8. End-to-end MVP paths
 
 | MVP | path |
 |---|---|
 | ingest | `wikify-ingest` skill → `wikify corpus build <source> --out <corpus>` → `corpus refresh` → `corpus check` |
-| baseline | `wikify run init --bundle <b> --corpus <c> --strategy baseline` → `wikify-baseline` loop: `corpus find --seed` → forked `wikify-extract-concepts` → for each concept fork `wikify-gather-evidence` (`work claim`/`work add evidence`/`work release`) and `wikify-write-page` (`draft build`/writer/`draft check`/`wiki commit`) → `wikify-tend` → `wikify run close --status completed` |
+| baseline | `wikify run init --bundle <b> --corpus <c> --strategy baseline` → `wikify-baseline` loop: `corpus sample` → forked `wikify-extract-concepts` → for each concept fork `wikify-gather-evidence` (`work claim`/`work add evidence`/`work release`) and `wikify-write-page` (`draft build`/writer/`draft check`/`wiki commit`) → `wikify-tend` → `wikify run close --status completed` |
 | query | `wikify-query` skill: `wiki find` / `wiki show` / `corpus find` (fallback) → answer → `work add feedback query` → `wikify-consolidate-inbox` → optional `wikify-refine-page` → `wiki commit` |
 | render+eval | `wikify render --bundle <b> --format html --out <dir>` and `wikify eval --bundle <b> --report <path>` |
 
@@ -387,7 +391,7 @@ PR 3 — `redesign/a-run` (W2). Depends on PR 2.
 | `docs/architecture.md` | D | rewrite for noun-verb surface, package-per-noun layout, events.jsonl telemetry, hybrid skill layout. Drop legacy sections. |
 | `AGENTS.md` | D | rewrite Read First; remove legacy CLI table. |
 | `docs/filesystem-state-design.md` | D | promote from "design target" to "implementation reference"; remove disclaimer. Decide whether to rename on-disk `work/` → `concepts/` for full alignment with the package name. |
-| `docs/skill-centric-execution-plan.md` | D | archive to `docs/history/`. |
+| execution brief | D | archived in git history; current references are `docs/architecture.md`, `docs/filesystem-state-design.md`, and `AGENTS.md`. |
 | `.claude/skills/wikify/references/cli-tool-surface.md` | A (each PR) | extended incrementally as each noun ships. |
 | `.claude/skills/wikify/references/schemas.md` | A (each PR) | extended incrementally — events envelope (W2), work.md/evidence.jsonl/inbox (W4), draft/response/validation (W5), wiki + derived (W6/W7). |
 | `tasks/lessons.md` | continuous | append after every correction per CLAUDE.md format. |

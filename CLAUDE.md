@@ -47,11 +47,13 @@ All comparisons must run under the same pipeline contract and telemetry.
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: For multi-step changes, keep a visible checklist in
+   the conversation or in a task-specific plan file under `tasks/`
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
+5. **Document Results**: Record durable results in the relevant task
+   file only when the workstream needs a persistent record
 6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
 
 ## Communication Style

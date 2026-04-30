@@ -1,13 +1,13 @@
 ---
 name: wikify-guided-explore
-description: Model-guided Wikify exploration workflow that composes corpus search, wiki search, bundle operations, concept extraction references, and page writing. Use for iterative exploration where the model chooses the next action. Status is stub composition only.
+description: Model-guided Wikify exploration workflow that composes corpus search, wiki search, bundle operations, concept extraction references, and page writing. Use for iterative exploration where the model chooses the next action and explicit budget, stop, and retry policies are supplied.
 allowed-tools: Bash(wikify *) Task
 ---
 
 # wikify-guided-explore
 
-Status: stub composition only. This workflow owns the exploration
-policy; core skills own mechanics.
+This workflow owns the exploration policy; core skills own mechanics.
+Run it only with explicit budget, stop, retry, and concurrency settings.
 
 ## Intent
 

@@ -325,6 +325,29 @@ def test_find_field_title_dispatches_to_title_search(tmp_path: Path) -> None:
     assert [r["doc_id"] for r in result["rows"]] == ["paper_0"]
 
 
+def test_find_field_title_honors_source_metric_rank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corpus = _make_corpus(tmp_path / "c", n_docs=2)
+
+    def _fake_doc_metrics(_corpus, doc_ids):
+        return {
+            did: {
+                "citation_count": 100 if did == "paper_1" else 1,
+                "pagerank": 0.0,
+            }
+            for did in doc_ids
+        }
+
+    monkeypatch.setattr(queries, "doc_metrics", _fake_doc_metrics)
+    result = queries.find(
+        corpus, query="title", by="paper", rank="citation_count",
+        top_k=1, field="title",
+    )
+    assert [r["doc_id"] for r in result["rows"]] == ["paper_1"]
+    assert result["rows"][0]["citation_count"] == 100
+
+
 def test_find_field_title_rejects_non_paper_by(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c")
     with pytest.raises(queries.QueryError) as exc:

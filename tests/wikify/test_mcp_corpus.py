@@ -20,6 +20,8 @@ import pytest
 
 # Reuse the on-disk corpus builder from test_corpus_queries.
 from tests.wikify.test_corpus_queries import _make_corpus  # noqa: E402
+from wikify.api import Bundle
+from wikify.bundle.run.lifecycle import init_run
 from wikify.corpus import queries
 from wikify.mcp import context, server
 
@@ -188,6 +190,22 @@ async def test_context_set_then_show(tmp_path: Path) -> None:
     assert set_res["ok"] is True
     show_res = await _tool(srv, "context_show")()
     snap = show_res["items"][0]
+    assert snap["corpus_bound"] is True
+    assert Path(snap["corpus_path"]) == corpus.root
+
+
+async def test_context_set_bundle_binds_recorded_corpus(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    bundle_root = tmp_path / "bundle"
+    bundle = Bundle(root=bundle_root)
+    init_run(bundle, corpus_path=corpus.root)
+
+    srv = server.build_server()
+    set_res = await _tool(srv, "context_set")(bundle_path=str(bundle_root))
+    assert set_res["ok"] is True
+    show_res = await _tool(srv, "context_show")()
+    snap = show_res["items"][0]
+    assert snap["bundle_bound"] is True
     assert snap["corpus_bound"] is True
     assert Path(snap["corpus_path"]) == corpus.root
 

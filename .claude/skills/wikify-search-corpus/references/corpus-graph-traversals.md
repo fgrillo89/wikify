@@ -148,13 +148,12 @@ wikify corpus traverse doc:<short> --to cited-by --format quiet \
 Each hop is one CLI call; pipes compose them. No special multi-hop
 syntax — the handle round-trip invariant carries the chain.
 
-### Out Of Scope (Tier 2)
+### Traverse Boundary
 
-The following relations are intentionally not in v1 of `traverse`:
-authors, coauthors, sections, figures, equations, nearby-figures,
-nearby-equations, neighborhood with hops. The fluent API supports them;
-they will surface in `traverse` when a workflow needs them. Until then,
-fall back to `corpus repl` for ad-hoc exploration.
+`traverse` supports the relations advertised by `wikify corpus schema`.
+For graph questions that require unsupported multi-hop expansion or a
+relation absent from the schema, compose one-hop traversals or use
+`corpus repl` for ad-hoc fluent exploration.
 
 These are search patterns, not strategies. Workflow skills decide which
 pattern to use and when to stop.

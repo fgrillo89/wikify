@@ -1,7 +1,7 @@
 ---
 name: wikify-search-corpus
 description: Explain and use the Wikify corpus CLI as the read/search surface over the corpus fluent API. Use when probing corpus documents, chunks, authors, citations, figures, equations, sampling diverse entry points, semantic search, text search, paper-level ranking by citation count, or recursive graph traversals. This skill is read-only and does not decide an exploration strategy.
-allowed-tools: Bash(wikify corpus *)
+allowed-tools: Bash(wikify corpus *) mcp__wikify__context_show mcp__wikify__context_set mcp__wikify__corpus_find mcp__wikify__corpus_traverse mcp__wikify__corpus_show mcp__wikify__corpus_sample mcp__wikify__corpus_schema mcp__wikify__corpus_image
 ---
 
 # wikify-search-corpus

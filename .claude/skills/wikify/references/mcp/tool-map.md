@@ -1,8 +1,7 @@
 # MCP tool map
 
 MCP tools and their CLI equivalents. Both adapters call into the same
-domain APIs (`wikify.corpus.queries` today); behaviour and validation
-rules match exactly.
+corpus domain APIs; behaviour and validation rules match exactly.
 
 For argument enumeration, call `mcp__wikify__corpus_schema` instead of
 listing flags here. The schema is the single source of truth and is
@@ -61,7 +60,7 @@ handles return `ambiguous_handle` with a match list, and so on.
   in-corpus sources they resolve to. Pair with
   ``corpus_show chunk:<short> --full`` to read the surrounding prose,
   then traverse its citations to follow an argument.
-- `corpus_find` paper rows now carry `meta.best_chunk_section` so the
+- `corpus_find` paper rows include `meta.best_chunk_section` so the
   agent can tell whether a hit came from the abstract vs. references
   without an extra `corpus_show chunk:`.
 

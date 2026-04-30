@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 
 from ..api import Bundle, Corpus
+from ..bundle.run.state import load_state
 
 _corpus: Corpus | None = None
 _bundle: Bundle | None = None
@@ -45,6 +46,7 @@ def bind(*, corpus_path: str | Path | None = None,
     pass ``clear_bundle=True``.
     """
     global _corpus, _bundle
+    corpus_explicit = corpus_path is not None
     if corpus_path is not None:
         path = Path(corpus_path)
         if not path.is_dir():
@@ -53,6 +55,15 @@ def bind(*, corpus_path: str | Path | None = None,
     if bundle_path is not None:
         path = Path(bundle_path)
         _bundle = Bundle.open(path)
+        if not corpus_explicit:
+            state = load_state(_bundle)
+            corpus_root = Path(state.corpus_path)
+            if not corpus_root.is_dir():
+                raise ContextError(
+                    "bundle records a corpus path that is not a directory: "
+                    f"{corpus_root}"
+                )
+            _corpus = Corpus(root=corpus_root)
     elif clear_bundle:
         _bundle = None
 
@@ -74,10 +85,7 @@ def bind_from_env() -> None:
     """
     corpus_env = os.environ.get("WIKIFY_CORPUS")
     bundle_env = os.environ.get("WIKIFY_BUNDLE")
-    if corpus_env:
-        bind(corpus_path=corpus_env)
-    if bundle_env:
-        bind(bundle_path=bundle_env)
+    bind(corpus_path=corpus_env, bundle_path=bundle_env)
 
 
 def get_corpus() -> Corpus | None:

@@ -385,7 +385,7 @@ def search_papers_by_title(
     corpus: Corpus,
     query: str,
     *,
-    top_k: int = 8,
+    top_k: int | None = 8,
 ) -> list[dict]:
     """Title-only paper search: literal substring on ``Document.title``.
 
@@ -408,7 +408,7 @@ def search_papers_by_title(
             "title_len": len(title),
         })
     rows.sort(key=lambda r: (r["match_offset"], r["title_len"], r["doc_id"]))
-    return rows[:top_k]
+    return rows[:top_k] if top_k is not None else rows
 
 
 def search_papers(
@@ -1394,9 +1394,16 @@ def find(
                 "missing_query",
                 "find with field='title' requires a non-empty query.",
             )
+        rows = search_papers_by_title(
+            corpus,
+            query,
+            top_k=(top_k if rank == "semantic" else None),
+        )
+        if rank in _SOURCE_RANKS:
+            rows = _rerank_papers(corpus, rows, rank=rank, top_k=top_k)
         return {
             "kind": "papers",
-            "rows": search_papers_by_title(corpus, query, top_k=top_k),
+            "rows": rows,
             "scored": False,
         }
 

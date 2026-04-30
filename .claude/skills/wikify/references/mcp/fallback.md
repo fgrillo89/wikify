@@ -1,8 +1,7 @@
 # Fallback when MCP is not configured
 
-The wikify CLI is a first-class sibling adapter, not legacy baggage.
-Every MCP tool has a CLI equivalent in `tool-map.md`; both call the
-same domain APIs.
+The wikify CLI is a first-class sibling adapter to MCP. Every MCP tool
+has a CLI equivalent in `tool-map.md`; both call the same domain APIs.
 
 ## Detecting MCP availability
 
@@ -41,6 +40,5 @@ to the CLI surface.
 - The CLI catches packaging, env resolution, and exit-code regressions
   the MCP layer cannot see.
 
-Skill docs should present MCP as preferred for repeated agent reads
-within a session and CLI as the portable equivalent. Do not describe
-either as deprecated.
+Skill docs present MCP as preferred for repeated agent reads within a
+session and CLI as the portable equivalent.

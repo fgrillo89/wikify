@@ -12,9 +12,9 @@ material.
 
 ## Canonical Skill Tree
 
-Claude Code is the current target, so `.claude/skills/` is canonical.
-Do not maintain `.agents/skills/` in parallel. If Codex support becomes
-necessary, generate a compatibility export from this tree.
+`.claude/skills/` is the canonical Wikify skill tree. Do not maintain
+parallel skill trees by hand; generate compatibility exports from this
+tree when another runtime needs them.
 
 ## Core Capability Skills
 
@@ -39,8 +39,9 @@ to use, and when to stop.
 - `wikify-query` - answer from wiki with corpus fallback and feedback.
 - `wikify-refine` - refine committed pages from inbox/new evidence.
 
-Keep unfinished workflows out of implicit use or clearly marked as
-stubs until executable.
+Only run workflow skills that define executable steps, inputs, and stop
+conditions. Treat incomplete workflow outlines as design references
+until those contracts are present.
 
 ## Reference Index
 

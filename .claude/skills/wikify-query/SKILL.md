@@ -1,13 +1,14 @@
 ---
 name: wikify-query
-description: Query workflow for answering from the committed Wikify wiki, falling back to corpus search when needed, and recording bundle feedback for later refinement. Status is stub composition only.
+description: Query workflow for answering from the committed Wikify wiki, falling back to corpus search when needed, and recording bundle feedback for refinement. Use when answer sufficiency, corpus fallback, and feedback policies are supplied.
 allowed-tools: Bash(wikify *) Task
 ---
 
 # wikify-query
 
-Status: stub composition only. This workflow owns answer sufficiency,
-corpus fallback, and feedback emission policy.
+This workflow owns answer sufficiency, corpus fallback, and feedback
+emission policy. Run it only with explicit sufficiency and feedback
+rules.
 
 ## Intent
 
