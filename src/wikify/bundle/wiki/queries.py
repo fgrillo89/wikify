@@ -41,6 +41,27 @@ def list_files(bundle: Bundle) -> list[str]:
     return out
 
 
+def find_bm25(bundle: Bundle, query: str, *, top_k: int = 50) -> list[dict]:
+    """BM25 search over committed wiki pages. Empty bundle -> []."""
+    if not bundle.sqlite_path.exists():
+        return []
+    from .store import open_wiki_store, search_wiki_bm25
+
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        rows: list[dict] = []
+        for page_id, score in search_wiki_bm25(con, query, top_k=top_k):
+            r = con.execute(
+                "SELECT page_id, slug, kind, title FROM wiki_pages WHERE page_id = ?",
+                (page_id,),
+            ).fetchone()
+            if r:
+                rows.append(dict(r) | {"score": score})
+        return rows
+    finally:
+        con.close()
+
+
 def find_text(bundle: Bundle, needle: str, *, top_k: int = 50) -> list[dict]:
     """Literal substring grep over committed page bodies."""
     out: list[dict] = []

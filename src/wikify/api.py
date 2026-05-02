@@ -198,6 +198,11 @@ class Bundle:
     def derived_vectors_path(self) -> Path:
         return self.derived_dir / "vectors.npz"
 
+    @property
+    def sqlite_path(self) -> Path:
+        """SQLite wiki query store path: <bundle_root>/wiki.db."""
+        return self.root / "wiki.db"
+
     def ensure(self) -> None:
         """Create every directory that a fresh run needs."""
         for p in (

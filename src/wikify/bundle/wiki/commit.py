@@ -157,6 +157,7 @@ def commit_page(
         save_card(bundle, slug, card)
 
         gc_attempt(bundle, slug)
+        _project_wiki_page(bundle, page=page, slug=slug)
 
         try:
             run_id = load_state(bundle).run_id
@@ -184,6 +185,30 @@ def commit_page(
     return CommitResult(
         page_path=page_path, page_id=page_id, kind=page_kind, slug=slug
     )
+
+
+def _project_wiki_page(bundle: Bundle, *, page: WikiPage, slug: str) -> None:
+    """Persist the just-committed page to wiki.db (idempotent per page)."""
+    from .store import open_wiki_store, upsert_wiki_page
+
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        upsert_wiki_page(
+            con,
+            page_id=page.id,
+            slug=slug,
+            title=page.title or page.id,
+            kind=page.kind,
+            body=page.body_markdown,
+            frontmatter={"aliases": list(page.aliases or [])},
+            evidence=[
+                {"chunk_id": e.chunk_id, "doc_id": e.doc_id, "marker": e.marker}
+                for e in page.evidence or []
+            ],
+            links=list(page.links or []),
+        )
+    finally:
+        con.close()
 
 
 def rebuild_projections(bundle: Bundle) -> None:
