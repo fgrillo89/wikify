@@ -376,11 +376,16 @@ def search_chunks(
     ``bm25`` (FTS5 — sqlite backend only), or ``hybrid`` (RRF over
     BM25 + vector — sqlite backend only).
     """
-    from .store.routing import is_sqlite
+    from .store.routing import is_sqlite_explicit, use_sqlite
 
-    if is_sqlite():
+    if use_sqlite(corpus.root):
         return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
     if rank in _LEXICAL_RANKS:
+        if is_sqlite_explicit():
+            raise QueryError(
+                "no_wikify_db",
+                f"--rank {rank} requires wikify.db; rebuild with `corpus build`",
+            )
         raise QueryError(
             "backend_required",
             f"--rank {rank} requires WIKIFY_QUERY_BACKEND=sqlite",
@@ -544,9 +549,9 @@ def rank_docs(
     ``by`` is one of ``citation_count`` or ``pagerank``. Each item has
     ``doc_id``, ``title``, ``citation_count``, ``pagerank``.
     """
-    from .store.routing import is_sqlite
+    from .store.routing import use_sqlite
 
-    if is_sqlite():
+    if use_sqlite(corpus.root):
         rows = _rank_docs_sqlite(corpus)
     else:
         vs = read_vector_store(corpus)
@@ -616,8 +621,8 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
     """
     if not doc_ids:
         return {}
-    from .store.routing import is_sqlite
-    if is_sqlite():
+    from .store.routing import use_sqlite
+    if use_sqlite(corpus.root):
         rows = {r["doc_id"]: r for r in _rank_docs_sqlite(corpus)}
         return {
             did: {

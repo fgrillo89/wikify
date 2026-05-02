@@ -17,11 +17,17 @@ from .sync import space_id_for
 _BACKEND_ENV = "WIKIFY_QUERY_BACKEND"
 _LEGACY = "legacy"
 _SQLITE = "sqlite"
+_DEFAULT = _SQLITE
 
 
 def query_backend() -> str:
-    """Return the active backend; defaults to `legacy` until Phase 7."""
-    val = (os.environ.get(_BACKEND_ENV) or _LEGACY).strip().lower()
+    """Return the active backend.
+
+    Default is ``sqlite`` (Phase 7 cutover). Set
+    ``WIKIFY_QUERY_BACKEND=legacy`` to force the NetworkX/NPZ path.
+    """
+    raw = os.environ.get(_BACKEND_ENV)
+    val = (raw or _DEFAULT).strip().lower()
     if val not in {_LEGACY, _SQLITE}:
         raise ValueError(
             f"unknown {_BACKEND_ENV}={val!r}; expected 'legacy' or 'sqlite'",
@@ -29,8 +35,32 @@ def query_backend() -> str:
     return val
 
 
+def is_sqlite_explicit() -> bool:
+    """True iff the user has explicitly set the env to sqlite."""
+    raw = os.environ.get(_BACKEND_ENV)
+    return raw is not None and raw.strip().lower() == _SQLITE
+
+
 def is_sqlite() -> bool:
     return query_backend() == _SQLITE
+
+
+def sqlite_available(corpus_root: Path) -> bool:
+    return (corpus_root / "wikify.db").exists()
+
+
+def use_sqlite(corpus_root: Path) -> bool:
+    """Phase-7 default: use sqlite when the env permits AND wikify.db exists.
+
+    - explicit ``sqlite``: always sqlite (caller fails if db missing)
+    - explicit ``legacy``: always legacy
+    - unset (default): sqlite when available, else legacy
+    """
+    if not is_sqlite():
+        return False
+    if is_sqlite_explicit():
+        return True
+    return sqlite_available(corpus_root)
 
 
 def open_store(corpus_root: Path) -> Store:
