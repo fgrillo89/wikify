@@ -93,6 +93,11 @@ class Corpus:
     def knowledge_graph_path(self) -> Path:
         return self.root / "knowledge_graph.json"
 
+    @property
+    def sqlite_path(self) -> Path:
+        """SQLite query store path: <corpus_root>/wikify.db."""
+        return self.root / "wikify.db"
+
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
             p.mkdir(parents=True, exist_ok=True)

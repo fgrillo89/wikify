@@ -324,6 +324,21 @@ def _refresh_doc_resave(ctx: dict) -> None:
     _resave_docs(ctx["paths"], ctx["docs"])
 
 
+def _refresh_sqlite_store(ctx: dict) -> None:
+    """Dual-write `wikify.db` from in-memory ingest artefacts.
+
+    Runs after every other refresh wave so it sees the final docs,
+    chunks, vectors, and citation index. Idempotent: re-running the
+    DAG over the same inputs reproduces the same SQLite content.
+    """
+    from wikify.corpus.store.sync import write_corpus
+    from wikify.corpus.vectors_meta import read_meta
+
+    paths = ctx["paths"]
+    meta = read_meta(paths.vectors_path)
+    write_corpus(paths, ctx["docs"], ctx["chunks"], ctx.get("store"), meta)
+
+
 # ---------------------------------------------------------------------------
 # DAG declaration
 # ---------------------------------------------------------------------------
@@ -384,6 +399,13 @@ REFRESH_DAG: list[Wave] = [
         label="wave F (resave)",
         steps=[
             Step("doc_resave", _refresh_doc_resave),
+        ],
+    ),
+    # Wave G: SQLite query store dual-write (depends on every prior wave).
+    Wave(
+        label="wave G (sqlite store)",
+        steps=[
+            Step("sqlite_store", _refresh_sqlite_store),
         ],
     ),
 ]
