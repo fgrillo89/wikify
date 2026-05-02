@@ -25,6 +25,31 @@ This is an execution-strategy deviation, not a design change. The
 schema, API surface, locked defaults, and acceptance tests still match
 the spec.
 
+## Phase 8 — partial deletion (legacy writers retained pending soak)
+
+Phase 8 of the spec calls for deleting `vectors.npz` /
+`knowledge_graph.json` / `citations.json` writers and the legacy code
+paths in `corpus.queries`. This implementation does the minimal,
+safe slice and explicitly defers the wider deletion to a follow-up
+commit, matching the spec's own "gated on Phase 7 soak" note.
+
+What ships in this run:
+
+- The Phase 0 prototype (`src/wikify/_prototype/`) is removed — it was a
+  one-shot smoke harness, superseded by `src/wikify/corpus/store/`.
+- A new `corpus check` probe asserts that `wikify.db` exists, the
+  schema is intact, and the embedding space carries the expected dim.
+- Legacy artefact writers stay in place until a dedicated follow-up
+  PR can migrate the ~16 source-side and the test-side callers off
+  `read_vector_store` / `read_knowledge_graph` / `citations.json`.
+
+Why deferred: removing the writers requires migrating every legacy
+caller (corpus/queries.py, ingest/pipeline.py, many tests, eval, render,
+distill helpers) in lockstep. That migration is independently scoped
+and large enough that bundling it into the same commit would risk
+breaking unrelated features. The cutover (Phase 7) already gives users
+the new query path; the deletion is a cleanup pass.
+
 ## Module layout — 8 files, not 11
 
 The spec lists module names: `documents.py`, `chunks.py`, `authors.py`,

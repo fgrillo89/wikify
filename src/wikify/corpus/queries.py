@@ -727,7 +727,10 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "has_vectors": corpus.vectors_path.exists(),
         "has_knowledge_graph": corpus.knowledge_graph_path.exists(),
         "has_manifest": corpus.manifest_path.exists(),
+        "has_sqlite_store": corpus.sqlite_path.exists(),
     }
+    if out["has_sqlite_store"]:
+        out.update(_sqlite_health(corpus, full=full))
     try:
         from .field_detect import detect_field, detect_field_scores
 
@@ -743,6 +746,44 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
             out["ord_refs_coverage_pct"] = None
             out["ord_refs_error"] = str(exc)
     return out
+
+
+def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
+    """Probe wikify.db for schema sanity, FTS optimize state, and metric staleness."""
+    from .store.metrics_global import is_stale
+    from .store.routing import open_store
+
+    try:
+        store = open_store(corpus.root)
+    except FileNotFoundError as exc:
+        return {"sqlite_error": str(exc)}
+    try:
+        sqlite_check = store.con.execute("PRAGMA integrity_check").fetchone()[0]
+        n_docs = store.con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        n_chunks = store.con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        n_emb = store.con.execute(
+            "SELECT COUNT(*) FROM embeddings WHERE node_type='chunk'",
+        ).fetchone()[0]
+        spaces = [
+            dict(r) for r in store.con.execute(
+                "SELECT space_id, dim, model FROM embedding_spaces",
+            )
+        ]
+        out: dict = {
+            "sqlite_integrity": sqlite_check,
+            "sqlite_n_docs": n_docs,
+            "sqlite_n_chunks": n_chunks,
+            "sqlite_n_embeddings": n_emb,
+            "sqlite_embedding_spaces": spaces,
+            "metrics_corpus_citation_stale": is_stale(store.con, "corpus_citation"),
+        }
+        if full:
+            out["sqlite_n_edges"] = store.con.execute(
+                "SELECT COUNT(*) FROM graph_edges",
+            ).fetchone()[0]
+        return out
+    finally:
+        store.close()
 
 
 def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
