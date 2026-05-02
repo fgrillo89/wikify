@@ -391,7 +391,10 @@ def cmd_find(
     rank: str = typer.Option(
         "semantic",
         "--rank",
-        help="Ranking metric: semantic | citation_count | pagerank.",
+        help=(
+            "Ranking metric: semantic | bm25 | hybrid | citation_count | "
+            "pagerank. bm25 and hybrid require WIKIFY_QUERY_BACKEND=sqlite."
+        ),
     ),
     field: str = typer.Option(
         "chunk_text",

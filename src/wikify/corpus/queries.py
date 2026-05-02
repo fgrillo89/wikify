@@ -362,13 +362,29 @@ def parse_handle(handle: str) -> tuple[str, str]:
 # ------------------------------------------------------------------- find
 
 
-def search_chunks(corpus: Corpus, query: str, *, top_k: int = 8) -> list[dict]:
-    """Semantic search over chunk embeddings; returns ranked chunk dicts.
+def search_chunks(
+    corpus: Corpus,
+    query: str,
+    *,
+    top_k: int = 8,
+    rank: str = "semantic",
+) -> list[dict]:
+    """Chunk search; backend selected by ``WIKIFY_QUERY_BACKEND``.
 
-    Each result has ``id``, ``score``, and ``doc_id`` (so the agent can
-    follow up with ``corpus show chunk:<id>`` or ``corpus show
-    doc:<doc_id>``).
+    Each result has ``id``, ``score``, and ``doc_id``. ``rank`` is one of
+    ``semantic`` (cosine over chunk embeddings; legacy default),
+    ``bm25`` (FTS5 — sqlite backend only), or ``hybrid`` (RRF over
+    BM25 + vector — sqlite backend only).
     """
+    from .store.routing import is_sqlite
+
+    if is_sqlite():
+        return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
+    if rank in _LEXICAL_RANKS:
+        raise QueryError(
+            "backend_required",
+            f"--rank {rank} requires WIKIFY_QUERY_BACKEND=sqlite",
+        )
     vs = read_vector_store(corpus)
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
@@ -379,6 +395,58 @@ def search_chunks(corpus: Corpus, query: str, *, top_k: int = 8) -> list[dict]:
     )
     kg = read_knowledge_graph(corpus, vectors=vs, embed_fn=embed)
     return list(kg.chunks().search(query, top_k=top_k))
+
+
+def _search_chunks_sqlite(
+    corpus: Corpus, query: str, *, top_k: int, rank: str,
+) -> list[dict]:
+    from ..corpus.vectors_meta import read_meta
+    from ..embedding import embedder_for
+    from .store.routing import active_space_id, open_store
+
+    store = open_store(corpus.root)
+    try:
+        if rank in {"bm25", "hybrid"}:
+            if rank == "bm25":
+                hits = store.search_chunks_bm25(query, top_k=top_k)
+            else:
+                meta = read_meta(corpus.vectors_path)
+                embed = (
+                    embedder_for(meta.backend, meta.model, mode="query")
+                    if meta else None
+                )
+                qv = embed([query])[0] if embed else None  # type: ignore[index]
+                space_id = active_space_id(store)
+                hits = store.search_hybrid(
+                    query, query_vec=qv, space_id=space_id, top_k=top_k,
+                )
+        else:
+            # default semantic: cosine over the active embedding space.
+            meta = read_meta(corpus.vectors_path)
+            embed = (
+                embedder_for(meta.backend, meta.model, mode="query")
+                if meta else None
+            )
+            if embed is None:
+                return []
+            qv = embed([query])[0]  # type: ignore[index]
+            space_id = active_space_id(store)
+            if not space_id:
+                return []
+            hits = store.vector_index(space_id).search(qv, top_k=top_k)
+        out: list[dict] = []
+        for cid, score in hits:
+            row = store.get_chunk(cid)
+            if not row:
+                continue
+            out.append({
+                "id": cid,
+                "doc_id": row["doc_id"],
+                "score": float(score),
+            })
+        return out
+    finally:
+        store.close()
 
 
 def search_papers_by_title(
@@ -418,6 +486,7 @@ def search_papers(
     top_k: int = 8,
     chunk_pool: int | None = None,
     text: bool = False,
+    rank: str = "semantic",
 ) -> list[dict]:
     """Search aggregated to the paper level: best chunk per doc.
 
@@ -429,7 +498,7 @@ def search_papers(
     if text:
         hits = search_text(corpus, query, top_k=pool)
     else:
-        hits = search_chunks(corpus, query, top_k=pool)
+        hits = search_chunks(corpus, query, top_k=pool, rank=rank)
     docs_by_id = {d.id: d for d in list_documents(corpus)}
     grouped: dict[str, dict] = {}
     for hit in hits:
@@ -1179,7 +1248,8 @@ _AUTHOR_RELATIONS = {"sources", "coauthors"}
 
 _SOURCE_RANKS = {"citation_count", "pagerank"}
 _AUTHOR_RANKS = {"h_index", "citation_count", "n_papers"}
-_FIND_RANKS = {"semantic", *_SOURCE_RANKS, *_AUTHOR_RANKS}
+_LEXICAL_RANKS = {"bm25", "hybrid"}
+_FIND_RANKS = {"semantic", *_LEXICAL_RANKS, *_SOURCE_RANKS, *_AUTHOR_RANKS}
 
 
 SCHEMA: dict = {
@@ -1271,7 +1341,7 @@ def _validate_find_params(*, query: str, by: str, rank: str, top_k: int,
             "bad_field_by_combo",
             f"field='title' only applies with by='paper'; got by={by!r}",
         )
-    if by == "chunk" and rank != "semantic":
+    if by == "chunk" and rank not in {"semantic", *_LEXICAL_RANKS}:
         raise QueryError(
             "bad_rank_by_combo",
             f"rank {rank!r} only applies when chunks are aggregated to a "
@@ -1457,6 +1527,9 @@ def find(
         )
 
     if by == "paper":
+        if rank in _LEXICAL_RANKS:
+            papers = search_papers(corpus, query, top_k=top_k, rank=rank)
+            return {"kind": "papers", "rows": papers, "scored": True}
         papers = search_papers(corpus, query, top_k=paper_pool)
         return {
             "kind": "papers",
@@ -1466,7 +1539,7 @@ def find(
 
     return {
         "kind": "chunks",
-        "rows": search_chunks(corpus, query, top_k=top_k),
+        "rows": search_chunks(corpus, query, top_k=top_k, rank=rank),
         "scored": True,
     }
 
