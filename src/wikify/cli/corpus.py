@@ -1033,6 +1033,44 @@ def cmd_show(
 # ---------------------------------------------------------------- schema
 
 
+metrics_app = typer.Typer(
+    add_completion=False, help="Metric refresh / inspection over the SQLite store.",
+)
+app.add_typer(metrics_app, name="metrics")
+
+
+@metrics_app.command("refresh")
+def cmd_metrics_refresh(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    view: str = typer.Option(
+        "corpus_citation",
+        "--view",
+        help="Graph view to refresh (currently: corpus_citation).",
+    ),
+) -> None:
+    """Recompute global metrics (PageRank, h-index) over the SQLite store."""
+    from ..corpus.store.metrics import refresh_cheap_metrics
+    from ..corpus.store.metrics_global import refresh_h_index, refresh_pagerank
+    from ..corpus.store.routing import open_store
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    try:
+        if view == "corpus_citation":
+            refresh_cheap_metrics(store.con)
+            refresh_pagerank(store.con)
+            refresh_h_index(store.con)
+        else:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_view",
+                message=f"unknown view {view!r}; expected corpus_citation",
+            )
+    finally:
+        store.close()
+    typer.echo(f"refreshed metrics for view={view}")
+
+
 @app.command("schema")
 def cmd_schema(
     fmt: str = typer.Option(
