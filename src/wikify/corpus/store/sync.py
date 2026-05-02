@@ -183,6 +183,8 @@ def write_corpus(
             if vec is not None and meta is not None:
                 project_embeddings(store, vec, meta)
         store.fts_rebuild()
+        from .metrics import refresh_cheap_metrics
+        refresh_cheap_metrics(store.con)
     finally:
         store.close()
     return db_path

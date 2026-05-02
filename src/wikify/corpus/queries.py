@@ -544,23 +544,28 @@ def rank_docs(
     ``by`` is one of ``citation_count`` or ``pagerank``. Each item has
     ``doc_id``, ``title``, ``citation_count``, ``pagerank``.
     """
-    vs = read_vector_store(corpus)
-    kg = read_knowledge_graph(corpus, vectors=vs)
-    backend = kg._backend
-    docs_by_id = {d.id: d for d in list_documents(corpus)}
-    rows: list[dict] = []
-    for doc_id, doc in docs_by_id.items():
-        if doc_id not in backend.G:
-            continue
-        attrs = backend.G.nodes[doc_id]
-        rows.append(
-            {
-                "doc_id": doc_id,
-                "title": doc.title or "",
-                "citation_count": int(attrs.get("citation_count", 0) or 0),
-                "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
-            }
-        )
+    from .store.routing import is_sqlite
+
+    if is_sqlite():
+        rows = _rank_docs_sqlite(corpus)
+    else:
+        vs = read_vector_store(corpus)
+        kg = read_knowledge_graph(corpus, vectors=vs)
+        backend = kg._backend
+        docs_by_id = {d.id: d for d in list_documents(corpus)}
+        rows = []
+        for doc_id, doc in docs_by_id.items():
+            if doc_id not in backend.G:
+                continue
+            attrs = backend.G.nodes[doc_id]
+            rows.append(
+                {
+                    "doc_id": doc_id,
+                    "title": doc.title or "",
+                    "citation_count": int(attrs.get("citation_count", 0) or 0),
+                    "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
+                }
+            )
     if by == "citation_count":
         rows.sort(key=lambda r: (-r["citation_count"], -r["pagerank"], r["doc_id"]))
     elif by == "pagerank":
@@ -568,6 +573,39 @@ def rank_docs(
     else:
         raise ValueError(f"unknown rank metric: {by!r}; expected citation_count or pagerank")
     return rows[:top_k]
+
+
+def _rank_docs_sqlite(corpus: Corpus) -> list[dict]:
+    """Pull citation_count + pagerank from node_metrics."""
+    from .store.metrics import (
+        CITATION_COUNT,
+        VIEW_CORPUS_CITATION,
+    )
+    from .store.routing import open_store
+
+    store = open_store(corpus.root)
+    try:
+        cite_rows = dict(store.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name=? AND node_type='document' AND metric=?",
+            (VIEW_CORPUS_CITATION, CITATION_COUNT),
+        ))
+        pr_rows = dict(store.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name=? AND node_type='document' AND metric='pagerank'",
+            (VIEW_CORPUS_CITATION,),
+        ))
+        out: list[dict] = []
+        for d in store.list_documents():
+            out.append({
+                "doc_id": d["doc_id"],
+                "title": d["title"] or "",
+                "citation_count": int(cite_rows.get(d["doc_id"], 0)),
+                "pagerank": float(pr_rows.get(d["doc_id"], 0.0)),
+            })
+        return out
+    finally:
+        store.close()
 
 
 def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
@@ -578,6 +616,16 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
     """
     if not doc_ids:
         return {}
+    from .store.routing import is_sqlite
+    if is_sqlite():
+        rows = {r["doc_id"]: r for r in _rank_docs_sqlite(corpus)}
+        return {
+            did: {
+                "citation_count": int(rows.get(did, {}).get("citation_count", 0)),
+                "pagerank": float(rows.get(did, {}).get("pagerank", 0.0)),
+            }
+            for did in doc_ids
+        }
     if not (corpus.knowledge_graph_path.exists() and corpus.vectors_path.exists()):
         return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
     vs = read_vector_store(corpus)
