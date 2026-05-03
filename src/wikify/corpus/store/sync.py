@@ -179,6 +179,7 @@ def write_corpus(
     store = Store(db_path)
     try:
         with transaction(store.con):
+            _sync_remove_absent_docs(store, {d.id for d in docs})
             project_documents(store, docs, by_doc)
             if vec is not None and meta is not None:
                 project_embeddings(store, vec, meta)
@@ -188,6 +189,36 @@ def write_corpus(
     finally:
         store.close()
     return db_path
+
+
+def _sync_remove_absent_docs(store: Store, current_ids: set[str]) -> None:
+    """Drop any document rows that aren't in the current ingest's doc set.
+
+    FK cascade clears chunks / bib_entries / assets / chunk_citations /
+    chunk_assets. We also delete graph_edges that originated at the
+    removed doc and any embeddings rows pointing at chunks that vanished.
+    """
+    existing = [r[0] for r in store.con.execute("SELECT doc_id FROM documents")]
+    to_remove = [d for d in existing if d not in current_ids]
+    if not to_remove:
+        return
+    placeholders = ",".join("?" * len(to_remove))
+    # Embedding rows for the doc's chunks — must run before chunks are FK-cascaded.
+    store.con.execute(
+        f"DELETE FROM embeddings WHERE node_type='chunk' AND node_id IN ("
+        f"  SELECT chunk_id FROM chunks WHERE doc_id IN ({placeholders})"
+        f")",
+        to_remove,
+    )
+    store.con.execute(
+        f"DELETE FROM documents WHERE doc_id IN ({placeholders})", to_remove,
+    )
+    store.con.execute(
+        f"DELETE FROM graph_edges WHERE "
+        f"(src_type='document' AND src_id IN ({placeholders})) "
+        f"OR (dst_type='document' AND dst_id IN ({placeholders}))",
+        to_remove + to_remove,
+    )
 
 
 def write_doc_metadata_json(store: Store, doc_id: str) -> dict:
