@@ -1,8 +1,8 @@
 """bm25 / hybrid rank routing through the SQLite store.
 
-WIKIFY_QUERY_BACKEND has been removed; the SQLite store is the only
-runtime path. These tests verify the lexical ranks still work end-to-end
-through the public `queries.find` surface.
+The SQLite store is the authoritative query backend; these tests
+verify the lexical ranks work end-to-end through the public
+``queries.find`` surface.
 """
 
 from __future__ import annotations

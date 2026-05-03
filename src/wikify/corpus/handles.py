@@ -110,9 +110,37 @@ def format_handle(kind: str, full_id: str, *, long: bool = False) -> str:
     return f"{kind}:{payload}"
 
 
+def format_chunk_handles(rows: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Disambiguated chunk handles for a result set.
+
+    For each ``(chunk_id, doc_id)`` pair, returns ``chunk:<short>`` when
+    the bare short suffix is unique within ``rows``; otherwise escalates
+    to ``chunk:<doc-short>/<chunk-short>`` so two distinct chunks never
+    print the same handle. Falls back to the full chunk_id if no
+    ``doc_id`` is available to namespace by. Pipe-safe and resolvable
+    by ``resolve_chunk_id``.
+    """
+    pairs = list(rows)
+    by_short: dict[str, set[str]] = {}
+    for cid, _ in pairs:
+        by_short.setdefault(short_id(cid), set()).add(cid)
+    out: dict[str, str] = {}
+    for cid, did in pairs:
+        s = short_id(cid)
+        if len(by_short[s]) > 1:
+            if did:
+                out[cid] = f"chunk:{short_id(did)}/{s}"
+            else:
+                out[cid] = f"chunk:{cid}"
+        else:
+            out[cid] = f"chunk:{s}"
+    return out
+
+
 __all__ = [
     "AmbiguousHandleError",
     "HandleNotFoundError",
+    "format_chunk_handles",
     "format_handle",
     "resolve",
     "short_id",

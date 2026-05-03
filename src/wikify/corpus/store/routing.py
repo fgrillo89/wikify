@@ -1,11 +1,4 @@
-"""SQLite query store helpers.
-
-There used to be an env-flag (``WIKIFY_QUERY_BACKEND``) selecting
-between a legacy NetworkX path and SQLite. SQLite is now the only
-runtime path, so this module collapses to a small set of "open the
-store" helpers. The legacy flag and `is_sqlite()` / `is_sqlite_explicit()`
-predicates have been removed.
-"""
+"""SQLite query store helpers."""
 
 from __future__ import annotations
 

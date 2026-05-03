@@ -7,8 +7,7 @@ sourced from `wikify.db` instead of a NetworkX MultiDiGraph + JSON.
 The backend loads everything into in-memory dicts at construction. For
 typical wikify corpora (<= 5k papers, ~150k chunks, ~1M edges) this is
 sub-second and matches what the legacy NetworkXBackend did. For larger
-corpora it will need lazy loading; see the scaling envelope in
-`tasks/sqlite-query-store-plan.md`.
+corpora, this eager snapshot should be replaced with lazy loading.
 """
 
 from __future__ import annotations
@@ -525,7 +524,12 @@ def build_kg_in_memory(
         # bib_entries from doc.citations + citation_index entries.
         bib_rows = _bib_rows_for_doc(doc, entries, bibkey_to_doc_id, doc_citations_map)
         store.upsert_bib_entries(doc.id, bib_rows)
-        # Edges: doc -> doc references for in-corpus targets only.
+        # Edges: doc -> doc references for in-corpus targets resolved
+        # via bib_entries. Direct `Document.cites` projection happens
+        # after the cross-doc reresolve loop below — that loop calls
+        # `refresh_reference_edges` which DELETEs outgoing references
+        # before re-inserting from bib_entries, so cites-derived edges
+        # have to land after it.
         targets = sorted({
             row["target_doc_id"] for row in bib_rows if row.get("target_doc_id")
         })
@@ -567,6 +571,18 @@ def build_kg_in_memory(
     for doc in docs:
         store.reresolve_inbound(doc.id)
         store.refresh_reference_edges(doc.id)
+
+    # Project Document.cites directly into references edges. Runs after
+    # refresh_reference_edges so its DELETE-then-INSERT doesn't wipe
+    # these. INSERT OR IGNORE dedupes overlap with bib-derived rows.
+    for doc in docs:
+        cites = [t for t in (doc.cites or []) if t and t != doc.id]
+        if cites:
+            store.con.executemany(
+                "INSERT OR IGNORE INTO graph_edges(src_type, src_id, kind, dst_type, dst_id) "
+                "VALUES ('document', ?, 'references', 'document', ?)",
+                [(doc.id, t) for t in cites],
+            )
 
     backend = SqliteGraphBackend(store.con)
     embed_fn = None

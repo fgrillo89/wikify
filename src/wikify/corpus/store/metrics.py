@@ -1,8 +1,8 @@
 """Graph-projection metrics over `graph_edges`.
 
-Phase 5 covers cheap incremental metrics that recompute in O(edges) per
-update — citation_count, coauthor_count, in/out degree. PageRank and
-h-index are deferred to Phase 6 (`metrics_global.py`).
+This module covers cheap incremental metrics that recompute in O(edges)
+per update: citation_count, coauthor_count, and in/out degree. Global
+metrics such as PageRank and h-index live in `metrics_global.py`.
 
 Metrics are stored in `node_metrics` keyed by (graph_name, node_type,
 node_id, metric); skill code reads them via `get_node_metric`.

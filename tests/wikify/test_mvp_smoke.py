@@ -15,11 +15,11 @@ without ever calling an LLM:
 
 Notes:
 
-- The ``corpus sample`` step from the spec is replaced by a
-  hard-coded concept title because the diverse-sample selector requires
-  a fully embedded corpus (vectors.npz + knowledge_graph.json) which is
-  out of scope for a deterministic, no-LLM smoke test. The check is
-  documented in this docstring rather than skipped silently.
+- The ``corpus sample`` step is replaced by a hard-coded concept title
+  because the diverse-sample selector requires a fully embedded corpus
+  with graph metrics, which is out of scope for a deterministic, no-LLM
+  smoke test. The check is documented in this docstring rather than
+  skipped silently.
 - ``draft build`` is a deterministic Python step that just compiles a
   ``WriteRequest`` from on-disk evidence; no model is called. The smoke
   test then writes the synthetic ``response.json`` directly. ``draft

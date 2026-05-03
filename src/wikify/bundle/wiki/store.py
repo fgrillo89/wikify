@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ...corpus.store.connection import connect
+from ...corpus.store.connection import connect, transaction
 
 WIKI_SCHEMA = """
 CREATE TABLE IF NOT EXISTS wiki_pages (
@@ -93,72 +93,79 @@ def upsert_wiki_page(
     evidence: list[dict[str, Any]] | None = None,
     links: list[str] | None = None,
 ) -> None:
+    """Refresh page row + FTS index + evidence + outgoing edges atomically.
+
+    All mutations land inside one BEGIN/COMMIT so readers never observe
+    a half-refreshed page (e.g. new body but stale evidence) and a mid-
+    upsert exception rolls everything back.
+    """
     now = datetime.now(UTC).isoformat()
-    existing = con.execute(
-        "SELECT rowid, created_at, title, body FROM wiki_pages WHERE page_id = ?",
-        (page_id,),
-    ).fetchone()
     fm_json = json.dumps(frontmatter or {})
-    if existing:
-        # Update in place so rowid stays stable; tell FTS the old (title, body)
-        # via 'delete' so its index forgets the previous content first.
+    with transaction(con):
+        existing = con.execute(
+            "SELECT rowid, created_at, title, body FROM wiki_pages WHERE page_id = ?",
+            (page_id,),
+        ).fetchone()
+        if existing:
+            # Update in place so rowid stays stable; tell FTS the old (title, body)
+            # via 'delete' so its index forgets the previous content first.
+            con.execute(
+                "INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, body) "
+                "VALUES('delete', ?, ?, ?)",
+                (existing["rowid"], existing["title"], existing["body"]),
+            )
+            con.execute(
+                "UPDATE wiki_pages SET slug=?, title=?, kind=?, body=?, "
+                "frontmatter_json=?, updated_at=? WHERE page_id=?",
+                (slug, title, kind, body, fm_json, now, page_id),
+            )
+            rowid = existing["rowid"]
+        else:
+            cur = con.execute(
+                "INSERT INTO wiki_pages(page_id, slug, title, kind, body, "
+                "frontmatter_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (page_id, slug, title, kind, body, fm_json, now, now),
+            )
+            rowid = cur.lastrowid
         con.execute(
-            "INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, body) "
-            "VALUES('delete', ?, ?, ?)",
-            (existing["rowid"], existing["title"], existing["body"]),
+            "INSERT INTO wiki_pages_fts(rowid, title, body) VALUES (?, ?, ?)",
+            (rowid, title, body),
         )
-        con.execute(
-            "UPDATE wiki_pages SET slug=?, title=?, kind=?, body=?, "
-            "frontmatter_json=?, updated_at=? WHERE page_id=?",
-            (slug, title, kind, body, fm_json, now, page_id),
-        )
-        rowid = existing["rowid"]
-    else:
-        cur = con.execute(
-            "INSERT INTO wiki_pages(page_id, slug, title, kind, body, "
-            "frontmatter_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-            (page_id, slug, title, kind, body, fm_json, now, now),
-        )
-        rowid = cur.lastrowid
-    con.execute(
-        "INSERT INTO wiki_pages_fts(rowid, title, body) VALUES (?, ?, ?)",
-        (rowid, title, body),
-    )
-    # Refresh evidence rows for this page.
-    con.execute("DELETE FROM wiki_evidence WHERE page_id = ?", (page_id,))
-    if evidence:
-        con.executemany(
-            "INSERT INTO wiki_evidence(page_id, marker, chunk_id, doc_id, quote) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [
-                (
-                    page_id,
-                    ev.get("marker") or f"e{i}",
-                    ev.get("chunk_id"),
-                    ev.get("doc_id"),
-                    (ev.get("quote") or "")[:2000],
-                )
-                for i, ev in enumerate(evidence)
-            ],
-        )
-    # Refresh outgoing edges for this page.
-    con.execute("DELETE FROM wiki_edges WHERE src_id = ?", (page_id,))
-    edge_rows: list[tuple[str, str, str, str, str | None]] = []
-    for ev in evidence or []:
-        chunk_id = ev.get("chunk_id")
-        if chunk_id:
-            edge_rows.append((page_id, "cites_evidence", "chunk", chunk_id, None))
-        doc_id = ev.get("doc_id")
-        if doc_id:
-            edge_rows.append((page_id, "grounded_in", "document", doc_id, None))
-    for link in links or []:
-        edge_rows.append((page_id, "links_to", "wiki_page", link, None))
-    if edge_rows:
-        con.executemany(
-            "INSERT OR IGNORE INTO wiki_edges(src_id, kind, dst_type, dst_id, meta_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            edge_rows,
-        )
+        # Refresh evidence rows for this page.
+        con.execute("DELETE FROM wiki_evidence WHERE page_id = ?", (page_id,))
+        if evidence:
+            con.executemany(
+                "INSERT INTO wiki_evidence(page_id, marker, chunk_id, doc_id, quote) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        page_id,
+                        ev.get("marker") or f"e{i}",
+                        ev.get("chunk_id"),
+                        ev.get("doc_id"),
+                        (ev.get("quote") or "")[:2000],
+                    )
+                    for i, ev in enumerate(evidence)
+                ],
+            )
+        # Refresh outgoing edges for this page.
+        con.execute("DELETE FROM wiki_edges WHERE src_id = ?", (page_id,))
+        edge_rows: list[tuple[str, str, str, str, str | None]] = []
+        for ev in evidence or []:
+            chunk_id = ev.get("chunk_id")
+            if chunk_id:
+                edge_rows.append((page_id, "cites_evidence", "chunk", chunk_id, None))
+            doc_id = ev.get("doc_id")
+            if doc_id:
+                edge_rows.append((page_id, "grounded_in", "document", doc_id, None))
+        for link in links or []:
+            edge_rows.append((page_id, "links_to", "wiki_page", link, None))
+        if edge_rows:
+            con.executemany(
+                "INSERT OR IGNORE INTO wiki_edges(src_id, kind, dst_type, dst_id, meta_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                edge_rows,
+            )
 
 
 def get_wiki_page(con: sqlite3.Connection, slug: str) -> dict[str, Any] | None:

@@ -101,8 +101,35 @@ def resolve_doc_id(corpus: Corpus, short: str) -> str:
 
 
 def resolve_chunk_id(corpus: Corpus, short: str) -> str:
-    """Resolve a short or full chunk handle to the canonical full id."""
-    return resolve_short(short, (c.id for c in all_chunks(corpus)))
+    """Resolve a short or full chunk handle to the canonical full id.
+
+    Tries the standard handle resolver first — that already covers bare
+    ``<chunk-short>`` and figure-namespaced caption-chunk forms like
+    ``<doc-short>/Figure_01__caption`` (whose `short_id` includes the
+    slash). Falls back to the disambiguated
+    ``<doc-short>/<chunk-short>`` form emitted by `_emit_chunk_rows`
+    only when the standard resolver does not find a match — that
+    preserves the legacy slash semantics for caption chunks.
+    """
+    chunks = list(all_chunks(corpus))
+    try:
+        return resolve_short(short, (c.id for c in chunks))
+    except HandleNotFoundError:
+        if "/" not in short:
+            raise
+        # Compound disambiguation form: <doc-short>/<chunk-short>. Scope
+        # candidates to the doc, then resolve the chunk-short within.
+        from .handles import short_id
+        doc_short, _, chunk_short = short.partition("/")
+        candidates = [
+            c for c in chunks
+            if c.doc_id == doc_short
+            or short_id(c.doc_id) == doc_short
+            or c.doc_id.endswith("_" + doc_short)
+        ]
+        if not candidates:
+            raise
+        return resolve_short(chunk_short, (c.id for c in candidates))
 
 
 def resolve_figure_id(corpus: Corpus, short: str) -> str:
@@ -859,13 +886,10 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     """Lightweight corpus health summary used by ``corpus check``.
 
     Reports doc/chunk counts, derived-artifact presence, and detected
-    field. The default form does **not** load the knowledge graph
-    (~18MB JSON for the ALD corpus, ~6s wall-clock) so the call stays
-    fast. Pass ``full=True`` to also report citation-marker indexing
-    coverage (``traverse <chunk> --to cited-in-corpus`` requires
-    sources with populated ``ord_refs``); this triggers a full KG
-    parse via ``json.load`` + a streaming pass over the ``nodes``
-    array.
+    field. The default form skips citation-index coverage so the call
+    stays fast. Pass ``full=True`` to also report citation-marker
+    indexing coverage (``traverse <chunk> --to cited-in-corpus``
+    requires sources with populated ``ord_refs``).
     """
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
@@ -874,7 +898,6 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "n_docs": len(docs),
         "n_chunks": len(chunks),
         "has_vectors": corpus.vectors_path.exists(),
-        "has_knowledge_graph": corpus.knowledge_graph_path.exists(),
         "has_manifest": corpus.manifest_path.exists(),
         "has_sqlite_store": corpus.sqlite_path.exists(),
     }
@@ -938,9 +961,8 @@ def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
 def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
     """Fraction of corpus docs that have at least one resolved bib_entry.
 
-    Reads `bib_entries.target_doc_id IS NOT NULL` directly from
-    `wikify.db` — the SQL replacement for the legacy ``knowledge_graph.json``
-    walk. Returns zeros when wikify.db is absent.
+    Reads ``bib_entries.target_doc_id IS NOT NULL`` directly from
+    ``wikify.db``. Returns zeros when ``wikify.db`` is absent.
     """
     from .store.routing import sqlite_available
 

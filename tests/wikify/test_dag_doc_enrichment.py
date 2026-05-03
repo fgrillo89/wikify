@@ -3,11 +3,9 @@
 The historical bug: title fallback (``"Word Document"`` placeholder ->
 filename-derived real title) lived inside ``write_corpus_bibliography``
 as a *local* enrichment used only to build the bibtex output. The
-enriched docs were never written back to ``ctx["docs"]``, so
-``build_knowledge_graph`` (Wave E) and ``_resave_docs`` (Wave F)
-silently kept the placeholder title in ``knowledge_graph.json`` and in
-the persisted ``docs/<id>.json`` records — even though
-``corpus_papers.bib`` looked correct.
+enriched docs were never written back to ``ctx["docs"]``, so downstream
+graph rows and persisted ``docs/<id>.json`` records silently kept the
+placeholder title even though ``corpus_papers.bib`` looked correct.
 
 These tests guard the fix: a dedicated DAG step
 (``_refresh_doc_enrichment``) runs before bibliography and replaces

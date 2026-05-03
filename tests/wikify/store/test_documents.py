@@ -107,3 +107,33 @@ def test_fk_cascade_on_delete_document():
     # d2 untouched
     assert s.get_document("d2") is not None
     assert len(s.get_chunks("d2")) == 2
+
+
+def test_sync_rebuilds_coauthor_edges_when_only_link_doc_dropped():
+    """Reviewer scenario: A+B coauthor on d1; A on d2; B on d3. Removing
+    d1 must wipe the A-B coauthor edge — it's no longer asserted by any
+    surviving doc, even though both authors are still canonical rows."""
+    from wikify.corpus.store.sync import _sync_remove_absent_docs
+
+    s = Store(":memory:")
+    for did, authors in [
+        ("d1", ["Alice X", "Bob Y"]),
+        ("d2", ["Alice X"]),
+        ("d3", ["Bob Y"]),
+    ]:
+        s.upsert_document(_make_doc(did, authors=authors))
+        s.upsert_document_authors(did, authors)
+
+    pre = list(s.con.execute(
+        "SELECT src_id, dst_id FROM graph_edges WHERE kind='coauthor'",
+    ))
+    assert len(pre) == 1, "expected one A-B coauthor edge from d1"
+
+    _sync_remove_absent_docs(s, {"d2", "d3"})
+
+    post = list(s.con.execute(
+        "SELECT src_id, dst_id FROM graph_edges WHERE kind='coauthor'",
+    ))
+    assert post == [], f"stale A-B coauthor edge survived: {post}"
+    # Both authors are still canonical rows, just not coauthors anymore.
+    assert s.con.execute("SELECT COUNT(*) FROM authors").fetchone()[0] == 2

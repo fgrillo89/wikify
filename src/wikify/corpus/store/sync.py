@@ -185,6 +185,17 @@ def project_documents(
     for doc in docs:
         store.reresolve_inbound(doc.id)
         store.refresh_reference_edges(doc.id)
+        # Doc.cites is set by enrichment / by callers that populate the
+        # field directly; project those into references too. The bib-side
+        # refresh above already DELETEd then INSERTed; we extend with
+        # OR IGNORE so overlap with bib-derived edges dedupes.
+        cites = [t for t in (doc.cites or []) if t and t != doc.id]
+        if cites:
+            store.con.executemany(
+                "INSERT OR IGNORE INTO graph_edges(src_type, src_id, kind, dst_type, dst_id) "
+                "VALUES ('document', ?, 'references', 'document', ?)",
+                [(doc.id, t) for t in cites],
+            )
 
 
 def project_embeddings(store: Store, vec: VectorStore, meta: VectorsMeta) -> None:
@@ -241,35 +252,139 @@ def _sync_remove_absent_docs(store: Store, current_ids: set[str]) -> None:
     """Drop any document rows that aren't in the current ingest's doc set.
 
     FK cascade clears chunks / bib_entries / assets / chunk_citations /
-    chunk_assets. We also delete graph_edges that originated at the
-    removed doc and any embeddings rows pointing at chunks that vanished.
+    chunk_assets. ``graph_edges`` has no FK so we must scrub every row
+    whose endpoint refers to a removed entity (doc, chunk, bib_entry,
+    asset, or author no longer attached to any surviving doc). Authors
+    orphaned by the removal are also deleted, along with their
+    embeddings.
     """
     existing = [r[0] for r in store.con.execute("SELECT doc_id FROM documents")]
     to_remove = [d for d in existing if d not in current_ids]
     if not to_remove:
         return
     placeholders = ",".join("?" * len(to_remove))
-    # Embedding rows for the doc's chunks — must run before chunks are FK-cascaded.
-    store.con.execute(
-        f"DELETE FROM embeddings WHERE node_type='chunk' AND node_id IN ("
-        f"  SELECT chunk_id FROM chunks WHERE doc_id IN ({placeholders})"
-        f")",
-        to_remove,
-    )
+    # Snapshot the entity ids that are about to disappear via FK cascade.
+    chunk_ids = [
+        r[0] for r in store.con.execute(
+            f"SELECT chunk_id FROM chunks WHERE doc_id IN ({placeholders})", to_remove,
+        )
+    ]
+    bib_ids = [
+        r[0] for r in store.con.execute(
+            f"SELECT bib_id FROM bib_entries WHERE doc_id IN ({placeholders})", to_remove,
+        )
+    ]
+    asset_ids = [
+        r[0] for r in store.con.execute(
+            f"SELECT asset_id FROM assets WHERE doc_id IN ({placeholders})", to_remove,
+        )
+    ]
+    author_ids_touched = [
+        r[0] for r in store.con.execute(
+            f"SELECT DISTINCT author_id FROM document_authors WHERE doc_id IN ({placeholders})",
+            to_remove,
+        )
+    ]
+    # Embedding rows for chunks must go before FK cascade clears the chunk row.
+    if chunk_ids:
+        _delete_in_chunks(
+            store.con,
+            "DELETE FROM embeddings WHERE node_type='chunk' AND node_id IN ({})",
+            chunk_ids,
+        )
     store.con.execute(
         f"DELETE FROM documents WHERE doc_id IN ({placeholders})", to_remove,
     )
-    store.con.execute(
-        f"DELETE FROM graph_edges WHERE "
-        f"(src_type='document' AND src_id IN ({placeholders})) "
-        f"OR (dst_type='document' AND dst_id IN ({placeholders}))",
-        to_remove + to_remove,
+    # Authors that no longer appear in any document_authors row are now orphans.
+    orphan_authors: list[str] = []
+    if author_ids_touched:
+        rows = _exec_in_chunks(
+            store.con,
+            "SELECT author_id FROM authors WHERE author_id IN ({}) "
+            "AND author_id NOT IN (SELECT DISTINCT author_id FROM document_authors)",
+            author_ids_touched,
+        )
+        orphan_authors = [r[0] for r in rows]
+    if orphan_authors:
+        _delete_in_chunks(
+            store.con,
+            "DELETE FROM embeddings WHERE node_type='author' AND node_id IN ({})",
+            orphan_authors,
+        )
+        _delete_in_chunks(
+            store.con, "DELETE FROM authors WHERE author_id IN ({})", orphan_authors,
+        )
+    # Scrub graph_edges referencing any vanished entity (either endpoint).
+    removed: list[tuple[str, str]] = (
+        [("document", d) for d in to_remove]
+        + [("chunk", c) for c in chunk_ids]
+        + [("bib_entry", b) for b in bib_ids]
+        + [("asset", a) for a in asset_ids]
+        + [("author", a) for a in orphan_authors]
     )
+    if removed:
+        _delete_edges_with_endpoint(store.con, removed)
+    # Coauthor edges between two surviving authors can outlive the doc
+    # that asserted them: A+B coauthored d1, A also on d2, B also on d3
+    # — after deleting d1, the A-B edge has no surviving doc backing it.
+    # Both endpoints are canonical so the scrub above can't catch it.
+    # Wipe coauthor edges incident to any touched author and rebuild
+    # from the surviving document_authors rows.
+    surviving_touched = [a for a in author_ids_touched if a not in set(orphan_authors)]
+    if surviving_touched:
+        _delete_in_chunks(
+            store.con,
+            "DELETE FROM graph_edges WHERE kind='coauthor' AND src_id IN ({})",
+            surviving_touched,
+        )
+        _delete_in_chunks(
+            store.con,
+            "DELETE FROM graph_edges WHERE kind='coauthor' AND dst_id IN ({})",
+            surviving_touched,
+        )
+        rebuild_doc_rows = _exec_in_chunks(
+            store.con,
+            "SELECT DISTINCT doc_id FROM document_authors WHERE author_id IN ({})",
+            surviving_touched,
+        )
+        from .authors import upsert_coauthor_edges as _ucae
+        for (doc_id,) in rebuild_doc_rows:
+            _ucae(store.con, doc_id)
+
+
+def _exec_in_chunks(con, sql_template: str, ids: list[str], batch: int = 500):
+    """Run ``sql_template`` with an IN-clause expanded over ``ids`` in batches."""
+    out: list = []
+    for i in range(0, len(ids), batch):
+        chunk = ids[i:i + batch]
+        sql = sql_template.format(",".join("?" * len(chunk)))
+        out.extend(con.execute(sql, chunk).fetchall())
+    return out
+
+
+def _delete_in_chunks(con, sql_template: str, ids: list[str], batch: int = 500) -> None:
+    """DELETE with an IN-clause expanded over ``ids`` in batches."""
+    for i in range(0, len(ids), batch):
+        chunk = ids[i:i + batch]
+        sql = sql_template.format(",".join("?" * len(chunk)))
+        con.execute(sql, chunk)
+
+
+def _delete_edges_with_endpoint(con, removed: list[tuple[str, str]], batch: int = 250) -> None:
+    """Delete graph_edges where either endpoint is in ``removed``."""
+    for i in range(0, len(removed), batch):
+        chunk = removed[i:i + batch]
+        placeholders = ",".join(["(?, ?)"] * len(chunk))
+        flat: list[str] = [v for pair in chunk for v in pair]
+        con.execute(
+            f"DELETE FROM graph_edges WHERE (src_type, src_id) IN ({placeholders}) "
+            f"OR (dst_type, dst_id) IN ({placeholders})",
+            flat + flat,
+        )
 
 
 def write_doc_metadata_json(store: Store, doc_id: str) -> dict:
-    """Snapshot a document row into the same dict shape the legacy json
-    files use; helpful for parity tests in Phase 2."""
+    """Snapshot a document row into the JSON sidecar compatibility shape."""
     row = store.get_document(doc_id)
     if not row:
         return {}

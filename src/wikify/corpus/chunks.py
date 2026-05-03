@@ -10,7 +10,7 @@ from wikify.citations.models import CitationEntry
 
 from ..api import Corpus
 from ..models import Chunk, DocImage, Document
-from .vectors import VectorStore, load_vectors, save_vectors
+from .vectors import VectorStore, load_vectors
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -109,10 +109,6 @@ def read_chunks_by_id(
             if len(result) >= cap:
                 break
     return result
-
-
-def write_vector_store(paths: Corpus, store: VectorStore) -> None:
-    save_vectors(paths.vectors_path, store)
 
 
 def read_vector_store(paths: Corpus) -> VectorStore:

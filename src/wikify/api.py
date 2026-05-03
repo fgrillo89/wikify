@@ -90,10 +90,6 @@ class Corpus:
         return self.root / "citations.json"
 
     @property
-    def knowledge_graph_path(self) -> Path:
-        return self.root / "knowledge_graph.json"
-
-    @property
     def sqlite_path(self) -> Path:
         """SQLite query store path: <corpus_root>/wikify.db."""
         return self.root / "wikify.db"

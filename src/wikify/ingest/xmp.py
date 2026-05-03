@@ -20,9 +20,9 @@ from __future__ import annotations
 import re
 from xml.etree import ElementTree as ET
 
-# Namespace map covering Dublin Core + every PRISM revision we've seen in
-# the ALD corpus. PRISM 2.0 is most common; 2.1 and 3.0 show up on newer
-# Elsevier/Wiley PDFs.
+# Namespace map covering Dublin Core + PRISM revisions seen in publisher
+# PDFs. PRISM 2.0 is most common; 2.1 and 3.0 show up on newer
+# Elsevier/Wiley documents.
 NS = {
     "dc":      "http://purl.org/dc/elements/1.1/",
     "rdf":     "http://www.w3.org/1999/02/22-rdf-syntax-ns#",

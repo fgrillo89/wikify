@@ -47,6 +47,11 @@ notebooks/
 
 # Scratch (one-off scripts, experiments, not versioned)
 scratch/
+scratch_*.py
+scratch_*.log
+
+# Claude Code session state
+.claude/scheduled_tasks.lock
 
 # Claude Code MCP server config (carries absolute paths)
 .mcp.json

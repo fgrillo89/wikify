@@ -73,6 +73,18 @@ def test_kg_citations_create_references_edges():
     assert "a" in refs
 
 
+def test_document_cites_field_projects_into_references():
+    """Hand-built `Document(cites=[...])` (no bib_entries) must still
+    surface as kg.source(...).references() — protects callers that
+    construct a graph from minimal Document fixtures."""
+    a = _doc("a")
+    b = _doc("b")
+    a.cites = ["b"]
+    kg = _build([a, b])
+    assert "b" in kg.source("a").references().ids()
+    assert "a" in kg.source("b").cited_by().ids()
+
+
 def test_kg_citation_count_via_node_metrics():
     a = _doc("a")
     b = _doc("b")

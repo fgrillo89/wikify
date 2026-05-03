@@ -7,6 +7,7 @@ import pytest
 from wikify.corpus.handles import (
     AmbiguousHandleError,
     HandleNotFoundError,
+    format_chunk_handles,
     format_handle,
     resolve,
     short_id,
@@ -98,3 +99,36 @@ def test_resolve_compound_short_via_loose_suffix() -> None:
 def test_format_handle_compound_short() -> None:
     full = "[1971 Chua]_514791d621fa/fig_002"
     assert format_handle("figure", full) == "figure:514791d621fa/fig_002"
+
+
+def test_format_chunk_handles_unique_uses_bare_short() -> None:
+    """When chunk shorts don't collide, emit the bare ``chunk:<short>``."""
+    rows = [
+        ("doc_a_111111111111__c0000__aaaaaaaa", "doc_a_111111111111"),
+        ("doc_b_222222222222__c0000__bbbbbbbb", "doc_b_222222222222"),
+    ]
+    out = format_chunk_handles(rows)
+    assert out["doc_a_111111111111__c0000__aaaaaaaa"] == "chunk:aaaaaaaa"
+    assert out["doc_b_222222222222__c0000__bbbbbbbb"] == "chunk:bbbbbbbb"
+
+
+def test_format_chunk_handles_collision_namespaces_by_doc() -> None:
+    """Two chunks sharing the same short suffix escalate to compound form."""
+    rows = [
+        ("doc_a_111111111111__c0000__deadbeef", "doc_a_111111111111"),
+        ("doc_b_222222222222__c0009__deadbeef", "doc_b_222222222222"),
+    ]
+    out = format_chunk_handles(rows)
+    assert out["doc_a_111111111111__c0000__deadbeef"] == "chunk:111111111111/deadbeef"
+    assert out["doc_b_222222222222__c0009__deadbeef"] == "chunk:222222222222/deadbeef"
+
+
+def test_format_chunk_handles_no_doc_id_falls_back_to_full() -> None:
+    """No doc_id available means we cannot namespace; emit the full id."""
+    rows = [
+        ("aaa__c0__deadbeef", ""),
+        ("bbb__c0__deadbeef", ""),
+    ]
+    out = format_chunk_handles(rows)
+    assert out["aaa__c0__deadbeef"] == "chunk:aaa__c0__deadbeef"
+    assert out["bbb__c0__deadbeef"] == "chunk:bbb__c0__deadbeef"

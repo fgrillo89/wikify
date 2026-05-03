@@ -130,7 +130,8 @@ quote hyphenated phrases as `'"self-limiting"'`. See
 
 `citation-walk "<concept>" --depth 2 --top-k 5` walks **author-
 asserted** edges (in-text [N] markers → in-corpus papers → their
-chunks). Sparse in low-density corpora (~1.7% on ALD).
+chunks). Sparse in low-density corpora where few citations resolve to
+in-corpus papers.
 
 `similarity-walk "<concept>" --depth 2 --neighbors 3` walks **cosine
 neighbours** of chunk vectors. Dense (every chunk has neighbours),
