@@ -173,10 +173,20 @@ def _refresh_equations_index(ctx: dict) -> None:
 
 
 def _refresh_openalex(ctx: dict) -> None:
-    """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
+    """Resolve citations via OpenAlex API (DOI + bulk reference expansion).
+
+    Seeds the resolver with the corpus papers' own DOIs so corpus titles
+    land in the title index that Phase 4 fuzzy-matches against -- that
+    is what surfaces no-DOI bibs as in-corpus references. Scopes the
+    Phase 3 referenced_works expansion to those same corpus DOIs so
+    Wave C does not spend ~half its wall-clock fetching the references
+    of out-of-corpus papers (whose 2nd-degree refs are also out-of-
+    corpus and almost never match a corpus paper).
+    """
     if not ctx.get("resolve_bibliography_doi", False):
         return
     import asyncio
+    import os
 
     from wikify.citations.db import DatabaseManager
     from wikify.citations.resolver import AsyncResolver
@@ -187,27 +197,38 @@ def _refresh_openalex(ctx: dict) -> None:
     if not all_cits:
         return
 
+    corpus_dois: list[str] = []
+    for doc in ctx["docs"]:
+        d = (doc.metadata or {}).get("doi")
+        if d:
+            corpus_dois.append(str(d))
+    seed_dicts: list[dict] = [
+        {"raw_text": "", "doi": d, "title": "", "year": None}
+        for d in corpus_dois
+    ]
+
     db_path = ctx["paths"].root / ".citestore.db"
 
     async def _run() -> None:
         async with DatabaseManager(db_path) as db:
-            import os
             email = os.environ.get("OPENALEX_EMAIL", "wikify@example.com")
             resolver = AsyncResolver(
                 db,
                 email=email,
                 expand_references=True,
+                expand_corpus_dois=set(corpus_dois) or None,
             )
             try:
-                # Convert to dicts for the resolver API
                 cit_dicts = [c.to_dict() if hasattr(c, "to_dict") else c for c in all_cits]
-                results = await resolver.resolve_batch(cit_dicts)
+                full_input = seed_dicts + cit_dicts
+                results = await resolver.resolve_batch(full_input)
+                bib_results = results[len(seed_dicts):]
             finally:
                 await resolver.close()
 
         # Map results back onto CitationEntry objects
         result_by_text: dict[str, object] = {}
-        for r in results:
+        for r in bib_results:
             if r.source_text:
                 result_by_text[r.source_text] = r
 
