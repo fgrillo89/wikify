@@ -61,6 +61,86 @@ def test_inbound_resolution_by_title_year():
     assert ("d1", "d2") in edges
 
 
+def test_inbound_resolution_alnum_normalisation():
+    """Em-dashes, smart quotes, marker line-breaks, NFKD subscripts must
+    not block a bib.title vs doc.title match. The resolver should treat
+    these as the same canonical key."""
+    s = Store(":memory:")
+    s.upsert_document(_doc("d1"))
+    # Doc title has line-break artefact from PDF extraction (Marker output).
+    s.upsert_document(_doc(
+        "d2", title="Improving linearity by introducing Al in HfO\n2 as a memristor synapse device",
+        year=2022,
+    ))
+    s.upsert_bib_entries("d1", [
+        # Bib has the same title without the line break.
+        {"title": "Improving linearity by introducing Al in HfO2 as a memristor synapse device",
+         "year": 2022, "raw_text": "x"},
+    ])
+    assert s.reresolve_inbound("d2") == 1
+
+
+def test_inbound_resolution_em_dash_vs_hyphen():
+    s = Store(":memory:")
+    s.upsert_document(_doc("d1"))
+    s.upsert_document(_doc("d2", title="Memristor-The missing circuit element", year=1971))
+    s.upsert_bib_entries("d1", [
+        {"title": "Memristor—The missing circuit element", "year": 1971, "raw_text": "x"},
+    ])
+    assert s.reresolve_inbound("d2") == 1
+
+
+def test_inbound_resolution_rawtext_fallback_for_null_title():
+    """A bib with no extracted title should still resolve when the cited
+    paper's title prefix appears in the bib raw_text and the year matches."""
+    s = Store(":memory:")
+    s.upsert_document(_doc("d1"))
+    s.upsert_document(_doc(
+        "d2",
+        title="Atomic layer deposited HfZrO based flexible memristor for synapses",
+        year=2023,
+    ))
+    s.upsert_bib_entries("d1", [
+        # title=None; the doc title appears verbatim inside the raw_text.
+        {"title": None, "year": 2023,
+         "raw_text": "X. Author et al. Atomic layer deposited HfZrO based flexible "
+                     "memristor for synapses. J. Mater. Chem. C 11 (2023) 1234."},
+    ])
+    n = s.reresolve_inbound("d2")
+    assert n == 1
+    res = s.con.execute(
+        "SELECT resolution FROM bib_entries WHERE doc_id='d1'"
+    ).fetchone()[0]
+    assert res == "rawtext_year"
+
+
+def test_inbound_resolution_rawtext_requires_year_match():
+    """Raw-text fallback must not match across year boundaries."""
+    s = Store(":memory:")
+    s.upsert_document(_doc("d1"))
+    s.upsert_document(_doc(
+        "d2", title="Atomic layer deposited HfZrO based flexible memristor for synapses",
+        year=2023,
+    ))
+    s.upsert_bib_entries("d1", [
+        {"title": None, "year": 2019,  # wrong year
+         "raw_text": "Atomic layer deposited HfZrO based flexible memristor for synapses. 2019."},
+    ])
+    assert s.reresolve_inbound("d2") == 0
+
+
+def test_inbound_resolution_skips_short_doc_titles():
+    """Avoid matching on stub doc titles ('Article', 'Editorial', etc.)
+    which would generate huge false-positive sets."""
+    s = Store(":memory:")
+    s.upsert_document(_doc("d1"))
+    s.upsert_document(_doc("d2", title="Editorial", year=2022))
+    s.upsert_bib_entries("d1", [
+        {"title": "Editorial", "year": 2022, "raw_text": "Editorial 2022"},
+    ])
+    assert s.reresolve_inbound("d2") == 0
+
+
 def test_chunk_citations_create_cites_edges():
     s = Store(":memory:")
     s.upsert_document(_doc("d1"))

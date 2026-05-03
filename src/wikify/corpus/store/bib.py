@@ -10,15 +10,33 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 from typing import Any, Literal
 
 from .documents import _norm_doi
 
+# Title-key tuning. The alnum form folds em-dash/hyphen, NFKD subscripts,
+# Greek letters, PDF line-break artefacts (e.g. "HfO\n2"), and whitespace
+# into one comparable string so the resolver is not defeated by surface
+# punctuation. Two signals fire against unresolved bibs in the same year:
+#
+#   A. bib.title alnum prefix == doc.title alnum prefix (length _TITLE_PREFIX_LEN)
+#   B. doc.title alnum prefix appears as substring of bib.raw_text alnum
+#      (length _RAW_PREFIX_LEN; rescues the bibs whose title field is NULL)
+#
+# Both require year match. _MIN_DOC_TITLE_ALNUM gates the doc to avoid
+# matching on stub titles ("Article", a chapter heading, etc.).
+_TITLE_PREFIX_LEN = 50
+_RAW_PREFIX_LEN = 40
+_MIN_DOC_TITLE_ALNUM = 30
 
-def _title_key(title: str | None) -> str:
-    if not title or len(title) <= 15:
+
+def _alnum(text: str | None) -> str:
+    """NFKD-fold to ASCII, lowercase, strip non-alphanumerics."""
+    if not text:
         return ""
-    return title.lower()[:50]
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]", "", folded.lower())
 
 
 def upsert_bib_entries(
@@ -92,7 +110,9 @@ def upsert_chunk_citations(
 
 
 def reresolve_inbound(con: sqlite3.Connection, new_doc_id: str) -> int:
-    """Resolve unresolved bib_entries to *new_doc_id* by DOI or title+year.
+    """Resolve unresolved bib_entries to *new_doc_id* by DOI, alnum title,
+    or alnum doc-title-prefix found in the bib raw_text. All non-DOI signals
+    are year-gated.
 
     Returns the number of bib_entries newly resolved. Side effects:
     - Updates bib_entries.target_doc_id / resolution / confidence.
@@ -106,8 +126,8 @@ def reresolve_inbound(con: sqlite3.Connection, new_doc_id: str) -> int:
     if not row:
         return 0
     doi = _norm_doi(row["doi"])
-    tkey = _title_key(row["title"])
     year = row["year"]
+    title_alnum = _alnum(row["title"])
 
     resolved: list[tuple[str, str, str, float]] = []  # (bib_id, src_doc_id, resolution, confidence)
     if doi:
@@ -116,14 +136,27 @@ def reresolve_inbound(con: sqlite3.Connection, new_doc_id: str) -> int:
             (doi,),
         ):
             resolved.append((r["bib_id"], r["doc_id"], "exact_doi", 1.0))
-    if tkey and year:
+    if year and len(title_alnum) >= _MIN_DOC_TITLE_ALNUM:
+        title_key = title_alnum[:_TITLE_PREFIX_LEN]
+        raw_prefix = title_alnum[:_RAW_PREFIX_LEN]
+        seen_in_year: set[str] = set()
         for r in con.execute(
-            "SELECT bib_id, doc_id, title FROM bib_entries "
-            "WHERE target_doc_id IS NULL AND year = ? AND title IS NOT NULL",
+            "SELECT bib_id, doc_id, title, raw_text FROM bib_entries "
+            "WHERE target_doc_id IS NULL AND year = ?",
             (year,),
         ):
-            if (r["title"] or "").lower()[:50] == tkey:
-                resolved.append((r["bib_id"], r["doc_id"], "title_year", 0.85))
+            bib_id = r["bib_id"]
+            if bib_id in seen_in_year:
+                continue
+            bib_title_alnum = _alnum(r["title"])
+            if bib_title_alnum and bib_title_alnum[:_TITLE_PREFIX_LEN] == title_key:
+                resolved.append((bib_id, r["doc_id"], "title_year", 0.85))
+                seen_in_year.add(bib_id)
+                continue
+            bib_raw_alnum = _alnum(r["raw_text"])
+            if bib_raw_alnum and raw_prefix in bib_raw_alnum:
+                resolved.append((bib_id, r["doc_id"], "rawtext_year", 0.75))
+                seen_in_year.add(bib_id)
 
     seen: set[str] = set()
     src_docs: set[str] = set()
