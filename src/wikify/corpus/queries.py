@@ -378,7 +378,7 @@ def search_chunks(
     from .store.routing import sqlite_available
 
     if not sqlite_available(corpus.root):
-        if rank in _LEXICAL_RANKS:
+        if rank in _LEXICAL_RANKS or rank == _MULTI_RANK:
             raise QueryError(
                 "no_wikify_db",
                 f"--rank {rank} requires wikify.db; rebuild with `corpus build`",
@@ -386,6 +386,8 @@ def search_chunks(
         # No SQLite store yet (hand-built test fixture or pre-build);
         # fall back to the empty KG so callers get [] instead of an error.
         return []
+    if rank == _MULTI_RANK:
+        return _search_chunks_all_modes(corpus, query, top_k=top_k)
     return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
 
 
@@ -604,8 +606,163 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
     return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
 
 
+def _search_chunks_all_modes(
+    corpus: Corpus, query: str, *, top_k: int, per_mode: int | None = None,
+) -> list[dict]:
+    """Run semantic + bm25 + literal-substring chunk search and dedupe.
+
+    Each returned chunk dict carries a ``modes`` list (subset of
+    ``{"semantic", "bm25", "text"}``) so callers can see which channels
+    matched, and a ``score`` taken from the best-scoring mode for that
+    chunk. Chunks present in more modes are surfaced first; ties broken
+    by the RRF fusion across modes (k=60).
+
+    Failures in any single mode are tolerated — e.g. an FTS5 syntax error
+    in *query* (a stray hyphen, an unbalanced quote) drops just BM25 and
+    the other channels still return.
+
+    Optimization: opens one Store and embeds the query once; the three
+    mode searches share both. The legacy per-mode helpers reopen the
+    store each time, so we replicate their logic inline here.
+    """
+    from ..corpus.vectors_meta import read_meta
+    from ..embedding import embedder_for
+    from .store.fts import RRF_K_DEFAULT, rrf_fuse
+    from .store.routing import active_space_id, open_store
+
+    pool = per_mode or max(top_k * 2, 20)
+    store = open_store(corpus.root)
+    try:
+        # Embed once; share between semantic and hybrid (we only need it for
+        # the semantic side here; BM25 + text don't use it).
+        meta = read_meta(corpus.vectors_path)
+        embed = embedder_for(meta.backend, meta.model, mode="query") if meta else None
+        space_id = active_space_id(store)
+        qv = embed([query])[0] if embed else None  # type: ignore[index]
+
+        def _doc_ids_for(cids: list[str]) -> dict[str, str]:
+            if not cids:
+                return {}
+            placeholders = ",".join("?" * len(cids))
+            rows = store.con.execute(
+                f"SELECT chunk_id, doc_id FROM chunks WHERE chunk_id IN ({placeholders})",
+                cids,
+            ).fetchall()
+            return {r["chunk_id"]: r["doc_id"] for r in rows}
+
+        def _semantic() -> list[dict]:
+            if qv is None or not space_id:
+                return []
+            hits = store.vector_index(space_id).search(qv, top_k=pool)
+            doc_map = _doc_ids_for([cid for cid, _ in hits])
+            return [
+                {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
+                for cid, score in hits if cid in doc_map
+            ]
+
+        def _bm25() -> list[dict]:
+            hits = store.search_chunks_bm25(query, top_k=pool)
+            doc_map = _doc_ids_for([cid for cid, _ in hits])
+            return [
+                {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
+                for cid, score in hits if cid in doc_map
+            ]
+
+        def _text() -> list[dict]:
+            rows = store.con.execute(
+                "SELECT chunk_id, doc_id FROM chunks WHERE LOWER(text) LIKE ? "
+                "ORDER BY chunk_id LIMIT ?",
+                (f"%{query.lower()}%", pool),
+            ).fetchall()
+            return [{"id": r["chunk_id"], "doc_id": r["doc_id"]} for r in rows]
+
+        sem_hits = _safe_mode("semantic", _semantic)
+        bm_hits = _safe_mode("bm25", _bm25)
+        text_hits = _safe_mode("text", _text)
+    finally:
+        store.close()
+
+    by_id: dict[str, dict] = {}
+    score_keys = (("semantic", "semantic_score"), ("bm25", "bm25_score"),
+                  ("text", "text_score"))
+    rankings_by_mode = {"semantic": sem_hits, "bm25": bm_hits, "text": text_hits}
+    for mode, score_key in score_keys:
+        for hit in rankings_by_mode[mode]:
+            cid = hit["id"]
+            entry = by_id.setdefault(cid, {
+                "id": cid,
+                "doc_id": hit.get("doc_id", ""),
+                "modes": [],
+            })
+            if mode not in entry["modes"]:
+                entry["modes"].append(mode)
+            if "score" in hit:
+                entry[score_key] = float(hit["score"])
+
+    # Fuse across the three rankings; consensus wins via RRF.
+    fused = rrf_fuse(
+        [
+            [(h["id"], float(h.get("score", 0.0))) for h in sem_hits],
+            [(h["id"], float(h.get("score", 0.0))) for h in bm_hits],
+            [(h["id"], 0.0) for h in text_hits],
+        ],
+        k=RRF_K_DEFAULT,
+        top_k=top_k,
+    )
+    out: list[dict] = []
+    for cid, fused_score in fused:
+        entry = by_id.get(cid)
+        if not entry:
+            continue
+        entry["score"] = round(float(fused_score), 6)
+        out.append(entry)
+    # Append any remaining entries (rare: a chunk only present in text
+    # search may not survive RRF when others have stronger ranks).
+    if len(out) < top_k:
+        seen_ids = {e["id"] for e in out}
+        for cid, entry in by_id.items():
+            if cid in seen_ids:
+                continue
+            entry.setdefault("score", 0.0)
+            out.append(entry)
+            if len(out) >= top_k:
+                break
+    return out[:top_k]
+
+
+def _safe_mode(mode: str, fn) -> list[dict]:
+    try:
+        return list(fn())
+    except (QueryError, Exception):  # noqa: BLE001
+        # FTS5 syntax error, embedder hiccup, etc. Drop just this mode.
+        return []
+
+
 def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
-    """Literal substring grep over chunk text. Cheap, no embedding load."""
+    """Literal substring grep over chunk text.
+
+    Uses SQLite `LIKE` against `wikify.db` when available (sub-ms for
+    typical corpus sizes); falls back to scanning the on-disk JSONL
+    only for hand-built fixtures with no SQLite store.
+    """
+    from .store.routing import sqlite_available
+
+    if sqlite_available(corpus.root):
+        from .store.routing import open_store
+        store = open_store(corpus.root)
+        try:
+            rows = store.con.execute(
+                "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview "
+                "FROM chunks WHERE LOWER(text) LIKE ? "
+                "ORDER BY chunk_id LIMIT ?",
+                (f"%{needle.lower()}%", top_k),
+            ).fetchall()
+            return [
+                {"id": r["chunk_id"], "doc_id": r["doc_id"], "preview": r["preview"]}
+                for r in rows
+            ]
+        finally:
+            store.close()
     needle_lower = needle.lower()
     out: list[dict] = []
     for c in all_chunks(corpus):
@@ -1298,7 +1455,8 @@ _AUTHOR_RELATIONS = {"sources", "coauthors"}
 _SOURCE_RANKS = {"citation_count", "pagerank"}
 _AUTHOR_RANKS = {"h_index", "citation_count", "n_papers"}
 _LEXICAL_RANKS = {"bm25", "hybrid"}
-_FIND_RANKS = {"semantic", *_LEXICAL_RANKS, *_SOURCE_RANKS, *_AUTHOR_RANKS}
+_MULTI_RANK = "all"
+_FIND_RANKS = {"semantic", *_LEXICAL_RANKS, _MULTI_RANK, *_SOURCE_RANKS, *_AUTHOR_RANKS}
 
 
 SCHEMA: dict = {
@@ -1390,7 +1548,7 @@ def _validate_find_params(*, query: str, by: str, rank: str, top_k: int,
             "bad_field_by_combo",
             f"field='title' only applies with by='paper'; got by={by!r}",
         )
-    if by == "chunk" and rank not in {"semantic", *_LEXICAL_RANKS}:
+    if by == "chunk" and rank not in {"semantic", _MULTI_RANK, *_LEXICAL_RANKS}:
         raise QueryError(
             "bad_rank_by_combo",
             f"rank {rank!r} only applies when chunks are aggregated to a "

@@ -392,8 +392,9 @@ def cmd_find(
         "semantic",
         "--rank",
         help=(
-            "Ranking metric: semantic | bm25 | hybrid | citation_count | "
-            "pagerank."
+            "Ranking metric: semantic | bm25 | hybrid | all | citation_count | "
+            "pagerank. `all` runs semantic+bm25+text, RRF-fuses, dedupes, and "
+            "tags each row with which channels matched."
         ),
     ),
     field: str = typer.Option(
@@ -615,14 +616,23 @@ def _emit_chunk_rows(
         cites = metrics.get(did, {}).get("citation_count", 0)
         score_val = h.get(score_key) if score_key else None
         score_col = f"{float(score_val):.3f}" if score_val is not None else "."
-        typer.echo(
-            format_row([
-                score_col,
-                f"cites={cites}",
-                format_handle("chunk", cid),
-                format_handle("doc", did) if did else "",
-            ])
-        )
+        cols = [
+            score_col,
+            f"cites={cites}",
+            format_handle("chunk", cid),
+            format_handle("doc", did) if did else "",
+        ]
+        if "modes" in h:
+            cols.insert(1, _modes_badge(h["modes"]))
+        typer.echo(format_row(cols))
+
+
+def _modes_badge(modes: list[str]) -> str:
+    """3-letter badge: s=semantic, b=bm25, t=text. Letter present == mode matched."""
+    s = "s" if "semantic" in modes else "-"
+    b = "b" if "bm25" in modes else "-"
+    t = "t" if "text" in modes else "-"
+    return f"via={s}{b}{t}"
 
 
 def _emit_paper_rows(

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "wikify": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "C:/dev/scholarforge",
+        "wikify",
+        "mcp",
+        "serve"
+      ],
+      "env": {
+        "WIKIFY_CORPUS": "C:/dev/scholarforge/data/corpora/ald_all_marker"
+      }
+    }
+  }
+}

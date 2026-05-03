@@ -13,32 +13,12 @@ decide what to explore next.
 ## MCP mode
 
 If `mcp__wikify__corpus_schema` is in the tool list, prefer MCP tools
-over CLI verbs for repeated reads (`corpus_find`, `corpus_traverse`,
-`corpus_show`, `corpus_sample`, `corpus_schema`, `context_show`).
-Validation and data are identical — both adapters call the same
-domain helpers.
-
-High-leverage parameters worth knowing:
-
-- `corpus_show(handle="doc:<short>", include_text=True, mode="full")`
-  returns the body as one ordered string in `meta.body` with
-  `## <section>` headers inlined — best for "summarise this paper".
-  Default `mode="sections"` returns segmented `meta.text`. `sections`
-  filters either mode; mismatch echoes available paths in `notes`.
-- `corpus_find(by="paper", field="title")` does literal substring
-  search on `Document.title` — use for "title mentions X".
-- `corpus_traverse(handle="doc:...", to="chunks")` returns chunks in
-  document order with `section_path` + `ord` on each row.
-- `corpus_traverse(handle="chunk:...", to="cited-in-corpus")` returns
-  the in-corpus references the markers in that paragraph's text point
-  to — use to follow an argument from a specific paragraph to its
-  sources.
-- `corpus_image(handle="figure:...")` returns the figure binary as an
-  MCP ImageContent block so the model can see the figure during
-  reasoning.
-
-See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`
-for setup, the tool↔CLI map, URI patterns, and CLI fallback.
+over CLI verbs for repeated reads. Validation + data are identical.
+High-leverage params: `corpus_show(mode="full")` for the whole body
+as one string; `corpus_find(by="paper", field="title")` for literal
+title substring; `corpus_traverse(chunk:..., to="cited-in-corpus")`
+to follow markers; `corpus_image(figure:...)` to see the binary.
+See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`.
 
 ## Step 0: discover the surface
 
@@ -90,6 +70,7 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
 | Paper whose **title** mentions X                    | `find "X" --by paper --field title` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
+| **Unsure which mode?** Semantic + BM25 + text       | `find "X" --rank all --top-k 12` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
 | Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |
 | **Authors**                                         | |
@@ -128,6 +109,28 @@ when debugging GPU-provider fallback or model loading.
 `--format quiet` prints handles only — pipe-safe and the default when
 stdout is piped.
 
+## Picking a `--rank` for chunk search
+
+`--rank all` is the safe default when you can't predict the query shape.
+It fans out to semantic + bm25 + literal substring, RRF-fuses, dedupes,
+and tags each row `via=sbt` (s=semantic, b=bm25, t=text). `via=sbt`
+means all three modes agreed; high-confidence consensus. Tolerates a
+failure in any single mode (FTS5 syntax error, missing embedder, etc).
+
+| Query shape                          | Recommended rank |
+|--------------------------------------|------------------|
+| Concept / paraphrase / question      | `semantic` (default) or `all` |
+| Exact term, acronym, formula         | `bm25` (sub-ms) |
+| Term + paraphrase, weighted          | `hybrid` |
+| Don't know / agent exploration       | `all` |
+
+FTS5 grammar gotchas — apply to `bm25` / `hybrid` only, not `all`:
+default operator is AND, so `"what is growth per cycle"` needs every
+word present (use `semantic` or `all` for natural questions); `-`
+parses as NOT at query time even with `tokenchars '-'` (quote
+hyphenated phrases: `'"self-limiting"'`). See
+`references/corpus-cli-patterns.md` for full syntax.
+
 ## Idiom: empty query + `--rank` = "rank everything by metric"
 
 `find` with no query string and `--rank <graph-metric>` ranks the whole
@@ -153,25 +156,19 @@ few citations.
 ## Capability surface (reference)
 
 - **Handles**: `doc:` / `chunk:` / `figure:` / `equation:` / `author:`.
-  All accept short forms (12-hex doc/chunk suffix, `<doc-short>/<stem>`
-  for figures, `first_last` for authors). Any unique suffix or
-  case-insensitive prefix resolves; ambiguous matches return an error
-  with candidates.
-- **Output formats** (`--format auto|quiet|compact|json`): `quiet`
-  emits handles only and is the default when stdout is piped;
-  `compact` is tab-separated columns; `json` for tooling. `auto`
-  consults `WIKIFY_CLI_FORMAT` (env override), then falls back to
-  `compact` for TTY / `quiet` for pipe.
-- **Traverse relations**:
-  - doc: `cited-by`, `references`, `chunks`, `figures`, `equations`, `authors`
-  - chunk: `source`, `cited-in-corpus`, `figures`, `equations`
-  - author: `sources`, `coauthors`
-- **Rank metrics**:
-  - sources: `citation_count`, `pagerank`
-  - authors: `h_index`, `citation_count`, `n_papers`
-- **Figures consume two ways**: pass the printed `path` to the Read
-  tool for visual ingestion, or compose `![caption](path)` markdown
-  for wiki pages.
+  Short forms (12-hex suffix, `<doc-short>/<stem>` for figures,
+  `first_last` for authors); unique suffix or case-insensitive prefix
+  resolves; ambiguous matches return an error with candidates.
+- **Output formats** (`--format auto|quiet|compact|json`): `quiet` =
+  handles only (default when piped); `compact` = TSV columns;
+  `auto` = `WIKIFY_CLI_FORMAT` env, else compact for TTY / quiet for pipe.
+- **Traverse relations**: doc → cited-by, references, chunks, figures,
+  equations, authors; chunk → source, cited-in-corpus, figures,
+  equations; author → sources, coauthors.
+- **Rank metrics**: sources → citation_count, pagerank; authors →
+  h_index, citation_count, n_papers.
+- **Figures**: pass the printed `path` to Read for visual ingestion,
+  or compose `![caption](path)` markdown for wiki pages.
 
 ## Default loop
 
