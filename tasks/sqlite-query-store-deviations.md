@@ -1,5 +1,28 @@
 # SQLite query store — deviations from the spec
 
+> **Update (post-NetworkX-removal pass).** The follow-up "complete all
+> phases, remove NetworkX storage, drop WIKIFY_QUERY_BACKEND" lands in
+> commits after `c000415`. NetworkX stays as an algorithm dependency
+> only; the storage shape is SQLite end to end. The notes below cover
+> deviations from the original spec; the live behaviour is captured in
+> the commits and `notes/` (where present).
+
+## Final state, in one paragraph
+
+`wikify.db` is the corpus runtime store (canonical entities + FTS5 +
+embeddings + graph_edges + node_metrics). `wiki.db` is the bundle
+runtime store (wiki_pages + wiki_evidence + wiki_edges +
+wiki_pages_fts + wiki_embeddings). NetworkX no longer backs either —
+the fluent `KnowledgeGraph` / `WikiKnowledgeGraph` APIs run over
+SQLite-backed `_GShim` adapters. NetworkX stays as the algorithm
+library that `corpus metrics refresh` (PageRank, degree centrality,
+Louvain modularity) calls on the projected subgraph. The
+`WIKIFY_QUERY_BACKEND` env flag is gone; SQLite is the only path.
+`vectors.npz` and `knowledge_graph.json` writers are removed;
+`citations.json`, `corpus_papers.bib`, `cited_works.bib`, and
+`vectors.meta.json` stay as small derived sidecars.
+
+
 Tracks places where the implementation differs from
 `tasks/sqlite-query-store-plan.md`. Architecture and acceptance criteria
 are unchanged unless a specific design hard-constraint is named here.

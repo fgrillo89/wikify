@@ -599,22 +599,9 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
             }
             for did in doc_ids
         }
-    if not (corpus.knowledge_graph_path.exists() and corpus.vectors_path.exists()):
-        return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
-    vs = read_vector_store(corpus)
-    kg = read_knowledge_graph(corpus, vectors=vs)
-    backend = kg._backend
-    out: dict[str, dict] = {}
-    for did in doc_ids:
-        if did not in backend.G:
-            out[did] = {"citation_count": 0, "pagerank": 0.0}
-            continue
-        attrs = backend.G.nodes[did]
-        out[did] = {
-            "citation_count": int(attrs.get("citation_count", 0) or 0),
-            "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
-        }
-    return out
+    # No SQLite store available (hand-built test fixture or pre-build);
+    # zeroed metrics are the expected fallback.
+    return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
 
 
 def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
@@ -707,7 +694,7 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
-    if full and out["has_knowledge_graph"]:
+    if full and out["has_sqlite_store"]:
         try:
             out.update(_ord_refs_coverage(corpus, docs))
         except Exception as exc:
