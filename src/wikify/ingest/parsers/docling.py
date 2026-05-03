@@ -242,9 +242,10 @@ def parse(
 
     title = metadata.get("title") or path.stem
 
-    if opts.hybrid_chunks:
-        chunks_data = _hybrid_chunk(doc)
-        metadata["_docling_chunks"] = chunks_data
+    # The unified pipeline chunker (HybridChunker on saved markdown)
+    # ignores any ``_docling_chunks`` payload, so building one here is
+    # wasted work. Skip the call entirely; the markdown carries enough
+    # structure for the downstream chunker to recover.
 
     return ParseResult(
         markdown=md_text,

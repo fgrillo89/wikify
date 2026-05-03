@@ -316,3 +316,44 @@ across all three.
 | equations.json records | 0 | - | - | - | - | target 786+ |
 
 Numbers update inline as each stage lands.
+
+## 2026-05-04 -- HybridChunker swap supersedes Stages 1 + 3
+
+The Docling HybridChunker landed as the universal chunker for every
+parser (Marker, Docling-PDF, Docling-DOCX, lite-pdf, lite-docx, etc.).
+It runs uniformly via ``markdown -> DocumentConverter -> DoclingDocument
+-> HybridChunker`` so the same code path covers any future parser that
+emits markdown. Implementation lives in
+``src/wikify/ingest/hybrid_chunker.py``; the pipeline worker now calls
+it in place of both ``chunk_document`` and ``_chunks_from_docling``.
+
+Two staged items collapse:
+
+- **Stage 1 (section_path normalisation)** is now mostly free.
+  HybridChunker reads the markdown through Docling's structural
+  parser, which discards HTML-style anchors / spans / page-number
+  headings during heading detection. The earlier approach (regex-clean
+  each section element) is no longer needed for the patterns surfaced
+  by the audit. A residual normalisation pass may still be useful for
+  edge cases the structural parser misses; revisit only if the
+  full-corpus validation surfaces stragglers.
+- **Stage 3 (merge nano-chunks)** is built into HybridChunker's
+  tokenizer-aware merge pass. Configured against
+  ``jinaai/jina-embeddings-v2-small-en`` with ``max_tokens=2048`` and
+  ``merge_peers=True``. A 10-doc spot-check showed nano-chunk count
+  drop 78 -> 18 (-77%), median chunk size 449 -> 1784 (+297%), HTML
+  noise in section_path 31 -> 0.
+
+Citations + equations migration: chunk-level citation linking already
+runs on chunk text (no offset dependency), so it is unaffected.
+Equation binding switches to the existing ``use_text_match=True`` path
+in ``bind_equations_to_chunks`` because HybridChunker carries only
+best-effort ``char_span``.
+
+Stage 0 ``corpus rechunk`` shipped alongside: re-runs the chunker over
+saved markdown without re-parsing PDFs, then triggers the existing
+refresh DAG to rebuild embeddings + graph rows. Wall-clock is
+chunking-dominated (~3-9 s/doc warm) plus the existing refresh step.
+Use ``wikify corpus rechunk <corpus_dir>`` for chunker-only iteration.
+
+Stages 2, 4, 5, 6 still apply on top of HybridChunker output.

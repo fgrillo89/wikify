@@ -234,6 +234,72 @@ def cmd_build(
     typer.echo(f"corpus written to {paths.root}")
 
 
+@app.command("rechunk")
+def cmd_rechunk(
+    corpus_dir: Path = typer.Argument(..., help="Corpus directory."),
+    only_doc: list[str] = typer.Option(
+        [],
+        "--only-doc",
+        help=(
+            "Limit to specific doc id(s); pass multiple times. "
+            "Useful when iterating on chunker behaviour against a few "
+            "audit-flagged docs without rebuilding the whole corpus."
+        ),
+    ),
+    workers: int = typer.Option(
+        0,
+        "--workers",
+        help=(
+            "Number of chunker worker processes (0 = auto, ~60%% of "
+            "cores). Set to 1 to force serial execution."
+        ),
+    ),
+    openalex: bool = typer.Option(
+        False,
+        "--openalex/--no-openalex",
+        help=(
+            "Re-run OpenAlex enrichment after rechunking. OFF by default "
+            "because chunking changes do not affect bibliographies."
+        ),
+    ),
+) -> None:
+    """Re-chunk an existing corpus from saved markdown.
+
+    Skips parsing entirely (no Marker, no Docling, no OCR). Reads
+    each doc's persisted markdown and image sidecars, runs the
+    universal HybridChunker, re-extracts equations / citations /
+    figure refs, and rewrites the chunk-derived disk artefacts plus
+    the SQLite store. Embeddings get rebuilt for every doc whose
+    chunk ids changed (which is all of them when the chunker
+    changes), so the wall-clock is dominated by chunking +
+    embedding, not parsing.
+
+    Use this when chunker logic, section detection, or boilerplate
+    rules change. Use ``corpus build`` when source PDFs change.
+    """
+    from ..ingest.rechunk import rechunk_corpus
+
+    paths = Corpus(root=corpus_dir)
+    if not paths.docs_dir.exists():
+        cli_error(
+            EXIT_VALIDATION,
+            error="not_a_corpus",
+            message=f"{corpus_dir} has no docs/ directory",
+        )
+    summary = rechunk_corpus(
+        paths,
+        only_docs=only_doc or None,
+        max_workers=workers if workers > 0 else None,
+        resolve_bibliography_doi=openalex,
+        cite_resolution="crossref" if openalex else "off",
+    )
+    typer.echo(
+        f"rechunk complete: {summary['docs']} docs / "
+        f"{summary['chunks']} chunks in "
+        f"{summary['total_seconds']}s"
+    )
+
+
 @app.command("refresh")
 def cmd_refresh(
     corpus_dir: Path = typer.Argument(...),

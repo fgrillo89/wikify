@@ -30,11 +30,11 @@ from wikify.corpus.vectors_meta import write_meta as write_vectors_meta
 from ..api import Corpus
 from ..embedding import embed_passages
 from ..models import Chunk, DocSection, Document
-from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
 from .equations import extract_equations
 from .figure_refs import extract_figure_refs
+from .hybrid_chunker import chunk_with_hybrid
 from .images import (
     caption_chunks_for,
     link_chunks_to_images,
@@ -222,19 +222,18 @@ def _parse_and_persist_worker(
         saved = save_doc_images(did, image_dir_path, parsed.raw_images)
         parsed.images.extend(saved)
 
-    # Chunks
-    docling_chunks = parsed.metadata.pop("_docling_chunks", None)
-    is_docling = docling_chunks is not None
-    if is_docling:
-        chunks = _chunks_from_docling(did, docling_chunks)
-    else:
-        chunks = chunk_document(did, parsed.markdown, parsed.sections)
+    # Chunks: HybridChunker runs uniformly on every parser's markdown.
+    # Drop any legacy Docling-direct payload; the chunker re-derives
+    # structure by feeding the markdown back through DocumentConverter.
+    parsed.metadata.pop("_docling_chunks", None)
+    chunks = chunk_with_hybrid(did, parsed.markdown)
     chunks += caption_chunks_for(did, parsed.images, ord_offset=len(chunks))
 
-    # Equations + figure refs
+    # Equations + figure refs. Equation binding goes through text-match
+    # because HybridChunker chunks carry only best-effort char_span.
     equations = extract_equations(parsed.markdown)
     figure_refs = extract_figure_refs(parsed.markdown)
-    bind_equations_to_chunks(chunks, equations, use_text_match=is_docling)
+    bind_equations_to_chunks(chunks, equations, use_text_match=True)
 
     # Citations + image linking + sections
     citations = extract_citations(parsed.markdown, did)
