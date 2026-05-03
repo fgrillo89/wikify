@@ -27,15 +27,24 @@ _PREVIEW_CHARS = 240
 
 def ok(kind: str, *, items: list[dict] | None = None,
        notes: list[str] | None = None,
-       next_: str | None = None) -> dict:
-    """Build a success envelope."""
-    return {
+       next_: str | None = None,
+       **extras: Any) -> dict:
+    """Build a success envelope.
+
+    ``extras`` are merged in alongside the canonical envelope keys so
+    walk tools can attach structured ``seeds`` / ``edges`` collections
+    without nesting them inside ``items``. Existing tests assert the
+    canonical key set is present (``>=``), so additional keys are safe.
+    """
+    out: dict[str, Any] = {
         "ok": True,
         "kind": kind,
         "items": items or [],
         "notes": notes or [],
         "next": next_,
     }
+    out.update(extras)
+    return out
 
 
 def err(code: str, message: str, **details: Any) -> dict:
@@ -147,7 +156,13 @@ def doc_item(doc: Document, *,
 
 
 def doc_row_item(row: dict, *, score: float | None = None) -> dict:
-    """Build an item from a ``rank_docs`` / ``search_papers`` row dict."""
+    """Build an item from a ``rank_docs`` / ``search_papers`` row dict.
+
+    Recognised optional triage keys (set by callers when they have the
+    document loaded): ``_doc_year``, ``_doc_n_chunks``, ``_doc_abstract``,
+    ``_doc_is_stub``. Each lands under ``meta`` so the agent can decide
+    whether to dereference the row without an extra ``corpus_show``.
+    """
     doc_id = str(row.get("doc_id", ""))
     rank: dict[str, Any] = {}
     if "citation_count" in row:
@@ -169,16 +184,27 @@ def doc_row_item(row: dict, *, score: float | None = None) -> dict:
         ]
     if "match_offset" in row:
         meta["title_match_offset"] = int(row["match_offset"])
+    if "_doc_year" in row and row["_doc_year"] is not None:
+        meta["year"] = row["_doc_year"]
+    if "_doc_n_chunks" in row and row["_doc_n_chunks"] is not None:
+        meta["n_chunks"] = int(row["_doc_n_chunks"])
+    if row.get("_doc_abstract"):
+        meta["abstract_preview"] = str(row["_doc_abstract"])[:_PREVIEW_CHARS]
+    if row.get("_doc_is_stub"):
+        meta["is_stub"] = True
     if score is None and "best_score" in row:
         score = float(row["best_score"])
+    title = str(row.get("title", "") or "")
+    abstract_preview = str(row.get("_doc_abstract", "") or "").strip()
+    preview = abstract_preview or title
     return {
         "handle": format_handle("doc", doc_id),
         "type": "doc",
-        "title": str(row.get("title", "") or ""),
+        "title": title,
         "score": score,
         "rank": rank or None,
         "resource_uri": doc_uri(doc_id),
-        "preview": str(row.get("title", "") or "")[:_PREVIEW_CHARS],
+        "preview": preview[:_PREVIEW_CHARS],
         "meta": meta or None,
     }
 
@@ -207,10 +233,21 @@ def chunk_item(chunk: Chunk, *,
 
 
 def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
-    """Build a chunk item from a search-result dict."""
+    """Build a chunk item from a search-result dict.
+
+    Reads ``preview`` directly when present; otherwise truncates
+    ``text`` for the preview. ``section_path`` (when present on the
+    row) lands under ``meta`` so the agent can tell whether a hit came
+    from intro / methods / references without an extra round-trip.
+    """
     chunk_id = str(row.get("id", ""))
     doc_id = str(row.get("doc_id") or row.get("source_id") or "")
-    preview = str(row.get("preview", "") or "")
+    preview = str(row.get("preview") or row.get("text") or "")
+    meta: dict[str, Any] = {
+        "doc_handle": format_handle("doc", doc_id) if doc_id else "",
+    }
+    if "section_path" in row:
+        meta["section_path"] = list(row.get("section_path") or [])
     return {
         "handle": format_handle("chunk", chunk_id),
         "type": "chunk",
@@ -219,9 +256,7 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
         "rank": None,
         "resource_uri": chunk_uri(chunk_id),
         "preview": preview[:_PREVIEW_CHARS],
-        "meta": {
-            "doc_handle": format_handle("doc", doc_id) if doc_id else "",
-        },
+        "meta": meta,
     }
 
 
@@ -363,6 +398,9 @@ def traverse_row_item(row: dict) -> dict:
         })
     # source / unknown -> doc-style row
     doc_id = str(row.get("id", ""))
+    meta: dict[str, Any] | None = None
+    if row.get("_doc_is_stub"):
+        meta = {"is_stub": True}
     return {
         "handle": format_handle("doc", doc_id),
         "type": "doc",
@@ -374,5 +412,5 @@ def traverse_row_item(row: dict) -> dict:
         },
         "resource_uri": doc_uri(doc_id),
         "preview": str(row.get("title", "") or "")[:_PREVIEW_CHARS],
-        "meta": None,
+        "meta": meta,
     }

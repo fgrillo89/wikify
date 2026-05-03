@@ -28,7 +28,7 @@ from .chunks import (
     read_knowledge_graph,
     read_vector_store,
 )
-from .handles import HandleNotFoundError
+from .handles import AmbiguousHandleError, HandleNotFoundError
 from .handles import resolve as resolve_short
 
 # ---------------------------------------------------------------- listing
@@ -1557,12 +1557,63 @@ SCHEMA: dict = {
             "Literal substring search over Document.title. Use with "
             "--by paper for 'paper whose title mentions X'."
         ),
+        "--in-doc <doc-handle>": (
+            "Scope chunk search to one document. Accepts any doc handle "
+            "form (short, hex, or full id). BM25 / text get a cheap "
+            "WHERE filter; vector search post-filters a wider pool."
+        ),
     },
     "sample_strategies": {
         "diverse": (
             "Greedy submodular: PageRank prior + coverage gain over doc "
             "embeddings."
         ),
+    },
+    "walks": {
+        "similarity_walk": {
+            "purpose": (
+                "Recursive cosine-similarity walk over chunk vectors. "
+                "Starts from a query (top-k chunks at hop 0) or a single "
+                "chunk handle and expands neighbours per hop."
+            ),
+            "params": {
+                "query": "Concept seed (mutually exclusive with from_chunk).",
+                "from_chunk": (
+                    "chunk:<id-or-short> seed (mutually exclusive with query)."
+                ),
+                "depth": "Hops; 0 = seeds only.",
+                "top_k": "Seed count at hop 0 (query mode only).",
+                "neighbors": "Per-chunk fanout per hop.",
+                "threshold": "Cosine cut; below this, edges are dropped.",
+                "rank": "Hop-0 search method (query mode only).",
+                "cross_doc_only": (
+                    "True drops same-doc neighbours (default); False "
+                    "includes intra-doc edges."
+                ),
+            },
+            "result": (
+                "{seeds, edges, chunks} -- chunks deduped across paths; "
+                "edges typed 'similar' with cosine score."
+            ),
+        },
+        "citation_walk": {
+            "purpose": (
+                "Concept-grounded recursive citation walk. For each "
+                "frontier chunk, follow chunk_citations to in-corpus "
+                "papers and pick that paper's best chunk for the same "
+                "query (scoped to the doc), recursing to depth."
+            ),
+            "params": {
+                "query": "Concept the walk is grounded on (required).",
+                "depth": "Citation hops; 0 = seeds only.",
+                "top_k": "Seed chunks at hop 0.",
+                "rank": "Ranking method for seed and per-hop sub-search.",
+            },
+            "result": (
+                "{seeds, edges, chunks} -- edges carry the citation "
+                "marker that led from src_chunk to dst_chunk in dst_doc."
+            ),
+        },
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
@@ -1900,7 +1951,7 @@ def similarity_walk(
             short = (from_chunk or "").removeprefix("chunk:")
             try:
                 cid = resolve_chunk_id(corpus, short)
-            except HandleNotFoundError as exc:
+            except (HandleNotFoundError, AmbiguousHandleError) as exc:
                 raise QueryError("bad_chunk", str(exc)) from exc
             row = store.get_chunk(cid)
             if not row:
