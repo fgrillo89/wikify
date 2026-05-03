@@ -1045,30 +1045,69 @@ def cmd_metrics_refresh(
     view: str = typer.Option(
         "corpus_citation",
         "--view",
-        help="Graph view to refresh (currently: corpus_citation).",
+        help=(
+            "Graph view to refresh: corpus_citation | author_coauthor | "
+            "chunk_citation | all."
+        ),
     ),
 ) -> None:
-    """Recompute global metrics (PageRank, h-index) over the SQLite store."""
+    """Recompute global metrics (PageRank, h-index, degree centrality)."""
     from ..corpus.store.metrics import refresh_cheap_metrics
-    from ..corpus.store.metrics_global import refresh_h_index, refresh_pagerank
+    from ..corpus.store.metrics_global import (
+        VIEWS,
+        refresh_h_index,
+        refresh_view,
+    )
     from ..corpus.store.routing import open_store
 
     corpus = _resolve_corpus(corpus_dir)
     store = open_store(corpus.root)
     try:
-        if view == "corpus_citation":
-            refresh_cheap_metrics(store.con)
-            refresh_pagerank(store.con)
+        refresh_cheap_metrics(store.con)
+        if view == "all":
+            written: dict[str, list[str]] = {}
+            for v in VIEWS:
+                written[v] = refresh_view(store.con, v)
             refresh_h_index(store.con)
-        else:
+            for vname, metrics in written.items():
+                typer.echo(f"refreshed {vname}: {', '.join(metrics)}")
+            typer.echo("refreshed author_h_index: h_index")
+            return
+        if view not in VIEWS:
             cli_error(
                 EXIT_VALIDATION,
                 error="bad_view",
-                message=f"unknown view {view!r}; expected corpus_citation",
+                message=f"unknown view {view!r}; expected one of "
+                f"{sorted(VIEWS)} or 'all'",
             )
+        metrics = refresh_view(store.con, view)
+        if view == "corpus_citation":
+            refresh_h_index(store.con)
+            metrics.append("h_index")
+        typer.echo(f"refreshed {view}: {', '.join(metrics)}")
     finally:
         store.close()
-    typer.echo(f"refreshed metrics for view={view}")
+
+
+@metrics_app.command("list")
+def cmd_metrics_list(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+) -> None:
+    """List the registered graph views and their freshness."""
+    from ..corpus.store.metrics_global import VIEWS, view_status
+    from ..corpus.store.routing import open_store
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    try:
+        for v in VIEWS.values():
+            status = view_status(store.con, v.name)
+            badge = (status or {}).get("status", "stale")
+            kinds = ", ".join(v.edge_kinds)
+            metrics = ", ".join(v.metrics)
+            typer.echo(f"{v.name:24s} [{badge}] kinds={kinds} metrics={metrics}")
+    finally:
+        store.close()
 
 
 @app.command("schema")
