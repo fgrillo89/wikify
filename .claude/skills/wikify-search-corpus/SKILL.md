@@ -131,6 +131,24 @@ parses as NOT at query time even with `tokenchars '-'` (quote
 hyphenated phrases: `'"self-limiting"'`). See
 `references/corpus-cli-patterns.md` for full syntax.
 
+## Recipe: finding the definition of a term
+
+Definitions in primary literature don't follow Wikipedia patterns
+(`"<term> is"` is rare). Try in order:
+
+1. `find '"<term> (<ABBREV>)"' --rank bm25 --top-k 5` — the parenthesised
+   intro form. Authors introduce a term with its abbreviation in one
+   sentence and define it in the next.
+2. `find '"<ABBREV> is"' --rank bm25 --top-k 5` — body-text definition
+   using the abbreviation. Works for explained concepts (techniques,
+   materials); useless for operational quantities (rates, currents,
+   yields) which are introduced by value, not prose.
+3. `find '"<term>"' --rank bm25 --top-k 10` — fallback. Skim previews
+   for the parenthesised abbreviation; the definition lives next to it.
+
+Skip `'"<full term> is"'` — once authors introduce the abbreviation,
+they use it in prose.
+
 ## Idiom: empty query + `--rank` = "rank everything by metric"
 
 `find` with no query string and `--rank <graph-metric>` ranks the whole
@@ -155,34 +173,20 @@ few citations.
 
 ## Capability surface (reference)
 
-- **Handles**: `doc:` / `chunk:` / `figure:` / `equation:` / `author:`.
-  Short forms (12-hex suffix, `<doc-short>/<stem>` for figures,
-  `first_last` for authors); unique suffix or case-insensitive prefix
-  resolves; ambiguous matches return an error with candidates.
-- **Output formats** (`--format auto|quiet|compact|json`): `quiet` =
-  handles only (default when piped); `compact` = TSV columns;
-  `auto` = `WIKIFY_CLI_FORMAT` env, else compact for TTY / quiet for pipe.
-- **Traverse relations**: doc → cited-by, references, chunks, figures,
-  equations, authors; chunk → source, cited-in-corpus, figures,
-  equations; author → sources, coauthors.
-- **Rank metrics**: sources → citation_count, pagerank; authors →
-  h_index, citation_count, n_papers.
-- **Figures**: pass the printed `path` to Read for visual ingestion,
-  or compose `![caption](path)` markdown for wiki pages.
+Run `corpus schema` for the full surface (handles, traverse relations,
+rank metrics, formats). Highlights: `--format auto|quiet|compact|json`
+(quiet = pipe default); figure handles render as `figure:<short>/<stem>`
+and the printed `path` is consumable by Read for visual ingestion.
 
 ## Default loop
 
-1. Start with a small query, listing, or schema lookup.
-2. Inspect returned handles and previews.
-3. Pick one or more handles.
-4. Traverse one hop or show one selected handle.
-5. Narrow or broaden based on the result.
-6. Pull full text only after choosing the handle.
+Small query → inspect handles + previews → pick → traverse one hop or
+show → narrow or broaden → only then pull full text.
 
 ## Does not do
 
-- Does not mutate a bundle, add concepts, or pick an exploration strategy.
-- Does not decide whether evidence is sufficient for writing.
+Mutate a bundle, pick an exploration strategy, or decide whether
+evidence is sufficient for writing.
 
 ## References
 
