@@ -11,19 +11,20 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import networkx as nx
 import numpy as np
 import pytest
 
-from wikify.corpus.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
+from wikify.corpus.graph import KnowledgeGraph
 from wikify.corpus.sampling import (
     doc_embeddings,
     pagerank_normalised,
     sample_diverse,
     sample_doc_abstracts,
 )
+from wikify.corpus.store import Store
+from wikify.corpus.store.kg import SqliteGraphBackend
 from wikify.corpus.vectors import VectorStore
-from wikify.models import Chunk
+from wikify.models import Chunk, Document
 
 
 def _kg(
@@ -32,21 +33,42 @@ def _kg(
     *,
     abstract_chunks: dict[str, str] | None = None,
 ) -> KnowledgeGraph:
-    """Build a small KG with corpus sources and (optionally) one
-    canonical abstract chunk per doc — the post-tagger invariant.
-    """
-    g = nx.MultiDiGraph()
+    """Build a small SQLite-backed KG with corpus sources and (optionally)
+    one canonical abstract chunk per doc — the post-tagger invariant."""
     abstract_chunks = abstract_chunks or {}
+    store = Store(":memory:")
+    docs: list[Document] = []
     for did in doc_ids:
-        g.add_node(did, type=SOURCE, kind="corpus", pagerank=pagerank.get(did, 0.0))
+        doc = Document(
+            id=did, source_path=f"{did}.pdf", kind="pdf",
+            title=did, metadata={},
+            markdown_path=f"m/{did}.md", image_dir=f"i/{did}/",
+        )
+        docs.append(doc)
+        store.upsert_document(doc)
         cid = abstract_chunks.get(did)
         if cid:
-            g.add_node(cid, type=CHUNK, source_id=did, ord=0,
-                       section_type="abstract", is_boilerplate=False)
-            g.add_edge(did, cid, kind="CONTAINS_CHUNK")
-    backend = NetworkXBackend(G=g)
-    backend.rebuild_indexes()
-    return KnowledgeGraph(backend=backend)
+            store.upsert_chunks([Chunk(
+                id=cid, doc_id=did, ord=0,
+                text=f"text-{cid}", char_span=(0, 10), section_path=[],
+                section_type="abstract",
+            )])
+            store.upsert_chunk_edges(did)
+    # Inject pagerank values into node_metrics so the backend reflects them.
+    rows = [
+        ("corpus_citation", "document", did, "pagerank",
+         float(pagerank.get(did, 0.0)), "1970-01-01T00:00:00Z")
+        for did in doc_ids
+    ]
+    store.con.executemany(
+        "INSERT OR REPLACE INTO node_metrics(graph_name, node_type, node_id, "
+        "metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    backend = SqliteGraphBackend(store.con)
+    kg = KnowledgeGraph(backend=backend)
+    kg._owned_store = store  # keep the connection alive
+    return kg
 
 
 def _chunk(cid: str, doc_id: str, ord_: int, *, section_type: str = "abstract") -> Chunk:

@@ -7,38 +7,41 @@ returns the canonical abstract chunk via the same data invariant.
 
 from __future__ import annotations
 
-import networkx as nx
-
-from wikify.corpus.graph import CHUNK, SOURCE, KnowledgeGraph, NetworkXBackend
+from wikify.corpus.graph import KnowledgeGraph
+from wikify.corpus.store import Store
+from wikify.corpus.store.kg import SqliteGraphBackend
+from wikify.models import Chunk, Document
 
 
 def _kg() -> KnowledgeGraph:
     """Build a minimal KG with one source + 4 chunks, two flagged."""
-    g = nx.MultiDiGraph()
-    g.add_node("d1", type=SOURCE, kind="corpus", title="Doc 1")
-    g.add_node(
-        "d1#c0", type=CHUNK, source_id="d1", ord=0,
-        section_type="abstract", is_boilerplate=False,
+    store = Store(":memory:")
+    doc = Document(
+        id="d1", source_path="d1.pdf", kind="pdf",
+        title="Doc 1", metadata={},
+        markdown_path="m/d1.md", image_dir="i/d1/",
     )
-    g.add_node(
-        "d1#c1", type=CHUNK, source_id="d1", ord=1,
-        section_type="body", is_boilerplate=True,  # flagged
-    )
-    g.add_node(
-        "d1#c2", type=CHUNK, source_id="d1", ord=2,
-        section_type="body", is_boilerplate=False,
-    )
-    g.add_node(
-        "d1#c3", type=CHUNK, source_id="d1", ord=3,
-        section_type="body", is_boilerplate=True,  # flagged
-    )
-    g.add_edge("d1", "d1#c0", kind="CONTAINS_CHUNK")
-    g.add_edge("d1", "d1#c1", kind="CONTAINS_CHUNK")
-    g.add_edge("d1", "d1#c2", kind="CONTAINS_CHUNK")
-    g.add_edge("d1", "d1#c3", kind="CONTAINS_CHUNK")
-    backend = NetworkXBackend(G=g)
-    backend.rebuild_indexes()
-    return KnowledgeGraph(backend=backend)
+    store.upsert_document(doc)
+    chunks = [
+        Chunk(id="d1#c0", doc_id="d1", ord=0, text="abstract",
+              char_span=(0, 1), section_path=[],
+              section_type="abstract", is_boilerplate=False),
+        Chunk(id="d1#c1", doc_id="d1", ord=1, text="boiler",
+              char_span=(0, 1), section_path=[],
+              section_type="body", is_boilerplate=True),
+        Chunk(id="d1#c2", doc_id="d1", ord=2, text="body",
+              char_span=(0, 1), section_path=[],
+              section_type="body", is_boilerplate=False),
+        Chunk(id="d1#c3", doc_id="d1", ord=3, text="boiler 2",
+              char_span=(0, 1), section_path=[],
+              section_type="body", is_boilerplate=True),
+    ]
+    store.upsert_chunks(chunks)
+    store.upsert_chunk_edges("d1")
+    backend = SqliteGraphBackend(store.con)
+    kg = KnowledgeGraph(backend=backend)
+    kg._owned_store = store  # keep connection alive
+    return kg
 
 
 # --- default-filter behaviour ---------------------------------------------
@@ -101,14 +104,17 @@ def test_abstract_chunk_returns_the_canonical_abstract():
 
 
 def test_abstract_chunk_returns_none_when_no_abstract_tagged():
-    """A source with no body-bearing chunks (and thus no abstract tag)
-    yields None — the picker silently doesn't tag, and the accessor
-    silently returns None."""
-    g = nx.MultiDiGraph()
-    g.add_node("d2", type=SOURCE, kind="corpus", title="Empty doc")
-    backend = NetworkXBackend(G=g)
-    backend.rebuild_indexes()
+    """A source with no body-bearing chunks yields None."""
+    store = Store(":memory:")
+    doc = Document(
+        id="d2", source_path="d2.pdf", kind="pdf",
+        title="Empty doc", metadata={},
+        markdown_path="m/d2.md", image_dir="i/d2/",
+    )
+    store.upsert_document(doc)
+    backend = SqliteGraphBackend(store.con)
     kg = KnowledgeGraph(backend=backend)
+    kg._owned_store = store
     assert kg.source("d2").abstract_chunk() is None
 
 

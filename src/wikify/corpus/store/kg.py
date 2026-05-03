@@ -244,20 +244,24 @@ class SqliteGraphBackend:
     def _load_bib_cited_only(self) -> None:
         """Synthesize cited-only source nodes from unresolved bib_entries.
 
-        These mirror the `kind='cited'` virtual nodes the legacy
-        NetworkXBackend produced from citation_index.json.
+        Prefers `local_key` (the bibkey) as the node id when present so
+        callers can resolve external references the same way the legacy
+        path did; falls back to `bib_id`.
         """
+        seen: set[str] = set()
         for r in self.con.execute(
-            "SELECT bib_id, title, authors_json, year, container_title, publisher, doi "
-            "FROM bib_entries WHERE target_doc_id IS NULL",
+            "SELECT bib_id, local_key, title, authors_json, year, container_title, "
+            "publisher, doi FROM bib_entries WHERE target_doc_id IS NULL",
         ):
-            if r["bib_id"] in self._node_attrs:
+            nid = r["local_key"] or r["bib_id"]
+            if nid in self._node_attrs or nid in seen:
                 continue
+            seen.add(nid)
             authors = json.loads(r["authors_json"] or "[]")
-            self._node_attrs[r["bib_id"]] = {
+            self._node_attrs[nid] = {
                 "type": "source",
                 "kind": "cited",
-                "title": r["title"] or r["bib_id"],
+                "title": r["title"] or nid,
                 "year": r["year"],
                 "doi": (r["doi"] or "").lower().strip(),
                 "venue": r["container_title"] or "",
@@ -297,6 +301,7 @@ class SqliteGraphBackend:
             kind = r[2]
             src, dst = r[1], r[4]
             if kind == "references":
+                # Translate bib_id targets to their bibkey id when applicable.
                 self._references[src].add(dst)
                 self._cited_by[dst].add(src)
             elif kind == "authored_by":
@@ -443,3 +448,152 @@ class SqliteGraphBackend:
 def open_corpus_kg(sqlite_path: str | Path) -> SqliteGraphBackend:
     """Open the SQLite corpus KG. Caller owns close()."""
     return SqliteGraphBackend(sqlite_path)
+
+
+# ---------------------------------------------------------------------------
+# Test-friendly in-memory builder (replaces the old nx-based path).
+# ---------------------------------------------------------------------------
+
+
+def build_kg_in_memory(
+    docs,
+    chunks,
+    vectors=None,
+    citation_index=None,
+):
+    """Build a `KnowledgeGraph` over an in-memory `wikify.db`.
+
+    Used by tests and ad-hoc tools that hand over Document/Chunk lists
+    rather than ingesting into a real corpus directory. The runtime
+    path goes through `read_knowledge_graph(corpus, ...)` which opens
+    the on-disk `wikify.db`; this helper produces the same shape from
+    a `:memory:` Store so unit tests do not pay the ingest cost.
+
+    `citation_index` (the legacy citations.json shape) is honoured
+    when present: each `doc_citations` bibkey becomes a bib_entry row,
+    `doc_bibkeys` controls which bibkey is the doc's own canonical
+    reference id (cited works), and `entries` provides the metadata.
+    """
+    from collections import defaultdict
+
+    from wikify.corpus.graph import (
+        KnowledgeGraph,
+        TraceContext,
+    )
+    from wikify.corpus.store import Store
+
+    store = Store(":memory:")
+    chunks_by_doc: dict[str, list] = defaultdict(list)
+    for ck in chunks:
+        chunks_by_doc[ck.doc_id].append(ck)
+    for v in chunks_by_doc.values():
+        v.sort(key=lambda c: c.ord)
+
+    citation_index = citation_index or {}
+    doc_bibkeys = citation_index.get("doc_bibkeys", {}) or {}
+    doc_citations_map = citation_index.get("doc_citations", {}) or {}
+    entries = citation_index.get("entries", {}) or {}
+    bibkey_to_doc_id = {bk: did for did, bk in doc_bibkeys.items()}
+
+    for doc in docs:
+        store.upsert_document(doc)
+        store.upsert_chunks(chunks_by_doc.get(doc.id, []))
+        store.upsert_document_authors(doc.id, doc.metadata.get("authors") or [])
+        store.upsert_authored_edges(doc.id)
+        store.upsert_chunk_edges(doc.id)
+        # bib_entries from doc.citations + citation_index entries.
+        bib_rows = _bib_rows_for_doc(doc, entries, bibkey_to_doc_id, doc_citations_map)
+        store.upsert_bib_entries(doc.id, bib_rows)
+        # Edges: doc -> doc references for in-corpus targets only.
+        targets = sorted({
+            row["target_doc_id"] for row in bib_rows if row.get("target_doc_id")
+        })
+        if targets:
+            store.con.executemany(
+                "INSERT OR IGNORE INTO graph_edges(src_type, src_id, kind, dst_type, dst_id) "
+                "VALUES ('document', ?, 'references', 'document', ?)",
+                [(doc.id, t) for t in targets],
+            )
+        # Assets from doc.images + doc.equations.
+        assets = []
+        for img in doc.images or []:
+            assets.append({
+                "id": img.id, "type": "figure",
+                "page": img.page, "path": img.path,
+                "caption": img.caption,
+            })
+        for ord_i, eq in enumerate(doc.equations or []):
+            if not isinstance(eq, dict):
+                continue
+            eq_id = eq.get("id") or f"{doc.id}/eq_{ord_i:03d}"
+            assets.append({
+                "id": eq_id, "type": "equation", "ord": ord_i,
+                "content": eq.get("latex") or eq.get("text"),
+                "caption": eq.get("label") or "",
+            })
+        store.upsert_assets(doc.id, assets)
+        chunk_assets: list[dict] = []
+        for img in doc.images or []:
+            for cid in img.near_chunk_ids or []:
+                chunk_assets.append({"chunk_id": cid, "asset_id": img.id, "relation": "near"})
+        for ck in chunks_by_doc.get(doc.id, []):
+            for eq_id in ck.equation_ids or []:
+                chunk_assets.append({"chunk_id": ck.id, "asset_id": eq_id, "relation": "contains"})
+        store.upsert_chunk_assets(doc.id, chunk_assets)
+
+    # Cross-doc resolution: bib_entries with matching DOIs/titles get
+    # target_doc_id set + the implied references edges fire.
+    for doc in docs:
+        store.reresolve_inbound(doc.id)
+        store.refresh_reference_edges(doc.id)
+
+    backend = SqliteGraphBackend(store.con)
+    embed_fn = None
+    kg = KnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
+    kg._trace = TraceContext()
+    # Hold a reference to the store so its connection isn't garbage-collected
+    # before the kg is done with it.
+    kg._owned_store = store  # type: ignore[attr-defined]
+    return kg
+
+
+def _bib_rows_for_doc(
+    doc, entries: dict, bibkey_to_doc_id: dict, doc_citations_map: dict,
+) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for ord_i, c in enumerate(doc.citations or []):
+        target = None
+        rows.append({
+            "ord": c.ord,
+            "raw_text": c.raw_text,
+            "title": c.title or None,
+            "authors": list(c.authors or []),
+            "year": c.year,
+            "container_title": c.venue or None,
+            "publisher": c.publisher or None,
+            "doi": (c.doi or "").lower().strip() or None,
+            "resolution": c.resolution or None,
+            "confidence": c.confidence,
+            "target_doc_id": target,
+        })
+    for bibkey in doc_citations_map.get(doc.id, []) or []:
+        if bibkey in seen:
+            continue
+        seen.add(bibkey)
+        target = bibkey_to_doc_id.get(bibkey)
+        if target == doc.id:
+            target = None
+        meta = entries.get(bibkey, {}) or {}
+        rows.append({
+            "ord": len(rows),
+            "raw_text": meta.get("raw_text", ""),
+            "title": meta.get("title") or bibkey,
+            "authors": list(meta.get("authors") or []),
+            "year": meta.get("year"),
+            "container_title": meta.get("venue"),
+            "doi": (meta.get("doi") or "").lower().strip() or None,
+            "target_doc_id": target,
+            "local_key": bibkey,
+        })
+    return rows
