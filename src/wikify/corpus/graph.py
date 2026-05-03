@@ -626,7 +626,7 @@ class TraceContext:
 class KnowledgeGraph:
     """Entry point for fluent graph queries.
 
-    Agents use this. Backend (NetworkX) is never exposed.
+    Agents use this. The backend (SqliteGraphBackend) is never exposed.
     """
 
     def __init__(

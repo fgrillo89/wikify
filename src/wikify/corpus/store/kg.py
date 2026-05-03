@@ -381,13 +381,34 @@ class SqliteGraphBackend:
                 self._node_attrs[doc_id]["ord_refs"] = self._ord_refs[doc_id]
 
     def _load_chunk_citation_edges(self) -> None:
-        """Add cites edges to cited-only nodes from chunk_citations rows.
+        """Synthesize doc -> cited-only references and chunk -> cited cites.
 
-        graph_edges only carries doc->doc references; bib_entry-targeted
-        chunk-level citations come from chunk_citations.
+        `graph_edges` only carries doc->doc references for in-corpus
+        targets. To match the legacy traverse behaviour we also expose
+        edges to the synthetic cited-only nodes (one per unresolved
+        bib_entry) so `traverse doc:X --to references` returns both
+        in-corpus and out-of-corpus references.
         """
-        # nothing to do; chunk_citations already mapped chunk→bib_entry,
-        # which equals chunk→cited node when bib was unresolved.
+        bib_to_node: dict[str, str] = {}
+        for r in self.con.execute(
+            "SELECT bib_id, local_key, doc_id FROM bib_entries "
+            "WHERE target_doc_id IS NULL",
+        ):
+            nid = r["local_key"] or r["bib_id"]
+            bib_to_node[r["bib_id"]] = nid
+            # doc -> cited reference (per bib_entry's parent doc).
+            doc_id = r["doc_id"]
+            if doc_id and nid in self._node_attrs:
+                self._references[doc_id].add(nid)
+                self._cited_by[nid].add(doc_id)
+        # chunk -> cited cites edges (from chunk_citations).
+        for r in self.con.execute(
+            "SELECT chunk_id, bib_id FROM chunk_citations",
+        ):
+            nid = bib_to_node.get(r["bib_id"])
+            if nid is None:
+                continue
+            self._references.setdefault(r["chunk_id"], set()).add(nid)
 
     # ------------------------------------------------------------------
     # API used by QueryBuilder

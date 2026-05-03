@@ -755,33 +755,33 @@ def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
 
 
 def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
-    """Count in-corpus source nodes with a populated ``ord_refs`` attribute.
+    """Fraction of corpus docs that have at least one resolved bib_entry.
 
-    Reads ``knowledge_graph.json`` directly via ``json.load`` and
-    iterates the ``nodes`` array — avoids the full NetworkX backend
-    construction that the regular KG load performs. Roughly 6x faster
-    than a full ``read_knowledge_graph`` on the ALD reference corpus.
+    Reads `bib_entries.target_doc_id IS NOT NULL` directly from
+    `wikify.db` — the SQL replacement for the legacy ``knowledge_graph.json``
+    walk. Returns zeros when wikify.db is absent.
     """
-    import json as _json
+    from .store.routing import sqlite_available
 
-    with corpus.knowledge_graph_path.open(encoding="utf-8") as fh:
-        kg_blob = _json.load(fh)
     in_corpus_ids = {d.id for d in docs}
-    with_ord = 0
-    for node in kg_blob.get("nodes", []):
-        if node.get("type") != "source":
-            continue
-        if node.get("id") not in in_corpus_ids:
-            continue
-        ord_refs = node.get("ord_refs") or {}
-        if ord_refs:
-            with_ord += 1
     n = len(in_corpus_ids)
+    if not n or not sqlite_available(corpus.root):
+        return {
+            "sources_with_ord_refs": 0,
+            "ord_refs_coverage_pct": 0.0,
+        }
+    from .store.routing import open_store
+    store = open_store(corpus.root)
+    try:
+        rows = store.con.execute(
+            "SELECT DISTINCT doc_id FROM bib_entries WHERE target_doc_id IS NOT NULL",
+        )
+        with_ord = sum(1 for r in rows if r[0] in in_corpus_ids)
+    finally:
+        store.close()
     return {
         "sources_with_ord_refs": with_ord,
-        "ord_refs_coverage_pct": (
-            round(100.0 * with_ord / n, 1) if n else 0.0
-        ),
+        "ord_refs_coverage_pct": round(100.0 * with_ord / n, 1),
     }
 
 

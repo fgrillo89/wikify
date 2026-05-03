@@ -38,15 +38,35 @@ def _bib_id(doc_id: str, ord_i: int) -> str:
     return f"{doc_id}::bib:{ord_i:04d}"
 
 
-def _bibs_from_doc(doc: Document) -> list[dict]:
-    """One bib_entry row per CitationEntry on the document."""
+def _bibs_from_doc(
+    doc: Document,
+    doc_citations_map: dict | None = None,
+    entries: dict | None = None,
+    bibkey_to_doc_id: dict | None = None,
+) -> list[dict]:
+    """One bib_entry row per CitationEntry, plus bibkey-mapped local_key.
+
+    When *doc_citations_map* / *entries* are present (from citations.json),
+    each citation's ord is mapped to its bibkey and stored as `local_key`.
+    The bibkey is what skill traversals show in the handle (`doc:ref_...`),
+    so populating it makes traverse-references readable.
+    """
     out: list[dict] = []
     if not doc.citations:
         return out
+    doc_citations_map = doc_citations_map or {}
+    entries = entries or {}
+    bibkey_to_doc_id = bibkey_to_doc_id or {}
+    bibkeys_for_doc = doc_citations_map.get(doc.id, []) or []
     for c in doc.citations:
+        bibkey = bibkeys_for_doc[c.ord] if c.ord < len(bibkeys_for_doc) else None
+        target_doc = bibkey_to_doc_id.get(bibkey) if bibkey else None
+        if target_doc == doc.id:
+            target_doc = None
         out.append({
             "bib_id": _bib_id(doc.id, c.ord),
             "ord": c.ord,
+            "local_key": bibkey,
             "raw_text": c.raw_text,
             "title": c.title or None,
             "authors": list(c.authors or []),
@@ -56,6 +76,7 @@ def _bibs_from_doc(doc: Document) -> list[dict]:
             "doi": c.doi or None,
             "resolution": c.resolution or None,
             "confidence": c.confidence,
+            "target_doc_id": target_doc,
         })
     return out
 
@@ -129,9 +150,18 @@ def _equation_chunk_assets(doc: Document, chunks: list[Chunk]) -> list[dict]:
 
 
 def project_documents(
-    store: Store, docs: list[Document], chunks_by_doc: dict[str, list[Chunk]],
+    store: Store,
+    docs: list[Document],
+    chunks_by_doc: dict[str, list[Chunk]],
+    citation_index: dict | None = None,
 ) -> None:
     """Upsert documents/chunks/authors/bibs/citations/assets for each doc."""
+    citation_index = citation_index or {}
+    bibkey_for_doc = (citation_index.get("doc_bibkeys") or {}) if citation_index else {}
+    doc_citations_map = (citation_index.get("doc_citations") or {}) if citation_index else {}
+    entries = (citation_index.get("entries") or {}) if citation_index else {}
+    bibkey_to_doc_id = {bk: did for did, bk in bibkey_for_doc.items()}
+
     for doc in docs:
         doc_chunks = chunks_by_doc.get(doc.id, [])
         store.upsert_document(doc)
@@ -139,8 +169,13 @@ def project_documents(
         store.upsert_document_authors(doc.id, doc.metadata.get("authors") or [])
         store.upsert_authored_edges(doc.id)
         store.upsert_chunk_edges(doc.id)
-        store.upsert_bib_entries(doc.id, _bibs_from_doc(doc))
-        store.upsert_chunk_citations(doc.id, _chunk_citations_from(doc, doc_chunks))
+        bib_rows = _bibs_from_doc(
+            doc, doc_citations_map, entries, bibkey_to_doc_id,
+        )
+        store.upsert_bib_entries(doc.id, bib_rows)
+        store.upsert_chunk_citations(
+            doc.id, _chunk_citations_from(doc, doc_chunks),
+        )
         store.upsert_assets(doc.id, _assets_from_doc(doc))
         store.upsert_chunk_assets(
             doc.id,
@@ -175,12 +210,13 @@ def write_corpus(
         by_doc.setdefault(ck.doc_id, []).append(ck)
     for v in by_doc.values():
         v.sort(key=lambda c: c.ord)
+    citation_index = _load_citation_index_optional(paths)
     db_path = paths.sqlite_path
     store = Store(db_path)
     try:
         with transaction(store.con):
             _sync_remove_absent_docs(store, {d.id for d in docs})
-            project_documents(store, docs, by_doc)
+            project_documents(store, docs, by_doc, citation_index=citation_index)
             if vec is not None and meta is not None:
                 project_embeddings(store, vec, meta)
         store.fts_rebuild()
@@ -189,6 +225,16 @@ def write_corpus(
     finally:
         store.close()
     return db_path
+
+
+def _load_citation_index_optional(paths: Corpus) -> dict | None:
+    """Read citations.json if it exists, else None."""
+    if not paths.citation_index_path.exists():
+        return None
+    try:
+        return json.loads(paths.citation_index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _sync_remove_absent_docs(store: Store, current_ids: set[str]) -> None:
