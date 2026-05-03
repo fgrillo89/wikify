@@ -129,14 +129,23 @@ class AsyncResolver:
         db: DatabaseManager,
         *,
         email: str,
-        max_concurrent: int = 5,
-        requests_per_second: float = 5.0,
+        max_concurrent: int = 20,
+        requests_per_second: float = 10.0,
         expand_references: bool = True,
+        expand_corpus_dois: set[str] | None = None,
         confidence_threshold: float = 85.0,
     ) -> None:
         self.db = db
         self.email = email
         self.expand_references = expand_references
+        # When set, only these DOIs (typically the corpus papers) have
+        # their referenced_works expanded. Skipping expansion of the
+        # ~900 out-of-corpus DOI'd bibs cuts Phase 3 work by ~5x and
+        # does not lose any in-corpus matches (the cited references of
+        # an out-of-corpus paper are second-degree out-of-corpus too).
+        self.expand_corpus_dois = (
+            {d.lower() for d in expand_corpus_dois} if expand_corpus_dois else None
+        )
         self.confidence_threshold = confidence_threshold
         self._client: httpx.AsyncClient | None = None
 
@@ -278,7 +287,11 @@ class AsyncResolver:
             len(citations) - len(need_api), len(citations), len(need_api),
         )
 
-        # ---- Phase 2: bulk DOI resolution ----
+        # ---- Phase 2 + 3: bulk DOI resolution + ref-works expansion ----
+        # When `expand_corpus_dois` is set we split the work into two
+        # concurrent groups so the (small, ~5 batch) corpus seed fetch
+        # plus its expansion overlaps with the (larger, ~22 batch) bib
+        # DOI fetch. Group A blocks on Phase 3; group B finishes earlier.
         unique_dois: dict[str, list[int]] = {}  # doi -> [citation indices]
         no_doi_indices: list[int] = []
         for idx, cit in need_api:
@@ -288,20 +301,42 @@ class AsyncResolver:
             else:
                 no_doi_indices.append(idx)
 
-        doi_to_work: dict[str, Work] = {}
-        doi_list = list(unique_dois.keys())
-        # Batch DOI lookups concurrently
-        doi_tasks = []
-        for batch_start in range(0, len(doi_list), _DOI_BATCH_SIZE):
-            batch = doi_list[batch_start:batch_start + _DOI_BATCH_SIZE]
-            doi_tasks.append(self._bulk_fetch_by_dois(batch))
-        if doi_tasks:
-            doi_results = await asyncio.gather(*doi_tasks, return_exceptions=True)
-            for dr in doi_results:
-                if isinstance(dr, BaseException):
-                    logger.warning("DOI batch fetch failed: %s", dr)
+        all_dois_set = set(unique_dois)
+        if self.expand_corpus_dois is not None:
+            corpus_dois_in_set = self.expand_corpus_dois & all_dois_set
+        else:
+            corpus_dois_in_set = all_dois_set
+        bib_dois_in_set = all_dois_set - corpus_dois_in_set
+
+        async def _fetch_group(dois: list[str]) -> dict[str, Work]:
+            if not dois:
+                return {}
+            tasks = [
+                self._bulk_fetch_by_dois(dois[i:i + _DOI_BATCH_SIZE])
+                for i in range(0, len(dois), _DOI_BATCH_SIZE)
+            ]
+            out: dict[str, Work] = {}
+            for r in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(r, BaseException):
+                    logger.warning("DOI batch fetch failed: %s", r)
                 else:
-                    doi_to_work.update(dr)
+                    out.update(r)
+            return out
+
+        async def _seeds_then_expand() -> tuple[dict[str, Work], dict[str, Work]]:
+            seeds = await _fetch_group(list(corpus_dois_in_set))
+            if not (self.expand_references and seeds):
+                return seeds, {}
+            refs = await self._expand_references_bulk(list(seeds.values()))
+            return seeds, refs
+
+        async def _bibs() -> dict[str, Work]:
+            return await _fetch_group(list(bib_dois_in_set))
+
+        (seed_works, ref_works), bib_works = await asyncio.gather(
+            _seeds_then_expand(), _bibs(),
+        )
+        doi_to_work: dict[str, Work] = {**seed_works, **bib_works}
 
         if doi_to_work:
             await self.db.upsert_works(list(doi_to_work.values()))
@@ -323,16 +358,10 @@ class AsyncResolver:
                     unresolved_indices.append(idx)
 
         logger.info(
-            "DOI batch: %d unique DOIs, %d resolved, %d unresolved",
+            "DOI batch: %d unique DOIs, %d resolved, %d unresolved (refs expanded: %d)",
             len(unique_dois), len(doi_to_work),
-            len(unresolved_indices),
+            len(unresolved_indices), len(ref_works),
         )
-
-        # ---- Phase 3: expand referenced_works (depth-1) ----
-        all_resolved_works = list(doi_to_work.values())
-        ref_works: dict[str, Work] = {}
-        if self.expand_references and all_resolved_works:
-            ref_works = await self._expand_references_bulk(all_resolved_works)
 
         # ---- Phase 4: match remaining citations locally ----
         # Build a document-frequency-filtered inverted token index, then
