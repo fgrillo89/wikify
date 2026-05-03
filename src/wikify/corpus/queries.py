@@ -369,37 +369,24 @@ def search_chunks(
     top_k: int = 8,
     rank: str = "semantic",
 ) -> list[dict]:
-    """Chunk search; backend selected by ``WIKIFY_QUERY_BACKEND``.
+    """Chunk search via the SQLite store.
 
     Each result has ``id``, ``score``, and ``doc_id``. ``rank`` is one of
-    ``semantic`` (cosine over chunk embeddings; legacy default),
-    ``bm25`` (FTS5 — sqlite backend only), or ``hybrid`` (RRF over
-    BM25 + vector — sqlite backend only).
+    ``semantic`` (cosine over chunk embeddings), ``bm25`` (FTS5), or
+    ``hybrid`` (RRF over BM25 + vector).
     """
-    from .store.routing import is_sqlite_explicit, use_sqlite
+    from .store.routing import sqlite_available
 
-    if use_sqlite(corpus.root):
-        return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
-    if rank in _LEXICAL_RANKS:
-        if is_sqlite_explicit():
+    if not sqlite_available(corpus.root):
+        if rank in _LEXICAL_RANKS:
             raise QueryError(
                 "no_wikify_db",
                 f"--rank {rank} requires wikify.db; rebuild with `corpus build`",
             )
-        raise QueryError(
-            "backend_required",
-            f"--rank {rank} requires WIKIFY_QUERY_BACKEND=sqlite",
-        )
-    vs = read_vector_store(corpus)
-    from ..corpus.vectors_meta import read_meta
-    from ..embedding import embedder_for
-
-    meta = read_meta(corpus.vectors_path)
-    embed = (
-        embedder_for(meta.backend, meta.model, mode="query") if meta else None
-    )
-    kg = read_knowledge_graph(corpus, vectors=vs, embed_fn=embed)
-    return list(kg.chunks().search(query, top_k=top_k))
+        # No SQLite store yet (hand-built test fixture or pre-build);
+        # fall back to the empty KG so callers get [] instead of an error.
+        return []
+    return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
 
 
 def _search_chunks_sqlite(
@@ -549,28 +536,9 @@ def rank_docs(
     ``by`` is one of ``citation_count`` or ``pagerank``. Each item has
     ``doc_id``, ``title``, ``citation_count``, ``pagerank``.
     """
-    from .store.routing import use_sqlite
+    from .store.routing import sqlite_available
 
-    if use_sqlite(corpus.root):
-        rows = _rank_docs_sqlite(corpus)
-    else:
-        vs = read_vector_store(corpus)
-        kg = read_knowledge_graph(corpus, vectors=vs)
-        backend = kg._backend
-        docs_by_id = {d.id: d for d in list_documents(corpus)}
-        rows = []
-        for doc_id, doc in docs_by_id.items():
-            if doc_id not in backend.G:
-                continue
-            attrs = backend.G.nodes[doc_id]
-            rows.append(
-                {
-                    "doc_id": doc_id,
-                    "title": doc.title or "",
-                    "citation_count": int(attrs.get("citation_count", 0) or 0),
-                    "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
-                }
-            )
+    rows = _rank_docs_sqlite(corpus) if sqlite_available(corpus.root) else []
     if by == "citation_count":
         rows.sort(key=lambda r: (-r["citation_count"], -r["pagerank"], r["doc_id"]))
     elif by == "pagerank":
@@ -621,8 +589,8 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
     """
     if not doc_ids:
         return {}
-    from .store.routing import use_sqlite
-    if use_sqlite(corpus.root):
+    from .store.routing import sqlite_available
+    if sqlite_available(corpus.root):
         rows = {r["doc_id"]: r for r in _rank_docs_sqlite(corpus)}
         return {
             did: {

@@ -393,7 +393,7 @@ def cmd_find(
         "--rank",
         help=(
             "Ranking metric: semantic | bm25 | hybrid | citation_count | "
-            "pagerank. bm25 and hybrid require WIKIFY_QUERY_BACKEND=sqlite."
+            "pagerank."
         ),
     ),
     field: str = typer.Option(

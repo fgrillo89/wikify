@@ -1,4 +1,9 @@
-"""Phase 3 acceptance: WIKIFY_QUERY_BACKEND routing + bm25/hybrid ranks."""
+"""bm25 / hybrid rank routing through the SQLite store.
+
+WIKIFY_QUERY_BACKEND has been removed; the SQLite store is the only
+runtime path. These tests verify the lexical ranks still work end-to-end
+through the public `queries.find` surface.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ def _md(path: Path, title: str, body: str) -> None:
 
 
 @pytest.fixture
-def small_corpus(tmp_path, monkeypatch):
+def small_corpus(tmp_path):
     sources = tmp_path / "sources"
     sources.mkdir()
     _md(sources / "a.md", "Alpha title",
@@ -29,8 +34,7 @@ def small_corpus(tmp_path, monkeypatch):
     yield paths
 
 
-def test_bm25_rank_returns_hits_under_sqlite_backend(small_corpus, monkeypatch):
-    monkeypatch.setenv("WIKIFY_QUERY_BACKEND", "sqlite")
+def test_bm25_rank_returns_chunk_hits(small_corpus):
     out = queries.find(
         small_corpus, query="titanium dioxide", by="chunk", rank="bm25", top_k=5,
     )
@@ -39,15 +43,7 @@ def test_bm25_rank_returns_hits_under_sqlite_backend(small_corpus, monkeypatch):
     assert out["rows"][0]["doc_id"]
 
 
-def test_bm25_rank_rejected_under_legacy_backend(small_corpus, monkeypatch):
-    monkeypatch.setenv("WIKIFY_QUERY_BACKEND", "legacy")
-    with pytest.raises(queries.QueryError) as exc:
-        queries.find(small_corpus, query="x", by="chunk", rank="bm25", top_k=5)
-    assert exc.value.code == "backend_required"
-
-
-def test_hybrid_rank_smoke(small_corpus, monkeypatch):
-    monkeypatch.setenv("WIKIFY_QUERY_BACKEND", "sqlite")
+def test_hybrid_rank_smoke(small_corpus):
     out = queries.find(
         small_corpus, query="atomic layer deposition", by="chunk",
         rank="hybrid", top_k=5,
@@ -56,15 +52,7 @@ def test_hybrid_rank_smoke(small_corpus, monkeypatch):
     assert out["rows"]
 
 
-def test_unknown_backend_raises(monkeypatch):
-    from wikify.corpus.store.routing import query_backend
-    monkeypatch.setenv("WIKIFY_QUERY_BACKEND", "duckdb")
-    with pytest.raises(ValueError):
-        query_backend()
-
-
-def test_bm25_paper_aggregation(small_corpus, monkeypatch):
-    monkeypatch.setenv("WIKIFY_QUERY_BACKEND", "sqlite")
+def test_bm25_paper_aggregation(small_corpus):
     out = queries.find(
         small_corpus, query="atomic layer deposition", by="paper",
         rank="bm25", top_k=5,
@@ -73,9 +61,20 @@ def test_bm25_paper_aggregation(small_corpus, monkeypatch):
     assert out["rows"]
 
 
-def test_default_legacy_unchanged_for_semantic(small_corpus, monkeypatch):
-    monkeypatch.delenv("WIKIFY_QUERY_BACKEND", raising=False)
+def test_semantic_rank_default_path(small_corpus):
     out = queries.find(
         small_corpus, query="photocatalysis", by="chunk", rank="semantic", top_k=3,
     )
     assert out["kind"] == "chunks"
+
+
+def test_lexical_rank_without_wikify_db_raises(tmp_path):
+    """No wikify.db -> bm25/hybrid surfaces a clear error."""
+    from wikify.api import Corpus
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    corpus = Corpus(root=corpus_root)
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(corpus, query="x", by="chunk", rank="bm25", top_k=5)
+    assert exc.value.code == "no_wikify_db"
