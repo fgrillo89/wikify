@@ -1,32 +1,42 @@
 """Multi-format parser using IBM Docling.
 
 Docling's ``DocumentConverter`` natively handles PDF, DOCX, PPTX, and
-HTML — all through one interface that returns a ``DoclingDocument`` we
-can lower to markdown + images + sections. This parser exposes
-``.pdf``, ``.docx``, ``.pptx``, ``.html``, ``.htm`` as supported, so it
-covers the same set as the per-format ``python-docx`` /
-``python-pptx`` / ``trafilatura`` parsers when higher-quality
-structured output is needed.
+HTML through one interface that returns a ``DoclingDocument``. This
+module lowers each input to ``ParseResult`` (markdown + images +
+sections + metadata) so the rest of the ingest pipeline does not need
+to know which backend produced it.
 
-PDF still gets the full enrichment pipeline (RT-DETRv2 layout +
-TableFormer + optional formulas/VLM). DOCX / PPTX / HTML use Docling's
-default pipelines for those formats; Docling already knows how to walk
-the native structure, so no custom options are wired.
+PDFs go through the full enrichment pipeline (RT-DETRv2 layout +
+TableFormer + optional formula/VLM heads). DOCX / PPTX / HTML use
+Docling's native parsers for those formats; we only need to declare
+them in ``allowed_formats``.
 
-When ``hybrid_chunks=True`` (the default), the ``ParseResult.metadata``
-carries ``_docling_chunks``: a list of ``(text, heading_path)`` pairs
-that the pipeline can consume directly, skipping ``chunk_document``.
+GPU acceleration is automatic when CUDA is available. The standard
+PDF pipeline uses ``ThreadedPdfPipelineOptions`` so layout and OCR
+inference can batch on the GPU; tune via ``DOCLING_*_BATCH_SIZE`` env
+vars below.
 
-GPU acceleration is used automatically when CUDA is available.
+Enrichment + performance knobs (env vars):
 
-Enrichment options (PDF only) are controlled via env vars:
+  DOCLING_FORMULAS=1            Formula/equation enrichment (LaTeX)
+  DOCLING_FORMULA_MODEL=...     granite_docling (default) | codeformulav2
+  DOCLING_OCR=1                 OCR scanned pages (slow on long PDFs)
+  DOCLING_PIC_CLASSIFY=1        Picture classification
+  DOCLING_PIC_DESCRIBE=1        Picture description (VLM captioning)
+  DOCLING_VLM=1                 Use the VLM pipeline (whole-page VLM)
+  DOCLING_VLM_MODEL=granite     granite | smoldocling | got2 | glmocr |
+                                granite-ollama | granite-vllm
+  DOCLING_IMAGES_SCALE=3.0      Picture render resolution multiplier
+  DOCLING_PAGE_BATCH_SIZE=64    Global per-page batch size (default 4 in
+                                Docling; bumped to 64 for GPU throughput)
+  DOCLING_LAYOUT_BATCH_SIZE=64  Layout-detection batch size on GPU
+  DOCLING_OCR_BATCH_SIZE=64     OCR batch size on GPU
+  DOCLING_TABLE_BATCH_SIZE=4    TableFormer batch size (still CPU-bound
+                                in current Docling; do not raise blindly)
 
-  DOCLING_FORMULAS=1       Enable formula/equation extraction (LaTeX)
-  DOCLING_PIC_CLASSIFY=1   Enable picture classification
-  DOCLING_PIC_DESCRIBE=1   Enable picture description (VLM captioning)
-  DOCLING_VLM=1            Use VLM pipeline instead of standard pipeline
-  DOCLING_VLM_MODEL=granite  VLM model: granite, smoldocling, got2, glmocr,
-                             granite-ollama, granite-vllm
+Chunking is owned by ``wikify.ingest.hybrid_chunker.chunk_with_hybrid``
+and runs on the persisted markdown; this module never produces chunks
+itself.
 """
 
 from __future__ import annotations
@@ -70,29 +80,48 @@ class DoclingOptions:
     may take 100s+ even with the granite model.
     """
 
-    hybrid_chunks: bool = True
     formulas: bool = True
-    formula_model: str = "granite_docling"  # "granite_docling" or "codeformulav2"
+    formula_model: str = "granite_docling"  # "granite_docling" | "codeformulav2"
     ocr: bool = False
     pic_classify: bool = False
     pic_describe: bool = False
     vlm: bool = False
     images_scale: float = 3.0
-    # Batch sizes for GPU inference (ignored on CPU).
+    # Batch sizes for GPU inference. Docling defaults are conservative
+    # (4) which leaves the GPU idle on most pages; raising layout/OCR
+    # batches gives the documented up-to-6x speedup on Ampere+. Table
+    # batching is still CPU-bound in current Docling, so we keep it at
+    # the documented safe value of 4.
+    page_batch_size: int = 64
     layout_batch_size: int = 64
     ocr_batch_size: int = 64
+    table_batch_size: int = 4
 
     @classmethod
     def from_env(cls) -> DoclingOptions:
         """Build options from DOCLING_* environment variables."""
         return cls(
             formulas=os.environ.get("DOCLING_FORMULAS", "1") != "0",
-            formula_model=os.environ.get("DOCLING_FORMULA_MODEL", "granite_docling"),
+            formula_model=os.environ.get(
+                "DOCLING_FORMULA_MODEL", "granite_docling",
+            ),
             ocr=os.environ.get("DOCLING_OCR", "") == "1",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
             images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "3.0")),
+            page_batch_size=int(
+                os.environ.get("DOCLING_PAGE_BATCH_SIZE", "64"),
+            ),
+            layout_batch_size=int(
+                os.environ.get("DOCLING_LAYOUT_BATCH_SIZE", "64"),
+            ),
+            ocr_batch_size=int(
+                os.environ.get("DOCLING_OCR_BATCH_SIZE", "64"),
+            ),
+            table_batch_size=int(
+                os.environ.get("DOCLING_TABLE_BATCH_SIZE", "4"),
+            ),
         )
 
 
@@ -157,34 +186,60 @@ _CACHED_OPTS_KEY = None
 def _get_converter(opts: DoclingOptions):
     """Return a cached converter, rebuilding only if options changed."""
     global _CACHED_CONVERTER, _CACHED_OPTS_KEY
-    key = (opts.formulas, opts.formula_model, opts.ocr, opts.pic_classify,
-           opts.pic_describe, opts.vlm, opts.images_scale,
-           opts.layout_batch_size, opts.ocr_batch_size)
+    key = (
+        opts.formulas, opts.formula_model, opts.ocr,
+        opts.pic_classify, opts.pic_describe, opts.vlm,
+        opts.images_scale,
+        opts.page_batch_size, opts.layout_batch_size,
+        opts.ocr_batch_size, opts.table_batch_size,
+    )
     if _CACHED_CONVERTER is None or _CACHED_OPTS_KEY != key:
         _CACHED_CONVERTER = _build_converter(opts)
         _CACHED_OPTS_KEY = key
     return _CACHED_CONVERTER
 
 
+def _apply_global_perf_settings(opts: DoclingOptions) -> None:
+    """Set Docling's per-process performance settings.
+
+    ``settings.perf.page_batch_size`` defaults to 4 in upstream
+    Docling, which leaves the GPU idle on most pages. The official
+    GPU-tuning guide recommends raising it to 64 for batch ingest; the
+    setting is process-global, so we apply it once before building the
+    converter rather than per-call. We set unconditionally (rather
+    than ratcheting up) so DOCLING_PAGE_BATCH_SIZE remains the source
+    of truth across re-imports / probe runs.
+    """
+    try:
+        from docling.datamodel.settings import settings
+    except ImportError:
+        return
+    try:
+        settings.perf.page_batch_size = int(opts.page_batch_size)
+    except (AttributeError, TypeError):
+        # Older docling versions may not expose this; fall through.
+        pass
+
+
 def parse(
     path: Path,
     *,
-    hybrid_chunks: bool = True,
     skip_metadata: bool = False,
 ) -> ParseResult:
-    """Parse a PDF via Docling into markdown + images + sections + metadata.
+    """Parse one PDF / DOCX / PPTX / HTML via Docling.
 
-    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion is
-    skipped (ingest DAG pass 3 -> pass 4 decoupling). The
-    ``_docling_chunks`` HybridChunker payload still rides in
-    ``metadata`` because downstream chunking depends on it; the fusion
-    step in pass 4 merges its output over that payload.
+    Returns a ``ParseResult`` with markdown + images + sections +
+    metadata. Chunking is owned by the universal HybridChunker and
+    runs on the persisted markdown; this function never produces
+    chunks. ``skip_metadata=True`` skips ``assemble_pdf_metadata`` so
+    the ingest DAG can fuse metadata in a later pass with DOI-resolved
+    context.
     """
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
 
     opts = DoclingOptions.from_env()
-    opts.hybrid_chunks = hybrid_chunks
+    _apply_global_perf_settings(opts)
 
     effective_opts = opts
     converter = _get_converter(opts)
@@ -345,6 +400,11 @@ def _make_standard_options(accel, opts: DoclingOptions):
     if _has_cuda():
         kwargs["layout_batch_size"] = opts.layout_batch_size
         kwargs["ocr_batch_size"] = opts.ocr_batch_size
+        # ``table_batch_size`` lives on the threaded pipeline options
+        # too, but TableFormer is currently CPU-bound in upstream
+        # Docling, so the value is a soft hint. Keep at the documented
+        # default unless an upstream change moves it onto GPU.
+        kwargs["table_batch_size"] = opts.table_batch_size
 
     return PipelineCls(**kwargs)
 
@@ -566,23 +626,44 @@ def _image_bytes_from_item(item) -> bytes | None:
     return None
 
 
-def _hybrid_chunk(doc) -> list[dict]:
-    """Use Docling's HybridChunker to produce structure-aware chunks."""
-    from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
+def extract_formulas(doc) -> list[dict]:
+    """Pull every detected formula out of a parsed DoclingDocument.
 
-    chunker = HybridChunker(max_tokens=2000, merge_peers=True)
-    chunks: list[dict] = []
-    for chunk in chunker.chunk(doc):
-        text = chunker.contextualize(chunk)
-        heading_path = ["body"]
-        if hasattr(chunk, "meta") and chunk.meta:
-            export = getattr(chunk.meta, "export_json_dict", None)
-            meta_dict = export() if export else {}
-            headings = meta_dict.get("headings", [])
-            if headings:
-                heading_path = headings
-        chunks.append({
-            "text": text,
-            "heading_path": heading_path,
-        })
-    return chunks
+    Returns a list of dicts compatible with the markdown-derived
+    ``ingest.equations.extract_equations`` shape so downstream code
+    (binding to chunks, equations index) can consume either source
+    interchangeably. When the formula enrichment model is enabled the
+    Granite-Docling LaTeX is in ``item.text``; otherwise the field
+    holds whatever placeholder Docling emits, which we surface as-is
+    so callers can decide whether to discard it.
+    """
+    out: list[dict] = []
+    try:
+        from docling_core.types.doc.document import FormulaItem
+    except ImportError:
+        return out
+    try:
+        for item, _level in doc.iterate_items():
+            if not isinstance(item, FormulaItem):
+                continue
+            latex = (getattr(item, "text", "") or "").strip()
+            if not latex:
+                continue
+            page = None
+            prov = getattr(item, "prov", None)
+            if prov:
+                page = getattr(prov[0], "page_no", None)
+            label = (getattr(item, "label", "") or "")
+            out.append({
+                "id": hashlib.sha1(latex.encode("utf-8")).hexdigest()[:12],
+                "latex": latex,
+                "label": str(label) if label else "",
+                "type": "display",
+                "kind": "display",
+                "page": page,
+                "context": "",
+                "char_offset": -1,
+            })
+    except Exception:
+        return out
+    return out

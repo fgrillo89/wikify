@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 import re
-import statistics
 import sqlite3
+import statistics
 import sys
 from pathlib import Path
 
@@ -140,23 +140,37 @@ def render_diff(before: dict, after: dict) -> None:
         print(f"  {k:>10s}  {fmt(before['size_hist'][k], after['size_hist'][k])}")
 
     print("\n=== section_path artifacts ===")
-    for k in before["section_path_artifacts"]:
-        print(f"  {k:25s}  {fmt(before['section_path_artifacts'][k], after['section_path_artifacts'][k])}")
+    sp_b = before["section_path_artifacts"]
+    sp_a = after["section_path_artifacts"]
+    for k in sp_b:
+        print(f"  {k:25s}  {fmt(sp_b[k], sp_a[k])}")
 
     print("\n=== docs ===")
     print(f"  n_docs                     {fmt(before['n_docs'], after['n_docs'])}")
-    print(f"  with abstract chunk        {fmt(before['docs_with_abstract_chunk'], after['docs_with_abstract_chunk'])}")
-    print(f"  with single ['body'] path  {fmt(before['docs_with_one_section_path'], after['docs_with_one_section_path'])}")
+    abs_b = before["docs_with_abstract_chunk"]
+    abs_a = after["docs_with_abstract_chunk"]
+    one_b = before["docs_with_one_section_path"]
+    one_a = after["docs_with_one_section_path"]
+    print(f"  with abstract chunk        {fmt(abs_b, abs_a)}")
+    print(f"  with single ['body'] path  {fmt(one_b, one_a)}")
 
     print("\n=== boilerplate / equations ===")
-    print(f"  is_boilerplate flagged     {fmt(before['chunks_flagged_boilerplate'], after['chunks_flagged_boilerplate'])}")
-    print(f"  equations.json records     {fmt(before['equations']['json_records'], after['equations']['json_records'])}")
-    print(f"  chunks w/ equation_ids     {fmt(before['equations']['chunks_with_equation_ids'], after['equations']['chunks_with_equation_ids'])}")
+    bp_b = before["chunks_flagged_boilerplate"]
+    bp_a = after["chunks_flagged_boilerplate"]
+    eq_b = before["equations"]
+    eq_a = after["equations"]
+    print(f"  is_boilerplate flagged     {fmt(bp_b, bp_a)}")
+    print(f"  equations.json records     "
+          f"{fmt(eq_b['json_records'], eq_a['json_records'])}")
+    print(f"  chunks w/ equation_ids     "
+          f"{fmt(eq_b['chunks_with_equation_ids'], eq_a['chunks_with_equation_ids'])}")
 
     print("\n=== section_type breakdown ===")
     types = sorted(set(before["section_type"]) | set(after["section_type"]))
     for t in types:
-        print(f"  {t:18s}  {fmt(before['section_type'].get(t, 0), after['section_type'].get(t, 0))}")
+        b = before["section_type"].get(t, 0)
+        a = after["section_type"].get(t, 0)
+        print(f"  {t:18s}  {fmt(b, a)}")
 
 
 def main() -> int:
