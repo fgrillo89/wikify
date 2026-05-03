@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
 );
 CREATE INDEX IF NOT EXISTS wiki_pages_kind ON wiki_pages(kind);
 
+CREATE TABLE IF NOT EXISTS wiki_evidence (
+  page_id TEXT NOT NULL REFERENCES wiki_pages(page_id) ON DELETE CASCADE,
+  marker TEXT NOT NULL,
+  chunk_id TEXT,
+  doc_id TEXT,
+  quote TEXT,
+  PRIMARY KEY (page_id, marker)
+);
+CREATE INDEX IF NOT EXISTS wiki_evidence_doc ON wiki_evidence(doc_id);
+CREATE INDEX IF NOT EXISTS wiki_evidence_chunk ON wiki_evidence(chunk_id);
+
 CREATE TABLE IF NOT EXISTS wiki_edges (
   src_id TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -39,6 +50,21 @@ CREATE TABLE IF NOT EXISTS wiki_edges (
 );
 CREATE INDEX IF NOT EXISTS wiki_edges_kind ON wiki_edges(kind);
 CREATE INDEX IF NOT EXISTS wiki_edges_dst ON wiki_edges(dst_type, dst_id, kind);
+
+CREATE TABLE IF NOT EXISTS wiki_embedding_spaces (
+  space_id TEXT PRIMARY KEY,
+  backend TEXT NOT NULL,
+  model TEXT,
+  dim INTEGER NOT NULL,
+  created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS wiki_embeddings (
+  space_id TEXT NOT NULL REFERENCES wiki_embedding_spaces(space_id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES wiki_pages(page_id) ON DELETE CASCADE,
+  vector BLOB NOT NULL,
+  PRIMARY KEY (space_id, page_id)
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts USING fts5(
   title, body,
@@ -98,6 +124,23 @@ def upsert_wiki_page(
         "INSERT INTO wiki_pages_fts(rowid, title, body) VALUES (?, ?, ?)",
         (rowid, title, body),
     )
+    # Refresh evidence rows for this page.
+    con.execute("DELETE FROM wiki_evidence WHERE page_id = ?", (page_id,))
+    if evidence:
+        con.executemany(
+            "INSERT INTO wiki_evidence(page_id, marker, chunk_id, doc_id, quote) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    page_id,
+                    ev.get("marker") or f"e{i}",
+                    ev.get("chunk_id"),
+                    ev.get("doc_id"),
+                    (ev.get("quote") or "")[:2000],
+                )
+                for i, ev in enumerate(evidence)
+            ],
+        )
     # Refresh outgoing edges for this page.
     con.execute("DELETE FROM wiki_edges WHERE src_id = ?", (page_id,))
     edge_rows: list[tuple[str, str, str, str, str | None]] = []

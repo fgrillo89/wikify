@@ -199,10 +199,9 @@ def traverse_page(
             f"unknown wiki relation {relation!r}; expected "
             f"{' | '.join(sorted(_WIKI_RELATIONS))}"
         )
-    graph_path = bundle.derived_graph_path
-    if not graph_path.is_file():
+    if not bundle.sqlite_path.is_file():
         return []
-    wkg = load_wiki_graph(graph_path)
+    wkg = load_wiki_graph(bundle.sqlite_path)
     backend = wkg._backend
     page_id = _slug_to_page_id(bundle, slug)
     if page_id is None or not backend.has_node(page_id):

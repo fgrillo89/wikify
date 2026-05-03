@@ -97,20 +97,46 @@ def _load_pages(bundle: Bundle) -> list:
 
 
 def rebuild_graph(bundle: Bundle) -> Path:
-    """Rebuild ``derived/graph.json`` from committed pages.
+    """Refresh `wiki.db` rows from every committed page on disk.
 
-    Calls :func:`bundle.wiki.graph.build_wiki_graph` over the parsed
-    pages and serialises with :func:`save_wiki_graph`. The vectors
-    parameter is None (no embeddings) — vectors are owned by
-    :func:`rebuild_vectors`.
+    Walks `wiki/articles/` + `wiki/people/`, parses each markdown file,
+    and upserts the result into `wiki.db`. The wiki graph IS wiki.db;
+    `derived/graph.json` is no longer produced.
     """
-    from .graph import build_wiki_graph, save_wiki_graph
+    from .page import parse_page
+    from .store import open_wiki_store, upsert_wiki_page
 
-    bundle.derived_dir.mkdir(parents=True, exist_ok=True)
-    pages = _load_pages(bundle)
-    wkg = build_wiki_graph(pages, vectors=None, embed_fn=None)
-    save_wiki_graph(bundle.derived_graph_path, wkg)
-    return bundle.derived_graph_path
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+            if not sub.is_dir():
+                continue
+            for path in sorted(sub.glob("*.md")):
+                page = parse_page(path)
+                upsert_wiki_page(
+                    con,
+                    page_id=page.id,
+                    slug=path.stem,
+                    title=page.title or page.id,
+                    kind=page.kind,
+                    body=page.body_clean or "",
+                    frontmatter={"aliases": list(page.aliases or [])},
+                    evidence=[
+                        {
+                            "marker": ev.marker,
+                            "chunk_id": ev.chunk_id or "",
+                            "doc_id": ev.doc_id or "",
+                            "quote": ev.quote or "",
+                        }
+                        for ev in (page.evidence or [])
+                    ],
+                    links=[
+                        link for link in (page.links or []) if link != page.id
+                    ],
+                )
+    finally:
+        con.close()
+    return bundle.sqlite_path
 
 
 def rebuild_vectors(bundle: Bundle) -> Path:
