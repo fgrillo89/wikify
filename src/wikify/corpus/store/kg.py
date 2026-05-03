@@ -1,0 +1,636 @@
+"""SQLite-backed adapter for the corpus fluent KnowledgeGraph API.
+
+Exposes the same `_cited_by` / `_authors_of` / `_chunks_of_source` /
+`G.nodes[nid]` interface that `corpus/graph.py::QueryBuilder` reads, but
+sourced from `wikify.db` instead of a NetworkX MultiDiGraph + JSON.
+
+The backend loads everything into in-memory dicts at construction. For
+typical wikify corpora (<= 5k papers, ~150k chunks, ~1M edges) this is
+sub-second and matches what the legacy NetworkXBackend did. For larger
+corpora, this eager snapshot should be replaced with lazy loading.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import unicodedata
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+from .connection import connect
+
+_NORM_RE = re.compile(r"[^a-z0-9 ]+")
+
+_SECTION_KEYWORDS: list[tuple[str, str]] = [
+    ("abstract", "abstract"),
+    ("introduction", "introduction"),
+    ("background", "introduction"),
+    ("method", "methods"),
+    ("experimental", "methods"),
+    ("materials", "methods"),
+    ("result", "results"),
+    ("discussion", "discussion"),
+    ("conclusion", "conclusions"),
+    ("summary", "conclusions"),
+    ("reference", "references"),
+    ("bibliography", "references"),
+    ("acknowledgment", "acknowledgments"),
+    ("acknowledgement", "acknowledgments"),
+    ("supplement", "supplementary"),
+    ("appendix", "supplementary"),
+    ("supporting info", "supplementary"),
+]
+
+
+def classify_section(path: list[str]) -> str:
+    if not path:
+        return "body"
+    heading = path[-1].lower().strip()
+    heading = re.sub(r"^\d+[\.\)]\s*", "", heading)
+    for keyword, stype in _SECTION_KEYWORDS:
+        if keyword in heading:
+            return stype
+    return "body"
+
+
+def author_key(name: str) -> str:
+    if not name:
+        return ""
+    n = unicodedata.normalize("NFKC", name)
+    n = re.sub(r"\s+", " ", n).strip().rstrip(",.; ")
+    n = re.sub(r"\s+\d+(?:\s*,\s*\d+)*$", "", n)
+    key = _NORM_RE.sub(" ", n.lower()).strip()
+    return re.sub(r"\s+", " ", key)
+
+
+# ---------------------------------------------------------------------------
+# G shim — minimal NetworkX-like read surface used by QueryBuilder.
+# ---------------------------------------------------------------------------
+
+
+class _NodeView:
+    """Mimics nx.Graph.nodes: indexable + callable + iterable."""
+
+    __slots__ = ("_attrs",)
+
+    def __init__(self, attrs: dict[str, dict[str, Any]]):
+        self._attrs = attrs
+
+    def __getitem__(self, nid: str) -> dict[str, Any]:
+        return self._attrs[nid]
+
+    def __contains__(self, nid: str) -> bool:
+        return nid in self._attrs
+
+    def __iter__(self):
+        return iter(self._attrs)
+
+    def __len__(self) -> int:
+        return len(self._attrs)
+
+    def get(self, nid: str, default: Any = None) -> Any:
+        return self._attrs.get(nid, default)
+
+    def __call__(self, *, data: bool = False):
+        if data:
+            return list(self._attrs.items())
+        return list(self._attrs.keys())
+
+
+class _GShim:
+    """Minimal nx.Graph-shaped read surface; does not support edge iteration."""
+
+    __slots__ = ("nodes", "_n_edges")
+
+    def __init__(self, attrs: dict[str, dict[str, Any]], n_edges: int):
+        self.nodes = _NodeView(attrs)
+        self._n_edges = n_edges
+
+    def __contains__(self, nid: str) -> bool:
+        return nid in self.nodes
+
+    def number_of_edges(self) -> int:
+        return self._n_edges
+
+
+# ---------------------------------------------------------------------------
+# SqliteGraphBackend
+# ---------------------------------------------------------------------------
+
+
+class SqliteGraphBackend:
+    """Drop-in replacement for NetworkXBackend that reads `wikify.db`.
+
+    Populates the inverted-index dicts that `QueryBuilder` consumes;
+    exposes `G` as a thin shim so `backend.G.nodes[nid]` keeps working.
+    """
+
+    def __init__(self, sqlite_path: str | Path | sqlite3.Connection):
+        if isinstance(sqlite_path, sqlite3.Connection):
+            self.con = sqlite_path
+            self._owns_con = False
+        else:
+            self.con = connect(sqlite_path)
+            self._owns_con = True
+
+        self._node_attrs: dict[str, dict[str, Any]] = {}
+        self._cited_by: dict[str, set[str]] = defaultdict(set)
+        self._references: dict[str, set[str]] = defaultdict(set)
+        self._sources_of: dict[str, set[str]] = defaultdict(set)
+        self._authors_of: dict[str, set[str]] = defaultdict(set)
+        self._coauthors: dict[str, set[str]] = defaultdict(set)
+        self._sections_of: dict[str, list[str]] = defaultdict(list)
+        self._chunks_of_source: dict[str, list[str]] = defaultdict(list)
+        self._chunks_of_section: dict[str, list[str]] = defaultdict(list)
+        self._figures_of: dict[str, list[str]] = defaultdict(list)
+        self._equations_of: dict[str, list[str]] = defaultdict(list)
+        self._equations_in_chunk: dict[str, list[str]] = defaultdict(list)
+        self._figures_near_chunk: dict[str, list[str]] = defaultdict(list)
+        self._chunks_near_figure: dict[str, list[str]] = defaultdict(list)
+        self._chunks_with_equation: dict[str, list[str]] = defaultdict(list)
+        self._pagerank: dict[str, float] = {}
+        self._h_index: dict[str, int] = {}
+        self._ord_refs: dict[str, dict[int, str]] = {}
+
+        self._load_documents()
+        self._load_chunks()
+        self._load_authors()
+        self._load_assets()
+        self._load_bib_cited_only()
+        self._load_metrics()
+        self._n_edges = self._load_edges()
+        self._load_sections_from_chunks()
+        self._load_ord_refs()
+        self._load_chunk_citation_edges()
+
+        self.G = _GShim(self._node_attrs, self._n_edges)
+
+    # ------------------------------------------------------------------
+    # populate
+    # ------------------------------------------------------------------
+
+    def _load_documents(self) -> None:
+        for r in self.con.execute("SELECT * FROM documents"):
+            authors = json.loads(r["authors_json"] or "[]")
+            self._node_attrs[r["doc_id"]] = {
+                "type": "source",
+                "kind": "corpus",
+                "title": r["title"] or "",
+                "year": r["year"],
+                "doi": (r["doi"] or "").lower().strip(),
+                "venue": r["container_title"] or "",
+                "publisher": r["publisher"] or "",
+                "n_chunks": r["n_chunks"] or 0,
+                "n_tokens": r["n_tokens"] or 0,
+                "authors": authors,
+                "markdown_path": r["source_path"] or "",
+                "abstract": r["abstract"] or "",
+                "tldr": r["tldr"] or "",
+            }
+
+    def _load_chunks(self) -> None:
+        for r in self.con.execute("SELECT * FROM chunks"):
+            section_path = json.loads(r["section_path_json"] or "[]")
+            equation_ids = json.loads(r["equation_ids_json"] or "[]")
+            self._node_attrs[r["chunk_id"]] = {
+                "type": "chunk",
+                "source_id": r["doc_id"],
+                "doc_id": r["doc_id"],
+                "ord": r["ord"],
+                "section_type": r["section_type"] or "body",
+                "is_boilerplate": bool(r["is_boilerplate"]),
+                "char_span": [r["char_start"] or 0, r["char_end"] or 0],
+                "equation_ids": equation_ids,
+                "section_path": section_path,
+                "text": r["text"],
+            }
+
+    def _load_authors(self) -> None:
+        author_count: dict[str, int] = defaultdict(int)
+        for r in self.con.execute("SELECT author_id, doc_id FROM document_authors"):
+            author_count[r[0]] += 1
+        for r in self.con.execute("SELECT author_id, display_name FROM authors"):
+            aid = r["author_id"]
+            self._node_attrs[aid] = {
+                "type": "author",
+                "display_name": r["display_name"] or aid,
+                "source_count": author_count.get(aid, 0),
+            }
+
+    def _load_assets(self) -> None:
+        for r in self.con.execute("SELECT * FROM assets"):
+            atype = r["asset_type"] or "image"
+            ntype = "figure" if atype in ("figure", "image", "table", "scheme") else "equation"
+            attrs = {
+                "type": ntype,
+                "source_id": r["doc_id"],
+                "page": r["page"],
+                "path": r["path"] or "",
+                "caption": r["caption"] or "",
+                "near_chunk_ids": [],
+            }
+            if ntype == "equation":
+                attrs["latex"] = r["content"] or ""
+                attrs["label"] = r["caption"] or ""
+                meta = json.loads(r["metadata_json"] or "{}")
+                attrs["kind"] = meta.get("kind", "math")
+                attrs["is_chemical"] = meta.get("kind") == "chemical"
+            self._node_attrs[r["asset_id"]] = attrs
+
+    def _load_bib_cited_only(self) -> None:
+        """Synthesize cited-only source nodes from unresolved bib_entries.
+
+        Prefers `local_key` (the bibkey) as the node id when present so
+        callers can resolve external references the same way the legacy
+        path did; falls back to `bib_id`.
+        """
+        seen: set[str] = set()
+        for r in self.con.execute(
+            "SELECT bib_id, local_key, title, authors_json, year, container_title, "
+            "publisher, doi FROM bib_entries WHERE target_doc_id IS NULL",
+        ):
+            nid = r["local_key"] or r["bib_id"]
+            if nid in self._node_attrs or nid in seen:
+                continue
+            seen.add(nid)
+            authors = json.loads(r["authors_json"] or "[]")
+            self._node_attrs[nid] = {
+                "type": "source",
+                "kind": "cited",
+                "title": r["title"] or nid,
+                "year": r["year"],
+                "doi": (r["doi"] or "").lower().strip(),
+                "venue": r["container_title"] or "",
+                "publisher": r["publisher"] or "",
+                "authors": authors,
+                "markdown_path": "",
+            }
+
+    def _load_metrics(self) -> None:
+        for r in self.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name='corpus_citation' AND metric='pagerank'",
+        ):
+            self._pagerank[r[0]] = float(r[1])
+            if r[0] in self._node_attrs:
+                self._node_attrs[r[0]]["pagerank"] = float(r[1])
+        for r in self.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE node_type='author' AND metric='h_index'",
+        ):
+            self._h_index[r[0]] = int(r[1])
+            if r[0] in self._node_attrs:
+                self._node_attrs[r[0]]["h_index"] = int(r[1])
+        for r in self.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name='corpus_citation' AND metric='citation_count'",
+        ):
+            if r[0] in self._node_attrs:
+                self._node_attrs[r[0]]["citation_count"] = int(r[1])
+
+    def _load_edges(self) -> int:
+        n = 0
+        for r in self.con.execute(
+            "SELECT src_type, src_id, kind, dst_type, dst_id FROM graph_edges",
+        ):
+            n += 1
+            kind = r[2]
+            src, dst = r[1], r[4]
+            if kind == "references":
+                # Translate bib_id targets to their bibkey id when applicable.
+                self._references[src].add(dst)
+                self._cited_by[dst].add(src)
+            elif kind == "authored_by":
+                self._authors_of[src].add(dst)
+                self._sources_of[dst].add(src)
+            elif kind == "coauthor":
+                self._coauthors[src].add(dst)
+                self._coauthors[dst].add(src)
+            elif kind == "has_chunk":
+                self._chunks_of_source[src].append(dst)
+            elif kind == "has_asset":
+                ntype = self._node_attrs.get(dst, {}).get("type")
+                if ntype == "figure":
+                    self._figures_of[src].append(dst)
+                elif ntype == "equation":
+                    self._equations_of[src].append(dst)
+            elif kind in ("near", "mentions"):
+                # chunk -> figure
+                if self._node_attrs.get(dst, {}).get("type") == "figure":
+                    self._figures_near_chunk[src].append(dst)
+                    self._chunks_near_figure[dst].append(src)
+                    near_list = self._node_attrs[dst].setdefault("near_chunk_ids", [])
+                    if src not in near_list:
+                        near_list.append(src)
+            elif kind == "contains":
+                # chunk -> equation
+                if self._node_attrs.get(dst, {}).get("type") == "equation":
+                    self._equations_in_chunk[src].append(dst)
+                    self._chunks_with_equation[dst].append(src)
+        return n
+
+    def _load_sections_from_chunks(self) -> None:
+        """Synthesize SECTION nodes from chunks.section_path.
+
+        Section id pattern matches the legacy: `{doc_id}::{path joined}`.
+        """
+        section_chunks: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        section_path_map: dict[str, list[str]] = {}
+        for cid, attrs in self._node_attrs.items():
+            if attrs.get("type") != "chunk":
+                continue
+            path = attrs.get("section_path") or []
+            if not path:
+                continue
+            sec_id = f"{attrs['source_id']}::{'/'.join(path)}"
+            section_chunks[sec_id].append((attrs.get("ord", 0), cid))
+            section_path_map[sec_id] = path
+
+        for sec_id, ord_chunks in section_chunks.items():
+            doc_id = sec_id.split("::", 1)[0]
+            ord_chunks.sort()
+            chunk_ids = [cid for _, cid in ord_chunks]
+            path = section_path_map[sec_id]
+            self._node_attrs[sec_id] = {
+                "type": "section",
+                "source_id": doc_id,
+                "heading": path[-1] if path else "",
+                "level": len(path),
+                "section_type": classify_section(path),
+                "chunk_ids": chunk_ids,
+            }
+            self._sections_of[doc_id].append(sec_id)
+            self._chunks_of_section[sec_id].extend(chunk_ids)
+
+    def _load_ord_refs(self) -> None:
+        """Reconstruct ord_refs[doc_id][ord_n] = target_doc_id from bib_entries.
+
+        ord_n is 1-based to match legacy [N] marker semantics.
+        """
+        for r in self.con.execute(
+            "SELECT doc_id, ord, target_doc_id FROM bib_entries "
+            "WHERE target_doc_id IS NOT NULL",
+        ):
+            doc_id = r["doc_id"]
+            self._ord_refs.setdefault(doc_id, {})[int(r["ord"]) + 1] = r["target_doc_id"]
+            if doc_id in self._node_attrs:
+                self._node_attrs[doc_id]["ord_refs"] = self._ord_refs[doc_id]
+
+    def _load_chunk_citation_edges(self) -> None:
+        """Synthesize doc -> cited-only references and chunk -> cited cites.
+
+        `graph_edges` only carries doc->doc references for in-corpus
+        targets. To match the legacy traverse behaviour we also expose
+        edges to the synthetic cited-only nodes (one per unresolved
+        bib_entry) so `traverse doc:X --to references` returns both
+        in-corpus and out-of-corpus references.
+        """
+        bib_to_node: dict[str, str] = {}
+        for r in self.con.execute(
+            "SELECT bib_id, local_key, doc_id FROM bib_entries "
+            "WHERE target_doc_id IS NULL",
+        ):
+            nid = r["local_key"] or r["bib_id"]
+            bib_to_node[r["bib_id"]] = nid
+            # doc -> cited reference (per bib_entry's parent doc).
+            doc_id = r["doc_id"]
+            if doc_id and nid in self._node_attrs:
+                self._references[doc_id].add(nid)
+                self._cited_by[nid].add(doc_id)
+        # chunk -> cited cites edges (from chunk_citations).
+        for r in self.con.execute(
+            "SELECT chunk_id, bib_id FROM chunk_citations",
+        ):
+            nid = bib_to_node.get(r["bib_id"])
+            if nid is None:
+                continue
+            self._references.setdefault(r["chunk_id"], set()).add(nid)
+
+    # ------------------------------------------------------------------
+    # API used by QueryBuilder
+    # ------------------------------------------------------------------
+
+    def node(self, nid: str) -> dict[str, Any]:
+        attrs = dict(self._node_attrs.get(nid, {}))
+        attrs["id"] = nid
+        return attrs
+
+    def has_node(self, nid: str) -> bool:
+        return nid in self._node_attrs
+
+    def nodes_of_type(self, ntype: str) -> set[str]:
+        return {
+            nid for nid, a in self._node_attrs.items() if a.get("type") == ntype
+        }
+
+    def neighbors(self, nid: str, hops: int = 1) -> set[str]:
+        """Undirected N-hop neighbors. Used by `kg.<...>.neighborhood()`."""
+        if nid not in self._node_attrs:
+            return set()
+        result: set[str] = set()
+        frontier = {nid}
+        for _ in range(hops):
+            next_frontier: set[str] = set()
+            for n in frontier:
+                for nb in self._undirected_neighbors(n):
+                    if nb != nid and nb not in result:
+                        next_frontier.add(nb)
+            result |= next_frontier
+            frontier = next_frontier
+        return result
+
+    def _undirected_neighbors(self, nid: str) -> set[str]:
+        out: set[str] = set()
+        out |= self._references.get(nid, set())
+        out |= self._cited_by.get(nid, set())
+        out |= self._authors_of.get(nid, set())
+        out |= self._sources_of.get(nid, set())
+        out |= self._coauthors.get(nid, set())
+        out.update(self._chunks_of_source.get(nid, []))
+        out.update(self._figures_of.get(nid, []))
+        out.update(self._equations_of.get(nid, []))
+        out.update(self._figures_near_chunk.get(nid, []))
+        out.update(self._chunks_near_figure.get(nid, []))
+        out.update(self._equations_in_chunk.get(nid, []))
+        out.update(self._chunks_with_equation.get(nid, []))
+        out.update(self._sections_of.get(nid, []))
+        out.update(self._chunks_of_section.get(nid, []))
+        return out
+
+    def close(self) -> None:
+        if self._owns_con:
+            self.con.close()
+
+
+def open_corpus_kg(sqlite_path: str | Path) -> SqliteGraphBackend:
+    """Open the SQLite corpus KG. Caller owns close()."""
+    return SqliteGraphBackend(sqlite_path)
+
+
+# ---------------------------------------------------------------------------
+# Test-friendly in-memory builder (replaces the old nx-based path).
+# ---------------------------------------------------------------------------
+
+
+def build_kg_in_memory(
+    docs,
+    chunks,
+    vectors=None,
+    citation_index=None,
+):
+    """Build a `KnowledgeGraph` over an in-memory `wikify.db`.
+
+    Used by tests and ad-hoc tools that hand over Document/Chunk lists
+    rather than ingesting into a real corpus directory. The runtime
+    path goes through `read_knowledge_graph(corpus, ...)` which opens
+    the on-disk `wikify.db`; this helper produces the same shape from
+    a `:memory:` Store so unit tests do not pay the ingest cost.
+
+    `citation_index` (the legacy citations.json shape) is honoured
+    when present: each `doc_citations` bibkey becomes a bib_entry row,
+    `doc_bibkeys` controls which bibkey is the doc's own canonical
+    reference id (cited works), and `entries` provides the metadata.
+    """
+    from collections import defaultdict
+
+    from wikify.corpus.graph import (
+        KnowledgeGraph,
+        TraceContext,
+    )
+    from wikify.corpus.store import Store
+
+    store = Store(":memory:")
+    chunks_by_doc: dict[str, list] = defaultdict(list)
+    for ck in chunks:
+        chunks_by_doc[ck.doc_id].append(ck)
+    for v in chunks_by_doc.values():
+        v.sort(key=lambda c: c.ord)
+
+    citation_index = citation_index or {}
+    doc_bibkeys = citation_index.get("doc_bibkeys", {}) or {}
+    doc_citations_map = citation_index.get("doc_citations", {}) or {}
+    entries = citation_index.get("entries", {}) or {}
+    bibkey_to_doc_id = {bk: did for did, bk in doc_bibkeys.items()}
+
+    for doc in docs:
+        store.upsert_document(doc)
+        store.upsert_chunks(chunks_by_doc.get(doc.id, []))
+        store.upsert_document_authors(doc.id, doc.metadata.get("authors") or [])
+        store.upsert_authored_edges(doc.id)
+        store.upsert_chunk_edges(doc.id)
+        # bib_entries from doc.citations + citation_index entries.
+        bib_rows = _bib_rows_for_doc(doc, entries, bibkey_to_doc_id, doc_citations_map)
+        store.upsert_bib_entries(doc.id, bib_rows)
+        # Edges: doc -> doc references for in-corpus targets resolved
+        # via bib_entries. Direct `Document.cites` projection happens
+        # after the cross-doc reresolve loop below — that loop calls
+        # `refresh_reference_edges` which DELETEs outgoing references
+        # before re-inserting from bib_entries, so cites-derived edges
+        # have to land after it.
+        targets = sorted({
+            row["target_doc_id"] for row in bib_rows if row.get("target_doc_id")
+        })
+        if targets:
+            store.con.executemany(
+                "INSERT OR IGNORE INTO graph_edges(src_type, src_id, kind, dst_type, dst_id) "
+                "VALUES ('document', ?, 'references', 'document', ?)",
+                [(doc.id, t) for t in targets],
+            )
+        # Assets from doc.images + doc.equations.
+        assets = []
+        for img in doc.images or []:
+            assets.append({
+                "id": img.id, "type": "figure",
+                "page": img.page, "path": img.path,
+                "caption": img.caption,
+            })
+        for ord_i, eq in enumerate(doc.equations or []):
+            if not isinstance(eq, dict):
+                continue
+            eq_id = eq.get("id") or f"{doc.id}/eq_{ord_i:03d}"
+            assets.append({
+                "id": eq_id, "type": "equation", "ord": ord_i,
+                "content": eq.get("latex") or eq.get("text"),
+                "caption": eq.get("label") or "",
+            })
+        store.upsert_assets(doc.id, assets)
+        chunk_assets: list[dict] = []
+        for img in doc.images or []:
+            for cid in img.near_chunk_ids or []:
+                chunk_assets.append({"chunk_id": cid, "asset_id": img.id, "relation": "near"})
+        for ck in chunks_by_doc.get(doc.id, []):
+            for eq_id in ck.equation_ids or []:
+                chunk_assets.append({"chunk_id": ck.id, "asset_id": eq_id, "relation": "contains"})
+        store.upsert_chunk_assets(doc.id, chunk_assets)
+
+    # Cross-doc resolution: bib_entries with matching DOIs/titles get
+    # target_doc_id set + the implied references edges fire.
+    for doc in docs:
+        store.reresolve_inbound(doc.id)
+        store.refresh_reference_edges(doc.id)
+
+    # Project Document.cites directly into references edges. Runs after
+    # refresh_reference_edges so its DELETE-then-INSERT doesn't wipe
+    # these. INSERT OR IGNORE dedupes overlap with bib-derived rows.
+    for doc in docs:
+        cites = [t for t in (doc.cites or []) if t and t != doc.id]
+        if cites:
+            store.con.executemany(
+                "INSERT OR IGNORE INTO graph_edges(src_type, src_id, kind, dst_type, dst_id) "
+                "VALUES ('document', ?, 'references', 'document', ?)",
+                [(doc.id, t) for t in cites],
+            )
+
+    backend = SqliteGraphBackend(store.con)
+    embed_fn = None
+    kg = KnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
+    kg._trace = TraceContext()
+    # Hold a reference to the store so its connection isn't garbage-collected
+    # before the kg is done with it.
+    kg._owned_store = store  # type: ignore[attr-defined]
+    return kg
+
+
+def _bib_rows_for_doc(
+    doc, entries: dict, bibkey_to_doc_id: dict, doc_citations_map: dict,
+) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for ord_i, c in enumerate(doc.citations or []):
+        target = None
+        rows.append({
+            "ord": c.ord,
+            "raw_text": c.raw_text,
+            "title": c.title or None,
+            "authors": list(c.authors or []),
+            "year": c.year,
+            "container_title": c.venue or None,
+            "publisher": c.publisher or None,
+            "doi": (c.doi or "").lower().strip() or None,
+            "resolution": c.resolution or None,
+            "confidence": c.confidence,
+            "target_doc_id": target,
+        })
+    for bibkey in doc_citations_map.get(doc.id, []) or []:
+        if bibkey in seen:
+            continue
+        seen.add(bibkey)
+        target = bibkey_to_doc_id.get(bibkey)
+        if target == doc.id:
+            target = None
+        meta = entries.get(bibkey, {}) or {}
+        rows.append({
+            "ord": len(rows),
+            "raw_text": meta.get("raw_text", ""),
+            "title": meta.get("title") or bibkey,
+            "authors": list(meta.get("authors") or []),
+            "year": meta.get("year"),
+            "container_title": meta.get("venue"),
+            "doi": (meta.get("doi") or "").lower().strip() or None,
+            "target_doc_id": target,
+            "local_key": bibkey,
+        })
+    return rows

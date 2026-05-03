@@ -101,8 +101,35 @@ def resolve_doc_id(corpus: Corpus, short: str) -> str:
 
 
 def resolve_chunk_id(corpus: Corpus, short: str) -> str:
-    """Resolve a short or full chunk handle to the canonical full id."""
-    return resolve_short(short, (c.id for c in all_chunks(corpus)))
+    """Resolve a short or full chunk handle to the canonical full id.
+
+    Tries the standard handle resolver first — that already covers bare
+    ``<chunk-short>`` and figure-namespaced caption-chunk forms like
+    ``<doc-short>/Figure_01__caption`` (whose `short_id` includes the
+    slash). Falls back to the disambiguated
+    ``<doc-short>/<chunk-short>`` form emitted by `_emit_chunk_rows`
+    only when the standard resolver does not find a match — that
+    preserves the legacy slash semantics for caption chunks.
+    """
+    chunks = list(all_chunks(corpus))
+    try:
+        return resolve_short(short, (c.id for c in chunks))
+    except HandleNotFoundError:
+        if "/" not in short:
+            raise
+        # Compound disambiguation form: <doc-short>/<chunk-short>. Scope
+        # candidates to the doc, then resolve the chunk-short within.
+        from .handles import short_id
+        doc_short, _, chunk_short = short.partition("/")
+        candidates = [
+            c for c in chunks
+            if c.doc_id == doc_short
+            or short_id(c.doc_id) == doc_short
+            or c.doc_id.endswith("_" + doc_short)
+        ]
+        if not candidates:
+            raise
+        return resolve_short(chunk_short, (c.id for c in candidates))
 
 
 def resolve_figure_id(corpus: Corpus, short: str) -> str:
@@ -362,23 +389,111 @@ def parse_handle(handle: str) -> tuple[str, str]:
 # ------------------------------------------------------------------- find
 
 
-def search_chunks(corpus: Corpus, query: str, *, top_k: int = 8) -> list[dict]:
-    """Semantic search over chunk embeddings; returns ranked chunk dicts.
+def search_chunks(
+    corpus: Corpus,
+    query: str,
+    *,
+    top_k: int = 8,
+    rank: str = "semantic",
+    in_doc: str | None = None,
+) -> list[dict]:
+    """Chunk search via the SQLite store.
 
-    Each result has ``id``, ``score``, and ``doc_id`` (so the agent can
-    follow up with ``corpus show chunk:<id>`` or ``corpus show
-    doc:<doc_id>``).
+    Each result has ``id``, ``score``, and ``doc_id``. ``rank`` is one of
+    ``semantic`` (cosine over chunk embeddings), ``bm25`` (FTS5), or
+    ``hybrid`` (RRF over BM25 + vector).
+
+    When *in_doc* is set, the search is scoped to a single document.
+    BM25 / text get a cheap WHERE filter; vector search post-filters
+    a wider top-k pool down to the requested doc.
     """
-    vs = read_vector_store(corpus)
+    from .store.routing import sqlite_available
+
+    if not sqlite_available(corpus.root):
+        if rank in _LEXICAL_RANKS or rank == _MULTI_RANK:
+            raise QueryError(
+                "no_wikify_db",
+                f"--rank {rank} requires wikify.db; rebuild with `corpus build`",
+            )
+        # No SQLite store yet (hand-built test fixture or pre-build);
+        # fall back to the empty KG so callers get [] instead of an error.
+        return []
+    if rank == _MULTI_RANK:
+        return _search_chunks_all_modes(corpus, query, top_k=top_k, in_doc=in_doc)
+    return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank, in_doc=in_doc)
+
+
+def _search_chunks_sqlite(
+    corpus: Corpus, query: str, *,
+    top_k: int, rank: str, in_doc: str | None = None,
+) -> list[dict]:
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
+    from .store.routing import active_space_id, open_store
 
-    meta = read_meta(corpus.vectors_path)
-    embed = (
-        embedder_for(meta.backend, meta.model, mode="query") if meta else None
-    )
-    kg = read_knowledge_graph(corpus, vectors=vs, embed_fn=embed)
-    return list(kg.chunks().search(query, top_k=top_k))
+    store = open_store(corpus.root)
+    try:
+        if rank == "bm25":
+            hits = store.search_chunks_bm25(query, top_k=top_k, doc_id=in_doc)
+        elif rank == "hybrid":
+            meta = read_meta(corpus.vectors_path)
+            embed = (
+                embedder_for(meta.backend, meta.model, mode="query")
+                if meta else None
+            )
+            qv = embed([query])[0] if embed else None  # type: ignore[index]
+            space_id = active_space_id(store)
+            hits = store.search_hybrid(
+                query, query_vec=qv, space_id=space_id, top_k=top_k,
+            )
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
+        else:
+            # default semantic: cosine over the active embedding space.
+            meta = read_meta(corpus.vectors_path)
+            embed = (
+                embedder_for(meta.backend, meta.model, mode="query")
+                if meta else None
+            )
+            if embed is None:
+                return []
+            qv = embed([query])[0]  # type: ignore[index]
+            space_id = active_space_id(store)
+            if not space_id:
+                return []
+            # Post-filter when scoping: pull a wider pool, narrow to the doc.
+            pool = max(top_k * 10, 50) if in_doc else top_k
+            hits = store.vector_index(space_id).search(qv, top_k=pool)
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
+        out: list[dict] = []
+        for cid, score in hits:
+            row = store.get_chunk(cid)
+            if not row:
+                continue
+            out.append({
+                "id": cid,
+                "doc_id": row["doc_id"],
+                "score": float(score),
+            })
+        return out
+    finally:
+        store.close()
+
+
+def _filter_hits_to_doc(store, hits, doc_id: str) -> list[tuple[str, float]]:
+    """Drop hits whose chunk does not belong to *doc_id*. One SQL round-trip."""
+    if not hits:
+        return []
+    cids = [cid for cid, _ in hits]
+    placeholders = ",".join("?" * len(cids))
+    in_doc_set = {
+        r[0] for r in store.con.execute(
+            f"SELECT chunk_id FROM chunks WHERE doc_id = ? AND chunk_id IN ({placeholders})",
+            [doc_id, *cids],
+        )
+    }
+    return [(cid, score) for cid, score in hits if cid in in_doc_set]
 
 
 def search_papers_by_title(
@@ -418,6 +533,7 @@ def search_papers(
     top_k: int = 8,
     chunk_pool: int | None = None,
     text: bool = False,
+    rank: str = "semantic",
 ) -> list[dict]:
     """Search aggregated to the paper level: best chunk per doc.
 
@@ -429,7 +545,7 @@ def search_papers(
     if text:
         hits = search_text(corpus, query, top_k=pool)
     else:
-        hits = search_chunks(corpus, query, top_k=pool)
+        hits = search_chunks(corpus, query, top_k=pool, rank=rank)
     docs_by_id = {d.id: d for d in list_documents(corpus)}
     grouped: dict[str, dict] = {}
     for hit in hits:
@@ -475,23 +591,9 @@ def rank_docs(
     ``by`` is one of ``citation_count`` or ``pagerank``. Each item has
     ``doc_id``, ``title``, ``citation_count``, ``pagerank``.
     """
-    vs = read_vector_store(corpus)
-    kg = read_knowledge_graph(corpus, vectors=vs)
-    backend = kg._backend
-    docs_by_id = {d.id: d for d in list_documents(corpus)}
-    rows: list[dict] = []
-    for doc_id, doc in docs_by_id.items():
-        if doc_id not in backend.G:
-            continue
-        attrs = backend.G.nodes[doc_id]
-        rows.append(
-            {
-                "doc_id": doc_id,
-                "title": doc.title or "",
-                "citation_count": int(attrs.get("citation_count", 0) or 0),
-                "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
-            }
-        )
+    from .store.routing import sqlite_available
+
+    rows = _rank_docs_sqlite(corpus) if sqlite_available(corpus.root) else []
     if by == "citation_count":
         rows.sort(key=lambda r: (-r["citation_count"], -r["pagerank"], r["doc_id"]))
     elif by == "pagerank":
@@ -499,6 +601,39 @@ def rank_docs(
     else:
         raise ValueError(f"unknown rank metric: {by!r}; expected citation_count or pagerank")
     return rows[:top_k]
+
+
+def _rank_docs_sqlite(corpus: Corpus) -> list[dict]:
+    """Pull citation_count + pagerank from node_metrics."""
+    from .store.metrics import (
+        CITATION_COUNT,
+        VIEW_CORPUS_CITATION,
+    )
+    from .store.routing import open_store
+
+    store = open_store(corpus.root)
+    try:
+        cite_rows = dict(store.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name=? AND node_type='document' AND metric=?",
+            (VIEW_CORPUS_CITATION, CITATION_COUNT),
+        ))
+        pr_rows = dict(store.con.execute(
+            "SELECT node_id, value FROM node_metrics "
+            "WHERE graph_name=? AND node_type='document' AND metric='pagerank'",
+            (VIEW_CORPUS_CITATION,),
+        ))
+        out: list[dict] = []
+        for d in store.list_documents():
+            out.append({
+                "doc_id": d["doc_id"],
+                "title": d["title"] or "",
+                "citation_count": int(cite_rows.get(d["doc_id"], 0)),
+                "pagerank": float(pr_rows.get(d["doc_id"], 0.0)),
+            })
+        return out
+    finally:
+        store.close()
 
 
 def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
@@ -509,26 +644,189 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
     """
     if not doc_ids:
         return {}
-    if not (corpus.knowledge_graph_path.exists() and corpus.vectors_path.exists()):
-        return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
-    vs = read_vector_store(corpus)
-    kg = read_knowledge_graph(corpus, vectors=vs)
-    backend = kg._backend
-    out: dict[str, dict] = {}
-    for did in doc_ids:
-        if did not in backend.G:
-            out[did] = {"citation_count": 0, "pagerank": 0.0}
-            continue
-        attrs = backend.G.nodes[did]
-        out[did] = {
-            "citation_count": int(attrs.get("citation_count", 0) or 0),
-            "pagerank": float(attrs.get("pagerank", 0.0) or 0.0),
+    from .store.routing import sqlite_available
+    if sqlite_available(corpus.root):
+        rows = {r["doc_id"]: r for r in _rank_docs_sqlite(corpus)}
+        return {
+            did: {
+                "citation_count": int(rows.get(did, {}).get("citation_count", 0)),
+                "pagerank": float(rows.get(did, {}).get("pagerank", 0.0)),
+            }
+            for did in doc_ids
         }
-    return out
+    # No SQLite store available (hand-built test fixture or pre-build);
+    # zeroed metrics are the expected fallback.
+    return {did: {"citation_count": 0, "pagerank": 0.0} for did in doc_ids}
+
+
+def _search_chunks_all_modes(
+    corpus: Corpus, query: str, *,
+    top_k: int, per_mode: int | None = None, in_doc: str | None = None,
+) -> list[dict]:
+    """Run semantic + bm25 + literal-substring chunk search and dedupe.
+
+    Each returned chunk dict carries a ``modes`` list (subset of
+    ``{"semantic", "bm25", "text"}``) so callers can see which channels
+    matched, and a ``score`` taken from the best-scoring mode for that
+    chunk. Chunks present in more modes are surfaced first; ties broken
+    by the RRF fusion across modes (k=60).
+
+    Failures in any single mode are tolerated — e.g. an FTS5 syntax error
+    in *query* (a stray hyphen, an unbalanced quote) drops just BM25 and
+    the other channels still return.
+
+    Optimization: opens one Store and embeds the query once; the three
+    mode searches share both. The legacy per-mode helpers reopen the
+    store each time, so we replicate their logic inline here.
+    """
+    from ..corpus.vectors_meta import read_meta
+    from ..embedding import embedder_for
+    from .store.fts import RRF_K_DEFAULT, rrf_fuse
+    from .store.routing import active_space_id, open_store
+
+    pool = per_mode or max(top_k * 2, 20)
+    store = open_store(corpus.root)
+    try:
+        # Embed once; share between semantic and hybrid (we only need it for
+        # the semantic side here; BM25 + text don't use it).
+        meta = read_meta(corpus.vectors_path)
+        embed = embedder_for(meta.backend, meta.model, mode="query") if meta else None
+        space_id = active_space_id(store)
+        qv = embed([query])[0] if embed else None  # type: ignore[index]
+
+        def _doc_ids_for(cids: list[str]) -> dict[str, str]:
+            if not cids:
+                return {}
+            placeholders = ",".join("?" * len(cids))
+            rows = store.con.execute(
+                f"SELECT chunk_id, doc_id FROM chunks WHERE chunk_id IN ({placeholders})",
+                cids,
+            ).fetchall()
+            return {r["chunk_id"]: r["doc_id"] for r in rows}
+
+        def _semantic() -> list[dict]:
+            if qv is None or not space_id:
+                return []
+            search_pool = pool * 4 if in_doc else pool
+            hits = store.vector_index(space_id).search(qv, top_k=search_pool)
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:pool]
+            doc_map = _doc_ids_for([cid for cid, _ in hits])
+            return [
+                {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
+                for cid, score in hits if cid in doc_map
+            ]
+
+        def _bm25() -> list[dict]:
+            hits = store.search_chunks_bm25(query, top_k=pool, doc_id=in_doc)
+            doc_map = _doc_ids_for([cid for cid, _ in hits])
+            return [
+                {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
+                for cid, score in hits if cid in doc_map
+            ]
+
+        def _text() -> list[dict]:
+            if in_doc is not None:
+                rows = store.con.execute(
+                    "SELECT chunk_id, doc_id FROM chunks WHERE doc_id = ? "
+                    "AND LOWER(text) LIKE ? ORDER BY chunk_id LIMIT ?",
+                    (in_doc, f"%{query.lower()}%", pool),
+                ).fetchall()
+            else:
+                rows = store.con.execute(
+                    "SELECT chunk_id, doc_id FROM chunks WHERE LOWER(text) LIKE ? "
+                    "ORDER BY chunk_id LIMIT ?",
+                    (f"%{query.lower()}%", pool),
+                ).fetchall()
+            return [{"id": r["chunk_id"], "doc_id": r["doc_id"]} for r in rows]
+
+        sem_hits = _safe_mode("semantic", _semantic)
+        bm_hits = _safe_mode("bm25", _bm25)
+        text_hits = _safe_mode("text", _text)
+    finally:
+        store.close()
+
+    by_id: dict[str, dict] = {}
+    score_keys = (("semantic", "semantic_score"), ("bm25", "bm25_score"),
+                  ("text", "text_score"))
+    rankings_by_mode = {"semantic": sem_hits, "bm25": bm_hits, "text": text_hits}
+    for mode, score_key in score_keys:
+        for hit in rankings_by_mode[mode]:
+            cid = hit["id"]
+            entry = by_id.setdefault(cid, {
+                "id": cid,
+                "doc_id": hit.get("doc_id", ""),
+                "modes": [],
+            })
+            if mode not in entry["modes"]:
+                entry["modes"].append(mode)
+            if "score" in hit:
+                entry[score_key] = float(hit["score"])
+
+    # Fuse across the three rankings; consensus wins via RRF.
+    fused = rrf_fuse(
+        [
+            [(h["id"], float(h.get("score", 0.0))) for h in sem_hits],
+            [(h["id"], float(h.get("score", 0.0))) for h in bm_hits],
+            [(h["id"], 0.0) for h in text_hits],
+        ],
+        k=RRF_K_DEFAULT,
+        top_k=top_k,
+    )
+    out: list[dict] = []
+    for cid, fused_score in fused:
+        entry = by_id.get(cid)
+        if not entry:
+            continue
+        entry["score"] = round(float(fused_score), 6)
+        out.append(entry)
+    # Append any remaining entries (rare: a chunk only present in text
+    # search may not survive RRF when others have stronger ranks).
+    if len(out) < top_k:
+        seen_ids = {e["id"] for e in out}
+        for cid, entry in by_id.items():
+            if cid in seen_ids:
+                continue
+            entry.setdefault("score", 0.0)
+            out.append(entry)
+            if len(out) >= top_k:
+                break
+    return out[:top_k]
+
+
+def _safe_mode(mode: str, fn) -> list[dict]:
+    try:
+        return list(fn())
+    except (QueryError, Exception):  # noqa: BLE001
+        # FTS5 syntax error, embedder hiccup, etc. Drop just this mode.
+        return []
 
 
 def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
-    """Literal substring grep over chunk text. Cheap, no embedding load."""
+    """Literal substring grep over chunk text.
+
+    Uses SQLite `LIKE` against `wikify.db` when available (sub-ms for
+    typical corpus sizes); falls back to scanning the on-disk JSONL
+    only for hand-built fixtures with no SQLite store.
+    """
+    from .store.routing import sqlite_available
+
+    if sqlite_available(corpus.root):
+        from .store.routing import open_store
+        store = open_store(corpus.root)
+        try:
+            rows = store.con.execute(
+                "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview "
+                "FROM chunks WHERE LOWER(text) LIKE ? "
+                "ORDER BY chunk_id LIMIT ?",
+                (f"%{needle.lower()}%", top_k),
+            ).fetchall()
+            return [
+                {"id": r["chunk_id"], "doc_id": r["doc_id"], "preview": r["preview"]}
+                for r in rows
+            ]
+        finally:
+            store.close()
     needle_lower = needle.lower()
     out: list[dict] = []
     for c in all_chunks(corpus):
@@ -588,13 +886,10 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     """Lightweight corpus health summary used by ``corpus check``.
 
     Reports doc/chunk counts, derived-artifact presence, and detected
-    field. The default form does **not** load the knowledge graph
-    (~18MB JSON for the ALD corpus, ~6s wall-clock) so the call stays
-    fast. Pass ``full=True`` to also report citation-marker indexing
-    coverage (``traverse <chunk> --to cited-in-corpus`` requires
-    sources with populated ``ord_refs``); this triggers a full KG
-    parse via ``json.load`` + a streaming pass over the ``nodes``
-    array.
+    field. The default form skips citation-index coverage so the call
+    stays fast. Pass ``full=True`` to also report citation-marker
+    indexing coverage (``traverse <chunk> --to cited-in-corpus``
+    requires sources with populated ``ord_refs``).
     """
     docs = list_documents(corpus)
     chunks = all_chunks(corpus)
@@ -603,9 +898,11 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "n_docs": len(docs),
         "n_chunks": len(chunks),
         "has_vectors": corpus.vectors_path.exists(),
-        "has_knowledge_graph": corpus.knowledge_graph_path.exists(),
         "has_manifest": corpus.manifest_path.exists(),
+        "has_sqlite_store": corpus.sqlite_path.exists(),
     }
+    if out["has_sqlite_store"]:
+        out.update(_sqlite_health(corpus, full=full))
     try:
         from .field_detect import detect_field, detect_field_scores
 
@@ -614,7 +911,7 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
-    if full and out["has_knowledge_graph"]:
+    if full and out["has_sqlite_store"]:
         try:
             out.update(_ord_refs_coverage(corpus, docs))
         except Exception as exc:
@@ -623,34 +920,71 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     return out
 
 
+def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
+    """Probe wikify.db for schema sanity, FTS optimize state, and metric staleness."""
+    from .store.metrics_global import is_stale
+    from .store.routing import open_store
+
+    try:
+        store = open_store(corpus.root)
+    except FileNotFoundError as exc:
+        return {"sqlite_error": str(exc)}
+    try:
+        sqlite_check = store.con.execute("PRAGMA integrity_check").fetchone()[0]
+        n_docs = store.con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        n_chunks = store.con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        n_emb = store.con.execute(
+            "SELECT COUNT(*) FROM embeddings WHERE node_type='chunk'",
+        ).fetchone()[0]
+        spaces = [
+            dict(r) for r in store.con.execute(
+                "SELECT space_id, dim, model FROM embedding_spaces",
+            )
+        ]
+        out: dict = {
+            "sqlite_integrity": sqlite_check,
+            "sqlite_n_docs": n_docs,
+            "sqlite_n_chunks": n_chunks,
+            "sqlite_n_embeddings": n_emb,
+            "sqlite_embedding_spaces": spaces,
+            "metrics_corpus_citation_stale": is_stale(store.con, "corpus_citation"),
+        }
+        if full:
+            out["sqlite_n_edges"] = store.con.execute(
+                "SELECT COUNT(*) FROM graph_edges",
+            ).fetchone()[0]
+        return out
+    finally:
+        store.close()
+
+
 def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:
-    """Count in-corpus source nodes with a populated ``ord_refs`` attribute.
+    """Fraction of corpus docs that have at least one resolved bib_entry.
 
-    Reads ``knowledge_graph.json`` directly via ``json.load`` and
-    iterates the ``nodes`` array — avoids the full NetworkX backend
-    construction that the regular KG load performs. Roughly 6x faster
-    than a full ``read_knowledge_graph`` on the ALD reference corpus.
+    Reads ``bib_entries.target_doc_id IS NOT NULL`` directly from
+    ``wikify.db``. Returns zeros when ``wikify.db`` is absent.
     """
-    import json as _json
+    from .store.routing import sqlite_available
 
-    with corpus.knowledge_graph_path.open(encoding="utf-8") as fh:
-        kg_blob = _json.load(fh)
     in_corpus_ids = {d.id for d in docs}
-    with_ord = 0
-    for node in kg_blob.get("nodes", []):
-        if node.get("type") != "source":
-            continue
-        if node.get("id") not in in_corpus_ids:
-            continue
-        ord_refs = node.get("ord_refs") or {}
-        if ord_refs:
-            with_ord += 1
     n = len(in_corpus_ids)
+    if not n or not sqlite_available(corpus.root):
+        return {
+            "sources_with_ord_refs": 0,
+            "ord_refs_coverage_pct": 0.0,
+        }
+    from .store.routing import open_store
+    store = open_store(corpus.root)
+    try:
+        rows = store.con.execute(
+            "SELECT DISTINCT doc_id FROM bib_entries WHERE target_doc_id IS NOT NULL",
+        )
+        with_ord = sum(1 for r in rows if r[0] in in_corpus_ids)
+    finally:
+        store.close()
     return {
         "sources_with_ord_refs": with_ord,
-        "ord_refs_coverage_pct": (
-            round(100.0 * with_ord / n, 1) if n else 0.0
-        ),
+        "ord_refs_coverage_pct": round(100.0 * with_ord / n, 1),
     }
 
 
@@ -1179,7 +1513,9 @@ _AUTHOR_RELATIONS = {"sources", "coauthors"}
 
 _SOURCE_RANKS = {"citation_count", "pagerank"}
 _AUTHOR_RANKS = {"h_index", "citation_count", "n_papers"}
-_FIND_RANKS = {"semantic", *_SOURCE_RANKS, *_AUTHOR_RANKS}
+_LEXICAL_RANKS = {"bm25", "hybrid"}
+_MULTI_RANK = "all"
+_FIND_RANKS = {"semantic", *_LEXICAL_RANKS, _MULTI_RANK, *_SOURCE_RANKS, *_AUTHOR_RANKS}
 
 
 SCHEMA: dict = {
@@ -1271,7 +1607,7 @@ def _validate_find_params(*, query: str, by: str, rank: str, top_k: int,
             "bad_field_by_combo",
             f"field='title' only applies with by='paper'; got by={by!r}",
         )
-    if by == "chunk" and rank != "semantic":
+    if by == "chunk" and rank not in {"semantic", _MULTI_RANK, *_LEXICAL_RANKS}:
         raise QueryError(
             "bad_rank_by_combo",
             f"rank {rank!r} only applies when chunks are aggregated to a "
@@ -1363,6 +1699,7 @@ def find(
     top_k: int = 8,
     text: bool = False,
     field: str = "chunk_text",
+    in_doc: str | None = None,
 ) -> dict:
     """Validate + dispatch ``find``. Returns ``{kind, rows, scored}``.
 
@@ -1457,6 +1794,9 @@ def find(
         )
 
     if by == "paper":
+        if rank in _LEXICAL_RANKS:
+            papers = search_papers(corpus, query, top_k=top_k, rank=rank)
+            return {"kind": "papers", "rows": papers, "scored": True}
         papers = search_papers(corpus, query, top_k=paper_pool)
         return {
             "kind": "papers",
@@ -1466,8 +1806,287 @@ def find(
 
     return {
         "kind": "chunks",
-        "rows": search_chunks(corpus, query, top_k=top_k),
+        "rows": search_chunks(
+            corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
+        ),
         "scored": True,
+    }
+
+
+def similarity_walk(
+    corpus: Corpus,
+    *,
+    query: str | None = None,
+    from_chunk: str | None = None,
+    depth: int = 2,
+    top_k: int = 5,
+    neighbors: int = 3,
+    threshold: float = 0.65,
+    rank: str = "all",
+    cross_doc_only: bool = True,
+) -> dict:
+    """Concept- or chunk-seeded recursive cosine-similarity walk.
+
+    Two seed modes (mutually exclusive):
+
+    - *query* — find the top-`top_k` chunks for the concept (per
+      *rank*), then expand each via cosine neighbours.
+    - *from_chunk* — start from a single chunk handle; no search.
+
+    Per hop, each chunk in the frontier emits up to *neighbors* edges
+    to chunks with cosine ≥ *threshold*. Edges are typed
+    ``kind="similar"`` and carry a ``score`` field. Chunks are
+    deduped across paths (added once, at first encounter); subsequent
+    edges to an already-visited chunk are dropped.
+
+    With *cross_doc_only* (default True), neighbours in the same
+    document as their source are filtered out — adjacent paragraphs
+    are usually trivially similar.
+
+    Returns ``{seeds, edges, chunks}`` matching `citation_walk`'s
+    shape so callers can render either walker the same way.
+    """
+    import numpy as np
+
+    from .store.routing import active_space_id, open_store, sqlite_available
+
+    if (query is None) == (from_chunk is None):
+        raise QueryError(
+            "bad_seed",
+            "similarity_walk requires exactly one of query / from_chunk",
+        )
+    if depth < 0:
+        raise QueryError("bad_depth", f"depth must be >= 0; got {depth}")
+    if top_k <= 0:
+        raise QueryError("bad_top_k", f"top_k must be > 0; got {top_k}")
+    if neighbors <= 0:
+        raise QueryError("bad_neighbors", f"neighbors must be > 0; got {neighbors}")
+    if not -1.0 <= threshold <= 1.0:
+        raise QueryError("bad_threshold", f"threshold must be in [-1, 1]; got {threshold}")
+    if not sqlite_available(corpus.root):
+        raise QueryError(
+            "no_wikify_db",
+            "similarity-walk requires wikify.db; rebuild with `corpus build`",
+        )
+
+    store = open_store(corpus.root)
+    try:
+        # Vector matrix is the only thing this walker reads from SQLite at
+        # depth>0; no graph_edges, no chunk_citations.
+        space_id = active_space_id(store)
+        if not space_id:
+            raise QueryError(
+                "no_embeddings",
+                "corpus has no embedding space; run `corpus build` to embed chunks",
+            )
+        vi = store.vector_index(space_id)
+        ids = vi.ids
+        matrix = vi.matrix
+        if matrix.shape[0] == 0:
+            raise QueryError(
+                "no_embeddings",
+                "embedding space exists but has no chunks",
+            )
+        id_to_idx = {cid: i for i, cid in enumerate(ids)}
+
+        # Seed
+        chunks: dict[str, dict] = {}
+        if query is not None:
+            seeds = search_chunks(corpus, query, top_k=top_k, rank=rank)
+            for s in seeds:
+                chunks[s["id"]] = {**s, "hop": 0}
+            seed_rows = [chunks[s["id"]] for s in seeds]
+        else:
+            short = (from_chunk or "").removeprefix("chunk:")
+            try:
+                cid = resolve_chunk_id(corpus, short)
+            except HandleNotFoundError as exc:
+                raise QueryError("bad_chunk", str(exc)) from exc
+            row = store.get_chunk(cid)
+            if not row:
+                raise QueryError("bad_chunk", f"chunk {from_chunk!r} not found")
+            seed = {"id": cid, "doc_id": row["doc_id"], "hop": 0, "modes": []}
+            chunks[cid] = seed
+            seed_rows = [seed]
+
+        edges: list[dict] = []
+        if depth == 0:
+            return {"seeds": seed_rows, "edges": edges, "chunks": chunks}
+
+        # Cache doc_id per chunk_id; used by cross_doc_only and result rows.
+        doc_cache: dict[str, str] = {s["id"]: s["doc_id"] for s in seed_rows}
+
+        def _doc_of(cid: str) -> str:
+            if cid not in doc_cache:
+                row = store.get_chunk(cid)
+                doc_cache[cid] = row["doc_id"] if row else ""
+            return doc_cache[cid]
+
+        frontier = [s["id"] for s in seed_rows]
+        for hop in range(1, depth + 1):
+            next_frontier: list[str] = []
+            for src_id in frontier:
+                src_idx = id_to_idx.get(src_id)
+                if src_idx is None:
+                    continue
+                src_vec = matrix[src_idx]
+                src_doc = _doc_of(src_id)
+                sims = matrix @ src_vec  # cosine; vectors are unit-normalised
+                # Sort all candidates desc; break early on threshold.
+                order = np.argsort(-sims)
+                added = 0
+                for idx in order:
+                    score = float(sims[int(idx)])
+                    if score < threshold:
+                        break  # rest are below
+                    cid = ids[int(idx)]
+                    if cid == src_id:
+                        continue
+                    if cross_doc_only and _doc_of(cid) == src_doc:
+                        continue
+                    if cid in chunks:
+                        continue  # already visited — skip to keep the frontier focused
+                    edges.append({
+                        "src_chunk": src_id,
+                        "dst_chunk": cid,
+                        "kind": "similar",
+                        "score": round(score, 6),
+                        "hop": hop,
+                    })
+                    chunks[cid] = {
+                        "id": cid,
+                        "doc_id": _doc_of(cid),
+                        "hop": hop,
+                        "score": round(score, 6),
+                    }
+                    next_frontier.append(cid)
+                    added += 1
+                    if added >= neighbors:
+                        break
+            if not next_frontier:
+                break
+            frontier = next_frontier
+
+        return {"seeds": seed_rows, "edges": edges, "chunks": chunks}
+    finally:
+        store.close()
+
+
+def citation_walk(
+    corpus: Corpus,
+    *,
+    query: str,
+    depth: int = 2,
+    top_k: int = 5,
+    rank: str = "all",
+) -> dict:
+    """Recursive concept-grounded citation traversal.
+
+    Hop 0: find top-`top_k` chunks for *query* across the corpus.
+    Hops 1..depth: for each chunk found, follow `chunk_citations` to
+    the in-corpus papers it cites; for each cited paper, find its
+    best chunk for the same query (scoped to that doc) and recurse.
+
+    Returns a dict with:
+
+    - ``seeds``: top-`top_k` chunks at hop 0 (each row carries the
+      same fields as ``find`` plus ``hop=0``).
+    - ``edges``: list of ``{src_chunk, marker, dst_chunk, dst_doc, hop}``
+      records describing the citation lineage.
+    - ``chunks``: dict ``{chunk_id: chunk_dict}`` deduped across hops;
+      each value carries ``hop``, ``doc_id``, ``score``, ``modes``
+      (when produced by `--rank all`), and a short `preview`.
+
+    Pruning: a chunk is added once. Subsequent paths reaching it via a
+    different citation just attach a new `edges` row without recursing.
+    """
+    from .store.routing import open_store, sqlite_available
+
+    if not sqlite_available(corpus.root):
+        raise QueryError(
+            "no_wikify_db",
+            "citation-walk requires wikify.db; rebuild with `corpus build`",
+        )
+    if depth < 0:
+        raise QueryError("bad_depth", f"depth must be >= 0; got {depth}")
+    if top_k <= 0:
+        raise QueryError("bad_top_k", f"top_k must be > 0; got {top_k}")
+
+    # Hop 0: corpus-wide search.
+    seed_rows = search_chunks(corpus, query, top_k=top_k, rank=rank)
+    chunks: dict[str, dict] = {}
+    edges: list[dict] = []
+
+    def _attach_chunk(row: dict, hop: int) -> None:
+        cid = row["id"]
+        if cid in chunks:
+            return
+        chunks[cid] = {**row, "hop": hop}
+
+    for r in seed_rows:
+        _attach_chunk(r, hop=0)
+
+    if depth == 0 or not seed_rows:
+        return {
+            "seeds": [chunks[r["id"]] for r in seed_rows],
+            "edges": edges,
+            "chunks": chunks,
+        }
+
+    store = open_store(corpus.root)
+    try:
+        frontier = [r["id"] for r in seed_rows]
+        for hop in range(1, depth + 1):
+            next_frontier: list[str] = []
+            placeholders = ",".join("?" * len(frontier))
+            cite_rows = list(store.con.execute(
+                f"SELECT cc.chunk_id, cc.marker_text, be.target_doc_id "
+                f"FROM chunk_citations cc JOIN bib_entries be USING (bib_id) "
+                f"WHERE cc.chunk_id IN ({placeholders}) "
+                f"AND be.target_doc_id IS NOT NULL",
+                frontier,
+            ))
+            # Group target_doc_ids per source chunk.
+            citations_per_src: dict[str, list[tuple[str, str]]] = {}
+            for r in cite_rows:
+                citations_per_src.setdefault(r["chunk_id"], []).append(
+                    (r["marker_text"] or "", r["target_doc_id"]),
+                )
+            for src_chunk_id, items in citations_per_src.items():
+                # Dedupe target docs (multiple markers can point at the same paper)
+                seen_targets: set[str] = set()
+                for marker, target_doc in items:
+                    if target_doc in seen_targets:
+                        continue
+                    seen_targets.add(target_doc)
+                    sub = search_chunks(
+                        corpus, query, top_k=1, rank=rank, in_doc=target_doc,
+                    )
+                    if not sub:
+                        # No semantic/bm25 hit inside that doc; skip rather
+                        # than emit an arbitrary chunk.
+                        continue
+                    dst = sub[0]
+                    edges.append({
+                        "src_chunk": src_chunk_id,
+                        "marker": marker,
+                        "dst_chunk": dst["id"],
+                        "dst_doc": target_doc,
+                        "hop": hop,
+                    })
+                    if dst["id"] not in chunks:
+                        _attach_chunk(dst, hop=hop)
+                        next_frontier.append(dst["id"])
+            if not next_frontier:
+                break
+            frontier = next_frontier
+    finally:
+        store.close()
+
+    return {
+        "seeds": [chunks[r["id"]] for r in seed_rows],
+        "edges": edges,
+        "chunks": chunks,
     }
 
 

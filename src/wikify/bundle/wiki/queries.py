@@ -41,6 +41,27 @@ def list_files(bundle: Bundle) -> list[str]:
     return out
 
 
+def find_bm25(bundle: Bundle, query: str, *, top_k: int = 50) -> list[dict]:
+    """BM25 search over committed wiki pages. Empty bundle -> []."""
+    if not bundle.sqlite_path.exists():
+        return []
+    from .store import open_wiki_store, search_wiki_bm25
+
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        rows: list[dict] = []
+        for page_id, score in search_wiki_bm25(con, query, top_k=top_k):
+            r = con.execute(
+                "SELECT page_id, slug, kind, title FROM wiki_pages WHERE page_id = ?",
+                (page_id,),
+            ).fetchone()
+            if r:
+                rows.append(dict(r) | {"score": score})
+        return rows
+    finally:
+        con.close()
+
+
 def find_text(bundle: Bundle, needle: str, *, top_k: int = 50) -> list[dict]:
     """Literal substring grep over committed page bodies."""
     out: list[dict] = []
@@ -178,10 +199,9 @@ def traverse_page(
             f"unknown wiki relation {relation!r}; expected "
             f"{' | '.join(sorted(_WIKI_RELATIONS))}"
         )
-    graph_path = bundle.derived_graph_path
-    if not graph_path.is_file():
+    if not bundle.sqlite_path.is_file():
         return []
-    wkg = load_wiki_graph(graph_path)
+    wkg = load_wiki_graph(bundle.sqlite_path)
     backend = wkg._backend
     page_id = _slug_to_page_id(bundle, slug)
     if page_id is None or not backend.has_node(page_id):

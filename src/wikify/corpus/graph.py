@@ -1,7 +1,9 @@
 """Fluent knowledge graph API for agent traversal and scoped vector search.
 
-Agents chain typed methods, never touch NetworkX or raw indexes.
-Backend is NetworkX + dict indexes internally, swappable to FalkorDB later.
+Agents chain typed methods; the backend is a `SqliteGraphBackend` over
+`wikify.db` (see ``corpus/store/kg.py``). The same QueryBuilder runs
+over any backend that exposes the dict-of-sets index interface and a
+`G.nodes[nid]` shim.
 
 Usage::
 
@@ -26,8 +28,6 @@ import numpy as np
 _MARKER_RE = re.compile(r"\[(\d+(?:\s*[-‐-―,]\s*\d+)*)\]")
 
 if TYPE_CHECKING:
-    import networkx as nx
-
     from wikify.corpus.vectors import VectorStore
 
 
@@ -73,129 +73,6 @@ CHUNK = "chunk"
 SECTION = "section"
 FIGURE = "figure"
 EQUATION = "equation"
-
-
-# ---------------------------------------------------------------------------
-# NetworkX backend -- internal, never exposed to agents
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class NetworkXBackend:
-    """NetworkX graph backend with inverted dict indexes."""
-
-    G: nx.MultiDiGraph
-
-    # Hot-path indexes (rebuilt from G at load time)
-    _cited_by: dict[str, set[str]] = field(default_factory=dict)
-    _references: dict[str, set[str]] = field(default_factory=dict)
-    _sources_of: dict[str, set[str]] = field(default_factory=dict)
-    _authors_of: dict[str, set[str]] = field(default_factory=dict)
-    _coauthors: dict[str, set[str]] = field(default_factory=dict)
-    _sections_of: dict[str, list[str]] = field(default_factory=dict)
-    _chunks_of_source: dict[str, list[str]] = field(default_factory=dict)
-    _chunks_of_section: dict[str, list[str]] = field(default_factory=dict)
-    _figures_of: dict[str, list[str]] = field(default_factory=dict)
-    _equations_of: dict[str, list[str]] = field(default_factory=dict)
-    _equations_in_chunk: dict[str, list[str]] = field(default_factory=dict)
-    _figures_near_chunk: dict[str, list[str]] = field(default_factory=dict)
-    _chunks_near_figure: dict[str, list[str]] = field(default_factory=dict)
-    _chunks_with_equation: dict[str, list[str]] = field(default_factory=dict)
-    _pagerank: dict[str, float] = field(default_factory=dict)
-    _h_index: dict[str, int] = field(default_factory=dict)
-    _ord_refs: dict[str, dict[int, str]] = field(default_factory=dict)
-
-    def rebuild_indexes(self) -> None:
-        """O(E) scan to populate all inverted indexes from the graph."""
-        g = self.G
-        self._cited_by.clear()
-        self._references.clear()
-        self._sources_of.clear()
-        self._authors_of.clear()
-        self._coauthors.clear()
-        self._sections_of.clear()
-        self._chunks_of_source.clear()
-        self._chunks_of_section.clear()
-        self._figures_of.clear()
-        self._equations_of.clear()
-        self._equations_in_chunk.clear()
-        self._figures_near_chunk.clear()
-        self._chunks_near_figure.clear()
-        self._chunks_with_equation.clear()
-        self._pagerank.clear()
-        self._h_index.clear()
-        self._ord_refs.clear()
-
-        for u, v, data in g.edges(data=True):
-            kind = data.get("kind", "")
-            if kind == "CITES":
-                self._references.setdefault(u, set()).add(v)
-                self._cited_by.setdefault(v, set()).add(u)
-            elif kind == "AUTHORED_BY":
-                self._authors_of.setdefault(u, set()).add(v)
-                self._sources_of.setdefault(v, set()).add(u)
-            elif kind == "COLLABORATED":
-                self._coauthors.setdefault(u, set()).add(v)
-                self._coauthors.setdefault(v, set()).add(u)
-            elif kind == "CONTAINS_SECTION":
-                self._sections_of.setdefault(u, []).append(v)
-            elif kind == "CONTAINS_CHUNK":
-                self._chunks_of_source.setdefault(u, []).append(v)
-            elif kind == "CHUNK_IN_SECTION":
-                self._chunks_of_section.setdefault(v, []).append(u)
-            elif kind == "CONTAINS_FIGURE":
-                self._figures_of.setdefault(u, []).append(v)
-            elif kind == "CONTAINS_EQUATION":
-                self._equations_of.setdefault(u, []).append(v)
-            elif kind == "EQUATION_IN_CHUNK":
-                self._equations_in_chunk.setdefault(v, []).append(u)
-                self._chunks_with_equation.setdefault(u, []).append(v)
-            elif kind == "FIGURE_NEAR_CHUNK":
-                self._figures_near_chunk.setdefault(v, []).append(u)
-                self._chunks_near_figure.setdefault(u, []).append(v)
-
-        # Node-level metrics
-        for nid, ndata in g.nodes(data=True):
-            if "pagerank" in ndata:
-                self._pagerank[nid] = ndata["pagerank"]
-            if "h_index" in ndata:
-                self._h_index[nid] = ndata["h_index"]
-            if "ord_refs" in ndata:
-                self._ord_refs[nid] = {
-                    int(k): v for k, v in ndata["ord_refs"].items()
-                }
-
-    def node(self, nid: str) -> dict:
-        """Return node attributes as a dict with 'id' included."""
-        attrs = dict(self.G.nodes[nid])
-        attrs["id"] = nid
-        return attrs
-
-    def has_node(self, nid: str) -> bool:
-        return nid in self.G
-
-    def nodes_of_type(self, ntype: str) -> set[str]:
-        return {
-            nid for nid, d in self.G.nodes(data=True)
-            if d.get("type") == ntype
-        }
-
-    def neighbors(self, nid: str, hops: int = 1) -> set[str]:
-        """Undirected N-hop neighbors."""
-        if nid not in self.G:
-            return set()
-        undirected = self.G.to_undirected(as_view=True)
-        result: set[str] = set()
-        frontier = {nid}
-        for _ in range(hops):
-            next_frontier: set[str] = set()
-            for n in frontier:
-                for nb in undirected.neighbors(n):
-                    if nb != nid and nb not in result:
-                        next_frontier.add(nb)
-            result |= next_frontier
-            frontier = next_frontier
-        return result
 
 
 # ---------------------------------------------------------------------------
@@ -749,12 +626,12 @@ class TraceContext:
 class KnowledgeGraph:
     """Entry point for fluent graph queries.
 
-    Agents use this. Backend (NetworkX) is never exposed.
+    Agents use this. The backend (SqliteGraphBackend) is never exposed.
     """
 
     def __init__(
         self,
-        backend: NetworkXBackend,
+        backend,
         vectors: VectorStore | None = None,
         embed_fn: Callable[[Sequence[str]], np.ndarray] | None = None,
     ) -> None:

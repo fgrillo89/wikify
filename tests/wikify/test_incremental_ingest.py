@@ -161,6 +161,34 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
     for cid in vs.ids:
         assert beta_id not in cid
 
+    # graph_edges must have no orphan endpoints after sync delete: every
+    # (type, id) pair on either side has to map to a row in its canonical
+    # table. graph_edges has no FK so this is the only protection.
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        cur = store.con.execute(
+            "SELECT src_type, src_id, kind, dst_type, dst_id FROM graph_edges"
+        )
+        edges = [tuple(r) for r in cur]
+        canonical = {
+            "document": "SELECT 1 FROM documents WHERE doc_id = ?",
+            "chunk": "SELECT 1 FROM chunks WHERE chunk_id = ?",
+            "bib_entry": "SELECT 1 FROM bib_entries WHERE bib_id = ?",
+            "asset": "SELECT 1 FROM assets WHERE asset_id = ?",
+            "author": "SELECT 1 FROM authors WHERE author_id = ?",
+        }
+        for st, sid, _kind, dt, did in edges:
+            for nt, nid in ((st, sid), (dt, did)):
+                sql = canonical.get(nt)
+                if sql is None:
+                    continue  # synthetic node types (section) have no canonical table
+                assert store.con.execute(sql, (nid,)).fetchone() is not None, (
+                    f"orphan {nt} endpoint after sync: {nid}"
+                )
+    finally:
+        store.close()
+
 
 # --- Distill preload excludes deleted ---
 

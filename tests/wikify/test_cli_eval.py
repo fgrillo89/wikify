@@ -83,3 +83,36 @@ def test_eval_corpus_flag_rejects_missing_dir(tmp_path: Path) -> None:
         ["eval", "--bundle", str(bundle.root), "--corpus", str(missing)],
     )
     assert result.exit_code != 0
+
+
+def test_eval_uses_sqlite_embeddings_when_npz_absent(tmp_path: Path) -> None:
+    """Fresh `ingest_corpus` builds only emit `wikify.db`; the eval path
+    must read embeddings from there instead of erroring on a missing
+    `vectors.npz`. Regression for the SQLite migration."""
+    from wikify.ingest.pipeline import ingest_corpus
+
+    sources = tmp_path / "src"
+    sources.mkdir()
+    (sources / "alpha.md").write_text(
+        "# Alpha\n\nSome short body content for embedding.\n", encoding="utf-8"
+    )
+    corpus_dir = tmp_path / "corpus"
+    paths = ingest_corpus(sources, corpus_dir, max_workers=1)
+    assert paths.sqlite_path.exists()
+    # Fresh build: vectors.npz is no longer written; the SQLite store is
+    # the embedding-of-record. This precondition guards the regression.
+    assert not paths.vectors_path.exists()
+
+    bundle, _ = _commit_one_article(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "eval", "--bundle", str(bundle.root),
+            "--corpus", str(paths.root), "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["M1_coverage_residual"] is not None
+    assert data["M6_grounding"] is not None
+    assert data["corpus_dependent_unavailable"] == []

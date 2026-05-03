@@ -13,32 +13,12 @@ decide what to explore next.
 ## MCP mode
 
 If `mcp__wikify__corpus_schema` is in the tool list, prefer MCP tools
-over CLI verbs for repeated reads (`corpus_find`, `corpus_traverse`,
-`corpus_show`, `corpus_sample`, `corpus_schema`, `context_show`).
-Validation and data are identical — both adapters call the same
-domain helpers.
-
-High-leverage parameters worth knowing:
-
-- `corpus_show(handle="doc:<short>", include_text=True, mode="full")`
-  returns the body as one ordered string in `meta.body` with
-  `## <section>` headers inlined — best for "summarise this paper".
-  Default `mode="sections"` returns segmented `meta.text`. `sections`
-  filters either mode; mismatch echoes available paths in `notes`.
-- `corpus_find(by="paper", field="title")` does literal substring
-  search on `Document.title` — use for "title mentions X".
-- `corpus_traverse(handle="doc:...", to="chunks")` returns chunks in
-  document order with `section_path` + `ord` on each row.
-- `corpus_traverse(handle="chunk:...", to="cited-in-corpus")` returns
-  the in-corpus references the markers in that paragraph's text point
-  to — use to follow an argument from a specific paragraph to its
-  sources.
-- `corpus_image(handle="figure:...")` returns the figure binary as an
-  MCP ImageContent block so the model can see the figure during
-  reasoning.
-
-See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`
-for setup, the tool↔CLI map, URI patterns, and CLI fallback.
+over CLI verbs for repeated reads. Validation + data are identical.
+High-leverage params: `corpus_show(mode="full")` for the whole body
+as one string; `corpus_find(by="paper", field="title")` for literal
+title substring; `corpus_traverse(chunk:..., to="cited-in-corpus")`
+to follow markers; `corpus_image(figure:...)` to see the binary.
+See `../wikify/references/mcp/{setup,tool-map,resources,fallback}.md`.
 
 ## Step 0: discover the surface
 
@@ -90,6 +70,8 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited paper that talks about X                 | `find "X" --by paper --rank citation_count` |
 | Paper whose **title** mentions X                    | `find "X" --by paper --field title` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
+| **Unsure which mode?** Semantic + BM25 + text       | `find "X" --rank all --top-k 12` |
+| Scope chunk search to one doc                       | `find "X" --in-doc <doc-handle>` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
 | Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |
 | **Authors**                                         | |
@@ -106,6 +88,9 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited papers citing this paper                 | `traverse doc:<short> --to cited-by --rank citation_count` |
 | Bibliography of this paper (in-corpus targets)      | `traverse doc:<short> --to references` |
 | In-corpus refs marked inside a chunk's text         | `traverse chunk:<short> --to cited-in-corpus` |
+| **Concept-grounded recursive citation walk**        | `citation-walk "<concept>" --depth 2 --top-k 5` |
+| **Cosine-neighbour walk (semantic exploration)**    | `similarity-walk "<concept>" --depth 2 --neighbors 3` |
+| Walk from a specific chunk                          | `similarity-walk --from-chunk chunk:<short> --depth 2` |
 | Papers by authors who cite this paper (3-hop pipe)  | `traverse doc:X --to cited-by --format quiet \| xargs -I {} traverse {} --to authors --format quiet \| sort -u \| xargs -I {} traverse {} --to sources --format quiet \| sort -u` |
 | **Structure & media**                               | |
 | Chunks of a paper                                   | `traverse doc:<short> --to chunks` |
@@ -128,64 +113,80 @@ when debugging GPU-provider fallback or model loading.
 `--format quiet` prints handles only — pipe-safe and the default when
 stdout is piped.
 
+## Picking a `--rank` for chunk search
+
+`--rank all` is the safe default — fans out to semantic + bm25 +
+literal substring, RRF-fuses, dedupes, tags each row `via=sbt`
+(`via=sbt` = all three agreed). Tolerates a failure in any single
+mode. Use `bm25` for exact terms / acronyms (sub-ms); `hybrid` to
+weight a paraphrasable concept; `semantic` for pure paraphrase.
+
+FTS5 gotchas (bm25/hybrid only, not `all`): default-AND so
+`"what is X"` needs every word; `-` parses as NOT at query time so
+quote hyphenated phrases as `'"self-limiting"'`. See
+`references/corpus-cli-patterns.md`.
+
+## Recipe: walks + scoped search
+
+`citation-walk "<concept>" --depth 2 --top-k 5` walks **author-
+asserted** edges (in-text [N] markers → in-corpus papers → their
+chunks). Sparse in low-density corpora where few citations resolve to
+in-corpus papers.
+
+`similarity-walk "<concept>" --depth 2 --neighbors 3` walks **cosine
+neighbours** of chunk vectors. Dense (every chunk has neighbours),
+no schema dependency, ~180 ms total at depth=2 on a 5k-chunk corpus.
+Use `--from-chunk chunk:<handle>` to seed from a specific chunk.
+`--threshold` (default 0.65) cuts low-similarity edges;
+`--cross-doc-only` (default on) skips trivially-similar adjacent
+paragraphs.
+
+Both walkers share `{seeds, edges, chunks}` JSON shape. Pick
+citation-walk for "trace argument to source"; similarity-walk for
+"explore conceptual neighbourhood".
+
+`find "X" --in-doc <doc-handle>` scopes chunk search to one paper —
+used internally by `citation-walk` for hop≥1.
+
+## Recipe: finding the definition of a term
+
+Primary literature doesn't follow `"<term> is"` Wikipedia patterns.
+Try in order: (1) `find '"<term> (<ABBREV>)"' --rank bm25` — the
+parenthesised intro form authors use to introduce abbreviations; (2)
+`find '"<ABBREV> is"' --rank bm25` — body prose using the abbrev,
+works for explained concepts but not for operational quantities
+introduced by value (rates, currents, yields); (3) `find '"<term>"'
+--rank bm25` fallback — skim previews for the parenthesised abbrev.
+Skip `'"<full term> is"'` — once authors introduce the abbreviation
+they switch to it in prose.
+
 ## Idiom: empty query + `--rank` = "rank everything by metric"
 
-`find` with no query string and `--rank <graph-metric>` ranks the whole
-population by that metric. Population must be specified explicitly: use
-`--by paper` for source-typed metrics (`citation_count`, `pagerank`) or
-`--by author` for author-typed metrics (`h_index`, `citation_count`,
-`n_papers`). `--by chunk` (the default) is **rejected** with metric
-ranks — chunks have no graph-metric to rank by; ask for papers or
-authors instead.
+`find` with no query and `--rank <graph-metric>` ranks the whole
+population. Specify `--by paper` for source-typed metrics
+(`citation_count`, `pagerank`) or `--by author` for author-typed
+(`h_index`, `citation_count`, `n_papers`). `--by chunk` is rejected
+with metric ranks — chunks have no graph-metric.
 
-```bash
-wikify corpus find --by paper  --rank citation_count --top-k 10
-wikify corpus find --by paper  --rank pagerank        --top-k 10
-wikify corpus find --by author --rank h_index         --top-k 10
-wikify corpus find --by author --rank citation_count  --top-k 10
-```
-
-When a query is supplied, `--rank <metric>` *re-orders* the semantic
-top-K by that metric instead — useful for "most cited paper that
-discusses X" where pure semantic top-1 might be a recent paper with
-few citations.
+When a query is supplied, `--rank <metric>` re-orders the semantic
+top-K by that metric — "most cited paper that discusses X".
 
 ## Capability surface (reference)
 
-- **Handles**: `doc:` / `chunk:` / `figure:` / `equation:` / `author:`.
-  All accept short forms (12-hex doc/chunk suffix, `<doc-short>/<stem>`
-  for figures, `first_last` for authors). Any unique suffix or
-  case-insensitive prefix resolves; ambiguous matches return an error
-  with candidates.
-- **Output formats** (`--format auto|quiet|compact|json`): `quiet`
-  emits handles only and is the default when stdout is piped;
-  `compact` is tab-separated columns; `json` for tooling. `auto`
-  consults `WIKIFY_CLI_FORMAT` (env override), then falls back to
-  `compact` for TTY / `quiet` for pipe.
-- **Traverse relations**:
-  - doc: `cited-by`, `references`, `chunks`, `figures`, `equations`, `authors`
-  - chunk: `source`, `cited-in-corpus`, `figures`, `equations`
-  - author: `sources`, `coauthors`
-- **Rank metrics**:
-  - sources: `citation_count`, `pagerank`
-  - authors: `h_index`, `citation_count`, `n_papers`
-- **Figures consume two ways**: pass the printed `path` to the Read
-  tool for visual ingestion, or compose `![caption](path)` markdown
-  for wiki pages.
+Run `corpus schema` for the full surface (handles, traverse relations,
+rank metrics, formats). Highlights: `--format auto|quiet|compact|json`
+(quiet = pipe default); figure handles render as `figure:<short>/<stem>`
+and the printed `path` is consumable by Read for visual ingestion.
 
 ## Default loop
 
-1. Start with a small query, listing, or schema lookup.
-2. Inspect returned handles and previews.
-3. Pick one or more handles.
-4. Traverse one hop or show one selected handle.
-5. Narrow or broaden based on the result.
-6. Pull full text only after choosing the handle.
+Small query → inspect handles + previews → pick → traverse one hop or
+show → narrow or broaden → only then pull full text.
 
 ## Does not do
 
-- Does not mutate a bundle, add concepts, or pick an exploration strategy.
-- Does not decide whether evidence is sufficient for writing.
+Mutate a bundle, pick an exploration strategy, or decide whether
+evidence is sufficient for writing.
 
 ## References
 

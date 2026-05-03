@@ -139,31 +139,45 @@ def _compute_corpus_metrics(page_bundle, corpus: Corpus) -> dict:
     Returns the metric dict; raises ``cli_error`` if the corpus handle
     or its vector backend is unusable.
     """
-    from ..corpus.chunks import all_chunks, read_chunks_by_id
-    from ..corpus.vectors import load_vectors
-    from ..corpus.vectors_meta import read_meta
+    from ..corpus.chunks import all_chunks, read_chunks_by_id, read_vector_store
+    from ..corpus.vectors_meta import meta_path_for, read_meta
     from ..embedding import embedder_for
 
-    if not corpus.vectors_path.is_file():
+    # Embeddings live in `wikify.db` for fresh builds; the legacy
+    # `vectors.npz` is only present in older corpora. Either is fine —
+    # `read_vector_store` picks whichever the corpus has.
+    if not corpus.sqlite_path.exists() and not corpus.vectors_path.is_file():
         cli_error(
             EXIT_VALIDATION,
             error="corpus_missing_vectors",
             message=(
-                f"corpus at {corpus.root} has no vectors.npz; M1/M6 require an embedded corpus"
+                f"corpus at {corpus.root} has no embeddings (looked for "
+                f"{corpus.sqlite_path.name} and {corpus.vectors_path.name}); "
+                f"M1/M6 require an embedded corpus"
             ),
         )
 
-    meta = read_meta(corpus.vectors_path)
-    if meta is None:
+    meta_path = meta_path_for(corpus.vectors_path)
+    if not meta_path.exists():
         cli_error(
             EXIT_VALIDATION,
             error="corpus_missing_vectors_meta",
             message=(
-                f"no vectors.meta.json next to {corpus.vectors_path}; cannot reconstruct embedder"
+                f"no {meta_path.name} next to {corpus.vectors_path}; cannot reconstruct embedder"
             ),
         )
+    meta = read_meta(corpus.vectors_path)
 
-    vectors = load_vectors(corpus.vectors_path)
+    vectors = read_vector_store(corpus)
+    if vectors.matrix.shape[0] == 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="corpus_missing_vectors",
+            message=(
+                f"corpus at {corpus.root} has no embedded chunks; "
+                f"M1/M6 require an embedded corpus"
+            ),
+        )
     chunk_embeds = vectors.matrix
     embed = embedder_for(meta.backend, meta.model)
 

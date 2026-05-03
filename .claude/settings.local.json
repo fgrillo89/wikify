@@ -14,7 +14,9 @@
       "Bash(xargs grep *)",
       "PowerShell(Copy-Item *)",
       "Bash(rm .claude/skills/wikify/handlers/compact.md .claude/skills/wikify/handlers/edit.md .claude/skills/wikify/handlers/extract.md .claude/skills/wikify/handlers/maintenance.md .claude/skills/wikify/handlers/orchestrate.md .claude/skills/wikify/handlers/query.md .claude/skills/wikify/handlers/write.md .claude/skills/wikify/runtime/serve-dispatch.md)",
-      "Bash(rmdir .claude/skills/wikify/handlers .claude/skills/wikify/runtime)"
+      "Bash(rmdir .claude/skills/wikify/handlers .claude/skills/wikify/runtime)",
+      "PowerShell(Get-WmiObject *)",
+      "PowerShell(Get-ChildItem -Path C:\\\\dev\\\\scholarforge | Format-Table Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} -AutoSize)"
     ]
   },
   "enableAllProjectMcpServers": true,

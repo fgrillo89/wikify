@@ -90,8 +90,9 @@ class Corpus:
         return self.root / "citations.json"
 
     @property
-    def knowledge_graph_path(self) -> Path:
-        return self.root / "knowledge_graph.json"
+    def sqlite_path(self) -> Path:
+        """SQLite query store path: <corpus_root>/wikify.db."""
+        return self.root / "wikify.db"
 
     def ensure(self) -> None:
         for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
@@ -192,6 +193,11 @@ class Bundle:
     @property
     def derived_vectors_path(self) -> Path:
         return self.derived_dir / "vectors.npz"
+
+    @property
+    def sqlite_path(self) -> Path:
+        """SQLite wiki query store path: <bundle_root>/wiki.db."""
+        return self.root / "wiki.db"
 
     def ensure(self) -> None:
         """Create every directory that a fresh run needs."""

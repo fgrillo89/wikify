@@ -1,15 +1,8 @@
 """Wiki-side knowledge graph: pages, evidence, links, similarity.
 
-Independent from the corpus KnowledgeGraph. Same fluent QueryBuilder pattern,
-different node types and traversals. Communicates with the corpus graph via
-shared string IDs (chunk_id, doc_id).
-
-The wiki graph rebuilds after every write phase from the current bundle state.
-The corpus graph is immutable between ingests. They never merge.
-
-Cross-graph search: the model uses one graph's text as a query into the
-other's vector search. The embedder is shared, so the vector spaces are
-compatible.
+Backed by `<bundle_root>/wiki.db`. Same fluent QueryBuilder pattern as
+the corpus side; cross-graph search uses one graph's text as input to
+the other's vector search via a shared embedder.
 
     # Wiki -> Corpus
     page = wkg.page("ALD").first()
@@ -23,20 +16,21 @@ compatible.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
+import sqlite3
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import networkx as nx
 import numpy as np
+
+from ...corpus.store.kg import _GShim
+from .store import open_wiki_store, upsert_wiki_page
 
 if TYPE_CHECKING:
     from ...corpus.vectors import VectorStore
     from ...models import WikiPage
+
 
 # ---------------------------------------------------------------------------
 # Node type constants
@@ -45,60 +39,132 @@ if TYPE_CHECKING:
 PAGE = "page"
 EVIDENCE = "evidence"
 
-# ---------------------------------------------------------------------------
-# Similarity threshold for page-page edges
-# ---------------------------------------------------------------------------
-
+# Threshold above which two pages are similar enough to add a SIMILAR edge.
 WIKI_SIM_COS = 0.45
 
 
 # ---------------------------------------------------------------------------
-# Wiki backend
+# SQLite-backed wiki backend
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class WikiBackend:
-    """NetworkX backend for the wiki graph."""
+    """SQLite-backed wiki graph backend.
 
-    G: nx.MultiDiGraph
+    Drop-in for the previous nx.MultiDiGraph backend: exposes the same
+    `_links_to`, `_linked_by`, `_co_evidence`, `_evidence_of` dicts and a
+    `G.nodes[nid]` shim. All data comes from `wiki.db` rows.
+    """
 
-    _links_to: dict[str, set[str]] = field(default_factory=dict)
-    _linked_by: dict[str, set[str]] = field(default_factory=dict)
-    _co_evidence: dict[str, set[str]] = field(default_factory=dict)
-    _evidence_of: dict[str, list[str]] = field(default_factory=dict)
+    def __init__(self, sqlite_path: str | Path | sqlite3.Connection):
+        if isinstance(sqlite_path, sqlite3.Connection):
+            self.con = sqlite_path
+            self._owns_con = False
+        else:
+            self.con = open_wiki_store(sqlite_path)
+            self._owns_con = True
 
-    def rebuild_indexes(self) -> None:
-        g = self.G
-        self._links_to.clear()
-        self._linked_by.clear()
-        self._co_evidence.clear()
-        self._evidence_of.clear()
+        self._node_attrs: dict[str, dict] = {}
+        self._links_to: dict[str, set[str]] = defaultdict(set)
+        self._linked_by: dict[str, set[str]] = defaultdict(set)
+        self._co_evidence: dict[str, set[str]] = defaultdict(set)
+        self._evidence_of: dict[str, list[str]] = defaultdict(list)
 
-        for u, v, data in g.edges(data=True):
-            kind = data.get("kind", "")
-            if kind == "LINKS_TO":
-                self._links_to.setdefault(u, set()).add(v)
-                self._linked_by.setdefault(v, set()).add(u)
-            elif kind == "CO_EVIDENCE":
-                self._co_evidence.setdefault(u, set()).add(v)
-                self._co_evidence.setdefault(v, set()).add(u)
-            elif kind == "HAS_EVIDENCE":
-                self._evidence_of.setdefault(u, []).append(v)
+        self._load_pages()
+        self._load_evidence()
+        n_edges = self._load_edges()
+        self.G = _GShim(self._node_attrs, n_edges)
+
+    def _load_pages(self) -> None:
+        for r in self.con.execute("SELECT * FROM wiki_pages"):
+            fm = json.loads(r["frontmatter_json"] or "{}")
+            self._node_attrs[r["page_id"]] = {
+                "type": PAGE,
+                "title": r["title"] or r["page_id"],
+                "kind": r["kind"] or "article",
+                "slug": r["slug"],
+                "n_evidence": 0,  # filled in _load_evidence
+                "n_links": 0,
+                "has_body": bool(r["body"] and len(r["body"]) > 100),
+                "aliases": list(fm.get("aliases") or []),
+                "evidence_doc_ids": [],
+            }
+
+    def _load_evidence(self) -> None:
+        per_page: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
+        for r in self.con.execute(
+            "SELECT page_id, marker, chunk_id, doc_id, quote FROM wiki_evidence "
+            "ORDER BY page_id, marker",
+        ):
+            per_page[r["page_id"]].append(
+                (r["marker"], r["chunk_id"] or "", r["doc_id"] or "", r["quote"] or ""),
+            )
+        for page_id, items in per_page.items():
+            doc_ids = sorted({d for _, _, d, _ in items if d})
+            attrs = self._node_attrs.setdefault(page_id, {
+                "type": PAGE, "title": page_id, "kind": "article",
+                "aliases": [], "evidence_doc_ids": [],
+            })
+            attrs["n_evidence"] = len(items)
+            attrs["evidence_doc_ids"] = doc_ids
+            for marker, chunk_id, doc_id, quote in items:
+                marker_part = marker if marker.startswith("e") else f"e{marker}"
+                ev_id = f"{page_id}::{marker_part}"
+                self._node_attrs[ev_id] = {
+                    "type": EVIDENCE,
+                    "page_id": page_id,
+                    "chunk_id": chunk_id,
+                    "doc_id": doc_id,
+                    "quote": quote[:200],
+                    "marker": marker,
+                }
+                self._evidence_of[page_id].append(ev_id)
+
+    def _load_edges(self) -> int:
+        n = 0
+        for r in self.con.execute("SELECT src_id, kind, dst_type, dst_id FROM wiki_edges"):
+            n += 1
+            kind = r["kind"]
+            if kind == "links_to":
+                self._links_to[r["src_id"]].add(r["dst_id"])
+                self._linked_by[r["dst_id"]].add(r["src_id"])
+                if r["src_id"] in self._node_attrs:
+                    self._node_attrs[r["src_id"]]["n_links"] = (
+                        self._node_attrs[r["src_id"]].get("n_links", 0) + 1
+                    )
+        # CO_EVIDENCE: pages that share at least one doc_id via evidence.
+        doc_to_pages: dict[str, set[str]] = defaultdict(set)
+        for r in self.con.execute(
+            "SELECT page_id, doc_id FROM wiki_evidence WHERE doc_id IS NOT NULL",
+        ):
+            doc_to_pages[r["doc_id"]].add(r["page_id"])
+        for pids in doc_to_pages.values():
+            pid_list = sorted(pids)
+            for i in range(len(pid_list)):
+                for j in range(i + 1, len(pid_list)):
+                    self._co_evidence[pid_list[i]].add(pid_list[j])
+                    self._co_evidence[pid_list[j]].add(pid_list[i])
+                    n += 2  # virtual edges (not in wiki_edges, but counted)
+        return n
+
+    # ------------------------------------------------------------------
+    # API used by WikiQueryBuilder
+    # ------------------------------------------------------------------
 
     def node(self, nid: str) -> dict:
-        attrs = dict(self.G.nodes[nid])
+        attrs = dict(self._node_attrs.get(nid, {}))
         attrs["id"] = nid
         return attrs
 
     def has_node(self, nid: str) -> bool:
-        return nid in self.G
+        return nid in self._node_attrs
 
     def nodes_of_type(self, ntype: str) -> set[str]:
-        return {
-            nid for nid, d in self.G.nodes(data=True)
-            if d.get("type") == ntype
-        }
+        return {nid for nid, a in self._node_attrs.items() if a.get("type") == ntype}
+
+    def close(self) -> None:
+        if self._owns_con:
+            self.con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +173,7 @@ class WikiBackend:
 
 
 class WikiQueryBuilder:
-    """Lazy query builder over the wiki graph. Same pattern as corpus QueryBuilder."""
+    """Lazy query builder over the wiki graph."""
 
     __slots__ = ("_wkg", "_ids", "_type")
 
@@ -121,12 +187,9 @@ class WikiQueryBuilder:
         self._ids = frozenset(node_ids)
         self._type = node_type
 
-    # ---- Traversal helpers ----
-
     def _follow(
         self, index: dict, node_type: str, *, exclude_self: bool = False,
     ) -> WikiQueryBuilder:
-        """Traverse an inverted index: union all values for current IDs."""
         result: set[str] = set()
         for nid in self._ids:
             hit = index.get(nid)
@@ -136,25 +199,17 @@ class WikiQueryBuilder:
             result -= self._ids
         return WikiQueryBuilder(self._wkg, result, node_type)
 
-    # ---- Traversals ----
-
     def links(self) -> WikiQueryBuilder:
-        """Pages this page links to."""
         return self._follow(self._wkg._backend._links_to, PAGE)
 
     def linked_by(self) -> WikiQueryBuilder:
-        """Pages that link to this page."""
         return self._follow(self._wkg._backend._linked_by, PAGE)
 
     def co_evidence(self) -> WikiQueryBuilder:
-        """Pages sharing at least one evidence source document."""
         return self._follow(self._wkg._backend._co_evidence, PAGE, exclude_self=True)
 
     def evidence(self) -> WikiQueryBuilder:
-        """Evidence entries for these pages."""
         return self._follow(self._wkg._backend._evidence_of, EVIDENCE)
-
-    # ---- Filters ----
 
     def where(self, **kwargs: object) -> WikiQueryBuilder:
         backend = self._wkg._backend
@@ -178,10 +233,7 @@ class WikiQueryBuilder:
         scored.sort(key=lambda t: -t[0])
         return WikiQueryBuilder(self._wkg, {nid for _, nid in scored[:n]}, self._type)
 
-    # ---- Scoped vector search ----
-
     def search(self, query: str, top_k: int = 10) -> list[dict]:
-        """Vector search scoped to current page set."""
         vectors = self._wkg._vectors
         embed_fn = self._wkg._embed_fn
         if vectors is None or embed_fn is None:
@@ -189,7 +241,6 @@ class WikiQueryBuilder:
 
         scope_ids = set(self._ids) if self._type == PAGE else set()
         if not scope_ids:
-            # If current set is evidence, resolve to their pages
             backend = self._wkg._backend
             for nid in self._ids:
                 if backend.has_node(nid):
@@ -209,10 +260,9 @@ class WikiQueryBuilder:
         qvec = vecs[0]
         sims = vectors.cosine_to_all(qvec)
 
-        valid_idx: list[int] = []
-        for i, pid in enumerate(vectors.ids):
-            if pid in scope_ids:
-                valid_idx.append(i)
+        valid_idx: list[int] = [
+            i for i, pid in enumerate(vectors.ids) if pid in scope_ids
+        ]
         if not valid_idx:
             return []
 
@@ -225,8 +275,6 @@ class WikiQueryBuilder:
             node_data["score"] = float(score)
             results.append(node_data)
         return results
-
-    # ---- Terminals ----
 
     def collect(self) -> list[dict]:
         backend = self._wkg._backend
@@ -252,7 +300,6 @@ class WikiQueryBuilder:
         return len(self._ids) > 0
 
     def titles(self) -> list[str]:
-        """Return the title of each page as a flat list."""
         backend = self._wkg._backend
         out: list[str] = []
         for nid in sorted(self._ids):
@@ -269,7 +316,7 @@ class WikiQueryBuilder:
 
 
 class WikiKnowledgeGraph:
-    """Fluent API over wiki pages. Independent from corpus KnowledgeGraph."""
+    """Fluent API over wiki pages."""
 
     def __init__(
         self,
@@ -293,7 +340,6 @@ class WikiKnowledgeGraph:
         return qb
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
-        """Search all pages by vector similarity."""
         return self.pages().search(query, top_k=top_k)
 
     def stats(self) -> dict:
@@ -307,7 +353,7 @@ class WikiKnowledgeGraph:
 
 
 # ---------------------------------------------------------------------------
-# Builder
+# Builders + persistence
 # ---------------------------------------------------------------------------
 
 
@@ -316,75 +362,32 @@ def build_wiki_graph(
     vectors: VectorStore | None = None,
     embed_fn: Callable[[Sequence[str]], np.ndarray] | None = None,
 ) -> WikiKnowledgeGraph:
-    """Build the wiki knowledge graph from pages."""
-    g = nx.MultiDiGraph()
+    """Build a wiki KG over an in-memory page list (no SQLite required).
 
-    # ---- Page nodes ----
+    Used by tools that hand over a list of WikiPage without a bundle —
+    primarily smoke tests and CLI dry-runs. The returned KG is backed
+    by a :memory: SQLite store populated from *pages*.
+    """
+    from .store import open_wiki_store
+
+    con = open_wiki_store(":memory:")
     for page in pages:
-        evidence_doc_ids = sorted({ev.doc_id for ev in page.evidence})
-        g.add_node(page.id, **{
-            "type": PAGE,
-            "title": page.title,
-            "kind": page.kind,
-            "n_evidence": len(page.evidence),
-            "n_links": len(page.links),
-            "has_body": bool(page.body_markdown and len(page.body_markdown) > 100),
-            "aliases": list(page.aliases),
-            "evidence_doc_ids": evidence_doc_ids,
-        })
-
-    # ---- Evidence nodes + HAS_EVIDENCE edges ----
-    for page in pages:
-        for ev in page.evidence:
-            ev_id = f"{page.id}::e{ev.marker}"
-            g.add_node(ev_id, **{
-                "type": EVIDENCE,
-                "page_id": page.id,
-                "chunk_id": ev.chunk_id,
-                "doc_id": ev.doc_id,
-                "quote": ev.quote[:200],
-            })
-            g.add_edge(page.id, ev_id, kind="HAS_EVIDENCE")
-
-    # ---- LINKS_TO edges (from crosslink) ----
-    page_ids = {p.id for p in pages}
-    for page in pages:
-        for target in page.links:
-            if target in page_ids and target != page.id:
-                g.add_edge(page.id, target, kind="LINKS_TO")
-
-    # ---- CO_EVIDENCE edges (shared doc_id) ----
-    doc_to_pages: dict[str, set[str]] = defaultdict(set)
-    for page in pages:
-        for ev in page.evidence:
-            doc_to_pages[ev.doc_id].add(page.id)
-    co_ev_seen: set[tuple[str, str]] = set()
-    for doc_id, pids in doc_to_pages.items():
-        pid_list = sorted(pids)
-        for i in range(len(pid_list)):
-            for j in range(i + 1, len(pid_list)):
-                pair = (pid_list[i], pid_list[j])
-                if pair not in co_ev_seen:
-                    co_ev_seen.add(pair)
-                    g.add_edge(pair[0], pair[1], kind="CO_EVIDENCE")
-                    g.add_edge(pair[1], pair[0], kind="CO_EVIDENCE")
-
-    # ---- SIMILAR edges (embedding cosine) ----
-    if vectors is not None and vectors.matrix.shape[0] >= 2:
-        n = vectors.matrix.shape[0]
-        sims = vectors.matrix @ vectors.matrix.T
-        np.fill_diagonal(sims, -1.0)
-        for i in range(n):
-            for j in range(i + 1, n):
-                if sims[i, j] >= WIKI_SIM_COS:
-                    pid_i = vectors.ids[i]
-                    pid_j = vectors.ids[j]
-                    if pid_i in page_ids and pid_j in page_ids:
-                        g.add_edge(pid_i, pid_j, kind="SIMILAR")
-                        g.add_edge(pid_j, pid_i, kind="SIMILAR")
-
-    backend = WikiBackend(G=g)
-    backend.rebuild_indexes()
+        upsert_wiki_page(
+            con,
+            page_id=page.id,
+            slug=getattr(page, "slug", page.id),
+            title=page.title or page.id,
+            kind=page.kind,
+            body=page.body_markdown or "",
+            frontmatter={"aliases": list(page.aliases or [])},
+            evidence=[
+                {"marker": ev.marker, "chunk_id": ev.chunk_id,
+                 "doc_id": ev.doc_id, "quote": ev.quote}
+                for ev in (page.evidence or [])
+            ],
+            links=[link for link in (page.links or []) if link != page.id],
+        )
+    backend = WikiBackend(con)
     return WikiKnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
 
 
@@ -392,10 +395,7 @@ def build_wiki_vectors(
     pages: list[WikiPage],
     embed_fn: Callable[[Sequence[str]], np.ndarray],
 ) -> VectorStore:
-    """Embed wiki page bodies into a VectorStore.
-
-    Uses title + lead + first 2000 chars of body as the embedding text.
-    """
+    """Embed wiki page bodies into a VectorStore."""
     from ...corpus.vectors import VectorStore
 
     ids: list[str] = []
@@ -411,30 +411,67 @@ def build_wiki_vectors(
         return VectorStore(ids=[], matrix=np.zeros((0, 1), dtype=np.float32))
 
     matrix = embed_fn(texts)
-    # Unit-norm
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     matrix = matrix / np.where(norms > 0, norms, 1.0)
-    return VectorStore(ids=ids, matrix=matrix)
+    return VectorStore(ids=ids, matrix=matrix.astype(np.float32))
+
+
+def open_wiki_kg(
+    sqlite_path: str | Path,
+    vectors: VectorStore | None = None,
+    embed_fn: Callable[[Sequence[str]], np.ndarray] | None = None,
+) -> WikiKnowledgeGraph:
+    """Open the wiki KG at *sqlite_path* (caller doesn't need to read SQL)."""
+    backend = WikiBackend(sqlite_path)
+    return WikiKnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
 
 
 # ---------------------------------------------------------------------------
-# Persistence
+# Backwards-compatible legacy wrappers (no-op SQLite paths).
 # ---------------------------------------------------------------------------
 
 
 def save_wiki_graph(path: Path, wkg: WikiKnowledgeGraph) -> None:
-    data = nx.node_link_data(wkg._backend.G)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".wkg-", suffix=".json", dir=str(path.parent))
-    os.close(fd)
+    """Persist *wkg* to a fresh SQLite database at *path*.
+
+    The wiki graph IS wiki.db; this function copies the in-memory
+    backend's contents into a new file. Used by tests that round-trip
+    a built graph; production code mutates `<bundle_root>/wiki.db`
+    directly via :func:`upsert_wiki_page`.
+    """
+    from .store import open_wiki_store
+
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.exists():
+        p.unlink()
+    target = open_wiki_store(p)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+        for page_id, attrs in wkg._backend._node_attrs.items():
+            if attrs.get("type") != PAGE:
+                continue
+            evidence_rows = []
+            for ev_id in wkg._backend._evidence_of.get(page_id, []):
+                ev_attrs = wkg._backend._node_attrs.get(ev_id, {})
+                evidence_rows.append({
+                    "marker": ev_attrs.get("marker", ev_id.split("::")[-1]),
+                    "chunk_id": ev_attrs.get("chunk_id", ""),
+                    "doc_id": ev_attrs.get("doc_id", ""),
+                    "quote": ev_attrs.get("quote", ""),
+                })
+            upsert_wiki_page(
+                target,
+                page_id=page_id,
+                slug=attrs.get("slug") or page_id,
+                title=attrs.get("title", page_id),
+                kind=attrs.get("kind", "article"),
+                body=attrs.get("body", ""),
+                frontmatter={"aliases": list(attrs.get("aliases") or [])},
+                evidence=evidence_rows,
+                links=list(wkg._backend._links_to.get(page_id, set())),
+            )
+    finally:
+        target.close()
 
 
 def load_wiki_graph(
@@ -442,9 +479,6 @@ def load_wiki_graph(
     vectors: VectorStore | None = None,
     embed_fn: Callable[[Sequence[str]], np.ndarray] | None = None,
 ) -> WikiKnowledgeGraph:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    loaded = nx.node_link_graph(data, directed=True, multigraph=True)
-    backend = WikiBackend(G=loaded)
-    backend.rebuild_indexes()
+    """Open the wiki KG. *path* is the SQLite file path."""
+    backend = WikiBackend(Path(path))
     return WikiKnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)

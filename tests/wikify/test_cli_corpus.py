@@ -20,6 +20,8 @@ def test_corpus_check_text(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "docs:" in result.output
     assert "chunks:" in result.output
+    assert "sqlite:" in result.output
+    assert "graph:" not in result.output
 
 
 def test_corpus_check_json(tmp_path: Path) -> None:
@@ -31,6 +33,8 @@ def test_corpus_check_json(tmp_path: Path) -> None:
     data = json.loads(result.output)
     assert data["n_docs"] == 2
     assert data["n_chunks"] == 4
+    assert data["has_sqlite_store"] is False
+    assert "has_knowledge_graph" not in data
 
 
 def test_corpus_list_docs(tmp_path: Path) -> None:
@@ -528,8 +532,8 @@ def test_corpus_repl_reports_user_errors_and_continues(tmp_path: Path) -> None:
 
 # ----------------------------------------------------------------- sample
 #
-# `corpus sample` requires vectors.npz + knowledge_graph.json (the
-# diverse-strategy selector loads both). The bare `_make_corpus`
+# `corpus sample` requires a fully embedded corpus with graph metrics.
+# The bare `_make_corpus`
 # fixture deliberately omits these — they are exercised end-to-end by
 # `test_baseline_sampling.py`. The tests below cover the CLI surface
 # itself: validation gates, the strategy-rejection envelope, --explain,

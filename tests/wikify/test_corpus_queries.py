@@ -177,7 +177,8 @@ def test_check_corpus_basic(tmp_path: Path) -> None:
     assert summary["n_chunks"] == 4
     assert summary["has_manifest"] is True
     assert summary["has_vectors"] is False
-    assert summary["has_knowledge_graph"] is False
+    assert summary["has_sqlite_store"] is False
+    assert "has_knowledge_graph" not in summary
 
 
 # --------------------------------------------------- find/traverse/show orchestrators

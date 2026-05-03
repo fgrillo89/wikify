@@ -10,7 +10,7 @@ from wikify.citations.models import CitationEntry
 
 from ..api import Corpus
 from ..models import Chunk, DocImage, Document
-from .vectors import VectorStore, load_vectors, save_vectors
+from .vectors import VectorStore, load_vectors
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -111,19 +111,51 @@ def read_chunks_by_id(
     return result
 
 
-def write_vector_store(paths: Corpus, store: VectorStore) -> None:
-    save_vectors(paths.vectors_path, store)
-
-
 def read_vector_store(paths: Corpus) -> VectorStore:
-    return load_vectors(paths.vectors_path)
+    """Load chunk embeddings as a `VectorStore` from `wikify.db`.
+
+    Falls back to the on-disk `vectors.npz` only when the SQLite store is
+    absent (hand-built test fixtures, legacy corpora). Empty stores are
+    returned for corpora with no embeddings rather than raising.
+    """
+    if paths.sqlite_path.exists():
+        return _vector_store_from_sqlite(paths.sqlite_path)
+    if paths.vectors_path.exists():
+        return load_vectors(paths.vectors_path)
+    import numpy as np
+    return VectorStore(ids=[], matrix=np.zeros((0, 1), dtype="float32"))
 
 
-def write_knowledge_graph(paths: Corpus, kg: object) -> None:
-    """Persist a KnowledgeGraph to knowledge_graph.json."""
-    from wikify.corpus.graph_build import save_knowledge_graph
+def _vector_store_from_sqlite(sqlite_path) -> VectorStore:
+    import numpy as np
 
-    save_knowledge_graph(paths.knowledge_graph_path, kg)
+    from .store.connection import connect
+
+    con = connect(sqlite_path)
+    try:
+        space = con.execute(
+            "SELECT space_id, dim FROM embedding_spaces "
+            "ORDER BY created_at DESC LIMIT 1",
+        ).fetchone()
+        if not space:
+            return VectorStore(ids=[], matrix=np.zeros((0, 1), dtype="float32"))
+        rows = con.execute(
+            "SELECT node_id, vector FROM embeddings "
+            "WHERE space_id = ? AND node_type = 'chunk' ORDER BY node_id",
+            (space["space_id"],),
+        ).fetchall()
+        if not rows:
+            return VectorStore(
+                ids=[],
+                matrix=np.zeros((0, int(space["dim"])), dtype="float32"),
+            )
+        ids = [r[0] for r in rows]
+        matrix = np.frombuffer(
+            b"".join(r[1] for r in rows), dtype="float32",
+        ).reshape(len(rows), int(space["dim"]))
+        return VectorStore(ids=ids, matrix=matrix)
+    finally:
+        con.close()
 
 
 def read_knowledge_graph(
@@ -131,19 +163,32 @@ def read_knowledge_graph(
     vectors: object | None = None,
     embed_fn: object | None = None,
 ) -> object:
-    """Load a KnowledgeGraph, or return an empty one if file is missing."""
-    if not paths.knowledge_graph_path.exists():
-        import networkx as nx
+    """Open the SQLite-backed KnowledgeGraph for `paths`.
 
-        from wikify.corpus.graph import KnowledgeGraph, NetworkXBackend
+    Returns an empty KG if `wikify.db` does not yet exist (matches the
+    legacy contract for hand-built fixtures).
+    """
+    from wikify.corpus.graph import KnowledgeGraph
+    from wikify.corpus.store.kg import SqliteGraphBackend
 
-        backend = NetworkXBackend(G=nx.MultiDiGraph())
-        return KnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
-    from wikify.corpus.graph_build import load_knowledge_graph
+    if not paths.sqlite_path.exists():
+        # Empty backend: no SQLite yet (e.g. legacy fixture or pre-build).
+        backend = _empty_sqlite_backend()
+    else:
+        backend = SqliteGraphBackend(paths.sqlite_path)
+    return KnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
 
-    return load_knowledge_graph(
-        paths.knowledge_graph_path, vectors=vectors, embed_fn=embed_fn,
-    )
+
+def _empty_sqlite_backend():
+    """Stand-in for an empty corpus KG; used by callers that pre-build a
+    KnowledgeGraph manually (tests) or by paths where wikify.db is absent."""
+    from wikify.corpus.store.connection import connect
+    from wikify.corpus.store.kg import SqliteGraphBackend
+    from wikify.corpus.store.schema import apply_schema
+
+    con = connect(":memory:")
+    apply_schema(con)
+    return SqliteGraphBackend(con)
 
 
 def read_doc_images(doc: Document) -> list[DocImage]:

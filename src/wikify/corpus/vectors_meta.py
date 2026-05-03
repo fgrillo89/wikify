@@ -1,4 +1,4 @@
-"""Sidecar metadata for ``corpus/vectors.npz``.
+"""Sidecar metadata for corpus chunk embeddings.
 
 Records which embedder backend produced the matrix so that downstream
 tools (eval, query) can construct the *exact* matching embedder. The

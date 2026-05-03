@@ -31,6 +31,7 @@ from ..corpus import queries
 from ..corpus.handles import (
     AmbiguousHandleError,
     HandleNotFoundError,
+    format_chunk_handles,
     format_handle,
 )
 from ..corpus.session import CorpusSearchSession
@@ -203,8 +204,22 @@ def cmd_build(
     ),
     workers: int = typer.Option(0, "--workers"),
     no_refresh: bool = typer.Option(False, "--no-refresh"),
+    openalex: bool = typer.Option(
+        True,
+        "--openalex/--no-openalex",
+        help=(
+            "Enrich citation metadata via the OpenAlex API. ON by default; "
+            "this issues network requests to api.openalex.org during refresh. "
+            "Pass --no-openalex to skip Wave C and stay fully offline."
+        ),
+    ),
 ) -> None:
-    """Parse, chunk, embed, and graph an input directory."""
+    """Parse, chunk, embed, and graph an input directory.
+
+    Network: when --openalex is on (default), refresh hits api.openalex.org
+    to canonicalise bib metadata and surface in-corpus citation matches.
+    Set OPENALEX_EMAIL for the polite-pool rate limit (10 req/s).
+    """
     from ..ingest.pipeline import ingest_corpus
 
     paths = ingest_corpus(
@@ -214,6 +229,7 @@ def cmd_build(
         mode=mode,
         parser_backend=parser,
         refresh=not no_refresh,
+        resolve_bibliography_doi=openalex,
     )
     typer.echo(f"corpus written to {paths.root}")
 
@@ -221,12 +237,27 @@ def cmd_build(
 @app.command("refresh")
 def cmd_refresh(
     corpus_dir: Path = typer.Argument(...),
+    openalex: bool = typer.Option(
+        True,
+        "--openalex/--no-openalex",
+        help=(
+            "Enrich citation metadata via the OpenAlex API. ON by default; "
+            "this issues network requests to api.openalex.org. "
+            "Pass --no-openalex to skip Wave C and stay fully offline."
+        ),
+    ),
 ) -> None:
-    """Rebuild derived corpus artifacts (embeddings, graph, topics, ...)."""
+    """Rebuild derived corpus artifacts (embeddings, graph, topics, ...).
+
+    Network: when --openalex is on (default), Wave C of the refresh DAG
+    hits api.openalex.org to canonicalise bib metadata and surface
+    in-corpus citation matches. Set OPENALEX_EMAIL for the polite-pool
+    rate limit (10 req/s).
+    """
     from ..ingest.pipeline import refresh_corpus
 
     paths = Corpus(root=corpus_dir)
-    refresh_corpus(paths)
+    refresh_corpus(paths, resolve_bibliography_doi=openalex)
     typer.echo(f"refresh complete: {paths.root}")
 
 
@@ -241,14 +272,14 @@ def cmd_check(
         "--full",
         help=(
             "Also compute citation-marker indexing coverage "
-            "(requires loading knowledge_graph.json — slower)."
+            "(requires probing the SQLite graph store — slower)."
         ),
     ),
 ) -> None:
     """Report corpus health: doc/chunk counts, derived artifacts, field.
 
-    The default form stays under ~2s by skipping the knowledge-graph
-    load. Pass ``--full`` to also report ``cite_index`` coverage (% of
+    The default form stays fast by skipping citation-index coverage.
+    Pass ``--full`` to also report ``cite_index`` coverage (% of
     in-corpus sources whose ``ord_refs`` is populated — relevant for
     ``traverse <chunk> --to cited-in-corpus``).
     """
@@ -262,7 +293,13 @@ def cmd_check(
     typer.echo(f"docs:        {summary['n_docs']}")
     typer.echo(f"chunks:      {summary['n_chunks']}")
     typer.echo(f"vectors:     {summary['has_vectors']}")
-    typer.echo(f"graph:       {summary['has_knowledge_graph']}")
+    typer.echo(f"sqlite:      {summary['has_sqlite_store']}")
+    if summary.get("has_sqlite_store"):
+        typer.echo(f"  docs:      {summary.get('sqlite_n_docs', '?')}")
+        typer.echo(f"  chunks:    {summary.get('sqlite_n_chunks', '?')}")
+        typer.echo(f"  embeds:    {summary.get('sqlite_n_embeddings', '?')}")
+        if "sqlite_n_edges" in summary:
+            typer.echo(f"  edges:     {summary['sqlite_n_edges']}")
     typer.echo(f"manifest:    {summary['has_manifest']}")
     if summary.get("field"):
         typer.echo(f"field:       {summary['field']}")
@@ -391,7 +428,11 @@ def cmd_find(
     rank: str = typer.Option(
         "semantic",
         "--rank",
-        help="Ranking metric: semantic | citation_count | pagerank.",
+        help=(
+            "Ranking metric: semantic | bm25 | hybrid | all | citation_count | "
+            "pagerank. `all` runs semantic+bm25+text, RRF-fuses, dedupes, and "
+            "tags each row with which channels matched."
+        ),
     ),
     field: str = typer.Option(
         "chunk_text",
@@ -408,6 +449,15 @@ def cmd_find(
         help=(
             "Output format: auto (compact for TTY / quiet for pipe), "
             "quiet (handles only), compact (tab-separated columns), json."
+        ),
+    ),
+    in_doc: str | None = typer.Option(
+        None,
+        "--in-doc",
+        help=(
+            "Scope chunk search to one document. Accepts any doc handle "
+            "(short suffix, hex, or full id). BM25 / text get a cheap "
+            "WHERE filter; vector search post-filters a wider pool."
         ),
     ),
     explain: bool = typer.Option(
@@ -452,10 +502,16 @@ def cmd_find(
         )
         return
 
+    resolved_in_doc: str | None = None
+    if in_doc is not None:
+        try:
+            resolved_in_doc = queries.resolve_doc_id(corpus, in_doc.removeprefix("doc:"))
+        except queries.HandleNotFoundError as exc:
+            cli_error(EXIT_VALIDATION, error="bad_in_doc", message=str(exc))
     try:
         result = queries.find(
             corpus, query=query, by=by, rank=rank, top_k=top_k,
-            text=text, field=field,
+            text=text, field=field, in_doc=resolved_in_doc,
         )
     except queries.QueryError as exc:
         cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
@@ -579,7 +635,12 @@ def _emit_chunk_rows(
     fmt: str,
     score_key: str | None,
 ) -> None:
-    """Print chunk-level search results in the chosen format."""
+    """Print chunk-level search results in the chosen format.
+
+    Chunk handles are disambiguated within the result set: bare short
+    suffix when unique, ``chunk:<doc-short>/<chunk-short>`` when two
+    chunks would otherwise share the same printed handle.
+    """
     doc_ids_in_order: list[str] = []
     seen: set[str] = set()
     for h in hits:
@@ -588,14 +649,19 @@ def _emit_chunk_rows(
             seen.add(did)
             doc_ids_in_order.append(did)
     metrics = queries.doc_metrics(corpus, doc_ids_in_order)
+    chunk_handles = format_chunk_handles(
+        (str(h.get("id", "")), str(h.get("doc_id") or h.get("source_id") or ""))
+        for h in hits
+    )
     if fmt == "json":
         items = []
         for h in hits:
             did = str(h.get("doc_id") or h.get("source_id") or "")
+            cid = str(h.get("id", ""))
             items.append(
                 {
                     **h,
-                    "chunk_handle": format_handle("chunk", str(h.get("id", ""))),
+                    "chunk_handle": chunk_handles.get(cid, format_handle("chunk", cid)),
                     "doc_handle": format_handle("doc", did) if did else "",
                     "citation_count": metrics.get(did, {}).get("citation_count", 0),
                 }
@@ -604,7 +670,8 @@ def _emit_chunk_rows(
         return
     if fmt == "quiet":
         for h in hits:
-            typer.echo(format_handle("chunk", str(h.get("id", ""))))
+            cid = str(h.get("id", ""))
+            typer.echo(chunk_handles.get(cid, format_handle("chunk", cid)))
         return
     for h in hits:
         cid = str(h.get("id", ""))
@@ -612,14 +679,23 @@ def _emit_chunk_rows(
         cites = metrics.get(did, {}).get("citation_count", 0)
         score_val = h.get(score_key) if score_key else None
         score_col = f"{float(score_val):.3f}" if score_val is not None else "."
-        typer.echo(
-            format_row([
-                score_col,
-                f"cites={cites}",
-                format_handle("chunk", cid),
-                format_handle("doc", did) if did else "",
-            ])
-        )
+        cols = [
+            score_col,
+            f"cites={cites}",
+            chunk_handles.get(cid, format_handle("chunk", cid)),
+            format_handle("doc", did) if did else "",
+        ]
+        if "modes" in h:
+            cols.insert(1, _modes_badge(h["modes"]))
+        typer.echo(format_row(cols))
+
+
+def _modes_badge(modes: list[str]) -> str:
+    """3-letter badge: s=semantic, b=bm25, t=text. Letter present == mode matched."""
+    s = "s" if "semantic" in modes else "-"
+    b = "b" if "bm25" in modes else "-"
+    t = "t" if "text" in modes else "-"
+    return f"via={s}{b}{t}"
 
 
 def _emit_paper_rows(
@@ -1030,6 +1106,83 @@ def cmd_show(
 # ---------------------------------------------------------------- schema
 
 
+metrics_app = typer.Typer(
+    add_completion=False, help="Metric refresh / inspection over the SQLite store.",
+)
+app.add_typer(metrics_app, name="metrics")
+
+
+@metrics_app.command("refresh")
+def cmd_metrics_refresh(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    view: str = typer.Option(
+        "corpus_citation",
+        "--view",
+        help=(
+            "Graph view to refresh: corpus_citation | author_coauthor | "
+            "chunk_citation | all."
+        ),
+    ),
+) -> None:
+    """Recompute global metrics (PageRank, h-index, degree centrality)."""
+    from ..corpus.store.metrics import refresh_cheap_metrics
+    from ..corpus.store.metrics_global import (
+        VIEWS,
+        refresh_h_index,
+        refresh_view,
+    )
+    from ..corpus.store.routing import open_store
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    try:
+        refresh_cheap_metrics(store.con)
+        if view == "all":
+            written: dict[str, list[str]] = {}
+            for v in VIEWS:
+                written[v] = refresh_view(store.con, v)
+            refresh_h_index(store.con)
+            for vname, metrics in written.items():
+                typer.echo(f"refreshed {vname}: {', '.join(metrics)}")
+            typer.echo("refreshed author_h_index: h_index")
+            return
+        if view not in VIEWS:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_view",
+                message=f"unknown view {view!r}; expected one of "
+                f"{sorted(VIEWS)} or 'all'",
+            )
+        metrics = refresh_view(store.con, view)
+        if view == "corpus_citation":
+            refresh_h_index(store.con)
+            metrics.append("h_index")
+        typer.echo(f"refreshed {view}: {', '.join(metrics)}")
+    finally:
+        store.close()
+
+
+@metrics_app.command("list")
+def cmd_metrics_list(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+) -> None:
+    """List the registered graph views and their freshness."""
+    from ..corpus.store.metrics_global import VIEWS, view_status
+    from ..corpus.store.routing import open_store
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    try:
+        for v in VIEWS.values():
+            status = view_status(store.con, v.name)
+            badge = (status or {}).get("status", "stale")
+            kinds = ", ".join(v.edge_kinds)
+            metrics = ", ".join(v.metrics)
+            typer.echo(f"{v.name:24s} [{badge}] kinds={kinds} metrics={metrics}")
+    finally:
+        store.close()
+
+
 @app.command("schema")
 def cmd_schema(
     fmt: str = typer.Option(
@@ -1073,6 +1226,189 @@ def cmd_schema(
     typer.echo(f"Formats: {' | '.join(schema['formats'])}")
     typer.echo("")
     typer.echo(f"Handles: {schema['handle_resolution']}")
+
+
+# ---------------------------------------------------------------- similarity-walk
+
+
+@app.command("similarity-walk")
+def cmd_similarity_walk(
+    query: str = typer.Argument(
+        "", help="Concept to seed the walk on (omit when --from-chunk is set).",
+    ),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    from_chunk: str | None = typer.Option(
+        None, "--from-chunk",
+        help=(
+            "Seed from one chunk handle instead of a query; "
+            "mutually exclusive with the positional query."
+        ),
+    ),
+    depth: int = typer.Option(2, "--depth"),
+    top_k: int = typer.Option(5, "--top-k", help="Seed count at hop 0 (query mode only)."),
+    neighbors: int = typer.Option(3, "--neighbors", help="Per-chunk fanout per hop."),
+    threshold: float = typer.Option(
+        0.65, "--threshold",
+        help="Cosine cut; below this, edges are dropped. Calibrated for jina-v2-small.",
+    ),
+    rank: str = typer.Option(
+        "all", "--rank", help="Hop-0 search method (query mode only).",
+    ),
+    cross_doc_only: bool = typer.Option(
+        True, "--cross-doc-only/--include-same-doc",
+        help="Filter same-doc neighbours (default) or include them.",
+    ),
+    fmt: str = typer.Option("auto", "--format"),
+) -> None:
+    """Cosine-similarity walk over chunk vectors.
+
+    Two seed modes (mutually exclusive):
+
+    - positional `<query>` — seed via `find` with the chosen rank.
+    - `--from-chunk <handle>` — seed from one chunk; no search step.
+
+    Each hop expands every chunk in the frontier into up to
+    `--neighbors` cosine-similar chunks above `--threshold`. Edges are
+    typed `similar` with a score; chunks are deduped across paths.
+    The vector matrix is loaded once per process; subsequent walks
+    re-use it.
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    if (not query) and (not from_chunk):
+        cli_error(
+            EXIT_VALIDATION, error="bad_seed",
+            message="provide a query (positional) or --from-chunk",
+        )
+    if query and from_chunk:
+        cli_error(
+            EXIT_VALIDATION, error="bad_seed",
+            message="--from-chunk and a positional query are mutually exclusive",
+        )
+    if depth < 0:
+        cli_error(EXIT_VALIDATION, error="bad_depth",
+                  message=f"depth must be >= 0; got {depth}")
+    try:
+        out = queries.similarity_walk(
+            corpus,
+            query=query or None,
+            from_chunk=from_chunk,
+            depth=depth,
+            top_k=top_k,
+            neighbors=neighbors,
+            threshold=threshold,
+            rank=rank,
+            cross_doc_only=cross_doc_only,
+        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
+
+    if fmt_resolved == "json":
+        typer.echo(json.dumps({"ok": True, **out}))
+        return
+    if fmt_resolved == "quiet":
+        for c in out["chunks"].values():
+            typer.echo(format_handle("chunk", c["id"]))
+        return
+    edges_by_dst = {e["dst_chunk"]: e for e in out["edges"]}
+    for c in sorted(
+        out["chunks"].values(),
+        key=lambda r: (r.get("hop", 0), r.get("id", "")),
+    ):
+        cid = c["id"]
+        did = c.get("doc_id", "")
+        modes = c.get("modes") or []
+        via = "via=" + "".join(
+            m[0] if m in modes else "-" for m in ("semantic", "bm25", "text")
+        )
+        edge = edges_by_dst.get(cid)
+        cite = ""
+        if edge:
+            cite = (
+                f"  similar={edge['score']:.3f} <- chunk:{edge['src_chunk'][-12:]}"
+            )
+        typer.echo(
+            format_row([
+                f"  hop={c['hop']}",
+                via,
+                format_handle("chunk", cid),
+                format_handle("doc", did) if did else "",
+                cite,
+            ])
+        )
+
+
+# ---------------------------------------------------------------- citation-walk
+
+
+@app.command("citation-walk")
+def cmd_citation_walk(
+    query: str = typer.Argument(..., help="Concept to ground the walk on."),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    depth: int = typer.Option(2, "--depth", help="Citation hops; 0 = seeds only."),
+    top_k: int = typer.Option(5, "--top-k", help="Seed chunks at hop 0."),
+    rank: str = typer.Option(
+        "all", "--rank",
+        help="Ranking method for seed + per-hop sub-search.",
+    ),
+    fmt: str = typer.Option("auto", "--format"),
+) -> None:
+    """Concept-grounded recursive citation walk.
+
+    Hop 0: top chunks for *query* corpus-wide. For each, follow
+    chunk_citations to in-corpus papers and pick that paper's best
+    chunk for the same query (scoped to the doc). Recurse to *depth*
+    hops, deduping chunks across paths.
+
+    Output (compact): one row per chunk with hop and via tags, plus
+    parent edges showing the citation marker that led there. JSON
+    returns the full {seeds, edges, chunks} payload.
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    _validate_positive_int("top-k", top_k)
+    if depth < 0:
+        cli_error(EXIT_VALIDATION, error="bad_depth",
+                  message=f"depth must be >= 0; got {depth}")
+    try:
+        out = queries.citation_walk(
+            corpus, query=query, depth=depth, top_k=top_k, rank=rank,
+        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
+
+    if fmt_resolved == "json":
+        typer.echo(json.dumps({"ok": True, **out}))
+        return
+    if fmt_resolved == "quiet":
+        for c in out["chunks"].values():
+            typer.echo(format_handle("chunk", c["id"]))
+        return
+    edges_by_dst = {e["dst_chunk"]: e for e in out["edges"]}
+    for c in sorted(out["chunks"].values(), key=lambda r: (r.get("hop", 0), r.get("id", ""))):
+        cid = c["id"]
+        did = c.get("doc_id", "")
+        modes = c.get("modes") or []
+        via = (
+            "via=" + "".join(
+                m[0] if m in modes else "-"
+                for m in ("semantic", "bm25", "text")
+            )
+        )
+        edge = edges_by_dst.get(cid)
+        prefix = f"  hop={c['hop']}"
+        cite = ""
+        if edge:
+            cite = f"  cited-via={edge['marker']} <- chunk:{edge['src_chunk'][-12:]}"
+        typer.echo(
+            format_row([
+                prefix,
+                via,
+                format_handle("chunk", cid),
+                format_handle("doc", did) if did else "",
+                cite,
+            ])
+        )
 
 
 # ---------------------------------------------------------------- traverse

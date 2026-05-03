@@ -34,7 +34,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
-from wikify.corpus.graph_build import build_knowledge_graph, save_knowledge_graph
 from wikify.corpus.images_index import build_images_index
 
 from .bibtex import (
@@ -174,10 +173,20 @@ def _refresh_equations_index(ctx: dict) -> None:
 
 
 def _refresh_openalex(ctx: dict) -> None:
-    """Resolve citations via OpenAlex API (DOI + bulk reference expansion)."""
+    """Resolve citations via OpenAlex API (DOI + bulk reference expansion).
+
+    Seeds the resolver with the corpus papers' own DOIs so corpus titles
+    land in the title index that Phase 4 fuzzy-matches against -- that
+    is what surfaces no-DOI bibs as in-corpus references. Scopes the
+    Phase 3 referenced_works expansion to those same corpus DOIs so
+    Wave C does not spend ~half its wall-clock fetching the references
+    of out-of-corpus papers (whose 2nd-degree refs are also out-of-
+    corpus and almost never match a corpus paper).
+    """
     if not ctx.get("resolve_bibliography_doi", False):
         return
     import asyncio
+    import os
 
     from wikify.citations.db import DatabaseManager
     from wikify.citations.resolver import AsyncResolver
@@ -188,27 +197,38 @@ def _refresh_openalex(ctx: dict) -> None:
     if not all_cits:
         return
 
+    corpus_dois: list[str] = []
+    for doc in ctx["docs"]:
+        d = (doc.metadata or {}).get("doi")
+        if d:
+            corpus_dois.append(str(d))
+    seed_dicts: list[dict] = [
+        {"raw_text": "", "doi": d, "title": "", "year": None}
+        for d in corpus_dois
+    ]
+
     db_path = ctx["paths"].root / ".citestore.db"
 
     async def _run() -> None:
         async with DatabaseManager(db_path) as db:
-            import os
             email = os.environ.get("OPENALEX_EMAIL", "wikify@example.com")
             resolver = AsyncResolver(
                 db,
                 email=email,
                 expand_references=True,
+                expand_corpus_dois=set(corpus_dois) or None,
             )
             try:
-                # Convert to dicts for the resolver API
                 cit_dicts = [c.to_dict() if hasattr(c, "to_dict") else c for c in all_cits]
-                results = await resolver.resolve_batch(cit_dicts)
+                full_input = seed_dicts + cit_dicts
+                results = await resolver.resolve_batch(full_input)
+                bib_results = results[len(seed_dicts):]
             finally:
                 await resolver.close()
 
         # Map results back onto CitationEntry objects
         result_by_text: dict[str, object] = {}
-        for r in results:
+        for r in bib_results:
             if r.source_text:
                 result_by_text[r.source_text] = r
 
@@ -308,20 +328,33 @@ def _refresh_bibliography(ctx: dict) -> None:
 
 
 def _refresh_knowledge_graph(ctx: dict) -> None:
-    from wikify.corpus.bibliography import load_citation_index
+    """No-op since `wikify.db` is the canonical KG storage.
 
-    citation_index = load_citation_index(ctx["paths"])
-    kg = build_knowledge_graph(
-        ctx["docs"], ctx["chunks"], ctx["store"], citation_index,
-    )
-    save_knowledge_graph(ctx["paths"].knowledge_graph_path, kg)
-    ctx["knowledge_graph"] = kg
+    Kept as a wave entry so existing timing reports keep their shape; the
+    actual graph rows are written by `_refresh_sqlite_store` (Wave G).
+    """
+    ctx["knowledge_graph"] = None
 
 
 def _refresh_doc_resave(ctx: dict) -> None:
     from .pipeline import _resave_docs
 
     _resave_docs(ctx["paths"], ctx["docs"])
+
+
+def _refresh_sqlite_store(ctx: dict) -> None:
+    """Dual-write `wikify.db` from in-memory ingest artefacts.
+
+    Runs after every other refresh wave so it sees the final docs,
+    chunks, vectors, and citation index. Idempotent: re-running the
+    DAG over the same inputs reproduces the same SQLite content.
+    """
+    from wikify.corpus.store.sync import write_corpus
+    from wikify.corpus.vectors_meta import read_meta
+
+    paths = ctx["paths"]
+    meta = read_meta(paths.vectors_path)
+    write_corpus(paths, ctx["docs"], ctx["chunks"], ctx.get("store"), meta)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +417,13 @@ REFRESH_DAG: list[Wave] = [
         label="wave F (resave)",
         steps=[
             Step("doc_resave", _refresh_doc_resave),
+        ],
+    ),
+    # Wave G: SQLite query store dual-write (depends on every prior wave).
+    Wave(
+        label="wave G (sqlite store)",
+        steps=[
+            Step("sqlite_store", _refresh_sqlite_store),
         ],
     ),
 ]
