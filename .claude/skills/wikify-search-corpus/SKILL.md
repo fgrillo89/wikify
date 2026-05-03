@@ -89,6 +89,8 @@ when debugging GPU-provider fallback or model loading.
 | Bibliography of this paper (in-corpus targets)      | `traverse doc:<short> --to references` |
 | In-corpus refs marked inside a chunk's text         | `traverse chunk:<short> --to cited-in-corpus` |
 | **Concept-grounded recursive citation walk**        | `citation-walk "<concept>" --depth 2 --top-k 5` |
+| **Cosine-neighbour walk (semantic exploration)**    | `similarity-walk "<concept>" --depth 2 --neighbors 3` |
+| Walk from a specific chunk                          | `similarity-walk --from-chunk chunk:<short> --depth 2` |
 | Papers by authors who cite this paper (3-hop pipe)  | `traverse doc:X --to cited-by --format quiet \| xargs -I {} traverse {} --to authors --format quiet \| sort -u \| xargs -I {} traverse {} --to sources --format quiet \| sort -u` |
 | **Structure & media**                               | |
 | Chunks of a paper                                   | `traverse doc:<short> --to chunks` |
@@ -124,21 +126,26 @@ FTS5 gotchas (bm25/hybrid only, not `all`): default-AND so
 quote hyphenated phrases as `'"self-limiting"'`. See
 `references/corpus-cli-patterns.md`.
 
-## Recipe: citation-walk + scoped search
+## Recipe: walks + scoped search
 
-`citation-walk "<concept>" --depth 2 --top-k 5` runs *find seed
-chunks → follow their in-corpus citations → re-search those papers
-for the same concept → recurse*. Each row carries its hop and the
-marker that led there (`cited-via=[N] <- chunk:<src>`). depth=1
-covers most exploration (paragraph + direct sources); >=3 drifts.
-JSON shape: `{seeds, edges, chunks}`.
+`citation-walk "<concept>" --depth 2 --top-k 5` walks **author-
+asserted** edges (in-text [N] markers → in-corpus papers → their
+chunks). Sparse in low-density corpora (~1.7% on ALD).
 
-`find "X" --in-doc <doc-handle>` scopes chunk search to one paper.
-BM25 / text get a cheap WHERE filter; semantic post-filters a wider
-pool. The walker uses this internally for hop>=1.
+`similarity-walk "<concept>" --depth 2 --neighbors 3` walks **cosine
+neighbours** of chunk vectors. Dense (every chunk has neighbours),
+no schema dependency, ~180 ms total at depth=2 on a 5k-chunk corpus.
+Use `--from-chunk chunk:<handle>` to seed from a specific chunk.
+`--threshold` (default 0.65) cuts low-similarity edges;
+`--cross-doc-only` (default on) skips trivially-similar adjacent
+paragraphs.
 
-Walks dead-end where in-corpus citation density is low — a thematic
-slice typically resolves 5-15%, a broad sample 1-3%.
+Both walkers share `{seeds, edges, chunks}` JSON shape. Pick
+citation-walk for "trace argument to source"; similarity-walk for
+"explore conceptual neighbourhood".
+
+`find "X" --in-doc <doc-handle>` scopes chunk search to one paper —
+used internally by `citation-walk` for hop≥1.
 
 ## Recipe: finding the definition of a term
 

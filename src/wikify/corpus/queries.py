@@ -1791,6 +1791,165 @@ def find(
     }
 
 
+def similarity_walk(
+    corpus: Corpus,
+    *,
+    query: str | None = None,
+    from_chunk: str | None = None,
+    depth: int = 2,
+    top_k: int = 5,
+    neighbors: int = 3,
+    threshold: float = 0.65,
+    rank: str = "all",
+    cross_doc_only: bool = True,
+) -> dict:
+    """Concept- or chunk-seeded recursive cosine-similarity walk.
+
+    Two seed modes (mutually exclusive):
+
+    - *query* — find the top-`top_k` chunks for the concept (per
+      *rank*), then expand each via cosine neighbours.
+    - *from_chunk* — start from a single chunk handle; no search.
+
+    Per hop, each chunk in the frontier emits up to *neighbors* edges
+    to chunks with cosine ≥ *threshold*. Edges are typed
+    ``kind="similar"`` and carry a ``score`` field. Chunks are
+    deduped across paths (added once, at first encounter); subsequent
+    edges to an already-visited chunk are dropped.
+
+    With *cross_doc_only* (default True), neighbours in the same
+    document as their source are filtered out — adjacent paragraphs
+    are usually trivially similar.
+
+    Returns ``{seeds, edges, chunks}`` matching `citation_walk`'s
+    shape so callers can render either walker the same way.
+    """
+    import numpy as np
+
+    from .store.routing import active_space_id, open_store, sqlite_available
+
+    if (query is None) == (from_chunk is None):
+        raise QueryError(
+            "bad_seed",
+            "similarity_walk requires exactly one of query / from_chunk",
+        )
+    if depth < 0:
+        raise QueryError("bad_depth", f"depth must be >= 0; got {depth}")
+    if top_k <= 0:
+        raise QueryError("bad_top_k", f"top_k must be > 0; got {top_k}")
+    if neighbors <= 0:
+        raise QueryError("bad_neighbors", f"neighbors must be > 0; got {neighbors}")
+    if not -1.0 <= threshold <= 1.0:
+        raise QueryError("bad_threshold", f"threshold must be in [-1, 1]; got {threshold}")
+    if not sqlite_available(corpus.root):
+        raise QueryError(
+            "no_wikify_db",
+            "similarity-walk requires wikify.db; rebuild with `corpus build`",
+        )
+
+    store = open_store(corpus.root)
+    try:
+        # Vector matrix is the only thing this walker reads from SQLite at
+        # depth>0; no graph_edges, no chunk_citations.
+        space_id = active_space_id(store)
+        if not space_id:
+            raise QueryError(
+                "no_embeddings",
+                "corpus has no embedding space; run `corpus build` to embed chunks",
+            )
+        vi = store.vector_index(space_id)
+        ids = vi.ids
+        matrix = vi.matrix
+        if matrix.shape[0] == 0:
+            raise QueryError(
+                "no_embeddings",
+                "embedding space exists but has no chunks",
+            )
+        id_to_idx = {cid: i for i, cid in enumerate(ids)}
+
+        # Seed
+        chunks: dict[str, dict] = {}
+        if query is not None:
+            seeds = search_chunks(corpus, query, top_k=top_k, rank=rank)
+            for s in seeds:
+                chunks[s["id"]] = {**s, "hop": 0}
+            seed_rows = [chunks[s["id"]] for s in seeds]
+        else:
+            short = (from_chunk or "").removeprefix("chunk:")
+            try:
+                cid = resolve_chunk_id(corpus, short)
+            except HandleNotFoundError as exc:
+                raise QueryError("bad_chunk", str(exc)) from exc
+            row = store.get_chunk(cid)
+            if not row:
+                raise QueryError("bad_chunk", f"chunk {from_chunk!r} not found")
+            seed = {"id": cid, "doc_id": row["doc_id"], "hop": 0, "modes": []}
+            chunks[cid] = seed
+            seed_rows = [seed]
+
+        edges: list[dict] = []
+        if depth == 0:
+            return {"seeds": seed_rows, "edges": edges, "chunks": chunks}
+
+        # Cache doc_id per chunk_id; used by cross_doc_only and result rows.
+        doc_cache: dict[str, str] = {s["id"]: s["doc_id"] for s in seed_rows}
+
+        def _doc_of(cid: str) -> str:
+            if cid not in doc_cache:
+                row = store.get_chunk(cid)
+                doc_cache[cid] = row["doc_id"] if row else ""
+            return doc_cache[cid]
+
+        frontier = [s["id"] for s in seed_rows]
+        for hop in range(1, depth + 1):
+            next_frontier: list[str] = []
+            for src_id in frontier:
+                src_idx = id_to_idx.get(src_id)
+                if src_idx is None:
+                    continue
+                src_vec = matrix[src_idx]
+                src_doc = _doc_of(src_id)
+                sims = matrix @ src_vec  # cosine; vectors are unit-normalised
+                # Sort all candidates desc; break early on threshold.
+                order = np.argsort(-sims)
+                added = 0
+                for idx in order:
+                    score = float(sims[int(idx)])
+                    if score < threshold:
+                        break  # rest are below
+                    cid = ids[int(idx)]
+                    if cid == src_id:
+                        continue
+                    if cross_doc_only and _doc_of(cid) == src_doc:
+                        continue
+                    if cid in chunks:
+                        continue  # already visited — skip to keep the frontier focused
+                    edges.append({
+                        "src_chunk": src_id,
+                        "dst_chunk": cid,
+                        "kind": "similar",
+                        "score": round(score, 6),
+                        "hop": hop,
+                    })
+                    chunks[cid] = {
+                        "id": cid,
+                        "doc_id": _doc_of(cid),
+                        "hop": hop,
+                        "score": round(score, 6),
+                    }
+                    next_frontier.append(cid)
+                    added += 1
+                    if added >= neighbors:
+                        break
+            if not next_frontier:
+                break
+            frontier = next_frontier
+
+        return {"seeds": seed_rows, "edges": edges, "chunks": chunks}
+    finally:
+        store.close()
+
+
 def citation_walk(
     corpus: Corpus,
     *,

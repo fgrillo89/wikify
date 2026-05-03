@@ -1180,6 +1180,116 @@ def cmd_schema(
     typer.echo(f"Handles: {schema['handle_resolution']}")
 
 
+# ---------------------------------------------------------------- similarity-walk
+
+
+@app.command("similarity-walk")
+def cmd_similarity_walk(
+    query: str = typer.Argument(
+        "", help="Concept to seed the walk on (omit when --from-chunk is set).",
+    ),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    from_chunk: str | None = typer.Option(
+        None, "--from-chunk",
+        help=(
+            "Seed from one chunk handle instead of a query; "
+            "mutually exclusive with the positional query."
+        ),
+    ),
+    depth: int = typer.Option(2, "--depth"),
+    top_k: int = typer.Option(5, "--top-k", help="Seed count at hop 0 (query mode only)."),
+    neighbors: int = typer.Option(3, "--neighbors", help="Per-chunk fanout per hop."),
+    threshold: float = typer.Option(
+        0.65, "--threshold",
+        help="Cosine cut; below this, edges are dropped. Calibrated for jina-v2-small.",
+    ),
+    rank: str = typer.Option(
+        "all", "--rank", help="Hop-0 search method (query mode only).",
+    ),
+    cross_doc_only: bool = typer.Option(
+        True, "--cross-doc-only/--include-same-doc",
+        help="Filter same-doc neighbours (default) or include them.",
+    ),
+    fmt: str = typer.Option("auto", "--format"),
+) -> None:
+    """Cosine-similarity walk over chunk vectors.
+
+    Two seed modes (mutually exclusive):
+
+    - positional `<query>` — seed via `find` with the chosen rank.
+    - `--from-chunk <handle>` — seed from one chunk; no search step.
+
+    Each hop expands every chunk in the frontier into up to
+    `--neighbors` cosine-similar chunks above `--threshold`. Edges are
+    typed `similar` with a score; chunks are deduped across paths.
+    The vector matrix is loaded once per process; subsequent walks
+    re-use it.
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    if (not query) and (not from_chunk):
+        cli_error(
+            EXIT_VALIDATION, error="bad_seed",
+            message="provide a query (positional) or --from-chunk",
+        )
+    if query and from_chunk:
+        cli_error(
+            EXIT_VALIDATION, error="bad_seed",
+            message="--from-chunk and a positional query are mutually exclusive",
+        )
+    if depth < 0:
+        cli_error(EXIT_VALIDATION, error="bad_depth",
+                  message=f"depth must be >= 0; got {depth}")
+    try:
+        out = queries.similarity_walk(
+            corpus,
+            query=query or None,
+            from_chunk=from_chunk,
+            depth=depth,
+            top_k=top_k,
+            neighbors=neighbors,
+            threshold=threshold,
+            rank=rank,
+            cross_doc_only=cross_doc_only,
+        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
+
+    if fmt_resolved == "json":
+        typer.echo(json.dumps({"ok": True, **out}))
+        return
+    if fmt_resolved == "quiet":
+        for c in out["chunks"].values():
+            typer.echo(format_handle("chunk", c["id"]))
+        return
+    edges_by_dst = {e["dst_chunk"]: e for e in out["edges"]}
+    for c in sorted(
+        out["chunks"].values(),
+        key=lambda r: (r.get("hop", 0), r.get("id", "")),
+    ):
+        cid = c["id"]
+        did = c.get("doc_id", "")
+        modes = c.get("modes") or []
+        via = "via=" + "".join(
+            m[0] if m in modes else "-" for m in ("semantic", "bm25", "text")
+        )
+        edge = edges_by_dst.get(cid)
+        cite = ""
+        if edge:
+            cite = (
+                f"  similar={edge['score']:.3f} <- chunk:{edge['src_chunk'][-12:]}"
+            )
+        typer.echo(
+            format_row([
+                f"  hop={c['hop']}",
+                via,
+                format_handle("chunk", cid),
+                format_handle("doc", did) if did else "",
+                cite,
+            ])
+        )
+
+
 # ---------------------------------------------------------------- citation-walk
 
 
