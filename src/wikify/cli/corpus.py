@@ -414,6 +414,15 @@ def cmd_find(
             "quiet (handles only), compact (tab-separated columns), json."
         ),
     ),
+    in_doc: str | None = typer.Option(
+        None,
+        "--in-doc",
+        help=(
+            "Scope chunk search to one document. Accepts any doc handle "
+            "(short suffix, hex, or full id). BM25 / text get a cheap "
+            "WHERE filter; vector search post-filters a wider pool."
+        ),
+    ),
     explain: bool = typer.Option(
         False,
         "--explain",
@@ -456,10 +465,16 @@ def cmd_find(
         )
         return
 
+    resolved_in_doc: str | None = None
+    if in_doc is not None:
+        try:
+            resolved_in_doc = queries.resolve_doc_id(corpus, in_doc.removeprefix("doc:"))
+        except queries.HandleNotFoundError as exc:
+            cli_error(EXIT_VALIDATION, error="bad_in_doc", message=str(exc))
     try:
         result = queries.find(
             corpus, query=query, by=by, rank=rank, top_k=top_k,
-            text=text, field=field,
+            text=text, field=field, in_doc=resolved_in_doc,
         )
     except queries.QueryError as exc:
         cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
@@ -1163,6 +1178,79 @@ def cmd_schema(
     typer.echo(f"Formats: {' | '.join(schema['formats'])}")
     typer.echo("")
     typer.echo(f"Handles: {schema['handle_resolution']}")
+
+
+# ---------------------------------------------------------------- citation-walk
+
+
+@app.command("citation-walk")
+def cmd_citation_walk(
+    query: str = typer.Argument(..., help="Concept to ground the walk on."),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    depth: int = typer.Option(2, "--depth", help="Citation hops; 0 = seeds only."),
+    top_k: int = typer.Option(5, "--top-k", help="Seed chunks at hop 0."),
+    rank: str = typer.Option(
+        "all", "--rank",
+        help="Ranking method for seed + per-hop sub-search.",
+    ),
+    fmt: str = typer.Option("auto", "--format"),
+) -> None:
+    """Concept-grounded recursive citation walk.
+
+    Hop 0: top chunks for *query* corpus-wide. For each, follow
+    chunk_citations to in-corpus papers and pick that paper's best
+    chunk for the same query (scoped to the doc). Recurse to *depth*
+    hops, deduping chunks across paths.
+
+    Output (compact): one row per chunk with hop and via tags, plus
+    parent edges showing the citation marker that led there. JSON
+    returns the full {seeds, edges, chunks} payload.
+    """
+    corpus = _resolve_corpus(corpus_dir)
+    fmt_resolved = _resolve_format_or_error(fmt)
+    _validate_positive_int("top-k", top_k)
+    if depth < 0:
+        cli_error(EXIT_VALIDATION, error="bad_depth",
+                  message=f"depth must be >= 0; got {depth}")
+    try:
+        out = queries.citation_walk(
+            corpus, query=query, depth=depth, top_k=top_k, rank=rank,
+        )
+    except queries.QueryError as exc:
+        cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
+
+    if fmt_resolved == "json":
+        typer.echo(json.dumps({"ok": True, **out}))
+        return
+    if fmt_resolved == "quiet":
+        for c in out["chunks"].values():
+            typer.echo(format_handle("chunk", c["id"]))
+        return
+    edges_by_dst = {e["dst_chunk"]: e for e in out["edges"]}
+    for c in sorted(out["chunks"].values(), key=lambda r: (r.get("hop", 0), r.get("id", ""))):
+        cid = c["id"]
+        did = c.get("doc_id", "")
+        modes = c.get("modes") or []
+        via = (
+            "via=" + "".join(
+                m[0] if m in modes else "-"
+                for m in ("semantic", "bm25", "text")
+            )
+        )
+        edge = edges_by_dst.get(cid)
+        prefix = f"  hop={c['hop']}"
+        cite = ""
+        if edge:
+            cite = f"  cited-via={edge['marker']} <- chunk:{edge['src_chunk'][-12:]}"
+        typer.echo(
+            format_row([
+                prefix,
+                via,
+                format_handle("chunk", cid),
+                format_handle("doc", did) if did else "",
+                cite,
+            ])
+        )
 
 
 # ---------------------------------------------------------------- traverse

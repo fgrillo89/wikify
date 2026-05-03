@@ -202,8 +202,10 @@ class Store:
     def fts_refresh_document(self, doc_id: str) -> None:
         _fts.fts_refresh_document(self.con, doc_id)
 
-    def search_chunks_bm25(self, query: str, top_k: int = 10) -> list[tuple[str, float]]:
-        return _fts.search_chunks_bm25(self.con, query, top_k)
+    def search_chunks_bm25(
+        self, query: str, top_k: int = 10, *, doc_id: str | None = None,
+    ) -> list[tuple[str, float]]:
+        return _fts.search_chunks_bm25(self.con, query, top_k, doc_id=doc_id)
 
     def search_documents_bm25(self, query: str, top_k: int = 10) -> list[tuple[str, float]]:
         return _fts.search_documents_bm25(self.con, query, top_k)

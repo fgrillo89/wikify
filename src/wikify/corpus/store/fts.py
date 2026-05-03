@@ -48,18 +48,41 @@ def fts_refresh_document(con: sqlite3.Connection, doc_id: str) -> None:
 
 
 def search_chunks_bm25(
-    con: sqlite3.Connection, query: str, top_k: int = 10,
+    con: sqlite3.Connection,
+    query: str,
+    top_k: int = 10,
+    *,
+    doc_id: str | None = None,
 ) -> list[tuple[str, float]]:
-    """BM25 search against chunks_fts. Returns (chunk_id, score)."""
+    """BM25 search against chunks_fts. Returns (chunk_id, score).
+
+    When *doc_id* is set, the result is scoped to chunks of that one
+    document via a cheap `chunks.doc_id = ?` predicate on the join.
+    """
     if not query.strip():
         return []
-    sql = (
-        "SELECT chunks.chunk_id, bm25(chunks_fts) AS s "
-        "FROM chunks_fts JOIN chunks ON chunks.rowid = chunks_fts.rowid "
-        "WHERE chunks_fts MATCH ? "
-        "ORDER BY s LIMIT ?"
-    )
-    return [(r[0], float(r[1])) for r in con.execute(sql, (query, top_k))]
+    if doc_id is None:
+        sql = (
+            "SELECT chunks.chunk_id, bm25(chunks_fts) AS s "
+            "FROM chunks_fts JOIN chunks ON chunks.rowid = chunks_fts.rowid "
+            "WHERE chunks_fts MATCH ? "
+            "ORDER BY s LIMIT ?"
+        )
+        params: tuple = (query, top_k)
+    else:
+        sql = (
+            "SELECT chunks.chunk_id, bm25(chunks_fts) AS s "
+            "FROM chunks_fts JOIN chunks ON chunks.rowid = chunks_fts.rowid "
+            "WHERE chunks_fts MATCH ? AND chunks.doc_id = ? "
+            "ORDER BY s LIMIT ?"
+        )
+        params = (query, doc_id, top_k)
+    try:
+        return [(r[0], float(r[1])) for r in con.execute(sql, params)]
+    except sqlite3.OperationalError:
+        # FTS5 query parse error (`-` as NOT, unbalanced quote, etc.).
+        # Surface as "no hits" so callers can keep going.
+        return []
 
 
 def search_documents_bm25(

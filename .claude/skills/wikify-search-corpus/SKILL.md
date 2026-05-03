@@ -71,6 +71,7 @@ when debugging GPU-provider fallback or model loading.
 | Paper whose **title** mentions X                    | `find "X" --by paper --field title` |
 | Most-relevant chunks for X                          | `find "X" --top-k 8` |
 | **Unsure which mode?** Semantic + BM25 + text       | `find "X" --rank all --top-k 12` |
+| Scope chunk search to one doc                       | `find "X" --in-doc <doc-handle>` |
 | Literal phrase / acronym / formula                  | `find "X" --text` |
 | Diverse corpus entry points (PageRank + coverage)   | `sample --max 12` |
 | **Authors**                                         | |
@@ -87,6 +88,7 @@ when debugging GPU-provider fallback or model loading.
 | Most-cited papers citing this paper                 | `traverse doc:<short> --to cited-by --rank citation_count` |
 | Bibliography of this paper (in-corpus targets)      | `traverse doc:<short> --to references` |
 | In-corpus refs marked inside a chunk's text         | `traverse chunk:<short> --to cited-in-corpus` |
+| **Concept-grounded recursive citation walk**        | `citation-walk "<concept>" --depth 2 --top-k 5` |
 | Papers by authors who cite this paper (3-hop pipe)  | `traverse doc:X --to cited-by --format quiet \| xargs -I {} traverse {} --to authors --format quiet \| sort -u \| xargs -I {} traverse {} --to sources --format quiet \| sort -u` |
 | **Structure & media**                               | |
 | Chunks of a paper                                   | `traverse doc:<short> --to chunks` |
@@ -111,65 +113,55 @@ stdout is piped.
 
 ## Picking a `--rank` for chunk search
 
-`--rank all` is the safe default when you can't predict the query shape.
-It fans out to semantic + bm25 + literal substring, RRF-fuses, dedupes,
-and tags each row `via=sbt` (s=semantic, b=bm25, t=text). `via=sbt`
-means all three modes agreed; high-confidence consensus. Tolerates a
-failure in any single mode (FTS5 syntax error, missing embedder, etc).
+`--rank all` is the safe default — fans out to semantic + bm25 +
+literal substring, RRF-fuses, dedupes, tags each row `via=sbt`
+(`via=sbt` = all three agreed). Tolerates a failure in any single
+mode. Use `bm25` for exact terms / acronyms (sub-ms); `hybrid` to
+weight a paraphrasable concept; `semantic` for pure paraphrase.
 
-| Query shape                          | Recommended rank |
-|--------------------------------------|------------------|
-| Concept / paraphrase / question      | `semantic` (default) or `all` |
-| Exact term, acronym, formula         | `bm25` (sub-ms) |
-| Term + paraphrase, weighted          | `hybrid` |
-| Don't know / agent exploration       | `all` |
+FTS5 gotchas (bm25/hybrid only, not `all`): default-AND so
+`"what is X"` needs every word; `-` parses as NOT at query time so
+quote hyphenated phrases as `'"self-limiting"'`. See
+`references/corpus-cli-patterns.md`.
 
-FTS5 grammar gotchas — apply to `bm25` / `hybrid` only, not `all`:
-default operator is AND, so `"what is growth per cycle"` needs every
-word present (use `semantic` or `all` for natural questions); `-`
-parses as NOT at query time even with `tokenchars '-'` (quote
-hyphenated phrases: `'"self-limiting"'`). See
-`references/corpus-cli-patterns.md` for full syntax.
+## Recipe: citation-walk + scoped search
+
+`citation-walk "<concept>" --depth 2 --top-k 5` runs *find seed
+chunks → follow their in-corpus citations → re-search those papers
+for the same concept → recurse*. Each row carries its hop and the
+marker that led there (`cited-via=[N] <- chunk:<src>`). depth=1
+covers most exploration (paragraph + direct sources); >=3 drifts.
+JSON shape: `{seeds, edges, chunks}`.
+
+`find "X" --in-doc <doc-handle>` scopes chunk search to one paper.
+BM25 / text get a cheap WHERE filter; semantic post-filters a wider
+pool. The walker uses this internally for hop>=1.
+
+Walks dead-end where in-corpus citation density is low — a thematic
+slice typically resolves 5-15%, a broad sample 1-3%.
 
 ## Recipe: finding the definition of a term
 
-Definitions in primary literature don't follow Wikipedia patterns
-(`"<term> is"` is rare). Try in order:
-
-1. `find '"<term> (<ABBREV>)"' --rank bm25 --top-k 5` — the parenthesised
-   intro form. Authors introduce a term with its abbreviation in one
-   sentence and define it in the next.
-2. `find '"<ABBREV> is"' --rank bm25 --top-k 5` — body-text definition
-   using the abbreviation. Works for explained concepts (techniques,
-   materials); useless for operational quantities (rates, currents,
-   yields) which are introduced by value, not prose.
-3. `find '"<term>"' --rank bm25 --top-k 10` — fallback. Skim previews
-   for the parenthesised abbreviation; the definition lives next to it.
-
-Skip `'"<full term> is"'` — once authors introduce the abbreviation,
-they use it in prose.
+Primary literature doesn't follow `"<term> is"` Wikipedia patterns.
+Try in order: (1) `find '"<term> (<ABBREV>)"' --rank bm25` — the
+parenthesised intro form authors use to introduce abbreviations; (2)
+`find '"<ABBREV> is"' --rank bm25` — body prose using the abbrev,
+works for explained concepts but not for operational quantities
+introduced by value (rates, currents, yields); (3) `find '"<term>"'
+--rank bm25` fallback — skim previews for the parenthesised abbrev.
+Skip `'"<full term> is"'` — once authors introduce the abbreviation
+they switch to it in prose.
 
 ## Idiom: empty query + `--rank` = "rank everything by metric"
 
-`find` with no query string and `--rank <graph-metric>` ranks the whole
-population by that metric. Population must be specified explicitly: use
-`--by paper` for source-typed metrics (`citation_count`, `pagerank`) or
-`--by author` for author-typed metrics (`h_index`, `citation_count`,
-`n_papers`). `--by chunk` (the default) is **rejected** with metric
-ranks — chunks have no graph-metric to rank by; ask for papers or
-authors instead.
+`find` with no query and `--rank <graph-metric>` ranks the whole
+population. Specify `--by paper` for source-typed metrics
+(`citation_count`, `pagerank`) or `--by author` for author-typed
+(`h_index`, `citation_count`, `n_papers`). `--by chunk` is rejected
+with metric ranks — chunks have no graph-metric.
 
-```bash
-wikify corpus find --by paper  --rank citation_count --top-k 10
-wikify corpus find --by paper  --rank pagerank        --top-k 10
-wikify corpus find --by author --rank h_index         --top-k 10
-wikify corpus find --by author --rank citation_count  --top-k 10
-```
-
-When a query is supplied, `--rank <metric>` *re-orders* the semantic
-top-K by that metric instead — useful for "most cited paper that
-discusses X" where pure semantic top-1 might be a recent paper with
-few citations.
+When a query is supplied, `--rank <metric>` re-orders the semantic
+top-K by that metric — "most cited paper that discusses X".
 
 ## Capability surface (reference)
 

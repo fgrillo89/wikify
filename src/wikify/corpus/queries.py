@@ -368,12 +368,17 @@ def search_chunks(
     *,
     top_k: int = 8,
     rank: str = "semantic",
+    in_doc: str | None = None,
 ) -> list[dict]:
     """Chunk search via the SQLite store.
 
     Each result has ``id``, ``score``, and ``doc_id``. ``rank`` is one of
     ``semantic`` (cosine over chunk embeddings), ``bm25`` (FTS5), or
     ``hybrid`` (RRF over BM25 + vector).
+
+    When *in_doc* is set, the search is scoped to a single document.
+    BM25 / text get a cheap WHERE filter; vector search post-filters
+    a wider top-k pool down to the requested doc.
     """
     from .store.routing import sqlite_available
 
@@ -387,12 +392,13 @@ def search_chunks(
         # fall back to the empty KG so callers get [] instead of an error.
         return []
     if rank == _MULTI_RANK:
-        return _search_chunks_all_modes(corpus, query, top_k=top_k)
-    return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank)
+        return _search_chunks_all_modes(corpus, query, top_k=top_k, in_doc=in_doc)
+    return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank, in_doc=in_doc)
 
 
 def _search_chunks_sqlite(
-    corpus: Corpus, query: str, *, top_k: int, rank: str,
+    corpus: Corpus, query: str, *,
+    top_k: int, rank: str, in_doc: str | None = None,
 ) -> list[dict]:
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
@@ -400,20 +406,21 @@ def _search_chunks_sqlite(
 
     store = open_store(corpus.root)
     try:
-        if rank in {"bm25", "hybrid"}:
-            if rank == "bm25":
-                hits = store.search_chunks_bm25(query, top_k=top_k)
-            else:
-                meta = read_meta(corpus.vectors_path)
-                embed = (
-                    embedder_for(meta.backend, meta.model, mode="query")
-                    if meta else None
-                )
-                qv = embed([query])[0] if embed else None  # type: ignore[index]
-                space_id = active_space_id(store)
-                hits = store.search_hybrid(
-                    query, query_vec=qv, space_id=space_id, top_k=top_k,
-                )
+        if rank == "bm25":
+            hits = store.search_chunks_bm25(query, top_k=top_k, doc_id=in_doc)
+        elif rank == "hybrid":
+            meta = read_meta(corpus.vectors_path)
+            embed = (
+                embedder_for(meta.backend, meta.model, mode="query")
+                if meta else None
+            )
+            qv = embed([query])[0] if embed else None  # type: ignore[index]
+            space_id = active_space_id(store)
+            hits = store.search_hybrid(
+                query, query_vec=qv, space_id=space_id, top_k=top_k,
+            )
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
         else:
             # default semantic: cosine over the active embedding space.
             meta = read_meta(corpus.vectors_path)
@@ -427,7 +434,11 @@ def _search_chunks_sqlite(
             space_id = active_space_id(store)
             if not space_id:
                 return []
-            hits = store.vector_index(space_id).search(qv, top_k=top_k)
+            # Post-filter when scoping: pull a wider pool, narrow to the doc.
+            pool = max(top_k * 10, 50) if in_doc else top_k
+            hits = store.vector_index(space_id).search(qv, top_k=pool)
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
         out: list[dict] = []
         for cid, score in hits:
             row = store.get_chunk(cid)
@@ -441,6 +452,21 @@ def _search_chunks_sqlite(
         return out
     finally:
         store.close()
+
+
+def _filter_hits_to_doc(store, hits, doc_id: str) -> list[tuple[str, float]]:
+    """Drop hits whose chunk does not belong to *doc_id*. One SQL round-trip."""
+    if not hits:
+        return []
+    cids = [cid for cid, _ in hits]
+    placeholders = ",".join("?" * len(cids))
+    in_doc_set = {
+        r[0] for r in store.con.execute(
+            f"SELECT chunk_id FROM chunks WHERE doc_id = ? AND chunk_id IN ({placeholders})",
+            [doc_id, *cids],
+        )
+    }
+    return [(cid, score) for cid, score in hits if cid in in_doc_set]
 
 
 def search_papers_by_title(
@@ -607,7 +633,8 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
 
 
 def _search_chunks_all_modes(
-    corpus: Corpus, query: str, *, top_k: int, per_mode: int | None = None,
+    corpus: Corpus, query: str, *,
+    top_k: int, per_mode: int | None = None, in_doc: str | None = None,
 ) -> list[dict]:
     """Run semantic + bm25 + literal-substring chunk search and dedupe.
 
@@ -653,7 +680,10 @@ def _search_chunks_all_modes(
         def _semantic() -> list[dict]:
             if qv is None or not space_id:
                 return []
-            hits = store.vector_index(space_id).search(qv, top_k=pool)
+            search_pool = pool * 4 if in_doc else pool
+            hits = store.vector_index(space_id).search(qv, top_k=search_pool)
+            if in_doc is not None:
+                hits = _filter_hits_to_doc(store, hits, in_doc)[:pool]
             doc_map = _doc_ids_for([cid for cid, _ in hits])
             return [
                 {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
@@ -661,7 +691,7 @@ def _search_chunks_all_modes(
             ]
 
         def _bm25() -> list[dict]:
-            hits = store.search_chunks_bm25(query, top_k=pool)
+            hits = store.search_chunks_bm25(query, top_k=pool, doc_id=in_doc)
             doc_map = _doc_ids_for([cid for cid, _ in hits])
             return [
                 {"id": cid, "doc_id": doc_map.get(cid, ""), "score": float(score)}
@@ -669,11 +699,18 @@ def _search_chunks_all_modes(
             ]
 
         def _text() -> list[dict]:
-            rows = store.con.execute(
-                "SELECT chunk_id, doc_id FROM chunks WHERE LOWER(text) LIKE ? "
-                "ORDER BY chunk_id LIMIT ?",
-                (f"%{query.lower()}%", pool),
-            ).fetchall()
+            if in_doc is not None:
+                rows = store.con.execute(
+                    "SELECT chunk_id, doc_id FROM chunks WHERE doc_id = ? "
+                    "AND LOWER(text) LIKE ? ORDER BY chunk_id LIMIT ?",
+                    (in_doc, f"%{query.lower()}%", pool),
+                ).fetchall()
+            else:
+                rows = store.con.execute(
+                    "SELECT chunk_id, doc_id FROM chunks WHERE LOWER(text) LIKE ? "
+                    "ORDER BY chunk_id LIMIT ?",
+                    (f"%{query.lower()}%", pool),
+                ).fetchall()
             return [{"id": r["chunk_id"], "doc_id": r["doc_id"]} for r in rows]
 
         sem_hits = _safe_mode("semantic", _semantic)
@@ -1640,6 +1677,7 @@ def find(
     top_k: int = 8,
     text: bool = False,
     field: str = "chunk_text",
+    in_doc: str | None = None,
 ) -> dict:
     """Validate + dispatch ``find``. Returns ``{kind, rows, scored}``.
 
@@ -1746,8 +1784,128 @@ def find(
 
     return {
         "kind": "chunks",
-        "rows": search_chunks(corpus, query, top_k=top_k, rank=rank),
+        "rows": search_chunks(
+            corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
+        ),
         "scored": True,
+    }
+
+
+def citation_walk(
+    corpus: Corpus,
+    *,
+    query: str,
+    depth: int = 2,
+    top_k: int = 5,
+    rank: str = "all",
+) -> dict:
+    """Recursive concept-grounded citation traversal.
+
+    Hop 0: find top-`top_k` chunks for *query* across the corpus.
+    Hops 1..depth: for each chunk found, follow `chunk_citations` to
+    the in-corpus papers it cites; for each cited paper, find its
+    best chunk for the same query (scoped to that doc) and recurse.
+
+    Returns a dict with:
+
+    - ``seeds``: top-`top_k` chunks at hop 0 (each row carries the
+      same fields as ``find`` plus ``hop=0``).
+    - ``edges``: list of ``{src_chunk, marker, dst_chunk, dst_doc, hop}``
+      records describing the citation lineage.
+    - ``chunks``: dict ``{chunk_id: chunk_dict}`` deduped across hops;
+      each value carries ``hop``, ``doc_id``, ``score``, ``modes``
+      (when produced by `--rank all`), and a short `preview`.
+
+    Pruning: a chunk is added once. Subsequent paths reaching it via a
+    different citation just attach a new `edges` row without recursing.
+    """
+    from .store.routing import open_store, sqlite_available
+
+    if not sqlite_available(corpus.root):
+        raise QueryError(
+            "no_wikify_db",
+            "citation-walk requires wikify.db; rebuild with `corpus build`",
+        )
+    if depth < 0:
+        raise QueryError("bad_depth", f"depth must be >= 0; got {depth}")
+    if top_k <= 0:
+        raise QueryError("bad_top_k", f"top_k must be > 0; got {top_k}")
+
+    # Hop 0: corpus-wide search.
+    seed_rows = search_chunks(corpus, query, top_k=top_k, rank=rank)
+    chunks: dict[str, dict] = {}
+    edges: list[dict] = []
+
+    def _attach_chunk(row: dict, hop: int) -> None:
+        cid = row["id"]
+        if cid in chunks:
+            return
+        chunks[cid] = {**row, "hop": hop}
+
+    for r in seed_rows:
+        _attach_chunk(r, hop=0)
+
+    if depth == 0 or not seed_rows:
+        return {
+            "seeds": [chunks[r["id"]] for r in seed_rows],
+            "edges": edges,
+            "chunks": chunks,
+        }
+
+    store = open_store(corpus.root)
+    try:
+        frontier = [r["id"] for r in seed_rows]
+        for hop in range(1, depth + 1):
+            next_frontier: list[str] = []
+            placeholders = ",".join("?" * len(frontier))
+            cite_rows = list(store.con.execute(
+                f"SELECT cc.chunk_id, cc.marker_text, be.target_doc_id "
+                f"FROM chunk_citations cc JOIN bib_entries be USING (bib_id) "
+                f"WHERE cc.chunk_id IN ({placeholders}) "
+                f"AND be.target_doc_id IS NOT NULL",
+                frontier,
+            ))
+            # Group target_doc_ids per source chunk.
+            citations_per_src: dict[str, list[tuple[str, str]]] = {}
+            for r in cite_rows:
+                citations_per_src.setdefault(r["chunk_id"], []).append(
+                    (r["marker_text"] or "", r["target_doc_id"]),
+                )
+            for src_chunk_id, items in citations_per_src.items():
+                # Dedupe target docs (multiple markers can point at the same paper)
+                seen_targets: set[str] = set()
+                for marker, target_doc in items:
+                    if target_doc in seen_targets:
+                        continue
+                    seen_targets.add(target_doc)
+                    sub = search_chunks(
+                        corpus, query, top_k=1, rank=rank, in_doc=target_doc,
+                    )
+                    if not sub:
+                        # No semantic/bm25 hit inside that doc; skip rather
+                        # than emit an arbitrary chunk.
+                        continue
+                    dst = sub[0]
+                    edges.append({
+                        "src_chunk": src_chunk_id,
+                        "marker": marker,
+                        "dst_chunk": dst["id"],
+                        "dst_doc": target_doc,
+                        "hop": hop,
+                    })
+                    if dst["id"] not in chunks:
+                        _attach_chunk(dst, hop=hop)
+                        next_frontier.append(dst["id"])
+            if not next_frontier:
+                break
+            frontier = next_frontier
+    finally:
+        store.close()
+
+    return {
+        "seeds": [chunks[r["id"]] for r in seed_rows],
+        "edges": edges,
+        "chunks": chunks,
     }
 
 
