@@ -347,6 +347,31 @@ class DatabaseManager:
         )
         await self.conn.commit()
 
+    async def cache_resolutions_many(
+        self,
+        rows: list[tuple[str, str, str | None, str]],
+    ) -> None:
+        """Bulk variant of `cache_resolution`. One transaction, one commit.
+
+        Per-call commits scale linearly with row count and dominate
+        Phase 4 wall-clock when several thousand citations are processed.
+        Use this from any path that writes many resolutions in a row.
+        """
+        if not rows:
+            return
+        await self.conn.execute("BEGIN")
+        try:
+            await self.conn.executemany(
+                """INSERT OR REPLACE INTO string_cache
+                   (sha256, raw_text, resolved_doi, resolution_level)
+                   VALUES (?, ?, ?, ?)""",
+                rows,
+            )
+            await self.conn.execute("COMMIT")
+        except Exception:
+            await self.conn.execute("ROLLBACK")
+            raise
+
     # ---- citation_edges ----
 
     async def add_edges(self, parent_doi: str, child_dois: list[str]) -> None:

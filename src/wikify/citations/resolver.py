@@ -11,12 +11,13 @@ import asyncio
 import hashlib
 import logging
 import random
+import re
 from asyncio import Semaphore
 from typing import Any
 
 import httpx
 from aiolimiter import AsyncLimiter
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from ..util.async_limits import with_limiter as add_limiter
 from ..util.async_limits import with_semaphore as add_semaphore
@@ -38,6 +39,37 @@ _OA_BATCH_SIZE = 100
 _MAX_RETRIES = 5
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
+
+# Phase 4 (text fuzzy match) tuning. The naive cross-product cost is
+# O(unresolved * candidates); on a real corpus that is hundreds of
+# millions of comparisons. The inverted token index prunes candidates
+# down to ~tens per bib, then `fuzz.partial_ratio` picks out a clean
+# title window inside the noisy raw_text.
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "and", "in", "for", "on", "with", "by",
+    "to", "from", "at", "as", "is", "are", "was", "were", "be", "this",
+    "that", "these", "those", "or", "but", "not", "into", "via",
+    "vol", "no", "pp", "doi", "et", "al", "ed", "eds",
+})
+_MIN_TOKEN_LEN = 3
+_MIN_TITLE_LEN = 25
+_MIN_SHARED_TOKENS = 3
+_RAW_WINDOW = 600
+# Drop "memristor"-class tokens from the inverted index: they appear in
+# thousands of titles, blow up candidate sets, and add no discriminative
+# power. The scorer still sees them via partial_ratio over the raw_text.
+_MAX_DF_RATIO = 0.05
+# Cap candidates per bib to bound the Python -> C round trip in the
+# rare case that a bib still pulls in too many post-DF-filter tokens.
+_MAX_CANDIDATES = 200
+
+
+def _significant_tokens(text: str) -> set[str]:
+    return {
+        t for t in _TOKEN_RE.findall(text.lower())
+        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
+    }
 
 
 def _sha256(text: str) -> str:
@@ -303,39 +335,70 @@ class AsyncResolver:
             ref_works = await self._expand_references_bulk(all_resolved_works)
 
         # ---- Phase 4: match remaining citations locally ----
-        # Build a title index from all resolved works for fuzzy matching
+        # Build a document-frequency-filtered inverted token index, then
+        # for each unresolved bib pick a small candidate set sharing the
+        # rarest tokens, and score with rapidfuzz's C-loop `process.extractOne`
+        # using `partial_ratio` (clean title aligned within noisy raw_text).
         all_works = {**doi_to_work, **{w.doi: w for w in ref_works.values() if w.doi}}
-        title_index: list[tuple[str, Work]] = [
-            (w.title.lower(), w) for w in all_works.values() if w.title
+        works_indexed: list[Work] = [
+            w for w in all_works.values()
+            if w.title and len(w.title) >= _MIN_TITLE_LEN
         ]
+        title_lowers = [w.title.lower() for w in works_indexed]
+        title_tokens = [_significant_tokens(t) for t in title_lowers]
+        inv: dict[str, list[int]] = {}
+        for i, toks in enumerate(title_tokens):
+            for tok in toks:
+                inv.setdefault(tok, []).append(i)
+        max_df = max(2, int(len(works_indexed) * _MAX_DF_RATIO))
+        # Drop tokens that appear in too many titles -- they only inflate
+        # candidate sets without distinguishing works.
+        for tok in [t for t, lst in inv.items() if len(lst) > max_df]:
+            del inv[tok]
 
+        cache_rows: list[tuple[str, str, str | None, str]] = []
         for idx in unresolved_indices:
             cit = citations[idx]
             raw_text = cit.get("raw_text") or ""
             text_hash = _sha256(raw_text) if raw_text else ""
 
-            # Try local fuzzy match against all known works
             best_work = None
             best_score = 0.0
-            for title_lower, w in title_index:
-                score = fuzz.token_sort_ratio(raw_text[:300].lower(), title_lower)
-                if score > best_score:
-                    best_score = score
-                    best_work = w
+            if works_indexed and raw_text:
+                raw_window = raw_text[:_RAW_WINDOW].lower()
+                counts: dict[int, int] = {}
+                for tok in _significant_tokens(raw_window):
+                    for j in inv.get(tok, ()):
+                        counts[j] = counts.get(j, 0) + 1
+                # Keep candidates with enough shared rare tokens, capped
+                # at top-K by shared count to bound scoring cost.
+                kept = [(c, j) for j, c in counts.items() if c >= _MIN_SHARED_TOKENS]
+                if kept:
+                    kept.sort(reverse=True)
+                    cand_idx = [j for _, j in kept[:_MAX_CANDIDATES]]
+                    cand_titles = [title_lowers[j] for j in cand_idx]
+                    hit = process.extractOne(
+                        raw_window, cand_titles,
+                        scorer=fuzz.partial_ratio,
+                        score_cutoff=self.confidence_threshold,
+                    )
+                    if hit is not None:
+                        _, best_score, k = hit
+                        best_work = works_indexed[cand_idx[k]]
 
             if best_work and best_score >= self.confidence_threshold:
                 if text_hash:
-                    await self.db.cache_resolution(
-                        text_hash, raw_text, best_work.doi, "C")
+                    cache_rows.append((text_hash, raw_text, best_work.doi, "C"))
                 results[idx] = ResolutionResult(
                     work=best_work, level="C",
                     source_doi=cit.get("doi", ""), source_text=raw_text)
             else:
                 if text_hash:
-                    await self.db.cache_resolution(text_hash, raw_text, None, "miss")
+                    cache_rows.append((text_hash, raw_text, None, "miss"))
                 results[idx] = ResolutionResult(
                     work=None, level="miss",
                     source_doi=cit.get("doi", ""), source_text=raw_text)
+        await self.db.cache_resolutions_many(cache_rows)
 
         final = [r if r is not None else ResolutionResult(work=None, level="miss")
                  for r in results]
