@@ -31,6 +31,7 @@ from ..corpus import queries
 from ..corpus.handles import (
     AmbiguousHandleError,
     HandleNotFoundError,
+    format_chunk_handles,
     format_handle,
 )
 from ..corpus.session import CorpusSearchSession
@@ -203,8 +204,22 @@ def cmd_build(
     ),
     workers: int = typer.Option(0, "--workers"),
     no_refresh: bool = typer.Option(False, "--no-refresh"),
+    openalex: bool = typer.Option(
+        True,
+        "--openalex/--no-openalex",
+        help=(
+            "Enrich citation metadata via the OpenAlex API. ON by default; "
+            "this issues network requests to api.openalex.org during refresh. "
+            "Pass --no-openalex to skip Wave C and stay fully offline."
+        ),
+    ),
 ) -> None:
-    """Parse, chunk, embed, and graph an input directory."""
+    """Parse, chunk, embed, and graph an input directory.
+
+    Network: when --openalex is on (default), refresh hits api.openalex.org
+    to canonicalise bib metadata and surface in-corpus citation matches.
+    Set OPENALEX_EMAIL for the polite-pool rate limit (10 req/s).
+    """
     from ..ingest.pipeline import ingest_corpus
 
     paths = ingest_corpus(
@@ -214,6 +229,7 @@ def cmd_build(
         mode=mode,
         parser_backend=parser,
         refresh=not no_refresh,
+        resolve_bibliography_doi=openalex,
     )
     typer.echo(f"corpus written to {paths.root}")
 
@@ -221,12 +237,27 @@ def cmd_build(
 @app.command("refresh")
 def cmd_refresh(
     corpus_dir: Path = typer.Argument(...),
+    openalex: bool = typer.Option(
+        True,
+        "--openalex/--no-openalex",
+        help=(
+            "Enrich citation metadata via the OpenAlex API. ON by default; "
+            "this issues network requests to api.openalex.org. "
+            "Pass --no-openalex to skip Wave C and stay fully offline."
+        ),
+    ),
 ) -> None:
-    """Rebuild derived corpus artifacts (embeddings, graph, topics, ...)."""
+    """Rebuild derived corpus artifacts (embeddings, graph, topics, ...).
+
+    Network: when --openalex is on (default), Wave C of the refresh DAG
+    hits api.openalex.org to canonicalise bib metadata and surface
+    in-corpus citation matches. Set OPENALEX_EMAIL for the polite-pool
+    rate limit (10 req/s).
+    """
     from ..ingest.pipeline import refresh_corpus
 
     paths = Corpus(root=corpus_dir)
-    refresh_corpus(paths)
+    refresh_corpus(paths, resolve_bibliography_doi=openalex)
     typer.echo(f"refresh complete: {paths.root}")
 
 
@@ -241,14 +272,14 @@ def cmd_check(
         "--full",
         help=(
             "Also compute citation-marker indexing coverage "
-            "(requires loading knowledge_graph.json — slower)."
+            "(requires probing the SQLite graph store — slower)."
         ),
     ),
 ) -> None:
     """Report corpus health: doc/chunk counts, derived artifacts, field.
 
-    The default form stays under ~2s by skipping the knowledge-graph
-    load. Pass ``--full`` to also report ``cite_index`` coverage (% of
+    The default form stays fast by skipping citation-index coverage.
+    Pass ``--full`` to also report ``cite_index`` coverage (% of
     in-corpus sources whose ``ord_refs`` is populated — relevant for
     ``traverse <chunk> --to cited-in-corpus``).
     """
@@ -262,7 +293,13 @@ def cmd_check(
     typer.echo(f"docs:        {summary['n_docs']}")
     typer.echo(f"chunks:      {summary['n_chunks']}")
     typer.echo(f"vectors:     {summary['has_vectors']}")
-    typer.echo(f"graph:       {summary['has_knowledge_graph']}")
+    typer.echo(f"sqlite:      {summary['has_sqlite_store']}")
+    if summary.get("has_sqlite_store"):
+        typer.echo(f"  docs:      {summary.get('sqlite_n_docs', '?')}")
+        typer.echo(f"  chunks:    {summary.get('sqlite_n_chunks', '?')}")
+        typer.echo(f"  embeds:    {summary.get('sqlite_n_embeddings', '?')}")
+        if "sqlite_n_edges" in summary:
+            typer.echo(f"  edges:     {summary['sqlite_n_edges']}")
     typer.echo(f"manifest:    {summary['has_manifest']}")
     if summary.get("field"):
         typer.echo(f"field:       {summary['field']}")
@@ -598,7 +635,12 @@ def _emit_chunk_rows(
     fmt: str,
     score_key: str | None,
 ) -> None:
-    """Print chunk-level search results in the chosen format."""
+    """Print chunk-level search results in the chosen format.
+
+    Chunk handles are disambiguated within the result set: bare short
+    suffix when unique, ``chunk:<doc-short>/<chunk-short>`` when two
+    chunks would otherwise share the same printed handle.
+    """
     doc_ids_in_order: list[str] = []
     seen: set[str] = set()
     for h in hits:
@@ -607,14 +649,19 @@ def _emit_chunk_rows(
             seen.add(did)
             doc_ids_in_order.append(did)
     metrics = queries.doc_metrics(corpus, doc_ids_in_order)
+    chunk_handles = format_chunk_handles(
+        (str(h.get("id", "")), str(h.get("doc_id") or h.get("source_id") or ""))
+        for h in hits
+    )
     if fmt == "json":
         items = []
         for h in hits:
             did = str(h.get("doc_id") or h.get("source_id") or "")
+            cid = str(h.get("id", ""))
             items.append(
                 {
                     **h,
-                    "chunk_handle": format_handle("chunk", str(h.get("id", ""))),
+                    "chunk_handle": chunk_handles.get(cid, format_handle("chunk", cid)),
                     "doc_handle": format_handle("doc", did) if did else "",
                     "citation_count": metrics.get(did, {}).get("citation_count", 0),
                 }
@@ -623,7 +670,8 @@ def _emit_chunk_rows(
         return
     if fmt == "quiet":
         for h in hits:
-            typer.echo(format_handle("chunk", str(h.get("id", ""))))
+            cid = str(h.get("id", ""))
+            typer.echo(chunk_handles.get(cid, format_handle("chunk", cid)))
         return
     for h in hits:
         cid = str(h.get("id", ""))
@@ -634,7 +682,7 @@ def _emit_chunk_rows(
         cols = [
             score_col,
             f"cites={cites}",
-            format_handle("chunk", cid),
+            chunk_handles.get(cid, format_handle("chunk", cid)),
             format_handle("doc", did) if did else "",
         ]
         if "modes" in h:
