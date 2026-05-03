@@ -1100,7 +1100,7 @@ def refresh_corpus(
     paths: Corpus,
     *,
     stale_doc_ids: set[str] | None = None,
-    resolve_bibliography_doi: bool = False,
+    resolve_bibliography_doi: bool = True,
     cite_resolution: str = "crossref",
 ) -> None:
     """Rebuild derived artifacts (embeddings, graph, topics, etc.).
@@ -1172,7 +1172,7 @@ def ingest_corpus(
     mode: str = "additive",
     parser_backend: str = "lite",
     refresh: bool = True,
-    resolve_bibliography_doi: bool = False,
+    resolve_bibliography_doi: bool = True,
     cite_resolution: str = "crossref",
     dedup_same_stem: bool = True,
 ) -> Corpus:
