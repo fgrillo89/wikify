@@ -53,7 +53,6 @@ _STOPWORDS = frozenset({
     "vol", "no", "pp", "doi", "et", "al", "ed", "eds",
 })
 _MIN_TOKEN_LEN = 3
-_MIN_TITLE_LEN = 25
 _MIN_SHARED_TOKENS = 3
 _RAW_WINDOW = 600
 # Drop "memristor"-class tokens from the inverted index: they appear in
@@ -63,6 +62,34 @@ _MAX_DF_RATIO = 0.05
 # Cap candidates per bib to bound the Python -> C round trip in the
 # rare case that a bib still pulls in too many post-DF-filter tokens.
 _MAX_CANDIDATES = 200
+
+_DOI_PREFIXES = (
+    "https://doi.org/",
+    "http://doi.org/",
+    "https://dx.doi.org/",
+    "http://dx.doi.org/",
+    "doi:",
+)
+
+
+def _canonical_doi(doi: str | None) -> str:
+    """Single canonical DOI form: strip URL prefixes, trim, lowercase.
+
+    Every DOI that crosses a comparison or storage boundary in the
+    resolver -- citation input, OpenAlex response, cache key, edge
+    target, expand_corpus_dois set -- must run through this so a
+    case- or prefix-mismatched DOI does not slip past the level-A
+    short-circuit.
+    """
+    if not doi:
+        return ""
+    d = doi.strip()
+    low = d.lower()
+    for prefix in _DOI_PREFIXES:
+        if low.startswith(prefix):
+            d = d[len(prefix):]
+            break
+    return d.lower()
 
 
 def _significant_tokens(text: str) -> set[str]:
@@ -91,8 +118,7 @@ def parse_openalex_work(item: dict) -> Work:
     location = item.get("primary_location") or {}
     source = location.get("source") or {}
     biblio = item.get("biblio") or {}
-    doi_raw = item.get("doi") or ""
-    doi = doi_raw.replace("https://doi.org/", "")
+    doi = _canonical_doi(item.get("doi"))
     oa_id = _extract_openalex_id(item.get("id") or "")
 
     return Work(
@@ -144,7 +170,8 @@ class AsyncResolver:
         # does not lose any in-corpus matches (the cited references of
         # an out-of-corpus paper are second-degree out-of-corpus too).
         self.expand_corpus_dois = (
-            {d.lower() for d in expand_corpus_dois} if expand_corpus_dois else None
+            {_canonical_doi(d) for d in expand_corpus_dois if d}
+            if expand_corpus_dois else None
         )
         self.confidence_threshold = confidence_threshold
         self._client: httpx.AsyncClient | None = None
@@ -251,11 +278,17 @@ class AsyncResolver:
         """
         results: list[ResolutionResult | None] = [None] * len(citations)
         need_api: list[tuple[int, dict]] = []
+        # Phase 1 cached Works keyed by canonical DOI. These are corpus
+        # papers (or any DOI we have already resolved) that short-circuit
+        # at Phase 1; we still feed them to Phase 3 expansion so their
+        # referenced_works land in the Phase 4 title index even on a
+        # warm-cache re-run.
+        phase1_works: dict[str, Work] = {}
 
         # ---- Phase 1: local cache ----
         for i, cit in enumerate(citations):
             raw_text = cit.get("raw_text") or ""
-            doi = cit.get("doi") or ""
+            doi = _canonical_doi(cit.get("doi"))
             text_hash = _sha256(raw_text) if raw_text else ""
 
             if text_hash:
@@ -265,6 +298,8 @@ class AsyncResolver:
                     work = await self.db.get_work(resolved_doi) if resolved_doi else None
                     results[i] = ResolutionResult(
                         work=work, level=level, source_doi=doi, source_text=raw_text)
+                    if work and work.doi:
+                        phase1_works[_canonical_doi(work.doi)] = work
                     continue
 
             if doi:
@@ -274,10 +309,14 @@ class AsyncResolver:
                         await self.db.cache_resolution(text_hash, raw_text, doi, "A")
                     results[i] = ResolutionResult(
                         work=existing, level="A", source_doi=doi, source_text=raw_text)
+                    phase1_works[_canonical_doi(existing.doi)] = existing
                     continue
 
             need_api.append((i, cit))
 
+        # All citations cache-hit: still expand referenced_works for any
+        # cached corpus seeds so a future no-DOI bib could match them.
+        # But there are no unresolved bibs in this batch, so just return.
         if not need_api:
             logger.info("All %d citations resolved from cache", len(citations))
             return [r for r in results if r is not None]
@@ -292,21 +331,25 @@ class AsyncResolver:
         # concurrent groups so the (small, ~5 batch) corpus seed fetch
         # plus its expansion overlaps with the (larger, ~22 batch) bib
         # DOI fetch. Group A blocks on Phase 3; group B finishes earlier.
-        unique_dois: dict[str, list[int]] = {}  # doi -> [citation indices]
+        # All DOI keys are canonicalized so OpenAlex's normalized form
+        # matches the citation's original form.
+        unique_dois: dict[str, list[int]] = {}  # canonical doi -> [citation indices]
         no_doi_indices: list[int] = []
         for idx, cit in need_api:
-            doi = cit.get("doi") or ""
+            doi = _canonical_doi(cit.get("doi"))
             if doi:
                 unique_dois.setdefault(doi, []).append(idx)
             else:
                 no_doi_indices.append(idx)
 
-        all_dois_set = set(unique_dois)
+        all_dois_set = set(unique_dois) | set(phase1_works)
         if self.expand_corpus_dois is not None:
             corpus_dois_in_set = self.expand_corpus_dois & all_dois_set
         else:
             corpus_dois_in_set = all_dois_set
-        bib_dois_in_set = all_dois_set - corpus_dois_in_set
+        # Phase 2 only fetches DOIs that are not already cached.
+        fresh_corpus_dois = corpus_dois_in_set - set(phase1_works)
+        bib_dois_in_set = (set(unique_dois) - corpus_dois_in_set)
 
         async def _fetch_group(dois: list[str]) -> dict[str, Work]:
             if not dois:
@@ -324,10 +367,17 @@ class AsyncResolver:
             return out
 
         async def _seeds_then_expand() -> tuple[dict[str, Work], dict[str, Work]]:
-            seeds = await _fetch_group(list(corpus_dois_in_set))
-            if not (self.expand_references and seeds):
+            seeds = await _fetch_group(list(fresh_corpus_dois))
+            # Cached corpus seeds participate in Phase 3 expansion too
+            # (the expansion is cache-aware and won't re-fetch refs that
+            # are already in the works table).
+            cached_in_scope = [
+                w for d, w in phase1_works.items() if d in corpus_dois_in_set
+            ]
+            parents = list(seeds.values()) + cached_in_scope
+            if not (self.expand_references and parents):
                 return seeds, {}
-            refs = await self._expand_references_bulk(list(seeds.values()))
+            refs = await self._expand_references_bulk(parents)
             return seeds, refs
 
         async def _bibs() -> dict[str, Work]:
@@ -368,13 +418,23 @@ class AsyncResolver:
         # for each unresolved bib pick a small candidate set sharing the
         # rarest tokens, and score with rapidfuzz's C-loop `process.extractOne`
         # using `partial_ratio` (clean title aligned within noisy raw_text).
-        all_works = {**doi_to_work, **{w.doi: w for w in ref_works.values() if w.doi}}
-        works_indexed: list[Work] = [
-            w for w in all_works.values()
-            if w.title and len(w.title) >= _MIN_TITLE_LEN
-        ]
+        # Short titles (1-2 significant tokens) are still indexed but
+        # require all their tokens to appear in raw_text to avoid trivial
+        # partial-match false positives like the title "Cell".
+        all_works = {
+            **{w.doi: w for w in phase1_works.values() if w.doi},
+            **doi_to_work,
+            **{w.doi: w for w in ref_works.values() if w.doi},
+        }
+        works_indexed: list[Work] = [w for w in all_works.values() if w.title]
         title_lowers = [w.title.lower() for w in works_indexed]
         title_tokens = [_significant_tokens(t) for t in title_lowers]
+        # Per-title minimum shared-token threshold -- clamped to the
+        # title's significant-token count so a 2-token title needs both,
+        # while a long title still needs only _MIN_SHARED_TOKENS.
+        title_min_shared = [
+            max(1, min(_MIN_SHARED_TOKENS, len(toks))) for toks in title_tokens
+        ]
         inv: dict[str, list[int]] = {}
         for i, toks in enumerate(title_tokens):
             for tok in toks:
@@ -399,9 +459,12 @@ class AsyncResolver:
                 for tok in _significant_tokens(raw_window):
                     for j in inv.get(tok, ()):
                         counts[j] = counts.get(j, 0) + 1
-                # Keep candidates with enough shared rare tokens, capped
-                # at top-K by shared count to bound scoring cost.
-                kept = [(c, j) for j, c in counts.items() if c >= _MIN_SHARED_TOKENS]
+                # Keep candidates with enough shared rare tokens for
+                # their title length, capped at top-K to bound scoring.
+                kept = [
+                    (c, j) for j, c in counts.items()
+                    if c >= title_min_shared[j]
+                ]
                 if kept:
                     kept.sort(reverse=True)
                     cand_idx = [j for _, j in kept[:_MAX_CANDIDATES]]
@@ -479,11 +542,16 @@ class AsyncResolver:
         if fetched:
             await self.db.upsert_works(list(fetched.values()))
 
-        # Build edges
+        # Build edges + collect existing cached works so they participate
+        # in Phase 4 fuzzy matching alongside newly-fetched refs. Without
+        # this, a no-DOI bib that should fuzzy-match an already-cached
+        # reference would miss on the second run.
+        existing_works: dict[str, Work] = {}
         oa_to_doi = {w.openalex_id: w.doi for w in fetched.values()}
         for oa_id in all_oa_ids - set(to_fetch):
             existing = await self.db.get_work_by_openalex(oa_id)
             if existing:
+                existing_works[existing.openalex_id] = existing
                 oa_to_doi[existing.openalex_id] = existing.doi
 
         for parent_doi, child_oa_ids in parent_refs.items():
@@ -491,4 +559,4 @@ class AsyncResolver:
             if child_dois:
                 await self.db.add_edges(parent_doi, child_dois)
 
-        return fetched
+        return {**existing_works, **fetched}
