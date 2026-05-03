@@ -21,10 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from wikify.corpus.chunks import (
-    write_document,
-    write_vector_store,
-)
+from wikify.corpus.chunks import write_document
 from wikify.corpus.doc_markdown import write_doc_markdown
 from wikify.corpus.vectors import VectorStore
 from wikify.corpus.vectors_meta import VectorsMeta
@@ -417,10 +414,10 @@ def _derived_artifacts_missing(paths: Corpus) -> bool:
     has_docs = paths.docs_dir.exists() and any(paths.docs_dir.iterdir())
     if not has_docs:
         return False
-    # Check the three cheapest-to-verify derived artifacts.
+    # Cheapest-to-verify derived artifacts: wikify.db is the source of
+    # truth for chunks/vectors/edges; topics.json is still on disk.
     return (
-        not paths.vectors_path.exists()
-        or not paths.knowledge_graph_path.exists()
+        not paths.sqlite_path.exists()
         or not (paths.root / "topics.json").exists()
     )
 
@@ -612,7 +609,7 @@ def _embed_chunks_incremental(
     """
     import numpy as np
 
-    from wikify.corpus.vectors import load_vectors
+    from wikify.corpus.chunks import _vector_store_from_sqlite
     from wikify.corpus.vectors_meta import read_meta
 
     from ..embedding import current_backend
@@ -623,33 +620,35 @@ def _embed_chunks_incremental(
     # Check embedder fingerprint: skip reuse if backend/model/dim changed.
     backend = current_backend()
     embedder_changed = False
-    if paths.vectors_path.exists():
-        old_meta = read_meta(paths.vectors_path)
-        if old_meta is not None:
-            cur_fp = _embedder_fingerprint(backend)
-            old_fp = f"{old_meta.backend}:{old_meta.model}:{old_meta.dim}"
-            if cur_fp != old_fp:
-                embedder_changed = True
-                print(
-                    f"[ingest] embedder changed ({old_fp} -> {cur_fp}), "
-                    f"re-embedding all",
-                    file=sys.stderr,
-                )
+    # vectors.meta.json sits alongside vectors.npz; the .npz itself is no
+    # longer written but the small JSON sidecar still records the
+    # embedder fingerprint for incremental decisions.
+    from wikify.corpus.vectors_meta import meta_path_for
+    old_meta = read_meta(paths.vectors_path) if meta_path_for(paths.vectors_path).exists() else None
+    if old_meta is not None:
+        cur_fp = _embedder_fingerprint(backend)
+        old_fp = f"{old_meta.backend}:{old_meta.model}:{old_meta.dim}"
+        if cur_fp != old_fp:
+            embedder_changed = True
+            print(
+                f"[ingest] embedder changed ({old_fp} -> {cur_fp}), "
+                f"re-embedding all",
+                file=sys.stderr,
+            )
 
-    # Try to load existing vectors for reuse
+    # Try to load existing vectors for reuse from the SQLite store
+    # (the .npz is no longer written).
     reusable: dict[str, np.ndarray] = {}
     if (
-        paths.vectors_path.exists()
-        and not embedder_changed
-        and not stale_doc_ids == target_set
+        not embedder_changed
+        and stale_doc_ids != target_set
+        and paths.sqlite_path.exists()
     ):
-        try:
-            old_store = load_vectors(paths.vectors_path)
+        old_store = _vector_store_from_sqlite(paths.sqlite_path)
+        if old_store.ids:
             for i, cid in enumerate(old_store.ids):
                 if cid in target_set:
                     reusable[cid] = old_store.matrix[i]
-        except Exception:  # noqa: BLE001
-            pass  # corrupt or incompatible -- re-embed everything
 
     # Determine which chunks need fresh embedding
     to_embed = [c for c in all_chunks if c.id not in reusable]
@@ -683,8 +682,9 @@ def _embed_chunks_incremental(
         f"{len(target_set)} chunks"
     )
 
-    write_vector_store(paths, store)
-
+    # Vectors live in `wikify.db` (Wave G writes them). We still write
+    # the small vectors.meta.json sidecar so the embedder fingerprint
+    # check on the next ingest can decide whether to reuse vectors.
     meta = VectorsMeta(
         backend=str(backend["backend"]),
         dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend.get("dim") or 0),

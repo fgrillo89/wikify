@@ -34,7 +34,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
-from wikify.corpus.graph_build import build_knowledge_graph, save_knowledge_graph
 from wikify.corpus.images_index import build_images_index
 
 from .bibtex import (
@@ -308,14 +307,12 @@ def _refresh_bibliography(ctx: dict) -> None:
 
 
 def _refresh_knowledge_graph(ctx: dict) -> None:
-    from wikify.corpus.bibliography import load_citation_index
+    """No-op since `wikify.db` is the canonical KG storage.
 
-    citation_index = load_citation_index(ctx["paths"])
-    kg = build_knowledge_graph(
-        ctx["docs"], ctx["chunks"], ctx["store"], citation_index,
-    )
-    save_knowledge_graph(ctx["paths"].knowledge_graph_path, kg)
-    ctx["knowledge_graph"] = kg
+    Kept as a wave entry so existing timing reports keep their shape; the
+    actual graph rows are written by `_refresh_sqlite_store` (Wave G).
+    """
+    ctx["knowledge_graph"] = None
 
 
 def _refresh_doc_resave(ctx: dict) -> None:

@@ -14,7 +14,6 @@ lives outside the projection: the data lands back in SQLite.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 

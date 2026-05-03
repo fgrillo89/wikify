@@ -1156,7 +1156,13 @@ def write_corpus_bibliography(
     resolve_doi: bool = False,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
 ) -> dict[str, Path]:
-    """Write corpus_papers.bib, cited_works.bib, and citations.json."""
+    """Write corpus_papers.bib, cited_works.bib, and citations.json.
+
+    The .bib files are end-user exports; citations.json is a derived
+    sidecar that mirrors the bib_entries / chunk_citations rows for
+    callers that prefer a plain JSON view (the writer's preload path
+    and a couple of tests). The runtime KG is still in wikify.db.
+    """
     corpus.ensure()
     source_entries, reference_entries, index = build_citation_index(
         corpus, docs,
