@@ -47,3 +47,6 @@ notebooks/
 
 # Scratch (one-off scripts, experiments, not versioned)
 scratch/
+
+# Claude Code MCP server config (carries absolute paths)
+.mcp.json
