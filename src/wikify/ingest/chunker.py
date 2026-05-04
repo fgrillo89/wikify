@@ -178,7 +178,7 @@ def chunk_document(
     # chunks are kept in the corpus so downstream eval / debugging can
     # still see them.
     for c in chunks:
-        c.is_boilerplate = is_boilerplate(c.text)
+        c.is_boilerplate = is_boilerplate(c.text, c.section_path)
     # Tag the canonical abstract chunk (sets section_type='abstract'
     # on exactly one chunk per doc that has body content). Idempotent.
     tag_abstracts(chunks)

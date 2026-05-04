@@ -180,7 +180,7 @@ def chunk_with_hybrid(
         ord_ += 1
 
     for c in chunks:
-        c.is_boilerplate = is_boilerplate(c.text)
+        c.is_boilerplate = is_boilerplate(c.text, c.section_path)
 
     tag_abstracts(chunks)
     return chunks
