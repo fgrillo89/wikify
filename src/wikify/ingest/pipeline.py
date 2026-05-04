@@ -210,10 +210,12 @@ def _parse_and_persist_worker(
     paths = Corpus(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
+    did = doc_id_for(src)
+    doc_cache_path = paths.root / "derived" / "doclingdoc" / f"{did}.json"
     kind, parsed = parse_file(
         src, parser_backend=parser_backend, skip_metadata=skip_metadata,
+        doc_cache_path=doc_cache_path,
     )
-    did = doc_id_for(src)
 
     # Images
     img_slug = image_slug(did)

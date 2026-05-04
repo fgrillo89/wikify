@@ -225,6 +225,7 @@ def parse(
     path: Path,
     *,
     skip_metadata: bool = False,
+    doc_cache_path: Path | None = None,
 ) -> ParseResult:
     """Parse one PDF / DOCX / PPTX / HTML via Docling.
 
@@ -234,6 +235,12 @@ def parse(
     chunks. ``skip_metadata=True`` skips ``assemble_pdf_metadata`` so
     the ingest DAG can fuse metadata in a later pass with DOI-resolved
     context.
+
+    When ``doc_cache_path`` is set, the parsed ``DoclingDocument`` is
+    saved as JSON to that path. The rechunk path can later load this
+    cache via ``DoclingDocument.load_from_json`` and skip the
+    markdown -> DoclingDocument re-parse, dropping ~75% of per-doc
+    chunking cost.
     """
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
@@ -302,6 +309,18 @@ def parse(
     # is the only source -- same behaviour as a Marker-parsed doc.
     if effective_opts.formulas:
         metadata["_docling_formulas"] = extract_formulas(doc)
+
+    # Cache the DoclingDocument JSON so rechunk can skip
+    # DocumentConverter on subsequent invocations.
+    if doc_cache_path is not None:
+        try:
+            doc_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            doc.save_as_json(doc_cache_path)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[docling] failed to cache DoclingDocument for "
+                f"{path.name}: {exc}\n"
+            )
 
     title = metadata.get("title") or path.stem
 

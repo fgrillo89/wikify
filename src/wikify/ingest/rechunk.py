@@ -98,7 +98,8 @@ def rechunk_doc(paths: Corpus, doc_id: str) -> int:
             f"doc record for {doc_id!r} missing under {paths.docs_dir}"
         )
 
-    chunks = chunk_with_hybrid(doc_id, md)
+    cache_path = paths.root / "derived" / "doclingdoc" / f"{doc_id}.json"
+    chunks = chunk_with_hybrid(doc_id, md, cached_doc_path=cache_path)
 
     # Caption chunks come from already-persisted image sidecars.
     img_dir = Path(doc.image_dir)

@@ -103,3 +103,29 @@ materials downloaded from sciencedirect. Terms and conditions apply.
         assert not (
             "wiley" in lower and "licensed" in lower and "copyright" in lower
         ), f"chunk passed boilerplate gate: {c.text[:200]!r}"
+
+
+# ----------------------------------------------------- Stage A4: doc cache
+
+
+def test_chunk_with_hybrid_silent_fallback_on_missing_cache(tmp_path):
+    """Missing cache path must fall back to the markdown -> doc path."""
+    from wikify.ingest.hybrid_chunker import chunk_with_hybrid
+
+    chunks = chunk_with_hybrid(
+        "test_doc_id",
+        _SAMPLE_MD,
+        cached_doc_path=tmp_path / "missing.json",
+    )
+    assert chunks  # falls through to markdown path
+
+
+def test_chunk_with_hybrid_silent_fallback_on_malformed_cache(tmp_path):
+    bogus = tmp_path / "bogus.json"
+    bogus.write_text("{}", encoding="utf-8")
+    from wikify.ingest.hybrid_chunker import chunk_with_hybrid
+
+    chunks = chunk_with_hybrid(
+        "test_doc_id", _SAMPLE_MD, cached_doc_path=bogus,
+    )
+    assert chunks  # malformed cache falls through, doesn't raise

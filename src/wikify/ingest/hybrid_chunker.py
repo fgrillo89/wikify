@@ -115,12 +115,34 @@ def _extract_headings(meta) -> list[str]:
     return [str(h) for h in headings if h]
 
 
+def _load_cached_doc(cache_path):
+    """Load a previously persisted DoclingDocument JSON, or None on miss.
+
+    The cache is written by the Docling parser at ingest time; rechunk
+    looks for it before re-parsing markdown. Returns ``None`` (silent
+    fallback) when the file is missing, malformed, or Docling is
+    unavailable, so the markdown -> DoclingDocument path always works.
+    """
+    if cache_path is None:
+        return None
+    try:
+        from pathlib import Path as _Path
+        path = _Path(cache_path)
+        if not path.is_file():
+            return None
+        from docling_core.types.doc.document import DoclingDocument
+        return DoclingDocument.load_from_json(path)
+    except Exception:
+        return None
+
+
 def chunk_with_hybrid(
     doc_id: str,
     markdown: str,
     *,
     embed_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
+    cached_doc_path=None,
 ) -> list[Chunk]:
     """Chunk *markdown* with Docling's HybridChunker.
 
@@ -133,11 +155,18 @@ def chunk_with_hybrid(
     (``_is_boilerplate_chunk``) and soft flag (``is_boilerplate``) the
     legacy chunker applied still run here, so existing behaviour for
     publisher-license blocks is preserved.
+
+    When ``cached_doc_path`` is set and exists, the ``DoclingDocument``
+    is loaded from that JSON file, skipping the markdown ->
+    DoclingDocument re-parse (the dominant cost). Missing or
+    malformed cache silently falls through to the markdown path.
     """
     if not markdown.strip():
         return []
     chunker = _build_chunker(embed_model_id, max_tokens)
-    doc = _markdown_to_doc(markdown)
+    doc = _load_cached_doc(cached_doc_path)
+    if doc is None:
+        doc = _markdown_to_doc(markdown)
 
     chunks: list[Chunk] = []
     ord_ = 0
