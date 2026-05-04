@@ -62,8 +62,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
             placeholders = ",".join("?" * len(cids))
             fetched = {
                 r["chunk_id"]: r for r in store.con.execute(
-                    f"SELECT chunk_id, text, section_path_json FROM chunks "
-                    f"WHERE chunk_id IN ({placeholders})",
+                    f"SELECT chunk_id, text, section_path_json, section_type "
+                    f"FROM chunks WHERE chunk_id IN ({placeholders})",
                     cids,
                 )
             }
@@ -81,6 +81,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
                     r["section_path"] = _json.loads(row["section_path_json"] or "[]")
                 except (TypeError, ValueError):
                     r["section_path"] = []
+            if "section_type" not in r:
+                r["section_type"] = row["section_type"] or "body"
         return
     # Fallback: no sqlite store. Per-chunk JSONL lookup. Used only by
     # hand-built fixtures; production corpora always have sqlite.
@@ -95,6 +97,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
             r["preview"] = (chunk.text or "")[:240]
         if "section_path" not in r:
             r["section_path"] = list(chunk.section_path or [])
+        if "section_type" not in r:
+            r["section_type"] = chunk.section_type or "body"
 
 
 def _mark_traversal_stubs(corpus, rows: list[dict]) -> None:
@@ -357,7 +361,8 @@ def build_server() -> FastMCP:
                           rank: str = "semantic", top_k: int = 8,
                           text: bool = False,
                           field: str = "chunk_text",
-                          in_doc: str | None = None) -> dict:
+                          in_doc: str | None = None,
+                          exclude_kinds: list[str] | None = None) -> dict:
         """Search the corpus.
 
         ``by`` is ``chunk`` | ``paper`` | ``author``. ``rank`` is
@@ -374,6 +379,12 @@ def build_server() -> FastMCP:
         ``in_doc`` scopes a chunk search to one document. Accepts any
         doc handle form: ``doc:<short>``, the bare hash suffix, or a
         full id. Bad handles return a structured error.
+
+        ``exclude_kinds`` drops chunks whose ``section_type`` is in
+        the list (e.g. ``["references", "acknowledgments"]``). Useful
+        for keeping bibliography and acknowledgments paragraphs out
+        of content retrieval. Returned chunk rows carry ``meta.kind``
+        so callers can see what they got.
 
         Paper rows include ``best_chunk_section`` so the agent can tell
         whether a hit came from the abstract vs. references without
@@ -397,6 +408,7 @@ def build_server() -> FastMCP:
                 corpus, query=query, by=by, rank=rank,
                 top_k=top_k, text=text, field=field,
                 in_doc=resolved_in_doc,
+                exclude_kinds=exclude_kinds,
             )
         except queries.QueryError as exc:
             return _handle_query_error(exc)

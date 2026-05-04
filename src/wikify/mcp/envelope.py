@@ -248,6 +248,8 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
     }
     if "section_path" in row:
         meta["section_path"] = list(row.get("section_path") or [])
+    if "section_type" in row:
+        meta["kind"] = str(row.get("section_type") or "body")
     return {
         "handle": format_handle("chunk", chunk_id),
         "type": "chunk",

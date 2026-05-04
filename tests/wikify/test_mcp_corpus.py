@@ -739,7 +739,7 @@ async def test_chunk_find_disambiguates_colliding_short_handles(
          "preview": "p1"},
     ]
 
-    def _fake_find(corpus_arg, *, query, by, rank, top_k, text, field, in_doc):
+    def _fake_find(corpus_arg, **_kwargs):
         return {"kind": "chunks", "rows": fake_rows, "scored": True}
 
     import wikify.mcp.server as srv_mod
@@ -896,3 +896,54 @@ async def test_traverse_rows_flag_stub_docs(tmp_path: Path) -> None:
     assert (stub["meta"] or {}).get("is_stub") is True
     # Stub still present in the list.
     assert len(res["items"]) == 2
+
+
+# ----------------------------------------------- Stage 6: exclude_kinds + kind
+
+
+async def test_chunk_find_passes_exclude_kinds_through(tmp_path: Path) -> None:
+    """corpus_find forwards exclude_kinds to queries.find."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    captured: dict = {}
+
+    def _fake_find(corpus_arg, **kwargs):
+        captured.update(kwargs)
+        return {"kind": "chunks", "rows": [], "scored": True}
+
+    import wikify.mcp.server as srv_mod
+    target = srv_mod.queries.find
+    srv_mod.queries.find = _fake_find  # type: ignore[assignment]
+    try:
+        await _tool(srv, "corpus_find")(
+            query="x", by="chunk", exclude_kinds=["references", "acknowledgments"],
+        )
+    finally:
+        srv_mod.queries.find = target  # type: ignore[assignment]
+
+    assert captured.get("exclude_kinds") == ["references", "acknowledgments"]
+
+
+async def test_chunk_find_meta_kind_present(ingested_corpus) -> None:
+    """Chunk find rows expose meta.kind from the persisted section_type."""
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=3,
+    )
+    assert res["ok"] is True
+    assert res["items"]
+    for it in res["items"]:
+        assert "kind" in (it["meta"] or {}), it["meta"]
+
+
+async def test_corpus_schema_advertises_exclude_kinds() -> None:
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_schema")()
+    schema = res["items"][0]
+    assert any(
+        "exclude" in k.lower() or "exclude_kind" in k.lower()
+        for k in schema["find_modes"]
+    )

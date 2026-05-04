@@ -526,6 +526,18 @@ def cmd_find(
             "WHERE filter; vector search post-filters a wider pool."
         ),
     ),
+    exclude_kind: list[str] = typer.Option(
+        [],
+        "--exclude-kind",
+        help=(
+            "Drop chunks whose section_type matches the listed kind "
+            "(repeatable). Typical: --exclude-kind references "
+            "--exclude-kind acknowledgments. Section types are: "
+            "abstract|introduction|background|methods|results|"
+            "discussion|conclusion|references|acknowledgments|"
+            "appendix|body."
+        ),
+    ),
     explain: bool = typer.Option(
         False,
         "--explain",
@@ -578,6 +590,7 @@ def cmd_find(
         result = queries.find(
             corpus, query=query, by=by, rank=rank, top_k=top_k,
             text=text, field=field, in_doc=resolved_in_doc,
+            exclude_kinds=list(exclude_kind) or None,
         )
     except queries.QueryError as exc:
         cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)
