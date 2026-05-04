@@ -151,13 +151,18 @@ class ParserBackend(str, Enum):
     architectural rule and makes adding a backend a single-dict-entry
     edit instead of a new ``if`` branch.
 
-    DEFAULT is the best-quality configuration: Marker for PDFs,
-    Docling for DOCX / PPTX / HTML, built-in markdown reader for
-    ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
-    escape hatch (pymupdf4llm + python-docx + python-pptx +
-    trafilatura) for CI, tests, and low-resource environments.
-    MARKER and DOCLING are single-parser overrides for users who
-    want one parser everywhere.
+    DEFAULT is the best-quality configuration: Docling for PDFs +
+    DOCX / PPTX / HTML (uniform structural extraction, in-tree
+    Granite-Docling formula head), built-in markdown reader for
+    ``.md`` / ``.markdown`` / ``.txt``. The DEFAULT was previously
+    Marker for PDFs; the swap landed after Stage B1.5 of the parser
+    probe showed Docling's median wall-clock is within ~13% of
+    Marker on real-world papers (n=20) and Docling's structural
+    FormulaItem extraction produces materially cleaner LaTeX. LITE
+    is the lightweight escape hatch (pymupdf4llm + python-docx +
+    python-pptx + trafilatura) for CI, tests, and low-resource
+    environments. MARKER and DOCLING are single-parser overrides
+    for users who want one parser everywhere.
     """
 
     DEFAULT = "default"
@@ -189,7 +194,7 @@ class ParserBackend(str, Enum):
 _OVERRIDES: dict[ParserBackend, dict[str, tuple[DocKind, Callable]]] = {
     ParserBackend.LITE: {},
     ParserBackend.DEFAULT: {
-        "pdf":  ("pdf",  _lazy_marker),
+        "pdf":  ("pdf",  _lazy_docling),
         "docx": ("docx", _lazy_docling),
         "pptx": ("pptx", _lazy_docling),
         "html": ("html", _lazy_docling),

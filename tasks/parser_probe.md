@@ -82,4 +82,29 @@ Recommend a larger probe before flipping:
 - `scripts/probe_marker_vs_docling.py` -- the probe harness, one
   parser mode per process.
 - `tasks/probe_marker.json`, `tasks/probe_docling_default.json`,
-  `tasks/probe_docling_tuned.json` -- per-doc raw measurements.
+  `tasks/probe_docling_tuned.json` -- per-doc raw measurements (n=3).
+- `tasks/probe_marker_n20.json`,
+  `tasks/probe_docling_default_n20.json` -- B1.5 raw measurements
+  (n=20).
+
+## Stage B1.5 -- 20-doc rerun
+
+Same probe harness, n=20, same hardware. Skipped tuned-Docling
+(proven no-op in B1).
+
+| | Marker | Docling default |
+|---|---|---|
+| **median** | **8.4 s** | **9.5 s** (+13%) |
+| mean | 13.9 s | 35.7 s |
+
+The median speed gap is ~13%, not the 2x reported from the n=3
+sample. The 2x was an artifact of Chua 1971 being formula-dense
+(Granite-Docling runs per-formula); the median paper isn't formula-
+dense and the gap collapses. The mean is dragged by cold-start +
+the same formula-dense outlier (one paper at 318 s, the rest at
+8-15 s).
+
+**Verdict updated**: the speed cost of Docling-as-default is
+effectively a wash. Combined with the structural-formula extraction
+win (cleaner LaTeX, drives Stage 5 quality up), the default flip
+is now well-justified. Stage B2 ships.
