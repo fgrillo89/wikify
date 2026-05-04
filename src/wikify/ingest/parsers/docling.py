@@ -295,12 +295,15 @@ def parse(
     images = _extract_images(doc)
     sections = section_spans(md_text)
 
-    title = metadata.get("title") or path.stem
+    # Pull structural formulas straight from the DoclingDocument.
+    # ``effective_opts.formulas`` controls whether the Granite-Docling
+    # head ran; if it didn't, ``extract_formulas`` returns an empty
+    # list and the markdown-regex extractor in ``ingest.equations``
+    # is the only source -- same behaviour as a Marker-parsed doc.
+    if effective_opts.formulas:
+        metadata["_docling_formulas"] = extract_formulas(doc)
 
-    # The unified pipeline chunker (HybridChunker on saved markdown)
-    # ignores any ``_docling_chunks`` payload, so building one here is
-    # wasted work. Skip the call entirely; the markdown carries enough
-    # structure for the downstream chunker to recover.
+    title = metadata.get("title") or path.stem
 
     return ParseResult(
         markdown=md_text,

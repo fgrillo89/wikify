@@ -231,7 +231,13 @@ def _parse_and_persist_worker(
 
     # Equations + figure refs. Equation binding goes through text-match
     # because HybridChunker chunks carry only best-effort char_span.
-    equations = extract_equations(parsed.markdown)
+    # When the parser is Docling and the Granite-Docling formula head
+    # ran, ``parsed.metadata['_docling_formulas']`` carries structural
+    # FormulaItem records (clean LaTeX). Merge those over the markdown
+    # regex output so we keep both sources without double-counting.
+    docling_formulas = parsed.metadata.pop("_docling_formulas", None) or []
+    md_equations = extract_equations(parsed.markdown)
+    equations = _merge_equation_sources(docling_formulas, md_equations)
     figure_refs = extract_figure_refs(parsed.markdown)
     bind_equations_to_chunks(chunks, equations, use_text_match=True)
 
@@ -327,6 +333,28 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
             offset = end
             ord_ += 1
     return chunks
+
+
+def _merge_equation_sources(
+    docling: list[dict], md: list[dict],
+) -> list[dict]:
+    """Combine FormulaItem records with markdown-regex extraction.
+
+    Dedupe key is the equation id (sha1 of normalised latex), so a
+    formula picked up by both sources counts once. Docling records
+    take precedence on collision because their LaTeX is decoded by
+    Granite-Docling rather than emitted by Marker's heuristics.
+    """
+    by_id: dict[str, dict] = {}
+    for rec in docling:
+        rid = rec.get("id")
+        if rid:
+            by_id[rid] = rec
+    for rec in md:
+        rid = rec.get("id")
+        if rid and rid not in by_id:
+            by_id[rid] = rec
+    return list(by_id.values())
 
 
 def bind_equations_to_chunks(

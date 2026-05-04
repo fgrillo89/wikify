@@ -206,7 +206,16 @@ parser issue (Marker) or a stripper issue (us).
 **Blast radius**: `parsers/_sections.py`, possibly a new
 `tests/wikify/parsers/` fixture per failure mode discovered.
 
-### Stage 5: equations index repair
+### Stage 5: equations index repair (parser-agnostic)
+
+**Note**: this fix must work for both Marker (regex over markdown)
+and Docling (`FormulaItem` extraction via
+`parsers.docling.extract_formulas`). The bug is in the indexer /
+merger, not in the per-parser extraction. Whatever parser produces
+the equations, ``equations.json`` must end up populated and the
+``corpus_traverse(chunk:..., to="equations")`` path must return rows.
+
+
 
 **What**: the per-chunk `equation_ids` are populated (786 chunks)
 but `equations.json` is empty (0 records). The merge step is broken
