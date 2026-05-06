@@ -11,21 +11,18 @@ corpus).
 """
 
 import hashlib
-import json
 import os
 import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from wikify.corpus.chunks import write_document
+from wikify.corpus.chunks import write_document_markdown
 from wikify.corpus.doc_markdown import write_doc_markdown
 from wikify.corpus.vectors import VectorStore
-from wikify.corpus.vectors_meta import VectorsMeta
-from wikify.corpus.vectors_meta import write_meta as write_vectors_meta
 
 from ..api import Corpus
 from ..embedding import embed_passages
@@ -60,10 +57,13 @@ def _timed(timings: dict[str, float], label: str):
 
 @dataclass
 class FileReceipt:
-    """Lightweight result from a parse+persist worker.
+    """Result from a parse+persist worker.
 
-    Only carries identifiers and stats -- the full document, markdown,
-    and chunks are already persisted to disk.
+    Carries the freshly-built ``doc`` / ``chunks`` / ``markdown`` so
+    the ingest orchestrator can project them into ``wikify.db`` in a
+    single transaction. Recovered receipts (from a crashed prior run)
+    leave those fields as ``None``; the orchestrator skips re-projection
+    for those because the SQLite rows are already on disk.
     """
 
     src_path: str
@@ -71,6 +71,9 @@ class FileReceipt:
     n_chunks: int
     declared_keywords: list[str]
     parse_seconds: float
+    doc: Document | None = None
+    chunks: list[Chunk] | None = field(default=None)
+    markdown: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +230,15 @@ def _parse_and_persist_worker(
     # Chunks: HybridChunker runs uniformly on every parser's markdown.
     # Drop any legacy Docling-direct payload; the chunker re-derives
     # structure by feeding the markdown back through DocumentConverter.
+    # When the Docling parser ran, it just wrote the source
+    # ``DoclingDocument`` JSON at ``doc_cache_path``; pass that through
+    # so the chunker loads it instead of building a second
+    # ``DocumentConverter`` and re-parsing the markdown from scratch.
     parsed.metadata.pop("_docling_chunks", None)
-    chunks = chunk_with_hybrid(did, parsed.markdown)
+    chunks = chunk_with_hybrid(
+        did, parsed.markdown,
+        cached_doc_path=doc_cache_path if doc_cache_path.is_file() else None,
+    )
     chunks += caption_chunks_for(did, parsed.images, ord_offset=len(chunks))
 
     # Equations + figure refs. Equation binding goes through text-match
@@ -238,7 +248,17 @@ def _parse_and_persist_worker(
     # FormulaItem records (clean LaTeX). Merge those over the markdown
     # regex output so we keep both sources without double-counting.
     docling_formulas = parsed.metadata.pop("_docling_formulas", None) or []
-    md_equations = extract_equations(parsed.markdown)
+    # When Docling's formula head ran, structural FormulaItems already
+    # cover display + inline math at higher LaTeX quality than regex
+    # extraction. Restrict the markdown pass to the categories Docling
+    # does NOT surface as FormulaItems (chemical equations, unicode
+    # math, named equations, image-equation placeholders) so we don't
+    # duplicate work or pollute the index with regex re-derivations.
+    if docling_formulas:
+        md_equation_kinds = {"chemical", "unicode", "named", "image"}
+    else:
+        md_equation_kinds = None
+    md_equations = extract_equations(parsed.markdown, kinds=md_equation_kinds)
     equations = _merge_equation_sources(docling_formulas, md_equations)
     figure_refs = extract_figure_refs(parsed.markdown)
     bind_equations_to_chunks(chunks, equations, use_text_match=True)
@@ -267,8 +287,9 @@ def _parse_and_persist_worker(
         figure_refs=list(figure_refs),
     )
 
-    # Persist atomically
-    write_document(paths, doc, parsed.markdown, chunks)
+    # Persist the markdown body. Document + chunk rows go into wikify.db
+    # in pass 3's batch transaction.
+    write_document_markdown(paths, did, parsed.markdown)
 
     # Declared keywords for topic extraction
     kw = parsed.metadata.get("keywords")
@@ -281,6 +302,9 @@ def _parse_and_persist_worker(
         n_chunks=len(chunks),
         declared_keywords=declared,
         parse_seconds=elapsed,
+        doc=doc,
+        chunks=chunks,
+        markdown=parsed.markdown,
     )
 
 
@@ -385,6 +409,7 @@ def bind_equations_to_chunks(
         def _compact(s: str) -> str:
             return re.sub(r"\s+", "", s.lower())
 
+        compact_chunks = [(c, _compact(c.text)) for c in body_chunks]
         for eq in equations:
             latex = eq.get("latex", "")
             context = eq.get("context", "")
@@ -394,8 +419,8 @@ def bind_equations_to_chunks(
                 needle = _compact(context[:40])
             if not needle:
                 continue
-            for c in body_chunks:
-                if needle in _compact(c.text):
+            for c, compact_text in compact_chunks:
+                if needle in compact_text:
                     c.equation_ids.append(eq["id"])
                     break
     else:
@@ -435,20 +460,19 @@ def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
 # ---------------------------------------------------------------------------
 
 def _derived_artifacts_missing(paths: Corpus) -> bool:
-    """True if the corpus has docs but is missing key derived artifacts.
+    """True if the corpus has docs in the store but is missing derived artifacts.
 
     Catches the case where ingest completed but refresh crashed or was
     skipped -- re-running ``ingest`` should detect this and run refresh.
+    Today the only persistent store is ``wikify.db``; once a corpus
+    has any markdown but no DB, refresh has not run.
     """
-    has_docs = paths.docs_dir.exists() and any(paths.docs_dir.iterdir())
-    if not has_docs:
+    if not paths.markdown_dir.exists():
         return False
-    # Cheapest-to-verify derived artifacts: wikify.db is the source of
-    # truth for chunks/vectors/edges; topics.json is still on disk.
-    return (
-        not paths.sqlite_path.exists()
-        or not (paths.root / "topics.json").exists()
-    )
+    has_md = any(paths.markdown_dir.glob("*.md"))
+    if not has_md:
+        return False
+    return not paths.sqlite_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -461,32 +485,66 @@ def _recover_completed(
 ) -> tuple[list[Path], list[FileReceipt]]:
     """Split sources into (still_to_parse, already_done).
 
-    If a prior ingest crashed after persisting some files but before
-    saving the manifest, the doc JSON + chunks JSONL will be on disk
-    without a manifest entry. We detect those and build synthetic
-    receipts so they aren't re-parsed.
+    If a prior ingest crashed after projecting some files into the
+    SQLite store but before saving the manifest, those rows are still
+    in ``wikify.db`` and the markdown sidecar still exists. We detect
+    them by joining ``documents`` + the markdown file presence and
+    build synthetic receipts so they aren't re-parsed. Recovered
+    receipts carry ``doc=None`` / ``chunks=None`` so the orchestrator
+    skips re-projection (the rows are already in place).
     """
+    import sqlite3
+
     still: list[Path] = []
     recovered: list[FileReceipt] = []
 
-    for src in sources:
-        did = doc_id_for(src)
-        doc_json = paths.docs_dir / f"{did}.json"
-        chunks_jsonl = paths.chunks_dir / f"{did}.jsonl"
-        md_file = paths.markdown_dir / f"{did}.md"
+    con: sqlite3.Connection | None = None
+    if paths.sqlite_path.exists():
+        con = sqlite3.connect(paths.sqlite_path)
 
-        if doc_json.exists() and chunks_jsonl.exists() and md_file.exists():
-            # All three artifacts present -- build a synthetic receipt.
-            chunk_ids = _read_chunk_ids(paths, did)
-            # Read declared keywords from the persisted doc JSON.
+    try:
+        for src in sources:
+            did = doc_id_for(src)
+            md_file = paths.markdown_dir / f"{did}.md"
+            row = None
+            if con is not None:
+                row = con.execute(
+                    "SELECT metadata_json, title FROM documents WHERE doc_id=?",
+                    (did,),
+                ).fetchone()
+            if not (row and md_file.exists()):
+                still.append(src)
+                continue
+
+            # Pass 3 commits docs+chunks before pass 4 fuses metadata.
+            # If a prior run crashed in that window the row is real but
+            # carries placeholder metadata. Send those back through full
+            # re-parse so pass 4 runs and the title/authors/year actually
+            # land. A non-placeholder row is one with real metadata keys
+            # OR a non-stem title (pass 3 leaves title=src.stem).
+            metadata_raw, title = row[0], row[1] or ""
             kw: list[str] = []
-            try:
-                doc_data = json.loads(doc_json.read_text(encoding="utf-8"))
-                meta_kw = (doc_data.get("metadata") or {}).get("keywords")
-                if isinstance(meta_kw, list):
-                    kw = meta_kw
-            except Exception:  # noqa: BLE001
-                pass
+            looks_placeholder = title == src.stem
+            if metadata_raw:
+                try:
+                    import json as _json
+                    meta_data = _json.loads(metadata_raw)
+                    meta_kw = meta_data.get("keywords")
+                    if isinstance(meta_kw, list):
+                        kw = meta_kw
+                    if any(
+                        k for k in ("title", "authors", "year", "doi")
+                        if meta_data.get(k)
+                    ):
+                        looks_placeholder = False
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if src.suffix.lower() == ".pdf" and looks_placeholder:
+                still.append(src)
+                continue
+
+            chunk_ids = _read_chunk_ids(paths, did)
             recovered.append(FileReceipt(
                 src_path=str(src),
                 doc_id=did,
@@ -494,8 +552,9 @@ def _recover_completed(
                 declared_keywords=kw,
                 parse_seconds=0.0,
             ))
-        else:
-            still.append(src)
+    finally:
+        if con is not None:
+            con.close()
 
     if recovered:
         print(
@@ -649,11 +708,7 @@ def _embed_chunks_incremental(
     # Check embedder fingerprint: skip reuse if backend/model/dim changed.
     backend = current_backend()
     embedder_changed = False
-    # vectors.meta.json sits alongside vectors.npz; the .npz itself is no
-    # longer written but the small JSON sidecar still records the
-    # embedder fingerprint for incremental decisions.
-    from wikify.corpus.vectors_meta import meta_path_for
-    old_meta = read_meta(paths.vectors_path) if meta_path_for(paths.vectors_path).exists() else None
+    old_meta = read_meta(paths.sqlite_path)
     if old_meta is not None:
         cur_fp = _embedder_fingerprint(backend)
         old_fp = f"{old_meta.backend}:{old_meta.model}:{old_meta.dim}"
@@ -665,12 +720,10 @@ def _embed_chunks_incremental(
                 file=sys.stderr,
             )
 
-    # Try to load existing vectors for reuse from the SQLite store
-    # (the .npz is no longer written).
+    # Try to load existing vectors for reuse from the SQLite store.
     reusable: dict[str, np.ndarray] = {}
     if (
         not embedder_changed
-        and stale_doc_ids != target_set
         and paths.sqlite_path.exists()
     ):
         old_store = _vector_store_from_sqlite(paths.sqlite_path)
@@ -710,16 +763,6 @@ def _embed_chunks_incremental(
         f"vector/chunk mismatch: {len(store.ids)} vectors, "
         f"{len(target_set)} chunks"
     )
-
-    # Vectors live in `wikify.db` (Wave G writes them). We still write
-    # the small vectors.meta.json sidecar so the embedder fingerprint
-    # check on the next ingest can decide whether to reuse vectors.
-    meta = VectorsMeta(
-        backend=str(backend["backend"]),
-        dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend.get("dim") or 0),
-        model=backend.get("model"),  # type: ignore[arg-type]
-    )
-    write_vectors_meta(paths.vectors_path, meta)
     return store
 
 
@@ -734,6 +777,10 @@ def _compute_doc_similarity(
 ) -> None:
     """Fill in ``similar_to`` for every doc using embedding cosine."""
     import numpy as np
+
+    doc_by_id = {doc.id: doc for doc in docs}
+    for doc in docs:
+        doc.similar_to = []
 
     chunk_by_id = {cid: i for i, cid in enumerate(store.ids)}
     matrix = store.matrix
@@ -760,10 +807,9 @@ def _compute_doc_similarity(
             ]
             ranked.sort(key=lambda x: (-x[0], x[1]))
             top = [other for _, other in ranked[:5]]
-            for doc in docs:
-                if doc.id == d_id:
-                    doc.similar_to = top
-                    break
+            doc = doc_by_id.get(d_id)
+            if doc is not None:
+                doc.similar_to = top
 
 
 def _resolve_citations(docs: list[Document]) -> None:
@@ -849,19 +895,50 @@ def _resave_docs(
     paths: Corpus,
     docs: list[Document],
 ) -> None:
-    from wikify.corpus.chunks import _doc_to_dict, atomic_write_text
+    from wikify.corpus.store import Store, transaction
 
-    for doc in docs:
-        atomic_write_text(
-            paths.docs_dir / f"{doc.id}.json",
-            json.dumps(_doc_to_dict(doc)),
+    store = Store(paths.sqlite_path)
+    try:
+        with transaction(store.con):
+            for doc in docs:
+                store.upsert_document(doc)
+                _refresh_doc_edges(store.con, doc)
+        for doc in docs:
+            md_path = paths.markdown_dir / f"{doc.id}.md"
+            if md_path.exists():
+                body = _read_body_from_doc_markdown(md_path)
+            else:
+                body = ""
+            write_doc_markdown(paths, doc, body)
+    finally:
+        store.close()
+
+
+def _refresh_doc_edges(con, doc: Document) -> None:
+    """Project doc.similar_to and doc.cites_same into ``graph_edges``.
+
+    `cites` already lives in graph_edges (kind='references'), populated
+    by Wave D's bibliography pass. The similarity wave (and any
+    cites_same enrichment) only land on the Document dataclass; this
+    helper persists them so SQLite-only readers can recover them.
+    """
+    for kind, targets in (
+        ("similar", list(doc.similar_to or [])),
+        ("cites_same", list(doc.cites_same or [])),
+    ):
+        con.execute(
+            "DELETE FROM graph_edges WHERE src_type='document' AND src_id=? "
+            "AND kind=? AND dst_type='document'",
+            (doc.id, kind),
         )
-        md_path = paths.markdown_dir / f"{doc.id}.md"
-        if md_path.exists():
-            body = _read_body_from_doc_markdown(md_path)
-        else:
-            body = ""
-        write_doc_markdown(paths, doc, body)
+        if not targets:
+            continue
+        con.executemany(
+            "INSERT OR IGNORE INTO graph_edges("
+            "src_type, src_id, kind, dst_type, dst_id, ord) "
+            "VALUES ('document', ?, ?, 'document', ?, ?)",
+            [(doc.id, kind, t, i) for i, t in enumerate(targets)],
+        )
 
 
 def _read_body_from_doc_markdown(md_path: Path) -> str:
@@ -1057,15 +1134,34 @@ def _identify_stale_docs(
 
 
 def _read_chunk_ids(paths: Corpus, doc_id: str) -> list[str]:
-    """Read just the chunk ids from a persisted JSONL file (no text loaded)."""
-    p = paths.chunks_dir / f"{doc_id}.jsonl"
-    if not p.exists():
+    """Return the chunk ids for *doc_id* from the SQLite store."""
+    if not paths.sqlite_path.exists():
         return []
-    ids: list[str] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            ids.append(json.loads(line)["id"])
-    return ids
+    import sqlite3
+
+    con = sqlite3.connect(paths.sqlite_path)
+    try:
+        rows = con.execute(
+            "SELECT chunk_id FROM chunks WHERE doc_id=? ORDER BY ord",
+            (doc_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    return [str(r[0]) for r in rows]
+
+
+def _doc_ids_in_store(paths: Corpus) -> set[str]:
+    if not paths.sqlite_path.exists():
+        return set()
+    import sqlite3
+
+    con = sqlite3.connect(paths.sqlite_path)
+    try:
+        return {
+            str(r[0]) for r in con.execute("SELECT doc_id FROM documents")
+        }
+    finally:
+        con.close()
 
 
 def _update_manifest(
@@ -1096,9 +1192,10 @@ def _update_manifest(
 
     # Register dedup aliases only if the target doc_id actually exists.
     persisted_doc_ids = {r.doc_id for r in receipts}
+    target_in_store = _doc_ids_in_store(paths)
     for alias_sid, alias_h, alias_did in dedup_aliases:
-        target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
-        if alias_did not in persisted_doc_ids and not target_on_disk:
+        target_present = alias_did in target_in_store
+        if alias_did not in persisted_doc_ids and not target_present:
             print(
                 f"  [alias-skipped] {alias_sid}: target {alias_did} "
                 f"not on disk (canonical parse may have failed)",
@@ -1349,28 +1446,40 @@ def ingest_corpus(
 def _remove_doc_artifacts(paths: Corpus, doc_ids: set[str]) -> None:
     """Physically delete corpus artifacts for the given doc_ids.
 
-    Removes doc JSON, chunks JSONL, markdown, and image directories
-    whose sidecars belong exclusively to stale doc_ids.
+    Drops the SQLite document rows (FK cascade clears chunks / bibs /
+    assets / chunk_citations / chunk_assets), removes the markdown
+    sidecar, and deletes the image folder when every image inside
+    belongs to a stale doc_id.
     """
     import shutil
 
-    for did in doc_ids:
-        doc_json = paths.docs_dir / f"{did}.json"
-        if doc_json.exists():
-            doc_json.unlink()
-        chunk_jsonl = paths.chunks_dir / f"{did}.jsonl"
-        if chunk_jsonl.exists():
-            chunk_jsonl.unlink()
-        md_file = paths.markdown_dir / f"{did}.md"
-        if md_file.exists():
-            md_file.unlink()
-        # Image dir uses image_slug(doc_id) -- try direct match first.
-        img_dir = paths.images_dir / image_slug(did)
-        if img_dir.is_dir():
-            shutil.rmtree(img_dir)
+    from wikify.corpus.store import Store
+
+    store: Store | None = None
+    if paths.sqlite_path.exists():
+        store = Store(paths.sqlite_path)
+    try:
+        for did in doc_ids:
+            if store is not None:
+                store.delete_document(did)
+            md_file = paths.markdown_dir / f"{did}.md"
+            if md_file.exists():
+                md_file.unlink()
+            doc_cache = paths.root / "derived" / "doclingdoc" / f"{did}.json"
+            if doc_cache.is_file():
+                doc_cache.unlink()
+            # Image dir uses image_slug(doc_id) -- try direct match first.
+            img_dir = paths.images_dir / image_slug(did)
+            if img_dir.is_dir():
+                shutil.rmtree(img_dir)
+    finally:
+        if store is not None:
+            store.close()
     # Fallback: walk remaining image dirs and check sidecar doc_ids.
     # Catches dirs created by older ingest runs that used stem-based slugs.
     if paths.images_dir.exists():
+        import json as _json
+
         for img_dir in paths.images_dir.iterdir():
             if not img_dir.is_dir():
                 continue
@@ -1382,7 +1491,7 @@ def _remove_doc_artifacts(paths: Corpus, doc_ids: set[str]) -> None:
             all_stale = True
             for sc in sidecars:
                 try:
-                    data = json.loads(sc.read_text(encoding="utf-8"))
+                    data = _json.loads(sc.read_text(encoding="utf-8"))
                     img_id = data.get("id", "")
                     img_did = img_id.split("/", 1)[0] if "/" in img_id else ""
                     if img_did and img_did not in doc_ids:

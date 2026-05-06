@@ -56,10 +56,9 @@ class DocSection:
 class Document:
     """A parsed source document.
 
-    A Document is the file-level handle. Its canonical content lives on
-    disk (`markdown_path`, `image_dir`); the fields here are the small
-    structural index built once at ingest and cached in
-    `corpus/docs/{id}.json`.
+    A Document is the file-level handle. Its parsed body lives on disk
+    (`markdown_path`, `image_dir`); the structural index here is
+    persisted in the SQLite store at `corpus/wikify.db`.
 
     Helpers on top of this (see ``corpus/chunks.py``,
     ``corpus/doc_markdown.py``) provide ``read_chunks(corpus, doc_id)``,

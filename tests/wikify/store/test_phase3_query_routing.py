@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from wikify.corpus import queries
+from wikify.corpus.chunks import all_chunks, list_documents, read_chunks
 from wikify.ingest.pipeline import ingest_corpus
 
 _FILLER = " ".join(["word"] * 30)
@@ -78,3 +79,26 @@ def test_lexical_rank_without_wikify_db_raises(tmp_path):
     with pytest.raises(queries.QueryError) as exc:
         queries.find(corpus, query="x", by="chunk", rank="bm25", top_k=5)
     assert exc.value.code == "no_wikify_db"
+
+
+def test_query_paths_only_need_wikify_db(small_corpus):
+    """Reading docs/chunks goes exclusively through wikify.db."""
+    docs = list_documents(small_corpus)
+    chunks = all_chunks(small_corpus)
+    assert len(docs) == 2
+    assert chunks
+    assert read_chunks(small_corpus, docs[0].id)
+
+    by_chunk = queries.find(
+        small_corpus, query="titanium dioxide", by="chunk", rank="bm25", top_k=5,
+    )
+    assert by_chunk["rows"]
+
+    by_paper = queries.find(
+        small_corpus, query="atomic layer deposition", by="paper",
+        rank="bm25", top_k=5,
+    )
+    assert by_paper["rows"]
+
+    section_index = queries.doc_section_index(small_corpus, docs[0].id)
+    assert section_index

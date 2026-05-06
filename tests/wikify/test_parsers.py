@@ -30,3 +30,10 @@ def test_parser_round_trip(name, min_sections):
     assert isinstance(result.metadata, dict)
     # images list is a list of DocImage (possibly empty)
     assert isinstance(result.images, list)
+
+
+def test_pdf_ocr_fallback_prefers_more_usable_text():
+    from wikify.ingest.parsers.pdf import _better_markdown
+
+    assert _better_markdown("x", "usable fallback text 123") == "usable fallback text 123"
+    assert _better_markdown("usable OCR text 123", "") == "usable OCR text 123"

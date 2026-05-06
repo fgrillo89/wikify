@@ -128,11 +128,11 @@ def _emit_chunk_reads(
 
 
 def _looks_like_corpus(path: Path) -> bool:
-    """Heuristic: a directory with ``manifest.json`` and ``docs/`` is a corpus."""
+    """Heuristic: a directory with ``manifest.json`` and ``wikify.db`` is a corpus."""
     return (
         path.is_dir()
         and (path / "manifest.json").is_file()
-        and (path / "docs").is_dir()
+        and (path / "wikify.db").is_file()
     )
 
 
@@ -179,7 +179,7 @@ def _resolve_corpus(corpus_flag: Path | None) -> Corpus:
         message=(
             "no corpus resolved. Pass --corpus <path>, set WIKIFY_CORPUS, "
             "or run from inside a corpus directory (one containing "
-            "manifest.json and docs/)."
+            "manifest.json and wikify.db)."
         ),
     )
 
@@ -280,11 +280,11 @@ def cmd_rechunk(
     from ..ingest.rechunk import rechunk_corpus
 
     paths = Corpus(root=corpus_dir)
-    if not paths.docs_dir.exists():
+    if not paths.sqlite_path.exists():
         cli_error(
             EXIT_VALIDATION,
             error="not_a_corpus",
-            message=f"{corpus_dir} has no docs/ directory",
+            message=f"{corpus_dir} has no wikify.db",
         )
     summary = rechunk_corpus(
         paths,

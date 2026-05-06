@@ -255,7 +255,11 @@ def _is_real_equation(latex: str, *, kind: str) -> bool:
 # -- main extractor -------------------------------------------------------
 
 
-def extract_equations(md_text: str) -> list[dict]:
+def extract_equations(
+    md_text: str,
+    *,
+    kinds: set[str] | None = None,
+) -> list[dict]:
     """Extract mathematical and chemical equations from markdown text.
 
     Returns a list of dicts, deduplicated by ``id``. Order is:
@@ -263,9 +267,17 @@ def extract_equations(md_text: str) -> list[dict]:
     image-equation placeholders → named equations. ``char_offset`` is
     the byte offset of the first character of the match in ``md_text``,
     which the caller uses to bind equations to chunks.
+
+    ``kinds`` (default: all) restricts which extraction passes run.
+    Pass e.g. ``{"chemical","unicode","named","image"}`` when Docling's
+    structural FormulaItem extractor has already covered display +
+    inline math, so the markdown regex pass doesn't redo that work.
     """
     if not md_text:
         return []
+    allowed = kinds if kinds is not None else {
+        "display", "inline", "chemical", "unicode", "image", "named",
+    }
 
     out: list[dict] = []
     seen_ids: set[str] = set()
@@ -292,39 +304,45 @@ def extract_equations(md_text: str) -> list[dict]:
         )
 
     # 1. Display math
-    for pattern in _DISPLAY_MATH_PATTERNS:
-        for m in pattern.finditer(md_text):
-            label = _find_label_near(md_text, m.start(), m.end())
-            _push(m.group(1), "display", m.start(), m.end(), label)
+    if "display" in allowed:
+        for pattern in _DISPLAY_MATH_PATTERNS:
+            for m in pattern.finditer(md_text):
+                label = _find_label_near(md_text, m.start(), m.end())
+                _push(m.group(1), "display", m.start(), m.end(), label)
 
     # 2. Inline math
-    for m in _INLINE_MATH_RE.finditer(md_text):
-        _push(m.group(1), "inline", m.start(), m.end())
+    if "inline" in allowed:
+        for m in _INLINE_MATH_RE.finditer(md_text):
+            _push(m.group(1), "inline", m.start(), m.end())
 
-    # 3. Chemical equations (arrow-separated reactants→products)
-    for m in _CHEM_EQUATION_RE.finditer(md_text):
-        label = _find_label_near(md_text, m.start(), m.end())
-        _push(m.group(0), "chemical", m.start(), m.end(), label)
+    # 3. Chemical equations (arrow-separated reactants->products)
+    if "chemical" in allowed:
+        for m in _CHEM_EQUATION_RE.finditer(md_text):
+            label = _find_label_near(md_text, m.start(), m.end())
+            _push(m.group(0), "chemical", m.start(), m.end(), label)
 
     # 4. Unicode / plain-text math without LaTeX delimiters
-    for m in _UNICODE_EQUATION_RE.finditer(md_text):
-        text = m.group(1).strip().rstrip(".")
-        if len(text) < 3 or not _is_plausible_equation(text):
-            continue
-        _push(text, "unicode", m.start(), m.end())
+    if "unicode" in allowed:
+        for m in _UNICODE_EQUATION_RE.finditer(md_text):
+            text = m.group(1).strip().rstrip(".")
+            if len(text) < 3 or not _is_plausible_equation(text):
+                continue
+            _push(text, "unicode", m.start(), m.end())
 
     # 5. Picture-omitted placeholders near equation-context prose
-    for m in _PICTURE_OMITTED_RE.finditer(md_text):
-        region_start = max(0, m.start() - 300)
-        region_end = min(len(md_text), m.end() + 300)
-        if not _EQUATION_CONTEXT_RE.search(md_text[region_start:region_end]):
-            continue
-        _push("[image equation]", "image", m.start(), m.end(),
-              _find_label_near(md_text, m.start(), m.end()))
+    if "image" in allowed:
+        for m in _PICTURE_OMITTED_RE.finditer(md_text):
+            region_start = max(0, m.start() - 300)
+            region_end = min(len(md_text), m.end() + 300)
+            if not _EQUATION_CONTEXT_RE.search(md_text[region_start:region_end]):
+                continue
+            _push("[image equation]", "image", m.start(), m.end(),
+                  _find_label_near(md_text, m.start(), m.end()))
 
     # 6. Named equations (e.g. "Fick's second law", "Ohm's law")
     seen_names: set[str] = set()
-    for m in _NAMED_EQUATION_RE.finditer(md_text):
+    named_iter = _NAMED_EQUATION_RE.finditer(md_text) if "named" in allowed else iter([])
+    for m in named_iter:
         name_part = m.group(1).rstrip("'s\u2019").lower()
         if name_part in _NAMED_EQUATION_EXCLUDE:
             continue

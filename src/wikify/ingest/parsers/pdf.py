@@ -25,7 +25,6 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     direct ``parse_file`` callers and the ``reassemble_metadata`` script.
     """
     import fitz  # pymupdf
-    import pymupdf4llm
 
     # Use the layout engine with running-header + running-footer suppression
     # on. pymupdf4llm >=1.27 routes to ``_layout_to_markdown`` by default and
@@ -37,15 +36,7 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     # stray equation/symbol noise in papers.
     md_text: str = ""
     try:
-        md_text = str(
-            pymupdf4llm.to_markdown(
-                str(path),
-                use_ocr=False,
-                header=False,
-                footer=False,
-                ignore_code=True,
-            )
-        )
+        md_text = _to_markdown(path, use_ocr=False)
     except Exception:
         md_text = ""
 
@@ -53,22 +44,19 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     try:
         action = _classify_pdf_text(md_text, doc)
         if action == "ocr":
+            fallback_md = _fitz_fallback_markdown(doc)
             try:
-                md_text = str(
-                    pymupdf4llm.to_markdown(
-                        str(path),
-                        use_ocr=True,
-                        force_ocr=True,
-                        ocr_language="eng",
-                        header=False,
-                        footer=False,
-                        ignore_code=True,
-                    )
-                )
+                ocr_md = _to_markdown(path, use_ocr=True)
             except Exception:
-                md_text = _fitz_fallback_markdown(doc)
+                ocr_md = ""
+            md_text = _better_markdown(ocr_md, fallback_md)
         elif action == "fitz_fallback":
-            md_text = _fitz_fallback_markdown(doc)
+            fallback_md = _fitz_fallback_markdown(doc)
+            try:
+                ocr_md = _to_markdown(path, use_ocr=True)
+            except Exception:
+                ocr_md = ""
+            md_text = _better_markdown(ocr_md, fallback_md)
 
         md_text = _strip_pdf_artifacts(md_text)
         md_text = clean_markdown_text(md_text)
@@ -108,6 +96,25 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
 # --- classification + fallbacks -----------------------------------------
 
 
+def _to_markdown(path: Path, *, use_ocr: bool) -> str:
+    import pymupdf4llm
+
+    kwargs = {}
+    if use_ocr:
+        kwargs["ocr_language"] = "eng"
+    return str(
+        pymupdf4llm.to_markdown(
+            str(path),
+            use_ocr=use_ocr,
+            force_ocr=use_ocr,
+            header=False,
+            footer=False,
+            ignore_code=True,
+            **kwargs,
+        )
+    )
+
+
 def _classify_pdf_text(md_text: str, doc) -> str:
     if len(md_text) == 0:
         return "ocr"
@@ -122,6 +129,13 @@ def _classify_pdf_text(md_text: str, doc) -> str:
     if alphanumeric < 500:
         return "ocr"
     return "fitz_fallback"
+
+
+def _better_markdown(first: str, second: str) -> str:
+    """Choose the parse with more usable alphanumeric content."""
+    first_alnum = sum(1 for c in first if c.isalnum())
+    second_alnum = sum(1 for c in second if c.isalnum())
+    return first if first_alnum > second_alnum else second
 
 
 def _fitz_fallback_markdown(doc) -> str:

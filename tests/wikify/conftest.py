@@ -13,9 +13,42 @@ Tests that genuinely need a real embedder must override
 inside the test body.
 """
 
+from __future__ import annotations
+
 import pytest
+
+from wikify.api import Corpus
+from wikify.corpus.store import Store, transaction
+from wikify.corpus.store.sync import project_documents
+from wikify.models import Chunk, Document
 
 
 @pytest.fixture(autouse=True)
 def _pin_embedder_to_hash(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WIKIFY_EMBEDDER", "hash")
+
+
+@pytest.fixture
+def make_sqlite_corpus(tmp_path):
+    """Build a SQLite-only corpus from a list of (Document, [Chunk]) pairs."""
+
+    counter = {"n": 0}
+
+    def _make(docs_chunks: list[tuple[Document, list[Chunk]]]) -> Corpus:
+        counter["n"] += 1
+        slug = "corpus" if counter["n"] == 1 else f"corpus_{counter['n']}"
+        corpus = Corpus(root=tmp_path / slug)
+        corpus.ensure()
+        store = Store(corpus.sqlite_path)
+        try:
+            with transaction(store.con):
+                by_doc = {d.id: list(ch) for d, ch in docs_chunks}
+                project_documents(
+                    store, [d for d, _ in docs_chunks], by_doc,
+                )
+            store.fts_rebuild()
+        finally:
+            store.close()
+        return corpus
+
+    return _make

@@ -1,7 +1,5 @@
 """Tests for ingest/bibtex.py."""
 
-import json
-
 import bibtexparser
 
 from wikify.api import Corpus
@@ -163,7 +161,7 @@ def test_write_corpus_bibliography_writes_reference_artifacts(tmp_path):
 
     assert paths["library"].exists()
     assert paths["references"].exists()
-    assert paths["citation_index"].exists()
+    assert "index" in paths
 
     references = bibtexparser.loads(
         corpus.references_bib_path.read_text(encoding="utf-8"),
@@ -171,9 +169,7 @@ def test_write_corpus_bibliography_writes_reference_artifacts(tmp_path):
     assert len(references.entries) == 1
     assert references.entries[0]["doi"] == "10.5555/ref"
 
-    index = json.loads(
-        corpus.citation_index_path.read_text(encoding="utf-8"),
-    )
+    index = paths["index"]
     ref_key = next(
         k for k, e in index["entries"].items() if e["kind"] == "reference"
     )
@@ -197,10 +193,8 @@ def test_citation_index_links_reference_to_source_doc_when_doi_matches(
     ]
 
     corpus = Corpus(root=tmp_path / "corpus")
-    write_corpus_bibliography(corpus, [source, citing])
-    index = json.loads(
-        corpus.citation_index_path.read_text(encoding="utf-8"),
-    )
+    result = write_corpus_bibliography(corpus, [source, citing])
+    index = result["index"]
 
     source_key = index["doc_bibkeys"]["source_1"]
     assert index["doc_citations"]["citing_1"] == [source_key]
@@ -222,16 +216,14 @@ def test_unresolved_citations_are_in_index_but_not_in_bib(tmp_path):
     ]
 
     corpus = Corpus(root=tmp_path / "corpus")
-    write_corpus_bibliography(corpus, [doc])
+    result = write_corpus_bibliography(corpus, [doc])
 
     references = bibtexparser.loads(
         corpus.references_bib_path.read_text(encoding="utf-8"),
     )
     assert references.entries == []
 
-    index = json.loads(
-        corpus.citation_index_path.read_text(encoding="utf-8"),
-    )
+    index = result["index"]
     unresolved = [
         e for e in index["entries"].values() if e["kind"] == "unresolved"
     ]
@@ -284,7 +276,7 @@ def test_bibliography_preserves_balanced_paren_doi(tmp_path):
     ]
 
     corpus = Corpus(root=tmp_path / "corpus")
-    write_corpus_bibliography(corpus, [doc])
+    result = write_corpus_bibliography(corpus, [doc])
 
     references = bibtexparser.loads(
         corpus.references_bib_path.read_text(encoding="utf-8"),
@@ -292,9 +284,7 @@ def test_bibliography_preserves_balanced_paren_doi(tmp_path):
     assert len(references.entries) == 1
     assert references.entries[0]["doi"] == "10.1016/S0893-6080(97)00011-7"
 
-    index = json.loads(
-        corpus.citation_index_path.read_text(encoding="utf-8"),
-    )
+    index = result["index"]
     ref_keys = [k for k, e in index["entries"].items() if e["kind"] == "reference"]
     assert len(ref_keys) == 1
     assert index["entries"][ref_keys[0]]["doi"] == "10.1016/S0893-6080(97)00011-7"
@@ -326,7 +316,7 @@ def test_dedup_by_doi_across_citations(tmp_path):
     ]
 
     corpus = Corpus(root=tmp_path / "corpus")
-    write_corpus_bibliography(corpus, [first, second])
+    result = write_corpus_bibliography(corpus, [first, second])
 
     references = bibtexparser.loads(
         corpus.references_bib_path.read_text(encoding="utf-8"),
@@ -334,9 +324,7 @@ def test_dedup_by_doi_across_citations(tmp_path):
     assert len(references.entries) == 1
     assert references.entries[0]["doi"] == "10.1109/TED.2022.3172400"
 
-    index = json.loads(
-        corpus.citation_index_path.read_text(encoding="utf-8"),
-    )
+    index = result["index"]
     ref_key = references.entries[0]["ID"]
     # Both docs should cite the same reference
     assert ref_key in index["doc_citations"]["a_1"]

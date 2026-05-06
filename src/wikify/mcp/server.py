@@ -105,8 +105,8 @@ def _mark_traversal_stubs(corpus, rows: list[dict]) -> None:
     """Flag source-type traversal rows whose doc has no chunks.
 
     Reference traversal results often contain graph-only stubs (no
-    ``corpus/docs/<id>.json`` payload, no chunks, zero PageRank) -- the
-    agent shouldn't waste a ``corpus_show`` call on them. Mark via
+    ``documents`` row, no chunks, zero PageRank) -- the agent shouldn't
+    waste a ``corpus_show`` call on them. Mark via
     ``_doc_is_stub`` so the envelope item carries ``meta.is_stub=True``;
     rows are kept in the result list by default.
     """

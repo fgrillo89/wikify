@@ -1,29 +1,16 @@
-"""Sidecar metadata for corpus chunk embeddings.
+"""Embedder fingerprint loaded from the corpus SQLite store.
 
-Records which embedder backend produced the matrix so that downstream
-tools (eval, query) can construct the *exact* matching embedder. The
-schema is forward-stable: unknown keys are ignored on read.
-
-Shape::
-
-    {
-      "version": 1,
-      "backend": "hash" | "fastembed",
-      "dim": 384,
-      "model": "sentence-transformers/all-MiniLM-L6-v2"  # or null for hash
-    }
-
-Legacy corpora may carry ``"sentence_transformers"`` as the backend
-string; ``embedder_for`` aliases that to ``"fastembed"`` (same model,
-same dimension, drop-in replacement) so old corpora load without
-re-embedding.
+Records which embedder backend produced the active matrix so that
+downstream tools (eval, query) can construct the *exact* matching
+embedder. The fingerprint is read directly from the
+``embedding_spaces`` table; legacy ``"sentence_transformers"`` entries
+are aliased to ``"fastembed"`` by ``embedder_for`` (same model, same
+dimension).
 """
 
-import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-
-META_NAME = "vectors.meta.json"
 
 
 @dataclass(frozen=True)
@@ -33,32 +20,29 @@ class VectorsMeta:
     model: str | None = None
 
 
-def meta_path_for(vectors_path: Path) -> Path:
-    return vectors_path.parent / META_NAME
+def read_meta(sqlite_path: Path) -> VectorsMeta | None:
+    """Return the active embedding-space fingerprint, or ``None``.
 
-
-def write_meta(vectors_path: Path, meta: VectorsMeta) -> Path:
-    out = meta_path_for(vectors_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": 1,
-        "backend": meta.backend,
-        "dim": int(meta.dim),
-        "model": meta.model,
-    }
-    from .chunks import atomic_write_text
-
-    atomic_write_text(out, json.dumps(payload, indent=2))
-    return out
-
-
-def read_meta(vectors_path: Path) -> VectorsMeta | None:
-    p = meta_path_for(vectors_path)
-    if not p.exists():
+    ``None`` covers two cases: the corpus has no ``wikify.db`` yet, or
+    the DB exists but no embedding space row has been written.
+    """
+    if not sqlite_path.exists():
         return None
-    data = json.loads(p.read_text(encoding="utf-8"))
+    try:
+        con = sqlite3.connect(sqlite_path)
+        try:
+            row = con.execute(
+                "SELECT backend, model, dim FROM embedding_spaces "
+                "ORDER BY created_at DESC LIMIT 1",
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
     return VectorsMeta(
-        backend=str(data.get("backend", "hash")),
-        dim=int(data.get("dim", 0)),
-        model=data.get("model"),
+        backend=str(row[0]),
+        model=row[1],
+        dim=int(row[2] or 0),
     )

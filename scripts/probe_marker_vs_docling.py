@@ -12,12 +12,12 @@ Usage::
         --source data/papers/ald_references --n 3 \
         --mode marker --out tasks/probe_marker.json
 
-    # docling default pass (page_batch_size=4)
+    # docling default pass (stage batch sizes=4)
     uv run python scripts/probe_marker_vs_docling.py \
         --source data/papers/ald_references --n 3 \
         --mode docling-default --out tasks/probe_docling_default.json
 
-    # docling tuned pass (page_batch_size=64)
+    # docling tuned pass (layout/OCR batch sizes=64)
     uv run python scripts/probe_marker_vs_docling.py \
         --source data/papers/ald_references --n 3 \
         --mode docling-tuned --out tasks/probe_docling_tuned.json
@@ -82,12 +82,10 @@ def run_marker(pdf: Path) -> dict:
 def run_docling(pdf: Path, *, tuned: bool) -> dict:
     """Docling parse + structural formula extract in one pass."""
     if tuned:
-        os.environ["DOCLING_PAGE_BATCH_SIZE"] = "64"
         os.environ["DOCLING_LAYOUT_BATCH_SIZE"] = "64"
         os.environ["DOCLING_OCR_BATCH_SIZE"] = "64"
         os.environ["DOCLING_TABLE_BATCH_SIZE"] = "4"
     else:
-        os.environ["DOCLING_PAGE_BATCH_SIZE"] = "4"
         os.environ["DOCLING_LAYOUT_BATCH_SIZE"] = "4"
         os.environ["DOCLING_OCR_BATCH_SIZE"] = "4"
         os.environ["DOCLING_TABLE_BATCH_SIZE"] = "4"
@@ -97,7 +95,6 @@ def run_docling(pdf: Path, *, tuned: bool) -> dict:
     docling_mod._patch_hf_symlinks()
     docling_mod._disable_torch_compile_on_windows()
     opts = docling_mod.DoclingOptions.from_env()
-    docling_mod._apply_global_perf_settings(opts)
     converter = docling_mod._get_converter(opts)
 
     t0 = time.monotonic()

@@ -19,7 +19,10 @@ from pathlib import Path
 import pytest
 
 # Reuse the on-disk corpus builder from test_corpus_queries.
-from tests.wikify.test_corpus_queries import _make_corpus  # noqa: E402
+from tests.wikify.test_corpus_queries import (
+    _make_corpus,  # noqa: E402
+    _make_sqlite_only_corpus,  # noqa: E402
+)
 from wikify.api import Bundle
 from wikify.bundle.run.lifecycle import init_run
 from wikify.corpus import queries
@@ -157,6 +160,35 @@ async def test_corpus_show_chunk_full_text(tmp_path: Path) -> None:
     item = res["items"][0]
     assert item["type"] == "chunk"
     assert "atomic layer deposition" in item.get("text", "")
+
+
+async def test_corpus_mcp_reads_sqlite_when_json_sidecars_absent(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_sqlite_only_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    doc = await _tool(srv, "corpus_show")(handle="doc:paper_0")
+    chunk = await _tool(srv, "corpus_show")(
+        handle="chunk:paper_0__c0000",
+        full=True,
+    )
+    found = await _tool(srv, "corpus_find")(
+        query="atomic layer",
+        text=True,
+        top_k=2,
+    )
+
+    assert doc["ok"] is True
+    assert doc["items"][0]["title"] == "Title 0"
+    assert chunk["ok"] is True
+    assert "atomic layer deposition" in chunk["items"][0]["text"]
+    assert found["ok"] is True
+    assert [item["handle"] for item in found["items"]] == [
+        "chunk:paper_0__c0000",
+        "chunk:paper_0__c0001",
+    ]
 
 
 async def test_corpus_show_handle_not_found(tmp_path: Path) -> None:

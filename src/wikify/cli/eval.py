@@ -12,7 +12,8 @@ telemetry rollup (call cost + per-type/actor event counts).
 
 When ``--corpus`` is supplied, the corpus-dependent metrics M1
 (coverage residual) and M6 (grounding) are also computed using the
-embedding backend recorded in ``corpus/vectors.meta.json``. Without
+embedding backend recorded in ``embedding_spaces`` of ``wikify.db``.
+Without
 ``--corpus`` those fields are emitted as ``null`` and the
 ``corpus_dependent_unavailable`` list names which metrics were skipped
 — callers see the gap rather than fabricated zeros.
@@ -140,33 +141,31 @@ def _compute_corpus_metrics(page_bundle, corpus: Corpus) -> dict:
     or its vector backend is unusable.
     """
     from ..corpus.chunks import all_chunks, read_chunks_by_id, read_vector_store
-    from ..corpus.vectors_meta import meta_path_for, read_meta
+    from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
 
-    # Embeddings live in `wikify.db` for fresh builds; the legacy
-    # `vectors.npz` is only present in older corpora. Either is fine —
-    # `read_vector_store` picks whichever the corpus has.
-    if not corpus.sqlite_path.exists() and not corpus.vectors_path.is_file():
+    # Embeddings live in `wikify.db`; the embedder fingerprint comes
+    # from the same store via the embedding_spaces row.
+    if not corpus.sqlite_path.exists():
         cli_error(
             EXIT_VALIDATION,
             error="corpus_missing_vectors",
             message=(
-                f"corpus at {corpus.root} has no embeddings (looked for "
-                f"{corpus.sqlite_path.name} and {corpus.vectors_path.name}); "
+                f"corpus at {corpus.root} has no {corpus.sqlite_path.name}; "
                 f"M1/M6 require an embedded corpus"
             ),
         )
 
-    meta_path = meta_path_for(corpus.vectors_path)
-    if not meta_path.exists():
+    meta = read_meta(corpus.sqlite_path)
+    if meta is None:
         cli_error(
             EXIT_VALIDATION,
             error="corpus_missing_vectors_meta",
             message=(
-                f"no {meta_path.name} next to {corpus.vectors_path}; cannot reconstruct embedder"
+                f"no embedding_spaces row in {corpus.sqlite_path}; "
+                "cannot reconstruct embedder"
             ),
         )
-    meta = read_meta(corpus.vectors_path)
 
     vectors = read_vector_store(corpus)
     if vectors.matrix.shape[0] == 0:

@@ -25,7 +25,8 @@ Returns row-unit-norm float32 ``np.ndarray`` with shape ``(len(texts), dim)``.
 
 Use ``embedder_for(backend, model, mode=...)`` when you need an *explicit*
 embedder (no env var dependency) --- eval, query, and preload call this to
-reconstruct the same embedder that ingest used, based on ``vectors.meta.json``.
+reconstruct the same embedder that ingest used, based on the active
+``embedding_spaces`` row in ``wikify.db``.
 """
 
 import hashlib
@@ -45,6 +46,29 @@ HASH_DIM = 128
 # chunks) — acceptable on a laptop, and still a small model class. Swap to
 # MiniLM for speed or nomic-Q for higher MTEB via WIKIFY_EMBED_MODEL.
 FE_MODEL_DEFAULT = "jinaai/jina-embeddings-v2-small-en"
+
+
+def active_embed_model_id() -> str:
+    """Single source of truth for which embedder is active.
+
+    Resolves ``WIKIFY_EMBED_MODEL`` then ``FE_MODEL_DEFAULT``. Every
+    component that needs to reason about the embedder (the embedder
+    itself, the chunker's tokenizer, schema fingerprinting) MUST go
+    through this so chunk boundaries and embeddings stay in lockstep.
+    """
+    return os.environ.get("WIKIFY_EMBED_MODEL") or FE_MODEL_DEFAULT
+
+
+def active_embed_max_tokens() -> int:
+    """Token-window cap for the active embedder.
+
+    Reads from ``_MODEL_CONFIGS`` if known; falls back to 2048 (a safe
+    inline default for unknown models). The chunker uses this so the
+    HybridChunker's max_tokens matches what the embedder will actually
+    accept.
+    """
+    cfg = _MODEL_CONFIGS.get(active_embed_model_id())
+    return cfg.max_tokens if cfg else 2048
 
 
 @dataclass(frozen=True)

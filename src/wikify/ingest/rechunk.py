@@ -5,12 +5,10 @@ swap, parameter tweaks), there is no need to re-run Marker / Docling
 on the source PDFs. The pipeline already persists each doc's
 canonical markdown to ``markdown/<doc_id>.md``, plus image sidecars
 under ``images/<slug>/``. This module walks that disk state and
-rewrites the chunk-derived artefacts in place: per-doc
-``chunks/<id>.jsonl``, the chunk subset of ``docs/<id>.json``
-(``n_chunks``, ``sections``, ``equations``, ``citations``,
-``figure_refs``), and -- via ``refresh_corpus`` -- every downstream
-SQLite-store derivative (chunks table, embeddings, graph edges,
-chunk_citations, etc.).
+re-projects the chunk-derived rows in ``wikify.db``: ``chunks``,
+``documents.n_chunks/sections``, equation + citation assets, and --
+via ``refresh_corpus`` -- every downstream SQLite-store derivative
+(embeddings, graph edges, chunk_citations).
 
 Cost on the typical corpus is dominated by chunking + embedding:
 chunking is ~3-4 s/doc warm, embedding is incremental at
@@ -55,14 +53,12 @@ def _default_workers() -> int:
 
 def _load_doc(paths: Corpus, doc_id: str) -> Document | None:
     """Load the persisted Document record for *doc_id*."""
-    import json
+    from wikify.corpus.chunks import list_documents
 
-    from wikify.corpus.chunks import _doc_from_dict
-
-    f = paths.docs_dir / f"{doc_id}.json"
-    if not f.exists():
-        return None
-    return _doc_from_dict(json.loads(f.read_text(encoding="utf-8")))
+    for doc in list_documents(paths):
+        if doc.id == doc_id:
+            return doc
+    return None
 
 
 def _markdown_for(paths: Corpus, doc_id: str) -> str | None:
@@ -77,12 +73,14 @@ def rechunk_doc(paths: Corpus, doc_id: str) -> int:
 
     Reads markdown + image sidecars from disk, runs the universal
     HybridChunker, re-extracts equations / citations / figure_refs
-    from the same markdown, persists the new chunks JSONL, and
-    rewrites the Document JSON's chunk-derived fields. Image
+    from the same markdown, replaces the doc + chunks rows in
+    ``wikify.db``, and rewrites the markdown sidecar. Image
     near-chunk pointers are recomputed too because new chunk ids
     invalidate the old links.
     """
-    from wikify.corpus.chunks import write_document
+    from wikify.corpus.chunks import write_document_markdown
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
 
     from .citations import extract_citations
     from .pipeline import bind_equations_to_chunks, sections_from_chunks
@@ -95,7 +93,7 @@ def rechunk_doc(paths: Corpus, doc_id: str) -> int:
     doc = _load_doc(paths, doc_id)
     if doc is None:
         raise FileNotFoundError(
-            f"doc record for {doc_id!r} missing under {paths.docs_dir}"
+            f"doc record for {doc_id!r} missing in {paths.sqlite_path}"
         )
 
     cache_path = paths.root / "derived" / "doclingdoc" / f"{doc_id}.json"
@@ -137,7 +135,13 @@ def rechunk_doc(paths: Corpus, doc_id: str) -> int:
         similar_to=list(doc.similar_to),
         cites=list(doc.cites),
     )
-    write_document(paths, new_doc, md, chunks)
+    write_document_markdown(paths, doc_id, md)
+    store = Store(paths.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [new_doc], {new_doc.id: chunks})
+    finally:
+        store.close()
     return len(chunks)
 
 

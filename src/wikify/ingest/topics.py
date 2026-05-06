@@ -15,12 +15,11 @@ signature; the algorithm is invoked internally by building a
 per-doc text blob from chunk text.
 """
 
-import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from ..api import Corpus
 from ..models import Chunk
 
 # --- public surface -----------------------------------------------------
@@ -97,10 +96,25 @@ def extract_topics(
     return TopicVocabulary(topics=topics_sorted, declared=declared_final)
 
 
-def write_topics(path: Path, vocab: TopicVocabulary) -> None:
-    from wikify.corpus.chunks import atomic_write_text
+def write_topics(corpus: Corpus, vocab: TopicVocabulary) -> None:
+    """Replace the corpus topic vocabulary in ``wikify.db``.
 
-    atomic_write_text(path, json.dumps(vocab.to_dict(), indent=2))
+    Truncates the ``topics`` table and re-inserts the current vocabulary
+    so the persisted set always reflects the latest refresh.
+    """
+    from wikify.corpus.store import Store
+
+    declared_set = {t for t in vocab.declared}
+    store = Store(corpus.sqlite_path)
+    try:
+        store.con.execute("DELETE FROM topics")
+        store.con.executemany(
+            "INSERT INTO topics(topic, declared) VALUES (?, ?)",
+            [(t, 1 if t in declared_set else 0) for t in vocab.topics],
+        )
+        store.con.commit()
+    finally:
+        store.close()
 
 
 # --- internals ------------------------------------------------------------

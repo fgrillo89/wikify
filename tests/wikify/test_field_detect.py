@@ -1,6 +1,5 @@
 """Tests for distill.field_detect."""
 
-import json
 from pathlib import Path
 
 from wikify.api import Corpus
@@ -9,16 +8,24 @@ from wikify.corpus.field_detect import (
     detect_field,
     detect_field_scores,
 )
+from wikify.corpus.store import Store
 
 
 def _make_corpus(tmp_path: Path, topics: list[str]) -> Corpus:
     root = tmp_path / "corpus"
     root.mkdir()
-    (root / "topics.json").write_text(
-        json.dumps({"topics": topics, "declared": topics}),
-        encoding="utf-8",
-    )
-    return Corpus(root=root)
+    corpus = Corpus(root=root)
+    store = Store(corpus.sqlite_path)
+    try:
+        store.con.execute("DELETE FROM topics")
+        store.con.executemany(
+            "INSERT INTO topics(topic, declared) VALUES (?, 1)",
+            [(t,) for t in topics],
+        )
+        store.con.commit()
+    finally:
+        store.close()
+    return corpus
 
 
 def test_materials_science_topics_detected(tmp_path: Path) -> None:

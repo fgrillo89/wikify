@@ -36,9 +36,6 @@ from .chunker import _is_boilerplate_chunk
 from .config import MIN_CHUNK_ALNUM
 from .section_classifier import classify_section_path
 
-_DEFAULT_EMBED_MODEL_ID = "jinaai/jina-embeddings-v2-small-en"
-_DEFAULT_MAX_TOKENS = 2048
-
 _CHUNKER: Any = None
 _CHUNKER_KEY: tuple[str, int] | None = None
 
@@ -140,8 +137,8 @@ def chunk_with_hybrid(
     doc_id: str,
     markdown: str,
     *,
-    embed_model_id: str = _DEFAULT_EMBED_MODEL_ID,
-    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    embed_model_id: str | None = None,
+    max_tokens: int | None = None,
     cached_doc_path=None,
 ) -> list[Chunk]:
     """Chunk *markdown* with Docling's HybridChunker.
@@ -163,6 +160,11 @@ def chunk_with_hybrid(
     """
     if not markdown.strip():
         return []
+    from ..embedding import active_embed_max_tokens, active_embed_model_id
+    if embed_model_id is None:
+        embed_model_id = active_embed_model_id()
+    if max_tokens is None:
+        max_tokens = active_embed_max_tokens()
     chunker = _build_chunker(embed_model_id, max_tokens)
     doc = _load_cached_doc(cached_doc_path)
     if doc is None:

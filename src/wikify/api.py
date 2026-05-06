@@ -42,30 +42,6 @@ class Corpus:
         return self.root / "images"
 
     @property
-    def chunks_dir(self) -> Path:
-        return self.root / "chunks"
-
-    @property
-    def docs_dir(self) -> Path:
-        return self.root / "docs"
-
-    @property
-    def vectors_path(self) -> Path:
-        return self.root / "vectors.npz"
-
-    @property
-    def topics_path(self) -> Path:
-        return self.root / "topics.json"
-
-    @property
-    def images_index_path(self) -> Path:
-        return self.root / "images.json"
-
-    @property
-    def equations_index_path(self) -> Path:
-        return self.root / "equations.json"
-
-    @property
     def persona_path(self) -> Path:
         """Optional cached corpus persona text. The writer falls back to the
         generic persona in ``prompts.registry.compose_writer_prompt`` when
@@ -86,16 +62,12 @@ class Corpus:
         return self.root / "cited_works.bib"
 
     @property
-    def citation_index_path(self) -> Path:
-        return self.root / "citations.json"
-
-    @property
     def sqlite_path(self) -> Path:
         """SQLite query store path: <corpus_root>/wikify.db."""
         return self.root / "wikify.db"
 
     def ensure(self) -> None:
-        for p in (self.markdown_dir, self.images_dir, self.chunks_dir, self.docs_dir):
+        for p in (self.markdown_dir, self.images_dir):
             p.mkdir(parents=True, exist_ok=True)
 
 

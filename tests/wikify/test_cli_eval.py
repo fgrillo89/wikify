@@ -85,10 +85,8 @@ def test_eval_corpus_flag_rejects_missing_dir(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_eval_uses_sqlite_embeddings_when_npz_absent(tmp_path: Path) -> None:
-    """Fresh `ingest_corpus` builds only emit `wikify.db`; the eval path
-    must read embeddings from there instead of erroring on a missing
-    `vectors.npz`. Regression for the SQLite migration."""
+def test_eval_uses_sqlite_embeddings(tmp_path: Path) -> None:
+    """The eval path reads embeddings from ``wikify.db``."""
     from wikify.ingest.pipeline import ingest_corpus
 
     sources = tmp_path / "src"
@@ -99,9 +97,6 @@ def test_eval_uses_sqlite_embeddings_when_npz_absent(tmp_path: Path) -> None:
     corpus_dir = tmp_path / "corpus"
     paths = ingest_corpus(sources, corpus_dir, max_workers=1)
     assert paths.sqlite_path.exists()
-    # Fresh build: vectors.npz is no longer written; the SQLite store is
-    # the embedding-of-record. This precondition guards the regression.
-    assert not paths.vectors_path.exists()
 
     bundle, _ = _commit_one_article(tmp_path)
     result = runner.invoke(

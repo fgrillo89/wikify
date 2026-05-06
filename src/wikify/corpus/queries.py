@@ -458,7 +458,7 @@ def _search_chunks_sqlite(
                 query, top_k=effective_top_k, doc_id=in_doc,
             )
         elif rank == "hybrid":
-            meta = read_meta(corpus.vectors_path)
+            meta = read_meta(corpus.sqlite_path)
             embed = (
                 embedder_for(meta.backend, meta.model, mode="query")
                 if meta else None
@@ -473,7 +473,7 @@ def _search_chunks_sqlite(
                 hits = _filter_hits_to_doc(store, hits, in_doc)
         else:
             # default semantic: cosine over the active embedding space.
-            meta = read_meta(corpus.vectors_path)
+            meta = read_meta(corpus.sqlite_path)
             embed = (
                 embedder_for(meta.backend, meta.model, mode="query")
                 if meta else None
@@ -748,7 +748,7 @@ def _search_chunks_all_modes(
     try:
         # Embed once; share between semantic and hybrid (we only need it for
         # the semantic side here; BM25 + text don't use it).
-        meta = read_meta(corpus.vectors_path)
+        meta = read_meta(corpus.sqlite_path)
         embed = embedder_for(meta.backend, meta.model, mode="query") if meta else None
         space_id = active_space_id(store)
         qv = embed([query])[0] if embed else None  # type: ignore[index]
@@ -994,7 +994,7 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "root": str(corpus.root),
         "n_docs": len(docs),
         "n_chunks": len(chunks),
-        "has_vectors": corpus.vectors_path.exists(),
+        "has_vectors": _has_vectors(corpus),
         "has_manifest": corpus.manifest_path.exists(),
         "has_sqlite_store": corpus.sqlite_path.exists(),
     }
@@ -1015,6 +1015,24 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
             out["ord_refs_coverage_pct"] = None
             out["ord_refs_error"] = str(exc)
     return out
+
+
+def _has_vectors(corpus: Corpus) -> bool:
+    """True iff the corpus has any chunk embeddings persisted in `wikify.db`."""
+    if not corpus.sqlite_path.exists():
+        return False
+    import sqlite3
+    try:
+        con = sqlite3.connect(corpus.sqlite_path)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM embeddings WHERE node_type='chunk' LIMIT 1",
+            ).fetchone()
+            return row is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
 
 
 def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
@@ -1567,7 +1585,7 @@ def select_evidence_chunks(
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
 
-    meta = read_meta(corpus.vectors_path)
+    meta = read_meta(corpus.sqlite_path)
     embed = (
         embedder_for(meta.backend, meta.model, mode="query") if meta else None
     )
