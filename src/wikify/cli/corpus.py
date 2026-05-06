@@ -36,7 +36,7 @@ from ..corpus.handles import (
 )
 from ..corpus.session import CorpusSearchSession
 from ._format import FormatError, format_row, resolve_format
-from ._helpers import EXIT_VALIDATION, cli_error
+from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
 
 # ``wikify.ingest.pipeline`` (~250ms) and ``wikify.bundle.run.events``
 # (~300ms) are deferred to first use — neither is needed for the
@@ -220,17 +220,27 @@ def cmd_build(
     to canonicalise bib metadata and surface in-corpus citation matches.
     Set OPENALEX_EMAIL for the polite-pool rate limit (10 req/s).
     """
+    from ..corpus.lock import CorpusLockHeldError
     from ..ingest.pipeline import ingest_corpus
 
-    paths = ingest_corpus(
-        source,
-        out,
-        max_workers=None if workers == 0 else workers,
-        mode=mode,
-        parser_backend=parser,
-        refresh=not no_refresh,
-        resolve_bibliography_doi=openalex,
-    )
+    try:
+        paths = ingest_corpus(
+            source,
+            out,
+            max_workers=None if workers == 0 else workers,
+            mode=mode,
+            parser_backend=parser,
+            refresh=not no_refresh,
+            resolve_bibliography_doi=openalex,
+        )
+    except CorpusLockHeldError as exc:
+        cli_error(
+            EXIT_LOCK_HELD,
+            error="corpus_lock_held",
+            owner=exc.owner,
+            acquired_at=exc.acquired_at,
+            path=str(exc.path),
+        )
     typer.echo(f"corpus written to {paths.root}")
 
 

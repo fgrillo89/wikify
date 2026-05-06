@@ -27,9 +27,11 @@ Enrichment + performance knobs (env vars):
   DOCLING_VLM_MODEL=granite     granite | smoldocling | got2 | glmocr |
                                 granite-ollama | granite-vllm
   DOCLING_IMAGES_SCALE=3.0      Picture render resolution multiplier
-  DOCLING_LAYOUT_BATCH_SIZE=64  Layout-detection batch size on GPU
-  DOCLING_OCR_BATCH_SIZE=64     OCR batch size on GPU (only matters when
-                                DOCLING_OCR=1 or auto-detect kicks in)
+  DOCLING_LAYOUT_BATCH_SIZE=auto  Layout-detection batch size on GPU
+                                  (auto = 8/16/32/64 by VRAM tier)
+  DOCLING_OCR_BATCH_SIZE=auto     OCR batch size on GPU (only matters
+                                  when DOCLING_OCR=1 or auto-detect
+                                  kicks in; auto = 8/16/32/64 by VRAM)
   DOCLING_TABLE_BATCH_SIZE=4    TableFormer batch size (still CPU-bound
                                 in current Docling; do not raise blindly)
   DOCLING_OCR_AUTO=1            Auto-detect text layer per PDF; flip
@@ -47,7 +49,7 @@ import hashlib
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..equations import _equation_id
@@ -56,6 +58,102 @@ from ._sections import section_spans
 from .registry import ParseResult, RawImage
 
 _HF_PATCHED = False
+
+
+# Layout/OCR batch sizes by total VRAM. Tuned so that 64-page tensors
+# at images_scale=3.0 don't push layout activations + Granite-Docling
+# KV cache past the VRAM ceiling. Anything past the last entry uses 64.
+_GPU_BATCH_TIERS: tuple[tuple[int, int], ...] = (
+    (8, 8),
+    (16, 16),
+    (32, 32),
+)
+
+
+def _gpu_batch_size_default() -> int:
+    """Pick layout/ocr batch size from total VRAM.
+
+    Returns the upstream Docling default (4) when CUDA is unavailable
+    or the probe fails. On CUDA the result is one of 8/16/32/64
+    depending on which ``_GPU_BATCH_TIERS`` row matches the device's
+    total memory.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return 4
+        gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    except (ImportError, RuntimeError, AttributeError, AssertionError):
+        return 4
+    for max_gb, batch_size in _GPU_BATCH_TIERS:
+        if gb < max_gb:
+            return batch_size
+    return 64
+
+
+# OOM-retry ladder for layout/OCR batch sizes. Highest-to-lowest so a
+# linear scan finds the next-smaller value below the current setting.
+# We only step batch size down on CUDA OOM; we never disable formulas,
+# OCR, or any other quality-affecting knob — the contract is "fail loudly
+# at batch=4 rather than silently degrade output".
+_GPU_BATCH_RETRY_ORDER: tuple[int, ...] = (64, 32, 16, 8, 4)
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """True if *exc* looks like a CUDA out-of-memory failure."""
+    msg = str(exc).lower()
+    return "out of memory" in msg or "cuda" in msg
+
+
+def _next_lower_batch(current: int) -> int | None:
+    """Return the next value in ``_GPU_BATCH_RETRY_ORDER`` below *current*."""
+    for b in _GPU_BATCH_RETRY_ORDER:
+        if b < current:
+            return b
+    return None
+
+
+def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
+    """Run ``converter.convert(path)``; on CUDA OOM step batch size down.
+
+    Returns ``(result, effective_opts)`` so callers can read which
+    batch size succeeded. Only ``layout_batch_size`` and
+    ``ocr_batch_size`` are modified across retries — formulas, OCR,
+    picture description, VLM, and ``images_scale`` are preserved
+    exactly as configured. When even ``batch=4`` fails, the original
+    OOM is re-raised wrapped in a clear message naming the corpus's
+    fundamental VRAM ceiling so the operator knows to lower
+    ``DOCLING_IMAGES_SCALE`` or move to a bigger GPU.
+    """
+    import copy
+
+    effective = opts
+    last_exc: BaseException | None = None
+    while True:
+        converter = _get_converter(effective)
+        try:
+            result = converter.convert(str(path.resolve()))
+            return result, effective
+        except RuntimeError as exc:
+            if not _is_cuda_oom(exc):
+                raise
+            last_exc = exc
+            current = max(
+                effective.layout_batch_size, effective.ocr_batch_size,
+            )
+            next_batch = _next_lower_batch(current)
+            if next_batch is None:
+                raise RuntimeError(
+                    f"docling CUDA OOM on {path.name} at batch={current}; "
+                    f"lower DOCLING_IMAGES_SCALE or use a GPU with more VRAM"
+                ) from last_exc
+            sys.stderr.write(
+                f"[docling] CUDA OOM on {path.name}, "
+                f"retrying at batch={next_batch} (was {current})\n"
+            )
+            effective = copy.copy(effective)
+            effective.layout_batch_size = next_batch
+            effective.ocr_batch_size = next_batch
 
 
 @dataclass
@@ -93,15 +191,25 @@ class DoclingOptions:
     images_scale: float = 3.0
     # Per-stage batch sizes for GPU inference. PdfPipelineOptions exposes
     # these directly; raising layout/OCR batches gives the documented
-    # up-to-6x speedup on Ampere+. TableFormer is CPU-bound in current
-    # Docling, so the documented safe value 4 stays.
-    layout_batch_size: int = 64
-    ocr_batch_size: int = 64
+    # up-to-6x speedup on Ampere+. The default factory probes the GPU
+    # once and picks a tier (see ``_GPU_BATCH_TIERS``) so an 8 GB laptop
+    # doesn't OOM-thrash and a 40 GB datacentre card still gets 64.
+    # TableFormer is CPU-bound in current Docling, so the documented
+    # safe value 4 stays.
+    layout_batch_size: int = field(default_factory=_gpu_batch_size_default)
+    ocr_batch_size: int = field(default_factory=_gpu_batch_size_default)
     table_batch_size: int = 4
 
     @classmethod
     def from_env(cls) -> DoclingOptions:
-        """Build options from DOCLING_* environment variables."""
+        """Build options from DOCLING_* environment variables.
+
+        Layout and OCR batch sizes fall back to the VRAM-adaptive
+        default (``_gpu_batch_size_default``) when the env var is
+        unset OR empty. Explicit numeric overrides remain authoritative
+        for users who know their VRAM headroom.
+        """
+        gpu_default = _gpu_batch_size_default()
         return cls(
             formulas=os.environ.get("DOCLING_FORMULAS", "1") != "0",
             formula_model=os.environ.get(
@@ -114,10 +222,10 @@ class DoclingOptions:
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
             images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "3.0")),
             layout_batch_size=int(
-                os.environ.get("DOCLING_LAYOUT_BATCH_SIZE", "64"),
+                os.environ.get("DOCLING_LAYOUT_BATCH_SIZE") or gpu_default,
             ),
             ocr_batch_size=int(
-                os.environ.get("DOCLING_OCR_BATCH_SIZE", "64"),
+                os.environ.get("DOCLING_OCR_BATCH_SIZE") or gpu_default,
             ),
             table_batch_size=int(
                 os.environ.get("DOCLING_TABLE_BATCH_SIZE", "4"),
@@ -188,6 +296,45 @@ def _disable_torch_compile_when_unsafe() -> None:
 def _disable_torch_compile_on_windows() -> None:
     """Backward-compatible wrapper for probe scripts."""
     _disable_torch_compile_when_unsafe()
+
+
+_RUNTIME_CONFIGURED = False
+
+
+def _configure_torch_runtime() -> None:
+    """One-time torch + tokenizer thread setup.
+
+    Caps intra-op threads at 4 so CPU-side BLAS doesn't saturate
+    cores while GPU kernels are the actual bottleneck. Disables
+    HuggingFace tokenizer fork-parallelism (default ON deadlocks on
+    subprocess fork and clutters the log with warnings on Windows).
+    Honours an explicit ``TOKENIZERS_PARALLELISM`` override.
+
+    Must run before any tensor op or DocumentConverter
+    instantiation, because ``torch.set_num_interop_threads`` raises
+    once the thread pool is initialised. Sets the tokenizer env
+    var first so it lands even if the torch import/setup fails.
+    """
+    global _RUNTIME_CONFIGURED
+    if _RUNTIME_CONFIGURED:
+        return
+    _RUNTIME_CONFIGURED = True
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    try:
+        import torch
+        torch.set_num_threads(min(4, os.cpu_count() or 4))
+        try:
+            torch.set_num_interop_threads(min(2, os.cpu_count() or 2))
+        except RuntimeError:
+            # Pool already initialised (another importer touched
+            # torch first); the intra-op cap above still applies.
+            pass
+    except (ImportError, RuntimeError):
+        # Broken or already-constrained torch should not fail
+        # ingest because of a performance guard.
+        pass
 
 
 _TEXT_LAYER_PROBE_PAGES = 3
@@ -273,6 +420,7 @@ def parse(
     chunking cost.
     """
     _patch_hf_symlinks()
+    _configure_torch_runtime()
     _disable_torch_compile_when_unsafe()
 
     opts = DoclingOptions.from_env()
@@ -307,28 +455,7 @@ def parse(
             f"enabling OCR for this doc\n"
         )
 
-    effective_opts = opts
-    converter = _get_converter(opts)
-
-    try:
-        result = converter.convert(str(path.resolve()))
-    except RuntimeError as exc:
-        if "out of memory" in str(exc).lower() or "CUDA" in str(exc):
-            # VRAM exhausted on large PDF -- retry without GPU-heavy
-            # enrichments (formulas, pic_describe) to fit in memory.
-            import copy
-
-            effective_opts = copy.copy(opts)
-            effective_opts.formulas = False
-            effective_opts.pic_describe = False
-            sys.stderr.write(
-                f"[docling] CUDA OOM on {path.name}, "
-                f"retrying without formula enrichment\n"
-            )
-            converter = _get_converter(effective_opts)
-            result = converter.convert(str(path.resolve()))
-        else:
-            raise
+    result, effective_opts = _convert_with_oom_retry(opts, path)
     doc = result.document
 
     md_text = doc.export_to_markdown()

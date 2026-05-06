@@ -51,6 +51,43 @@ def _timed(timings: dict[str, float], label: str):
     timings[label] = time.monotonic() - t
 
 
+_HEARTBEAT_INTERVAL = 60.0
+
+
+@contextmanager
+def _parse_heartbeat(filename: str):
+    """Print ``[ingest] still parsing <filename> elapsed=Ns`` every 60s.
+
+    Diagnostic only — no timeout, no behaviour change. Lets a stuck
+    serial GPU parse surface in the log instead of going dark for the
+    full duration. The initial ``[ingest] parsing <filename>`` line
+    fires before the inner block runs so users see something even on
+    fast files. Uses ``threading.Event.wait`` so the timer thread
+    exits promptly when the parse returns or raises.
+    """
+    import threading
+
+    print(f"[ingest] parsing {filename}", file=sys.stderr, flush=True)
+    stop = threading.Event()
+    t0 = time.monotonic()
+
+    def _tick() -> None:
+        while not stop.wait(_HEARTBEAT_INTERVAL):
+            elapsed = time.monotonic() - t0
+            print(
+                f"[ingest] still parsing {filename} elapsed={elapsed:.0f}s",
+                file=sys.stderr, flush=True,
+            )
+
+    thread = threading.Thread(target=_tick, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+
+
 # ---------------------------------------------------------------------------
 # Worker bundle
 # ---------------------------------------------------------------------------
@@ -636,9 +673,10 @@ def _stream_parse_and_persist(
     else:
         for src in sources:
             try:
-                receipt = _parse_and_persist_worker(
-                    str(src), corpus_root_str, parser_backend, skip_metadata,
-                )
+                with _parse_heartbeat(src.name):
+                    receipt = _parse_and_persist_worker(
+                        str(src), corpus_root_str, parser_backend, skip_metadata,
+                    )
                 receipts.append(receipt)
                 bar.set_postfix_str(
                     f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
@@ -1328,7 +1366,7 @@ def ingest_corpus(
     ``dedup_same_stem=False`` when a directory has intentionally-matching
     stems (typical in synthetic test fixtures).
     """
-    from .manifest import SourceRecord
+    from wikify.corpus.lock import acquire_lock, release_lock
 
     validate_backend(parser_backend)
 
@@ -1337,6 +1375,53 @@ def ingest_corpus(
 
     paths = Corpus(root=output_dir)
     paths.ensure()
+
+    # Hold an exclusive build lock for the duration of the run; this
+    # guards against a second wikify-corpus-build (or an orphaned
+    # process from a prior run) racing on the same --out directory and
+    # corrupting the SQLite store / markdown sidecars. The lock is
+    # released in finally so we never strand a corpus on crash.
+    lock_owner = f"wikify-ingest/pid-{os.getpid()}"
+    acquire_lock(paths, owner=lock_owner)
+    try:
+        return _ingest_corpus_locked(
+            input_dir=input_dir,
+            paths=paths,
+            timings=timings,
+            t0_run=t0_run,
+            mode=mode,
+            parser_backend=parser_backend,
+            max_workers=max_workers,
+            refresh=refresh,
+            resolve_bibliography_doi=resolve_bibliography_doi,
+            cite_resolution=cite_resolution,
+            dedup_same_stem=dedup_same_stem,
+        )
+    finally:
+        release_lock(paths, owner=lock_owner)
+
+
+def _ingest_corpus_locked(
+    *,
+    input_dir: Path,
+    paths: Corpus,
+    timings: dict[str, float],
+    t0_run: float,
+    mode: str,
+    parser_backend: str,
+    max_workers: int | None,
+    refresh: bool,
+    resolve_bibliography_doi: bool,
+    cite_resolution: str,
+    dedup_same_stem: bool,
+) -> Corpus:
+    """Body of ``ingest_corpus`` that runs while holding the build lock.
+
+    Split out so the public ``ingest_corpus`` can hold the corpus lock
+    around the entire run via try/finally without mass-reindenting the
+    body.
+    """
+    from .manifest import SourceRecord
 
     # 1. Enumerate, diff, dedupe
     manifest, change_set, dedup_aliases = _prepare_change_set(

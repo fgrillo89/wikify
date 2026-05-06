@@ -739,3 +739,49 @@ def test_corpus_sample_quiet_emits_one_handle_per_line(
     assert result.exit_code == 0, result.output
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
     assert lines == ["doc:paper_0", "doc:paper_1"]
+
+
+def test_corpus_build_exits_lock_held(tmp_path: Path) -> None:
+    """A live ``.ingest.lock`` blocks ``corpus build`` with exit code 2.
+
+    The CLI must surface a structured ``corpus_lock_held`` envelope on
+    stderr so agents can recognise the conflict without parsing prose.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "paper.md").write_text("# Paper\n\nbody\n", encoding="utf-8")
+
+    out = tmp_path / "corpus"
+    out.mkdir()
+    expires = (datetime.now(UTC) + timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
+    (out / ".ingest.lock").write_text(
+        json.dumps({
+            "owner": "other-process",
+            "pid": 12345,
+            "acquired_at": expires,
+            "expires_at": expires,
+            "ttl_seconds": 3600,
+            "root": str(out),
+        }),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "build", str(src),
+            "--out", str(out),
+            "--parser", "lite",
+            "--no-openalex",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"] == "corpus_lock_held"
+    assert payload["owner"] == "other-process"
+    assert payload["ok"] is False

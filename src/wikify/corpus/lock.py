@@ -1,0 +1,178 @@
+"""Corpus-wide advisory lock at ``<corpus>/.ingest.lock``.
+
+Prevents two ``wikify corpus build`` calls (or any concurrent
+``ingest_corpus`` invocations) from racing on the same output
+directory. The atomic ``os.open(O_CREAT|O_EXCL)`` pattern guarantees
+mutual exclusion across processes; stale locks (TTL expired) are
+silently reclaimed.
+
+Mirrors the bundle ``run/lock`` shape so the patterns line up.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from ..api import Corpus
+
+
+class CorpusLockHeldError(RuntimeError):
+    """Raised when ``acquire_lock`` finds the lock held by a live owner."""
+
+    def __init__(self, owner: str, acquired_at: str, path: Path) -> None:
+        super().__init__(
+            f"corpus lock at {path} held by {owner!r} since {acquired_at}"
+        )
+        self.owner = owner
+        self.acquired_at = acquired_at
+        self.path = path
+
+
+def _parse_iso(s: str) -> datetime | None:
+    try:
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _is_stale(record: dict) -> bool:
+    expires_s = record.get("expires_at")
+    if expires_s:
+        expires = _parse_iso(expires_s)
+        if expires is None:
+            return False
+        return datetime.now(UTC) > expires
+    ttl = record.get("ttl_seconds")
+    acquired_s = record.get("acquired_at")
+    if not (ttl and acquired_s):
+        return False
+    acquired = _parse_iso(acquired_s)
+    if acquired is None:
+        return False
+    return datetime.now(UTC) > acquired + timedelta(seconds=int(ttl))
+
+
+def _lock_path(corpus: Corpus) -> Path:
+    return corpus.root / ".ingest.lock"
+
+
+def read_lock(corpus: Corpus) -> dict | None:
+    """Return the lock record dict, or ``None`` if no lock file exists."""
+    path = _lock_path(corpus)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _build_record(owner: str, ttl_seconds: int, root: Path) -> dict:
+    now = datetime.now(UTC)
+    expires = now + timedelta(seconds=ttl_seconds)
+    return {
+        "owner": owner,
+        "pid": os.getpid(),
+        "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ttl_seconds": ttl_seconds,
+        "root": str(root),
+    }
+
+
+def _atomic_create(path: Path, payload: bytes) -> bool:
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(path), flags)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+    return True
+
+
+def _atomic_replace(path: Path, payload: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=".ingest-lock-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        if Path(tmp).exists():
+            Path(tmp).unlink()
+        raise
+
+
+def acquire_lock(
+    corpus: Corpus,
+    owner: str,
+    *,
+    ttl_seconds: int = 86400,
+    force: bool = False,
+) -> None:
+    """Acquire ``<corpus>/.ingest.lock`` or raise ``CorpusLockHeldError``.
+
+    Race-safe via ``O_EXCL`` for fresh acquisition and ``os.replace``
+    + post-write owner verification for stale-lock reclaim. ``force=True``
+    overrides a live lock without raising.
+    """
+    corpus.root.mkdir(parents=True, exist_ok=True)
+    path = _lock_path(corpus)
+    record = _build_record(owner, ttl_seconds, corpus.root)
+    payload = json.dumps(record).encode("utf-8")
+
+    if _atomic_create(path, payload):
+        return
+
+    existing = read_lock(corpus)
+    if existing and not _is_stale(existing) and not force:
+        raise CorpusLockHeldError(
+            existing.get("owner", "unknown"),
+            existing.get("acquired_at", ""),
+            path,
+        )
+
+    _atomic_replace(path, payload)
+    actual = read_lock(corpus) or {}
+    if actual.get("owner") != owner or actual.get("pid") != os.getpid():
+        raise CorpusLockHeldError(
+            actual.get("owner", "unknown"),
+            actual.get("acquired_at", ""),
+            path,
+        )
+
+
+def release_lock(corpus: Corpus, *, owner: str | None = None) -> None:
+    """Remove the lock file iff we still own it.
+
+    When ``owner`` is given, the lock is removed only if the on-disk
+    record names that owner AND our pid. Prevents a finally-block from
+    clobbering a lock that another process reclaimed after our TTL
+    expired. ``owner=None`` removes unconditionally for admin paths.
+    """
+    path = _lock_path(corpus)
+    if not path.exists():
+        return
+    if owner is None:
+        path.unlink()
+        return
+    record = read_lock(corpus) or {}
+    if record.get("owner") == owner and record.get("pid") == os.getpid():
+        path.unlink()
+
+
+@contextmanager
+def corpus_lock(corpus: Corpus, owner: str, *, ttl_seconds: int = 86400):
+    """Hold the corpus lock for the duration of the block."""
+    acquire_lock(corpus, owner=owner, ttl_seconds=ttl_seconds)
+    try:
+        yield
+    finally:
+        release_lock(corpus, owner=owner)
