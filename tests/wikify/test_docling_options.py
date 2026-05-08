@@ -6,6 +6,7 @@ converter factory so the suite runs on CI machines with no CUDA.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,8 +119,24 @@ def test_clear_converter_cache_resets_globals(
 
 def test_is_cuda_oom_recognises_messages() -> None:
     assert docling._is_cuda_oom(RuntimeError("CUDA out of memory"))
-    assert docling._is_cuda_oom(RuntimeError("Some CUDA error"))
+    assert docling._is_cuda_oom(RuntimeError("CUBLAS out of memory"))
+    assert not docling._is_cuda_oom(RuntimeError("Some CUDA error"))
+    assert not docling._is_cuda_oom(RuntimeError("host out of memory"))
     assert not docling._is_cuda_oom(RuntimeError("file not found"))
+
+
+def test_is_cuda_oom_recognises_torch_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCudaOOMError(RuntimeError):
+        pass
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(OutOfMemoryError=FakeCudaOOMError),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert docling._is_cuda_oom(FakeCudaOOMError("driver-specific wording"))
 
 
 class _FakeConverter:
@@ -205,7 +222,10 @@ def test_oom_retry_raises_at_minimum_batch(
 
     monkeypatch.setattr(docling, "_get_converter", always_oom)
 
-    with pytest.raises(RuntimeError, match=r"layout=4.*ocr=4"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"layout=4.*ocr=4.*more VRAM",
+    ):
         docling._convert_with_oom_retry(opts, pdf)
 
     assert [o.layout_batch_size for o in captured_opts] == [64, 32, 16, 8, 4]

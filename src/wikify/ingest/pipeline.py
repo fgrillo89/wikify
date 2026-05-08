@@ -797,7 +797,6 @@ def _stream_parse_and_persist(
                 _on_success(src, receipt)
             except Exception as exc:  # noqa: BLE001
                 _on_failure(src, exc)
-            bar.update(1)
 
     bar.close()
 

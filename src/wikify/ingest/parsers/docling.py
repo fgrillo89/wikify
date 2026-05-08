@@ -101,8 +101,17 @@ _GPU_BATCH_RETRY_ORDER: tuple[int, ...] = (64, 32, 16, 8, 4)
 
 def _is_cuda_oom(exc: BaseException) -> bool:
     """True if *exc* looks like a CUDA out-of-memory failure."""
+    try:
+        import torch
+        cuda_oom = getattr(torch.cuda, "OutOfMemoryError", None)
+    except (ImportError, AttributeError, RuntimeError):
+        cuda_oom = None
+    if cuda_oom is not None and isinstance(exc, cuda_oom):
+        return True
     msg = str(exc).lower()
-    return "out of memory" in msg or "cuda" in msg
+    return "out of memory" in msg and any(
+        marker in msg for marker in ("cuda", "cudnn", "cublas")
+    )
 
 
 def _next_lower_batch(current: int) -> int | None:
@@ -168,7 +177,7 @@ def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
     cleared and CUDA cache flushed so the new converter doesn't
     co-reside with the old one. When neither knob can step lower, the
     original OOM is re-raised wrapped in a clear message naming
-    ``DOCLING_IMAGES_SCALE`` and VRAM as the levers.
+    VRAM pressure as the remaining operator action.
     """
     effective = opts
     last_exc: BaseException | None = None
@@ -186,8 +195,8 @@ def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
                 raise RuntimeError(
                     f"docling CUDA OOM on {path.name} at "
                     f"layout={effective.layout_batch_size}, "
-                    f"ocr={effective.ocr_batch_size}; lower "
-                    f"DOCLING_IMAGES_SCALE or use a GPU with more VRAM"
+                    f"ocr={effective.ocr_batch_size}; close other GPU "
+                    f"workloads or use a GPU with more VRAM"
                 ) from last_exc
             sys.stderr.write(
                 f"[docling] CUDA OOM on {path.name}, retrying at "
