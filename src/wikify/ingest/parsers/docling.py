@@ -308,12 +308,19 @@ def _configure_torch_runtime() -> None:
     cores while GPU kernels are the actual bottleneck. Disables
     HuggingFace tokenizer fork-parallelism (default ON deadlocks on
     subprocess fork and clutters the log with warnings on Windows).
-    Honours an explicit ``TOKENIZERS_PARALLELISM`` override.
+    Honours explicit ``TOKENIZERS_PARALLELISM`` /
+    ``PYTORCH_CUDA_ALLOC_CONF`` overrides.
+
+    ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` is the
+    canonical fix for the Windows ``8 GB-card "VRAM tax"``: it lets
+    the CUDA caching allocator grow segments instead of pre-reserving
+    fixed blocks, which is the difference between "OOM after 50 papers"
+    and "stable for 200+".
 
     Must run before any tensor op or DocumentConverter
     instantiation, because ``torch.set_num_interop_threads`` raises
-    once the thread pool is initialised. Sets the tokenizer env
-    var first so it lands even if the torch import/setup fails.
+    once the thread pool is initialised. Env vars land first so they
+    apply even if the torch import/setup fails.
     """
     global _RUNTIME_CONFIGURED
     if _RUNTIME_CONFIGURED:
@@ -321,6 +328,9 @@ def _configure_torch_runtime() -> None:
     _RUNTIME_CONFIGURED = True
 
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault(
+        "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True",
+    )
 
     try:
         import torch
@@ -334,6 +344,27 @@ def _configure_torch_runtime() -> None:
     except (ImportError, RuntimeError):
         # Broken or already-constrained torch should not fail
         # ingest because of a performance guard.
+        pass
+
+
+def _release_gpu_memory() -> None:
+    """Free per-document VRAM allocations after a parse completes.
+
+    Called from the parse-and-persist worker after every successful
+    document. ``gc.collect()`` reclaims any ``DoclingDocument`` /
+    intermediate-tensor cycles; ``torch.cuda.empty_cache()`` returns
+    the freed allocator blocks to the CUDA driver. On Windows where
+    the OS doesn't reclaim VRAM aggressively until the process exits,
+    this combination keeps long-running ingests from accumulating
+    fragmentation bit by bit.
+    """
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except (ImportError, RuntimeError):
         pass
 
 
@@ -513,13 +544,20 @@ def parse(
 
     title = metadata.get("title") or path.stem
 
-    return ParseResult(
+    result_obj = ParseResult(
         markdown=md_text,
         sections=sections,
         raw_images=images,
         metadata=metadata,
         title=title,
     )
+    # Release per-document GPU/CPU allocations so long-running ingests
+    # don't accumulate fragmentation across hundreds of documents.
+    # Drop the converter result + doc references first; empty_cache only
+    # frees what's actually unreferenced.
+    del result, doc
+    _release_gpu_memory()
+    return result_obj
 
 
 # ---------------------------------------------------------------------------

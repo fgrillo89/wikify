@@ -245,8 +245,26 @@ def _parse_and_persist_worker(
     persisted with an empty metadata dict (sections + citations + chunks
     are still built from the parsed markdown).  Pass 4 loads the markdown
     back and runs ``assemble_pdf_metadata`` with DOI-resolved context.
+
+    The heartbeat wraps the body so a stuck file surfaces in the log
+    regardless of whether the worker runs in-main, in a long-lived
+    pool, or in a per-batch subprocess that gets restarted every N
+    papers to flush VRAM.
     """
     src = Path(src_str)
+    with _parse_heartbeat(src.name):
+        return _parse_and_persist_inner(
+            src, corpus_root_str, parser_backend, skip_metadata,
+        )
+
+
+def _parse_and_persist_inner(
+    src: Path,
+    corpus_root_str: str,
+    parser_backend: str,
+    skip_metadata: bool,
+) -> FileReceipt:
+    """Body of ``_parse_and_persist_worker`` minus the heartbeat wrap."""
     paths = Corpus(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
@@ -607,6 +625,55 @@ def _recover_completed(
 # Stage: streaming parse + persist (new pipeline)
 # ---------------------------------------------------------------------------
 
+_WORKER_BATCH_SIZE_DEFAULT = 20
+
+
+def _worker_batch_size(parser_backend: str) -> int:
+    """Number of papers per subprocess batch; ``0`` = no restart.
+
+    GPU backends restart the worker every N papers to flush the
+    Windows-tax VRAM that the CUDA caching allocator can't return
+    mid-process — without this, a 200-paper run on an 8 GB card OOMs
+    around paper 50-150 even with ``expandable_segments=True``. CPU
+    backends keep the long-lived pool because their startup cost
+    dominates and there's no VRAM to flush.
+
+    Override via ``WIKIFY_WORKER_BATCH_SIZE``: ``0`` disables restart,
+    a positive integer sets the cadence.
+    """
+    from .parsers.registry import backend_requires_single_worker
+
+    env = os.environ.get("WIKIFY_WORKER_BATCH_SIZE", "")
+    if env:
+        try:
+            return max(0, int(env))
+        except ValueError:
+            pass
+    if backend_requires_single_worker(parser_backend):
+        return _WORKER_BATCH_SIZE_DEFAULT
+    return 0
+
+
+def _log_failure(paths: Corpus, src: Path, exc: BaseException) -> None:
+    """Append one structured line to ``<corpus>/failed_files.log``.
+
+    Format: ``ISO8601\tfilename\tException: message`` so downstream
+    tooling can parse the failures without re-grepping the main log.
+    Failures are accumulated across runs (append-only); inspect or
+    truncate the file manually between rebuilds.
+    """
+    import datetime as _dt
+
+    paths.root.mkdir(parents=True, exist_ok=True)
+    line = (
+        f"{_dt.datetime.now(_dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\t"
+        f"{src.name}\t"
+        f"{type(exc).__name__}: {exc}\n"
+    )
+    with open(paths.root / "failed_files.log", "a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
 def _stream_parse_and_persist(
     sources: list[Path],
     paths: Corpus,
@@ -614,11 +681,24 @@ def _stream_parse_and_persist(
     parser_backend: str = "default",
     skip_metadata: bool = False,
 ) -> list[FileReceipt]:
-    """Parse, persist each source in parallel. Returns sorted receipts.
+    """Parse, persist each source. Returns sorted receipts.
 
-    ``skip_metadata`` is forwarded to the per-file worker; the ingest DAG
-    sets it ``True`` during pass 3 so metadata fusion can run as pass 4
-    with DOI-resolved context.
+    Three execution strategies:
+
+    - **subprocess-batched** (GPU default): spawn a fresh
+      ``ProcessPoolExecutor(max_workers=1)`` every
+      ``WIKIFY_WORKER_BATCH_SIZE`` papers (default 20). Each batch
+      shutdown kills the worker, releasing all VRAM back to the OS.
+      The only known way to keep a Windows 8 GB GPU stable across
+      hundreds of formula-decoded PDFs.
+    - **CPU-parallel**: long-lived pool of ``max_workers`` processes
+      for ``LITE`` and other CPU-bound backends.
+    - **serial-in-main**: single worker, single process — for tiny
+      jobs where pool startup isn't worth it.
+
+    Failed papers (exceptions raised by the worker) are logged to
+    ``<corpus>/failed_files.log``; ``skip_metadata`` is forwarded to
+    every worker invocation.
     """
     from tqdm import tqdm
 
@@ -633,6 +713,8 @@ def _stream_parse_and_persist(
     if backend_requires_single_worker(parser_backend):
         workers = 1
 
+    batch_size = _worker_batch_size(parser_backend) if workers == 1 else 0
+
     bar = tqdm(
         total=total,
         desc=f"[ingest] parse+persist ({workers}w)",
@@ -641,7 +723,54 @@ def _stream_parse_and_persist(
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
     )
 
-    if workers > 1 and total > 1:
+    def _on_success(src: Path, receipt: FileReceipt) -> None:
+        receipts.append(receipt)
+        bar.set_postfix_str(
+            f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
+            refresh=False,
+        )
+        bar.update(1)
+
+    def _on_failure(src: Path, exc: BaseException) -> None:
+        nonlocal failed
+        failed += 1
+        bar.set_postfix_str(f"FAIL {src.name[:40]}", refresh=False)
+        tqdm.write(f"[ingest] FAIL {src.name}: {exc}", file=sys.stderr)
+        _log_failure(paths, src, exc)
+        bar.update(1)
+
+    if workers == 1 and batch_size > 0 and total > 1:
+        n_batches = (total + batch_size - 1) // batch_size
+        print(
+            f"[ingest] subprocess-batched: {total} files in "
+            f"{n_batches} batches of {batch_size} (workers restart "
+            f"between batches to flush VRAM)",
+            file=sys.stderr,
+        )
+        for batch_idx, batch_start in enumerate(range(0, total, batch_size)):
+            chunk = sources[batch_start:batch_start + batch_size]
+            with ProcessPoolExecutor(max_workers=1) as pool:
+                futures = {
+                    pool.submit(
+                        _parse_and_persist_worker, str(src), corpus_root_str,
+                        parser_backend, skip_metadata,
+                    ): src
+                    for src in chunk
+                }
+                for fut in as_completed(futures):
+                    src = futures[fut]
+                    try:
+                        _on_success(src, fut.result())
+                    except Exception as exc:  # noqa: BLE001
+                        _on_failure(src, exc)
+            # Pool shutdown here: worker subprocess exits, returning
+            # all CUDA allocations + heap to the OS.
+            tqdm.write(
+                f"[ingest] batch {batch_idx + 1}/{n_batches} done "
+                f"(worker restarted, VRAM flushed)",
+                file=sys.stderr,
+            )
+    elif workers > 1 and total > 1:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(
@@ -653,45 +782,18 @@ def _stream_parse_and_persist(
             for fut in as_completed(futures):
                 src = futures[fut]
                 try:
-                    receipt = fut.result()
-                    receipts.append(receipt)
-                    bar.set_postfix_str(
-                        f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
-                        refresh=False,
-                    )
+                    _on_success(src, fut.result())
                 except Exception as exc:  # noqa: BLE001
-                    failed += 1
-                    bar.set_postfix_str(
-                        f"FAIL {src.name[:40]}",
-                        refresh=False,
-                    )
-                    tqdm.write(
-                        f"[ingest] FAIL {src.name}: {exc}",
-                        file=sys.stderr,
-                    )
-                bar.update(1)
+                    _on_failure(src, exc)
     else:
         for src in sources:
             try:
-                with _parse_heartbeat(src.name):
-                    receipt = _parse_and_persist_worker(
-                        str(src), corpus_root_str, parser_backend, skip_metadata,
-                    )
-                receipts.append(receipt)
-                bar.set_postfix_str(
-                    f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
-                    refresh=False,
+                receipt = _parse_and_persist_worker(
+                    str(src), corpus_root_str, parser_backend, skip_metadata,
                 )
+                _on_success(src, receipt)
             except Exception as exc:  # noqa: BLE001
-                failed += 1
-                bar.set_postfix_str(
-                    f"FAIL {src.name[:40]}",
-                    refresh=False,
-                )
-                tqdm.write(
-                    f"[ingest] FAIL {src.name}: {exc}",
-                    file=sys.stderr,
-                )
+                _on_failure(src, exc)
             bar.update(1)
 
     bar.close()
