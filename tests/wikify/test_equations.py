@@ -165,3 +165,52 @@ def test_full_extract_returns_offset_sorted():
     assert "named" in types
     assert "display" in types
     assert "chemical" in types
+
+
+# ---------------------------------------------------------------- junk filter
+
+
+def test_display_math_rejects_pure_digit_latex():
+    """Bibliography numbers Marker emits as ``$$10$$`` are not equations."""
+    md = "See refs $$10$$ and $$11$$ for details."
+    eqs = extract_equations(md)
+    assert eqs == [], (
+        f"pure-digit display math should be rejected; got {[e['latex'] for e in eqs]}"
+    )
+
+
+def test_display_math_rejects_single_paren():
+    md = "Output $$($$ ranges from 1 to 5."
+    eqs = extract_equations(md)
+    assert eqs == [], f"single paren in $$..$$ should be rejected; got {eqs}"
+
+
+def test_inline_math_rejects_short_punctuation():
+    md = "Performance was $.$ percent better."
+    eqs = extract_equations(md)
+    assert eqs == [], f"single-punctuation inline should be rejected; got {eqs}"
+
+
+def test_real_display_math_still_passes():
+    md = r"The energy is $$E = mc^2$$ where $c$ is the speed of light."
+    eqs = extract_equations(md)
+    assert any(
+        e["type"] == "display" and "E = mc" in e["latex"]
+        for e in eqs
+    ), [e["latex"] for e in eqs]
+
+
+def test_real_inline_math_still_passes():
+    md = r"We define $\alpha = 0.05$ as the threshold."
+    eqs = extract_equations(md)
+    assert any(
+        e["type"] == "inline" and "alpha" in e["latex"]
+        for e in eqs
+    ), [e["latex"] for e in eqs]
+
+
+def test_named_equations_still_pass_even_without_math_signal():
+    """Named equations are matched by phrase, not by math syntax."""
+    md = "We applied Ohm's law to compute resistance."
+    eqs = extract_equations(md)
+    assert any(e["type"] == "named" for e in eqs), eqs

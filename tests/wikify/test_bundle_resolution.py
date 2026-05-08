@@ -89,5 +89,5 @@ def test_corpus_paths_are_under_root(tmp_path: Path) -> None:
     corpus_dir.mkdir()
     c = Corpus.open(corpus_dir)
     assert c.markdown_dir == corpus_dir / "markdown"
-    assert c.vectors_path == corpus_dir / "vectors.npz"
+    assert c.sqlite_path == corpus_dir / "wikify.db"
     assert c.manifest_path == corpus_dir / "manifest.json"

@@ -5,12 +5,12 @@ vector id invariants, parse-failure preservation, nested same-name
 files, vector reuse, and distill preload visibility.
 """
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from wikify.corpus.bibliography import load_citation_index
 from wikify.corpus.chunks import (
     all_chunks,
     list_documents,
@@ -69,9 +69,11 @@ def test_fresh_ingest(sources_dir, corpus_dir):
     for artifact in (
         paths.library_bib_path,
         paths.references_bib_path,
-        paths.citation_index_path,
     ):
         assert artifact.exists()
+    # Citation index now lives in wikify.db; surface it through the reader.
+    index = load_citation_index(paths)
+    assert {doc.id for doc in docs} <= set(index["doc_bibkeys"].keys())
 
 
 # --- Add preserves existing markdown ---
@@ -91,7 +93,7 @@ def test_add_preserves_existing_markdown(sources_dir, corpus_dir):
 
     docs = list_documents(paths)
     assert len(docs) == 2
-    index = json.loads(paths.citation_index_path.read_text(encoding="utf-8"))
+    index = load_citation_index(paths)
     assert set(index["doc_bibkeys"]) == {doc.id for doc in docs}
 
     alpha_md_after = (paths.markdown_dir / f"{alpha_doc.id}.md").read_text(
@@ -116,8 +118,13 @@ def test_modify_replaces_old_doc(sources_dir, corpus_dir):
     new_doc_id = docs[0].id
     assert new_doc_id != old_doc_id
 
-    assert not (paths.docs_dir / f"{old_doc_id}.json").exists()
-    assert not (paths.chunks_dir / f"{old_doc_id}.jsonl").exists()
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        assert store.get_document(old_doc_id) is None
+        assert store.get_chunks(old_doc_id) == []
+    finally:
+        store.close()
 
     md = (paths.markdown_dir / f"{new_doc_id}.md").read_text(encoding="utf-8")
     assert "Second version" in md
@@ -150,7 +157,12 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
     assert len(docs_after) == 1
     assert docs_after[0].id != beta_id
 
-    assert not (paths.docs_dir / f"{beta_id}.json").exists()
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        assert store.get_document(beta_id) is None
+    finally:
+        store.close()
 
     kg = read_knowledge_graph(paths)
     assert not kg.source(beta_id).exists()
@@ -238,8 +250,16 @@ def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):
             raise RuntimeError("simulated parse failure")
         return real_parse(path)
 
+    # ``allow_partial=True``: the strict default would raise
+    # IngestFailedError before the manifest update, which also
+    # preserves the old artifacts but as a hard failure. Here we
+    # exercise the explicit-opt-in partial path because the test's
+    # intent is to verify the manifest stays consistent through a
+    # partial run.
     with patch("wikify.ingest.pipeline.parse_file", side_effect=failing_parse):
-        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        paths = ingest_corpus(
+            sources_dir, corpus_dir, max_workers=1, allow_partial=True,
+        )
 
     # Old doc must still be on disk and active
     docs = list_documents(paths)
@@ -255,6 +275,40 @@ def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):
     active = [s for s in manifest.sources.values() if s.status == "active"]
     assert len(active) == 1
     assert active[0].doc_id == old_doc_id
+
+
+def test_parse_failure_raises_ingest_failed_by_default(sources_dir, corpus_dir):
+    """Strict default (no ``allow_partial``): any per-file parse
+    failure raises ``IngestFailedError`` BEFORE the manifest update +
+    refresh, so the corpus is never advertised as queryable when it's
+    missing papers.
+    """
+    from wikify.ingest.pipeline import IngestFailedError
+
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body.")
+
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def fail_beta(path, **kw):
+        if "beta" in path.name:
+            raise RuntimeError("simulated parse failure")
+        return real_parse(path, **kw)
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=fail_beta,
+    ):
+        with pytest.raises(IngestFailedError) as exc_info:
+            ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    assert exc_info.value.failed == 1
+    assert exc_info.value.total >= 1
+    # ``failed_files.log`` is the diagnostic written for the operator.
+    assert exc_info.value.log_path == corpus_dir / "failed_files.log"
+    assert exc_info.value.log_path.exists()
 
 
 # --- Nested same-name files (Finding #2) ---
@@ -353,12 +407,17 @@ def test_embedder_change_reembeds_all(sources_dir, corpus_dir):
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
 
-    # Tamper with the vectors.meta.json to simulate a different backend
-    from wikify.corpus.vectors_meta import VectorsMeta, write_meta
-
-    write_meta(paths.vectors_path, VectorsMeta(
-        backend="fake_old_backend", dim=999, model="old-model",
-    ))
+    # Tamper with the embedding_spaces row to simulate a different backend.
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        store.con.execute(
+            "UPDATE embedding_spaces SET backend='fake_old_backend', "
+            "dim=999, model='old-model'",
+        )
+        store.con.commit()
+    finally:
+        store.close()
 
     embed_call_count = [0]
     real_embed = __import__(
@@ -484,9 +543,14 @@ def test_duplicate_content_different_names_alias(sources_dir, corpus_dir):
     doc_ids = {s.doc_id for s in active}
     assert len(doc_ids) == 1, f"Expected shared doc_id, got {doc_ids}"
 
-    # That doc_id must actually exist on disk
+    # That doc_id must actually exist in the store.
     shared = doc_ids.pop()
-    assert (paths.docs_dir / f"{shared}.json").exists()
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        assert store.get_document(shared) is not None
+    finally:
+        store.close()
 
 
 # --- Unknown parser backend fails fast ---
@@ -619,22 +683,32 @@ def test_alias_to_failed_parse_not_registered(sources_dir, corpus_dir):
                 raise RuntimeError("simulated first-alpha failure")
         return real_parse(path, **kw)
 
+    # ``allow_partial=True`` because the test deliberately fails one
+    # parse and inspects what landed in the manifest; strict mode
+    # would raise IngestFailedError before manifest update.
     with patch(
         "wikify.ingest.pipeline.parse_file",
         side_effect=fail_first_alpha,
     ):
-        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        paths = ingest_corpus(
+            sources_dir, corpus_dir, max_workers=1, allow_partial=True,
+        )
 
     manifest = CorpusManifest.load(paths.manifest_path)
     active = [s for s in manifest.sources.values()
               if s.status == "active"]
     # The canonical parse failed, so neither source should have an
     # active manifest record pointing at a non-existent doc
-    for rec in active:
-        assert (paths.docs_dir / f"{rec.doc_id}.json").exists(), (
-            f"Active manifest record {rec.source_id} points at "
-            f"non-existent doc {rec.doc_id}"
-        )
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        for rec in active:
+            assert store.get_document(rec.doc_id) is not None, (
+                f"Active manifest record {rec.source_id} points at "
+                f"non-existent doc {rec.doc_id}"
+            )
+    finally:
+        store.close()
 
 
 # --- Replacement becomes alias when new content matches existing doc ---
@@ -665,7 +739,12 @@ def test_replacement_becomes_alias_to_existing(sources_dir, corpus_dir):
     assert docs_r2[0].id == foo_did
 
     # Old bar doc is gone
-    assert not (paths.docs_dir / f"{bar_old_did}.json").exists()
+    from wikify.corpus.store import Store
+    store = Store(paths.sqlite_path)
+    try:
+        assert store.get_document(bar_old_did) is None
+    finally:
+        store.close()
 
     # Manifest has 2 active sources pointing at foo's doc_id
     manifest = CorpusManifest.load(paths.manifest_path)
@@ -701,24 +780,26 @@ def test_crash_mid_persist_recoverable(sources_dir, corpus_dir):
 
     call_count = [0]
     real_write = __import__(
-        "wikify.corpus.chunks", fromlist=["write_document"]
-    ).write_document
+        "wikify.corpus.chunks", fromlist=["write_document_markdown"]
+    ).write_document_markdown
 
-    def crash_on_second(paths_arg, doc, markdown, chunks):
+    def crash_on_second(paths_arg, doc_id, markdown):
         call_count[0] += 1
         if call_count[0] == 2:
             raise OSError("simulated disk failure")
-        return real_write(paths_arg, doc, markdown, chunks)
+        return real_write(paths_arg, doc_id, markdown)
 
-    # First ingest crashes mid-persist
+    # First ingest crashes mid-persist. The worker catches OSError as
+    # a per-file failure, then ingest_corpus raises IngestFailedError
+    # before manifest update so a partial corpus isn't advertised.
+    from wikify.ingest.pipeline import IngestFailedError
+
     with patch(
-        "wikify.ingest.pipeline.write_document",
+        "wikify.ingest.pipeline.write_document_markdown",
         side_effect=crash_on_second,
     ):
-        try:
+        with pytest.raises(IngestFailedError):
             ingest_corpus(sources_dir, corpus_dir, max_workers=1)
-        except OSError:
-            pass  # expected crash
 
     # Second ingest should succeed cleanly (additive mode re-parses all)
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
@@ -729,30 +810,24 @@ def test_crash_mid_persist_recoverable(sources_dir, corpus_dir):
 # --- Atomic write: crash during final resave leaves corpus recoverable ---
 
 def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
-    """If ingest crashes during the final _resave_docs (after graph
-    population), a subsequent ingest should recover cleanly."""
+    """If ingest crashes during the final ``_resave_docs`` upsert pass
+    (after graph population), a subsequent ingest should recover cleanly.
+    """
     _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
     _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
 
-    from wikify.corpus.chunks import atomic_write_text
+    from wikify.ingest import pipeline
 
+    real_resave = pipeline._resave_docs
     call_count = [0]
-    real_write = atomic_write_text
 
-    def crash_during_resave(path, content):
-        # Let initial write_document calls through; crash on the
-        # doc resave pass (which rewrites docs/*.json a second time).
-        if "docs" in str(path) and path.suffix == ".json":
-            call_count[0] += 1
-            # First 2 calls are initial persist; 3rd+ are resave
-            if call_count[0] > 2:
-                raise OSError("simulated resave failure")
-        return real_write(path, content)
+    def crash_during_resave(paths_arg, docs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("simulated resave failure")
+        return real_resave(paths_arg, docs)
 
-    with patch(
-        "wikify.corpus.chunks.atomic_write_text",
-        side_effect=crash_during_resave,
-    ):
+    with patch.object(pipeline, "_resave_docs", side_effect=crash_during_resave):
         try:
             ingest_corpus(sources_dir, corpus_dir, max_workers=1)
         except OSError:
@@ -762,3 +837,69 @@ def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
     docs = list_documents(paths)
     assert len(docs) == 2
+
+
+# --- _recover_completed: placeholder rows must re-parse, not "recover" ---
+
+def test_recover_completed_replaces_placeholder_pdf_metadata(tmp_path: Path):
+    """Pass 3 commits docs+chunks; pass 4 fuses PDF metadata. If ingest
+    crashes between, the row exists with placeholder title/metadata and
+    ``_recover_completed`` MUST send the source back to ``to_parse`` so
+    pass 4 reruns and real metadata lands. A doc with non-placeholder
+    metadata should still be recovered without re-parse.
+    """
+    import json
+
+    from wikify.api import Corpus
+    from wikify.corpus.store import Store
+    from wikify.ingest.pipeline import _recover_completed, doc_id_for
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    placeholder_pdf = src_dir / "placeholder.pdf"
+    placeholder_pdf.write_bytes(b"%PDF-1.4 fake-placeholder\n%%EOF\n")
+    real_pdf = src_dir / "real.pdf"
+    real_pdf.write_bytes(b"%PDF-1.4 fake-real\n%%EOF\n")
+
+    paths = Corpus(root=tmp_path / "corpus")
+    paths.ensure()
+
+    # Synthesize SQLite rows + markdown sidecars for both docs.
+    placeholder_did = doc_id_for(placeholder_pdf)
+    real_did = doc_id_for(real_pdf)
+    (paths.markdown_dir / f"{placeholder_did}.md").write_text("p", encoding="utf-8")
+    (paths.markdown_dir / f"{real_did}.md").write_text("r", encoding="utf-8")
+
+    store = Store(paths.sqlite_path)
+    try:
+        # Placeholder: title == src stem, empty metadata (pass 3 leaves
+        # this when skip_metadata=True and the parser doesn't fill in).
+        store.con.execute(
+            "INSERT INTO documents(doc_id, title, source_path, metadata_json) "
+            "VALUES (?, ?, ?, ?)",
+            (placeholder_did, placeholder_pdf.stem, str(placeholder_pdf), json.dumps({})),
+        )
+        # Real: enriched title + author + year (looks like pass 4 ran).
+        store.con.execute(
+            "INSERT INTO documents(doc_id, title, source_path, metadata_json) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                real_did, "An Actual Paper Title",
+                str(real_pdf),
+                json.dumps({"title": "An Actual Paper Title", "year": 2024}),
+            ),
+        )
+        store.con.commit()
+    finally:
+        store.close()
+
+    still, recovered = _recover_completed(
+        [placeholder_pdf, real_pdf], paths,
+    )
+    recovered_dids = {r.doc_id for r in recovered}
+    still_paths = {p.name for p in still}
+
+    assert real_did in recovered_dids
+    assert placeholder_did not in recovered_dids
+    assert "placeholder.pdf" in still_paths
+    assert "real.pdf" not in still_paths

@@ -36,7 +36,12 @@ from ..corpus.handles import (
 )
 from ..corpus.session import CorpusSearchSession
 from ._format import FormatError, format_row, resolve_format
-from ._helpers import EXIT_VALIDATION, cli_error
+from ._helpers import (
+    EXIT_INGEST_FAILED,
+    EXIT_LOCK_HELD,
+    EXIT_VALIDATION,
+    cli_error,
+)
 
 # ``wikify.ingest.pipeline`` (~250ms) and ``wikify.bundle.run.events``
 # (~300ms) are deferred to first use — neither is needed for the
@@ -128,11 +133,11 @@ def _emit_chunk_reads(
 
 
 def _looks_like_corpus(path: Path) -> bool:
-    """Heuristic: a directory with ``manifest.json`` and ``docs/`` is a corpus."""
+    """Heuristic: a directory with ``manifest.json`` and ``wikify.db`` is a corpus."""
     return (
         path.is_dir()
         and (path / "manifest.json").is_file()
-        and (path / "docs").is_dir()
+        and (path / "wikify.db").is_file()
     )
 
 
@@ -179,7 +184,7 @@ def _resolve_corpus(corpus_flag: Path | None) -> Corpus:
         message=(
             "no corpus resolved. Pass --corpus <path>, set WIKIFY_CORPUS, "
             "or run from inside a corpus directory (one containing "
-            "manifest.json and docs/)."
+            "manifest.json and wikify.db)."
         ),
     )
 
@@ -213,6 +218,17 @@ def cmd_build(
             "Pass --no-openalex to skip Wave C and stay fully offline."
         ),
     ),
+    allow_partial: bool = typer.Option(
+        False,
+        "--allow-partial",
+        help=(
+            "Continue manifest update + refresh even when some files fail "
+            "to parse. Default OFF: any per-file failure aborts the build "
+            "with exit code 5 so partial corpora are not silently advertised "
+            "as queryable. Successful papers stay on disk for the next run "
+            "to recover via _recover_completed."
+        ),
+    ),
 ) -> None:
     """Parse, chunk, embed, and graph an input directory.
 
@@ -220,18 +236,109 @@ def cmd_build(
     to canonicalise bib metadata and surface in-corpus citation matches.
     Set OPENALEX_EMAIL for the polite-pool rate limit (10 req/s).
     """
-    from ..ingest.pipeline import ingest_corpus
+    from ..corpus.lock import CorpusLockHeldError
+    from ..ingest.pipeline import IngestFailedError, ingest_corpus
 
-    paths = ingest_corpus(
-        source,
-        out,
-        max_workers=None if workers == 0 else workers,
-        mode=mode,
-        parser_backend=parser,
-        refresh=not no_refresh,
-        resolve_bibliography_doi=openalex,
-    )
+    try:
+        paths = ingest_corpus(
+            source,
+            out,
+            max_workers=None if workers == 0 else workers,
+            mode=mode,
+            parser_backend=parser,
+            refresh=not no_refresh,
+            resolve_bibliography_doi=openalex,
+            allow_partial=allow_partial,
+        )
+    except CorpusLockHeldError as exc:
+        cli_error(
+            EXIT_LOCK_HELD,
+            error="corpus_lock_held",
+            owner=exc.owner,
+            acquired_at=exc.acquired_at,
+            path=str(exc.path),
+        )
+    except IngestFailedError as exc:
+        cli_error(
+            EXIT_INGEST_FAILED,
+            error="ingest_failed",
+            failed=exc.failed,
+            total=exc.total,
+            log_path=str(exc.log_path),
+            message=(
+                f"{exc.failed}/{exc.total} files failed to parse. "
+                f"Inspect {exc.log_path} and re-run; "
+                f"successful papers will be recovered automatically. "
+                f"Pass --allow-partial to refresh anyway."
+            ),
+        )
     typer.echo(f"corpus written to {paths.root}")
+
+
+@app.command("rechunk")
+def cmd_rechunk(
+    corpus_dir: Path = typer.Argument(..., help="Corpus directory."),
+    only_doc: list[str] = typer.Option(
+        [],
+        "--only-doc",
+        help=(
+            "Limit to specific doc id(s); pass multiple times. "
+            "Useful when iterating on chunker behaviour against a few "
+            "audit-flagged docs without rebuilding the whole corpus."
+        ),
+    ),
+    workers: int = typer.Option(
+        0,
+        "--workers",
+        help=(
+            "Number of chunker worker processes (0 = auto, ~60%% of "
+            "cores). Set to 1 to force serial execution."
+        ),
+    ),
+    openalex: bool = typer.Option(
+        False,
+        "--openalex/--no-openalex",
+        help=(
+            "Re-run OpenAlex enrichment after rechunking. OFF by default "
+            "because chunking changes do not affect bibliographies."
+        ),
+    ),
+) -> None:
+    """Re-chunk an existing corpus from saved markdown.
+
+    Skips parsing entirely (no Marker, no Docling, no OCR). Reads
+    each doc's persisted markdown and image sidecars, runs the
+    universal HybridChunker, re-extracts equations / citations /
+    figure refs, and rewrites the chunk-derived disk artefacts plus
+    the SQLite store. Embeddings get rebuilt for every doc whose
+    chunk ids changed (which is all of them when the chunker
+    changes), so the wall-clock is dominated by chunking +
+    embedding, not parsing.
+
+    Use this when chunker logic, section detection, or boilerplate
+    rules change. Use ``corpus build`` when source PDFs change.
+    """
+    from ..ingest.rechunk import rechunk_corpus
+
+    paths = Corpus(root=corpus_dir)
+    if not paths.sqlite_path.exists():
+        cli_error(
+            EXIT_VALIDATION,
+            error="not_a_corpus",
+            message=f"{corpus_dir} has no wikify.db",
+        )
+    summary = rechunk_corpus(
+        paths,
+        only_docs=only_doc or None,
+        max_workers=workers if workers > 0 else None,
+        resolve_bibliography_doi=openalex,
+        cite_resolution="crossref" if openalex else "off",
+    )
+    typer.echo(
+        f"rechunk complete: {summary['docs']} docs / "
+        f"{summary['chunks']} chunks in "
+        f"{summary['total_seconds']}s"
+    )
 
 
 @app.command("refresh")
@@ -460,6 +567,18 @@ def cmd_find(
             "WHERE filter; vector search post-filters a wider pool."
         ),
     ),
+    exclude_kind: list[str] = typer.Option(
+        [],
+        "--exclude-kind",
+        help=(
+            "Drop chunks whose section_type matches the listed kind "
+            "(repeatable). Typical: --exclude-kind references "
+            "--exclude-kind acknowledgments. Section types are: "
+            "abstract|introduction|background|methods|results|"
+            "discussion|conclusion|references|acknowledgments|"
+            "appendix|body."
+        ),
+    ),
     explain: bool = typer.Option(
         False,
         "--explain",
@@ -512,6 +631,7 @@ def cmd_find(
         result = queries.find(
             corpus, query=query, by=by, rank=rank, top_k=top_k,
             text=text, field=field, in_doc=resolved_in_doc,
+            exclude_kinds=list(exclude_kind) or None,
         )
     except queries.QueryError as exc:
         cli_error(EXIT_VALIDATION, error=exc.code, message=exc.message)

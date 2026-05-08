@@ -151,13 +151,18 @@ class ParserBackend(str, Enum):
     architectural rule and makes adding a backend a single-dict-entry
     edit instead of a new ``if`` branch.
 
-    DEFAULT is the best-quality configuration: Marker for PDFs,
-    Docling for DOCX / PPTX / HTML, built-in markdown reader for
-    ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
-    escape hatch (pymupdf4llm + python-docx + python-pptx +
-    trafilatura) for CI, tests, and low-resource environments.
-    MARKER and DOCLING are single-parser overrides for users who
-    want one parser everywhere.
+    DEFAULT is the best-quality configuration: Docling for PDFs +
+    DOCX / PPTX / HTML (uniform structural extraction, in-tree
+    Granite-Docling formula head), built-in markdown reader for
+    ``.md`` / ``.markdown`` / ``.txt``. The DEFAULT was previously
+    Marker for PDFs; the swap landed after Stage B1.5 of the parser
+    probe showed Docling's median wall-clock is within ~13% of
+    Marker on real-world papers (n=20) and Docling's structural
+    FormulaItem extraction produces materially cleaner LaTeX. LITE
+    is the lightweight escape hatch (pymupdf4llm + python-docx +
+    python-pptx + trafilatura) for CI, tests, and low-resource
+    environments. MARKER and DOCLING are single-parser overrides
+    for users who want one parser everywhere.
     """
 
     DEFAULT = "default"
@@ -189,7 +194,7 @@ class ParserBackend(str, Enum):
 _OVERRIDES: dict[ParserBackend, dict[str, tuple[DocKind, Callable]]] = {
     ParserBackend.LITE: {},
     ParserBackend.DEFAULT: {
-        "pdf":  ("pdf",  _lazy_marker),
+        "pdf":  ("pdf",  _lazy_docling),
         "docx": ("docx", _lazy_docling),
         "pptx": ("pptx", _lazy_docling),
         "html": ("html", _lazy_docling),
@@ -292,6 +297,7 @@ def parse_file(
     *,
     parser_backend: str | ParserBackend = ParserBackend.LITE,
     skip_metadata: bool = False,
+    doc_cache_path: Path | None = None,
 ) -> tuple[DocKind, ParseResult]:
     """Dispatch a source file to the right parser.
 
@@ -306,6 +312,11 @@ def parse_file(
     non-PDF parsers ignore it silently. The ingest DAG sets this to
     ``True`` during pass 3 (content parse) so metadata fusion can run
     in pass 4 with DOI-resolved context from pass 2.
+
+    ``doc_cache_path`` is forwarded to the Docling parser only;
+    other parsers don't produce a ``DoclingDocument`` so there's
+    nothing to cache. When set, Docling persists the parsed
+    document JSON for later rechunk runs.
     """
     key = parser_backend.value if isinstance(parser_backend, ParserBackend) else parser_backend
     overrides = _resolve_backend(key)
@@ -315,7 +326,13 @@ def parse_file(
         raise ValueError(f"unsupported file type: {path.suffix}")
     kind, loader = entry
     parser = loader()
-    # Only PDF parsers accept skip_metadata; forward when it's set.
+    # Only the docling parser accepts doc_cache_path, and only PDF
+    # parsers accept skip_metadata. Forward each kwarg to the
+    # matching subset of parsers.
+    kwargs: dict = {}
     if skip_metadata and suffix == "pdf":
-        return kind, parser.parse(path, skip_metadata=True)
-    return kind, parser.parse(path)
+        kwargs["skip_metadata"] = True
+    is_docling = parser.__name__.endswith("docling")
+    if doc_cache_path is not None and is_docling:
+        kwargs["doc_cache_path"] = doc_cache_path
+    return kind, parser.parse(path, **kwargs)

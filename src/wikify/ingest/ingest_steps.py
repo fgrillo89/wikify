@@ -44,7 +44,6 @@ line up on one report.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -240,8 +239,13 @@ def _ingest_content_parse(ctx: dict) -> None:
     Uses ``pipeline._stream_parse_and_persist`` with ``skip_metadata=True``
     for PDFs — the content is written to disk but metadata fusion is
     deferred to pass 4.  Non-PDF sources keep their inline metadata.
-    Publishes ``receipts`` into ctx.
+    Persists each parsed (Document, chunks) tuple into ``wikify.db`` in
+    a single transaction once all workers finish, and publishes
+    ``receipts`` into ctx.
     """
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+
     from .pipeline import _stream_parse_and_persist
 
     sources: list[Path] = ctx["sources_to_parse"]
@@ -249,13 +253,26 @@ def _ingest_content_parse(ctx: dict) -> None:
     parser_backend: str = ctx.get("parser_backend", "default")
     max_workers = ctx.get("max_workers")
 
-    receipts = _stream_parse_and_persist(
+    receipts, failed_count = _stream_parse_and_persist(
         sources,
         paths,
         max_workers,
         parser_backend,
         skip_metadata=True,
     )
+    ctx["parse_failed_count"] = failed_count
+
+    fresh = [r for r in receipts if r.doc is not None and r.chunks is not None]
+    if fresh:
+        store = Store(paths.sqlite_path)
+        try:
+            with transaction(store.con):
+                docs = [r.doc for r in fresh]
+                chunks_by_doc = {r.doc.id: list(r.chunks or []) for r in fresh}
+                project_documents(store, docs, chunks_by_doc)
+        finally:
+            store.close()
+
     ctx["receipts"] = receipts
 
 
@@ -271,13 +288,15 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
     back from ``markdown/{doc_id}.md`` (stripping frontmatter + edges),
     call ``assemble_pdf_metadata`` with the pre-resolved DOI record,
     merge the result into ``doc.metadata`` (preserving parser-specific
-    keys), re-persist the Document JSON and enriched markdown.
+    keys), re-upsert the Document row in ``wikify.db`` and rewrite the
+    enriched markdown sidecar.
 
     Non-PDF sources are skipped — their parsers owned metadata from
     pass 3.
     """
-    from wikify.corpus.chunks import _doc_from_dict, atomic_write_text
+    from wikify.corpus.chunks import list_documents
     from wikify.corpus.doc_markdown import write_doc_markdown
+    from wikify.corpus.store import Store
 
     from .metadata import assemble_pdf_metadata
     from .pipeline import _read_body_from_doc_markdown
@@ -287,67 +306,67 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
     probes: dict[str, _Probe] = ctx.get("probes") or {}
     resolved_by_doi: dict[str, dict] = ctx.get("resolved_metadata") or {}
 
+    if not paths.sqlite_path.exists():
+        return
+
+    docs_by_id = {d.id: d for d in list_documents(paths)}
+
     n_fused = 0
-    for receipt in receipts:
-        src_path = Path(receipt.src_path)
-        if src_path.suffix.lower() != ".pdf":
-            continue
-        md_path = paths.markdown_dir / f"{receipt.doc_id}.md"
-        doc_json = paths.docs_dir / f"{receipt.doc_id}.json"
-        if not md_path.exists() or not doc_json.exists():
-            continue
-        body = _read_body_from_doc_markdown(md_path)
+    store = Store(paths.sqlite_path)
+    try:
+        for receipt in receipts:
+            src_path = Path(receipt.src_path)
+            if src_path.suffix.lower() != ".pdf":
+                continue
+            md_path = paths.markdown_dir / f"{receipt.doc_id}.md"
+            doc = docs_by_id.get(receipt.doc_id)
+            if not md_path.exists() or doc is None:
+                continue
+            body = _read_body_from_doc_markdown(md_path)
 
-        probe = probes.get(str(src_path))
-        resolved_record: dict | None = None
-        doi_hint = ""
-        if probe is not None:
-            for cand in (probe.xmp_doi, probe.md_doi_candidate):
-                if not cand:
-                    continue
-                # First non-empty probe DOI is the hint — it skips the
-                # raw-PDF fallback scan in pass 4 even if CrossRef missed.
-                if not doi_hint:
-                    doi_hint = cand
-                if cand.lower() in resolved_by_doi:
-                    rec = resolved_by_doi[cand.lower()]
-                    if rec:
-                        resolved_record = rec
-                        break
+            probe = probes.get(str(src_path))
+            resolved_record: dict | None = None
+            doi_hint = ""
+            if probe is not None:
+                for cand in (probe.xmp_doi, probe.md_doi_candidate):
+                    if not cand:
+                        continue
+                    # First non-empty probe DOI is the hint — it skips the
+                    # raw-PDF fallback scan in pass 4 even if CrossRef missed.
+                    if not doi_hint:
+                        doi_hint = cand
+                    if cand.lower() in resolved_by_doi:
+                        rec = resolved_by_doi[cand.lower()]
+                        if rec:
+                            resolved_record = rec
+                            break
 
-        try:
-            new_metadata = assemble_pdf_metadata(
-                src_path, body, resolved=resolved_record, doi_hint=doi_hint,
-            )
-        except Exception as exc:  # noqa: BLE001 - per-doc, keep going
-            print(f"[ingest] fuse FAIL {receipt.doc_id}: {exc}", file=sys.stderr)
-            continue
+            try:
+                new_metadata = assemble_pdf_metadata(
+                    src_path, body, resolved=resolved_record, doi_hint=doi_hint,
+                )
+            except Exception as exc:  # noqa: BLE001 - per-doc, keep going
+                print(f"[ingest] fuse FAIL {receipt.doc_id}: {exc}", file=sys.stderr)
+                continue
 
-        # Merge new fused metadata into the persisted doc; preserve any
-        # parser-specific keys already written (e.g. _docling_chunks was
-        # popped by the worker before write, but future keys may stay).
-        doc_data = json.loads(doc_json.read_text(encoding="utf-8"))
-        merged = dict(doc_data.get("metadata") or {})
-        merged.update(new_metadata)
-        doc_data["metadata"] = merged
-        if new_metadata.get("title"):
-            doc_data["title"] = new_metadata["title"]
+            merged = dict(doc.metadata or {})
+            merged.update(new_metadata)
+            doc.metadata = merged
+            if new_metadata.get("title"):
+                doc.title = new_metadata["title"]
 
-        atomic_write_text(doc_json, json.dumps(doc_data))
+            store.upsert_document(doc)
+            write_doc_markdown(paths, doc, body)
 
-        # Rewrite the enriched markdown (frontmatter + edges) so
-        # the on-disk file reflects the fused metadata.  Go through the
-        # canonical writer so field order and trailer stay consistent.
-        doc = _doc_from_dict(doc_data)
-        write_doc_markdown(paths, doc, body)
+            # Rebuild the topic-extraction keyword hint for this receipt
+            # now that metadata carries the publisher-supplied keywords.
+            kw = merged.get("keywords")
+            if isinstance(kw, list):
+                receipt.declared_keywords = kw
 
-        # Rebuild the topic-extraction keyword hint for this receipt
-        # now that metadata carries the publisher-supplied keywords.
-        kw = merged.get("keywords")
-        if isinstance(kw, list):
-            receipt.declared_keywords = kw
-
-        n_fused += 1
+            n_fused += 1
+    finally:
+        store.close()
 
     if n_fused:
         print(f"[ingest] fuse metadata: {n_fused} PDFs", file=sys.stderr)
@@ -390,12 +409,15 @@ def run_ingest_dag(
     max_workers: int | None,
     parser_backend: str,
     timings: dict[str, float],
-) -> list:
-    """Build the shared ctx, run ``INGEST_DAG``, return the receipts.
+) -> tuple[list, int]:
+    """Build the shared ctx, run ``INGEST_DAG``, return ``(receipts,
+    parse_failed_count)``.
 
     Thin wrapper so ``pipeline.ingest_corpus`` stays readable.  The
     ctx dict is the single source of truth across passes; every
     ``_ingest_*`` reads its inputs from ctx and publishes outputs back.
+    The orchestrator uses ``parse_failed_count`` to decide whether to
+    abort the build (default) or continue under ``--allow-partial``.
     """
     from .dag import run_dag
 
@@ -406,6 +428,6 @@ def run_ingest_dag(
         max_workers=max_workers,
     )
     run_dag(INGEST_DAG, ctx, timings=timings)
-    return ctx.get("receipts") or []
+    return ctx.get("receipts") or [], int(ctx.get("parse_failed_count", 0))
 
 

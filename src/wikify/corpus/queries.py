@@ -28,7 +28,7 @@ from .chunks import (
     read_knowledge_graph,
     read_vector_store,
 )
-from .handles import HandleNotFoundError
+from .handles import AmbiguousHandleError, HandleNotFoundError
 from .handles import resolve as resolve_short
 
 # ---------------------------------------------------------------- listing
@@ -396,6 +396,7 @@ def search_chunks(
     top_k: int = 8,
     rank: str = "semantic",
     in_doc: str | None = None,
+    exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
     """Chunk search via the SQLite store.
 
@@ -406,6 +407,12 @@ def search_chunks(
     When *in_doc* is set, the search is scoped to a single document.
     BM25 / text get a cheap WHERE filter; vector search post-filters
     a wider top-k pool down to the requested doc.
+
+    When *exclude_kinds* is set, hits whose ``section_type`` matches
+    any of the listed kinds are dropped. Typical caller usage:
+    ``exclude_kinds=["references", "acknowledgments"]`` to keep
+    bibliography chunks and acknowledgments paragraphs out of
+    content retrieval.
     """
     from .store.routing import sqlite_available
 
@@ -419,13 +426,21 @@ def search_chunks(
         # fall back to the empty KG so callers get [] instead of an error.
         return []
     if rank == _MULTI_RANK:
-        return _search_chunks_all_modes(corpus, query, top_k=top_k, in_doc=in_doc)
-    return _search_chunks_sqlite(corpus, query, top_k=top_k, rank=rank, in_doc=in_doc)
+        return _search_chunks_all_modes(
+            corpus, query, top_k=top_k, in_doc=in_doc,
+            exclude_kinds=exclude_kinds,
+        )
+    return _search_chunks_sqlite(
+        corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
+        exclude_kinds=exclude_kinds,
+    )
 
 
 def _search_chunks_sqlite(
     corpus: Corpus, query: str, *,
-    top_k: int, rank: str, in_doc: str | None = None,
+    top_k: int, rank: str,
+    in_doc: str | None = None,
+    exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
@@ -433,10 +448,17 @@ def _search_chunks_sqlite(
 
     store = open_store(corpus.root)
     try:
+        # Widen the candidate pool when post-filtering so the final
+        # result still hits ``top_k`` after kind/in_doc filters drop hits.
+        needs_wider = bool(in_doc) or bool(exclude_kinds)
+        effective_top_k = max(top_k * 10, 50) if needs_wider else top_k
+
         if rank == "bm25":
-            hits = store.search_chunks_bm25(query, top_k=top_k, doc_id=in_doc)
+            hits = store.search_chunks_bm25(
+                query, top_k=effective_top_k, doc_id=in_doc,
+            )
         elif rank == "hybrid":
-            meta = read_meta(corpus.vectors_path)
+            meta = read_meta(corpus.sqlite_path)
             embed = (
                 embedder_for(meta.backend, meta.model, mode="query")
                 if meta else None
@@ -444,13 +466,14 @@ def _search_chunks_sqlite(
             qv = embed([query])[0] if embed else None  # type: ignore[index]
             space_id = active_space_id(store)
             hits = store.search_hybrid(
-                query, query_vec=qv, space_id=space_id, top_k=top_k,
+                query, query_vec=qv, space_id=space_id,
+                top_k=effective_top_k,
             )
             if in_doc is not None:
-                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
+                hits = _filter_hits_to_doc(store, hits, in_doc)
         else:
             # default semantic: cosine over the active embedding space.
-            meta = read_meta(corpus.vectors_path)
+            meta = read_meta(corpus.sqlite_path)
             embed = (
                 embedder_for(meta.backend, meta.model, mode="query")
                 if meta else None
@@ -461,11 +484,12 @@ def _search_chunks_sqlite(
             space_id = active_space_id(store)
             if not space_id:
                 return []
-            # Post-filter when scoping: pull a wider pool, narrow to the doc.
-            pool = max(top_k * 10, 50) if in_doc else top_k
-            hits = store.vector_index(space_id).search(qv, top_k=pool)
+            hits = store.vector_index(space_id).search(qv, top_k=effective_top_k)
             if in_doc is not None:
-                hits = _filter_hits_to_doc(store, hits, in_doc)[:top_k]
+                hits = _filter_hits_to_doc(store, hits, in_doc)
+        if exclude_kinds:
+            hits = _filter_hits_excluding_kinds(store, hits, exclude_kinds)
+        hits = hits[:top_k]
         out: list[dict] = []
         for cid, score in hits:
             row = store.get_chunk(cid)
@@ -494,6 +518,33 @@ def _filter_hits_to_doc(store, hits, doc_id: str) -> list[tuple[str, float]]:
         )
     }
     return [(cid, score) for cid, score in hits if cid in in_doc_set]
+
+
+def _filter_hits_excluding_kinds(
+    store, hits, exclude_kinds: list[str],
+) -> list[tuple[str, float]]:
+    """Drop hits whose ``section_type`` matches any excluded kind.
+
+    One SQL round-trip; agents pass ``exclude_kinds=["references",
+    "acknowledgments"]`` to keep bibliography and acknowledgments
+    paragraphs out of content retrieval. Empty ``exclude_kinds``
+    returns the input unchanged.
+    """
+    if not hits or not exclude_kinds:
+        return list(hits)
+    cids = [cid for cid, _ in hits]
+    placeholders = ",".join("?" * len(cids))
+    rows = store.con.execute(
+        f"SELECT chunk_id, section_type FROM chunks "
+        f"WHERE chunk_id IN ({placeholders})",
+        cids,
+    ).fetchall()
+    excluded = {str(k).lower() for k in exclude_kinds}
+    keep = {
+        r[0] for r in rows
+        if (r[1] or "").lower() not in excluded
+    }
+    return [(cid, score) for cid, score in hits if cid in keep]
 
 
 def search_papers_by_title(
@@ -534,18 +585,25 @@ def search_papers(
     chunk_pool: int | None = None,
     text: bool = False,
     rank: str = "semantic",
+    exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
     """Search aggregated to the paper level: best chunk per doc.
 
     Returns a sorted list of ``{doc_id, title, best_score, n_chunks,
     best_chunk_id, chunk_ids}`` records. ``text=True`` switches the
     underlying chunk match from semantic to literal substring grep.
+    ``exclude_kinds`` drops chunks of those section types before
+    aggregation, so a paper that only has matches in references /
+    acknowledgments won't surface as a content hit.
     """
     pool = chunk_pool or max(top_k * 5, top_k)
     if text:
-        hits = search_text(corpus, query, top_k=pool)
+        hits = search_text(corpus, query, top_k=pool, exclude_kinds=exclude_kinds)
     else:
-        hits = search_chunks(corpus, query, top_k=pool, rank=rank)
+        hits = search_chunks(
+            corpus, query, top_k=pool, rank=rank,
+            exclude_kinds=exclude_kinds,
+        )
     docs_by_id = {d.id: d for d in list_documents(corpus)}
     grouped: dict[str, dict] = {}
     for hit in hits:
@@ -662,6 +720,7 @@ def doc_metrics(corpus: Corpus, doc_ids: list[str]) -> dict[str, dict]:
 def _search_chunks_all_modes(
     corpus: Corpus, query: str, *,
     top_k: int, per_mode: int | None = None, in_doc: str | None = None,
+    exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
     """Run semantic + bm25 + literal-substring chunk search and dedupe.
 
@@ -689,7 +748,7 @@ def _search_chunks_all_modes(
     try:
         # Embed once; share between semantic and hybrid (we only need it for
         # the semantic side here; BM25 + text don't use it).
-        meta = read_meta(corpus.vectors_path)
+        meta = read_meta(corpus.sqlite_path)
         embed = embedder_for(meta.backend, meta.model, mode="query") if meta else None
         space_id = active_space_id(store)
         qv = embed([query])[0] if embed else None  # type: ignore[index]
@@ -745,6 +804,23 @@ def _search_chunks_all_modes(
         text_hits = _safe_mode("text", _text)
     finally:
         store.close()
+
+    if exclude_kinds:
+        store2 = open_store(corpus.root)
+        try:
+            sem_pairs = [(h["id"], float(h.get("score", 0.0))) for h in sem_hits]
+            bm_pairs = [(h["id"], float(h.get("score", 0.0))) for h in bm_hits]
+            tx_pairs = [(h["id"], 0.0) for h in text_hits]
+            sem_pairs = _filter_hits_excluding_kinds(store2, sem_pairs, exclude_kinds)
+            bm_pairs = _filter_hits_excluding_kinds(store2, bm_pairs, exclude_kinds)
+            tx_pairs = _filter_hits_excluding_kinds(store2, tx_pairs, exclude_kinds)
+        finally:
+            store2.close()
+        keep_ids = {cid for cid, _ in sem_pairs} | {cid for cid, _ in bm_pairs} \
+                   | {cid for cid, _ in tx_pairs}
+        sem_hits = [h for h in sem_hits if h["id"] in keep_ids]
+        bm_hits = [h for h in bm_hits if h["id"] in keep_ids]
+        text_hits = [h for h in text_hits if h["id"] in keep_ids]
 
     by_id: dict[str, dict] = {}
     score_keys = (("semantic", "semantic_score"), ("bm25", "bm25_score"),
@@ -802,25 +878,43 @@ def _safe_mode(mode: str, fn) -> list[dict]:
         return []
 
 
-def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
+def search_text(
+    corpus: Corpus, needle: str, *,
+    top_k: int = 50,
+    exclude_kinds: list[str] | None = None,
+) -> list[dict]:
     """Literal substring grep over chunk text.
 
     Uses SQLite `LIKE` against `wikify.db` when available (sub-ms for
     typical corpus sizes); falls back to scanning the on-disk JSONL
     only for hand-built fixtures with no SQLite store.
+
+    ``exclude_kinds`` drops chunks whose ``section_type`` is in the
+    list before returning -- the SQLite path filters in SQL, the
+    JSONL fallback filters in Python.
     """
     from .store.routing import sqlite_available
+
+    excluded = (
+        {str(k).lower() for k in exclude_kinds} if exclude_kinds else set()
+    )
 
     if sqlite_available(corpus.root):
         from .store.routing import open_store
         store = open_store(corpus.root)
         try:
-            rows = store.con.execute(
+            sql = (
                 "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview "
                 "FROM chunks WHERE LOWER(text) LIKE ? "
-                "ORDER BY chunk_id LIMIT ?",
-                (f"%{needle.lower()}%", top_k),
-            ).fetchall()
+            )
+            params: list = [f"%{needle.lower()}%"]
+            if excluded:
+                placeholders = ",".join("?" * len(excluded))
+                sql += f"AND LOWER(section_type) NOT IN ({placeholders}) "
+                params.extend(excluded)
+            sql += "ORDER BY chunk_id LIMIT ?"
+            params.append(top_k)
+            rows = store.con.execute(sql, params).fetchall()
             return [
                 {"id": r["chunk_id"], "doc_id": r["doc_id"], "preview": r["preview"]}
                 for r in rows
@@ -830,10 +924,13 @@ def search_text(corpus: Corpus, needle: str, *, top_k: int = 50) -> list[dict]:
     needle_lower = needle.lower()
     out: list[dict] = []
     for c in all_chunks(corpus):
-        if needle_lower in c.text.lower():
-            out.append({"id": c.id, "doc_id": c.doc_id, "preview": c.text[:160]})
-            if len(out) >= top_k:
-                break
+        if needle_lower not in c.text.lower():
+            continue
+        if excluded and (c.section_type or "").lower() in excluded:
+            continue
+        out.append({"id": c.id, "doc_id": c.doc_id, "preview": c.text[:160]})
+        if len(out) >= top_k:
+            break
     return out
 
 
@@ -897,7 +994,7 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "root": str(corpus.root),
         "n_docs": len(docs),
         "n_chunks": len(chunks),
-        "has_vectors": corpus.vectors_path.exists(),
+        "has_vectors": _has_vectors(corpus),
         "has_manifest": corpus.manifest_path.exists(),
         "has_sqlite_store": corpus.sqlite_path.exists(),
     }
@@ -918,6 +1015,24 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
             out["ord_refs_coverage_pct"] = None
             out["ord_refs_error"] = str(exc)
     return out
+
+
+def _has_vectors(corpus: Corpus) -> bool:
+    """True iff the corpus has any chunk embeddings persisted in `wikify.db`."""
+    if not corpus.sqlite_path.exists():
+        return False
+    import sqlite3
+    try:
+        con = sqlite3.connect(corpus.sqlite_path)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM embeddings WHERE node_type='chunk' LIMIT 1",
+            ).fetchone()
+            return row is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
 
 
 def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
@@ -1470,7 +1585,7 @@ def select_evidence_chunks(
     from ..corpus.vectors_meta import read_meta
     from ..embedding import embedder_for
 
-    meta = read_meta(corpus.vectors_path)
+    meta = read_meta(corpus.sqlite_path)
     embed = (
         embedder_for(meta.backend, meta.model, mode="query") if meta else None
     )
@@ -1557,12 +1672,72 @@ SCHEMA: dict = {
             "Literal substring search over Document.title. Use with "
             "--by paper for 'paper whose title mentions X'."
         ),
+        "--in-doc <doc-handle>": (
+            "Scope chunk search to one document. Accepts any doc handle "
+            "form (short, hex, or full id). BM25 / text get a cheap "
+            "WHERE filter; vector search post-filters a wider pool."
+        ),
+        "--exclude-kind <kind>": (
+            "Drop chunks whose section_type matches (repeatable). "
+            "Kinds: abstract | introduction | background | methods | "
+            "results | discussion | conclusion | references | "
+            "acknowledgments | appendix | body. Typical: "
+            "exclude_kinds=['references','acknowledgments'] to keep "
+            "bibliography and acknowledgments paragraphs out of "
+            "content retrieval."
+        ),
     },
     "sample_strategies": {
         "diverse": (
             "Greedy submodular: PageRank prior + coverage gain over doc "
             "embeddings."
         ),
+    },
+    "walks": {
+        "similarity_walk": {
+            "purpose": (
+                "Recursive cosine-similarity walk over chunk vectors. "
+                "Starts from a query (top-k chunks at hop 0) or a single "
+                "chunk handle and expands neighbours per hop."
+            ),
+            "params": {
+                "query": "Concept seed (mutually exclusive with from_chunk).",
+                "from_chunk": (
+                    "chunk:<id-or-short> seed (mutually exclusive with query)."
+                ),
+                "depth": "Hops; 0 = seeds only.",
+                "top_k": "Seed count at hop 0 (query mode only).",
+                "neighbors": "Per-chunk fanout per hop.",
+                "threshold": "Cosine cut; below this, edges are dropped.",
+                "rank": "Hop-0 search method (query mode only).",
+                "cross_doc_only": (
+                    "True drops same-doc neighbours (default); False "
+                    "includes intra-doc edges."
+                ),
+            },
+            "result": (
+                "{seeds, edges, chunks} -- chunks deduped across paths; "
+                "edges typed 'similar' with cosine score."
+            ),
+        },
+        "citation_walk": {
+            "purpose": (
+                "Concept-grounded recursive citation walk. For each "
+                "frontier chunk, follow chunk_citations to in-corpus "
+                "papers and pick that paper's best chunk for the same "
+                "query (scoped to the doc), recursing to depth."
+            ),
+            "params": {
+                "query": "Concept the walk is grounded on (required).",
+                "depth": "Citation hops; 0 = seeds only.",
+                "top_k": "Seed chunks at hop 0.",
+                "rank": "Ranking method for seed and per-hop sub-search.",
+            },
+            "result": (
+                "{seeds, edges, chunks} -- edges carry the citation "
+                "marker that led from src_chunk to dst_chunk in dst_doc."
+            ),
+        },
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
@@ -1700,6 +1875,7 @@ def find(
     text: bool = False,
     field: str = "chunk_text",
     in_doc: str | None = None,
+    exclude_kinds: list[str] | None = None,
 ) -> dict:
     """Validate + dispatch ``find``. Returns ``{kind, rows, scored}``.
 
@@ -1774,7 +1950,10 @@ def find(
 
     if text:
         if by == "paper":
-            papers = search_papers(corpus, query, top_k=paper_pool, text=True)
+            papers = search_papers(
+                corpus, query, top_k=paper_pool, text=True,
+                exclude_kinds=exclude_kinds,
+            )
             return {
                 "kind": "papers",
                 "rows": _rerank_papers(corpus, papers, rank=rank, top_k=top_k),
@@ -1782,7 +1961,9 @@ def find(
             }
         return {
             "kind": "chunks",
-            "rows": search_text(corpus, query, top_k=top_k),
+            "rows": search_text(
+                corpus, query, top_k=top_k, exclude_kinds=exclude_kinds,
+            ),
             "scored": False,
         }
 
@@ -1795,9 +1976,14 @@ def find(
 
     if by == "paper":
         if rank in _LEXICAL_RANKS:
-            papers = search_papers(corpus, query, top_k=top_k, rank=rank)
+            papers = search_papers(
+                corpus, query, top_k=top_k, rank=rank,
+                exclude_kinds=exclude_kinds,
+            )
             return {"kind": "papers", "rows": papers, "scored": True}
-        papers = search_papers(corpus, query, top_k=paper_pool)
+        papers = search_papers(
+            corpus, query, top_k=paper_pool, exclude_kinds=exclude_kinds,
+        )
         return {
             "kind": "papers",
             "rows": _rerank_papers(corpus, papers, rank=rank, top_k=top_k),
@@ -1808,6 +1994,7 @@ def find(
         "kind": "chunks",
         "rows": search_chunks(
             corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
+            exclude_kinds=exclude_kinds,
         ),
         "scored": True,
     }
@@ -1900,7 +2087,7 @@ def similarity_walk(
             short = (from_chunk or "").removeprefix("chunk:")
             try:
                 cid = resolve_chunk_id(corpus, short)
-            except HandleNotFoundError as exc:
+            except (HandleNotFoundError, AmbiguousHandleError) as exc:
                 raise QueryError("bad_chunk", str(exc)) from exc
             row = store.get_chunk(cid)
             if not row:

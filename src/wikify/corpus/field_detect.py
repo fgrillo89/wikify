@@ -10,8 +10,8 @@ Result is cached in ``<corpus>/field.txt`` so subsequent runs don't
 re-detect.
 """
 
-import json
 import re
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
@@ -140,18 +140,19 @@ def _score_topics(topics: list[str], keywords: frozenset[str]) -> int:
 
 
 def _load_topics(corpus: Corpus) -> list[str]:
-    path = corpus.topics_path
-    if not path.exists():
+    if not corpus.sqlite_path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        con = sqlite3.connect(corpus.sqlite_path)
+        try:
+            rows = con.execute(
+                "SELECT topic FROM topics ORDER BY topic",
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
         return []
-    if isinstance(data, dict):
-        topics = data.get("topics") or data.get("declared") or []
-    else:
-        topics = data
-    return [str(t) for t in topics if isinstance(t, str)]
+    return [str(r[0]) for r in rows]
 
 
 def _field_cache_path(corpus: Corpus) -> Path:

@@ -1,8 +1,7 @@
-"""Phase 2 acceptance: ingest dual-write + per-doc isolation + inbound resolution."""
+"""Ingest write + per-doc isolation + inbound resolution."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -188,21 +187,16 @@ def test_embedding_space_is_recorded(sources, corpus):
         s.close()
 
 
-def test_chunk_text_round_trip_matches_jsonl(sources, corpus):
-    """Phase 2 parity: chunk text + ord per chunk_id matches the legacy JSONL."""
+def test_chunks_have_text_and_ord(sources, corpus):
+    """Every persisted chunk row carries non-empty text and an ord."""
     _md(sources / "a.md", "Alpha", "Alpha body about photocatalysis.")
     paths = _ingest(sources, corpus)
     s = Store(paths.sqlite_path)
     try:
-        sql_chunks = {c["chunk_id"]: (c["ord"], c["text"]) for c in s.all_chunks()}
+        rows = s.all_chunks()
     finally:
         s.close()
-    # Read the legacy jsonl chunks and compare.
-    jsonl_chunks = {}
-    for f in (paths.chunks_dir).glob("*.jsonl"):
-        for line in f.read_text(encoding="utf-8").splitlines():
-            if not line:
-                continue
-            d = json.loads(line)
-            jsonl_chunks[d["id"]] = (d["ord"], d["text"])
-    assert sql_chunks == jsonl_chunks
+    assert rows
+    for r in rows:
+        assert isinstance(r["ord"], int)
+        assert r["text"]

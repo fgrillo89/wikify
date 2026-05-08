@@ -34,8 +34,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
-from wikify.corpus.images_index import build_images_index
-
 from .bibtex import (
     enrich_doc_metadata,
     read_existing_bib_titles,
@@ -158,18 +156,7 @@ def _refresh_citation_edges(ctx: dict) -> None:
 
 def _refresh_topics(ctx: dict) -> None:
     vocab = extract_topics(ctx["pairs"], declared_per_doc=ctx["declared"])
-    write_topics(ctx["paths"].topics_path, vocab)
-
-
-def _refresh_images_index(ctx: dict) -> None:
-    build_images_index(ctx["paths"], doc_ids=[d.id for d in ctx["docs"]])
-
-
-def _refresh_equations_index(ctx: dict) -> None:
-    from wikify.corpus.equations_index import build_equations_index, save_equations_index
-
-    idx = build_equations_index(ctx["docs"], ctx["chunks"])
-    save_equations_index(ctx["paths"].equations_index_path, idx)
+    write_topics(ctx["paths"], vocab)
 
 
 def _refresh_openalex(ctx: dict) -> None:
@@ -290,10 +277,10 @@ def _refresh_doc_enrichment(ctx: dict) -> None:
 
     Without this, the title fallback (``"Word Document"`` placeholder ->
     filename-derived title) only reaches the bibtex writer's local copy,
-    so the knowledge graph and persisted ``docs/<id>.json`` records keep
-    the raw placeholder. Running this step before bibliography / KG
-    build / doc resave makes every downstream consumer see the cleaned
-    metadata.
+    so the persisted ``documents`` rows and SQLite graph edges keep the
+    raw placeholder. Running this step before bibliography, doc resave,
+    and the SQLite re-projection makes every downstream consumer see the
+    cleaned metadata.
 
     The previous run's ``corpus_papers.bib`` is loaded once and passed
     in as ``bib_titles`` so title resolution always contends with bib —
@@ -318,22 +305,16 @@ def _refresh_bibliography(ctx: dict) -> None:
     # ``ctx["docs"]`` was already enriched in the dedicated
     # ``doc_enrichment`` wave; ``write_corpus_bibliography`` re-runs the
     # enrichment defensively (idempotent for already-clean docs) so it
-    # remains correct when called outside the DAG.
+    # remains correct when called outside the DAG. The returned citation
+    # index is stashed on ``ctx`` so the SQLite-store wave can populate
+    # bib_entries.local_key.
     resolve_doi = True
-    write_corpus_bibliography(
+    result = write_corpus_bibliography(
         ctx["paths"],
         ctx["docs"],
         resolve_doi=resolve_doi,
     )
-
-
-def _refresh_knowledge_graph(ctx: dict) -> None:
-    """No-op since `wikify.db` is the canonical KG storage.
-
-    Kept as a wave entry so existing timing reports keep their shape; the
-    actual graph rows are written by `_refresh_sqlite_store` (Wave G).
-    """
-    ctx["knowledge_graph"] = None
+    ctx["citation_index"] = result.get("index")
 
 
 def _refresh_doc_resave(ctx: dict) -> None:
@@ -343,18 +324,44 @@ def _refresh_doc_resave(ctx: dict) -> None:
 
 
 def _refresh_sqlite_store(ctx: dict) -> None:
-    """Dual-write `wikify.db` from in-memory ingest artefacts.
+    """Project the final docs/chunks/vectors into `wikify.db`.
 
     Runs after every other refresh wave so it sees the final docs,
     chunks, vectors, and citation index. Idempotent: re-running the
-    DAG over the same inputs reproduces the same SQLite content.
+    DAG over the same inputs reproduces the same SQLite content. The
+    embedder fingerprint comes from ``current_backend()`` (the env-var
+    driven backend that ``_embed_chunks_incremental`` actually used)
+    so the very first ingest can write ``embedding_spaces`` even
+    though no prior space row exists to read back from.
     """
     from wikify.corpus.store.sync import write_corpus
-    from wikify.corpus.vectors_meta import read_meta
+    from wikify.corpus.vectors_meta import VectorsMeta
+
+    from ..embedding import current_backend
 
     paths = ctx["paths"]
-    meta = read_meta(paths.vectors_path)
-    write_corpus(paths, ctx["docs"], ctx["chunks"], ctx.get("store"), meta)
+    store = ctx.get("store")
+    meta: VectorsMeta | None = None
+    if store is not None:
+        be = current_backend()
+        dim = (
+            int(store.matrix.shape[1])
+            if getattr(store, "matrix", None) is not None and store.matrix.size
+            else int(be.get("dim") or 0)
+        )
+        meta = VectorsMeta(
+            backend=str(be["backend"]),
+            dim=dim,
+            model=be.get("model"),  # type: ignore[arg-type]
+        )
+    write_corpus(
+        paths,
+        ctx["docs"],
+        ctx["chunks"],
+        store,
+        meta,
+        citation_index=ctx.get("citation_index"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -363,14 +370,15 @@ def _refresh_sqlite_store(ctx: dict) -> None:
 
 
 REFRESH_DAG: list[Wave] = [
-    # Wave A: independent steps (no citation dependency)
+    # Wave A: independent steps (no citation dependency).
+    # Images and equations get projected into `wikify.db` by Wave G's
+    # ``project_documents``; their query-time views are derived from the
+    # ``assets`` table directly, so no separate index step is needed here.
     Wave(
-        label="wave A (similarity+topics+images+equations)",
+        label="wave A (similarity+topics)",
         steps=[
             Step("doc_similarity", _refresh_doc_similarity),
             Step("topics", _refresh_topics),
-            Step("images_index", _refresh_images_index),
-            Step("equations_index", _refresh_equations_index),
         ],
     ),
     # Wave B: heuristic enrichment (always, zero API calls except DOI negotiation)
@@ -388,8 +396,8 @@ REFRESH_DAG: list[Wave] = [
         ],
     ),
     # Wave C': metadata enrichment (title/author/venue/DOI fallback).
-    # Must run before Wave D so bibliography, KG build (Wave E), and
-    # doc resave (Wave F) all see cleaned doc records.
+    # Must run before Wave D so bibliography, doc resave, and the
+    # SQLite store all see cleaned doc records.
     Wave(
         label="wave C' (doc metadata enrichment)",
         steps=[
@@ -405,21 +413,14 @@ REFRESH_DAG: list[Wave] = [
             Step("bibliography", _refresh_bibliography),
         ],
     ),
-    # Wave E: knowledge graph (depends on citation edges)
-    Wave(
-        label="wave E (knowledge graph)",
-        steps=[
-            Step("knowledge_graph", _refresh_knowledge_graph),
-        ],
-    ),
-    # Wave F: derived artifacts (depend on KG)
+    # Wave F: persist enriched docs and citation-derived edges.
     Wave(
         label="wave F (resave)",
         steps=[
             Step("doc_resave", _refresh_doc_resave),
         ],
     ),
-    # Wave G: SQLite query store dual-write (depends on every prior wave).
+    # Wave G: SQLite query store dual-write from final docs/chunks/vectors.
     Wave(
         label="wave G (sqlite store)",
         steps=[

@@ -116,3 +116,15 @@ Format: `- **Topic**: What went wrong → what to do instead.`
 - **wikify person pages**: Person pages are written by the model like article pages. Author metadata is assembled at ingest/distill time and attached as `author_context`. The "appears in this corpus" phrasing is banned. Must be robust to missing `author_context`.
 - **wikify CLI file exploration**: For skill workflows, make the CLI the canonical wrapper around `ls`/`rg`/`cat` behavior so bundle reads are constrained, rendered, and logged. Keep raw shell file tools for debugging, not normal workflow guidance.
 - **No meta-references in code or docstrings**: Never write "per `tasks/foo.md`", "Phase 1 ships X", "see `tasks/mcp_plan.md`", "in this phase", "in later phases", or any pointer to plan/todo/temp docs inside source comments, docstrings, or shipped skill docs. Plans rot fast and the reference is dead the moment the plan moves. Describe what the code IS and DOES, not what session/plan motivated it. Historical framing belongs in commit messages and the labelled history docs (`tasks/lessons.md`, `tasks/skill-centric-redesign-plan.md`); everything else must read as if the plan never existed. Pre-existing internal "phase 1/phase 2" labels that describe an algorithm's stages (e.g. `bibtex.py`, `resolver.py`) are fine — those describe code, not project planning.
+
+## Parser backend (Docling default)
+
+The default parser backend is **Docling** for every supported format
+(PDF / DOCX / PPTX / HTML). First-run cost includes a one-time
+download of the Granite-Docling-258M formula model (~258 MB) plus
+the layout / table models. After the cache is warm the median
+PDF parses in ~10 s on an Ampere GPU. Pass
+`--parser marker` to fall back to Marker if equation extraction is
+not needed and you want the absolute-fastest PDF path. Pass
+`--parser lite` for CI / low-resource environments
+(pymupdf4llm + python-docx + python-pptx + trafilatura, no models).

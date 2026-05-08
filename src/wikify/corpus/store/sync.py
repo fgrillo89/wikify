@@ -1,14 +1,14 @@
-"""Project ingest in-memory artefacts into the SQLite query store.
+"""Project in-memory ingest artefacts into the SQLite query store.
 
-Bridge between the existing on-disk corpus shape (Document + Chunk +
-VectorStore + images.json + equations.json + citations) and the new
-canonical tables. Used by `ingest.dag._refresh_sqlite_store` and by any
-ad-hoc rebuild that wants to materialise `wikify.db` from corpus state.
+Takes Document + Chunk + VectorStore objects (built by the ingest DAG)
+and writes the canonical ``documents`` / ``chunks`` / ``bib_entries`` /
+``assets`` / ``embeddings`` / ``graph_edges`` rows. Used by
+``ingest.dag._refresh_sqlite_store`` (Wave G) and by any ad-hoc rebuild
+that wants to materialise ``wikify.db`` from in-memory state.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -121,6 +121,7 @@ def _assets_from_doc(doc: Document) -> list[dict]:
             continue
         eq_id = eq.get("id") or f"{doc.id}/eq_{ord_i:03d}"
         out.append({
+            **eq,
             "id": eq_id,
             "type": "equation",
             "ord": ord_i,
@@ -214,14 +215,15 @@ def write_corpus(
     chunks: list[Chunk],
     vec: VectorStore | None,
     meta: VectorsMeta | None,
+    *,
+    citation_index: dict | None = None,
 ) -> Path:
-    """Top-level dual-write entry point. Returns the wikify.db path."""
+    """Top-level write entry point. Returns the wikify.db path."""
     by_doc: dict[str, list[Chunk]] = {}
     for ck in chunks:
         by_doc.setdefault(ck.doc_id, []).append(ck)
     for v in by_doc.values():
         v.sort(key=lambda c: c.ord)
-    citation_index = _load_citation_index_optional(paths)
     db_path = paths.sqlite_path
     store = Store(db_path)
     try:
@@ -236,16 +238,6 @@ def write_corpus(
     finally:
         store.close()
     return db_path
-
-
-def _load_citation_index_optional(paths: Corpus) -> dict | None:
-    """Read citations.json if it exists, else None."""
-    if not paths.citation_index_path.exists():
-        return None
-    try:
-        return json.loads(paths.citation_index_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
 
 
 def _sync_remove_absent_docs(store: Store, current_ids: set[str]) -> None:
@@ -383,15 +375,3 @@ def _delete_edges_with_endpoint(con, removed: list[tuple[str, str]], batch: int 
         )
 
 
-def write_doc_metadata_json(store: Store, doc_id: str) -> dict:
-    """Snapshot a document row into the JSON sidecar compatibility shape."""
-    row = store.get_document(doc_id)
-    if not row:
-        return {}
-    out = dict(row)
-    out["authors"] = json.loads(out.pop("authors_json") or "[]")
-    if out.get("metadata_json"):
-        meta = json.loads(out["metadata_json"])
-        out["metadata"] = meta
-    out.pop("metadata_json", None)
-    return out

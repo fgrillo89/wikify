@@ -8,10 +8,12 @@ from wikify.api import Corpus
 from wikify.corpus.images_index import (
     ImageIndex,
     build_images_index,
-    rebuild_images_index,
 )
+from wikify.corpus.store import Store, transaction
+from wikify.corpus.store.sync import project_documents
 from wikify.ingest.images import save_doc_images
 from wikify.ingest.parsers.registry import RawImage
+from wikify.models import Document
 
 PNG_1x1 = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -34,31 +36,61 @@ def corpus_with_images(tmp_path: Path) -> Corpus:
         RawImage(data=PNG_1x1, ext="png", page=4, caption="loose img",
                  media_type="figure", width=1, height=1),
     ]
-    save_doc_images(doc_id, folder, raw)
+    saved_liu = save_doc_images(doc_id, folder, raw)
     # Second doc to verify multi-doc dispatch
     doc_id2 = "[2018 Yang] Crossbar_abcd"
     folder2 = corpus.images_dir / "2018_Yang_Crossbar"
-    save_doc_images(
+    saved_yang = save_doc_images(
         doc_id2,
         folder2,
         [RawImage(data=PNG_1x1, ext="png", page=1, caption="table",
                   label="Table 1", media_type="table", width=1, height=1)],
     )
+
+    docs = [
+        Document(
+            id=doc_id, source_path=f"src/{doc_id}.pdf", kind="pdf",
+            title="Liu paper", metadata={},
+            markdown_path=f"markdown/{doc_id}.md",
+            image_dir=str(folder), images=saved_liu,
+        ),
+        Document(
+            id=doc_id2, source_path=f"src/{doc_id2}.pdf", kind="pdf",
+            title="Yang paper", metadata={},
+            markdown_path=f"markdown/{doc_id2}.md",
+            image_dir=str(folder2), images=saved_yang,
+        ),
+    ]
+    # Tag images on Yang as table type so the projector emits asset_type='table'.
+    for img in docs[1].images:
+        img.media_type = "table"  # type: ignore[attr-defined]
+
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, docs, {d.id: [] for d in docs})
+        # Override the figure projection for the Yang doc to record table type;
+        # the default projection writes asset_type='figure'. We patch the rows.
+        store.con.execute(
+            "UPDATE assets SET asset_type='table' WHERE doc_id=? AND caption=?",
+            (doc_id2, "table"),
+        )
+        store.con.commit()
+    finally:
+        store.close()
     return corpus
 
 
 def test_build_index_round_trip(corpus_with_images: Corpus) -> None:
-    idx = build_images_index(corpus_with_images, doc_ids=[])
+    idx = build_images_index(corpus_with_images)
     assert len(idx.by_doc) == 2
-    # Persisted file exists and reloads to the same shape.
-    assert corpus_with_images.images_index_path.exists()
+    assert sum(len(v) for v in idx.by_doc.values()) == 4
     reloaded = ImageIndex.load(corpus_with_images)
     assert set(reloaded.by_doc.keys()) == set(idx.by_doc.keys())
-    assert sum(len(v) for v in reloaded.by_doc.values()) == 4
 
 
 def test_resolve_caption_aliases(corpus_with_images: Corpus) -> None:
-    idx = build_images_index(corpus_with_images, doc_ids=[])
+    idx = build_images_index(corpus_with_images)
     liu = next(k for k in idx.by_doc if "Liu" in k)
     for ref in ("Figure 1", "fig 1", "Figure_01", "figure_01", "Fig. 1", "fig.1"):
         hit = idx.resolve(liu, ref)
@@ -67,7 +99,7 @@ def test_resolve_caption_aliases(corpus_with_images: Corpus) -> None:
 
 
 def test_resolve_table_label(corpus_with_images: Corpus) -> None:
-    idx = build_images_index(corpus_with_images, doc_ids=[])
+    idx = build_images_index(corpus_with_images)
     yang = next(k for k in idx.by_doc if "Yang" in k)
     hit = idx.resolve(yang, "Table 1")
     assert hit is not None
@@ -75,24 +107,15 @@ def test_resolve_table_label(corpus_with_images: Corpus) -> None:
 
 
 def test_resolve_unmatched_returns_none(corpus_with_images: Corpus) -> None:
-    idx = build_images_index(corpus_with_images, doc_ids=[])
+    idx = build_images_index(corpus_with_images)
     liu = next(k for k in idx.by_doc if "Liu" in k)
     assert idx.resolve(liu, "Figure 99") is None
     assert idx.resolve("nonexistent_doc", "Figure 1") is None
 
 
 def test_paths_are_relative_to_corpus_root(corpus_with_images: Corpus) -> None:
-    idx = build_images_index(corpus_with_images, doc_ids=[])
+    idx = build_images_index(corpus_with_images)
     for recs in idx.by_doc.values():
         for r in recs:
             assert not Path(r.path).is_absolute(), r.path
             assert (corpus_with_images.root / r.path).exists()
-            assert (corpus_with_images.root / r.sidecar).exists()
-
-
-def test_rebuild_from_sidecars_only(corpus_with_images: Corpus) -> None:
-    build_images_index(corpus_with_images, doc_ids=[])
-    corpus_with_images.images_index_path.unlink()
-    rebuilt = rebuild_images_index(corpus_with_images)
-    assert len(rebuilt.by_doc) == 2
-    assert corpus_with_images.images_index_path.exists()

@@ -120,3 +120,55 @@ def test_span_dedup_does_not_double_count_overlapping_matches():
         "Further analysis confirms the conductive filament model."
     )
     assert not is_boilerplate(text)
+
+
+# --------------------------- Stage 2 extensions -----------------------------
+
+
+def test_section_path_articles_you_may_be_interested_in() -> None:
+    """Body text inside the publisher sidebar gets flagged via section_path."""
+    body = "TaN bottom electrode bar (width 20 um), atomic layer deposition."
+    sp = [
+        "Resistive switching of fully ALD HfO2 devices",
+        "**Articles You May Be Interested In**",
+    ]
+    assert is_boilerplate(body, sp) is True
+
+
+def test_section_path_recommended_by_acs() -> None:
+    body = "Some short body that would not normally trip the marker test."
+    sp = ["■ REFERENCES", "Recommended by ACS"]
+    assert is_boilerplate(body, sp) is True
+
+
+def test_real_section_path_does_not_flag() -> None:
+    """A plain body section must never be section-path-flagged."""
+    body = "We deposited 100 cycles of HfO2 by ALD on TiN at 200C."
+    sp = ["Methods", "Sample Preparation"]
+    assert is_boilerplate(body, sp) is False
+
+
+def test_articles_marker_in_body_text_flags_via_density() -> None:
+    """Even without section_path, the new body-text markers fire."""
+    text = (
+        "Articles You May Be Interested In. Cited By. "
+        "Recommended for you. Some short trailing text."
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_downloaded_from_inline_marker_fires() -> None:
+    """Page-footer download stamps inline with prose count as a marker."""
+    text = (
+        "All rights reserved. The article is downloaded from "
+        "https://onlinelibrary.wiley.com/doi/10.1002/foo "
+        "on 15 March 2026. Copyright 2024 reserved."
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_section_path_kwarg_is_optional() -> None:
+    """Existing callers without section_path keep working unchanged."""
+    text = "All rights reserved. Reprints and permissions."
+    assert is_boilerplate(text) is True
+    assert is_boilerplate(text, None) is True

@@ -1,32 +1,46 @@
 """Multi-format parser using IBM Docling.
 
 Docling's ``DocumentConverter`` natively handles PDF, DOCX, PPTX, and
-HTML — all through one interface that returns a ``DoclingDocument`` we
-can lower to markdown + images + sections. This parser exposes
-``.pdf``, ``.docx``, ``.pptx``, ``.html``, ``.htm`` as supported, so it
-covers the same set as the per-format ``python-docx`` /
-``python-pptx`` / ``trafilatura`` parsers when higher-quality
-structured output is needed.
+HTML through one interface that returns a ``DoclingDocument``. This
+module lowers each input to ``ParseResult`` (markdown + images +
+sections + metadata) so the rest of the ingest pipeline does not need
+to know which backend produced it.
 
-PDF still gets the full enrichment pipeline (RT-DETRv2 layout +
-TableFormer + optional formulas/VLM). DOCX / PPTX / HTML use Docling's
-default pipelines for those formats; Docling already knows how to walk
-the native structure, so no custom options are wired.
+PDFs go through the full enrichment pipeline (RT-DETRv2 layout +
+TableFormer + optional formula/VLM heads). DOCX / PPTX / HTML use
+Docling's native parsers for those formats; we only need to declare
+them in ``allowed_formats``.
 
-When ``hybrid_chunks=True`` (the default), the ``ParseResult.metadata``
-carries ``_docling_chunks``: a list of ``(text, heading_path)`` pairs
-that the pipeline can consume directly, skipping ``chunk_document``.
+GPU acceleration is automatic when CUDA is available. The standard
+PDF pipeline batches layout / OCR / table inference on the GPU; tune
+via ``DOCLING_*_BATCH_SIZE`` env vars below.
 
-GPU acceleration is used automatically when CUDA is available.
+Enrichment + performance knobs (env vars):
 
-Enrichment options (PDF only) are controlled via env vars:
+  DOCLING_FORMULAS=1            Formula/equation enrichment (LaTeX)
+  DOCLING_FORMULA_MODEL=...     granite_docling (default) | codeformulav2
+  DOCLING_ALLOW_CPU_FORMULAS=0  Allow formula enrichment on CPU (very slow)
+  DOCLING_OCR=1                 OCR scanned pages (slow on long PDFs)
+  DOCLING_PIC_CLASSIFY=1        Picture classification
+  DOCLING_PIC_DESCRIBE=1        Picture description (VLM captioning)
+  DOCLING_VLM=1                 Use the VLM pipeline (whole-page VLM)
+  DOCLING_VLM_MODEL=granite     granite | smoldocling | got2 | glmocr |
+                                granite-ollama | granite-vllm
+  DOCLING_IMAGES_SCALE=3.0      Picture render resolution multiplier
+  DOCLING_LAYOUT_BATCH_SIZE=auto  Layout-detection batch size on GPU
+                                  (auto = 8/16/32/64 by VRAM tier)
+  DOCLING_OCR_BATCH_SIZE=auto     OCR batch size on GPU (only matters
+                                  when DOCLING_OCR=1 or auto-detect
+                                  kicks in; auto = 8/16/32/64 by VRAM)
+  DOCLING_TABLE_BATCH_SIZE=4    TableFormer batch size (still CPU-bound
+                                in current Docling; do not raise blindly)
+  DOCLING_OCR_AUTO=1            Auto-detect text layer per PDF; flip
+                                do_ocr=True only when no text found.
+                                Set to 0 to disable auto-detect.
 
-  DOCLING_FORMULAS=1       Enable formula/equation extraction (LaTeX)
-  DOCLING_PIC_CLASSIFY=1   Enable picture classification
-  DOCLING_PIC_DESCRIBE=1   Enable picture description (VLM captioning)
-  DOCLING_VLM=1            Use VLM pipeline instead of standard pipeline
-  DOCLING_VLM_MODEL=granite  VLM model: granite, smoldocling, got2, glmocr,
-                             granite-ollama, granite-vllm
+Chunking is owned by ``wikify.ingest.hybrid_chunker.chunk_with_hybrid``
+and runs on the persisted markdown; this module never produces chunks
+itself.
 """
 
 from __future__ import annotations
@@ -35,14 +49,167 @@ import hashlib
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..equations import _equation_id
 from ._citations import bracketize_bare_refs
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
 
 _HF_PATCHED = False
+
+
+# Layout/OCR batch sizes by total VRAM. Tuned so that 64-page tensors
+# at images_scale=3.0 don't push layout activations + Granite-Docling
+# KV cache past the VRAM ceiling. Anything past the last entry uses 64.
+_GPU_BATCH_TIERS: tuple[tuple[int, int], ...] = (
+    (8, 8),
+    (16, 16),
+    (32, 32),
+)
+
+
+def _gpu_batch_size_default() -> int:
+    """Pick layout/ocr batch size from total VRAM.
+
+    Returns the upstream Docling default (4) when CUDA is unavailable
+    or the probe fails. On CUDA the result is one of 8/16/32/64
+    depending on which ``_GPU_BATCH_TIERS`` row matches the device's
+    total memory.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return 4
+        gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    except (ImportError, RuntimeError, AttributeError, AssertionError):
+        return 4
+    for max_gb, batch_size in _GPU_BATCH_TIERS:
+        if gb < max_gb:
+            return batch_size
+    return 64
+
+
+# OOM-retry ladder for layout/OCR batch sizes. Highest-to-lowest so a
+# linear scan finds the next-smaller value below the current setting.
+# We only step batch size down on CUDA OOM; we never disable formulas,
+# OCR, or any other quality-affecting knob — the contract is "fail loudly
+# at batch=4 rather than silently degrade output".
+_GPU_BATCH_RETRY_ORDER: tuple[int, ...] = (64, 32, 16, 8, 4)
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """True if *exc* looks like a CUDA out-of-memory failure."""
+    try:
+        import torch
+        cuda_oom = getattr(torch.cuda, "OutOfMemoryError", None)
+    except (ImportError, AttributeError, RuntimeError):
+        cuda_oom = None
+    if cuda_oom is not None and isinstance(exc, cuda_oom):
+        return True
+    msg = str(exc).lower()
+    return "out of memory" in msg and any(
+        marker in msg for marker in ("cuda", "cudnn", "cublas")
+    )
+
+
+def _next_lower_batch(current: int) -> int | None:
+    """Return the next value in ``_GPU_BATCH_RETRY_ORDER`` below *current*."""
+    for b in _GPU_BATCH_RETRY_ORDER:
+        if b < current:
+            return b
+    return None
+
+
+def _step_down_batches(opts: DoclingOptions) -> DoclingOptions | None:
+    """Return a fresh ``DoclingOptions`` with each batch knob stepped
+    down independently per ``_GPU_BATCH_RETRY_ORDER``. Returns ``None``
+    when neither knob can drop further (both already at the floor).
+
+    Independence matters: if the operator pinned
+    ``DOCLING_OCR_BATCH_SIZE=4`` while keeping layout at 64, the retry
+    must lower layout 64 -> 32 without touching OCR. Using
+    ``max(layout, ocr)`` and assigning the same value to both would
+    silently raise the OCR pin from 4 to 32 — exactly the kind of
+    "fixing one bug, planting another" pattern this code aims to
+    avoid.
+    """
+    import copy
+
+    new_layout = _next_lower_batch(opts.layout_batch_size)
+    new_ocr = _next_lower_batch(opts.ocr_batch_size)
+    if new_layout is None and new_ocr is None:
+        return None
+    out = copy.copy(opts)
+    if new_layout is not None:
+        out.layout_batch_size = new_layout
+    if new_ocr is not None:
+        out.ocr_batch_size = new_ocr
+    return out
+
+
+def _clear_converter_cache() -> None:
+    """Drop the cached ``DocumentConverter`` and release its VRAM.
+
+    Called between OOM retries so the previous converter (with its
+    layout/OCR/formula model weights resident on GPU) is freed
+    before the lower-batch rebuild allocates a fresh one. Without
+    this, the retry path briefly co-resides two converter copies and
+    the lower batch buys less headroom than expected.
+    """
+    global _CACHED_CONVERTER, _CACHED_OPTS_KEY
+    _CACHED_CONVERTER = None
+    _CACHED_OPTS_KEY = None
+    _release_gpu_memory()
+
+
+def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
+    """Run ``converter.convert(path)``; on CUDA OOM step batch size down.
+
+    Returns ``(result, effective_opts)`` so callers can read which
+    batch size succeeded. Only ``layout_batch_size`` and
+    ``ocr_batch_size`` are modified across retries — formulas, OCR,
+    picture description, VLM, and ``images_scale`` are preserved
+    exactly as configured. Each knob steps down independently per its
+    own position in ``_GPU_BATCH_RETRY_ORDER``; we never raise either
+    knob during fallback. Between retries, the cached converter is
+    cleared and CUDA cache flushed so the new converter doesn't
+    co-reside with the old one. When neither knob can step lower, the
+    original OOM is re-raised wrapped in a clear message naming
+    VRAM pressure as the remaining operator action.
+    """
+    effective = opts
+    last_exc: BaseException | None = None
+    while True:
+        converter = _get_converter(effective)
+        try:
+            result = converter.convert(str(path.resolve()))
+            return result, effective
+        except RuntimeError as exc:
+            if not _is_cuda_oom(exc):
+                raise
+            last_exc = exc
+            stepped = _step_down_batches(effective)
+            if stepped is None:
+                raise RuntimeError(
+                    f"docling CUDA OOM on {path.name} at "
+                    f"layout={effective.layout_batch_size}, "
+                    f"ocr={effective.ocr_batch_size}; close other GPU "
+                    f"workloads or use a GPU with more VRAM"
+                ) from last_exc
+            sys.stderr.write(
+                f"[docling] CUDA OOM on {path.name}, retrying at "
+                f"layout={stepped.layout_batch_size}, "
+                f"ocr={stepped.ocr_batch_size} (was "
+                f"layout={effective.layout_batch_size}, "
+                f"ocr={effective.ocr_batch_size})\n"
+            )
+            # Drop the old converter + free its VRAM before building
+            # the new one; otherwise both briefly co-reside.
+            del converter
+            _clear_converter_cache()
+            effective = stepped
 
 
 @dataclass
@@ -70,29 +237,55 @@ class DoclingOptions:
     may take 100s+ even with the granite model.
     """
 
-    hybrid_chunks: bool = True
     formulas: bool = True
-    formula_model: str = "granite_docling"  # "granite_docling" or "codeformulav2"
+    formula_model: str = "granite_docling"  # "granite_docling" | "codeformulav2"
     ocr: bool = False
+    ocr_auto: bool = True
     pic_classify: bool = False
     pic_describe: bool = False
     vlm: bool = False
     images_scale: float = 3.0
-    # Batch sizes for GPU inference (ignored on CPU).
-    layout_batch_size: int = 64
-    ocr_batch_size: int = 64
+    # Per-stage batch sizes for GPU inference. PdfPipelineOptions exposes
+    # these directly; raising layout/OCR batches gives the documented
+    # up-to-6x speedup on Ampere+. The default factory probes the GPU
+    # once and picks a tier (see ``_GPU_BATCH_TIERS``) so an 8 GB laptop
+    # doesn't OOM-thrash and a 40 GB datacentre card still gets 64.
+    # TableFormer is CPU-bound in current Docling, so the documented
+    # safe value 4 stays.
+    layout_batch_size: int = field(default_factory=_gpu_batch_size_default)
+    ocr_batch_size: int = field(default_factory=_gpu_batch_size_default)
+    table_batch_size: int = 4
 
     @classmethod
     def from_env(cls) -> DoclingOptions:
-        """Build options from DOCLING_* environment variables."""
+        """Build options from DOCLING_* environment variables.
+
+        Layout and OCR batch sizes fall back to the VRAM-adaptive
+        default (``_gpu_batch_size_default``) when the env var is
+        unset OR empty. Explicit numeric overrides remain authoritative
+        for users who know their VRAM headroom.
+        """
+        gpu_default = _gpu_batch_size_default()
         return cls(
             formulas=os.environ.get("DOCLING_FORMULAS", "1") != "0",
-            formula_model=os.environ.get("DOCLING_FORMULA_MODEL", "granite_docling"),
+            formula_model=os.environ.get(
+                "DOCLING_FORMULA_MODEL", "granite_docling",
+            ),
             ocr=os.environ.get("DOCLING_OCR", "") == "1",
+            ocr_auto=os.environ.get("DOCLING_OCR_AUTO", "1") != "0",
             pic_classify=os.environ.get("DOCLING_PIC_CLASSIFY", "") == "1",
             pic_describe=os.environ.get("DOCLING_PIC_DESCRIBE", "") == "1",
             vlm=os.environ.get("DOCLING_VLM", "") == "1",
             images_scale=float(os.environ.get("DOCLING_IMAGES_SCALE", "3.0")),
+            layout_batch_size=int(
+                os.environ.get("DOCLING_LAYOUT_BATCH_SIZE") or gpu_default,
+            ),
+            ocr_batch_size=int(
+                os.environ.get("DOCLING_OCR_BATCH_SIZE") or gpu_default,
+            ),
+            table_batch_size=int(
+                os.environ.get("DOCLING_TABLE_BATCH_SIZE", "4"),
+            ),
         )
 
 
@@ -129,19 +322,25 @@ def _patch_hf_symlinks() -> None:
 _DYNAMO_PATCHED = False
 
 
-def _disable_torch_compile_on_windows() -> None:
-    """Disable torch.compile on Windows where triton is unavailable.
+def _disable_torch_compile_when_unsafe() -> None:
+    """Disable torch.compile on Windows or CPU-only Docling runs.
 
-    Triton is OpenAI's GPU compiler for fused kernels -- it only supports
-    Linux.  Docling's CodeFormula enrichment model triggers torch.compile
-    which fails on Windows without triton.  Setting ``suppress_errors``
-    makes torch fall back to eager execution (same results, slightly
-    slower on large batches, no crash).
+    Triton is OpenAI's GPU compiler for fused kernels -- it only
+    supports Linux. On CPU-only runs, compile warmup cost is also the
+    wrong default for ingest because the pipeline should fail or proceed
+    predictably, not spend minutes tracing model code before work starts.
     """
     global _DYNAMO_PATCHED
-    if _DYNAMO_PATCHED or sys.platform != "win32":
+    if _DYNAMO_PATCHED:
+        return
+    if sys.platform != "win32" and _has_cuda():
         return
     _DYNAMO_PATCHED = True
+    try:
+        from docling.datamodel.settings import settings
+        settings.inference.compile_torch_models = False
+    except (ImportError, AttributeError):
+        pass
     try:
         import torch._dynamo
 
@@ -150,16 +349,136 @@ def _disable_torch_compile_on_windows() -> None:
         pass
 
 
+def _disable_torch_compile_on_windows() -> None:
+    """Backward-compatible wrapper for probe scripts."""
+    _disable_torch_compile_when_unsafe()
+
+
+_RUNTIME_CONFIGURED = False
+
+
+def _configure_torch_runtime() -> None:
+    """One-time torch + tokenizer thread setup.
+
+    Caps intra-op threads at 4 so CPU-side BLAS doesn't saturate
+    cores while GPU kernels are the actual bottleneck. Disables
+    HuggingFace tokenizer fork-parallelism (default ON deadlocks on
+    subprocess fork and clutters the log with warnings on Windows).
+    Honours explicit ``TOKENIZERS_PARALLELISM`` /
+    ``PYTORCH_CUDA_ALLOC_CONF`` overrides.
+
+    ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` is the
+    canonical fix for the Windows ``8 GB-card "VRAM tax"``: it lets
+    the CUDA caching allocator grow segments instead of pre-reserving
+    fixed blocks, which is the difference between "OOM after 50 papers"
+    and "stable for 200+".
+
+    Must run before any tensor op or DocumentConverter
+    instantiation, because ``torch.set_num_interop_threads`` raises
+    once the thread pool is initialised. Env vars land first so they
+    apply even if the torch import/setup fails.
+    """
+    global _RUNTIME_CONFIGURED
+    if _RUNTIME_CONFIGURED:
+        return
+    _RUNTIME_CONFIGURED = True
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault(
+        "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True",
+    )
+
+    try:
+        import torch
+        torch.set_num_threads(min(4, os.cpu_count() or 4))
+        try:
+            torch.set_num_interop_threads(min(2, os.cpu_count() or 2))
+        except RuntimeError:
+            # Pool already initialised (another importer touched
+            # torch first); the intra-op cap above still applies.
+            pass
+    except (ImportError, RuntimeError):
+        # Broken or already-constrained torch should not fail
+        # ingest because of a performance guard.
+        pass
+
+
+def _release_gpu_memory() -> None:
+    """Free per-document VRAM allocations after a parse completes.
+
+    Called from the parse-and-persist worker after every successful
+    document. ``gc.collect()`` reclaims any ``DoclingDocument`` /
+    intermediate-tensor cycles; ``torch.cuda.empty_cache()`` returns
+    the freed allocator blocks to the CUDA driver. On Windows where
+    the OS doesn't reclaim VRAM aggressively until the process exits,
+    this combination keeps long-running ingests from accumulating
+    fragmentation bit by bit.
+    """
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except (ImportError, RuntimeError):
+        pass
+
+
+_TEXT_LAYER_PROBE_PAGES = 3
+_TEXT_LAYER_MIN_CHARS = 200
+
+
+def _pdf_has_text_layer(path: Path) -> bool:
+    """True if the PDF has an embedded text layer in its first pages.
+
+    Born-digital PDFs always do; scanned PDFs don't (or have a tiny
+    OCR-by-Acrobat layer that's still under the threshold). We probe
+    the first few pages because that's enough to distinguish the two
+    classes without paying full-document scan cost. Failure to open
+    the file (corrupt, encrypted, non-PDF) returns ``True`` so we DO
+    NOT flip OCR on speculatively — better to surface the upstream
+    failure than to spend minutes OCRing a junk file.
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        return True
+    try:
+        doc = pymupdf.open(str(path))
+    except Exception:
+        return True
+    try:
+        chars = 0
+        for page in doc[: _TEXT_LAYER_PROBE_PAGES]:
+            chars += len((page.get_text() or "").strip())
+            if chars >= _TEXT_LAYER_MIN_CHARS:
+                return True
+        return chars >= _TEXT_LAYER_MIN_CHARS
+    finally:
+        doc.close()
+
+
 _CACHED_CONVERTER = None
 _CACHED_OPTS_KEY = None
 
 
 def _get_converter(opts: DoclingOptions):
-    """Return a cached converter, rebuilding only if options changed."""
+    """Return a cached converter, rebuilding only if options changed.
+
+    Cache key includes ``_has_cuda()`` because the converter's
+    pipeline class differs between CUDA / CPU paths; if CUDA visibility
+    flips mid-process (rare, but possible via env tweaks) we want a
+    rebuild rather than a stale converter.
+    """
     global _CACHED_CONVERTER, _CACHED_OPTS_KEY
-    key = (opts.formulas, opts.formula_model, opts.ocr, opts.pic_classify,
-           opts.pic_describe, opts.vlm, opts.images_scale,
-           opts.layout_batch_size, opts.ocr_batch_size)
+    key = (
+        opts.formulas, opts.formula_model, opts.ocr,
+        opts.pic_classify, opts.pic_describe, opts.vlm,
+        opts.images_scale,
+        opts.layout_batch_size, opts.ocr_batch_size,
+        opts.table_batch_size,
+        _has_cuda(),
+    )
     if _CACHED_CONVERTER is None or _CACHED_OPTS_KEY != key:
         _CACHED_CONVERTER = _build_converter(opts)
         _CACHED_OPTS_KEY = key
@@ -169,52 +488,74 @@ def _get_converter(opts: DoclingOptions):
 def parse(
     path: Path,
     *,
-    hybrid_chunks: bool = True,
     skip_metadata: bool = False,
+    doc_cache_path: Path | None = None,
 ) -> ParseResult:
-    """Parse a PDF via Docling into markdown + images + sections + metadata.
+    """Parse one PDF / DOCX / PPTX / HTML via Docling.
 
-    When ``skip_metadata=True`` the ``assemble_pdf_metadata`` fusion is
-    skipped (ingest DAG pass 3 -> pass 4 decoupling). The
-    ``_docling_chunks`` HybridChunker payload still rides in
-    ``metadata`` because downstream chunking depends on it; the fusion
-    step in pass 4 merges its output over that payload.
+    Returns a ``ParseResult`` with markdown + images + sections +
+    metadata. Chunking is owned by the universal HybridChunker and
+    runs on the persisted markdown; this function never produces
+    chunks. ``skip_metadata=True`` skips ``assemble_pdf_metadata`` so
+    the ingest DAG can fuse metadata in a later pass with DOI-resolved
+    context.
+
+    When ``doc_cache_path`` is set, the parsed ``DoclingDocument`` is
+    saved as JSON to that path. The rechunk path can later load this
+    cache via ``DoclingDocument.load_from_json`` and skip the
+    markdown -> DoclingDocument re-parse, dropping ~75% of per-doc
+    chunking cost.
     """
     _patch_hf_symlinks()
-    _disable_torch_compile_on_windows()
+    _configure_torch_runtime()
+    _disable_torch_compile_when_unsafe()
 
     opts = DoclingOptions.from_env()
-    opts.hybrid_chunks = hybrid_chunks
+    if (
+        opts.formulas
+        and path.suffix.lower() == ".pdf"
+        and not _has_cuda()
+        and os.environ.get("DOCLING_ALLOW_CPU_FORMULAS", "") != "1"
+    ):
+        raise RuntimeError(
+            "Docling formula enrichment requires CUDA for practical ingest. "
+            "Set DOCLING_ALLOW_CPU_FORMULAS=1 to run it on CPU, or use "
+            "--parser lite for the lightweight no-enrichment parser path.",
+        )
 
-    effective_opts = opts
-    converter = _get_converter(opts)
+    # OCR auto-detect: born-digital PDFs already have a text layer,
+    # so paying Docling's OCR pass is wasted minutes per doc. Probe
+    # the first few pages and only flip do_ocr=True when we don't
+    # find enough embedded text. PDFs only -- DOCX/PPTX/HTML have
+    # native text and don't go through the OCR engine anyway.
+    if (
+        opts.ocr_auto
+        and not opts.ocr
+        and path.suffix.lower() == ".pdf"
+        and not _pdf_has_text_layer(path)
+    ):
+        import copy
+        opts = copy.copy(opts)
+        opts.ocr = True
+        sys.stderr.write(
+            f"[docling] {path.name}: no text layer detected, "
+            f"enabling OCR for this doc\n"
+        )
 
-    try:
-        result = converter.convert(str(path.resolve()))
-    except RuntimeError as exc:
-        if "out of memory" in str(exc).lower() or "CUDA" in str(exc):
-            # VRAM exhausted on large PDF -- retry without GPU-heavy
-            # enrichments (formulas, pic_describe) to fit in memory.
-            import copy
-
-            effective_opts = copy.copy(opts)
-            effective_opts.formulas = False
-            effective_opts.pic_describe = False
-            sys.stderr.write(
-                f"[docling] CUDA OOM on {path.name}, "
-                f"retrying without formula enrichment\n"
-            )
-            converter = _get_converter(effective_opts)
-            result = converter.convert(str(path.resolve()))
-        else:
-            raise
+    result, effective_opts = _convert_with_oom_retry(opts, path)
     doc = result.document
 
     md_text = doc.export_to_markdown()
     md_text = _light_clean(md_text, formulas_enabled=effective_opts.formulas)
 
-    # Count bibliography entries for bracketize_refs range validation.
-    ref_count = _count_ref_list_items(doc)
+    # Single linear pass over DoclingDocument items: collects
+    # bibliography count, picture items, and formula items in one
+    # iteration instead of three. Order matters because the ref-list
+    # heuristic needs to know the last "references"/"bibliography"
+    # header position.
+    ref_count, images, formulas = _doc_walk(
+        doc, want_formulas=effective_opts.formulas,
+    )
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
     if skip_metadata:
@@ -237,22 +578,42 @@ def parse(
             _, _, fn_title = parse_filename(path.name)
             if fn_title:
                 metadata["title"] = fn_title
-    images = _extract_images(doc)
     sections = section_spans(md_text)
+
+    # Formulas come from the same _doc_walk pass above (when the
+    # Granite-Docling head ran). Stash them on metadata so the
+    # pipeline can merge them with markdown-regex equations.
+    if effective_opts.formulas:
+        metadata["_docling_formulas"] = formulas
+
+    # Cache the DoclingDocument JSON so rechunk can skip
+    # DocumentConverter on subsequent invocations.
+    if doc_cache_path is not None:
+        try:
+            doc_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            doc.save_as_json(doc_cache_path)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[docling] failed to cache DoclingDocument for "
+                f"{path.name}: {exc}\n"
+            )
 
     title = metadata.get("title") or path.stem
 
-    if opts.hybrid_chunks:
-        chunks_data = _hybrid_chunk(doc)
-        metadata["_docling_chunks"] = chunks_data
-
-    return ParseResult(
+    result_obj = ParseResult(
         markdown=md_text,
         sections=sections,
         raw_images=images,
         metadata=metadata,
         title=title,
     )
+    # Release per-document GPU/CPU allocations so long-running ingests
+    # don't accumulate fragmentation across hundreds of documents.
+    # Drop the converter result + doc references first; empty_cache only
+    # frees what's actually unreferenced.
+    del result, doc
+    _release_gpu_memory()
+    return result_obj
 
 
 # ---------------------------------------------------------------------------
@@ -309,15 +670,16 @@ def _build_converter(opts: DoclingOptions):
 
 
 def _make_standard_options(accel, opts: DoclingOptions):
-    """Standard pipeline options with enrichments."""
-    if _has_cuda():
-        from docling.datamodel.pipeline_options import (
-            ThreadedPdfPipelineOptions as PipelineCls,
-        )
-    else:
-        from docling.datamodel.pipeline_options import (
-            PdfPipelineOptions as PipelineCls,
-        )
+    """Standard pipeline options with enrichments.
+
+    ``PdfPipelineOptions`` already exposes the per-stage batch knobs
+    (``layout_batch_size``, ``ocr_batch_size``, ``table_batch_size``);
+    ``ThreadedPdfPipelineOptions`` adds nothing on top, so we use the
+    parent class unconditionally and pass the batch sizes regardless
+    of CUDA availability — they're a no-op on CPU paths but shouldn't
+    be silently dropped.
+    """
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
 
     kwargs: dict = {
         "accelerator_options": accel,
@@ -327,6 +689,12 @@ def _make_standard_options(accel, opts: DoclingOptions):
         "do_formula_enrichment": opts.formulas,
         "do_picture_classification": opts.pic_classify,
         "do_picture_description": opts.pic_describe,
+        "layout_batch_size": opts.layout_batch_size,
+        "ocr_batch_size": opts.ocr_batch_size,
+        # TableFormer is CPU-bound in current upstream Docling, so
+        # ``table_batch_size`` is a soft hint. Keep at documented
+        # default unless an upstream change moves it onto GPU.
+        "table_batch_size": opts.table_batch_size,
     }
 
     if opts.formulas:
@@ -341,11 +709,7 @@ def _make_standard_options(accel, opts: DoclingOptions):
                 CodeFormulaVlmOptions.from_preset(opts.formula_model)
             )
 
-    if _has_cuda():
-        kwargs["layout_batch_size"] = opts.layout_batch_size
-        kwargs["ocr_batch_size"] = opts.ocr_batch_size
-
-    return PipelineCls(**kwargs)
+    return PdfPipelineOptions(**kwargs)
 
 
 # VLM model lookup table. Keyed by DOCLING_VLM_MODEL env var value.
@@ -400,33 +764,119 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
-def _count_ref_list_items(doc) -> int:
-    """Count bibliography entries in the DoclingDocument.
+def _doc_walk(
+    doc, *, want_formulas: bool,
+) -> tuple[int, list[RawImage], list[dict]]:
+    """Single linear pass over a DoclingDocument's items.
 
-    Only counts ListItems that appear after the last section header
-    containing 'reference' or 'bibliography'. This avoids counting
-    bullet lists in the body as bibliography entries.
+    Returns ``(ref_count, images, formulas)`` where:
+
+    - ``ref_count`` is the number of ListItems that appear after the
+      last "References"/"Bibliography" SectionHeaderItem (used by
+      ``bracketize_bare_refs`` for range validation; the heuristic
+      avoids mistaking body-bullet lists for the bibliography);
+    - ``images`` is every PictureItem whose rendered crop survives
+      the ``_MIN_IMAGE_DIM`` filter, with caption + page metadata;
+    - ``formulas`` is every FormulaItem with non-empty LaTeX text,
+      keyed by ``_equation_id(f"display:{latex}")`` so it dedups
+      cleanly against markdown-regex extracted equations downstream.
+      ``want_formulas=False`` skips formula collection (caller knows
+      the Granite-Docling head didn't run).
+
+    Single iteration replaces three separate ``doc.iterate_items()``
+    walks; on long PDFs each pass reconstructs prov + caption state,
+    so the saving is real.
     """
+    ref_count = 0
+    images: list[RawImage] = []
+    formulas: list[dict] = []
     try:
-        from docling.datamodel.document import ListItem, SectionHeaderItem
-
-        items = list(doc.iterate_items())
-        # Find the last references/bibliography header
-        last_ref_idx = -1
-        for i, (item, _) in enumerate(items):
-            if isinstance(item, SectionHeaderItem):
-                text = getattr(item, "text", "").lower()
-                if "reference" in text or "bibliography" in text:
-                    last_ref_idx = i
-        if last_ref_idx < 0:
-            return 0
-        # Count ListItems after that header
-        return sum(
-            1 for item, _ in items[last_ref_idx:]
-            if isinstance(item, ListItem)
+        from docling.datamodel.document import (
+            ListItem,
+            PictureItem,
+            SectionHeaderItem,
         )
+        from docling_core.types.doc.document import FormulaItem
+    except ImportError:
+        return ref_count, images, formulas
+
+    in_ref_section = False
+    counted_refs = 0
+    for item, _level in doc.iterate_items():
+        if isinstance(item, SectionHeaderItem):
+            text = (getattr(item, "text", "") or "").lower()
+            if "reference" in text or "bibliography" in text:
+                in_ref_section = True
+                counted_refs = 0
+            else:
+                in_ref_section = False
+        elif in_ref_section and isinstance(item, ListItem):
+            counted_refs += 1
+        elif isinstance(item, PictureItem):
+            img = _picture_to_raw_image(item, doc)
+            if img is not None:
+                images.append(img)
+        elif want_formulas and isinstance(item, FormulaItem):
+            latex = (getattr(item, "text", "") or "").strip()
+            if latex:
+                page = None
+                prov = getattr(item, "prov", None)
+                if prov:
+                    page = getattr(prov[0], "page_no", None)
+                label = (getattr(item, "label", "") or "")
+                formulas.append({
+                    "id": _equation_id(f"display:{latex}"),
+                    "latex": latex,
+                    "label": str(label) if label else "",
+                    "type": "display",
+                    "kind": "display",
+                    "page": page,
+                    "context": "",
+                    "char_offset": -1,
+                })
+    ref_count = counted_refs
+    return ref_count, images, formulas
+
+
+def _picture_to_raw_image(item, doc) -> RawImage | None:
+    """Extract a single PictureItem to a ``RawImage`` or skip on tiny size.
+
+    Mirrors what the legacy ``_extract_images`` did per item; broken
+    out so ``_doc_walk`` and the public ``_extract_images`` wrapper
+    can share the conversion logic.
+    """
+    import io as _io
+
+    caption = ""
+    if hasattr(item, "caption_text"):
+        caption = item.caption_text(doc) or ""
+
+    page = None
+    if hasattr(item, "prov") and item.prov:
+        page = item.prov[0].page_no
+
+    data = _image_bytes_from_item(item)
+    if data is None:
+        return None
+
+    try:
+        from PIL import Image as PilImage  # noqa: N813
+
+        pil = PilImage.open(_io.BytesIO(data))
+        w, h = pil.size
+        if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
+            return None
     except Exception:
-        return 0
+        pass
+
+    content_hash = hashlib.sha1(data).hexdigest()[:12]
+    return RawImage(
+        data=data,
+        ext="png",
+        caption=caption,
+        page=page,
+        content_hash=content_hash,
+    )
 
 
 def _is_likely_noise_title(title: str) -> bool:
@@ -471,60 +921,14 @@ _MIN_IMAGE_DIM = 150
 
 
 def _extract_images(doc) -> list[RawImage]:
-    """Extract images from DoclingDocument.
+    """Extract images from a DoclingDocument (back-compat shim).
 
-    Requires ``generate_picture_images=True`` in pipeline options so
-    Docling renders each PictureItem's bounding-box crop into an
-    ``ImageRef`` with a PIL image or URI.
-
-    Images smaller than ``_MIN_IMAGE_DIM`` in both dimensions are
-    dropped as logos or decorative elements.
+    Internal callers go through ``_doc_walk`` for a single-pass
+    collection of refs + images + formulas. This wrapper exists so
+    external probe scripts and tests that imported
+    ``_extract_images`` keep working.
     """
-    import io as _io
-
-    images: list[RawImage] = []
-    try:
-        from docling.datamodel.document import PictureItem
-
-        for item, _level in doc.iterate_items():
-            if not isinstance(item, PictureItem):
-                continue
-
-            caption = ""
-            if hasattr(item, "caption_text"):
-                caption = item.caption_text(doc) or ""
-
-            page = None
-            if hasattr(item, "prov") and item.prov:
-                page = item.prov[0].page_no
-
-            data = _image_bytes_from_item(item)
-            if data is None:
-                continue
-
-            # Drop tiny images (logos, decorative elements).
-            try:
-                from PIL import Image as PilImage  # noqa: N813
-
-                pil = PilImage.open(_io.BytesIO(data))
-                w, h = pil.size
-                if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
-                    continue
-            except Exception:
-                pass
-
-            content_hash = hashlib.sha1(data).hexdigest()[:12]
-            images.append(
-                RawImage(
-                    data=data,
-                    ext="png",
-                    caption=caption,
-                    page=page,
-                    content_hash=content_hash,
-                )
-            )
-    except Exception:
-        pass
+    _ref_count, images, _formulas = _doc_walk(doc, want_formulas=False)
     return images
 
 
@@ -565,23 +969,13 @@ def _image_bytes_from_item(item) -> bytes | None:
     return None
 
 
-def _hybrid_chunk(doc) -> list[dict]:
-    """Use Docling's HybridChunker to produce structure-aware chunks."""
-    from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
+def extract_formulas(doc) -> list[dict]:
+    """Public wrapper: structural FormulaItem extraction (back-compat).
 
-    chunker = HybridChunker(max_tokens=2000, merge_peers=True)
-    chunks: list[dict] = []
-    for chunk in chunker.chunk(doc):
-        text = chunker.contextualize(chunk)
-        heading_path = ["body"]
-        if hasattr(chunk, "meta") and chunk.meta:
-            export = getattr(chunk.meta, "export_json_dict", None)
-            meta_dict = export() if export else {}
-            headings = meta_dict.get("headings", [])
-            if headings:
-                heading_path = headings
-        chunks.append({
-            "text": text,
-            "heading_path": heading_path,
-        })
-    return chunks
+    Internal ingest goes through ``_doc_walk`` so refs + images +
+    formulas are collected in a single pass over ``doc.iterate_items()``.
+    Probe scripts and tests that import ``extract_formulas`` standalone
+    keep working through this wrapper.
+    """
+    _ref_count, _images, formulas = _doc_walk(doc, want_formulas=True)
+    return formulas

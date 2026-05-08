@@ -47,13 +47,13 @@ def preload_corpus(corpus: Corpus) -> PreloadedCorpus:
     chunks = all_chunks(corpus)
     chunks_by_id: dict[str, Chunk] = {c.id: c for c in chunks}
     images_index = ImageIndex.load(corpus)
-    equations_index = EquationIndex.load(corpus.equations_index_path)
+    equations_index = EquationIndex.load(corpus)
     vectors = read_vector_store(corpus)
     # Resolve the embedder so KG vector search (search_chunks, similar_to)
     # works during guided-mode tool-calling. Without this, search() returns [].
     from wikify.corpus.vectors_meta import read_meta
 
-    vmeta = read_meta(corpus.vectors_path)
+    vmeta = read_meta(corpus.sqlite_path)
     # KG search uses query-mode embedding so task prefixes match how the
     # user's question should be encoded against passage-embedded chunks.
     embed_fn = (

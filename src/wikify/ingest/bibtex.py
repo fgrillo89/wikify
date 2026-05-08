@@ -2,7 +2,8 @@
 
 Corpus papers -> ``corpus_papers.bib`` (one entry per corpus Document).
 Cited works -> ``cited_works.bib`` (only CrossRef-resolved references).
-Citations -> ``citations.json`` (structured citation graph for matching).
+The in-memory citation index is returned alongside the bib paths so
+callers can project it into the SQLite store.
 
 Structured reference fields come exclusively from CrossRef resolution.
 We do not regex-parse raw citation text into authors/titles -- that
@@ -10,7 +11,6 @@ approach produced garbage and required 800+ lines of repair code.
 """
 
 import hashlib
-import json
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -1155,13 +1155,14 @@ def write_corpus_bibliography(
     *,
     resolve_doi: bool = False,
     doi_lookup: Callable[[str], dict[str, object]] | None = None,
-) -> dict[str, Path]:
-    """Write corpus_papers.bib, cited_works.bib, and citations.json.
+) -> dict[str, object]:
+    """Write corpus_papers.bib + cited_works.bib and return the citation index.
 
-    The .bib files are end-user exports; citations.json is a derived
-    sidecar that mirrors the bib_entries / chunk_citations rows for
-    callers that prefer a plain JSON view (the writer's preload path
-    and a couple of tests). The runtime KG is still in wikify.db.
+    The .bib files are end-user exports; the in-memory ``index``
+    payload mirrors the bib_entries / chunk_citations rows so the
+    SQLite-store wave can populate ``bib_entries.local_key`` without
+    re-deriving it. ``index`` is also the shape consumed by
+    ``corpus.bibliography.load_citation_index`` callers.
     """
     corpus.ensure()
     source_entries, reference_entries, index = build_citation_index(
@@ -1178,14 +1179,10 @@ def write_corpus_bibliography(
     atomic_write_text(
         corpus.references_bib_path, _entries_to_bibtex(reference_entries),
     )
-    atomic_write_text(
-        corpus.citation_index_path,
-        json.dumps(index, indent=2, sort_keys=True) + "\n",
-    )
     return {
         "library": corpus.library_bib_path,
         "references": corpus.references_bib_path,
-        "citation_index": corpus.citation_index_path,
+        "index": index,
     }
 
 

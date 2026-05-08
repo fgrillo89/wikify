@@ -11,30 +11,27 @@ corpus).
 """
 
 import hashlib
-import json
 import os
 import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from wikify.corpus.chunks import write_document
+from wikify.corpus.chunks import write_document_markdown
 from wikify.corpus.doc_markdown import write_doc_markdown
 from wikify.corpus.vectors import VectorStore
-from wikify.corpus.vectors_meta import VectorsMeta
-from wikify.corpus.vectors_meta import write_meta as write_vectors_meta
 
 from ..api import Corpus
 from ..embedding import embed_passages
 from ..models import Chunk, DocSection, Document
-from .chunker import chunk_document
 from .citations import extract_citations
 from .config import DOC_SIM_COS
 from .equations import extract_equations
 from .figure_refs import extract_figure_refs
+from .hybrid_chunker import chunk_with_hybrid
 from .images import (
     caption_chunks_for,
     link_chunks_to_images,
@@ -54,16 +51,56 @@ def _timed(timings: dict[str, float], label: str):
     timings[label] = time.monotonic() - t
 
 
+_HEARTBEAT_INTERVAL = 60.0
+
+
+@contextmanager
+def _parse_heartbeat(filename: str):
+    """Print ``[ingest] still parsing <filename> elapsed=Ns`` every 60s.
+
+    Diagnostic only — no timeout, no behaviour change. Lets a stuck
+    serial GPU parse surface in the log instead of going dark for the
+    full duration. The initial ``[ingest] parsing <filename>`` line
+    fires before the inner block runs so users see something even on
+    fast files. Uses ``threading.Event.wait`` so the timer thread
+    exits promptly when the parse returns or raises.
+    """
+    import threading
+
+    print(f"[ingest] parsing {filename}", file=sys.stderr, flush=True)
+    stop = threading.Event()
+    t0 = time.monotonic()
+
+    def _tick() -> None:
+        while not stop.wait(_HEARTBEAT_INTERVAL):
+            elapsed = time.monotonic() - t0
+            print(
+                f"[ingest] still parsing {filename} elapsed={elapsed:.0f}s",
+                file=sys.stderr, flush=True,
+            )
+
+    thread = threading.Thread(target=_tick, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+
+
 # ---------------------------------------------------------------------------
 # Worker bundle
 # ---------------------------------------------------------------------------
 
 @dataclass
 class FileReceipt:
-    """Lightweight result from a parse+persist worker.
+    """Result from a parse+persist worker.
 
-    Only carries identifiers and stats -- the full document, markdown,
-    and chunks are already persisted to disk.
+    Carries the freshly-built ``doc`` / ``chunks`` / ``markdown`` so
+    the ingest orchestrator can project them into ``wikify.db`` in a
+    single transaction. Recovered receipts (from a crashed prior run)
+    leave those fields as ``None``; the orchestrator skips re-projection
+    for those because the SQLite rows are already on disk.
     """
 
     src_path: str
@@ -71,6 +108,9 @@ class FileReceipt:
     n_chunks: int
     declared_keywords: list[str]
     parse_seconds: float
+    doc: Document | None = None
+    chunks: list[Chunk] | None = field(default=None)
+    markdown: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -205,15 +245,35 @@ def _parse_and_persist_worker(
     persisted with an empty metadata dict (sections + citations + chunks
     are still built from the parsed markdown).  Pass 4 loads the markdown
     back and runs ``assemble_pdf_metadata`` with DOI-resolved context.
+
+    The heartbeat wraps the body so a stuck file surfaces in the log
+    regardless of whether the worker runs in-main, in a long-lived
+    pool, or in a per-batch subprocess that gets restarted every N
+    papers to flush VRAM.
     """
     src = Path(src_str)
+    with _parse_heartbeat(src.name):
+        return _parse_and_persist_inner(
+            src, corpus_root_str, parser_backend, skip_metadata,
+        )
+
+
+def _parse_and_persist_inner(
+    src: Path,
+    corpus_root_str: str,
+    parser_backend: str,
+    skip_metadata: bool,
+) -> FileReceipt:
+    """Body of ``_parse_and_persist_worker`` minus the heartbeat wrap."""
     paths = Corpus(root=Path(corpus_root_str))
     t_worker = time.monotonic()
 
+    did = doc_id_for(src)
+    doc_cache_path = paths.root / "derived" / "doclingdoc" / f"{did}.json"
     kind, parsed = parse_file(
         src, parser_backend=parser_backend, skip_metadata=skip_metadata,
+        doc_cache_path=doc_cache_path,
     )
-    did = doc_id_for(src)
 
     # Images
     img_slug = image_slug(did)
@@ -222,19 +282,41 @@ def _parse_and_persist_worker(
         saved = save_doc_images(did, image_dir_path, parsed.raw_images)
         parsed.images.extend(saved)
 
-    # Chunks
-    docling_chunks = parsed.metadata.pop("_docling_chunks", None)
-    is_docling = docling_chunks is not None
-    if is_docling:
-        chunks = _chunks_from_docling(did, docling_chunks)
-    else:
-        chunks = chunk_document(did, parsed.markdown, parsed.sections)
+    # Chunks: HybridChunker runs uniformly on every parser's markdown.
+    # Drop any legacy Docling-direct payload; the chunker re-derives
+    # structure by feeding the markdown back through DocumentConverter.
+    # When the Docling parser ran, it just wrote the source
+    # ``DoclingDocument`` JSON at ``doc_cache_path``; pass that through
+    # so the chunker loads it instead of building a second
+    # ``DocumentConverter`` and re-parsing the markdown from scratch.
+    parsed.metadata.pop("_docling_chunks", None)
+    chunks = chunk_with_hybrid(
+        did, parsed.markdown,
+        cached_doc_path=doc_cache_path if doc_cache_path.is_file() else None,
+    )
     chunks += caption_chunks_for(did, parsed.images, ord_offset=len(chunks))
 
-    # Equations + figure refs
-    equations = extract_equations(parsed.markdown)
+    # Equations + figure refs. Equation binding goes through text-match
+    # because HybridChunker chunks carry only best-effort char_span.
+    # When the parser is Docling and the Granite-Docling formula head
+    # ran, ``parsed.metadata['_docling_formulas']`` carries structural
+    # FormulaItem records (clean LaTeX). Merge those over the markdown
+    # regex output so we keep both sources without double-counting.
+    docling_formulas = parsed.metadata.pop("_docling_formulas", None) or []
+    # When Docling's formula head ran, structural FormulaItems already
+    # cover display + inline math at higher LaTeX quality than regex
+    # extraction. Restrict the markdown pass to the categories Docling
+    # does NOT surface as FormulaItems (chemical equations, unicode
+    # math, named equations, image-equation placeholders) so we don't
+    # duplicate work or pollute the index with regex re-derivations.
+    if docling_formulas:
+        md_equation_kinds = {"chemical", "unicode", "named", "image"}
+    else:
+        md_equation_kinds = None
+    md_equations = extract_equations(parsed.markdown, kinds=md_equation_kinds)
+    equations = _merge_equation_sources(docling_formulas, md_equations)
     figure_refs = extract_figure_refs(parsed.markdown)
-    bind_equations_to_chunks(chunks, equations, use_text_match=is_docling)
+    bind_equations_to_chunks(chunks, equations, use_text_match=True)
 
     # Citations + image linking + sections
     citations = extract_citations(parsed.markdown, did)
@@ -260,8 +342,9 @@ def _parse_and_persist_worker(
         figure_refs=list(figure_refs),
     )
 
-    # Persist atomically
-    write_document(paths, doc, parsed.markdown, chunks)
+    # Persist the markdown body. Document + chunk rows go into wikify.db
+    # in pass 3's batch transaction.
+    write_document_markdown(paths, did, parsed.markdown)
 
     # Declared keywords for topic extraction
     kw = parsed.metadata.get("keywords")
@@ -274,6 +357,9 @@ def _parse_and_persist_worker(
         n_chunks=len(chunks),
         declared_keywords=declared,
         parse_seconds=elapsed,
+        doc=doc,
+        chunks=chunks,
+        markdown=parsed.markdown,
     )
 
 
@@ -330,6 +416,28 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
     return chunks
 
 
+def _merge_equation_sources(
+    docling: list[dict], md: list[dict],
+) -> list[dict]:
+    """Combine FormulaItem records with markdown-regex extraction.
+
+    Dedupe key is the equation id (sha1 of normalised latex), so a
+    formula picked up by both sources counts once. Docling records
+    take precedence on collision because their LaTeX is decoded by
+    Granite-Docling rather than emitted by Marker's heuristics.
+    """
+    by_id: dict[str, dict] = {}
+    for rec in docling:
+        rid = rec.get("id")
+        if rid:
+            by_id[rid] = rec
+    for rec in md:
+        rid = rec.get("id")
+        if rid and rid not in by_id:
+            by_id[rid] = rec
+    return list(by_id.values())
+
+
 def bind_equations_to_chunks(
     chunks: list[Chunk],
     equations: list[dict],
@@ -356,6 +464,7 @@ def bind_equations_to_chunks(
         def _compact(s: str) -> str:
             return re.sub(r"\s+", "", s.lower())
 
+        compact_chunks = [(c, _compact(c.text)) for c in body_chunks]
         for eq in equations:
             latex = eq.get("latex", "")
             context = eq.get("context", "")
@@ -365,8 +474,8 @@ def bind_equations_to_chunks(
                 needle = _compact(context[:40])
             if not needle:
                 continue
-            for c in body_chunks:
-                if needle in _compact(c.text):
+            for c, compact_text in compact_chunks:
+                if needle in compact_text:
                     c.equation_ids.append(eq["id"])
                     break
     else:
@@ -406,20 +515,19 @@ def sections_from_chunks(chunks: list[Chunk]) -> list[DocSection]:
 # ---------------------------------------------------------------------------
 
 def _derived_artifacts_missing(paths: Corpus) -> bool:
-    """True if the corpus has docs but is missing key derived artifacts.
+    """True if the corpus has docs in the store but is missing derived artifacts.
 
     Catches the case where ingest completed but refresh crashed or was
     skipped -- re-running ``ingest`` should detect this and run refresh.
+    Today the only persistent store is ``wikify.db``; once a corpus
+    has any markdown but no DB, refresh has not run.
     """
-    has_docs = paths.docs_dir.exists() and any(paths.docs_dir.iterdir())
-    if not has_docs:
+    if not paths.markdown_dir.exists():
         return False
-    # Cheapest-to-verify derived artifacts: wikify.db is the source of
-    # truth for chunks/vectors/edges; topics.json is still on disk.
-    return (
-        not paths.sqlite_path.exists()
-        or not (paths.root / "topics.json").exists()
-    )
+    has_md = any(paths.markdown_dir.glob("*.md"))
+    if not has_md:
+        return False
+    return not paths.sqlite_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -432,32 +540,66 @@ def _recover_completed(
 ) -> tuple[list[Path], list[FileReceipt]]:
     """Split sources into (still_to_parse, already_done).
 
-    If a prior ingest crashed after persisting some files but before
-    saving the manifest, the doc JSON + chunks JSONL will be on disk
-    without a manifest entry. We detect those and build synthetic
-    receipts so they aren't re-parsed.
+    If a prior ingest crashed after projecting some files into the
+    SQLite store but before saving the manifest, those rows are still
+    in ``wikify.db`` and the markdown sidecar still exists. We detect
+    them by joining ``documents`` + the markdown file presence and
+    build synthetic receipts so they aren't re-parsed. Recovered
+    receipts carry ``doc=None`` / ``chunks=None`` so the orchestrator
+    skips re-projection (the rows are already in place).
     """
+    import sqlite3
+
     still: list[Path] = []
     recovered: list[FileReceipt] = []
 
-    for src in sources:
-        did = doc_id_for(src)
-        doc_json = paths.docs_dir / f"{did}.json"
-        chunks_jsonl = paths.chunks_dir / f"{did}.jsonl"
-        md_file = paths.markdown_dir / f"{did}.md"
+    con: sqlite3.Connection | None = None
+    if paths.sqlite_path.exists():
+        con = sqlite3.connect(paths.sqlite_path)
 
-        if doc_json.exists() and chunks_jsonl.exists() and md_file.exists():
-            # All three artifacts present -- build a synthetic receipt.
-            chunk_ids = _read_chunk_ids(paths, did)
-            # Read declared keywords from the persisted doc JSON.
+    try:
+        for src in sources:
+            did = doc_id_for(src)
+            md_file = paths.markdown_dir / f"{did}.md"
+            row = None
+            if con is not None:
+                row = con.execute(
+                    "SELECT metadata_json, title FROM documents WHERE doc_id=?",
+                    (did,),
+                ).fetchone()
+            if not (row and md_file.exists()):
+                still.append(src)
+                continue
+
+            # Pass 3 commits docs+chunks before pass 4 fuses metadata.
+            # If a prior run crashed in that window the row is real but
+            # carries placeholder metadata. Send those back through full
+            # re-parse so pass 4 runs and the title/authors/year actually
+            # land. A non-placeholder row is one with real metadata keys
+            # OR a non-stem title (pass 3 leaves title=src.stem).
+            metadata_raw, title = row[0], row[1] or ""
             kw: list[str] = []
-            try:
-                doc_data = json.loads(doc_json.read_text(encoding="utf-8"))
-                meta_kw = (doc_data.get("metadata") or {}).get("keywords")
-                if isinstance(meta_kw, list):
-                    kw = meta_kw
-            except Exception:  # noqa: BLE001
-                pass
+            looks_placeholder = title == src.stem
+            if metadata_raw:
+                try:
+                    import json as _json
+                    meta_data = _json.loads(metadata_raw)
+                    meta_kw = meta_data.get("keywords")
+                    if isinstance(meta_kw, list):
+                        kw = meta_kw
+                    if any(
+                        k for k in ("title", "authors", "year", "doi")
+                        if meta_data.get(k)
+                    ):
+                        looks_placeholder = False
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if src.suffix.lower() == ".pdf" and looks_placeholder:
+                still.append(src)
+                continue
+
+            chunk_ids = _read_chunk_ids(paths, did)
             recovered.append(FileReceipt(
                 src_path=str(src),
                 doc_id=did,
@@ -465,8 +607,9 @@ def _recover_completed(
                 declared_keywords=kw,
                 parse_seconds=0.0,
             ))
-        else:
-            still.append(src)
+    finally:
+        if con is not None:
+            con.close()
 
     if recovered:
         print(
@@ -482,18 +625,83 @@ def _recover_completed(
 # Stage: streaming parse + persist (new pipeline)
 # ---------------------------------------------------------------------------
 
+_WORKER_BATCH_SIZE_DEFAULT = 20
+
+
+def _worker_batch_size(parser_backend: str) -> int:
+    """Number of papers per subprocess batch; ``0`` = no restart.
+
+    GPU backends restart the worker every N papers to flush the
+    Windows-tax VRAM that the CUDA caching allocator can't return
+    mid-process — without this, a 200-paper run on an 8 GB card OOMs
+    around paper 50-150 even with ``expandable_segments=True``. CPU
+    backends keep the long-lived pool because their startup cost
+    dominates and there's no VRAM to flush.
+
+    Override via ``WIKIFY_WORKER_BATCH_SIZE``: ``0`` disables restart,
+    a positive integer sets the cadence.
+    """
+    from .parsers.registry import backend_requires_single_worker
+
+    env = os.environ.get("WIKIFY_WORKER_BATCH_SIZE", "")
+    if env:
+        try:
+            return max(0, int(env))
+        except ValueError:
+            pass
+    if backend_requires_single_worker(parser_backend):
+        return _WORKER_BATCH_SIZE_DEFAULT
+    return 0
+
+
+def _log_failure(paths: Corpus, src: Path, exc: BaseException) -> None:
+    """Append one structured line to ``<corpus>/failed_files.log``.
+
+    Format: ``ISO8601\tfilename\tException: message`` so downstream
+    tooling can parse the failures without re-grepping the main log.
+    Failures are accumulated across runs (append-only); inspect or
+    truncate the file manually between rebuilds.
+    """
+    import datetime as _dt
+
+    paths.root.mkdir(parents=True, exist_ok=True)
+    line = (
+        f"{_dt.datetime.now(_dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\t"
+        f"{src.name}\t"
+        f"{type(exc).__name__}: {exc}\n"
+    )
+    with open(paths.root / "failed_files.log", "a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
 def _stream_parse_and_persist(
     sources: list[Path],
     paths: Corpus,
     max_workers: int | None,
     parser_backend: str = "default",
     skip_metadata: bool = False,
-) -> list[FileReceipt]:
-    """Parse, persist each source in parallel. Returns sorted receipts.
+) -> tuple[list[FileReceipt], int]:
+    """Parse, persist each source. Returns ``(receipts, failed_count)``.
 
-    ``skip_metadata`` is forwarded to the per-file worker; the ingest DAG
-    sets it ``True`` during pass 3 so metadata fusion can run as pass 4
-    with DOI-resolved context.
+    Three execution strategies:
+
+    - **subprocess-batched** (GPU default): spawn a fresh
+      ``ProcessPoolExecutor(max_workers=1)`` every
+      ``WIKIFY_WORKER_BATCH_SIZE`` papers (default 20). Each batch
+      shutdown kills the worker, releasing all VRAM back to the OS.
+      The only known way to keep a Windows 8 GB GPU stable across
+      hundreds of formula-decoded PDFs.
+    - **CPU-parallel**: long-lived pool of ``max_workers`` processes
+      for ``LITE`` and other CPU-bound backends.
+    - **serial-in-main**: single worker, single process — for tiny
+      jobs where pool startup isn't worth it.
+
+    Failed papers (exceptions raised by the worker) are logged to
+    ``<corpus>/failed_files.log`` and counted in the returned
+    ``failed_count``. The orchestrator decides whether a non-zero
+    failure count should abort the build (default) or continue with a
+    partial corpus (``--allow-partial``). ``skip_metadata`` is
+    forwarded to every worker invocation.
     """
     from tqdm import tqdm
 
@@ -508,6 +716,8 @@ def _stream_parse_and_persist(
     if backend_requires_single_worker(parser_backend):
         workers = 1
 
+    batch_size = _worker_batch_size(parser_backend) if workers == 1 else 0
+
     bar = tqdm(
         total=total,
         desc=f"[ingest] parse+persist ({workers}w)",
@@ -516,7 +726,54 @@ def _stream_parse_and_persist(
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
     )
 
-    if workers > 1 and total > 1:
+    def _on_success(src: Path, receipt: FileReceipt) -> None:
+        receipts.append(receipt)
+        bar.set_postfix_str(
+            f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
+            refresh=False,
+        )
+        bar.update(1)
+
+    def _on_failure(src: Path, exc: BaseException) -> None:
+        nonlocal failed
+        failed += 1
+        bar.set_postfix_str(f"FAIL {src.name[:40]}", refresh=False)
+        tqdm.write(f"[ingest] FAIL {src.name}: {exc}", file=sys.stderr)
+        _log_failure(paths, src, exc)
+        bar.update(1)
+
+    if workers == 1 and batch_size > 0 and total > 1:
+        n_batches = (total + batch_size - 1) // batch_size
+        print(
+            f"[ingest] subprocess-batched: {total} files in "
+            f"{n_batches} batches of {batch_size} (workers restart "
+            f"between batches to flush VRAM)",
+            file=sys.stderr,
+        )
+        for batch_idx, batch_start in enumerate(range(0, total, batch_size)):
+            chunk = sources[batch_start:batch_start + batch_size]
+            with ProcessPoolExecutor(max_workers=1) as pool:
+                futures = {
+                    pool.submit(
+                        _parse_and_persist_worker, str(src), corpus_root_str,
+                        parser_backend, skip_metadata,
+                    ): src
+                    for src in chunk
+                }
+                for fut in as_completed(futures):
+                    src = futures[fut]
+                    try:
+                        _on_success(src, fut.result())
+                    except Exception as exc:  # noqa: BLE001
+                        _on_failure(src, exc)
+            # Pool shutdown here: worker subprocess exits, returning
+            # all CUDA allocations + heap to the OS.
+            tqdm.write(
+                f"[ingest] batch {batch_idx + 1}/{n_batches} done "
+                f"(worker restarted, VRAM flushed)",
+                file=sys.stderr,
+            )
+    elif workers > 1 and total > 1:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(
@@ -528,45 +785,18 @@ def _stream_parse_and_persist(
             for fut in as_completed(futures):
                 src = futures[fut]
                 try:
-                    receipt = fut.result()
-                    receipts.append(receipt)
-                    bar.set_postfix_str(
-                        f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
-                        refresh=False,
-                    )
+                    _on_success(src, fut.result())
                 except Exception as exc:  # noqa: BLE001
-                    failed += 1
-                    bar.set_postfix_str(
-                        f"FAIL {src.name[:40]}",
-                        refresh=False,
-                    )
-                    tqdm.write(
-                        f"[ingest] FAIL {src.name}: {exc}",
-                        file=sys.stderr,
-                    )
-                bar.update(1)
+                    _on_failure(src, exc)
     else:
         for src in sources:
             try:
                 receipt = _parse_and_persist_worker(
                     str(src), corpus_root_str, parser_backend, skip_metadata,
                 )
-                receipts.append(receipt)
-                bar.set_postfix_str(
-                    f"{receipt.parse_seconds:.1f}s {src.name[:40]}",
-                    refresh=False,
-                )
+                _on_success(src, receipt)
             except Exception as exc:  # noqa: BLE001
-                failed += 1
-                bar.set_postfix_str(
-                    f"FAIL {src.name[:40]}",
-                    refresh=False,
-                )
-                tqdm.write(
-                    f"[ingest] FAIL {src.name}: {exc}",
-                    file=sys.stderr,
-                )
-            bar.update(1)
+                _on_failure(src, exc)
 
     bar.close()
 
@@ -583,7 +813,7 @@ def _stream_parse_and_persist(
             name = Path(r.src_path).name[:60]
             print(f"  {r.parse_seconds:6.2f}s  {name}", file=sys.stderr)
 
-    return receipts
+    return receipts, failed
 
 
 
@@ -620,11 +850,7 @@ def _embed_chunks_incremental(
     # Check embedder fingerprint: skip reuse if backend/model/dim changed.
     backend = current_backend()
     embedder_changed = False
-    # vectors.meta.json sits alongside vectors.npz; the .npz itself is no
-    # longer written but the small JSON sidecar still records the
-    # embedder fingerprint for incremental decisions.
-    from wikify.corpus.vectors_meta import meta_path_for
-    old_meta = read_meta(paths.vectors_path) if meta_path_for(paths.vectors_path).exists() else None
+    old_meta = read_meta(paths.sqlite_path)
     if old_meta is not None:
         cur_fp = _embedder_fingerprint(backend)
         old_fp = f"{old_meta.backend}:{old_meta.model}:{old_meta.dim}"
@@ -636,12 +862,10 @@ def _embed_chunks_incremental(
                 file=sys.stderr,
             )
 
-    # Try to load existing vectors for reuse from the SQLite store
-    # (the .npz is no longer written).
+    # Try to load existing vectors for reuse from the SQLite store.
     reusable: dict[str, np.ndarray] = {}
     if (
         not embedder_changed
-        and stale_doc_ids != target_set
         and paths.sqlite_path.exists()
     ):
         old_store = _vector_store_from_sqlite(paths.sqlite_path)
@@ -681,16 +905,6 @@ def _embed_chunks_incremental(
         f"vector/chunk mismatch: {len(store.ids)} vectors, "
         f"{len(target_set)} chunks"
     )
-
-    # Vectors live in `wikify.db` (Wave G writes them). We still write
-    # the small vectors.meta.json sidecar so the embedder fingerprint
-    # check on the next ingest can decide whether to reuse vectors.
-    meta = VectorsMeta(
-        backend=str(backend["backend"]),
-        dim=int(store.matrix.shape[1]) if store.matrix.size else int(backend.get("dim") or 0),
-        model=backend.get("model"),  # type: ignore[arg-type]
-    )
-    write_vectors_meta(paths.vectors_path, meta)
     return store
 
 
@@ -705,6 +919,10 @@ def _compute_doc_similarity(
 ) -> None:
     """Fill in ``similar_to`` for every doc using embedding cosine."""
     import numpy as np
+
+    doc_by_id = {doc.id: doc for doc in docs}
+    for doc in docs:
+        doc.similar_to = []
 
     chunk_by_id = {cid: i for i, cid in enumerate(store.ids)}
     matrix = store.matrix
@@ -731,10 +949,9 @@ def _compute_doc_similarity(
             ]
             ranked.sort(key=lambda x: (-x[0], x[1]))
             top = [other for _, other in ranked[:5]]
-            for doc in docs:
-                if doc.id == d_id:
-                    doc.similar_to = top
-                    break
+            doc = doc_by_id.get(d_id)
+            if doc is not None:
+                doc.similar_to = top
 
 
 def _resolve_citations(docs: list[Document]) -> None:
@@ -820,19 +1037,50 @@ def _resave_docs(
     paths: Corpus,
     docs: list[Document],
 ) -> None:
-    from wikify.corpus.chunks import _doc_to_dict, atomic_write_text
+    from wikify.corpus.store import Store, transaction
 
-    for doc in docs:
-        atomic_write_text(
-            paths.docs_dir / f"{doc.id}.json",
-            json.dumps(_doc_to_dict(doc)),
+    store = Store(paths.sqlite_path)
+    try:
+        with transaction(store.con):
+            for doc in docs:
+                store.upsert_document(doc)
+                _refresh_doc_edges(store.con, doc)
+        for doc in docs:
+            md_path = paths.markdown_dir / f"{doc.id}.md"
+            if md_path.exists():
+                body = _read_body_from_doc_markdown(md_path)
+            else:
+                body = ""
+            write_doc_markdown(paths, doc, body)
+    finally:
+        store.close()
+
+
+def _refresh_doc_edges(con, doc: Document) -> None:
+    """Project doc.similar_to and doc.cites_same into ``graph_edges``.
+
+    `cites` already lives in graph_edges (kind='references'), populated
+    by Wave D's bibliography pass. The similarity wave (and any
+    cites_same enrichment) only land on the Document dataclass; this
+    helper persists them so SQLite-only readers can recover them.
+    """
+    for kind, targets in (
+        ("similar", list(doc.similar_to or [])),
+        ("cites_same", list(doc.cites_same or [])),
+    ):
+        con.execute(
+            "DELETE FROM graph_edges WHERE src_type='document' AND src_id=? "
+            "AND kind=? AND dst_type='document'",
+            (doc.id, kind),
         )
-        md_path = paths.markdown_dir / f"{doc.id}.md"
-        if md_path.exists():
-            body = _read_body_from_doc_markdown(md_path)
-        else:
-            body = ""
-        write_doc_markdown(paths, doc, body)
+        if not targets:
+            continue
+        con.executemany(
+            "INSERT OR IGNORE INTO graph_edges("
+            "src_type, src_id, kind, dst_type, dst_id, ord) "
+            "VALUES ('document', ?, ?, 'document', ?, ?)",
+            [(doc.id, kind, t, i) for i, t in enumerate(targets)],
+        )
 
 
 def _read_body_from_doc_markdown(md_path: Path) -> str:
@@ -1028,15 +1276,34 @@ def _identify_stale_docs(
 
 
 def _read_chunk_ids(paths: Corpus, doc_id: str) -> list[str]:
-    """Read just the chunk ids from a persisted JSONL file (no text loaded)."""
-    p = paths.chunks_dir / f"{doc_id}.jsonl"
-    if not p.exists():
+    """Return the chunk ids for *doc_id* from the SQLite store."""
+    if not paths.sqlite_path.exists():
         return []
-    ids: list[str] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            ids.append(json.loads(line)["id"])
-    return ids
+    import sqlite3
+
+    con = sqlite3.connect(paths.sqlite_path)
+    try:
+        rows = con.execute(
+            "SELECT chunk_id FROM chunks WHERE doc_id=? ORDER BY ord",
+            (doc_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    return [str(r[0]) for r in rows]
+
+
+def _doc_ids_in_store(paths: Corpus) -> set[str]:
+    if not paths.sqlite_path.exists():
+        return set()
+    import sqlite3
+
+    con = sqlite3.connect(paths.sqlite_path)
+    try:
+        return {
+            str(r[0]) for r in con.execute("SELECT doc_id FROM documents")
+        }
+    finally:
+        con.close()
 
 
 def _update_manifest(
@@ -1067,9 +1334,10 @@ def _update_manifest(
 
     # Register dedup aliases only if the target doc_id actually exists.
     persisted_doc_ids = {r.doc_id for r in receipts}
+    target_in_store = _doc_ids_in_store(paths)
     for alias_sid, alias_h, alias_did in dedup_aliases:
-        target_on_disk = (paths.docs_dir / f"{alias_did}.json").exists()
-        if alias_did not in persisted_doc_ids and not target_on_disk:
+        target_present = alias_did in target_in_store
+        if alias_did not in persisted_doc_ids and not target_present:
             print(
                 f"  [alias-skipped] {alias_sid}: target {alias_did} "
                 f"not on disk (canonical parse may have failed)",
@@ -1164,6 +1432,32 @@ def refresh_corpus(
 # ---------------------------------------------------------------------------
 
 
+class IngestFailedError(RuntimeError):
+    """Raised when one or more files failed to parse during ingest.
+
+    Carries the failure count, total source count, and the path to
+    the per-corpus ``failed_files.log`` so the CLI can surface a
+    structured error envelope. Default behaviour: ``ingest_corpus``
+    raises this BEFORE manifest update + refresh, so a partial corpus
+    is not advertised as queryable. Override with ``allow_partial=
+    True`` (CLI: ``--allow-partial``) when the operator deliberately
+    wants to inspect what landed despite the failures.
+
+    The persisted markdown sidecars + SQLite document rows from the
+    successful papers are preserved on disk; ``_recover_completed``
+    will pick them up on the next run, so a re-run only retries the
+    failed papers.
+    """
+
+    def __init__(self, failed: int, total: int, log_path: Path) -> None:
+        super().__init__(
+            f"{failed}/{total} files failed to parse; see {log_path}"
+        )
+        self.failed = failed
+        self.total = total
+        self.log_path = log_path
+
+
 def ingest_corpus(
     input_dir: Path,
     output_dir: Path,
@@ -1175,6 +1469,7 @@ def ingest_corpus(
     resolve_bibliography_doi: bool = True,
     cite_resolution: str = "crossref",
     dedup_same_stem: bool = True,
+    allow_partial: bool = False,
 ) -> Corpus:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1202,7 +1497,7 @@ def ingest_corpus(
     ``dedup_same_stem=False`` when a directory has intentionally-matching
     stems (typical in synthetic test fixtures).
     """
-    from .manifest import SourceRecord
+    from wikify.corpus.lock import acquire_lock, release_lock
 
     validate_backend(parser_backend)
 
@@ -1211,6 +1506,55 @@ def ingest_corpus(
 
     paths = Corpus(root=output_dir)
     paths.ensure()
+
+    # Hold an exclusive build lock for the duration of the run; this
+    # guards against a second wikify-corpus-build (or an orphaned
+    # process from a prior run) racing on the same --out directory and
+    # corrupting the SQLite store / markdown sidecars. The lock is
+    # released in finally so we never strand a corpus on crash.
+    lock_owner = f"wikify-ingest/pid-{os.getpid()}"
+    acquire_lock(paths, owner=lock_owner)
+    try:
+        return _ingest_corpus_locked(
+            input_dir=input_dir,
+            paths=paths,
+            timings=timings,
+            t0_run=t0_run,
+            mode=mode,
+            parser_backend=parser_backend,
+            max_workers=max_workers,
+            refresh=refresh,
+            resolve_bibliography_doi=resolve_bibliography_doi,
+            cite_resolution=cite_resolution,
+            dedup_same_stem=dedup_same_stem,
+            allow_partial=allow_partial,
+        )
+    finally:
+        release_lock(paths, owner=lock_owner)
+
+
+def _ingest_corpus_locked(
+    *,
+    input_dir: Path,
+    paths: Corpus,
+    timings: dict[str, float],
+    t0_run: float,
+    mode: str,
+    parser_backend: str,
+    max_workers: int | None,
+    refresh: bool,
+    resolve_bibliography_doi: bool,
+    cite_resolution: str,
+    dedup_same_stem: bool,
+    allow_partial: bool,
+) -> Corpus:
+    """Body of ``ingest_corpus`` that runs while holding the build lock.
+
+    Split out so the public ``ingest_corpus`` can hold the corpus lock
+    around the entire run via try/finally without mass-reindenting the
+    body.
+    """
+    from .manifest import SourceRecord
 
     # 1. Enumerate, diff, dedupe
     manifest, change_set, dedup_aliases = _prepare_change_set(
@@ -1245,6 +1589,7 @@ def ingest_corpus(
     #    saving the manifest, those files are already on disk. We skip them
     #    and build synthetic receipts instead of re-parsing.
     receipts: list[FileReceipt] = []
+    parse_failed = 0
     if change_set.to_parse:
         to_parse, recovered = _recover_completed(
             change_set.to_parse, paths,
@@ -1253,15 +1598,29 @@ def ingest_corpus(
         if to_parse:
             from .ingest_steps import run_ingest_dag
 
-            receipts.extend(
-                run_ingest_dag(
-                    to_parse,
-                    paths,
-                    max_workers=max_workers,
-                    parser_backend=parser_backend,
-                    timings=timings,
-                )
+            new_receipts, parse_failed = run_ingest_dag(
+                to_parse,
+                paths,
+                max_workers=max_workers,
+                parser_backend=parser_backend,
+                timings=timings,
             )
+            receipts.extend(new_receipts)
+
+    # 2a. Abort BEFORE manifest update + refresh if any file failed to
+    # parse. Quality-over-completeness default: a partial corpus
+    # advertised as queryable would mask Docling/marker failures and
+    # let downstream wiki writes silently miss papers. The persisted
+    # markdown + SQLite rows from successful papers stay on disk so
+    # _recover_completed picks them up next run; only the failed
+    # papers re-parse. Operators who explicitly want to inspect a
+    # partial corpus pass --allow-partial to skip this gate.
+    if parse_failed and not allow_partial:
+        raise IngestFailedError(
+            failed=parse_failed,
+            total=parse_failed + len(receipts),
+            log_path=paths.root / "failed_files.log",
+        )
 
     # 3. Identify stale doc_ids from replacements + deletes
     stale_doc_ids = _identify_stale_docs(
@@ -1320,28 +1679,40 @@ def ingest_corpus(
 def _remove_doc_artifacts(paths: Corpus, doc_ids: set[str]) -> None:
     """Physically delete corpus artifacts for the given doc_ids.
 
-    Removes doc JSON, chunks JSONL, markdown, and image directories
-    whose sidecars belong exclusively to stale doc_ids.
+    Drops the SQLite document rows (FK cascade clears chunks / bibs /
+    assets / chunk_citations / chunk_assets), removes the markdown
+    sidecar, and deletes the image folder when every image inside
+    belongs to a stale doc_id.
     """
     import shutil
 
-    for did in doc_ids:
-        doc_json = paths.docs_dir / f"{did}.json"
-        if doc_json.exists():
-            doc_json.unlink()
-        chunk_jsonl = paths.chunks_dir / f"{did}.jsonl"
-        if chunk_jsonl.exists():
-            chunk_jsonl.unlink()
-        md_file = paths.markdown_dir / f"{did}.md"
-        if md_file.exists():
-            md_file.unlink()
-        # Image dir uses image_slug(doc_id) -- try direct match first.
-        img_dir = paths.images_dir / image_slug(did)
-        if img_dir.is_dir():
-            shutil.rmtree(img_dir)
+    from wikify.corpus.store import Store
+
+    store: Store | None = None
+    if paths.sqlite_path.exists():
+        store = Store(paths.sqlite_path)
+    try:
+        for did in doc_ids:
+            if store is not None:
+                store.delete_document(did)
+            md_file = paths.markdown_dir / f"{did}.md"
+            if md_file.exists():
+                md_file.unlink()
+            doc_cache = paths.root / "derived" / "doclingdoc" / f"{did}.json"
+            if doc_cache.is_file():
+                doc_cache.unlink()
+            # Image dir uses image_slug(doc_id) -- try direct match first.
+            img_dir = paths.images_dir / image_slug(did)
+            if img_dir.is_dir():
+                shutil.rmtree(img_dir)
+    finally:
+        if store is not None:
+            store.close()
     # Fallback: walk remaining image dirs and check sidecar doc_ids.
     # Catches dirs created by older ingest runs that used stem-based slugs.
     if paths.images_dir.exists():
+        import json as _json
+
         for img_dir in paths.images_dir.iterdir():
             if not img_dir.is_dir():
                 continue
@@ -1353,7 +1724,7 @@ def _remove_doc_artifacts(paths: Corpus, doc_ids: set[str]) -> None:
             all_stale = True
             for sc in sidecars:
                 try:
-                    data = json.loads(sc.read_text(encoding="utf-8"))
+                    data = _json.loads(sc.read_text(encoding="utf-8"))
                     img_id = data.get("id", "")
                     img_did = img_id.split("/", 1)[0] if "/" in img_id else ""
                     if img_did and img_did not in doc_ids:

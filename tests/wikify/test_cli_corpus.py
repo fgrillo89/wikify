@@ -8,7 +8,10 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 # Reuse the on-disk corpus builder from test_corpus_queries.
-from tests.wikify.test_corpus_queries import _make_corpus  # type: ignore  # noqa: E402
+from tests.wikify.test_corpus_queries import (
+    _make_corpus,  # type: ignore  # noqa: E402
+    _make_sqlite_only_corpus,  # type: ignore  # noqa: E402
+)
 from wikify.cli import app
 
 runner = CliRunner()
@@ -33,7 +36,7 @@ def test_corpus_check_json(tmp_path: Path) -> None:
     data = json.loads(result.output)
     assert data["n_docs"] == 2
     assert data["n_chunks"] == 4
-    assert data["has_sqlite_store"] is False
+    assert data["has_sqlite_store"] is True
     assert "has_knowledge_graph" not in data
 
 
@@ -447,6 +450,58 @@ def test_corpus_show_handles_windows_crlf_handle(tmp_path: Path) -> None:
     assert "Title 0" in result.output
 
 
+def test_corpus_cli_reads_sqlite_when_json_sidecars_absent(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_sqlite_only_corpus(tmp_path / "c")
+
+    docs = runner.invoke(
+        app,
+        ["corpus", "list", "docs", "--corpus", str(corpus.root), "--format", "json"],
+    )
+    chunks = runner.invoke(
+        app,
+        [
+            "corpus", "list", "chunks",
+            "--corpus", str(corpus.root),
+            "--doc", "paper_0",
+        ],
+    )
+    show_doc = runner.invoke(
+        app,
+        ["corpus", "show", "doc:paper_0", "--corpus", str(corpus.root)],
+    )
+    show_chunk = runner.invoke(
+        app,
+        [
+            "corpus", "show", "chunk:paper_0__c0000",
+            "--corpus", str(corpus.root),
+            "--full",
+        ],
+    )
+    find = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text",
+            "--top-k", "2",
+            "--format", "quiet",
+        ],
+    )
+
+    assert docs.exit_code == 0, docs.output
+    assert json.loads(docs.output)["items"] == ["doc:paper_0", "doc:paper_1"]
+    assert chunks.exit_code == 0, chunks.output
+    assert "paper_0__c0000" in chunks.output
+    assert show_doc.exit_code == 0, show_doc.output
+    assert "Title 0" in show_doc.output
+    assert show_chunk.exit_code == 0, show_chunk.output
+    assert "atomic layer deposition" in show_chunk.output
+    assert find.exit_code == 0, find.output
+    assert find.output.splitlines() == ["chunk:paper_0__c0000", "chunk:paper_0__c0001"]
+
+
 def test_corpus_find_rejects_zero_top_k(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c")
     result = runner.invoke(
@@ -684,3 +739,104 @@ def test_corpus_sample_quiet_emits_one_handle_per_line(
     assert result.exit_code == 0, result.output
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
     assert lines == ["doc:paper_0", "doc:paper_1"]
+
+
+def test_corpus_build_exits_lock_held(tmp_path: Path) -> None:
+    """A live ``.ingest.lock`` blocks ``corpus build`` with exit code 2.
+
+    The CLI must surface a structured ``corpus_lock_held`` envelope on
+    stderr so agents can recognise the conflict without parsing prose.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "paper.md").write_text("# Paper\n\nbody\n", encoding="utf-8")
+
+    out = tmp_path / "corpus"
+    out.mkdir()
+    expires = (datetime.now(UTC) + timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
+    (out / ".ingest.lock").write_text(
+        json.dumps({
+            "owner": "other-process",
+            "pid": 12345,
+            "acquired_at": expires,
+            "expires_at": expires,
+            "ttl_seconds": 3600,
+            "root": str(out),
+        }),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "build", str(src),
+            "--out", str(out),
+            "--parser", "lite",
+            "--no-openalex",
+            "--no-refresh",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"] == "corpus_lock_held"
+    assert payload["owner"] == "other-process"
+    assert payload["ok"] is False
+
+
+def test_corpus_build_exits_ingest_failed_on_parse_failure(tmp_path: Path) -> None:
+    """Strict default: any per-file parse failure exits with
+    EXIT_INGEST_FAILED (5) and a structured ``ingest_failed`` envelope.
+    --allow-partial would let it complete instead.
+    """
+    from unittest.mock import patch
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "alpha.md").write_text("# Alpha\n\nbody\n", encoding="utf-8")
+    (src / "beta.md").write_text("# Beta\n\nbody\n", encoding="utf-8")
+
+    out = tmp_path / "corpus"
+
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def fail_beta(path, **kw):
+        if "beta" in path.name:
+            raise RuntimeError("simulated parse failure")
+        return real_parse(path, **kw)
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=fail_beta,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "corpus", "build", str(src),
+                "--out", str(out),
+                "--parser", "lite",
+                # workers=1 keeps the parser in the main process so the
+                # mock above is visible; ProcessPool workers re-import
+                # the module fresh and bypass the patch.
+                "--workers", "1",
+                "--no-openalex",
+                "--no-refresh",
+            ],
+        )
+    assert result.exit_code == 5, result.output
+    # Stderr also contains tqdm + ingest log lines; the structured
+    # envelope is the last well-formed JSON object on stderr.
+    json_line = next(
+        ln for ln in reversed(result.stderr.splitlines())
+        if ln.startswith("{") and ln.endswith("}")
+    )
+    payload = json.loads(json_line)
+    assert payload["error"] == "ingest_failed"
+    assert payload["failed"] == 1
+    assert payload["ok"] is False
+    assert "failed_files.log" in payload["log_path"]

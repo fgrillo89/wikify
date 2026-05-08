@@ -4,8 +4,8 @@ The historical bug: title fallback (``"Word Document"`` placeholder ->
 filename-derived real title) lived inside ``write_corpus_bibliography``
 as a *local* enrichment used only to build the bibtex output. The
 enriched docs were never written back to ``ctx["docs"]``, so downstream
-graph rows and persisted ``docs/<id>.json`` records silently kept the
-placeholder title even though ``corpus_papers.bib`` looked correct.
+SQLite graph rows and persisted ``docs/<id>.json`` records silently kept
+the placeholder title even though ``corpus_papers.bib`` looked correct.
 
 These tests guard the fix: a dedicated DAG step
 (``_refresh_doc_enrichment``) runs before bibliography and replaces
@@ -77,7 +77,7 @@ def test_refresh_doc_enrichment_replaces_junk_title_from_filename(
 
 def test_refresh_doc_enrichment_replaces_ctx_docs_in_place(tmp_path: Path) -> None:
     """``ctx["docs"]`` must point at the enriched list afterwards (so
-    Wave E / Wave F see the cleaned data)."""
+    resave and SQLite store see the cleaned data)."""
     corpus = Corpus(root=tmp_path / "corpus")
     doc = _doc_with_junk_title(
         "[2020 Smith] Some Real Paper Title About Stuff.docx",
@@ -160,7 +160,7 @@ def test_enrich_doc_metadata_returns_doc_with_clean_title(tmp_path: Path) -> Non
 
 def test_doc_enrichment_step_runs_before_bibliography_in_refresh_dag() -> None:
     """Architectural guard: the enrichment must precede bibliography /
-    knowledge_graph / doc_resave in the DAG, otherwise downstream waves
+    doc_resave / sqlite_store in the DAG, otherwise downstream waves
     consume un-enriched docs."""
     step_order: list[str] = []
     for wave in REFRESH_DAG:
@@ -171,7 +171,7 @@ def test_doc_enrichment_step_runs_before_bibliography_in_refresh_dag() -> None:
         "doc_enrichment step is missing from REFRESH_DAG"
     )
     enrichment_idx = step_order.index("doc_enrichment")
-    for downstream in ("bibliography", "knowledge_graph", "doc_resave"):
+    for downstream in ("bibliography", "doc_resave", "sqlite_store"):
         assert downstream in step_order
         assert step_order.index(downstream) > enrichment_idx, (
             f"{downstream!r} must run after doc_enrichment, but DAG has "

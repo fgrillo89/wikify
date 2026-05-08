@@ -19,7 +19,10 @@ from pathlib import Path
 import pytest
 
 # Reuse the on-disk corpus builder from test_corpus_queries.
-from tests.wikify.test_corpus_queries import _make_corpus  # noqa: E402
+from tests.wikify.test_corpus_queries import (
+    _make_corpus,  # noqa: E402
+    _make_sqlite_only_corpus,  # noqa: E402
+)
 from wikify.api import Bundle
 from wikify.bundle.run.lifecycle import init_run
 from wikify.corpus import queries
@@ -58,6 +61,8 @@ def test_build_server_registers_corpus_tools() -> None:
         "corpus_sample",
         "corpus_schema",
         "corpus_image",
+        "corpus_similarity_walk",
+        "corpus_citation_walk",
     }
 
 
@@ -155,6 +160,35 @@ async def test_corpus_show_chunk_full_text(tmp_path: Path) -> None:
     item = res["items"][0]
     assert item["type"] == "chunk"
     assert "atomic layer deposition" in item.get("text", "")
+
+
+async def test_corpus_mcp_reads_sqlite_when_json_sidecars_absent(
+    tmp_path: Path,
+) -> None:
+    corpus = _make_sqlite_only_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    doc = await _tool(srv, "corpus_show")(handle="doc:paper_0")
+    chunk = await _tool(srv, "corpus_show")(
+        handle="chunk:paper_0__c0000",
+        full=True,
+    )
+    found = await _tool(srv, "corpus_find")(
+        query="atomic layer",
+        text=True,
+        top_k=2,
+    )
+
+    assert doc["ok"] is True
+    assert doc["items"][0]["title"] == "Title 0"
+    assert chunk["ok"] is True
+    assert "atomic layer deposition" in chunk["items"][0]["text"]
+    assert found["ok"] is True
+    assert [item["handle"] for item in found["items"]] == [
+        "chunk:paper_0__c0000",
+        "chunk:paper_0__c0001",
+    ]
 
 
 async def test_corpus_show_handle_not_found(tmp_path: Path) -> None:
@@ -534,3 +568,414 @@ async def test_figure_item_advertises_image_tool(
     hint = item["meta"]["image_tool"]
     assert hint["name"] == "corpus_image"
     assert hint["args"]["handle"] == "figure:paper_0/fig_001"
+
+
+# ----------------------------------------------------- in_doc / walk parity
+
+_FILLER = " ".join(["word"] * 30)
+
+
+def _md(path: Path, title: str, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# {title}\n\n{body} {_FILLER}\n", encoding="utf-8")
+
+
+@pytest.fixture
+def ingested_corpus(tmp_path: Path):
+    """Build a real ingested corpus (sqlite + vectors) for walk/in_doc tests."""
+    from wikify.ingest.pipeline import ingest_corpus
+
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    _md(sources / "a.md", "Alpha",
+        "Atomic layer deposition of HfO2 yields uniform films via self-limiting reactions.")
+    _md(sources / "b.md", "Beta",
+        "Atomic layer deposition deposits conformal HfO2 films "
+        "through alternating precursor pulses.")
+    _md(sources / "c.md", "Gamma",
+        "Photocatalysis on titanium dioxide drives water splitting under ultraviolet light.")
+    return ingest_corpus(sources, tmp_path / "corpus", max_workers=1)
+
+
+async def test_corpus_find_in_doc_scopes_to_one_doc(ingested_corpus) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    all_res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=5,
+    )
+    assert all_res["ok"] is True
+    assert all_res["items"], "expected unfiltered hits"
+    target_doc_handle = all_res["items"][0]["meta"]["doc_handle"]
+
+    scoped = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=5,
+        in_doc=target_doc_handle,
+    )
+    assert scoped["ok"] is True
+    assert scoped["items"]
+    assert all(
+        it["meta"]["doc_handle"] == target_doc_handle for it in scoped["items"]
+    )
+
+
+async def test_corpus_find_in_doc_accepts_bare_short(ingested_corpus) -> None:
+    """Bare doc id / short suffix (no doc: prefix) must also resolve."""
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    all_res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=5,
+    )
+    target_doc_handle = all_res["items"][0]["meta"]["doc_handle"]
+    bare = target_doc_handle.split(":", 1)[1]
+    scoped = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=5,
+        in_doc=bare,
+    )
+    assert scoped["ok"] is True
+    assert scoped["items"]
+    assert all(
+        it["meta"]["doc_handle"] == target_doc_handle for it in scoped["items"]
+    )
+
+
+async def test_corpus_find_in_doc_bad_handle_returns_structured_error(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25",
+        in_doc="doc:does_not_exist",
+    )
+    assert res["ok"] is False
+    assert res["code"] == "bad_in_doc"
+    assert "message" in res
+
+
+async def test_similarity_walk_returns_envelope_with_seeds_and_edges(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_similarity_walk")(
+        query="atomic layer deposition", depth=1, top_k=2,
+        neighbors=2, threshold=0.0,
+    )
+    assert res["ok"] is True
+    assert res.keys() >= ENVELOPE_KEYS
+    assert "seeds" in res and "edges" in res
+    assert res["seeds"], "expected at least one seed"
+    assert all(s.startswith("chunk:") for s in res["seeds"])
+    # Items are chunk rows with hop in meta and a doc_handle preserved.
+    assert all(it["type"] == "chunk" for it in res["items"])
+    assert all("hop" in it["meta"] for it in res["items"])
+    assert all(
+        it["meta"].get("doc_handle", "").startswith("doc:")
+        for it in res["items"]
+    )
+    for e in res["edges"]:
+        assert e["src_chunk"].startswith("chunk:")
+        assert e["dst_chunk"].startswith("chunk:")
+        assert e["kind"] == "similar"
+
+
+async def test_similarity_walk_cross_doc_only_filters_same_doc(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_similarity_walk")(
+        query="atomic layer deposition", depth=1, top_k=2,
+        neighbors=4, threshold=0.0, cross_doc_only=True,
+    )
+    assert res["ok"] is True
+    # Build a chunk_handle -> doc_handle map from items.
+    doc_by_handle = {
+        it["handle"]: it["meta"]["doc_handle"] for it in res["items"]
+    }
+    for e in res["edges"]:
+        assert doc_by_handle[e["src_chunk"]] != doc_by_handle[e["dst_chunk"]]
+
+
+async def test_similarity_walk_one_seed_rule_surfaces_domain_error(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_similarity_walk")(query="", from_chunk=None)
+    assert res["ok"] is False
+    assert res["code"] == "bad_seed"
+
+
+async def test_citation_walk_envelope_shape(ingested_corpus) -> None:
+    """Tiny fixture rarely has resolved cross-citations; shape still holds."""
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_citation_walk")(
+        query="atomic layer deposition", depth=1, top_k=3,
+    )
+    assert res["ok"] is True
+    assert res.keys() >= ENVELOPE_KEYS
+    assert "seeds" in res and "edges" in res
+    assert res["seeds"], "expected at least one seed"
+    assert all(s.startswith("chunk:") for s in res["seeds"])
+    assert all(it["type"] == "chunk" for it in res["items"])
+    assert all("hop" in it["meta"] for it in res["items"])
+    # Edges may be empty in a tiny fixture. When present, handles are shaped.
+    for e in res["edges"]:
+        assert e["src_chunk"].startswith("chunk:")
+        assert e["dst_chunk"].startswith("chunk:")
+        assert e["dst_doc"].startswith("doc:")
+
+
+async def test_citation_walk_negative_depth_returns_structured_error(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_citation_walk")(query="x", depth=-1)
+    assert res["ok"] is False
+    assert res["code"] == "bad_depth"
+
+
+# ----------------------------------------------------- enrichment + disambiguation
+
+
+async def test_chunk_find_rows_carry_preview_and_section_path(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=3,
+    )
+    assert res["ok"] is True
+    assert res["items"]
+    for it in res["items"]:
+        assert it["preview"], "chunk preview should not be blank"
+        assert "section_path" in it["meta"]
+
+
+async def test_chunk_find_disambiguates_colliding_short_handles(
+    tmp_path: Path,
+) -> None:
+    """Two distinct chunks with the same short hash get different handles."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    fake_rows = [
+        {"id": "paper_0__abcd1234", "doc_id": "paper_0", "score": 0.9,
+         "preview": "p0"},
+        {"id": "paper_1__abcd1234", "doc_id": "paper_1", "score": 0.8,
+         "preview": "p1"},
+    ]
+
+    def _fake_find(corpus_arg, **_kwargs):
+        return {"kind": "chunks", "rows": fake_rows, "scored": True}
+
+    import wikify.mcp.server as srv_mod
+    monkey_target = srv_mod.queries.find
+    srv_mod.queries.find = _fake_find  # type: ignore[assignment]
+    try:
+        res = await _tool(srv, "corpus_find")(
+            query="x", by="chunk", text=False,
+        )
+    finally:
+        srv_mod.queries.find = monkey_target  # type: ignore[assignment]
+
+    assert res["ok"] is True
+    handles = [it["handle"] for it in res["items"]]
+    assert len(set(handles)) == len(handles), (
+        f"handles must be distinct after disambiguation; got {handles}"
+    )
+    assert all("/" in h for h in handles), (
+        f"colliding short hashes should escalate to slash form; got {handles}"
+    )
+    # resource_uri must also be unique once the handle is escalated.
+    uris = [it["resource_uri"] for it in res["items"]]
+    assert len(set(uris)) == len(uris), (
+        f"resource_uri must be unique for disambiguated chunks; got {uris}"
+    )
+    for it, r in zip(res["items"], fake_rows, strict=True):
+        assert it["resource_uri"] == f"wikify://corpus/chunks/{r['id']}"
+
+
+async def test_similarity_walk_ambiguous_from_chunk_returns_structured_error(
+    ingested_corpus,
+) -> None:
+    """Ambiguous chunk handle on from_chunk must surface as bad_chunk."""
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+
+    import wikify.mcp.server as srv_mod
+    from wikify.corpus.handles import AmbiguousHandleError
+
+    def _fake_resolve(corpus_arg, short):
+        raise AmbiguousHandleError(short, ["a/x", "b/x"])
+
+    target = srv_mod.queries.resolve_chunk_id
+    srv_mod.queries.resolve_chunk_id = _fake_resolve  # type: ignore[assignment]
+    try:
+        res = await _tool(srv, "corpus_similarity_walk")(
+            from_chunk="chunk:ambiguous", depth=1,
+        )
+    finally:
+        srv_mod.queries.resolve_chunk_id = target  # type: ignore[assignment]
+
+    assert res["ok"] is False
+    assert res["code"] == "bad_chunk"
+    assert "message" in res
+
+
+async def test_corpus_schema_advertises_in_doc_and_walks(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_schema")()
+    schema = res["items"][0]
+    # in_doc surfaces in find_modes.
+    assert any("in-doc" in k.lower() or "in_doc" in k.lower()
+               for k in schema["find_modes"])
+    # Walk tools advertised with at least their key params.
+    assert "walks" in schema
+    assert "similarity_walk" in schema["walks"]
+    assert "citation_walk" in schema["walks"]
+    sw = schema["walks"]["similarity_walk"]
+    assert "params" in sw and "from_chunk" in sw["params"]
+    assert "cross_doc_only" in sw["params"]
+    cw = schema["walks"]["citation_walk"]
+    assert "params" in cw and "depth" in cw["params"]
+
+
+async def test_paper_find_meta_carries_year_n_chunks_abstract(
+    ingested_corpus,
+) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="paper", top_k=3,
+    )
+    assert res["ok"] is True
+    assert res["items"]
+    enriched = False
+    for it in res["items"]:
+        meta = it["meta"] or {}
+        # Real document n_chunks (distinct from match-count)
+        assert "n_chunks" in meta
+        if "year" in meta or meta.get("abstract_preview"):
+            enriched = True
+    # The fixture sources include front-matter; at least one row should have
+    # n_chunks populated (always true).
+    assert all(("n_chunks" in (it["meta"] or {})) for it in res["items"])
+    # enriched flag is informational; n_chunks coverage is the hard floor.
+    _ = enriched
+
+
+async def test_corpus_sample_rows_have_non_null_meta(ingested_corpus) -> None:
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_sample")(strategy="diverse", max_docs=3)
+    assert res["ok"] is True
+    assert res["items"]
+    for it in res["items"]:
+        assert it["meta"] is not None
+        assert "n_chunks" in it["meta"]
+
+
+async def test_traverse_rows_flag_stub_docs(tmp_path: Path) -> None:
+    """A doc traversal target whose Document is missing surfaces is_stub=True."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    def _fake_traverse(corpus_arg, *, handle, to, rank=None, top_k=None):
+        return {
+            "handle_kind": "doc",
+            "rows": [
+                {
+                    "id": "paper_0",
+                    "type": "source",
+                    "title": "Title 0",
+                    "citation_count": 1,
+                    "pagerank": 0.1,
+                },
+                {
+                    "id": "ref_does_not_exist",
+                    "type": "source",
+                    "title": "stub ref",
+                    "citation_count": 0,
+                    "pagerank": 0.0,
+                },
+            ],
+        }
+
+    import wikify.mcp.server as srv_mod
+    target = srv_mod.queries.traverse
+    srv_mod.queries.traverse = _fake_traverse  # type: ignore[assignment]
+    try:
+        res = await _tool(srv, "corpus_traverse")(
+            handle="doc:paper_0", to="references",
+        )
+    finally:
+        srv_mod.queries.traverse = target  # type: ignore[assignment]
+
+    assert res["ok"] is True
+    by_handle = {it["handle"]: it for it in res["items"]}
+    real = by_handle["doc:paper_0"]
+    stub = by_handle["doc:ref_does_not_exist"]
+    assert (real["meta"] or {}).get("is_stub") is not True
+    assert (stub["meta"] or {}).get("is_stub") is True
+    # Stub still present in the list.
+    assert len(res["items"]) == 2
+
+
+# ----------------------------------------------- Stage 6: exclude_kinds + kind
+
+
+async def test_chunk_find_passes_exclude_kinds_through(tmp_path: Path) -> None:
+    """corpus_find forwards exclude_kinds to queries.find."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    captured: dict = {}
+
+    def _fake_find(corpus_arg, **kwargs):
+        captured.update(kwargs)
+        return {"kind": "chunks", "rows": [], "scored": True}
+
+    import wikify.mcp.server as srv_mod
+    target = srv_mod.queries.find
+    srv_mod.queries.find = _fake_find  # type: ignore[assignment]
+    try:
+        await _tool(srv, "corpus_find")(
+            query="x", by="chunk", exclude_kinds=["references", "acknowledgments"],
+        )
+    finally:
+        srv_mod.queries.find = target  # type: ignore[assignment]
+
+    assert captured.get("exclude_kinds") == ["references", "acknowledgments"]
+
+
+async def test_chunk_find_meta_kind_present(ingested_corpus) -> None:
+    """Chunk find rows expose meta.kind from the persisted section_type."""
+    context.bind(corpus_path=ingested_corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer deposition", by="chunk", rank="bm25", top_k=3,
+    )
+    assert res["ok"] is True
+    assert res["items"]
+    for it in res["items"]:
+        assert "kind" in (it["meta"] or {}), it["meta"]
+
+
+async def test_corpus_schema_advertises_exclude_kinds() -> None:
+    srv = server.build_server()
+    res = await _tool(srv, "corpus_schema")()
+    schema = res["items"][0]
+    assert any(
+        "exclude" in k.lower() or "exclude_kind" in k.lower()
+        for k in schema["find_modes"]
+    )

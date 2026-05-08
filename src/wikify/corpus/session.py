@@ -118,7 +118,7 @@ class CorpusSearchSession:
         from ..embedding import embedder_for
 
         self._vectors = read_vector_store(self.corpus)
-        meta = read_meta(self.corpus.vectors_path)
+        meta = read_meta(self.corpus.sqlite_path)
         self._embed = (
             embedder_for(meta.backend, meta.model, mode="query") if meta else None
         )

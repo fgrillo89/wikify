@@ -2,15 +2,17 @@
 
 import json
 import os
+import sqlite3
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from wikify.citations.models import CitationEntry
 
 from ..api import Corpus
-from ..models import Chunk, DocImage, Document
-from .vectors import VectorStore, load_vectors
+from ..models import Chunk, DocImage, DocSection, Document
+from .vectors import VectorStore
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -27,45 +29,68 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def write_document(paths: Corpus, doc: Document, markdown: str, chunks: list[Chunk]) -> None:
+def write_document_markdown(paths: Corpus, doc_id: str, markdown: str) -> None:
+    """Persist the parsed markdown for *doc_id*.
+
+    Document/chunk rows live in `wikify.db`; this writer only handles the
+    markdown sidecar that downstream readers (rechunker, body-of-text
+    queries) load back from disk.
+    """
     paths.ensure()
-    atomic_write_text(
-        paths.markdown_dir / f"{doc.id}.md", markdown,
-    )
-    atomic_write_text(
-        paths.chunks_dir / f"{doc.id}.jsonl",
-        "\n".join(json.dumps(_chunk_to_dict(c)) for c in chunks),
-    )
-    atomic_write_text(
-        paths.docs_dir / f"{doc.id}.json", json.dumps(_doc_to_dict(doc)),
-    )
+    atomic_write_text(paths.markdown_dir / f"{doc_id}.md", markdown)
 
 
 def list_documents(paths: Corpus) -> list[Document]:
-    out: list[Document] = []
-    if not paths.docs_dir.exists():
-        return out
-    for f in sorted(paths.docs_dir.glob("*.json")):
-        out.append(_doc_from_dict(json.loads(f.read_text(encoding="utf-8"))))
-    return out
+    con = _connect_sqlite(paths)
+    if con is None:
+        return []
+    try:
+        rows = con.execute("SELECT * FROM documents ORDER BY doc_id").fetchall()
+        return [_doc_from_sqlite_row(paths, con, dict(r)) for r in rows]
+    finally:
+        con.close()
+
+
+def read_document(paths: Corpus, doc_id: str) -> Document | None:
+    """Load a single Document by id, or None if absent."""
+    con = _connect_sqlite(paths)
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT * FROM documents WHERE doc_id = ?", (doc_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _doc_from_sqlite_row(paths, con, dict(row))
+    finally:
+        con.close()
 
 
 def read_chunks(paths: Corpus, doc_id: str) -> list[Chunk]:
-    f = paths.chunks_dir / f"{doc_id}.jsonl"
-    if not f.exists():
+    con = _connect_sqlite(paths)
+    if con is None:
         return []
-    return [
-        _chunk_from_dict(json.loads(line))
-        for line in f.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
+    try:
+        rows = con.execute(
+            "SELECT * FROM chunks WHERE doc_id = ? ORDER BY ord", (doc_id,),
+        ).fetchall()
+        return [_chunk_from_sqlite_row(dict(r)) for r in rows]
+    finally:
+        con.close()
 
 
 def all_chunks(paths: Corpus) -> list[Chunk]:
-    out: list[Chunk] = []
-    for doc in list_documents(paths):
-        out.extend(read_chunks(paths, doc.id))
-    return out
+    con = _connect_sqlite(paths)
+    if con is None:
+        return []
+    try:
+        rows = con.execute(
+            "SELECT * FROM chunks ORDER BY doc_id, ord",
+        ).fetchall()
+        return [_chunk_from_sqlite_row(dict(r)) for r in rows]
+    finally:
+        con.close()
 
 
 def read_chunks_by_id(
@@ -73,55 +98,249 @@ def read_chunks_by_id(
     chunk_ids: Sequence[str],
     limit: int | None = None,
 ) -> list[Chunk]:
-    """Look up chunks by id using the real ``chunks/{doc_id}.jsonl`` layout.
+    """Look up chunks by id in the SQLite store.
 
-    Scans JSONL files to find the requested chunk ids. Preserves the
-    requested order. Returns only chunks that exist.  Stops after
-    *limit* returned chunks (in requested order) when provided.
+    Preserves the requested order and stops after *limit* returned
+    chunks when provided. Unknown ids are dropped.
     """
-    wanted = set(chunk_ids)
-    if not wanted:
+    if not chunk_ids:
         return []
-
-    # Scan all JSONL files to build a complete map of wanted chunks.
-    found: dict[str, Chunk] = {}
-    if not corpus.chunks_dir.exists():
+    con = _connect_sqlite(corpus)
+    if con is None:
         return []
-    for f in corpus.chunks_dir.glob("*.jsonl"):
-        for line in f.read_text(encoding="utf-8").splitlines():
-            if not line:
-                continue
-            d = json.loads(line)
-            cid = d.get("id", "")
-            if cid in wanted:
-                found[cid] = _chunk_from_dict(d)
-                if len(found) == len(wanted):
+    try:
+        wanted = list(dict.fromkeys(chunk_ids))
+        placeholders = ",".join("?" * len(wanted))
+        rows = con.execute(
+            f"SELECT * FROM chunks WHERE chunk_id IN ({placeholders})",
+            wanted,
+        ).fetchall()
+        by_id = {
+            str(r["chunk_id"]): _chunk_from_sqlite_row(dict(r))
+            for r in rows
+        }
+        cap = limit if limit is not None else len(chunk_ids)
+        out: list[Chunk] = []
+        for cid in chunk_ids:
+            chunk = by_id.get(cid)
+            if chunk is not None:
+                out.append(chunk)
+                if len(out) >= cap:
                     break
-        if len(found) == len(wanted):
-            break
+        return out
+    finally:
+        con.close()
 
-    # Return in requested order, capped by limit.
-    cap = limit if limit is not None else len(chunk_ids)
-    result: list[Chunk] = []
-    for cid in chunk_ids:
-        if cid in found:
-            result.append(found[cid])
-            if len(result) >= cap:
-                break
-    return result
+
+def _connect_sqlite(paths: Corpus) -> sqlite3.Connection | None:
+    db = paths.sqlite_path
+    if not db.exists():
+        return None
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def _json_obj(raw: Any) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _json_list(raw: Any) -> list:
+    if not raw:
+        return []
+    try:
+        data = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _chunk_from_sqlite_row(row: dict[str, Any]) -> Chunk:
+    return Chunk(
+        id=str(row["chunk_id"]),
+        doc_id=str(row["doc_id"]),
+        ord=int(row["ord"]),
+        text=str(row["text"] or ""),
+        char_span=(
+            int(row["char_start"] or 0),
+            int(row["char_end"] or 0),
+        ),
+        section_path=[str(p) for p in _json_list(row.get("section_path_json"))],
+        section_type=str(row.get("section_type") or "body"),
+        equation_ids=[str(e) for e in _json_list(row.get("equation_ids_json"))],
+        is_boilerplate=bool(row.get("is_boilerplate")),
+    )
+
+
+def _sections_from_chunk_rows(rows: list[dict[str, Any]]) -> list[DocSection]:
+    sections: list[DocSection] = []
+    for row in rows:
+        path = [str(p) for p in _json_list(row.get("section_path_json"))]
+        if not path:
+            path = ["body"]
+        chunk_id = str(row["chunk_id"])
+        if sections and sections[-1].path == path:
+            sections[-1].chunk_ids.append(chunk_id)
+        else:
+            sections.append(DocSection(path=path, chunk_ids=[chunk_id]))
+    return sections
+
+
+def _citations_from_sqlite(
+    con: sqlite3.Connection,
+    doc_id: str,
+) -> list[CitationEntry]:
+    rows = con.execute(
+        "SELECT * FROM bib_entries WHERE doc_id = ? ORDER BY ord", (doc_id,),
+    ).fetchall()
+    out: list[CitationEntry] = []
+    for r in rows:
+        row = dict(r)
+        bib = _json_obj(row.get("bib_json"))
+        authors = _json_list(row.get("authors_json"))
+        raw_authors = bib.get("author_last_names") or []
+        out.append(CitationEntry(
+            ord=int(row.get("ord") or 0),
+            raw_text=str(row.get("raw_text") or ""),
+            title=str(row.get("title") or ""),
+            authors=[str(a) for a in authors],
+            author_last_names=[str(a) for a in raw_authors],
+            year=row.get("year"),
+            doi=str(row.get("doi") or ""),
+            venue=str(row.get("container_title") or ""),
+            publisher=str(row.get("publisher") or ""),
+            resolution=str(row.get("resolution") or ""),
+            confidence=float(row.get("confidence") or 0.0),
+        ))
+    return out
+
+
+def _assets_from_sqlite(
+    con: sqlite3.Connection,
+    doc_id: str,
+) -> tuple[list[DocImage], list[dict]]:
+    rows = con.execute(
+        "SELECT * FROM assets WHERE doc_id = ? ORDER BY asset_type, ord", (doc_id,),
+    ).fetchall()
+    near_rows = con.execute(
+        "SELECT ca.asset_id, ca.chunk_id FROM chunk_assets ca "
+        "JOIN chunks c ON c.chunk_id = ca.chunk_id "
+        "WHERE c.doc_id = ? AND ca.relation = 'near' "
+        "ORDER BY ca.asset_id, c.ord",
+        (doc_id,),
+    ).fetchall()
+    near_by_asset: dict[str, list[str]] = {}
+    for r in near_rows:
+        near_by_asset.setdefault(str(r["asset_id"]), []).append(str(r["chunk_id"]))
+
+    images: list[DocImage] = []
+    equations: list[dict] = []
+    for r in rows:
+        row = dict(r)
+        asset_type = str(row.get("asset_type") or "")
+        meta = _json_obj(row.get("metadata_json"))
+        if asset_type in {"figure", "image", "table", "scheme"}:
+            images.append(DocImage(
+                id=str(row["asset_id"]),
+                path=str(row.get("path") or ""),
+                caption=str(row.get("caption") or ""),
+                alt_text=str(meta.get("alt_text") or ""),
+                page=row.get("page"),
+                near_chunk_ids=near_by_asset.get(str(row["asset_id"]), []),
+            ))
+        elif asset_type == "equation":
+            eq = dict(meta)
+            eq.setdefault("id", str(row["asset_id"]))
+            eq.setdefault("latex", str(row.get("content") or ""))
+            eq.setdefault("type", "equation")
+            if row.get("caption"):
+                eq.setdefault("label", str(row["caption"]))
+            if row.get("page") is not None:
+                eq.setdefault("page", row["page"])
+            equations.append(eq)
+    return images, equations
+
+
+def _edge_targets(
+    con: sqlite3.Connection,
+    doc_id: str,
+    *,
+    kind: str,
+) -> list[str]:
+    return [
+        str(r["dst_id"]) for r in con.execute(
+            "SELECT dst_id FROM graph_edges "
+            "WHERE src_type='document' AND src_id=? AND kind=? "
+            "AND dst_type='document' ORDER BY ord, dst_id",
+            (doc_id, kind),
+        )
+    ]
+
+
+def _doc_from_sqlite_row(
+    paths: Corpus,
+    con: sqlite3.Connection,
+    row: dict[str, Any],
+) -> Document:
+    doc_id = str(row["doc_id"])
+    metadata = _json_obj(row.get("metadata_json"))
+    metadata.setdefault("authors", _json_list(row.get("authors_json")))
+    for source, key in (
+        ("year", "year"),
+        ("container_title", "venue"),
+        ("publisher", "publisher"),
+        ("doi", "doi"),
+        ("url", "url"),
+        ("doc_type", "doc_type"),
+    ):
+        if row.get(source) not in (None, ""):
+            metadata.setdefault(key, row[source])
+
+    chunk_rows = [
+        dict(r) for r in con.execute(
+            "SELECT * FROM chunks WHERE doc_id = ? ORDER BY ord", (doc_id,),
+        )
+    ]
+    images, equations = _assets_from_sqlite(con, doc_id)
+    image_dir = paths.images_dir / doc_id
+    if images and images[0].path:
+        image_dir = Path(images[0].path).parent
+    return Document(
+        id=doc_id,
+        source_path=str(row.get("source_path") or ""),
+        kind=str(row.get("source_kind") or "md"),  # type: ignore[arg-type]
+        title=str(row.get("title") or doc_id),
+        metadata=metadata,
+        markdown_path=str(paths.markdown_dir / f"{doc_id}.md"),
+        image_dir=str(image_dir),
+        sections=_sections_from_chunk_rows(chunk_rows),
+        images=images,
+        abstract=str(row.get("abstract") or ""),
+        tldr=str(row.get("tldr") or ""),
+        n_chunks=int(row.get("n_chunks") or len(chunk_rows)),
+        n_tokens=int(row.get("n_tokens") or 0),
+        citations=_citations_from_sqlite(con, doc_id),
+        equations=equations,
+        similar_to=_edge_targets(con, doc_id, kind="similar"),
+        cites=_edge_targets(con, doc_id, kind="references"),
+        cites_same=_edge_targets(con, doc_id, kind="cites_same"),
+    )
 
 
 def read_vector_store(paths: Corpus) -> VectorStore:
     """Load chunk embeddings as a `VectorStore` from `wikify.db`.
 
-    Falls back to the on-disk `vectors.npz` only when the SQLite store is
-    absent (hand-built test fixtures, legacy corpora). Empty stores are
-    returned for corpora with no embeddings rather than raising.
+    Returns an empty store when the SQLite store is absent so hand-built
+    fixtures and pre-build paths don't blow up.
     """
     if paths.sqlite_path.exists():
         return _vector_store_from_sqlite(paths.sqlite_path)
-    if paths.vectors_path.exists():
-        return load_vectors(paths.vectors_path)
     import numpy as np
     return VectorStore(ids=[], matrix=np.zeros((0, 1), dtype="float32"))
 
@@ -201,110 +420,3 @@ def read_doc_images(doc: Document) -> list[DocImage]:
     from ..ingest.images import load_sidecars
 
     return load_sidecars(Path(doc.image_dir))
-
-
-# --- serialisation helpers -----------------------------------------------
-
-
-def _chunk_to_dict(c: Chunk) -> dict:
-    return {
-        "id": c.id,
-        "doc_id": c.doc_id,
-        "ord": c.ord,
-        "text": c.text,
-        "char_span": list(c.char_span),
-        "section_path": c.section_path,
-        "section_type": c.section_type,
-        "equation_ids": list(c.equation_ids or []),
-        "is_boilerplate": c.is_boilerplate,
-    }
-
-
-def _chunk_from_dict(d: dict) -> Chunk:
-    return Chunk(
-        id=d["id"],
-        doc_id=d["doc_id"],
-        ord=d["ord"],
-        text=d["text"],
-        char_span=tuple(d["char_span"]),
-        section_path=d["section_path"],
-        section_type=d.get("section_type", "body"),
-        equation_ids=list(d.get("equation_ids") or []),
-        is_boilerplate=bool(d.get("is_boilerplate", False)),
-    )
-
-
-def _doc_to_dict(doc: Document) -> dict:
-    return {
-        "id": doc.id,
-        "source_path": doc.source_path,
-        "kind": doc.kind,
-        "title": doc.title,
-        "metadata": doc.metadata,
-        "markdown_path": doc.markdown_path,
-        "image_dir": doc.image_dir,
-        "sections": [
-            {"path": s.path, "chunk_ids": s.chunk_ids, "summary": s.summary} for s in doc.sections
-        ],
-        "images": [_image_to_dict(i) for i in doc.images],
-        "abstract": doc.abstract,
-        "tldr": doc.tldr,
-        "n_chunks": doc.n_chunks,
-        "n_tokens": doc.n_tokens,
-        "citations": [c.to_dict() for c in doc.citations] if doc.citations else [],
-        "equations": list(doc.equations or []),
-        "figure_refs": list(doc.figure_refs or []),
-        "similar_to": list(doc.similar_to or []),
-        "cites": list(doc.cites or []),
-        "cites_same": list(doc.cites_same or []),
-    }
-
-
-def _image_to_dict(im: DocImage) -> dict:
-    return {
-        "id": im.id,
-        "path": im.path,
-        "caption": im.caption,
-        "alt_text": im.alt_text,
-        "page": im.page,
-        "near_chunk_ids": im.near_chunk_ids,
-    }
-
-
-def _doc_from_dict(d: dict) -> Document:
-    from ..models import DocSection
-
-    return Document(
-        id=d["id"],
-        source_path=d["source_path"],
-        kind=d["kind"],
-        title=d["title"],
-        metadata=d.get("metadata", {}),
-        markdown_path=d["markdown_path"],
-        image_dir=d["image_dir"],
-        sections=[
-            DocSection(path=s["path"], chunk_ids=s["chunk_ids"], summary=s.get("summary", ""))
-            for s in d.get("sections", [])
-        ],
-        images=[
-            DocImage(
-                id=i["id"],
-                path=i["path"],
-                caption=i.get("caption", ""),
-                alt_text=i.get("alt_text", ""),
-                page=i.get("page"),
-                near_chunk_ids=i.get("near_chunk_ids", []),
-            )
-            for i in d.get("images", [])
-        ],
-        abstract=d.get("abstract", ""),
-        tldr=d.get("tldr", ""),
-        n_chunks=d.get("n_chunks", 0),
-        n_tokens=d.get("n_tokens", 0),
-        citations=[CitationEntry.from_dict(c) for c in (d.get("citations") or [])],
-        equations=list(d.get("equations") or []),
-        figure_refs=list(d.get("figure_refs") or []),
-        similar_to=list(d.get("similar_to") or []),
-        cites=list(d.get("cites") or []),
-        cites_same=list(d.get("cites_same") or []),
-    )

@@ -52,8 +52,9 @@ def coverage_residual(
     Returns 1.0 (max meaningful distance) if the bundle has no pages.
 
     Either ``embed`` or ``corpus`` must be supplied. When ``embed`` is None,
-    the embedder is constructed from ``corpus/vectors.meta.json`` so the
-    page-body embeddings live in the same space as ``chunk_embeddings``.
+    the embedder is constructed from the active ``embedding_spaces`` row
+    in ``wikify.db`` so the page-body embeddings live in the same space
+    as ``chunk_embeddings``.
     Raises ``EmbedderMismatch`` if the dims don't line up — never silently
     falls back to a different backend.
     """
@@ -69,16 +70,16 @@ def coverage_residual(
 
         from ..embedding import embedder_for
 
-        meta = read_meta(corpus.vectors_path)
+        meta = read_meta(corpus.sqlite_path)
         if meta is None:
             raise EmbedderMismatch(
-                f"coverage_residual: no vectors.meta.json next to {corpus.vectors_path}; "
+                f"coverage_residual: no embedding_spaces row in {corpus.sqlite_path}; "
                 "cannot determine which embedder built the corpus vectors"
             )
         if meta.dim != int(chunk_embeddings.shape[1]):
             raise EmbedderMismatch(
                 f"coverage_residual: corpus vectors are {chunk_embeddings.shape[1]}-d "
-                f"but vectors.meta.json reports {meta.dim}-d ({meta.backend})"
+                f"but embedding_spaces reports {meta.dim}-d ({meta.backend})"
             )
         embed = embedder_for(meta.backend, meta.model)
 

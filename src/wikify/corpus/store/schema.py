@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 CORE_DDL = """
@@ -203,6 +203,11 @@ CREATE TABLE IF NOT EXISTS projection_status (
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS topics (
+  topic TEXT PRIMARY KEY,
+  declared INTEGER NOT NULL DEFAULT 0
 );
 """
 

@@ -59,6 +59,15 @@ BOILERPLATE_MARKERS: tuple[str, ...] = (
     r"peer review information",
     r"correspondence and requests for materials",
     r"supplementary information.{0,80}online version",
+    # Publisher article-recommendation widgets that contaminate top-N
+    # retrieval. Audit-flagged: chunk:380eb7a2 had its body inside a
+    # section_path starting with "Articles You May Be Interested In".
+    r"articles you may be interested in",
+    r"recommended (by|for you)",
+    r"cited by\s*$",
+    # Page-footer download stamps the parser leaves inline ("Downloaded
+    # from https://onlinelibrary.wiley.com/... 15 March 2026 12:11:38").
+    r"downloaded\s+from\s+https?://",
 )
 _BOILERPLATE_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in BOILERPLATE_MARKERS)
 
@@ -71,17 +80,52 @@ BOILERPLATE_MAX_WORDS = 600
 BOILERPLATE_MIN_HITS = 2
 
 
-def is_boilerplate(text: str) -> bool:
-    """True when the chunk text is dominated by legal/metadata boilerplate.
+# Section-path keywords that, on their own, mark the chunk as
+# publisher-sidebar boilerplate even when the body text is short and
+# wouldn't trip the marker-density test. These match against any
+# section_path element; the case-insensitive substring is enough.
+SECTION_PATH_BOILERPLATE_KEYWORDS: tuple[str, ...] = (
+    "articles you may be interested",
+    "recommended by acs",
+    "recommended by springer",
+    "recommended for you",
+    "see also",
+    "related content",
+)
 
-    Counts UNIQUE non-overlapping match spans, not pattern hits. The
-    phrase "licensed under a Creative Commons Attribution" would match
-    several markers if both `creative commons` and `licensed under`
-    were in the marker set — span-dedup ensures that's one signal,
-    not two. Only triggers when at least ``BOILERPLATE_MIN_HITS``
-    distinct spans match AND the chunk is short enough that the
-    boilerplate density is meaningful.
+
+def _section_path_is_boilerplate(section_path: list[str] | None) -> bool:
+    if not section_path:
+        return False
+    for element in section_path:
+        if not element:
+            continue
+        low = element.lower()
+        for kw in SECTION_PATH_BOILERPLATE_KEYWORDS:
+            if kw in low:
+                return True
+    return False
+
+
+def is_boilerplate(text: str, section_path: list[str] | None = None) -> bool:
+    """True when the chunk is admin / legal / publisher-sidebar boilerplate.
+
+    Two paths fire:
+
+    1. Section-path fast path -- when any heading in ``section_path``
+       matches a publisher-sidebar keyword (Articles You May Be
+       Interested In, Recommended by ACS, etc.), the chunk is
+       boilerplate regardless of body length. This is what catches
+       audit chunk:380eb7a2.
+    2. Body-text marker density -- counts UNIQUE non-overlapping
+       marker spans. The phrase "licensed under a Creative Commons
+       Attribution" matches multiple markers; span-dedup keeps that
+       as one signal. Triggers when at least ``BOILERPLATE_MIN_HITS``
+       distinct spans match AND the chunk is short enough that the
+       density is meaningful.
     """
+    if _section_path_is_boilerplate(section_path):
+        return True
     if len(text.split()) > BOILERPLATE_MAX_WORDS:
         return False
     spans: list[tuple[int, int]] = []

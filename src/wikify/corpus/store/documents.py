@@ -31,7 +31,14 @@ def _norm_doi(value: str | None) -> str | None:
 
 
 def upsert_document(con: sqlite3.Connection, doc: Document) -> None:
-    """Insert/replace a `documents` row from a Document dataclass."""
+    """Insert or update a ``documents`` row.
+
+    Uses ``ON CONFLICT(doc_id) DO UPDATE`` instead of ``INSERT OR REPLACE``
+    because the latter is implemented as DELETE+INSERT, which fires the
+    ``ON DELETE CASCADE`` FK on chunks / bib_entries / assets and wipes
+    every dependent row. The conflict-update form leaves the existing
+    primary key untouched so dependents stay attached.
+    """
     meta = dict(doc.metadata or {})
     authors_raw = meta.pop("authors", None)
     year = meta.pop("year", None)
@@ -61,7 +68,13 @@ def upsert_document(con: sqlite3.Connection, doc: Document) -> None:
     }
     cols = ",".join(row.keys())
     placeholders = ",".join(":" + k for k in row.keys())
-    con.execute(f"INSERT OR REPLACE INTO documents({cols}) VALUES ({placeholders})", row)
+    update_cols = [k for k in row.keys() if k != "doc_id"]
+    update_set = ",".join(f"{k}=excluded.{k}" for k in update_cols)
+    con.execute(
+        f"INSERT INTO documents({cols}) VALUES ({placeholders}) "
+        f"ON CONFLICT(doc_id) DO UPDATE SET {update_set}",
+        row,
+    )
 
 
 def get_document(con: sqlite3.Connection, doc_id: str) -> dict[str, Any] | None:
@@ -84,7 +97,12 @@ def delete_document(con: sqlite3.Connection, doc_id: str) -> None:
 
 
 def upsert_chunks(con: sqlite3.Connection, chunks: list[Chunk]) -> None:
-    """Insert/replace chunks as a single statement-batched transaction."""
+    """Insert or update chunk rows in one batch.
+
+    Uses ``ON CONFLICT(chunk_id) DO UPDATE`` (not ``INSERT OR REPLACE``)
+    so dependent ``chunk_citations`` / ``chunk_assets`` rows aren't
+    cascade-deleted on every re-upsert.
+    """
     rows = []
     for ck in chunks:
         rows.append({
@@ -105,8 +123,12 @@ def upsert_chunks(con: sqlite3.Connection, chunks: list[Chunk]) -> None:
         return
     cols = ",".join(rows[0].keys())
     placeholders = ",".join(":" + k for k in rows[0].keys())
+    update_cols = [k for k in rows[0].keys() if k != "chunk_id"]
+    update_set = ",".join(f"{k}=excluded.{k}" for k in update_cols)
     con.executemany(
-        f"INSERT OR REPLACE INTO chunks({cols}) VALUES ({placeholders})", rows,
+        f"INSERT INTO chunks({cols}) VALUES ({placeholders}) "
+        f"ON CONFLICT(chunk_id) DO UPDATE SET {update_set}",
+        rows,
     )
 
 

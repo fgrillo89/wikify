@@ -3,7 +3,9 @@
 from pathlib import Path
 
 from wikify.corpus.chunks import list_documents
+from wikify.corpus.vectors import VectorStore
 from wikify.ingest.pipeline import ingest_corpus
+from wikify.models import Chunk, Document
 
 
 def test_similar_to_populated_on_overlapping_docs(tmp_path: Path) -> None:
@@ -40,3 +42,49 @@ def test_similar_to_populated_on_overlapping_docs(tmp_path: Path) -> None:
         assert "## Edges" in md
     # sanity: by_id was built
     assert set(by_id.keys()) == {d.id for d in docs}
+
+
+def test_doc_similarity_clears_stale_edges_for_docs_without_vectors() -> None:
+    import numpy as np
+
+    from wikify.ingest.pipeline import _compute_doc_similarity
+
+    stale = Document(
+        id="stale",
+        source_path="stale.md",
+        kind="md",
+        title="Stale",
+        metadata={},
+        markdown_path="",
+        image_dir="",
+        similar_to=["old_neighbor"],
+    )
+    active = Document(
+        id="active",
+        source_path="active.md",
+        kind="md",
+        title="Active",
+        metadata={},
+        markdown_path="",
+        image_dir="",
+    )
+    chunk = Chunk(
+        id="active__c0000__aaaa",
+        doc_id="active",
+        ord=0,
+        text="active text",
+        char_span=(0, 11),
+        section_path=["body"],
+    )
+    store = VectorStore(
+        ids=[chunk.id],
+        matrix=np.array([[1.0, 0.0]], dtype=np.float32),
+    )
+
+    _compute_doc_similarity(
+        [stale, active],
+        [("stale", []), ("active", [chunk])],
+        store,
+    )
+
+    assert stale.similar_to == []
