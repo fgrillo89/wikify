@@ -36,7 +36,12 @@ from ..corpus.handles import (
 )
 from ..corpus.session import CorpusSearchSession
 from ._format import FormatError, format_row, resolve_format
-from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
+from ._helpers import (
+    EXIT_INGEST_FAILED,
+    EXIT_LOCK_HELD,
+    EXIT_VALIDATION,
+    cli_error,
+)
 
 # ``wikify.ingest.pipeline`` (~250ms) and ``wikify.bundle.run.events``
 # (~300ms) are deferred to first use — neither is needed for the
@@ -213,6 +218,17 @@ def cmd_build(
             "Pass --no-openalex to skip Wave C and stay fully offline."
         ),
     ),
+    allow_partial: bool = typer.Option(
+        False,
+        "--allow-partial",
+        help=(
+            "Continue manifest update + refresh even when some files fail "
+            "to parse. Default OFF: any per-file failure aborts the build "
+            "with exit code 5 so partial corpora are not silently advertised "
+            "as queryable. Successful papers stay on disk for the next run "
+            "to recover via _recover_completed."
+        ),
+    ),
 ) -> None:
     """Parse, chunk, embed, and graph an input directory.
 
@@ -221,7 +237,7 @@ def cmd_build(
     Set OPENALEX_EMAIL for the polite-pool rate limit (10 req/s).
     """
     from ..corpus.lock import CorpusLockHeldError
-    from ..ingest.pipeline import ingest_corpus
+    from ..ingest.pipeline import IngestFailedError, ingest_corpus
 
     try:
         paths = ingest_corpus(
@@ -232,6 +248,7 @@ def cmd_build(
             parser_backend=parser,
             refresh=not no_refresh,
             resolve_bibliography_doi=openalex,
+            allow_partial=allow_partial,
         )
     except CorpusLockHeldError as exc:
         cli_error(
@@ -240,6 +257,20 @@ def cmd_build(
             owner=exc.owner,
             acquired_at=exc.acquired_at,
             path=str(exc.path),
+        )
+    except IngestFailedError as exc:
+        cli_error(
+            EXIT_INGEST_FAILED,
+            error="ingest_failed",
+            failed=exc.failed,
+            total=exc.total,
+            log_path=str(exc.log_path),
+            message=(
+                f"{exc.failed}/{exc.total} files failed to parse. "
+                f"Inspect {exc.log_path} and re-run; "
+                f"successful papers will be recovered automatically. "
+                f"Pass --allow-partial to refresh anyway."
+            ),
         )
     typer.echo(f"corpus written to {paths.root}")
 

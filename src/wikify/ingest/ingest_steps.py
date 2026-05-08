@@ -253,13 +253,14 @@ def _ingest_content_parse(ctx: dict) -> None:
     parser_backend: str = ctx.get("parser_backend", "default")
     max_workers = ctx.get("max_workers")
 
-    receipts = _stream_parse_and_persist(
+    receipts, failed_count = _stream_parse_and_persist(
         sources,
         paths,
         max_workers,
         parser_backend,
         skip_metadata=True,
     )
+    ctx["parse_failed_count"] = failed_count
 
     fresh = [r for r in receipts if r.doc is not None and r.chunks is not None]
     if fresh:
@@ -408,12 +409,15 @@ def run_ingest_dag(
     max_workers: int | None,
     parser_backend: str,
     timings: dict[str, float],
-) -> list:
-    """Build the shared ctx, run ``INGEST_DAG``, return the receipts.
+) -> tuple[list, int]:
+    """Build the shared ctx, run ``INGEST_DAG``, return ``(receipts,
+    parse_failed_count)``.
 
     Thin wrapper so ``pipeline.ingest_corpus`` stays readable.  The
     ctx dict is the single source of truth across passes; every
     ``_ingest_*`` reads its inputs from ctx and publishes outputs back.
+    The orchestrator uses ``parse_failed_count`` to decide whether to
+    abort the build (default) or continue under ``--allow-partial``.
     """
     from .dag import run_dag
 
@@ -424,6 +428,6 @@ def run_ingest_dag(
         max_workers=max_workers,
     )
     run_dag(INGEST_DAG, ctx, timings=timings)
-    return ctx.get("receipts") or []
+    return ctx.get("receipts") or [], int(ctx.get("parse_failed_count", 0))
 
 

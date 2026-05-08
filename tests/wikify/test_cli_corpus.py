@@ -785,3 +785,58 @@ def test_corpus_build_exits_lock_held(tmp_path: Path) -> None:
     assert payload["error"] == "corpus_lock_held"
     assert payload["owner"] == "other-process"
     assert payload["ok"] is False
+
+
+def test_corpus_build_exits_ingest_failed_on_parse_failure(tmp_path: Path) -> None:
+    """Strict default: any per-file parse failure exits with
+    EXIT_INGEST_FAILED (5) and a structured ``ingest_failed`` envelope.
+    --allow-partial would let it complete instead.
+    """
+    from unittest.mock import patch
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "alpha.md").write_text("# Alpha\n\nbody\n", encoding="utf-8")
+    (src / "beta.md").write_text("# Beta\n\nbody\n", encoding="utf-8")
+
+    out = tmp_path / "corpus"
+
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def fail_beta(path, **kw):
+        if "beta" in path.name:
+            raise RuntimeError("simulated parse failure")
+        return real_parse(path, **kw)
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=fail_beta,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "corpus", "build", str(src),
+                "--out", str(out),
+                "--parser", "lite",
+                # workers=1 keeps the parser in the main process so the
+                # mock above is visible; ProcessPool workers re-import
+                # the module fresh and bypass the patch.
+                "--workers", "1",
+                "--no-openalex",
+                "--no-refresh",
+            ],
+        )
+    assert result.exit_code == 5, result.output
+    # Stderr also contains tqdm + ingest log lines; the structured
+    # envelope is the last well-formed JSON object on stderr.
+    json_line = next(
+        ln for ln in reversed(result.stderr.splitlines())
+        if ln.startswith("{") and ln.endswith("}")
+    )
+    payload = json.loads(json_line)
+    assert payload["error"] == "ingest_failed"
+    assert payload["failed"] == 1
+    assert payload["ok"] is False
+    assert "failed_files.log" in payload["log_path"]

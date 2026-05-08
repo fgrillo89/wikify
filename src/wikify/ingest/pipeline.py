@@ -680,8 +680,8 @@ def _stream_parse_and_persist(
     max_workers: int | None,
     parser_backend: str = "default",
     skip_metadata: bool = False,
-) -> list[FileReceipt]:
-    """Parse, persist each source. Returns sorted receipts.
+) -> tuple[list[FileReceipt], int]:
+    """Parse, persist each source. Returns ``(receipts, failed_count)``.
 
     Three execution strategies:
 
@@ -697,8 +697,11 @@ def _stream_parse_and_persist(
       jobs where pool startup isn't worth it.
 
     Failed papers (exceptions raised by the worker) are logged to
-    ``<corpus>/failed_files.log``; ``skip_metadata`` is forwarded to
-    every worker invocation.
+    ``<corpus>/failed_files.log`` and counted in the returned
+    ``failed_count``. The orchestrator decides whether a non-zero
+    failure count should abort the build (default) or continue with a
+    partial corpus (``--allow-partial``). ``skip_metadata`` is
+    forwarded to every worker invocation.
     """
     from tqdm import tqdm
 
@@ -811,7 +814,7 @@ def _stream_parse_and_persist(
             name = Path(r.src_path).name[:60]
             print(f"  {r.parse_seconds:6.2f}s  {name}", file=sys.stderr)
 
-    return receipts
+    return receipts, failed
 
 
 
@@ -1430,6 +1433,32 @@ def refresh_corpus(
 # ---------------------------------------------------------------------------
 
 
+class IngestFailedError(RuntimeError):
+    """Raised when one or more files failed to parse during ingest.
+
+    Carries the failure count, total source count, and the path to
+    the per-corpus ``failed_files.log`` so the CLI can surface a
+    structured error envelope. Default behaviour: ``ingest_corpus``
+    raises this BEFORE manifest update + refresh, so a partial corpus
+    is not advertised as queryable. Override with ``allow_partial=
+    True`` (CLI: ``--allow-partial``) when the operator deliberately
+    wants to inspect what landed despite the failures.
+
+    The persisted markdown sidecars + SQLite document rows from the
+    successful papers are preserved on disk; ``_recover_completed``
+    will pick them up on the next run, so a re-run only retries the
+    failed papers.
+    """
+
+    def __init__(self, failed: int, total: int, log_path: Path) -> None:
+        super().__init__(
+            f"{failed}/{total} files failed to parse; see {log_path}"
+        )
+        self.failed = failed
+        self.total = total
+        self.log_path = log_path
+
+
 def ingest_corpus(
     input_dir: Path,
     output_dir: Path,
@@ -1441,6 +1470,7 @@ def ingest_corpus(
     resolve_bibliography_doi: bool = True,
     cite_resolution: str = "crossref",
     dedup_same_stem: bool = True,
+    allow_partial: bool = False,
 ) -> Corpus:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1498,6 +1528,7 @@ def ingest_corpus(
             resolve_bibliography_doi=resolve_bibliography_doi,
             cite_resolution=cite_resolution,
             dedup_same_stem=dedup_same_stem,
+            allow_partial=allow_partial,
         )
     finally:
         release_lock(paths, owner=lock_owner)
@@ -1516,6 +1547,7 @@ def _ingest_corpus_locked(
     resolve_bibliography_doi: bool,
     cite_resolution: str,
     dedup_same_stem: bool,
+    allow_partial: bool,
 ) -> Corpus:
     """Body of ``ingest_corpus`` that runs while holding the build lock.
 
@@ -1558,6 +1590,7 @@ def _ingest_corpus_locked(
     #    saving the manifest, those files are already on disk. We skip them
     #    and build synthetic receipts instead of re-parsing.
     receipts: list[FileReceipt] = []
+    parse_failed = 0
     if change_set.to_parse:
         to_parse, recovered = _recover_completed(
             change_set.to_parse, paths,
@@ -1566,15 +1599,29 @@ def _ingest_corpus_locked(
         if to_parse:
             from .ingest_steps import run_ingest_dag
 
-            receipts.extend(
-                run_ingest_dag(
-                    to_parse,
-                    paths,
-                    max_workers=max_workers,
-                    parser_backend=parser_backend,
-                    timings=timings,
-                )
+            new_receipts, parse_failed = run_ingest_dag(
+                to_parse,
+                paths,
+                max_workers=max_workers,
+                parser_backend=parser_backend,
+                timings=timings,
             )
+            receipts.extend(new_receipts)
+
+    # 2a. Abort BEFORE manifest update + refresh if any file failed to
+    # parse. Quality-over-completeness default: a partial corpus
+    # advertised as queryable would mask Docling/marker failures and
+    # let downstream wiki writes silently miss papers. The persisted
+    # markdown + SQLite rows from successful papers stay on disk so
+    # _recover_completed picks them up next run; only the failed
+    # papers re-parse. Operators who explicitly want to inspect a
+    # partial corpus pass --allow-partial to skip this gate.
+    if parse_failed and not allow_partial:
+        raise IngestFailedError(
+            failed=parse_failed,
+            total=parse_failed + len(receipts),
+            log_path=paths.root / "failed_files.log",
+        )
 
     # 3. Identify stale doc_ids from replacements + deletes
     stale_doc_ids = _identify_stale_docs(

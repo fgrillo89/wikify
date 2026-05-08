@@ -50,6 +50,72 @@ def test_next_lower_batch_walks_ladder() -> None:
     assert docling._next_lower_batch(4) is None
 
 
+def test_step_down_batches_lowers_each_knob_independently() -> None:
+    """Asymmetric inputs (layout=64, ocr=4) must step layout down to 32
+    and leave ocr at 4 — never raise either knob during fallback."""
+    opts = DoclingOptions(
+        layout_batch_size=64, ocr_batch_size=4, table_batch_size=4,
+    )
+    stepped = docling._step_down_batches(opts)
+    assert stepped is not None
+    assert stepped.layout_batch_size == 32
+    assert stepped.ocr_batch_size == 4
+    # Original is unchanged (defensive copy).
+    assert opts.layout_batch_size == 64
+    assert opts.ocr_batch_size == 4
+
+
+def test_step_down_batches_returns_none_at_floor() -> None:
+    """Both knobs at floor (4) means no further step is possible."""
+    opts = DoclingOptions(
+        layout_batch_size=4, ocr_batch_size=4, table_batch_size=4,
+    )
+    assert docling._step_down_batches(opts) is None
+
+
+def test_step_down_batches_one_at_floor() -> None:
+    """Layout at floor + ocr higher: step ocr down only."""
+    opts = DoclingOptions(
+        layout_batch_size=4, ocr_batch_size=32, table_batch_size=4,
+    )
+    stepped = docling._step_down_batches(opts)
+    assert stepped is not None
+    assert stepped.layout_batch_size == 4
+    assert stepped.ocr_batch_size == 16
+
+
+def test_step_down_batches_preserves_quality_knobs() -> None:
+    """formulas/ocr/pic_describe/vlm/images_scale must never be touched
+    during a batch-only retry — quality is non-negotiable."""
+    opts = DoclingOptions(
+        formulas=True, ocr=True, pic_classify=True, pic_describe=True,
+        vlm=False, images_scale=3.0,
+        layout_batch_size=64, ocr_batch_size=64, table_batch_size=4,
+    )
+    stepped = docling._step_down_batches(opts)
+    assert stepped is not None
+    assert stepped.formulas is True
+    assert stepped.ocr is True
+    assert stepped.pic_classify is True
+    assert stepped.pic_describe is True
+    assert stepped.vlm is False
+    assert stepped.images_scale == 3.0
+    assert stepped.table_batch_size == 4
+
+
+def test_clear_converter_cache_resets_globals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_clear_converter_cache`` drops the cached converter + key so
+    the next ``_get_converter`` call rebuilds. Without the clear, an
+    OOM retry would briefly co-reside two converter copies."""
+    monkeypatch.setattr(docling, "_CACHED_CONVERTER", "sentinel")
+    monkeypatch.setattr(docling, "_CACHED_OPTS_KEY", ("k",))
+    docling._clear_converter_cache()
+    assert docling._CACHED_CONVERTER is None
+    assert docling._CACHED_OPTS_KEY is None
+
+
 def test_is_cuda_oom_recognises_messages() -> None:
     assert docling._is_cuda_oom(RuntimeError("CUDA out of memory"))
     assert docling._is_cuda_oom(RuntimeError("Some CUDA error"))
@@ -139,7 +205,7 @@ def test_oom_retry_raises_at_minimum_batch(
 
     monkeypatch.setattr(docling, "_get_converter", always_oom)
 
-    with pytest.raises(RuntimeError, match="batch=4"):
+    with pytest.raises(RuntimeError, match=r"layout=4.*ocr=4"):
         docling._convert_with_oom_retry(opts, pdf)
 
     assert [o.layout_batch_size for o in captured_opts] == [64, 32, 16, 8, 4]

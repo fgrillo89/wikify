@@ -250,8 +250,16 @@ def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):
             raise RuntimeError("simulated parse failure")
         return real_parse(path)
 
+    # ``allow_partial=True``: the strict default would raise
+    # IngestFailedError before the manifest update, which also
+    # preserves the old artifacts but as a hard failure. Here we
+    # exercise the explicit-opt-in partial path because the test's
+    # intent is to verify the manifest stays consistent through a
+    # partial run.
     with patch("wikify.ingest.pipeline.parse_file", side_effect=failing_parse):
-        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        paths = ingest_corpus(
+            sources_dir, corpus_dir, max_workers=1, allow_partial=True,
+        )
 
     # Old doc must still be on disk and active
     docs = list_documents(paths)
@@ -267,6 +275,40 @@ def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):
     active = [s for s in manifest.sources.values() if s.status == "active"]
     assert len(active) == 1
     assert active[0].doc_id == old_doc_id
+
+
+def test_parse_failure_raises_ingest_failed_by_default(sources_dir, corpus_dir):
+    """Strict default (no ``allow_partial``): any per-file parse
+    failure raises ``IngestFailedError`` BEFORE the manifest update +
+    refresh, so the corpus is never advertised as queryable when it's
+    missing papers.
+    """
+    from wikify.ingest.pipeline import IngestFailedError
+
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body.")
+
+    real_parse = __import__(
+        "wikify.ingest.parsers.registry", fromlist=["parse_file"]
+    ).parse_file
+
+    def fail_beta(path, **kw):
+        if "beta" in path.name:
+            raise RuntimeError("simulated parse failure")
+        return real_parse(path, **kw)
+
+    with patch(
+        "wikify.ingest.pipeline.parse_file",
+        side_effect=fail_beta,
+    ):
+        with pytest.raises(IngestFailedError) as exc_info:
+            ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+
+    assert exc_info.value.failed == 1
+    assert exc_info.value.total >= 1
+    # ``failed_files.log`` is the diagnostic written for the operator.
+    assert exc_info.value.log_path == corpus_dir / "failed_files.log"
+    assert exc_info.value.log_path.exists()
 
 
 # --- Nested same-name files (Finding #2) ---
@@ -641,11 +683,16 @@ def test_alias_to_failed_parse_not_registered(sources_dir, corpus_dir):
                 raise RuntimeError("simulated first-alpha failure")
         return real_parse(path, **kw)
 
+    # ``allow_partial=True`` because the test deliberately fails one
+    # parse and inspects what landed in the manifest; strict mode
+    # would raise IngestFailedError before manifest update.
     with patch(
         "wikify.ingest.pipeline.parse_file",
         side_effect=fail_first_alpha,
     ):
-        paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+        paths = ingest_corpus(
+            sources_dir, corpus_dir, max_workers=1, allow_partial=True,
+        )
 
     manifest = CorpusManifest.load(paths.manifest_path)
     active = [s for s in manifest.sources.values()
@@ -742,15 +789,17 @@ def test_crash_mid_persist_recoverable(sources_dir, corpus_dir):
             raise OSError("simulated disk failure")
         return real_write(paths_arg, doc_id, markdown)
 
-    # First ingest crashes mid-persist
+    # First ingest crashes mid-persist. The worker catches OSError as
+    # a per-file failure, then ingest_corpus raises IngestFailedError
+    # before manifest update so a partial corpus isn't advertised.
+    from wikify.ingest.pipeline import IngestFailedError
+
     with patch(
         "wikify.ingest.pipeline.write_document_markdown",
         side_effect=crash_on_second,
     ):
-        try:
+        with pytest.raises(IngestFailedError):
             ingest_corpus(sources_dir, corpus_dir, max_workers=1)
-        except OSError:
-            pass  # expected crash
 
     # Second ingest should succeed cleanly (additive mode re-parses all)
     paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)

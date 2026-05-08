@@ -113,6 +113,48 @@ def _next_lower_batch(current: int) -> int | None:
     return None
 
 
+def _step_down_batches(opts: DoclingOptions) -> DoclingOptions | None:
+    """Return a fresh ``DoclingOptions`` with each batch knob stepped
+    down independently per ``_GPU_BATCH_RETRY_ORDER``. Returns ``None``
+    when neither knob can drop further (both already at the floor).
+
+    Independence matters: if the operator pinned
+    ``DOCLING_OCR_BATCH_SIZE=4`` while keeping layout at 64, the retry
+    must lower layout 64 -> 32 without touching OCR. Using
+    ``max(layout, ocr)`` and assigning the same value to both would
+    silently raise the OCR pin from 4 to 32 — exactly the kind of
+    "fixing one bug, planting another" pattern this code aims to
+    avoid.
+    """
+    import copy
+
+    new_layout = _next_lower_batch(opts.layout_batch_size)
+    new_ocr = _next_lower_batch(opts.ocr_batch_size)
+    if new_layout is None and new_ocr is None:
+        return None
+    out = copy.copy(opts)
+    if new_layout is not None:
+        out.layout_batch_size = new_layout
+    if new_ocr is not None:
+        out.ocr_batch_size = new_ocr
+    return out
+
+
+def _clear_converter_cache() -> None:
+    """Drop the cached ``DocumentConverter`` and release its VRAM.
+
+    Called between OOM retries so the previous converter (with its
+    layout/OCR/formula model weights resident on GPU) is freed
+    before the lower-batch rebuild allocates a fresh one. Without
+    this, the retry path briefly co-resides two converter copies and
+    the lower batch buys less headroom than expected.
+    """
+    global _CACHED_CONVERTER, _CACHED_OPTS_KEY
+    _CACHED_CONVERTER = None
+    _CACHED_OPTS_KEY = None
+    _release_gpu_memory()
+
+
 def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
     """Run ``converter.convert(path)``; on CUDA OOM step batch size down.
 
@@ -120,13 +162,14 @@ def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
     batch size succeeded. Only ``layout_batch_size`` and
     ``ocr_batch_size`` are modified across retries — formulas, OCR,
     picture description, VLM, and ``images_scale`` are preserved
-    exactly as configured. When even ``batch=4`` fails, the original
-    OOM is re-raised wrapped in a clear message naming the corpus's
-    fundamental VRAM ceiling so the operator knows to lower
-    ``DOCLING_IMAGES_SCALE`` or move to a bigger GPU.
+    exactly as configured. Each knob steps down independently per its
+    own position in ``_GPU_BATCH_RETRY_ORDER``; we never raise either
+    knob during fallback. Between retries, the cached converter is
+    cleared and CUDA cache flushed so the new converter doesn't
+    co-reside with the old one. When neither knob can step lower, the
+    original OOM is re-raised wrapped in a clear message naming
+    ``DOCLING_IMAGES_SCALE`` and VRAM as the levers.
     """
-    import copy
-
     effective = opts
     last_exc: BaseException | None = None
     while True:
@@ -138,22 +181,26 @@ def _convert_with_oom_retry(opts: DoclingOptions, path: Path):
             if not _is_cuda_oom(exc):
                 raise
             last_exc = exc
-            current = max(
-                effective.layout_batch_size, effective.ocr_batch_size,
-            )
-            next_batch = _next_lower_batch(current)
-            if next_batch is None:
+            stepped = _step_down_batches(effective)
+            if stepped is None:
                 raise RuntimeError(
-                    f"docling CUDA OOM on {path.name} at batch={current}; "
-                    f"lower DOCLING_IMAGES_SCALE or use a GPU with more VRAM"
+                    f"docling CUDA OOM on {path.name} at "
+                    f"layout={effective.layout_batch_size}, "
+                    f"ocr={effective.ocr_batch_size}; lower "
+                    f"DOCLING_IMAGES_SCALE or use a GPU with more VRAM"
                 ) from last_exc
             sys.stderr.write(
-                f"[docling] CUDA OOM on {path.name}, "
-                f"retrying at batch={next_batch} (was {current})\n"
+                f"[docling] CUDA OOM on {path.name}, retrying at "
+                f"layout={stepped.layout_batch_size}, "
+                f"ocr={stepped.ocr_batch_size} (was "
+                f"layout={effective.layout_batch_size}, "
+                f"ocr={effective.ocr_batch_size})\n"
             )
-            effective = copy.copy(effective)
-            effective.layout_batch_size = next_batch
-            effective.ocr_batch_size = next_batch
+            # Drop the old converter + free its VRAM before building
+            # the new one; otherwise both briefly co-reside.
+            del converter
+            _clear_converter_cache()
+            effective = stepped
 
 
 @dataclass

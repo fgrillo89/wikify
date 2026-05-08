@@ -57,6 +57,7 @@ EXIT_VALIDATION = 1
 EXIT_LOCK_HELD = 2
 EXIT_BUDGET_EXCEEDED = 3
 EXIT_STALE_CLAIM_BROKEN = 4
+EXIT_INGEST_FAILED = 5
 
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     "EXIT_LOCK_HELD",
     "EXIT_BUDGET_EXCEEDED",
     "EXIT_STALE_CLAIM_BROKEN",
+    "EXIT_INGEST_FAILED",
     "cli_owner",
     "cli_error",
     "strip_envelope",
