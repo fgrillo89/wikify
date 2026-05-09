@@ -370,6 +370,114 @@ Branching rule:
 * Run the audit script against `build/ald_docling_2026_05_06/` and
   attach the top-10 offender summary.
 
+## Audit Result (2026-05-09)
+
+`scripts/audit_formula_leak.py` against
+`build/ald_docling_2026_05_06/` (207 papers, full corpus):
+
+```
+[markdown sidecars]
+  files: 207  with_leaks: 23  blocks: 479  contaminated: 44
+  block_rate: 9.19%
+  tokens: 89449  contaminated_tokens: 63898  token_share: 71.44%
+  leaked_tag_count: 737
+
+[cached DoclingDocument JSON]
+  files: 207  with_leaks: 23  blocks: 479  contaminated: 44
+  block_rate: 9.19%
+  tokens: 89449  contaminated_tokens: 63898  token_share: 71.44%
+```
+
+Two facts immediately useful for the structural-resolution branching:
+
+1. **Markdown sidecar counts match cached doclingdoc JSON exactly.**
+   The same 23 papers / 44 blocks / 737 leaked tags appear in both
+   surfaces. This rules out a markdown-export bug — the leak is
+   already in `FormulaItem.text` before serialisation. Option B
+   (parser-side recovery from clean structural text into dirty
+   markdown) does not apply.
+2. **Token bloat dominates.** 9.19% of blocks but 71.44% of
+   formula-block tokens are inside contaminated blocks; worst
+   offenders show 3-grams repeated up to ~2000x in a single
+   `FormulaItem`. This is the autoregressive-degeneration symptom
+   driving the wall-clock cost on formula-heavy review papers.
+
+Top-10 worst offenders (markdown sidecar; cached JSON identical):
+
+```
+rate=100.0% ( 2/ 2) tokens=100.0% longest_run=  397  [2025 Chang] ...Radiation Hardening...
+rate=100.0% ( 1/ 1) tokens=100.0% longest_run=  648  [2020 Wang]  ...3D memristor array...
+rate=100.0% ( 1/ 1) tokens=100.0% longest_run=  193  [2024 Liu]   ...GaOx-based memristor...
+rate= 66.7% ( 2/ 3) tokens= 98.5% longest_run=  503  [2020 Wang]  ...In2Se3...
+rate= 66.7% ( 2/ 3) tokens= 98.1% longest_run= 1896  [2022 Kim]   ...tantalum-oxide...
+rate= 66.7% ( 2/ 3) tokens= 98.4% longest_run= 1966  [2025 Kumar] ...HfO2 a2O5...
+rate= 50.0% ( 2/ 4) tokens= 97.1% longest_run= 2008  [2025 Park]  ...Frequency Switching Neuristor...
+rate= 50.0% ( 1/ 2) tokens= 97.9% longest_run= 1950  [2024 Ju]    ...NbOx Al2O3 reservoir...
+rate= 50.0% ( 1/ 2) tokens= 95.4% longest_run= 1920  [2024 Kim]   ...Forming-less crossbar...
+rate= 50.0% ( 1/ 2) tokens= 94.8% longest_run=  164  [2024 So]    ...TiO2 WOx Heterojunction...
+```
+
+Branching-rule verdict: worst offenders are well above the 30%
+contaminated-block threshold, so **Option A (VLM decode hardening) is
+the next workstream** while **Option C (quarantine via the new
+`FormulaContaminationError` gate) is already in place** as the safety
+net. Option B is ruled out by fact (1).
+
+## Option A Implementation (2026-05-09)
+
+The active Docling installation
+(`docling==2.86.0`, `docling_core==2.73.0`) does not expose any
+generation knobs on `CodeFormulaVlmOptions`. The code-formula stage
+hardwires `max_new_tokens=2048` and an `extra_generation_config`
+containing only `skip_special_tokens=False`, even though the
+underlying `transformers_engine` already forwards
+`repetition_penalty`, `no_repeat_ngram_size`, and `stop_strings`
+straight to `model.generate(...)`. Source-trace:
+
+* Hardwired call site:
+  `.venv/Lib/site-packages/docling/models/stages/code_formula/code_formula_vlm_model.py:256-269`.
+* Engine forwarding contract:
+  `.venv/Lib/site-packages/docling/models/inference_engines/vlm/transformers_engine.py:325-393`.
+* Incomplete `_post_process` strip (closing tags only, no openers,
+  only the standard bbox placeholder): same file, lines 194-219.
+
+Upstream tracking (no fix in flight as of 2026-05-09):
+
+* docling discussion #1254 (formula extraction quality).
+* docling issues #2398, #2374, #2478 (location-token leak, spacing,
+  decode hang).
+* llama.cpp #16678 (granite-docling looping under temp=0,
+  repeat_penalty=1.0).
+
+The fix lives in `src/wikify/ingest/parsers/_docling_patches.py`
+and is applied once per worker process from `parse()`. Two patches:
+
+1. `CodeFormulaVlmModel.__call__` is replaced so each
+   `VlmEngineInput` is built with
+   `max_new_tokens=4096`, `stop_strings=["</formula>", "</code>",
+   "<end_of_utterance>"]`, and an `extra_generation_config` of
+   `{"skip_special_tokens": False, "repetition_penalty": 1.15,
+    "no_repeat_ngram_size": 12}`.
+2. `CodeFormulaVlmModel._post_process` is extended to also strip the
+   `<formula>` / `<code>` opener tokens and arbitrary `<loc_NNN>`
+   bbox tokens.
+
+Both patches are idempotent and signature-guarded — if upstream
+refactors away the targeted symbols the patch no-ops with a stderr
+warning so the regression surfaces instead of silently stomping new
+code.
+
+Recovery measured against the audit's worst offenders:
+
+| Paper                            | Before                                           | After                                |
+|----------------------------------|--------------------------------------------------|--------------------------------------|
+| [2025 Park] Frequency Switching  | rate=50.0% (2/4), tokens=97.1%, longest_run=2008 | 0/4 contaminated, longest_run=3, 33.7 s |
+| [2025 Chang] Radiation Hardening | rate=100.0% (2/2), tokens=100.0%, longest_run=397| 0/2 contaminated, longest_run=3, 24.5 s |
+| [2020 Wang] 3D memristor array   | rate=100.0% (1/1), tokens=100.0%, longest_run=648| 0/1 contaminated, longest_run=3, 15.0 s |
+
+The `_assert_formula_quality` gate stays in place as defense-in-depth
+for any residual leak the generation knobs do not catch.
+
 ## References
 
 * Docling enrichment docs:
