@@ -983,10 +983,15 @@ _LEAK_SENTINELS: tuple[str, ...] = ("<formula", "</formula", "<loc_")
 # EOS and decodes the same short sub-sequence hundreds of times. A
 # 3-gram repeated more than ``_MAX_NGRAM_REPETITION`` times within one
 # block is the smallest signal that distinguishes a degenerate decode
-# from legitimate LaTeX (which can repeat short tokens like ``\,`` or
-# ``&`` without ever reaching that count for the same trigram).
+# from legitimate LaTeX. Empirically calibrated on the ALD reference
+# corpus (207 papers): post-patch worst legit math (1971 Chua's
+# variational derivations with dense subscripts like ``_{j=1}^{b}``)
+# tops out around x16 for any single trigram; pre-patch runaway loops
+# (the ``\, d t \, d t \, d t \,`` integration-variable cycle) ran
+# from x100 to x500+. A threshold of 50 gives ample margin on both
+# sides.
 _REPETITION_NGRAM = 3
-_MAX_NGRAM_REPETITION = 10
+_MAX_NGRAM_REPETITION = 50
 
 # Max contamination examples to attach to the raised error. Keeping a
 # small number bounds log noise without losing the diagnostic punch.

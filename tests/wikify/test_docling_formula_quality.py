@@ -50,14 +50,16 @@ def test_repetition_run_unique_tokens_returns_one() -> None:
 
 
 def test_repetition_run_legit_latex_stays_below_threshold() -> None:
-    """Real Maxwell-equation text with normal repetition of '\\,' or '&'
-    must not trip the >10 threshold for any single 3-gram."""
+    """Real dense math (subscripts, integration variables) must stay
+    well below the >50 threshold. The Chua 1971 paper's variational
+    derivations were observed to top out around x16 for any single
+    3-gram even on the densest formulas; loops sit at 100+."""
     text = (
         r"\text{curl} \, H = J + \frac{\partial D}{\partial t} "
         r"\quad \text{(2)} \quad \text{Faraday law:} "
         r"\nabla \times E = -\frac{\partial B}{\partial t}"
     )
-    assert _longest_repeated_ngram_run(text, n=3) <= 10
+    assert _longest_repeated_ngram_run(text, n=3) <= 50
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +135,27 @@ def test_quality_gate_fails_on_loc_token_only(tmp_path: Path) -> None:
 
 
 def test_quality_gate_fails_on_repetition_loop(tmp_path: Path) -> None:
-    """Autoregressive degeneration: 3-gram repeated 50x must raise."""
-    looped = ("\\text{not} \\, s " * 50).strip()
+    """Autoregressive degeneration: a 3-gram repeated >50x raises.
+    Real loops sit at 100x to 2000x; the cutoff is calibrated so legit
+    dense math (Chua-style variational derivations, x16 worst case)
+    passes."""
+    looped = ("\\text{not} \\, s " * 200).strip()
     formulas = [{"latex": looped, "type": "display"}]
     with pytest.raises(FormulaContaminationError, match="3-gram repetition"):
         _assert_formula_quality(formulas, "clean md", _path(tmp_path))
+
+
+def test_quality_gate_passes_dense_subscript_math(tmp_path: Path) -> None:
+    """Chua-style sums with dense subscripts (e.g. ``_{j=1}^{b}``)
+    showed x16 for the most-repeated trigram in the worst legit case
+    measured. Anything in that range must pass."""
+    # Synthesize 30 repetitions of the same subscript trigram — well
+    # above the dense-math empirical max of x16 but below the gate.
+    block = " ".join(["A _ { j = 1 } ^ { b }"] * 30)
+    formulas = [{"latex": block, "type": "display"}]
+    assert _assert_formula_quality(
+        formulas, "clean md", _path(tmp_path),
+    ) is None
 
 
 def test_quality_gate_fails_on_markdown_leak(tmp_path: Path) -> None:
