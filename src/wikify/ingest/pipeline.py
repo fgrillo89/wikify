@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -97,10 +98,12 @@ class FileReceipt:
     """Result from a parse+persist worker.
 
     Carries the freshly-built ``doc`` / ``chunks`` / ``markdown`` so
-    the ingest orchestrator can project them into ``wikify.db`` in a
-    single transaction. Recovered receipts (from a crashed prior run)
-    leave those fields as ``None``; the orchestrator skips re-projection
-    for those because the SQLite rows are already on disk.
+    the ingest orchestrator can project them into ``wikify.db``. The
+    orchestrator commits per subprocess-batch (every ~20 papers) so a
+    mid-run crash leaves at most one batch worth of unpersisted rows.
+    Recovered receipts (from a crashed prior run) leave those fields
+    as ``None``; the orchestrator skips re-projection for those
+    because the SQLite rows are already on disk.
     """
 
     src_path: str
@@ -571,15 +574,14 @@ def _recover_completed(
                 still.append(src)
                 continue
 
-            # Pass 3 commits docs+chunks before pass 4 fuses metadata.
-            # If a prior run crashed in that window the row is real but
-            # carries placeholder metadata. Send those back through full
-            # re-parse so pass 4 runs and the title/authors/year actually
-            # land. A non-placeholder row is one with real metadata keys
-            # OR a non-stem title (pass 3 leaves title=src.stem).
-            metadata_raw, title = row[0], row[1] or ""
+            # Pull declared keywords from metadata if present. PDFs
+            # may have placeholder metadata (pass 3 commits with
+            # skip_metadata=True; pass 4 enriches later); recovered
+            # PDFs are handed to pass 4 via ctx["recovered_receipts"]
+            # so it re-fuses metadata from the markdown body without a
+            # PDF re-parse.
+            metadata_raw = row[0]
             kw: list[str] = []
-            looks_placeholder = title == src.stem
             if metadata_raw:
                 try:
                     import json as _json
@@ -587,17 +589,8 @@ def _recover_completed(
                     meta_kw = meta_data.get("keywords")
                     if isinstance(meta_kw, list):
                         kw = meta_kw
-                    if any(
-                        k for k in ("title", "authors", "year", "doi")
-                        if meta_data.get(k)
-                    ):
-                        looks_placeholder = False
                 except Exception:  # noqa: BLE001
                     pass
-
-            if src.suffix.lower() == ".pdf" and looks_placeholder:
-                still.append(src)
-                continue
 
             chunk_ids = _read_chunk_ids(paths, did)
             recovered.append(FileReceipt(
@@ -680,6 +673,7 @@ def _stream_parse_and_persist(
     max_workers: int | None,
     parser_backend: str = "default",
     skip_metadata: bool = False,
+    on_batch_persist: Callable[[list[FileReceipt]], None] | None = None,
 ) -> tuple[list[FileReceipt], int]:
     """Parse, persist each source. Returns ``(receipts, failed_count)``.
 
@@ -702,6 +696,13 @@ def _stream_parse_and_persist(
     failure count should abort the build (default) or continue with a
     partial corpus (``--allow-partial``). ``skip_metadata`` is
     forwarded to every worker invocation.
+
+    ``on_batch_persist``, when supplied, is invoked with the receipts
+    that succeeded since the last invocation. In subprocess-batched
+    mode it fires after every batch's pool shutdown — that's the
+    natural crash boundary, so committing here means a kill mid-run
+    loses at most one batch's worth of work. In CPU-parallel and
+    serial-in-main modes it fires once at end of run.
     """
     from tqdm import tqdm
 
@@ -742,6 +743,18 @@ def _stream_parse_and_persist(
         _log_failure(paths, src, exc)
         bar.update(1)
 
+    last_persisted = 0
+
+    def _flush_to_persist() -> None:
+        """Forward newly-collected receipts to ``on_batch_persist``."""
+        nonlocal last_persisted
+        if on_batch_persist is None:
+            return
+        new = receipts[last_persisted:]
+        last_persisted = len(receipts)
+        if new:
+            on_batch_persist(new)
+
     if workers == 1 and batch_size > 0 and total > 1:
         n_batches = (total + batch_size - 1) // batch_size
         print(
@@ -767,7 +780,10 @@ def _stream_parse_and_persist(
                     except Exception as exc:  # noqa: BLE001
                         _on_failure(src, exc)
             # Pool shutdown here: worker subprocess exits, returning
-            # all CUDA allocations + heap to the OS.
+            # all CUDA allocations + heap to the OS. Commit this
+            # batch's receipts to SQLite BEFORE the next batch starts
+            # so a kill between batches leaves the corpus recoverable.
+            _flush_to_persist()
             tqdm.write(
                 f"[ingest] batch {batch_idx + 1}/{n_batches} done "
                 f"(worker restarted, VRAM flushed)",
@@ -799,6 +815,11 @@ def _stream_parse_and_persist(
                 _on_failure(src, exc)
 
     bar.close()
+
+    # Final flush for non-batched paths (CPU-parallel and serial-in-main).
+    # Idempotent: subprocess-batched mode flushed each batch already, so
+    # ``last_persisted == len(receipts)`` and this is a no-op.
+    _flush_to_persist()
 
     if failed:
         print(f"[ingest] {failed}/{total} files failed", file=sys.stderr)
@@ -1594,8 +1615,7 @@ def _ingest_corpus_locked(
         to_parse, recovered = _recover_completed(
             change_set.to_parse, paths,
         )
-        receipts.extend(recovered)
-        if to_parse:
+        if to_parse or recovered:
             from .ingest_steps import run_ingest_dag
 
             new_receipts, parse_failed = run_ingest_dag(
@@ -1604,8 +1624,13 @@ def _ingest_corpus_locked(
                 max_workers=max_workers,
                 parser_backend=parser_backend,
                 timings=timings,
+                recovered_receipts=recovered,
             )
             receipts.extend(new_receipts)
+            # Recovered receipts also flow into the manifest update below;
+            # without this, a crash-resumed PDF stays on disk but never
+            # re-enters the manifest as active.
+            receipts.extend(recovered)
 
     # 2a. Abort BEFORE manifest update + refresh if any file failed to
     # parse. Quality-over-completeness default: a partial corpus

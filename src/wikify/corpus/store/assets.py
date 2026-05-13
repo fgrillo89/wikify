@@ -61,18 +61,45 @@ def upsert_chunk_assets(
     doc_id: str,
     mappings: list[dict[str, Any]],
 ) -> None:
-    """Replace chunk<->asset relations belonging to chunks of *doc_id*."""
+    """Replace chunk<->asset relations belonging to chunks of *doc_id*.
+
+    Filters out mappings whose chunk_id or asset_id is missing from
+    the corresponding tables. ``INSERT OR IGNORE`` does not skip FK
+    violations in every SQLite build, so we drop dangling refs here
+    rather than rely on the resolver. Stale ``chunk.equation_ids``
+    pointing at equations that were filtered out during extraction
+    is the typical source of dangling refs.
+    """
     con.execute(
         "DELETE FROM chunk_assets WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE doc_id = ?)",
         (doc_id,),
     )
-    rows = []
-    for m in mappings or []:
-        rows.append((
+    if not mappings:
+        return
+    valid_chunks = {
+        r[0] for r in con.execute(
+            "SELECT chunk_id FROM chunks WHERE doc_id = ?", (doc_id,),
+        )
+    }
+    asset_ids = {m["asset_id"] for m in mappings}
+    if not asset_ids:
+        return
+    placeholders = ",".join("?" * len(asset_ids))
+    valid_assets = {
+        r[0] for r in con.execute(
+            f"SELECT asset_id FROM assets WHERE asset_id IN ({placeholders})",
+            tuple(asset_ids),
+        )
+    }
+    rows = [
+        (
             m["chunk_id"], m["asset_id"],
             m.get("relation", "near"),
             float(m["confidence"]) if m.get("confidence") is not None else None,
-        ))
+        )
+        for m in mappings
+        if m["chunk_id"] in valid_chunks and m["asset_id"] in valid_assets
+    ]
     if not rows:
         return
     con.executemany(

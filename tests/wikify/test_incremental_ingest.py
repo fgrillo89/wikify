@@ -841,12 +841,13 @@ def test_crash_during_resave_recoverable(sources_dir, corpus_dir):
 
 # --- _recover_completed: placeholder rows must re-parse, not "recover" ---
 
-def test_recover_completed_replaces_placeholder_pdf_metadata(tmp_path: Path):
+def test_recover_completed_accepts_placeholder_pdf_for_pass4_fuse(tmp_path: Path):
     """Pass 3 commits docs+chunks; pass 4 fuses PDF metadata. If ingest
-    crashes between, the row exists with placeholder title/metadata and
-    ``_recover_completed`` MUST send the source back to ``to_parse`` so
-    pass 4 reruns and real metadata lands. A doc with non-placeholder
-    metadata should still be recovered without re-parse.
+    crashes between, the row exists with placeholder title/metadata.
+    ``_recover_completed`` MUST still recover those PDFs (sidecar +
+    SQLite row both on disk) — pass 4 re-fuses metadata from the
+    markdown body without a PDF re-parse. Without this behaviour every
+    crash forces a full re-parse, which on GPU corpora costs hours.
     """
     import json
 
@@ -897,9 +898,31 @@ def test_recover_completed_replaces_placeholder_pdf_metadata(tmp_path: Path):
         [placeholder_pdf, real_pdf], paths,
     )
     recovered_dids = {r.doc_id for r in recovered}
-    still_paths = {p.name for p in still}
 
     assert real_did in recovered_dids
-    assert placeholder_did not in recovered_dids
-    assert "placeholder.pdf" in still_paths
-    assert "real.pdf" not in still_paths
+    assert placeholder_did in recovered_dids
+    assert still == []
+
+
+def test_resume_writes_recovered_docs_to_manifest(sources_dir, corpus_dir):
+    """Resume after a crash that lost the manifest must re-register
+    recovered docs as active in the manifest. Without this, the
+    sidecars + SQLite rows survive but the manifest treats the corpus
+    as empty, and the next diff considers every source new again.
+    """
+    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body text.")
+    _write_md(sources_dir / "beta.md", "Beta", "Beta body text.")
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+    first = CorpusManifest.load(paths.manifest_path)
+    expected_dids = {s.doc_id for s in first.sources.values()}
+    assert len(expected_dids) == 2
+
+    # Simulate a crash that landed pass-3 commits + sidecars but lost
+    # the manifest before _update_manifest ran.
+    paths.manifest_path.unlink()
+
+    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
+    resumed = CorpusManifest.load(paths.manifest_path)
+    active = {s.doc_id for s in resumed.sources.values() if s.status == "active"}
+    assert active == expected_dids
