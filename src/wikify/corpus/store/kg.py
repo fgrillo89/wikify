@@ -15,14 +15,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from .authors import author_key
 from .connection import connect
 
-_NORM_RE = re.compile(r"[^a-z0-9 ]+")
+__all__ = ["author_key"]
 
 _SECTION_KEYWORDS: list[tuple[str, str]] = [
     ("abstract", "abstract"),
@@ -54,16 +54,6 @@ def classify_section(path: list[str]) -> str:
         if keyword in heading:
             return stype
     return "body"
-
-
-def author_key(name: str) -> str:
-    if not name:
-        return ""
-    n = unicodedata.normalize("NFKC", name)
-    n = re.sub(r"\s+", " ", n).strip().rstrip(",.; ")
-    n = re.sub(r"\s+\d+(?:\s*,\s*\d+)*$", "", n)
-    key = _NORM_RE.sub(" ", n.lower()).strip()
-    return re.sub(r"\s+", " ", key)
 
 
 # ---------------------------------------------------------------------------

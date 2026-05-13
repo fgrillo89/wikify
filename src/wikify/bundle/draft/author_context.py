@@ -12,10 +12,9 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from wikify.corpus.store.authors import author_key as _author_key
 from wikify.ingest.metadata import _is_valid_author
 from wikify.models import Document
-
-_NORM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _normalize_author_name(name: str) -> str:
@@ -26,11 +25,6 @@ def _normalize_author_name(name: str) -> str:
     name = re.sub(r"\s+", " ", name).strip().rstrip(",.;")
     name = re.sub(r"\s+\d+(?:\s*,\s*\d+)*$", "", name)
     return name
-
-
-def _author_key(name: str) -> str:
-    n = _normalize_author_name(name)
-    return _NORM_RE.sub(" ", n.lower()).strip()
 
 
 @dataclass

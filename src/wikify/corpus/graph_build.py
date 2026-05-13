@@ -11,9 +11,7 @@ and never touch NetworkX.
 
 from __future__ import annotations
 
-import re
 import sqlite3
-import unicodedata
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .graph import AUTHOR, CHUNK, EQUATION, FIGURE, SECTION, SOURCE, KnowledgeGraph
+from .store.authors import author_key as _author_key  # noqa: F401  re-export
 from .store.connection import connect
 from .store.kg import SqliteGraphBackend, build_kg_in_memory
 from .store.schema import apply_schema
@@ -40,18 +39,6 @@ __all__ = [
     "load_knowledge_graph",
     "save_knowledge_graph",
 ]
-
-_NORM_RE = re.compile(r"[^a-z0-9 ]+")
-
-
-def _author_key(name: str) -> str:
-    if not name:
-        return ""
-    n = unicodedata.normalize("NFKC", name)
-    n = re.sub(r"\s+", " ", n).strip().rstrip(",.; ")
-    n = re.sub(r"\s+\d+(?:\s*,\s*\d+)*$", "", n)
-    key = _NORM_RE.sub(" ", n.lower()).strip()
-    return re.sub(r"\s+", " ", key)
 
 
 def build_knowledge_graph(
