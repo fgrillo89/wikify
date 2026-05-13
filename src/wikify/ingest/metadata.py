@@ -8,6 +8,31 @@ summary synthesiser.
 import re
 from dataclasses import dataclass
 
+# Footnote/affiliation glyphs that publishers attach to author names.
+# Includes Greek archaic koppa (U+0377, used as a footnote marker by
+# some Wiley journals), the asterisk operator (U+2217, not the ASCII
+# *), Private Use Area glyphs (U+E000-U+F8FF, custom journal fonts),
+# explicitly invalid codepoints (U+0378-U+0379), and the standard
+# dagger/section sign cluster.
+_AUTHOR_GLYPH_NOISE_RE = re.compile(
+    "["
+    "§"            # SECTION SIGN
+    "*"                  # ASCII ASTERISK
+    "ː-˿"    # spacing modifier SYMBOLS only (tilde, breve, length
+                          # marks). EXCLUDES U+02B0-U+02CF which contains
+                          # transliteration apostrophes (Hawaiian okina
+                          # U+02BB, modifier prime U+02B9) and other modifier
+                          # letters that survive in real names.
+    "ͷ-͹"    # Greek archaic koppa + invalid codepoints
+    "†-‡"    # DAGGER, DOUBLE DAGGER
+    "⁎"            # LOW ASTERISK
+    "∗"            # ASTERISK OPERATOR
+    "✱"            # HEAVY ASTERISK
+    "✉"            # ENVELOPE
+    "-"    # Private Use Area
+    "]"
+)
+
 
 def _strip_inline_markup(name: str) -> str:
     """Drop leftover ``<sup>…</sup>``/``<sub>…</sub>`` tags and tidy whitespace.
@@ -15,10 +40,27 @@ def _strip_inline_markup(name: str) -> str:
     Parsers occasionally leak affiliation markup like ``<sup>c</sup>`` into
     author strings when the sup-ref bracketiser (which targets numeric
     citation markers) leaves non-numeric affiliation markers untouched.
+    Also strips footnote glyphs (koppa, asterisk-operator, PUA chars)
+    and title-cases all-caps names ("DEBASHIS PANDA" -> "Debashis
+    Panda") from older IEEE templates that print bylines in upper
+    case.
     """
     name = re.sub(r"<sup>[^<]*</sup>", "", name, flags=re.IGNORECASE)
     name = re.sub(r"<sub>[^<]*</sub>", "", name, flags=re.IGNORECASE)
+    name = _AUTHOR_GLYPH_NOISE_RE.sub("", name)
     name = re.sub(r"\s+", " ", name).strip(" ,.;")
+    # Title-case names that arrived in all caps. Guard on a small token
+    # count so romanized Asian names like "WANG TIANYU" (rare but
+    # legitimate in some byline conventions) get cased, while
+    # acronymic strings of arbitrary length are not coerced into
+    # implausible names.
+    if name and name == name.upper() and 1 <= len(name.split()) <= 4:
+        parts = []
+        for token in name.split():
+            parts.append(
+                "-".join(p.capitalize() for p in token.split("-"))
+            )
+        name = " ".join(parts)
     return name
 
 # --- public surface ------------------------------------------------------
@@ -334,8 +376,23 @@ def assemble_pdf_metadata(
 
     # Authors: XMP and /Info lists also get the filename-surname guard so a
     # publisher-supplied list from the wrong paper can't slip through.
+    # XMP's dc:creator is supposed to be one rdf:li per author, but some
+    # publishers (notably IOP, Elsevier) stuff the entire author list
+    # into a single rdf:li separated by commas/semicolons. Run each XMP
+    # element through ``parse_authors`` whenever it contains a separator
+    # so the byline gets split correctly. ``parse_authors`` is a no-op on
+    # a single name without separators.
+    xmp_authors_raw = list(xmp.get("authors") or [])
+    xmp_authors_flat: list[str] = []
+    for raw in xmp_authors_raw:
+        if not raw:
+            continue
+        if re.search(r"[,;]| and ", raw):
+            xmp_authors_flat.extend(parse_authors(raw))
+        else:
+            xmp_authors_flat.append(raw)
     xmp_authors = validate_authors_against_filename(
-        list(xmp.get("authors") or []), fn_author
+        xmp_authors_flat, fn_author
     )
     info_raw = (info.get("author") or "").strip()
     info_authors = validate_authors_against_filename(
@@ -358,6 +415,12 @@ def assemble_pdf_metadata(
     # markup that sneaks through via markdown/XMP author strings (e.g.
     # affiliation markers like ``<sup>c</sup>``).
     authors = [a for a in (_strip_inline_markup(a) for a in authors) if a]
+    # Drop journal-abbreviation tokens that survived earlier filters
+    # (``ACS Nano``, ``Adv. Mater``, ``Adv. Funct. Mater``). These leak
+    # in via reference-list lines that happen to mention the filename
+    # surname; the strategy-1 fix in ``extract_authors_from_markdown``
+    # catches most cases, but XMP / /Info paths can still drop them in.
+    authors = [a for a in authors if not _looks_like_journal_name(a)]
 
     year = fn_year or xmp.get("year") or extract_year_from_pdf_meta(info)
 
@@ -715,7 +778,20 @@ def clean_markdown(text: str) -> str:
     text = re.sub(r"\*(.+?)\*", r"\1", text)
     text = re.sub(r"_(.+?)_", r"\1", text)
     text = re.sub(r"`(.+?)`", r"\1", text)
-    return text.strip()
+    text = text.strip()
+    # Slug-shaped title: pure hyphen-joined slug from a publisher's URL
+    # path used as a filename ("artificial-synapse-based-on-..."). When
+    # there are 5+ hyphens, no internal spaces, and the body is all
+    # lowercase letters/digits/hyphens, replace hyphens with spaces and
+    # title-case so the corpus reads naturally.
+    if (
+        text
+        and " " not in text
+        and text.count("-") >= 5
+        and re.fullmatch(r"[a-z0-9\-]+", text)
+    ):
+        text = " ".join(w.capitalize() for w in text.split("-"))
+    return text
 
 
 def is_garbled_title(title: str) -> bool:
@@ -777,11 +853,30 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
 
     # Strategy 1: filename-surname anchor. Most robust when the PDF has a
     # landing page that would otherwise fool a first-heading scanner.
+    #
+    # Algorithm (after two rounds of audit):
+    #   1. Scan lines in document order for any reasonable-length line
+    #      containing the filename surname.
+    #   2. Parse to a name list, drop journal-abbreviation tokens.
+    #   3. Reject reference-list-shaped candidates (``Lastname Initial``
+    #      majority) ONLY if we already have at least one byline-shape
+    #      candidate. Some Asian-journal bylines (Chinese Physics Letters,
+    #      Acta Phys Sin) are themselves printed in ``Lastname Initial``
+    #      form — the first surname-matching line in the document is
+    #      virtually always the byline, so always keep that first one.
+    #   4. Collect the first ``_AUTHOR_CANDIDATE_LIMIT`` valid multi-author
+    #      candidates. Then pick the LONGEST among them. This keeps the
+    #      long-form byline (``Jonathan Joshua Yang, Strachan, Williams``)
+    #      over the running-header short form (``J. J. Yang``) without
+    #      reaching out to the reference list.
+    #   5. Fall back to the earliest single-author candidate if no
+    #      multi-author line was found.
     if fn_author:
         surname = _extract_surname(fn_author)
         if surname:
-            best_names: list[str] = []
             surname_re = re.compile(rf"\b{re.escape(surname)}\b", re.IGNORECASE)
+            multi_candidates: list[list[str]] = []
+            best_single: list[str] = []
             for line in lines:
                 s = line.strip()
                 if not s or len(s) > 500:
@@ -791,11 +886,25 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
                 if re.search(r"(?i)(correspondence|nanotechnology|j\. phys\.)", s):
                     continue
                 names = _parse_author_line(_author_line_prefix(s))
-                if names and any(surname.lower() in n.lower() for n in names):
-                    if len(names) > len(best_names):
-                        best_names = names
-            if best_names:
-                return best_names
+                if not names or not any(surname.lower() in n.lower() for n in names):
+                    continue
+                names = [n for n in names if not _looks_like_journal_name(n)]
+                if not names or not any(surname.lower() in n.lower() for n in names):
+                    continue
+                if _looks_like_reference_list(names) and multi_candidates:
+                    # Already have a byline-shape candidate; this
+                    # ``Lastname Initial`` line is a reference entry.
+                    continue
+                if len(names) >= 2:
+                    multi_candidates.append(names)
+                    if len(multi_candidates) >= _AUTHOR_CANDIDATE_LIMIT:
+                        break
+                elif not best_single:
+                    best_single = names
+            if multi_candidates:
+                return max(multi_candidates, key=len)
+            if best_single:
+                return best_single
 
     # Strategy 2: first-heading heuristic. Used for single-author papers or
     # when no fn_author hint is available. Unchanged from the original.
@@ -830,6 +939,81 @@ def _author_line_prefix(line: str) -> str:
         line,
         maxsplit=1,
     )[0].strip(" ,;")
+
+
+# Reference-list entries print author names as ``Lastname Initial`` (e.g.
+# ``Hu M``, ``Yang JJ``, ``Li-Wei S-K``). The byline format is the
+# opposite: ``M. Hu``, ``J. J. Yang``, with the initial first and
+# usually followed by a period. When a candidate "author line" parses
+# to a list dominated by Lastname-Initial shapes, it's a citation entry
+# that happened to mention the filename surname — not the real byline.
+#
+# Asian-journal bylines (Chinese Physics Letters, Acta Phys Sin) print
+# author lists in the same ``Lastname Initial`` form, so the rejection
+# in ``extract_authors_from_markdown`` only fires when a real byline
+# was already seen earlier in the document.
+_REF_LIST_NAME_RE = re.compile(
+    r"^[A-Z][a-zA-Z'\-]+\s+[A-Z]{1,3}(?:\-[A-Z])?$"
+)
+
+# How many multi-author candidates to collect before picking the
+# longest. Three is enough to cover a short running-header form
+# (``J. J. Yang``) plus the full byline (``Jonathan Joshua Yang,
+# Strachan, Williams, ...``) plus one extra slot for an interstitial
+# co-author block, while staying well within the front-matter region
+# so reference-list contamination cannot enter.
+_AUTHOR_CANDIDATE_LIMIT = 3
+
+
+def _looks_like_reference_list(names: list[str]) -> bool:
+    """True when a STRICT majority of names match the ``Lastname Initial``
+    shape that only appears in citation entries. Ties between byline
+    and reference shape go to byline — when the list is genuinely
+    mixed, we want to preserve information rather than aggressively
+    drop the line.
+    """
+    if not names or len(names) < 2:
+        return False
+    ref_shape = sum(1 for n in names if _REF_LIST_NAME_RE.match(n))
+    return ref_shape > len(names) / 2
+
+
+# JATS journal-name tokens. Author lines occasionally include a trailing
+# journal abbreviation (``ACS Nano``, ``Adv. Mater``, ``Adv. Funct.
+# Mater``, ``Nat. Commun``) when the parser latches onto a reference
+# line. We detect them by tokenising on whitespace and checking that
+# EVERY token (with trailing period stripped) is in the known-journal
+# vocabulary. A real author name will always have at least one token
+# outside this vocabulary (Joshua, Williams, Strachan, etc.).
+_JOURNAL_TOKENS = frozenset({
+    # Prefix abbreviations.
+    "adv", "acta", "annu", "appl", "acs", "ieee", "nat", "sci", "phys",
+    "chem", "mater", "j", "proc", "rev", "trans", "comm", "commun",
+    "npg", "inorg", "surf", "solid", "opt", "anal", "synth",
+    "microelectron", "nano", "nanoscale", "nanotechnology", "curr",
+    "cell", "nature", "science", "springer", "funct", "rsc",
+    # Subject suffix words.
+    "lett", "letters", "eng", "tech", "today", "reviews", "review",
+    "reports", "report", "interfaces", "energy", "electron",
+    "electronics", "mol", "soc", "acad", "crystallogr", "photonics",
+    "catalysis", "plus", "asia", "materials", "communications",
+    "synthesis", "metals",
+})
+
+
+def _looks_like_journal_name(name: str) -> bool:
+    """True when a parsed author name is actually a journal abbreviation
+    (``ACS Nano``, ``Adv. Mater``, ``Adv. Funct. Mater``, ``Nat.
+    Commun``). Detected by tokenising on whitespace and confirming
+    every token belongs to the journal vocabulary.
+    """
+    if not name:
+        return False
+    tokens = [t.rstrip(".,").lower() for t in name.split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < 2 or len(tokens) > 5:
+        return False
+    return all(t in _JOURNAL_TOKENS for t in tokens)
 
 
 def _extract_surname(author_hint: str) -> str:
@@ -1095,6 +1279,36 @@ _AUTHOR_NOISE = {
     "journal",
     "proceedings",
     "letters",
+    # Affiliation / section nouns that occasionally show up as
+    # single-token "names" when a parser misclassifies a header
+    # fragment as a byline. The mononym path in ``_is_valid_author``
+    # otherwise lets long-enough single tokens through.
+    "department",
+    "departments",
+    "institute",
+    "institution",
+    "school",
+    "schools",
+    "laboratory",
+    "laboratories",
+    "centre",
+    "center",
+    "university",
+    "college",
+    "faculty",
+    "abstract",
+    "introduction",
+    "background",
+    "methods",
+    "results",
+    "discussion",
+    "conclusion",
+    "conclusions",
+    "appendix",
+    "references",
+    "bibliography",
+    "acknowledgments",
+    "acknowledgements",
 }
 
 
@@ -1104,7 +1318,24 @@ def _is_valid_author(name: str) -> bool:
         return False
     words = name.split()
     if len(words) == 1:
-        if not any("\u4e00" <= c <= "\u9fff" or "\uac00" <= c <= "\ud7af" for c in name):
+        # Single-token names: legitimate mononyms (Hadiyawarman,
+        # Madonna, Pel\u00e9) plus CJK / Hangul ideographs. Accept when the
+        # token is 5+ letters, starts with uppercase, contains only
+        # letters, and isn't all-caps (rules out section headers like
+        # ``INTRODUCTION`` / ``ABSTRACT`` that the heading scanner
+        # otherwise feeds us).
+        is_cjk = any(
+            "\u4e00" <= c <= "\u9fff" or "\uac00" <= c <= "\ud7af"
+            for c in name
+        )
+        is_mononym = (
+            len(name) >= 5
+            and name[0].isupper()
+            and name != name.upper()
+            and all(c.isalpha() or c in "'-" for c in name)
+            and name.lower() not in _AUTHOR_NOISE
+        )
+        if not (is_cjk or is_mononym):
             return False
     if len(words) > 5:
         return False

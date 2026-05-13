@@ -11,6 +11,7 @@ approach produced garbage and required 800+ lines of repair code.
 """
 
 import hashlib
+import html
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -99,6 +100,25 @@ def _clean_title(value: str) -> str:
     text = _as_text(value)
     text = re.sub(r"[\ue000-\uf8ff]", "", text)
     text = re.sub(r"\*{1,2}(.+?)\*{1,2}", r"\1", text)
+    # CrossRef titles can carry inline JATS markup ("HfO<sub>2</sub>",
+    # "<i>x</i>") and HTML entities ("&amp;"), and some publishers
+    # return pretty-printed JATS with embedded newlines + indents
+    # inside the title string. Strip tags, unescape entities, then
+    # collapse whitespace so downstream renderers see a single line of
+    # plain text.
+    #
+    # JATS-pretty-print whitespace adjacent to inline tags is XML-
+    # insignificant: ``TaO\n   <sub>x</sub>\n   Memristor`` displays as
+    # ``TaO`` + subscript-``x`` + ``Memristor`` -> ``TaOx Memristor`` in
+    # plain text. Only collapse the newline-containing whitespace runs
+    # (the pretty-print case); leave inline single spaces alone so
+    # ``"X <sub>y</sub>"`` survives as ``"X y"`` rather than becoming
+    # ``"Xy"``.
+    text = re.sub(r"\s*\n\s*(<[a-zA-Z][^>]*>)", r"\1", text)
+    text = re.sub(r"(</[a-zA-Z][^>]*>)\s*\n\s*", r"\1 ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -1548,6 +1568,11 @@ def _merge_external_metadata(
         "title", "journal", "venue", "volume", "pages", "publisher",
         "issn", "url",
     )
+    # CrossRef titles arrive with JATS inline markup ("HfO<sub>2</sub>")
+    # and HTML entities ("&amp;"). Sanitize before writing into
+    # metadata so neither the bib entry nor the SQLite metadata_json
+    # blob carries raw markup downstream.
+    sanitize_keys = {"title", "journal", "venue", "publisher"}
 
     for key, value in external.items():
         if not value:
@@ -1559,6 +1584,8 @@ def _merge_external_metadata(
                 metadata[key] = value
             continue
         if key in doi_authoritative:
+            if key in sanitize_keys and isinstance(value, str):
+                value = _clean_title(value)
             metadata[key] = value
             continue
         # For everything else (summary, year, etc.), keep local when present.
