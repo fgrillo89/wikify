@@ -46,6 +46,7 @@ itself.
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import re
 import sys
@@ -734,7 +735,17 @@ def _make_document_converter(opts: DoclingOptions):
     PDF gets the full enrichment pipeline (layout + tables + optional
     formulas). DOCX, PPTX, and HTML are declared in ``allowed_formats``
     so Docling dispatches to its native parsers without custom options.
+
+    The PDF text backend is ``PyPdfiumDocumentBackend`` rather than the
+    Docling default ``DoclingParseDocumentBackend``. pypdfium2 reads
+    ToUnicode CMaps when present and reconstructs ligature glyphs
+    (``ﬁ``, ``ﬂ``, ``ff``) as the underlying letters; the docling-parse
+    backend recovers characters by horizontal position and inserts a
+    space between letters when the ligature glyph has wider advance
+    than a single char width, producing artefacts like ``arti fi cial``
+    and ``di ff usion`` in body text.
     """
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -750,6 +761,7 @@ def _make_document_converter(opts: DoclingOptions):
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pipeline_opts,
+                backend=PyPdfiumDocumentBackend,
             ),
         },
     )
@@ -943,6 +955,26 @@ def _picture_to_raw_image(item, doc) -> RawImage | None:
         w, h = pil.size
         if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
             return None
+        # Publisher decorations (Crossmark "Check for updates" badge,
+        # journal logos, page-header banners) are wide-and-short or
+        # tall-and-narrow strips that pass the area test. Real
+        # figures from scientific papers have captions; decorations
+        # do not. Skip when the smaller dimension is under the
+        # threshold AND there's no caption to defend the image.
+        if min(w, h) < _MIN_IMAGE_DIM and not caption.strip():
+            return None
+        # Aspect-ratio guard for the rare case Docling assigns an
+        # adjacent caption to a banner: skip pathologically thin
+        # strips (>5:1) on page 1, where publisher decorations
+        # cluster. ``page is None`` (Docling failed to assign a page
+        # to a layout-stitched figure) used to be treated as page 1
+        # here, which silently erased legitimate composite figures.
+        if (
+            page == 1
+            and not caption.strip()
+            and max(w, h) >= 5 * min(w, h)
+        ):
+            return None
     except Exception:
         pass
 
@@ -1130,6 +1162,21 @@ def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     # Only strip formula placeholders if formula enrichment is OFF.
     if not formulas_enabled:
         md = re.sub(r"<!--\s*formula-not-decoded\s*-->", "", md)
+    # Docling's export_to_markdown escapes <, >, & so the output is
+    # also valid as inline HTML. We re-render through downstream
+    # tooling that expects the literal characters (``<10 nm``,
+    # ``R & D``), so undo the escaping once.
+    md = html.unescape(md)
+    # Drop CLUSTERS of standalone 1-3 digit lines: 2-column PDFs
+    # sometimes route a vertical page-number margin column into the
+    # markdown as a contiguous run of digit-only paragraphs (e.g.
+    # ``6\n9\n9\n8\n`` for pages 6,9,9,8). Require >=2 digit-only
+    # lines (blank-line-tolerant because the leading ``\s*`` can
+    # consume an interleaved newline) so an isolated bare-number
+    # line — a numbered table cell, a footnote anchor, a single page
+    # number that leaked alone — is preserved. The user values
+    # information preservation over surface cleanliness.
+    md = re.sub(r"(?m)(?:^\s*\d{1,3}\s*\n){2,}", "", md)
     # Collapse 3+ blank lines.
     md = re.sub(r"\n{3,}", "\n\n", md)
     # Strip trailing whitespace per line.

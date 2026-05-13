@@ -25,6 +25,112 @@ _H_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _TOC_NOISE_CHARS = ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060", "\u00ad")
 
 
+# Publisher boilerplate that Docling promotes to ``#`` headings on
+# journal-PDF front matter and end matter. These are pure template
+# tags — they carry no per-paper information that downstream readers
+# would query for. Compared case-insensitively after collapsing
+# whitespace + stripping bracketing punctuation.
+#
+# What is INTENTIONALLY NOT in this set:
+#   - ``acknowledgments`` and variants -> classified as ACKNOWLEDGMENTS;
+#     dropping the path entry would hide the chunks from
+#     ``exclude_kinds=['acknowledgments']`` queries.
+#   - ``supporting information`` / ``supplementary information`` ->
+#     classified as APPENDIX; same reasoning.
+#   - ``author contributions`` / ``data availability`` / ``funding`` /
+#     ``conflict of interest`` -> carry meaningful per-paper info
+#     (who funded what, what data is public) that researchers query
+#     directly. Keep them as named sections so they remain locatable.
+_BOILERPLATE_HEADINGS = frozenset({
+    "open access",
+    "open",
+    "*correspondence",
+    "correspondence",
+    "corresponding authors",
+    "corresponding author",
+    "citation",
+    "copyright",
+    "keywords",
+    "a r t i c l e i n f o",
+    "article info",
+    "article history",
+    "publisher's note",
+    "publisher s note",
+    "publishers note",
+    "generative ai statement",
+    "correction note",
+    "corrigendum",
+    "associated content",
+    "abbreviations",
+    "abbreviations used",
+    "orcid",
+    "author information",
+    "materials & correspondence",
+    "access",
+    "metrics & more",
+    "article recommendations",
+    "cite this",
+    "received",
+    "accepted",
+    "revised",
+    "published",
+})
+
+# Single-token journal names that Docling lifts as headings on the
+# cover page. Lowercased for comparison.
+_JOURNAL_NAME_HEADINGS = frozenset({
+    "nanoscale",
+    "nano energy",
+    "applied surface science",
+    "advanced functional materials",
+    "advanced materials",
+    "advanced electronic materials",
+    "nature",
+    "nature communications",
+    "nature electronics",
+    "science",
+    "iscience",
+    "acs nano",
+    "acs applied electronic materials",
+    "acs applied materials & interfaces",
+    "ieee transactions on electron devices",
+    "frontiers in",
+    "nanotechnology",
+    "small",
+    "paper",
+    "article",
+    "full length article",
+    "research article",
+    "review article",
+    "letters",
+})
+
+_HTTP_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_DOI_RE = re.compile(r"^(?:doi[: ]|10\.\d{4,}/)", re.IGNORECASE)
+
+
+def _is_boilerplate_heading(title: str) -> bool:
+    """Return True when a heading is publisher boilerplate rather than
+    a real document section. Compared after whitespace collapse and
+    casefold; matches the literal sets above plus URL / DOI heads.
+    """
+    if not title:
+        return True
+    norm = re.sub(r"\s+", " ", title).strip(" *:#-").lower()
+    if not norm:
+        return True
+    if norm in _BOILERPLATE_HEADINGS:
+        return True
+    if norm in _JOURNAL_NAME_HEADINGS:
+        return True
+    if _HTTP_URL_RE.match(norm) or _DOI_RE.match(norm):
+        return True
+    # Pure separator / decoration: e.g. "---" or single non-word char.
+    if not re.search(r"[a-zA-Z]", norm):
+        return True
+    return False
+
+
 def section_spans(body: str) -> list[tuple[list[str], int, int]]:
     matches = list(_H_RE.finditer(body))
     if not matches:
@@ -34,12 +140,22 @@ def section_spans(body: str) -> list[tuple[list[str], int, int]]:
     for i, m in enumerate(matches):
         level = len(m.group(1))
         title = m.group(2).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        # Drop publisher boilerplate from the section hierarchy. The
+        # span still gets emitted under the enclosing real section so
+        # the boilerplate's body text isn't lost — it just doesn't
+        # spawn its own section_path entry.
+        if _is_boilerplate_heading(title):
+            if stack:
+                spans.append(([t for _, t in stack], start, end))
+            else:
+                spans.append((["body"], start, end))
+            continue
         while stack and stack[-1][0] >= level:
             stack.pop()
         stack.append((level, title))
         path = [t for _, t in stack]
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
         spans.append((path, start, end))
     if matches[0].start() > 0:
         spans.insert(0, (["preamble"], 0, matches[0].start()))

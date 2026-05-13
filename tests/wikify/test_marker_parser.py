@@ -49,6 +49,49 @@ class TestBracketizeSupRefs:
         assert bracketize_sup_refs("") == ""
         assert bracketize_sup_refs("no sup here") == "no sup here"
 
+    def test_date_day_superscript_not_bracketed(self):
+        # ACS journals print day numbers as superscripts:
+        # ``Received for review April<sup>3</sup>, 2014``. Without the
+        # month-name guard this becomes ``April [3], 2014`` and the
+        # downstream citation-marker resolver treats ``[3]`` as a
+        # reference.
+        src = "Received for review April<sup>3</sup>, 2014"
+        out = bracketize_sup_refs(src)
+        assert "[3]" not in out
+        assert "<sup>3</sup>" in out
+
+    def test_published_online_not_bracketed(self):
+        src = "Published online June<sup>02</sup>, 2014"
+        assert "[02]" not in bracketize_sup_refs(src)
+
+    def test_regular_citation_still_bracketed(self):
+        # The month-name guard must not paint with too broad a brush:
+        # an ordinary sentence followed by a citation must still wrap.
+        src = "previous work on filaments<sup>17</sup>."
+        assert bracketize_sup_refs(src) == "previous work on filaments[17]."
+
+    def test_modal_verb_may_not_suppressed(self):
+        # ``may`` is both a month name and a frequent modal verb. The
+        # date-context skip must require BOTH a month/status word before
+        # AND a 4-digit year after; without the trailing-year check,
+        # ``we may need to revise<sup>17</sup>...`` would lose its
+        # citation.
+        src = "we may need to revise<sup>17</sup> the model"
+        out = bracketize_sup_refs(src)
+        assert "[17]" in out
+
+    def test_modal_verb_march_not_suppressed(self):
+        src = "as researchers march<sup>4</sup> toward a solution"
+        out = bracketize_sup_refs(src)
+        assert "[4]" in out
+
+    def test_month_without_year_after_is_bracketed(self):
+        # Month name with no trailing year: probably a coincidental
+        # adjacency, not a printed date. Bracketize normally.
+        src = "the May<sup>11</sup> experiment yielded..."
+        out = bracketize_sup_refs(src)
+        assert "[11]" in out
+
 
 # ---------------------------------------------------------------------------
 # Concat-ref bracketing

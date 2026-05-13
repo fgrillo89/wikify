@@ -16,7 +16,20 @@
       "Bash(rm .claude/skills/wikify/handlers/compact.md .claude/skills/wikify/handlers/edit.md .claude/skills/wikify/handlers/extract.md .claude/skills/wikify/handlers/maintenance.md .claude/skills/wikify/handlers/orchestrate.md .claude/skills/wikify/handlers/query.md .claude/skills/wikify/handlers/write.md .claude/skills/wikify/runtime/serve-dispatch.md)",
       "Bash(rmdir .claude/skills/wikify/handlers .claude/skills/wikify/runtime)",
       "PowerShell(Get-WmiObject *)",
-      "PowerShell(Get-ChildItem -Path C:\\\\dev\\\\scholarforge | Format-Table Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} -AutoSize)"
+      "PowerShell(Get-ChildItem -Path C:\\\\dev\\\\scholarforge | Format-Table Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} -AutoSize)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, CPU, @{n='RSS_GB';e={[math]::Round\\($_.WorkingSet64/1GB,2\\)}}, StartTime | Format-Table -AutoSize)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 100MB } | Select-Object Id, CPU, @{n='RSS_GB';e={[math]::Round\\($_.WorkingSet64/1GB,2\\)}}, StartTime | Format-Table -AutoSize; \"---GPU---\"; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell($p = Get-Process -Id 10000 -ErrorAction SilentlyContinue; if \\($p\\) { \"PID=10000 alive CPU=$\\([math]::Round\\($p.CPU,0\\)\\)s RSS=$\\([math]::Round\\($p.WorkingSet64/1GB,2\\)\\)GB\" } else { \"PID=10000 NOT FOUND\" }; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell($p = Get-Process -Id 10000 -ErrorAction SilentlyContinue; if \\($p\\) { \"PID=10000 alive CPU=$\\([math]::Round\\($p.CPU,0\\)\\)s RSS=$\\([math]::Round\\($p.WorkingSet64/1GB,2\\)\\)GB\" } else { \"PID=10000 NOT FOUND - completed or died\" }; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell(Get-Process *)",
+      "PowerShell($p = Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 500MB }; if \\($p\\) { $p | ForEach-Object { \"PID=$\\($_.Id\\) CPU=$\\([math]::Round\\($_.CPU,0\\)\\)s RSS=$\\([math]::Round\\($_.WorkingSet64/1GB,2\\)\\)GB\" } } else { \"No heavy python process found\" }; \"---GPU---\"; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell($p = Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 500MB }; if \\($p\\) { $p | ForEach-Object { \"PID=$\\($_.Id\\) CPU=$\\([math]::Round\\($_.CPU,0\\)\\)s RSS=$\\([math]::Round\\($_.WorkingSet64/1GB,2\\)\\)GB\" } } else { \"No heavy python process\" }; \"---GPU---\"; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell($p = Get-Process -Id 7592 -ErrorAction SilentlyContinue; if \\($p\\) { \"PID=7592 alive CPU=$\\([math]::Round\\($p.CPU,0\\)\\)s RSS=$\\([math]::Round\\($p.WorkingSet64/1GB,2\\)\\)GB\" } else { \"PID=7592 NOT FOUND\" }; if \\(Get-Command nvidia-smi -ErrorAction SilentlyContinue\\) { nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader })",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, CPU, @{n='RSS_MB';e={[math]::Round\\($_.WorkingSet64/1MB,0\\)}} | Format-Table -AutoSize)",
+      "mcp__wikify__corpus_schema",
+      "mcp__wikify__corpus_sample",
+      "mcp__wikify__corpus_find",
+      "mcp__wikify__corpus_show"
     ]
   },
   "enableAllProjectMcpServers": true,
