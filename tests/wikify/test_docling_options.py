@@ -357,6 +357,33 @@ def test_light_clean_preserves_footnote_anchor() -> None:
     assert "3" in [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def test_light_clean_preserves_small_data_cluster() -> None:
+    """Threshold raised from >=2 to >=4: a 3-row run of digit-only
+    lines is preserved because it's much more likely a small table
+    column or a pair of equation-number-only blocks than a page-margin
+    column. Real page margins are virtually always >=4 (most papers
+    have >=4 pages); the false-positive risk of >=2 outweighed the
+    cleanup gain."""
+    src = (
+        "Steady-state currents:\n\n"
+        "100\n200\n50\n"
+        "Next paragraph.\n"
+    )
+    out = docling._light_clean(src)
+    body_lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    for d in ("100", "200", "50"):
+        assert d in body_lines, (d, body_lines)
+
+
+def test_light_clean_preserves_two_digit_run() -> None:
+    """A pair of digit-only lines (e.g. equation-number-only blocks)
+    is preserved under the >=4 threshold."""
+    src = "End of derivation.\n\n3\n4\nNext paragraph.\n"
+    out = docling._light_clean(src)
+    body_lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    assert "3" in body_lines and "4" in body_lines
+
+
 # ---------------------------------------------------------------------------
 # Picture-extraction filter: drop publisher decorations + thin banners
 # ---------------------------------------------------------------------------

@@ -1175,13 +1175,16 @@ def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     # Drop CLUSTERS of standalone 1-3 digit lines: 2-column PDFs
     # sometimes route a vertical page-number margin column into the
     # markdown as a contiguous run of digit-only paragraphs (e.g.
-    # ``6\n9\n9\n8\n`` for pages 6,9,9,8). Require >=2 digit-only
+    # ``6\n9\n9\n8\n`` for pages 6,9,9,8). Require >=4 digit-only
     # lines (blank-line-tolerant because the leading ``\s*`` can
-    # consume an interleaved newline) so an isolated bare-number
-    # line — a numbered table cell, a footnote anchor, a single page
-    # number that leaked alone — is preserved. The user values
-    # information preservation over surface cleanliness.
-    md = re.sub(r"(?m)(?:^\s*\d{1,3}\s*\n){2,}", "", md)
+    # consume an interleaved newline) so a small data cluster — a
+    # 2-3 row table column, a pair of equation-number-only lines,
+    # an isolated footnote anchor — is preserved. The user values
+    # information preservation over surface cleanliness; real
+    # page-margin runs are virtually always >=4 (most papers have
+    # >=4 pages), the false-positive risk of >=2 was higher than
+    # the cleanup gain.
+    md = re.sub(r"(?m)(?:^\s*\d{1,3}\s*\n){4,}", "", md)
     # Collapse 3+ blank lines.
     md = re.sub(r"\n{3,}", "\n\n", md)
     # Strip trailing whitespace per line.
