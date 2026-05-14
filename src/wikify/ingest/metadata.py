@@ -849,6 +849,17 @@ def extract_authors_from_markdown(md_text: str, fn_author: str | None = None) ->
     # journal landing pages with "You may also like" recommendation
     # blocks). The extra scan is cheap — per-line regex, not embedder.
     window = body[:40000]
+    # Clip at the references heading so a reference entry can never be
+    # the first surname match. The reference-list-shape guard further
+    # down requires a byline-shape candidate to already exist before it
+    # rejects a ``Lastname Initial`` line — that exception is needed
+    # for Asian-journal bylines (Chinese Physics Letters, Acta Phys
+    # Sin) which are themselves printed in ``Lastname Initial`` form.
+    # Without this clip, a paper with no visible byline would return
+    # the first reference entry as authors.
+    ref_match = _REFERENCES_HEADING_RE.search(window)
+    if ref_match:
+        window = window[: ref_match.start()]
     lines = window.split("\n")
 
     # Strategy 1: filename-surname anchor. Most robust when the PDF has a
@@ -1030,13 +1041,15 @@ def _extract_surname(author_hint: str) -> str:
 # --- internal ------------------------------------------------------------
 
 
+_REFERENCES_HEADING_RE = re.compile(
+    r"(?im)^\s*(?:#+\s*)?(?:references|bibliography|works\s+cited)\b"
+)
+
+
 def _pre_references_window(md_text: str) -> str:
     """Return early paper text, stopping before references when detectable."""
     window = md_text[:12000]
-    ref_re = re.compile(
-        r"(?im)^\s*(?:#+\s*)?(?:references|bibliography|works\s+cited)\b"
-    )
-    match = ref_re.search(window)
+    match = _REFERENCES_HEADING_RE.search(window)
     if match:
         return window[: match.start()]
     return window

@@ -619,6 +619,33 @@ class TestExtractAuthorsRejectsReferenceLists:
         assert "Hu M" not in names
         assert "Williams RS" not in names
 
+    def test_no_byline_does_not_return_reference_entry(self):
+        # Pre-references-clip regression: when the PDF has no visible
+        # byline at all, the first surname match used to land in the
+        # references section because the reference-shape guard only
+        # fires AFTER another candidate exists. Result was bogus
+        # ``["Hu M", ..., "Yang JJ. ACS Nano"]`` authors. The window
+        # must be clipped at the references heading so reference
+        # entries can never be considered.
+        md = (
+            "# An Anonymous Paper Title\n"
+            "\n"
+            "Body text without any author line. The PDF parser failed\n"
+            "to detect a byline because of an unusual layout.\n"
+            "\n"
+            "## Introduction\n"
+            "Memristor switching depends on stoichiometry [1,2].\n"
+            "\n"
+            "## References\n"
+            "[1] Hu M, Li Y, Jiang H, Williams RS. Memristor paper. "
+            "Nature 2020.\n"
+            "[2] Yang JJ, Strachan JP. Another paper. ACS Nano 2018.\n"
+        )
+        names = extract_authors_from_markdown(md, fn_author="Hu")
+        assert "Hu M" not in names
+        assert "Yang JJ" not in names
+        assert "Williams RS" not in names
+
     def test_journal_name_dropped(self):
         # An XMP / Info string can include a trailing journal token.
         # The post-sanitation should drop it via _looks_like_journal_name.
