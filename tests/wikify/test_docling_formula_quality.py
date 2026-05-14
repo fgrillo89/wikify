@@ -393,3 +393,62 @@ def test_parse_raises_before_doc_cache_when_formulas_leak(
 
     assert saved == []
     assert not cache_path.exists()
+
+
+def test_parse_raises_when_markdown_leak_is_html_escaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: ``export_to_markdown`` HTML-escapes ``<``/``>``/``&``,
+    so a leaked ``<formula>`` arrives as ``&lt;formula&gt;`` in the raw
+    export. The literal ``_LEAK_SENTINELS`` would miss it; the parser
+    must unescape before the gate runs so the persisted markdown is
+    inspected. Regression test for the escaped-sentinel bypass.
+    """
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_path = tmp_path / "cache" / "doc.json"
+
+    saved: list[Path] = []
+
+    class _FakeDoc:
+        name = "paper"
+
+        def export_to_markdown(self) -> str:
+            # Exactly what Docling produces when a Granite-Docling leak
+            # passes through ``export_to_markdown``: angle brackets are
+            # entity-encoded.
+            return "Body text\n\n&lt;formula&gt;&lt;loc_247&gt;x = 1&lt;/formula&gt;\n\nmore"
+
+        def iterate_items(self):
+            return iter([])
+
+        def save_as_json(self, path) -> None:  # pragma: no cover - must NOT run
+            saved.append(Path(path))
+
+    class _FakeConvertResult:
+        document = _FakeDoc()
+
+    class _FakeConverter:
+        def convert(self, _path: str) -> _FakeConvertResult:
+            return _FakeConvertResult()
+
+    # Walker reports zero formulas — the leak is markdown-only, which is
+    # the exact shape escaped-sentinel bypass took in production.
+    monkeypatch.setattr(
+        docling, "_doc_walk",
+        lambda doc, *, want_formulas: (0, [], []),
+    )
+    monkeypatch.setattr(docling, "_get_converter", lambda opts: _FakeConverter())
+    monkeypatch.setattr(docling, "_has_cuda", lambda: True)
+    monkeypatch.setattr(docling, "_pdf_has_text_layer", lambda p: True)
+    monkeypatch.setattr(docling, "_patch_hf_symlinks", lambda: None)
+    monkeypatch.setattr(docling, "_configure_torch_runtime", lambda: None)
+    monkeypatch.setattr(
+        docling, "_disable_torch_compile_when_unsafe", lambda: None,
+    )
+
+    with pytest.raises(FormulaContaminationError, match="markdown"):
+        docling.parse(pdf, doc_cache_path=cache_path)
+
+    assert saved == []
+    assert not cache_path.exists()

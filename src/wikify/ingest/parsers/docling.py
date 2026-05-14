@@ -564,13 +564,18 @@ def parse(
     # Parser-boundary quality gate: refuse to persist any artifact when
     # Granite-Docling leaked wrapper tags or autoregressive repetition
     # into ``FormulaItem.text`` or the exported markdown. Run BEFORE
-    # ``_light_clean``, the JSON cache write, markdown persistence,
-    # chunking, and ``_docling_formulas`` insertion so contamination
-    # cannot enter downstream artifacts. The exception propagates up
-    # through ``_parse_and_persist_worker`` and the orchestrator routes
-    # it to ``failed_files.log`` + a non-zero failure count.
+    # the JSON cache write, markdown persistence, chunking, and
+    # ``_docling_formulas`` insertion so contamination cannot enter
+    # downstream artifacts. Inspect the post-unescape markdown — what
+    # ``_light_clean`` will persist — because Docling's
+    # ``export_to_markdown`` HTML-escapes ``<``/``>``/``&``, so a
+    # leaked ``<formula>`` arrives here as ``&lt;formula&gt;`` and the
+    # raw form would slip past the literal sentinel match. The
+    # exception propagates up through ``_parse_and_persist_worker``
+    # and the orchestrator routes it to ``failed_files.log`` + a
+    # non-zero failure count.
     if effective_opts.formulas:
-        _assert_formula_quality(formulas, md_raw, path)
+        _assert_formula_quality(formulas, html.unescape(md_raw), path)
 
     md_text = _light_clean(md_raw, formulas_enabled=effective_opts.formulas)
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
