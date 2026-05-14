@@ -471,6 +471,37 @@ class TestCleanTitleStripsCrossRefMarkup:
             "paper on AlO x films"
         )
 
+    def test_phrase_tag_pretty_print_keeps_separating_space(self):
+        # Pretty-printed phrase tags wrap word phrases — the previous
+        # rule applied subscript-style asymmetric whitespace and glued
+        # ``The\n<i>in situ</i>\nmethod`` into ``Thein situ method``.
+        # Phrase-class tags must keep the separating space on both
+        # sides so the tag-strip yields ``The in situ method``.
+        dirty = (
+            "The\n"
+            "                    <i>in situ</i>\n"
+            "                    method"
+        )
+        assert _clean_title(dirty) == "The in situ method"
+
+    def test_phrase_tag_em_pretty_print(self):
+        dirty = (
+            "Studies of\n"
+            "        <em>operando</em>\n"
+            "        spectroscopy"
+        )
+        assert _clean_title(dirty) == "Studies of operando spectroscopy"
+
+    def test_subscript_pretty_print_still_glues(self):
+        # Regression: the subscript-class behaviour must not regress
+        # when phrase-class handling is added. ``HfO\n<sub>2</sub>``
+        # still glues to ``HfO2`` (no separating space).
+        dirty = (
+            "Memristor based on HfO\n"
+            "                    <sub>2</sub>"
+        )
+        assert _clean_title(dirty) == "Memristor based on HfO2"
+
 
 # ---------------------------------------------------------------------------
 # XMP author flattening (root-cause fix C1)

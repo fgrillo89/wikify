@@ -71,6 +71,54 @@ def test_chunk_assets_drops_dangling_refs():
     assert rows == [("d1/c0", "d1/fig_01", "near")]
 
 
+def test_chunk_assets_drops_emit_warning(caplog):
+    """Dropped mappings must log a single WARNING per ``doc_id`` with
+    chunk-missing and asset-missing counts and a sample id from each.
+    Silent drops mask the upstream stale-equation_ids defect; the
+    warning makes the loss observable in the ingest log.
+    """
+    import logging
+
+    s = Store(":memory:")
+    s.upsert_document(_doc())
+    s.upsert_chunks([Chunk(id="d1/c0", doc_id="d1", ord=0, text="t",
+                           char_span=(0, 1), section_path=[])])
+    s.upsert_assets("d1", [{"id": "d1/fig_01", "type": "figure", "page": 1}])
+
+    with caplog.at_level(logging.WARNING, logger="wikify.corpus.store.assets"):
+        s.upsert_chunk_assets("d1", [
+            {"chunk_id": "d1/c0", "asset_id": "d1/fig_01", "relation": "near"},
+            {"chunk_id": "d1/MISSING_C", "asset_id": "d1/fig_01"},
+            {"chunk_id": "d1/c0", "asset_id": "d1/MISSING_EQ"},
+        ])
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, [r.message for r in warnings]
+    msg = warnings[0].getMessage()
+    assert "doc=d1" in msg
+    assert "dropped 2" in msg
+    assert "chunk_missing=1" in msg and "d1/MISSING_C" in msg
+    assert "asset_missing=1" in msg and "d1/MISSING_EQ" in msg
+
+
+def test_chunk_assets_clean_emits_no_warning(caplog):
+    """When no mappings are dropped, no warning fires."""
+    import logging
+
+    s = Store(":memory:")
+    s.upsert_document(_doc())
+    s.upsert_chunks([Chunk(id="d1/c0", doc_id="d1", ord=0, text="t",
+                           char_span=(0, 1), section_path=[])])
+    s.upsert_assets("d1", [{"id": "d1/fig_01", "type": "figure", "page": 1}])
+
+    with caplog.at_level(logging.WARNING, logger="wikify.corpus.store.assets"):
+        s.upsert_chunk_assets("d1", [
+            {"chunk_id": "d1/c0", "asset_id": "d1/fig_01", "relation": "near"},
+        ])
+
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
 # ---------------------------------------------------------------------------
 # author_key hyphen-collapse (root-cause fix C4)
 # ---------------------------------------------------------------------------

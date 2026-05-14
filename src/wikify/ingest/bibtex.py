@@ -96,6 +96,14 @@ def _add_optional(entry: dict[str, str], field: str, value: object) -> None:
         entry[field] = text
 
 
+# Subscript-class JATS tag names — these glue tightly to the
+# preceding word (no separating space) when JATS pretty-print
+# whitespace is collapsed. Any other inline tag (``<i>``, ``<em>``,
+# ``<b>``, ...) is treated as phrase-class and gets a separating
+# space on each side instead.
+_SUBSCRIPT_TAG_RE = r"(?:sub|sup|msub|msup|msubsup)"
+
+
 def _clean_title(value: str) -> str:
     text = _as_text(value)
     text = re.sub(r"[\ue000-\uf8ff]", "", text)
@@ -114,7 +122,21 @@ def _clean_title(value: str) -> str:
     # (the pretty-print case); leave inline single spaces alone so
     # ``"X <sub>y</sub>"`` survives as ``"X y"`` rather than becoming
     # ``"Xy"``.
-    text = re.sub(r"\s*\n\s*(<[a-zA-Z][^>]*>)", r"\1", text)
+    #
+    # Two tag classes need different treatment:
+    #
+    # * subscript-class (``<sub>``, ``<sup>``, ``<msub>``, ...) glues to
+    #   the preceding word: pretty-print whitespace before the opening
+    #   tag is dropped entirely so ``TaO<sub>x</sub>`` survives the
+    #   later tag-strip as ``TaOx``;
+    # * phrase-class (``<i>``, ``<em>``, ``<b>``, ``<strong>``, ...)
+    #   wraps a word phrase: pretty-print whitespace on either side of
+    #   the tag must collapse to a single space so
+    #   ``The\n<i>in situ</i>\nmethod`` survives the tag-strip as
+    #   ``The in situ method`` rather than ``Thein situ method``.
+    text = re.sub(rf"\s*\n\s*(</?{_SUBSCRIPT_TAG_RE}\b[^>]*>)", r"\1", text)
+    text = re.sub(rf"(</{_SUBSCRIPT_TAG_RE}\s*>)\s*\n\s*", r"\1 ", text)
+    text = re.sub(r"\s*\n\s*(<[a-zA-Z][^>]*>)", r" \1", text)
     text = re.sub(r"(</[a-zA-Z][^>]*>)\s*\n\s*", r"\1 ", text)
     text = re.sub(r"<[^>]+>", "", text)
     text = html.unescape(text)
