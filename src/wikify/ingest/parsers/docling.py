@@ -46,6 +46,7 @@ itself.
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import re
 import sys
@@ -54,6 +55,9 @@ from pathlib import Path
 
 from ..equations import _equation_id
 from ._citations import bracketize_bare_refs
+from ._docling_patches import (
+    apply_formula_extraction_patches as _apply_formula_extraction_patches,
+)
 from ._sections import section_spans
 from .registry import ParseResult, RawImage
 
@@ -509,6 +513,7 @@ def parse(
     _patch_hf_symlinks()
     _configure_torch_runtime()
     _disable_torch_compile_when_unsafe()
+    _apply_formula_extraction_patches()
 
     opts = DoclingOptions.from_env()
     if (
@@ -545,8 +550,7 @@ def parse(
     result, effective_opts = _convert_with_oom_retry(opts, path)
     doc = result.document
 
-    md_text = doc.export_to_markdown()
-    md_text = _light_clean(md_text, formulas_enabled=effective_opts.formulas)
+    md_raw = doc.export_to_markdown()
 
     # Single linear pass over DoclingDocument items: collects
     # bibliography count, picture items, and formula items in one
@@ -556,6 +560,24 @@ def parse(
     ref_count, images, formulas = _doc_walk(
         doc, want_formulas=effective_opts.formulas,
     )
+
+    # Parser-boundary quality gate: refuse to persist any artifact when
+    # Granite-Docling leaked wrapper tags or autoregressive repetition
+    # into ``FormulaItem.text`` or the exported markdown. Run BEFORE
+    # the JSON cache write, markdown persistence, chunking, and
+    # ``_docling_formulas`` insertion so contamination cannot enter
+    # downstream artifacts. Inspect the post-unescape markdown — what
+    # ``_light_clean`` will persist — because Docling's
+    # ``export_to_markdown`` HTML-escapes ``<``/``>``/``&``, so a
+    # leaked ``<formula>`` arrives here as ``&lt;formula&gt;`` and the
+    # raw form would slip past the literal sentinel match. The
+    # exception propagates up through ``_parse_and_persist_worker``
+    # and the orchestrator routes it to ``failed_files.log`` + a
+    # non-zero failure count.
+    if effective_opts.formulas:
+        _assert_formula_quality(formulas, html.unescape(md_raw), path)
+
+    md_text = _light_clean(md_raw, formulas_enabled=effective_opts.formulas)
     md_text = bracketize_bare_refs(md_text, ref_count=ref_count)
 
     if skip_metadata:
@@ -639,38 +661,45 @@ def _make_accelerator():
 
 
 def _build_converter(opts: DoclingOptions):
-    """Build a DocumentConverter from options, choosing the right pipeline.
-
-    PDF gets the full enrichment pipeline (layout + tables + optional
-    formulas/VLM). DOCX, PPTX, and HTML are declared in
-    ``allowed_formats`` so Docling will dispatch to its native parsers
-    for those formats without any custom options.
-    """
-    from docling.datamodel.base_models import InputFormat
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-
+    """Build a DocumentConverter, choosing the standard or VLM pipeline."""
     if opts.vlm:
         return _build_vlm_converter()
-
-    accel = _make_accelerator()
-    pipeline_opts = _make_standard_options(accel, opts)
-    return DocumentConverter(
-        allowed_formats=[
-            InputFormat.PDF,
-            InputFormat.DOCX,
-            InputFormat.PPTX,
-            InputFormat.HTML,
-        ],
-        format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_options=pipeline_opts,
-            ),
-        },
-    )
+    return _make_document_converter(opts)
 
 
-def _make_standard_options(accel, opts: DoclingOptions):
-    """Standard pipeline options with enrichments.
+def _make_code_formula_options(opts: DoclingOptions):
+    """Build ``CodeFormulaVlmOptions`` from a registered Docling preset.
+
+    The official Docling API surface for the Granite-Docling formula
+    head is ``CodeFormulaVlmOptions.from_preset(name)``. This helper
+    is the single allowed construction site so the preset path stays
+    auditable.
+
+    Rules enforced here:
+
+    * Only ``from_preset`` is used. There is no ``.with_overrides()``
+      on ``CodeFormulaVlmOptions`` and we do not invent one.
+    * ``from_preset`` does not accept arbitrary direct fields — passing
+      e.g. ``max_new_tokens=...`` raises. A future token-budget cap
+      must mutate a verified public nested field such as
+      ``options.model_spec.max_new_tokens`` AFTER a probe proves the
+      active engine consumes the mutated value.
+    * Generation knobs (``repetition_penalty``, ``no_repeat_ngram_size``,
+      ``do_sample``) MUST NOT be wired here until the active engine
+      path is inspected and verified.
+
+    Returns ``None`` if the running Docling version does not expose
+    ``CodeFormulaVlmOptions`` at all (older builds).
+    """
+    try:
+        from docling.datamodel.pipeline_options import CodeFormulaVlmOptions
+    except ImportError:
+        return None
+    return CodeFormulaVlmOptions.from_preset(opts.formula_model)
+
+
+def _make_pdf_pipeline_options(accel, opts: DoclingOptions):
+    """Build ``PdfPipelineOptions`` with enrichment + batch knobs.
 
     ``PdfPipelineOptions`` already exposes the per-stage batch knobs
     (``layout_batch_size``, ``ocr_batch_size``, ``table_batch_size``);
@@ -698,18 +727,49 @@ def _make_standard_options(accel, opts: DoclingOptions):
     }
 
     if opts.formulas:
-        try:
-            from docling.datamodel.pipeline_options import (
-                CodeFormulaVlmOptions,
-            )
-        except ImportError:
-            pass  # docling version without formula support
-        else:
-            kwargs["code_formula_options"] = (
-                CodeFormulaVlmOptions.from_preset(opts.formula_model)
-            )
+        code_formula_options = _make_code_formula_options(opts)
+        if code_formula_options is not None:
+            kwargs["code_formula_options"] = code_formula_options
 
     return PdfPipelineOptions(**kwargs)
+
+
+def _make_document_converter(opts: DoclingOptions):
+    """Build the standard-pipeline ``DocumentConverter``.
+
+    PDF gets the full enrichment pipeline (layout + tables + optional
+    formulas). DOCX, PPTX, and HTML are declared in ``allowed_formats``
+    so Docling dispatches to its native parsers without custom options.
+
+    The PDF text backend is ``PyPdfiumDocumentBackend`` rather than the
+    Docling default ``DoclingParseDocumentBackend``. pypdfium2 reads
+    ToUnicode CMaps when present and reconstructs ligature glyphs
+    (``ﬁ``, ``ﬂ``, ``ff``) as the underlying letters; the docling-parse
+    backend recovers characters by horizontal position and inserts a
+    space between letters when the ligature glyph has wider advance
+    than a single char width, producing artefacts like ``arti fi cial``
+    and ``di ff usion`` in body text.
+    """
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+    from docling.datamodel.base_models import InputFormat
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    accel = _make_accelerator()
+    pipeline_opts = _make_pdf_pipeline_options(accel, opts)
+    return DocumentConverter(
+        allowed_formats=[
+            InputFormat.PDF,
+            InputFormat.DOCX,
+            InputFormat.PPTX,
+            InputFormat.HTML,
+        ],
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_opts,
+                backend=PyPdfiumDocumentBackend,
+            ),
+        },
+    )
 
 
 # VLM model lookup table. Keyed by DOCLING_VLM_MODEL env var value.
@@ -764,6 +824,54 @@ def _build_vlm_converter():
 # ---------------------------------------------------------------------------
 
 
+def _formula_item_to_dict(item) -> dict | None:
+    """Convert a ``FormulaItem`` to the structural-equation record dict.
+
+    Returns ``None`` when the item carries no LaTeX text (skip).
+    """
+    latex = (getattr(item, "text", "") or "").strip()
+    if not latex:
+        return None
+    page = None
+    prov = getattr(item, "prov", None)
+    if prov:
+        page = getattr(prov[0], "page_no", None)
+    label = (getattr(item, "label", "") or "")
+    return {
+        "id": _equation_id(f"display:{latex}"),
+        "latex": latex,
+        "label": str(label) if label else "",
+        "type": "display",
+        "kind": "display",
+        "page": page,
+        "context": "",
+        "char_offset": -1,
+    }
+
+
+def _extract_docling_formulas(doc) -> list[dict]:
+    """Structural FormulaItem extraction — the single Docling formula source.
+
+    Iterates ``DoclingDocument.iterate_items()`` and selects
+    ``docling_core.types.doc.document.FormulaItem``. Reads ``item.text``,
+    preserves page provenance when available, and never parses
+    structural formulas from exported markdown. The returned dicts are
+    keyed by ``_equation_id(f"display:{latex}")`` so they dedup cleanly
+    against markdown-regex extracted equations downstream.
+    """
+    formulas: list[dict] = []
+    try:
+        from docling_core.types.doc.document import FormulaItem
+    except ImportError:
+        return formulas
+    for item, _level in doc.iterate_items():
+        if isinstance(item, FormulaItem):
+            record = _formula_item_to_dict(item)
+            if record is not None:
+                formulas.append(record)
+    return formulas
+
+
 def _doc_walk(
     doc, *, want_formulas: bool,
 ) -> tuple[int, list[RawImage], list[dict]]:
@@ -777,15 +885,15 @@ def _doc_walk(
       avoids mistaking body-bullet lists for the bibliography);
     - ``images`` is every PictureItem whose rendered crop survives
       the ``_MIN_IMAGE_DIM`` filter, with caption + page metadata;
-    - ``formulas`` is every FormulaItem with non-empty LaTeX text,
-      keyed by ``_equation_id(f"display:{latex}")`` so it dedups
-      cleanly against markdown-regex extracted equations downstream.
+    - ``formulas`` is every FormulaItem with non-empty LaTeX text.
       ``want_formulas=False`` skips formula collection (caller knows
       the Granite-Docling head didn't run).
 
     Single iteration replaces three separate ``doc.iterate_items()``
     walks; on long PDFs each pass reconstructs prov + caption state,
-    so the saving is real.
+    so the saving is real. Per-item formula construction is delegated
+    to ``_formula_item_to_dict`` so the structural-formula contract
+    has exactly one definition.
     """
     ref_count = 0
     images: list[RawImage] = []
@@ -817,23 +925,9 @@ def _doc_walk(
             if img is not None:
                 images.append(img)
         elif want_formulas and isinstance(item, FormulaItem):
-            latex = (getattr(item, "text", "") or "").strip()
-            if latex:
-                page = None
-                prov = getattr(item, "prov", None)
-                if prov:
-                    page = getattr(prov[0], "page_no", None)
-                label = (getattr(item, "label", "") or "")
-                formulas.append({
-                    "id": _equation_id(f"display:{latex}"),
-                    "latex": latex,
-                    "label": str(label) if label else "",
-                    "type": "display",
-                    "kind": "display",
-                    "page": page,
-                    "context": "",
-                    "char_offset": -1,
-                })
+            record = _formula_item_to_dict(item)
+            if record is not None:
+                formulas.append(record)
     ref_count = counted_refs
     return ref_count, images, formulas
 
@@ -866,6 +960,26 @@ def _picture_to_raw_image(item, doc) -> RawImage | None:
         w, h = pil.size
         if w < _MIN_IMAGE_DIM and h < _MIN_IMAGE_DIM:
             return None
+        # Publisher decorations (Crossmark "Check for updates" badge,
+        # journal logos, page-header banners) are wide-and-short or
+        # tall-and-narrow strips that pass the area test. Real
+        # figures from scientific papers have captions; decorations
+        # do not. Skip when the smaller dimension is under the
+        # threshold AND there's no caption to defend the image.
+        if min(w, h) < _MIN_IMAGE_DIM and not caption.strip():
+            return None
+        # Aspect-ratio guard for the rare case Docling assigns an
+        # adjacent caption to a banner: skip pathologically thin
+        # strips (>5:1) on page 1, where publisher decorations
+        # cluster. ``page is None`` (Docling failed to assign a page
+        # to a layout-stitched figure) used to be treated as page 1
+        # here, which silently erased legitimate composite figures.
+        if (
+            page == 1
+            and not caption.strip()
+            and max(w, h) >= 5 * min(w, h)
+        ):
+            return None
     except Exception:
         pass
 
@@ -891,6 +1005,159 @@ def _is_likely_noise_title(title: str) -> bool:
     return False
 
 
+# Sentinel substrings that indicate Granite-Docling VLM output leaked
+# past the upstream parser into ``FormulaItem.text`` or exported
+# markdown. ``<formula`` matches both opening (``<formula>``) and
+# self-attributed (``<formula attr=...>``) variants observed in real
+# corpora; ``</formula`` catches both well-formed (``</formula>``) and
+# truncated closers (``</formula`` with no trailing ``>``, the form
+# Granite emits when the close tag and ``<end_of_utterance>`` are
+# decoded as one contiguous sequence); ``<loc_`` catches the
+# bbox-token vocabulary that should never reach the markdown layer.
+_LEAK_SENTINELS: tuple[str, ...] = ("<formula", "</formula", "<loc_")
+
+# Repetition-loop threshold. Granite-Docling sometimes fails to predict
+# EOS and decodes the same short sub-sequence hundreds of times. A
+# 3-gram repeated more than ``_MAX_NGRAM_REPETITION`` times within one
+# block is the smallest signal that distinguishes a degenerate decode
+# from legitimate LaTeX. Empirically calibrated on the ALD reference
+# corpus (207 papers): post-patch worst legit math (1971 Chua's
+# variational derivations with dense subscripts like ``_{j=1}^{b}``)
+# tops out around x16 for any single trigram; pre-patch runaway loops
+# (the ``\, d t \, d t \, d t \,`` integration-variable cycle) ran
+# from x100 to x500+. A threshold of 50 gives ample margin on both
+# sides.
+_REPETITION_NGRAM = 3
+_MAX_NGRAM_REPETITION = 50
+
+# Max contamination examples to attach to the raised error. Keeping a
+# small number bounds log noise without losing the diagnostic punch.
+_MAX_FORMULA_QUALITY_EXAMPLES = 3
+
+
+class FormulaContaminationError(RuntimeError):
+    """Raised when a Docling parse contains contaminated formula output.
+
+    This is the parser-boundary assertion: when Granite-Docling leaks
+    wrapper tags or autoregressive repetition into ``FormulaItem.text``
+    or exported markdown, the document is rejected before any chunk,
+    embedding, cache JSON, equation row, or markdown sidecar is
+    persisted. The orchestrator routes the exception to
+    ``failed_files.log`` and counts it toward the build's failure
+    threshold — there is no silent strip and no placeholder.
+    """
+
+
+def _longest_repeated_ngram_run(text: str, n: int = _REPETITION_NGRAM) -> int:
+    """Return the highest occurrence count of any single ``n``-gram in ``text``.
+
+    Splits on whitespace; an ``n``-gram is a tuple of ``n`` consecutive
+    tokens. Counts how many times the SAME ``n``-gram appears across
+    the whole token stream — this is the right signal for the
+    autoregressive-degeneration symptom, where the model loops on a
+    short cycle (e.g. ``\\text{not} \\, s``) and the same 3-gram
+    therefore appears every cycle-length tokens (not literally
+    back-to-back). Legitimate LaTeX re-uses tokens like ``\\,`` but
+    rarely repeats a SPECIFIC trigram more than a handful of times.
+    Returns ``1`` for any text with at least ``n`` tokens (a single
+    occurrence counts as one); ``0`` for shorter input.
+    """
+    tokens = text.split()
+    if len(tokens) < n:
+        return 0
+    counts: dict[tuple, int] = {}
+    longest = 0
+    for i in range(len(tokens) - n + 1):
+        gram = tuple(tokens[i : i + n])
+        c = counts.get(gram, 0) + 1
+        counts[gram] = c
+        if c > longest:
+            longest = c
+    return longest
+
+
+def _find_leak_sentinels(text: str) -> list[str]:
+    """Return the subset of ``_LEAK_SENTINELS`` present in ``text``."""
+    if not text:
+        return []
+    return [s for s in _LEAK_SENTINELS if s in text]
+
+
+def _assert_formula_quality(
+    formulas: list[dict], md_text: str, path: Path,
+) -> None:
+    """Refuse contaminated Docling parses before any artifact is persisted.
+
+    Fails the document when any structural ``FormulaItem.text`` or
+    the exported markdown contains:
+
+    * ``<formula`` or ``</formula>`` wrapper tags,
+    * ``<loc_`` bbox tokens from Granite-Docling's vocabulary,
+    * a 3-gram repeated more than ``_MAX_NGRAM_REPETITION`` times
+      back-to-back inside any structural formula (autoregressive
+      repetition loop).
+
+    This is an assertion, not a cleanup pass. Raises
+    ``FormulaContaminationError`` with counts and short examples; the
+    orchestrator routes the exception to ``failed_files.log`` and
+    fails the build by default. Cleaning leaked tags here would hide
+    the upstream Granite-Docling defect while leaving broken LaTeX in
+    chunks and embeddings — the visible HTML in markdown is the
+    cheap surface signal that formula extraction is wrong.
+    """
+    problems: list[str] = []
+    examples: list[str] = []
+
+    # Markdown-side leak detection. Run on the RAW exported markdown
+    # before ``_light_clean`` so any leak is observed exactly as
+    # Docling produced it.
+    md_leaks = _find_leak_sentinels(md_text)
+    if md_leaks:
+        problems.append(
+            f"markdown contains leak tokens {md_leaks}",
+        )
+
+    # Structural-formula leak + repetition detection. Iterate the
+    # already-extracted records so we don't pay a second pass over
+    # ``iterate_items()``.
+    leaked_blocks = 0
+    repeating_blocks = 0
+    for f in formulas:
+        latex = f.get("latex") or ""
+        block_leaks = _find_leak_sentinels(latex)
+        if block_leaks:
+            leaked_blocks += 1
+            if len(examples) < _MAX_FORMULA_QUALITY_EXAMPLES:
+                examples.append(
+                    f"leak {block_leaks} in: {latex[:120]!r}",
+                )
+        run = _longest_repeated_ngram_run(latex)
+        if run > _MAX_NGRAM_REPETITION:
+            repeating_blocks += 1
+            if len(examples) < _MAX_FORMULA_QUALITY_EXAMPLES:
+                examples.append(
+                    f"3-gram x{run} in: {latex[:120]!r}",
+                )
+    if leaked_blocks:
+        problems.append(
+            f"{leaked_blocks}/{len(formulas)} formulas carry leak tokens",
+        )
+    if repeating_blocks:
+        problems.append(
+            f"{repeating_blocks}/{len(formulas)} formulas show "
+            f"{_REPETITION_NGRAM}-gram repetition >{_MAX_NGRAM_REPETITION}x",
+        )
+
+    if not problems:
+        return
+
+    raise FormulaContaminationError(
+        f"Granite-Docling formula contamination in {path.name}: "
+        + "; ".join(problems)
+        + (f" — examples: {examples}" if examples else "")
+    )
+
+
 def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     """Minimal cleanup -- Docling output is already cleaner than pymupdf."""
     if not md:
@@ -900,6 +1167,24 @@ def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
     # Only strip formula placeholders if formula enrichment is OFF.
     if not formulas_enabled:
         md = re.sub(r"<!--\s*formula-not-decoded\s*-->", "", md)
+    # Docling's export_to_markdown escapes <, >, & so the output is
+    # also valid as inline HTML. We re-render through downstream
+    # tooling that expects the literal characters (``<10 nm``,
+    # ``R & D``), so undo the escaping once.
+    md = html.unescape(md)
+    # Drop CLUSTERS of standalone 1-3 digit lines: 2-column PDFs
+    # sometimes route a vertical page-number margin column into the
+    # markdown as a contiguous run of digit-only paragraphs (e.g.
+    # ``6\n9\n9\n8\n`` for pages 6,9,9,8). Require >=4 digit-only
+    # lines (blank-line-tolerant because the leading ``\s*`` can
+    # consume an interleaved newline) so a small data cluster — a
+    # 2-3 row table column, a pair of equation-number-only lines,
+    # an isolated footnote anchor — is preserved. The user values
+    # information preservation over surface cleanliness; real
+    # page-margin runs are virtually always >=4 (most papers have
+    # >=4 pages), the false-positive risk of >=2 was higher than
+    # the cleanup gain.
+    md = re.sub(r"(?m)(?:^\s*\d{1,3}\s*\n){4,}", "", md)
     # Collapse 3+ blank lines.
     md = re.sub(r"\n{3,}", "\n\n", md)
     # Strip trailing whitespace per line.
@@ -910,8 +1195,8 @@ def _light_clean(md: str, *, formulas_enabled: bool = False) -> str:
 # Metadata assembly lives in ``ingest/metadata.py::assemble_pdf_metadata``.
 # Docling-specific quirks handled in ``parse()``: ``doc.name`` feeds the
 # shared chain as ``extra_title_candidate``, and a post-hoc
-# ``_is_likely_noise_title`` guard catches all-caps / section-header titles
-# Docling occasionally produces that ``is_junk_title`` misses.
+# ``_is_likely_noise_title`` guard catches all-caps / section-header
+# titles Docling occasionally produces that ``is_junk_title`` misses.
 
 
 # Minimum pixel dimension for a real figure. Images smaller than this
@@ -975,7 +1260,6 @@ def extract_formulas(doc) -> list[dict]:
     Internal ingest goes through ``_doc_walk`` so refs + images +
     formulas are collected in a single pass over ``doc.iterate_items()``.
     Probe scripts and tests that import ``extract_formulas`` standalone
-    keep working through this wrapper.
+    keep working through this wrapper around ``_extract_docling_formulas``.
     """
-    _ref_count, _images, formulas = _doc_walk(doc, want_formulas=True)
-    return formulas
+    return _extract_docling_formulas(doc)

@@ -239,31 +239,25 @@ def _ingest_content_parse(ctx: dict) -> None:
     Uses ``pipeline._stream_parse_and_persist`` with ``skip_metadata=True``
     for PDFs — the content is written to disk but metadata fusion is
     deferred to pass 4.  Non-PDF sources keep their inline metadata.
-    Persists each parsed (Document, chunks) tuple into ``wikify.db`` in
-    a single transaction once all workers finish, and publishes
-    ``receipts`` into ctx.
+    Persists each parsed (Document, chunks) tuple into ``wikify.db``
+    per subprocess-batch (every ~20 papers) so a mid-run crash leaves
+    a recoverable corpus, and publishes ``receipts`` into ctx.
     """
     from wikify.corpus.store import Store, transaction
     from wikify.corpus.store.sync import project_documents
 
-    from .pipeline import _stream_parse_and_persist
+    from .pipeline import FileReceipt, _stream_parse_and_persist
 
     sources: list[Path] = ctx["sources_to_parse"]
     paths: Corpus = ctx["paths"]
     parser_backend: str = ctx.get("parser_backend", "default")
     max_workers = ctx.get("max_workers")
 
-    receipts, failed_count = _stream_parse_and_persist(
-        sources,
-        paths,
-        max_workers,
-        parser_backend,
-        skip_metadata=True,
-    )
-    ctx["parse_failed_count"] = failed_count
-
-    fresh = [r for r in receipts if r.doc is not None and r.chunks is not None]
-    if fresh:
+    def _persist_to_sqlite(batch: list[FileReceipt]) -> None:
+        """Commit one batch of fresh receipts into ``wikify.db``."""
+        fresh = [r for r in batch if r.doc is not None and r.chunks is not None]
+        if not fresh:
+            return
         store = Store(paths.sqlite_path)
         try:
             with transaction(store.con):
@@ -273,6 +267,15 @@ def _ingest_content_parse(ctx: dict) -> None:
         finally:
             store.close()
 
+    receipts, failed_count = _stream_parse_and_persist(
+        sources,
+        paths,
+        max_workers,
+        parser_backend,
+        skip_metadata=True,
+        on_batch_persist=_persist_to_sqlite,
+    )
+    ctx["parse_failed_count"] = failed_count
     ctx["receipts"] = receipts
 
 
@@ -303,6 +306,7 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
 
     paths: Corpus = ctx["paths"]
     receipts = ctx.get("receipts") or []
+    recovered_receipts = ctx.get("recovered_receipts") or []
     probes: dict[str, _Probe] = ctx.get("probes") or {}
     resolved_by_doi: dict[str, dict] = ctx.get("resolved_metadata") or {}
 
@@ -311,10 +315,16 @@ def _ingest_fuse_metadata(ctx: dict) -> None:
 
     docs_by_id = {d.id: d for d in list_documents(paths)}
 
+    # Recovered placeholders also pass through fuse so titles / authors
+    # / DOIs land. Pass 1's probes don't include them, so the per-doc
+    # fallback path inside ``assemble_pdf_metadata`` handles DOI lookup
+    # — slower than the batched probe but a one-time cost per resume.
+    all_receipts = list(receipts) + list(recovered_receipts)
+
     n_fused = 0
     store = Store(paths.sqlite_path)
     try:
-        for receipt in receipts:
+        for receipt in all_receipts:
             src_path = Path(receipt.src_path)
             if src_path.suffix.lower() != ".pdf":
                 continue
@@ -409,6 +419,7 @@ def run_ingest_dag(
     max_workers: int | None,
     parser_backend: str,
     timings: dict[str, float],
+    recovered_receipts: list | None = None,
 ) -> tuple[list, int]:
     """Build the shared ctx, run ``INGEST_DAG``, return ``(receipts,
     parse_failed_count)``.
@@ -418,6 +429,11 @@ def run_ingest_dag(
     ``_ingest_*`` reads its inputs from ctx and publishes outputs back.
     The orchestrator uses ``parse_failed_count`` to decide whether to
     abort the build (default) or continue under ``--allow-partial``.
+
+    ``recovered_receipts`` carries placeholder docs from a prior crashed
+    run that ``_recover_completed`` accepted on disk; pass 4 fuses
+    metadata for those too so a resumed corpus carries full titles /
+    authors / DOIs without paying for a PDF re-parse.
     """
     from .dag import run_dag
 
@@ -426,6 +442,7 @@ def run_ingest_dag(
         paths=paths,
         parser_backend=parser_backend,
         max_workers=max_workers,
+        recovered_receipts=list(recovered_receipts or []),
     )
     run_dag(INGEST_DAG, ctx, timings=timings)
     return ctx.get("receipts") or [], int(ctx.get("parse_failed_count", 0))

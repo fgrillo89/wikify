@@ -8,8 +8,11 @@ the metadata moves into rows.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def upsert_assets(
@@ -61,18 +64,70 @@ def upsert_chunk_assets(
     doc_id: str,
     mappings: list[dict[str, Any]],
 ) -> None:
-    """Replace chunk<->asset relations belonging to chunks of *doc_id*."""
+    """Replace chunk<->asset relations belonging to chunks of *doc_id*.
+
+    Filters out mappings whose chunk_id or asset_id is missing from
+    the corresponding tables. ``INSERT OR IGNORE`` does not skip FK
+    violations in every SQLite build, so we drop dangling refs here
+    rather than rely on the resolver. Stale ``chunk.equation_ids``
+    pointing at equations that were filtered out during extraction
+    is the typical source of dangling refs.
+    """
     con.execute(
         "DELETE FROM chunk_assets WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE doc_id = ?)",
         (doc_id,),
     )
+    if not mappings:
+        return
+    valid_chunks = {
+        r[0] for r in con.execute(
+            "SELECT chunk_id FROM chunks WHERE doc_id = ?", (doc_id,),
+        )
+    }
+    asset_ids = {m["asset_id"] for m in mappings}
+    if not asset_ids:
+        return
+    placeholders = ",".join("?" * len(asset_ids))
+    valid_assets = {
+        r[0] for r in con.execute(
+            f"SELECT asset_id FROM assets WHERE asset_id IN ({placeholders})",
+            tuple(asset_ids),
+        )
+    }
     rows = []
-    for m in mappings or []:
-        rows.append((
-            m["chunk_id"], m["asset_id"],
-            m.get("relation", "near"),
-            float(m["confidence"]) if m.get("confidence") is not None else None,
-        ))
+    dropped_chunk_samples: list[str] = []
+    dropped_asset_samples: list[str] = []
+    dropped_chunk = 0
+    dropped_asset = 0
+    for m in mappings:
+        chunk_ok = m["chunk_id"] in valid_chunks
+        asset_ok = m["asset_id"] in valid_assets
+        if chunk_ok and asset_ok:
+            rows.append((
+                m["chunk_id"], m["asset_id"],
+                m.get("relation", "near"),
+                float(m["confidence"]) if m.get("confidence") is not None else None,
+            ))
+            continue
+        if not chunk_ok:
+            dropped_chunk += 1
+            if len(dropped_chunk_samples) < 3:
+                dropped_chunk_samples.append(str(m["chunk_id"]))
+        if not asset_ok:
+            dropped_asset += 1
+            if len(dropped_asset_samples) < 3:
+                dropped_asset_samples.append(str(m["asset_id"]))
+    if dropped_chunk or dropped_asset:
+        # Surface the drops so stale ``chunk.equation_ids`` (the typical
+        # source) is observable instead of a silent edge loss.
+        logger.warning(
+            "doc=%s dropped %d chunk_assets mapping(s) with dangling refs "
+            "(chunk_missing=%d %s, asset_missing=%d %s)",
+            doc_id,
+            dropped_chunk + dropped_asset,
+            dropped_chunk, dropped_chunk_samples,
+            dropped_asset, dropped_asset_samples,
+        )
     if not rows:
         return
     con.executemany(

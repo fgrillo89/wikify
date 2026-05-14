@@ -14,12 +14,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wikify.ingest.bibtex import _clean_author_name
+from wikify.ingest.bibtex import _clean_author_name, _clean_title
 from wikify.ingest.metadata import (
+    _looks_like_journal_name,
+    _looks_like_reference_list,
     _parse_author_line,
+    _strip_inline_markup,
     _strip_trailing_affiliation_letter,
     choose_document_title,
     clean_filename_title,
+    clean_markdown,
+    extract_authors_from_markdown,
     is_junk_title,
     parse_authors,
 )
@@ -317,3 +322,338 @@ class TestChooseDocumentTitleUnderscores:
             Path("[2020 Smith] Some Already Spaced Title.docx"),
         )
         assert chosen == "Some Already Spaced Title"
+
+
+# ---------------------------------------------------------------------------
+# Author glyph stripping + all-caps title-casing (root-cause fixes C2, C3)
+# ---------------------------------------------------------------------------
+
+
+class TestStripInlineMarkupGlyphs:
+    """``_strip_inline_markup`` is the universal post-sanitation hook for
+    author strings (called from ``assemble_pdf_metadata``). It must
+    handle publisher-specific footnote glyphs and IEEE-style ALL-CAPS
+    bylines, not just the original ``<sup>``/``<sub>`` markup."""
+
+    def test_strips_private_use_area_glyph(self):
+        # Wiley custom font footnote markers land in the PUA range.
+        assert _strip_inline_markup("Jun Li ") == "Jun Li"
+
+    def test_strips_invalid_codepoints(self):
+        # Some publishers misuse U+0378 / U+0379 (officially undefined).
+        assert _strip_inline_markup("Kitae Park ͸") == "Kitae Park"
+        assert _strip_inline_markup("Liudi Jiang ͹") == "Liudi Jiang"
+
+    def test_strips_greek_archaic_koppa(self):
+        # Greek archaic koppa (U+0377) used as a footnote anchor.
+        assert _strip_inline_markup("Daniel Newbrook ͷ") == "Daniel Newbrook"
+
+    def test_strips_asterisk_operator(self):
+        # U+2217 ASTERISK OPERATOR (not the ASCII *).
+        assert _strip_inline_markup("Bernabé Linares-Barranco ∗") == (
+            "Bernabé Linares-Barranco"
+        )
+
+    def test_strips_lone_spacing_modifier_tilde(self):
+        # When the diacritic got separated from its letter ("Su ñ e"
+        # became "Su ˜ e"), at least drop the floating tilde.
+        out = _strip_inline_markup("J. Su ˜ ne")
+        assert "˜" not in out
+
+    def test_titlecases_all_caps_name(self):
+        assert _strip_inline_markup("DEBASHIS PANDA") == "Debashis Panda"
+
+    def test_titlecases_hyphenated_all_caps(self):
+        # Hyphen-separated tokens get capitalised per-token.
+        assert _strip_inline_markup("PEI-YU JUNG") == "Pei-Yu Jung"
+
+    def test_preserves_mixed_case_name(self):
+        # Mixed case must NOT be re-cased: van der Waals, McMaster, etc.
+        assert _strip_inline_markup("Hai (Helen) Li") == "Hai (Helen) Li"
+        assert _strip_inline_markup("Bernabé Linares-Barranco") == (
+            "Bernabé Linares-Barranco"
+        )
+
+    def test_existing_sup_sub_markup_still_stripped(self):
+        # Original responsibility: drop affiliation HTML markup.
+        assert _strip_inline_markup("Sungjun Kim<sup>1,2</sup>") == "Sungjun Kim"
+        assert _strip_inline_markup("Sungjun Kim<sub>1,2</sub>") == "Sungjun Kim"
+
+    def test_preserves_hawaiian_okina(self):
+        # ʻokina (U+02BB) is a real letter in Hawaiian / Samoan names.
+        # The narrowed glyph range (U+02D0-U+02FF) excludes the
+        # transliteration-apostrophe band so it survives.
+        assert _strip_inline_markup("Keʻalohi") == "Keʻalohi"
+
+    def test_preserves_modifier_letter_apostrophe(self):
+        # ʼ (U+02BC) is the canonical apostrophe for transliterated
+        # names. Must not be stripped.
+        assert _strip_inline_markup("Suʼne") == "Suʼne"
+
+    def test_preserves_modifier_prime(self):
+        # ʹ (U+02B9) is the modifier prime used in Cyrillic
+        # transliteration (e.g., ``Solovʹev``).
+        assert _strip_inline_markup("Solovʹev") == "Solovʹev"
+
+
+# ---------------------------------------------------------------------------
+# Slug-shaped title detection (root-cause fix C5)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanMarkdownSlugRecovery:
+    """``clean_markdown`` is the common pre-filter for every title
+    candidate fed into ``choose_document_title``. When the candidate is
+    a pure URL/slug shape (5+ hyphens, no spaces, all lowercase) it
+    converts back to readable title case so the publisher-derived
+    filename doesn't survive as the corpus title."""
+
+    def test_unslug_hyphen_joined_filename(self):
+        out = clean_markdown("artificial-synapse-based-on-a-bilayer-memristor")
+        assert out == "Artificial Synapse Based On A Bilayer Memristor"
+
+    def test_plain_title_unchanged(self):
+        assert clean_markdown("Normal Paper Title") == "Normal Paper Title"
+
+    def test_short_hyphen_title_unchanged(self):
+        # Only 2 hyphens: a normal compound title, not a slug.
+        out = clean_markdown("In-Memory Computing with Memristor Arrays")
+        assert out == "In-Memory Computing with Memristor Arrays"
+
+    def test_internal_spaces_disable_slug_recovery(self):
+        # A title with both hyphens and spaces is already real text;
+        # don't touch it.
+        out = clean_markdown("low-cost-rapid-prototyping-system for memristors")
+        assert out == "low-cost-rapid-prototyping-system for memristors"
+
+
+# ---------------------------------------------------------------------------
+# CrossRef title sanitisation (root-cause fixes B1, B2)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanTitleStripsCrossRefMarkup:
+    """``bibtex._clean_title`` is called on every CrossRef-derived
+    title before it overwrites local metadata. It must strip JATS
+    inline markup, unescape HTML entities, and collapse whitespace so
+    no raw <sub>/<sup>/<i> tags survive in ``documents.title`` or in
+    ``metadata_json``."""
+
+    def test_strips_sub_tag(self):
+        out = _clean_title("Memristor based on HfO<sub>2</sub>")
+        assert out == "Memristor based on HfO2"
+
+    def test_strips_italic_tag(self):
+        out = _clean_title("Switching of AlO<i>x</i> films")
+        assert out == "Switching of AlOx films"
+
+    def test_unescapes_amp(self):
+        assert _clean_title("R &amp; D advances") == "R & D advances"
+
+    def test_collapses_embedded_newlines(self):
+        # Some CrossRef titles ship JATS pretty-printed with literal
+        # \n + indent inside the title value.
+        dirty = (
+            "Doping Engineering for Optimized TaO\n"
+            "                    <sub>x</sub>\n"
+            "                    Memristor"
+        )
+        assert _clean_title(dirty) == "Doping Engineering for Optimized TaOx Memristor"
+
+    def test_preserves_inline_single_space(self):
+        # Inline single-space adjacency to a tag must NOT be eaten:
+        # ``"Foo <sub>x</sub> bar"`` should yield ``"Foo x bar"`` (one
+        # space on each side), not ``"Foox bar"`` or ``"Foox bar"``.
+        # Only the JATS pretty-print case (newline + indent) gets
+        # collapsed.
+        assert _clean_title("Foo <sub>x</sub> bar") == "Foo x bar"
+        assert _clean_title("paper on AlO <sub>x</sub> films") == (
+            "paper on AlO x films"
+        )
+
+    def test_phrase_tag_pretty_print_keeps_separating_space(self):
+        # Pretty-printed phrase tags wrap word phrases — the previous
+        # rule applied subscript-style asymmetric whitespace and glued
+        # ``The\n<i>in situ</i>\nmethod`` into ``Thein situ method``.
+        # Phrase-class tags must keep the separating space on both
+        # sides so the tag-strip yields ``The in situ method``.
+        dirty = (
+            "The\n"
+            "                    <i>in situ</i>\n"
+            "                    method"
+        )
+        assert _clean_title(dirty) == "The in situ method"
+
+    def test_phrase_tag_em_pretty_print(self):
+        dirty = (
+            "Studies of\n"
+            "        <em>operando</em>\n"
+            "        spectroscopy"
+        )
+        assert _clean_title(dirty) == "Studies of operando spectroscopy"
+
+    def test_subscript_pretty_print_still_glues(self):
+        # Regression: the subscript-class behaviour must not regress
+        # when phrase-class handling is added. ``HfO\n<sub>2</sub>``
+        # still glues to ``HfO2`` (no separating space).
+        dirty = (
+            "Memristor based on HfO\n"
+            "                    <sub>2</sub>"
+        )
+        assert _clean_title(dirty) == "Memristor based on HfO2"
+
+
+# ---------------------------------------------------------------------------
+# XMP author flattening (root-cause fix C1)
+# ---------------------------------------------------------------------------
+
+
+class TestParseAuthorsFlattensStuffedXmp:
+    """When a publisher's XMP ``dc:creator`` field stuffs the entire
+    byline into a single rdf:li (instead of one entry per author),
+    ``assemble_pdf_metadata`` passes that one string through
+    ``parse_authors`` to flatten. This regression verifies the splitter
+    returns the expected name list for the failing real-world case."""
+
+    def test_flattens_comma_separated_byline(self):
+        raw = (
+            "Hadiyawarman, Faisal Budiman, Detiza Goldianto Octensi Hernowo, "
+            "Reetu Raj Pandey, Hirofumi Tanaka"
+        )
+        names = parse_authors(raw)
+        assert len(names) == 5
+        assert "Hadiyawarman" in names
+        assert "Faisal Budiman" in names
+        assert "Hirofumi Tanaka" in names
+
+    def test_flattens_semicolon_separated_byline(self):
+        # AIP landing pages use semicolons inside the dc:creator field.
+        raw = "Yu. Matveyev; K. Egorov; A. Markeev; A. Zenkevich"
+        names = parse_authors(raw)
+        assert len(names) >= 3
+
+    def test_single_name_pass_through(self):
+        # A clean single-author XMP value must not get mangled.
+        assert parse_authors("Sungjun Kim") == ["Sungjun Kim"]
+
+
+# ---------------------------------------------------------------------------
+# Reference-list and journal-name guards in extract_authors_from_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestLooksLikeReferenceList:
+    def test_lastname_initial_majority_is_reference(self):
+        names = ["Hu M", "Li Y", "Jiang H", "Ge N", "Williams RS", "Yang JJ"]
+        assert _looks_like_reference_list(names)
+
+    def test_byline_format_is_not_reference(self):
+        # "M. Hu, Y. Li" byline shape — initial first, period — must NOT
+        # be flagged as reference-list shape.
+        names = ["M. Hu", "Y. Li", "H. Jiang", "N. Ge"]
+        assert not _looks_like_reference_list(names)
+
+    def test_mixed_names_not_majority(self):
+        # Some lastname-initial entries can coexist with proper bylines
+        # (a paper with both formats interleaved). Only flag when the
+        # SHAPE dominates.
+        names = ["Jane Smith", "Bob Brown", "Hu M", "Williams RS"]
+        assert not _looks_like_reference_list(names)
+
+    def test_empty_list_not_reference(self):
+        assert not _looks_like_reference_list([])
+
+
+class TestLooksLikeJournalName:
+    def test_acs_nano_flagged(self):
+        assert _looks_like_journal_name("ACS Nano")
+
+    def test_adv_mater_flagged(self):
+        assert _looks_like_journal_name("Adv. Mater")
+        assert _looks_like_journal_name("Adv. Mater. Interfaces")
+        assert _looks_like_journal_name("Adv. Funct. Mater")
+
+    def test_nat_commun_flagged(self):
+        assert _looks_like_journal_name("Nat. Commun")
+        assert _looks_like_journal_name("Nat. Electron")
+
+    def test_real_author_not_flagged(self):
+        # The audit revealed my old regex flagged "J. Joshua Yang" as a
+        # journal — that's the false positive we need to avoid.
+        assert not _looks_like_journal_name("J. Joshua Yang")
+        assert not _looks_like_journal_name("J. J. Yang")
+        assert not _looks_like_journal_name("R. Stanley Williams")
+        assert not _looks_like_journal_name("J. P. Strachan")
+        assert not _looks_like_journal_name("Sungjun Kim")
+        assert not _looks_like_journal_name("Tianyu Wang")
+        assert not _looks_like_journal_name("Bernabé Linares-Barranco")
+
+    def test_empty_not_flagged(self):
+        assert not _looks_like_journal_name("")
+
+
+class TestExtractAuthorsRejectsReferenceLists:
+    """The real failure pattern in the corpus: when the filename
+    surname appears in a reference list (e.g. "... Yang JJ, Xia Q ..."),
+    the OLD ``extract_authors_from_markdown`` happily returned that
+    16-name list as the paper's authors. The fix prefers the EARLIEST
+    matching candidate, rejects reference-list shape, and drops journal
+    names."""
+
+    def test_real_byline_wins_over_reference_list(self):
+        md = (
+            "# A Paper\n"
+            "\n"
+            "Jane Smith, Bob Brown, and Charlie Yang\n"  # real byline
+            "\n"
+            "## Introduction\n"
+            "We build on prior work [1].\n"
+            "\n"
+            "## References\n"
+            "[1] Hu M, Li Y, Jiang H, Ge N, Williams RS, Yang JJ. "
+            "ACS Nano 2018.\n"
+        )
+        names = extract_authors_from_markdown(md, fn_author="Yang")
+        # Must pick the real byline, NOT the reference entry.
+        assert "Charlie Yang" in names
+        assert "Hu M" not in names
+        assert "Williams RS" not in names
+
+    def test_no_byline_does_not_return_reference_entry(self):
+        # Pre-references-clip regression: when the PDF has no visible
+        # byline at all, the first surname match used to land in the
+        # references section because the reference-shape guard only
+        # fires AFTER another candidate exists. Result was bogus
+        # ``["Hu M", ..., "Yang JJ. ACS Nano"]`` authors. The window
+        # must be clipped at the references heading so reference
+        # entries can never be considered.
+        md = (
+            "# An Anonymous Paper Title\n"
+            "\n"
+            "Body text without any author line. The PDF parser failed\n"
+            "to detect a byline because of an unusual layout.\n"
+            "\n"
+            "## Introduction\n"
+            "Memristor switching depends on stoichiometry [1,2].\n"
+            "\n"
+            "## References\n"
+            "[1] Hu M, Li Y, Jiang H, Williams RS. Memristor paper. "
+            "Nature 2020.\n"
+            "[2] Yang JJ, Strachan JP. Another paper. ACS Nano 2018.\n"
+        )
+        names = extract_authors_from_markdown(md, fn_author="Hu")
+        assert "Hu M" not in names
+        assert "Yang JJ" not in names
+        assert "Williams RS" not in names
+
+    def test_journal_name_dropped(self):
+        # An XMP / Info string can include a trailing journal token.
+        # The post-sanitation should drop it via _looks_like_journal_name.
+        names = [
+            "Jane Smith", "Bob Brown", "ACS Nano",
+        ]
+        cleaned = [
+            n for n in names
+            if not _looks_like_journal_name(n)
+        ]
+        assert cleaned == ["Jane Smith", "Bob Brown"]

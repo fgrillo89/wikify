@@ -1,9 +1,11 @@
 """Authors and document_authors CRUD.
 
 Author rows are derived from `documents.metadata['authors']`. The
-canonical id is the normalized author key from
-`src/wikify/corpus/graph_build.py:_author_key`. Display name keeps the
-original casing so renderers don't have to re-case.
+canonical id is the normalized author key from ``author_key`` defined
+in this module — it's the single source of truth for the projection,
+and ``corpus.graph_build``, ``corpus.store.kg``, and
+``bundle.draft.author_context`` all import from here. Display name
+keeps the original casing so renderers don't have to re-case.
 """
 
 from __future__ import annotations
@@ -18,10 +20,20 @@ _NORM_RE = re.compile(r"[^a-z0-9 ]+")
 
 
 def author_key(name: str) -> str:
-    """Stable id for an author display name; matches graph_build._author_key."""
+    """Stable id for an author display name; matches graph_build._author_key.
+
+    Collapses hyphens to nothing so romanized Chinese / Korean names
+    that publishers print either as ``Tianyu Wang`` or ``Tian-Yu Wang``
+    (and similar pairs) get the same key. Truly distinct Western
+    hyphenated surnames (``Garcia-Lopez``) collide with the merged form
+    (``Garcialopez``), but the same merge would happen on any sane
+    casefold of those tokens, and the Chinese-romanization case
+    dominates by an order of magnitude in scientific bylines.
+    """
     if not name:
         return ""
     n = unicodedata.normalize("NFKC", name)
+    n = n.replace("-", "").replace("‐", "")  # ASCII + non-breaking hyphen
     n = re.sub(r"\s+", " ", n).strip().rstrip(",.; ")
     n = re.sub(r"\s+\d+(?:\s*,\s*\d+)*$", "", n)
     key = _NORM_RE.sub(" ", n.lower()).strip()

@@ -129,3 +129,145 @@ def test_section_spans_basic_heading_tree():
     assert ["Top"] in paths
     assert ["Top", "Sub"] in paths
     assert ["Top", "Sub2"] in paths
+
+
+# ---------------------------------------------------------------------------
+# Publisher-boilerplate heading filter
+# ---------------------------------------------------------------------------
+
+
+def test_section_spans_drops_boilerplate_headings():
+    """Pure publisher boilerplate (``OPEN ACCESS``, ``KEYWORDS``,
+    ``CITATION``, ``COPYRIGHT``) must not become its own section path.
+    The boilerplate's body still gets emitted under the surrounding
+    real section so content isn't lost.
+    """
+    body = (
+        "# 1. Introduction\n"
+        "Intro text.\n"
+        "## KEYWORDS\n"
+        "memristor, ALD\n"
+        "## 2. Methods\n"
+        "Method text.\n"
+        "## CITATION\n"
+        "Cite this.\n"
+        "## 3. Results\n"
+        "Result text.\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    # Real sections survive.
+    assert ["1. Introduction"] in paths
+    assert any("2. Methods" in p for p in paths)
+    assert any("3. Results" in p for p in paths)
+    # Boilerplate headings DO NOT introduce a section path entry.
+    for p in paths:
+        assert "KEYWORDS" not in p
+        assert "CITATION" not in p
+
+
+def test_section_spans_keeps_acknowledgments_for_classification():
+    """``Acknowledgments`` MUST remain in the section_path so
+    ``classify_section_path`` returns ACKNOWLEDGMENTS — otherwise
+    ``exclude_kinds=['acknowledgments']`` queries leak the chunks
+    through."""
+    body = (
+        "# 1. Introduction\n"
+        "Intro text.\n"
+        "## Acknowledgments\n"
+        "We thank...\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    assert any("Acknowledgments" in p for p in paths)
+
+
+def test_section_spans_keeps_content_bearing_sections():
+    """``Author contributions``, ``Data availability``, ``Funding``,
+    ``Conflict of interest`` carry per-paper info researchers query
+    directly. They must survive as named sections so they remain
+    locatable downstream."""
+    body = (
+        "# 1. Introduction\n"
+        "Intro.\n"
+        "## Author contributions\n"
+        "A.B. did X.\n"
+        "## Data availability\n"
+        "Public on Zenodo.\n"
+        "## Funding\n"
+        "NSF grant 12345.\n"
+        "## Conflict of interest\n"
+        "None declared.\n"
+        "## Supporting information\n"
+        "Available online.\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    for keeper in (
+        "Author contributions",
+        "Data availability",
+        "Funding",
+        "Conflict of interest",
+        "Supporting information",
+    ):
+        assert any(keeper in p for p in paths), keeper
+
+
+def test_section_spans_drops_publisher_tags():
+    """``OPEN ACCESS``, ``*CORRESPONDENCE``, ``CITATION``, ``COPYRIGHT``,
+    ``Publisher's note`` are all publisher template tags. Drop them."""
+    body = (
+        "# OPEN ACCESS\n"
+        "Open access info.\n"
+        "# *CORRESPONDENCE\n"
+        "name@example.com\n"
+        "# CITATION\n"
+        "Cite this.\n"
+        "# COPYRIGHT\n"
+        "(c) 2024.\n"
+        "# Publisher's note\n"
+        "Note.\n"
+        "# 1. Introduction\n"
+        "Real intro.\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    assert ["1. Introduction"] in paths
+    # None of the boilerplate names appear.
+    flat = [p for path in paths for p in path]
+    for noise in ("OPEN ACCESS", "*CORRESPONDENCE", "CITATION",
+                  "COPYRIGHT", "Publisher's note"):
+        assert noise not in flat
+
+
+def test_section_spans_drops_url_headings():
+    """URLs and DOIs lifted as headings (``# https://doi.org/...``) are
+    boilerplate, not document sections."""
+    body = (
+        "# https://doi.org/10.1234/example\n"
+        "DOI line.\n"
+        "# 1. Introduction\n"
+        "Intro.\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    assert ["1. Introduction"] in paths
+    flat = [p for path in paths for p in path]
+    assert not any("doi.org" in p for p in flat)
+
+
+def test_section_spans_keeps_real_sections_with_similar_names():
+    """Real numbered sections must survive even if their name overlaps
+    with a boilerplate keyword (``Acknowledgments`` is in the
+    boilerplate set, but a section ``5. Conclusions and
+    Acknowledgments`` should still pass — the boilerplate filter
+    matches the WHOLE heading, not substrings)."""
+    body = (
+        "# 1. Introduction\n"
+        "Text.\n"
+        "# 5. Conclusions and Acknowledgments\n"
+        "Combined section.\n"
+    )
+    spans = section_spans(body)
+    paths = [s[0] for s in spans]
+    assert ["5. Conclusions and Acknowledgments"] in paths

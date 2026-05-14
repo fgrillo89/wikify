@@ -49,6 +49,20 @@ _MEAS_WORDS = frozenset({
     "x", "by", "or", "and", "only",
 })
 
+# Month names + publication-status words. When one of these immediately
+# precedes a 1-2 digit number AND a 4-digit year immediately follows,
+# the number is a day-of-month inside a printed date, not a citation
+# ordinal (``Received for review April 3, 2014``).
+_MONTH_WORDS = frozenset({
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
+    "published", "accepted", "received", "revised", "submitted",
+    "online",
+})
+_TRAILING_YEAR_BARE_RE = re.compile(r"^\s*[,.]?\s*(?:19|20)\d{2}\b")
+
 
 # ---------------------------------------------------------------------------
 # Passes
@@ -60,6 +74,21 @@ _SUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Month names + publication-status words that, when present in the
+# chars before a numeric superscript, signal that the tag is *likely*
+# a day-of-month, not a citation. Both checks fire together: month
+# name BEFORE AND year pattern AFTER. Either alone produces too many
+# false positives — ``may`` is a frequent modal verb in scientific
+# prose (``we may need to revise<sup>17</sup> ...``) and a trailing
+# year alone could match cohort/sample labels (``the 2014 batch<sup>5</sup>``).
+_MONTH_NAME_RE = re.compile(
+    r"(?i)\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
+    r"jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?|published|online|accepted|received|"
+    r"revised|submitted)\b"
+)
+_TRAILING_YEAR_RE = re.compile(r"^\s*[,.]?\s*(?:19|20)\d{2}\b")
+
 
 def bracketize_sup_refs(md: str) -> str:
     """Convert ``<sup>N</sup>``-style citation markup to ``[N]``.
@@ -68,11 +97,23 @@ def bracketize_sup_refs(md: str) -> str:
     list, or hyphen range). Superscripts carrying letters or other
     markup (``<sup>a</sup>`` affiliations, ``<sup>o</sup>`` degree
     symbols) are left untouched.
+
+    Skipped when BOTH a month name (or publication-status word) appears
+    within 30 chars before the tag AND a 4-digit year immediately
+    follows. Some publishers print day numbers as superscripts inside
+    dates (``April<sup>3</sup>, 2014``); bracketising those would feed
+    the citation-marker resolver a false ``[3]``. Requiring both
+    halves prevents the modal-verb case (``may`` / ``march`` as verbs)
+    from suppressing real inline citations.
     """
     if not md or "<sup>" not in md.lower():
         return md
 
     def _sub(m: re.Match) -> str:
+        left = md[max(0, m.start() - 30):m.start()]
+        right = md[m.end():m.end() + 20]
+        if _MONTH_NAME_RE.search(left) and _TRAILING_YEAR_RE.match(right):
+            return m.group(0)
         nums = re.sub(r"\s+", "", m.group("body"))
         return f"[{nums}]"
 
@@ -154,6 +195,19 @@ def bracketize_bare_refs(md: str, *, ref_count: int) -> str:
         if pre_word in _MEAS_WORDS:
             return m.group(0)
 
+        # Date-day guard: ``Received April 3, 2014`` / ``Published online 10,
+        # 2024``. When the preceding word is a month name or pub-status
+        # word AND the trailing context starts with a 4-digit year,
+        # the number is a day-of-month, not a citation. The trailing-year
+        # check disambiguates from the modal verb ``may``.
+        if pre_word in _MONTH_WORDS:
+            rest = md[m.end():m.end() + 20]
+            # Reconstruct the punctuation we consumed: the rule requires
+            # the year to appear after the post-char (which is typically
+            # "," or " ").
+            if _TRAILING_YEAR_BARE_RE.match(post + rest):
+                return m.group(0)
+
         parts = re.split(r"[,\u2013-]", nums_str)
         try:
             nums = [int(p.strip()) for p in parts if p.strip()]
@@ -171,6 +225,15 @@ def bracketize_bare_refs(md: str, *, ref_count: int) -> str:
             return m.group(0)
 
         rest_after = md[m.end():]
+        # DOI-prefix guard: ``Published online 10.1021/...`` — the ``10``
+        # is the DOI registrar prefix, not a citation ordinal. Detect by
+        # the period being immediately followed by 4+ digits and a slash.
+        if post == "." and re.match(r"\d{3,}/", rest_after):
+            return m.group(0)
+        # Decimal-number guard: avoid bracketing the integer part of a
+        # decimal (``temperature reached 300.5 K``).
+        if post == "." and re.match(r"\d", rest_after):
+            return m.group(0)
         next_word_match = re.match(r"\s*([a-zA-Z]+)", rest_after)
         if next_word_match:
             nw = next_word_match.group(1).lower()
