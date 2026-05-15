@@ -27,7 +27,8 @@ from .config import (
     max_chunk_chars,
     overlap_chars,
 )
-from .section_classifier import SectionType, classify_section_path
+from .non_prose import classify_chunk_kind
+from .section_classifier import SectionType
 
 # Section types that are never the "concluding body" of a paper.
 _NON_CONCLUSION_TYPES = frozenset(
@@ -130,7 +131,6 @@ def chunk_document(
     ord_ = 0
     for path, start, end in sections:
         section_text = body[start:end]
-        section_type = classify_section_path(path).value
         sub_chunks = _split_section(section_text)
         for sub_start, sub_end in sub_chunks:
             text = section_text[sub_start:sub_end].strip()
@@ -163,7 +163,7 @@ def chunk_document(
                         text=piece,
                         char_span=absolute,
                         section_path=list(path),
-                        section_type=section_type,
+                        section_type=classify_chunk_kind(piece, list(path)),
                     )
                 )
                 ord_ += 1
@@ -179,6 +179,11 @@ def chunk_document(
     # still see them.
     for c in chunks:
         c.is_boilerplate = is_boilerplate(c.text, c.section_path)
+        c.section_type = classify_chunk_kind(
+            c.text,
+            c.section_path,
+            is_boilerplate=c.is_boilerplate,
+        )
     # Tag the canonical abstract chunk (sets section_type='abstract'
     # on exactly one chunk per doc that has body content). Idempotent.
     tag_abstracts(chunks)

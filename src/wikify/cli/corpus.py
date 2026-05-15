@@ -98,6 +98,21 @@ def _resolve_cwd_bundle() -> Bundle | None:
         return None
 
 
+def _resolve_bundle_context(run: Path | None = None) -> Bundle | None:
+    """Return the explicit run bundle, cwd bundle, or None.
+
+    Corpus read commands are often invoked from the repository root while
+    passing ``--run``. Keep telemetry attachment explicit so M5 does not
+    depend on the caller's working directory.
+    """
+    if run is not None:
+        try:
+            return Bundle.open(run)
+        except FileNotFoundError as exc:
+            cli_error(EXIT_VALIDATION, error="bad_bundle", message=str(exc))
+    return _resolve_cwd_bundle()
+
+
 def _emit_chunk_reads(
     bundle: Bundle | None,
     chunk_ids: Iterable[str],
@@ -576,13 +591,18 @@ def cmd_find(
             "--exclude-kind acknowledgments. Section types are: "
             "abstract|introduction|background|methods|results|"
             "discussion|conclusion|references|acknowledgments|"
-            "appendix|body."
+            "appendix|figure|table|caption|boilerplate|body."
         ),
     ),
     explain: bool = typer.Option(
         False,
         "--explain",
         help="Print the resolved fluent-chain pseudocode and exit.",
+    ),
+    run: Path | None = typer.Option(
+        None,
+        "--run",
+        help="Bundle whose run/events.jsonl should receive chunk_read telemetry.",
     ),
 ) -> None:
     """Search the corpus.
@@ -655,7 +675,7 @@ def cmd_find(
         "corpus_find_text" if text else "corpus_find_semantic"
     )
     _emit_chunk_reads(
-        _resolve_cwd_bundle(),
+        _resolve_bundle_context(run),
         (h.get("id", "") for h in rows),
         via=via,
     )
@@ -728,6 +748,7 @@ def cmd_sample(
     except ValueError as exc:
         cli_error(EXIT_VALIDATION, error="bad_strategy", message=str(exc))
     metrics = queries.doc_metrics(corpus, ids)
+    _warn_if_all_pagerank_zero(ids, metrics, pagerank_weight=pagerank_weight)
     _emit_doc_rows(
         [
             {
@@ -746,6 +767,26 @@ def cmd_sample(
 def _doc_title(corpus: Corpus, doc_id: str) -> str:
     doc = queries.get_doc(corpus, doc_id)
     return (doc.title or "") if doc is not None else ""
+
+
+def _warn_if_all_pagerank_zero(
+    ids: list[str],
+    metrics: dict[str, dict],
+    *,
+    pagerank_weight: float,
+) -> None:
+    import os
+
+    if not ids or pagerank_weight <= 0:
+        return
+    if os.environ.get("WIKIFY_QUIET") == "1":
+        return
+    if any(float(metrics.get(did, {}).get("pagerank", 0.0) or 0.0) > 0 for did in ids):
+        return
+    typer.echo(
+        "warning: sampled docs all have pagerank=0; ranking fell back to coverage/tie-breaks",
+        err=True,
+    )
 
 
 def _emit_chunk_rows(
@@ -802,6 +843,7 @@ def _emit_chunk_rows(
         cols = [
             score_col,
             f"cites={cites}",
+            f"kind={str(h.get('section_type') or 'body')}",
             chunk_handles.get(cid, format_handle("chunk", cid)),
             format_handle("doc", did) if did else "",
         ]
@@ -1041,6 +1083,11 @@ def cmd_show(
         help="Print the full internal id alongside the short handle.",
     ),
     fmt: str = typer.Option("text", "--format"),
+    run: Path | None = typer.Option(
+        None,
+        "--run",
+        help="Bundle whose run/events.jsonl should receive chunk_read telemetry.",
+    ),
 ) -> None:
     """Dereference one handle and print its content.
 
@@ -1071,6 +1118,14 @@ def cmd_show(
     if kind == "doc":
         doc = result["data"]
         meta = doc.metadata or {}
+        markdown = queries.get_doc_markdown(corpus, doc.id) if full else ""
+        if full:
+            _emit_chunk_reads(
+                _resolve_bundle_context(run),
+                (chunk.id for chunk in queries.list_chunks_for_doc(corpus, doc.id)),
+                via="corpus_show_doc_full",
+                doc_id=doc.id,
+            )
         if fmt == "json":
             payload = {
                 "ok": True,
@@ -1080,6 +1135,8 @@ def cmd_show(
                 "metadata": meta,
                 "n_chunks": doc.n_chunks,
             }
+            if full:
+                payload["markdown"] = markdown
             if long:
                 payload["full_id"] = doc.id
             typer.echo(json.dumps(payload))
@@ -1094,12 +1151,15 @@ def cmd_show(
             typer.echo(f"year:     {meta['year']}")
         if "authors" in meta:
             typer.echo(f"authors:  {len(meta['authors'] or [])}")
+        if full:
+            typer.echo("---")
+            typer.echo(markdown)
         return
 
     if kind == "chunk":
         chunk = result["data"]
         _emit_chunk_reads(
-            _resolve_cwd_bundle(),
+            _resolve_bundle_context(run),
             [chunk.id],
             via="corpus_show_chunk",
             doc_id=chunk.doc_id,
@@ -1110,6 +1170,8 @@ def cmd_show(
                 "id": format_handle("chunk", chunk.id),
                 "doc_id": format_handle("doc", chunk.doc_id),
                 "section_path": list(chunk.section_path or []),
+                "section_type": chunk.section_type or "body",
+                "is_boilerplate": bool(chunk.is_boilerplate),
                 "text": chunk.text if full else chunk.text[:500],
             }
             if long:
@@ -1122,6 +1184,8 @@ def cmd_show(
         if long:
             typer.echo(f"full_id:      {chunk.id}")
             typer.echo(f"full_doc_id:  {chunk.doc_id}")
+        typer.echo(f"section_type: {chunk.section_type or 'body'}")
+        typer.echo(f"boilerplate:  {bool(chunk.is_boilerplate)}")
         typer.echo(f"section_path: {chunk.section_path}")
         if full:
             typer.echo("---")
@@ -1278,6 +1342,65 @@ def cmd_metrics_refresh(
             refresh_h_index(store.con)
             metrics.append("h_index")
         typer.echo(f"refreshed {view}: {', '.join(metrics)}")
+    finally:
+        store.close()
+
+
+@metrics_app.command("reclassify-section-types")
+def cmd_metrics_reclassify(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+) -> None:
+    """Re-run boilerplate detection + ``classify_chunk_kind`` on every chunk.
+
+    Fixes corpora ingested before later detector improvements landed.
+    Both ``is_boilerplate`` and ``section_type`` are re-evaluated against
+    the current code and updated when they change.
+    """
+    import json as _json
+
+    from ..corpus.store.routing import open_store
+    from ..ingest.boilerplate import is_boilerplate
+    from ..ingest.non_prose import classify_chunk_kind
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    try:
+        rows = list(
+            store.con.execute(
+                "SELECT chunk_id, text, section_path_json, section_type, "
+                "is_boilerplate FROM chunks"
+            )
+        )
+        section_updates: list[tuple[str, str]] = []
+        boilerplate_updates: list[tuple[int, str]] = []
+        for r in rows:
+            try:
+                path = _json.loads(r["section_path_json"] or "[]")
+            except Exception:
+                path = []
+            text = r["text"] or ""
+            section_path = path if isinstance(path, list) else []
+            new_bp = is_boilerplate(text, section_path)
+            new_type = classify_chunk_kind(
+                text, section_path, is_boilerplate=new_bp,
+            )
+            if new_type != (r["section_type"] or ""):
+                section_updates.append((new_type, r["chunk_id"]))
+            if int(new_bp) != int(r["is_boilerplate"] or 0):
+                boilerplate_updates.append((int(new_bp), r["chunk_id"]))
+        store.con.executemany(
+            "UPDATE chunks SET section_type=? WHERE chunk_id=?",
+            section_updates,
+        )
+        store.con.executemany(
+            "UPDATE chunks SET is_boilerplate=? WHERE chunk_id=?",
+            boilerplate_updates,
+        )
+        store.con.commit()
+        typer.echo(
+            f"reclassified section_type on {len(section_updates)}/{len(rows)} "
+            f"chunks; is_boilerplate on {len(boilerplate_updates)}"
+        )
     finally:
         store.close()
 
@@ -1566,6 +1689,11 @@ def cmd_traverse(
         "--explain",
         help="Print the resolved fluent-chain pseudocode and exit.",
     ),
+    run: Path | None = typer.Option(
+        None,
+        "--run",
+        help="Bundle whose run/events.jsonl should receive chunk_read telemetry.",
+    ),
 ) -> None:
     """Traverse one hop from a handle and print the resulting handles.
 
@@ -1621,7 +1749,13 @@ def cmd_traverse(
     except ValueError as exc:
         cli_error(EXIT_VALIDATION, error="bad_relation", message=str(exc))
 
-    _emit_traverse_rows(result["rows"], fmt=fmt_resolved)
+    rows = result["rows"]
+    _emit_chunk_reads(
+        _resolve_bundle_context(run),
+        (str(r.get("id", "")) for r in rows if r.get("type") == "chunk"),
+        via=f"corpus_traverse_{to}",
+    )
+    _emit_traverse_rows(rows, fmt=fmt_resolved)
 
 
 _HANDLE_KIND_BY_TYPE = {
@@ -1864,6 +1998,8 @@ def _render_chunk(
     return [
         f"id:           {chunk.id}",
         f"doc:          {chunk.doc_id}",
+        f"section_type: {chunk.section_type or 'body'}",
+        f"boilerplate:  {bool(chunk.is_boilerplate)}",
         f"section_path: {chunk.section_path}",
         "---",
         chunk.text if full else chunk.text[:500],
@@ -2018,6 +2154,11 @@ def _run_repl_line(
 def cmd_repl(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
     prompt: str = typer.Option("wikify-corpus> ", "--prompt"),
+    run: Path | None = typer.Option(
+        None,
+        "--run",
+        help="Bundle whose run/events.jsonl should receive chunk_read telemetry.",
+    ),
 ) -> None:
     """Open a line-oriented corpus query session.
 
@@ -2026,7 +2167,7 @@ def cmd_repl(
     """
     corpus = _open_corpus(corpus_dir)
     session = CorpusSearchSession(corpus)
-    bundle = _resolve_cwd_bundle()
+    bundle = _resolve_bundle_context(run)
     typer.echo(
         f"ready corpus={corpus.root} docs={session.n_docs} "
         f"chunks={session.n_chunks}"

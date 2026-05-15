@@ -5,7 +5,15 @@
 # index builder to exclude chunks and by distill to skip at extraction time.
 # Centralised here so ingest and distill stay in sync.
 SKIP_SECTION_TYPES: frozenset[str] = frozenset(
-    {"references", "acknowledgments", "appendix"}
+    {
+        "references",
+        "acknowledgments",
+        "appendix",
+        "figure",
+        "table",
+        "caption",
+        "boilerplate",
+    }
 )
 
 # -- chunking ----------------------------------------------------------------

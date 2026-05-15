@@ -225,6 +225,8 @@ def chunk_item(chunk: Chunk, *,
         "meta": {
             "doc_handle": format_handle("doc", chunk.doc_id),
             "section_path": list(chunk.section_path or []),
+            "kind": chunk.section_type or "body",
+            "is_boilerplate": bool(chunk.is_boilerplate),
         },
     }
     if full:
@@ -250,6 +252,8 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
         meta["section_path"] = list(row.get("section_path") or [])
     if "section_type" in row:
         meta["kind"] = str(row.get("section_type") or "body")
+    if "is_boilerplate" in row:
+        meta["is_boilerplate"] = bool(row.get("is_boilerplate"))
     return {
         "handle": format_handle("chunk", chunk_id),
         "type": "chunk",
@@ -360,6 +364,10 @@ def traverse_row_item(row: dict) -> dict:
         }
         if "section_path" in row:
             meta["section_path"] = list(row.get("section_path") or [])
+        if "section_type" in row:
+            meta["kind"] = str(row.get("section_type") or "body")
+        if "is_boilerplate" in row:
+            meta["is_boilerplate"] = bool(row.get("is_boilerplate"))
         if "ord" in row and row.get("ord") is not None:
             meta["ord"] = int(row["ord"])
         return {

@@ -71,6 +71,38 @@ BOILERPLATE_MARKERS: tuple[str, ...] = (
 )
 _BOILERPLATE_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in BOILERPLATE_MARKERS)
 
+# Patterns that, even when they appear ONCE in a short chunk, mark it as
+# header/footer/admin boilerplate. These are unambiguous metadata markers
+# — finding one of them in the leading text of a chunk is enough.
+DEFINITIVE_BOILERPLATE_MARKERS: tuple[str, ...] = (
+    # DoD / DTIC standard cover-sheet (SF298) preamble.
+    r"\bForm\s+Approved\s+OMB\s+No\.",
+    r"\bpublic\s+reporting\s+burden\b",
+    # Journal "Article history / Received / Accepted / Available online".
+    r"\bArticle\s+history\b",
+    r"\bReceived\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"\bAccepted\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"\bAvailable\s+online\s+\d",
+    # Keyword block at the head of a paper.
+    r"^\s*Keywords?\s*:\s*\S",
+    r"^\s*A\s*R\s*T\s*I\s*C\s*L\s*E\s+I\s*N\s*F\s*O\b",
+    # Pure ISSN / DOI / journal-homepage banners (short metadata chunks).
+    r"^\s*ISSN[:\s-]+\d{4}\b",
+    r"^\s*DOI\s*:\s*10\.\d{4,9}/",
+    r"\bjournal\s+homepage\s*:",
+    # Copyright / © / rights-reserved one-liners.
+    r"^\s*©\s*\d{4}",
+    r"^\s*Copyright\s+©?\s*\d{4}",
+    # Numbered references-list dumps that slipped past section_classifier.
+    # Match three or more consecutive numbered entries in one chunk.
+    r"(?:^|\n)\s*[\(\[]\d+[\)\]]\s+[A-Z][a-zA-Z\-]+,\s+[A-Z]\.[A-Z\.\s]*?[;,]"
+    r"[\s\S]{0,400}?"
+    r"(?:^|\n)\s*[\(\[]\d+[\)\]]\s+[A-Z][a-zA-Z\-]+,",
+)
+_DEFINITIVE_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE | re.MULTILINE) for p in DEFINITIVE_BOILERPLATE_MARKERS
+)
+
 # A chunk this long is almost certainly substantive content even if it
 # contains a few boilerplate phrases (e.g., a long review paper section
 # that quotes a license notice). Above this floor, never flag.
@@ -126,6 +158,13 @@ def is_boilerplate(text: str, section_path: list[str] | None = None) -> bool:
     """
     if _section_path_is_boilerplate(section_path):
         return True
+    # Definitive single-hit patterns: scoped to the chunk's leading region
+    # (first ~600 chars) so a passing mention in the middle of a long body
+    # chunk does not trigger. The patterns themselves are unambiguous.
+    head = text[:600]
+    for pattern in _DEFINITIVE_PATTERNS:
+        if pattern.search(head):
+            return True
     if len(text.split()) > BOILERPLATE_MAX_WORDS:
         return False
     spans: list[tuple[int, int]] = []
