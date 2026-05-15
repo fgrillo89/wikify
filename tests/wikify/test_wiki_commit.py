@@ -21,6 +21,7 @@ from wikify.bundle.draft.validator import validate_response
 from wikify.bundle.run.events import read_events
 from wikify.bundle.run.lifecycle import init_run
 from wikify.bundle.wiki.commit import CommitGateError, commit_page
+from wikify.bundle.wiki.page import parse_page
 from wikify.bundle.work.card import create_concept, load_card
 from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
 
@@ -87,6 +88,7 @@ def test_commit_writes_wiki_page(tmp_path: Path) -> None:
     assert "wiki/articles" in str(result.page_path).replace("\\", "/")
     text = result.page_path.read_text(encoding="utf-8")
     assert "Atomic Layer Deposition" in text
+    assert "links: []" in text
 
 
 def test_commit_updates_concept_card(tmp_path: Path) -> None:
@@ -138,6 +140,79 @@ def test_commit_rejects_when_validation_failed(tmp_path: Path) -> None:
     write_json(verdict_p, verdict)
     with pytest.raises(CommitGateError, match="ok=false"):
         commit_page(bundle, slug=slug)
+
+
+def test_commit_infers_links_from_existing_committed_pages(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    commit_page(bundle, slug=slug)
+
+    mem_slug, _ = create_concept(bundle, page_id="Memristor")
+    corpus = _make_corpus(tmp_path / "corpus2")
+    append_evidence(
+        bundle, mem_slug, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
+    )
+    build_draft(
+        bundle,
+        slug=mem_slug,
+        corpus=corpus,
+        model_id="claude-sonnet-4-6",
+        tier="M",
+    )
+    chunk_text = read_json(draft_path(bundle, mem_slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    payload = _good_response_payload(quote)
+    payload["page_id"] = "Memristor"
+    payload["body_markdown"] = payload["body_markdown"].replace(
+        "Atomic Layer Deposition", "Memristor"
+    )
+    payload["body_markdown"] = payload["body_markdown"].replace(
+        "advanced semiconductor nodes [^e1].",
+        "advanced semiconductor nodes and Atomic Layer Deposition workflows [^e1].",
+    )
+    write_json(response_path(bundle, mem_slug), payload)
+    validate_response(bundle, mem_slug)
+
+    result = commit_page(bundle, slug=mem_slug)
+
+    text = result.page_path.read_text(encoding="utf-8")
+    assert 'links: ["Atomic Layer Deposition"]' in text
+
+
+def test_commit_links_with_commas_round_trip(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    comma_quote = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"][:30].strip()
+    comma_payload = _good_response_payload(comma_quote)
+    comma_payload["page_id"] = "Chua, Circuit Theory"
+    write_json(response_path(bundle, slug), comma_payload)
+    validate_response(bundle, slug)
+    commit_page(bundle, slug=slug)
+
+    mem_slug, _ = create_concept(bundle, page_id="Memristor")
+    corpus = _make_corpus(tmp_path / "corpus3")
+    append_evidence(
+        bundle, mem_slug, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
+    )
+    build_draft(
+        bundle,
+        slug=mem_slug,
+        corpus=corpus,
+        model_id="claude-sonnet-4-6",
+        tier="M",
+    )
+    quote = read_json(draft_path(bundle, mem_slug))["evidence"][0]["chunk_text"][:30].strip()
+    payload = _good_response_payload(quote)
+    payload["page_id"] = "Memristor"
+    payload["body_markdown"] = payload["body_markdown"].replace(
+        "advanced semiconductor nodes [^e1].",
+        "advanced semiconductor nodes and Chua, Circuit Theory [^e1].",
+    )
+    write_json(response_path(bundle, mem_slug), payload)
+    validate_response(bundle, mem_slug)
+
+    result = commit_page(bundle, slug=mem_slug)
+
+    page = parse_page(result.page_path)
+    assert page.links == ["Chua, Circuit Theory"]
 
 
 def test_rebuild_index_lists_committed_pages(tmp_path: Path) -> None:

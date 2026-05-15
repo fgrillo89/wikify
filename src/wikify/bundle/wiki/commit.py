@@ -22,6 +22,7 @@ the end of a workflow.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,23 +60,69 @@ class CommitResult:
 
 def _parse_evidence_from_body(body_markdown: str) -> list[Evidence]:
     """Extract ``[^eN]: <doc_id> > "<quote>"`` entries from the References block."""
+    from .page import _extract_evidence
+
+    return [
+        Evidence(
+            marker=ev.marker,
+            chunk_id=ev.chunk_id,
+            doc_id=ev.doc_id,
+            quote=ev.quote,
+            locator=ev.locator,
+        )
+        for ev in _extract_evidence(body_markdown)
+    ]
+
+
+def _norm_tokens(text: str) -> set[str]:
     import re
 
-    out: list[Evidence] = []
-    pattern = re.compile(
-        r'^\[\^e(?P<n>\d+)\]:\s*(?P<doc_id>[^>\s]+)(?:[^>]*)>\s*"(?P<quote>.+?)"\s*$',
-        re.MULTILINE,
-    )
-    for m in pattern.finditer(body_markdown):
-        out.append(
-            Evidence(
-                marker=f"e{m.group('n')}",
-                chunk_id="",
-                doc_id=m.group("doc_id"),
-                quote=m.group("quote"),
-            )
-        )
-    return out
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9+-]*", text.lower())
+        if len(token) > 2
+    }
+
+
+def _phrase_present(text: str, phrase: str) -> bool:
+    import re
+
+    phrase = phrase.strip()
+    if not phrase:
+        return False
+    return re.search(rf"\b{re.escape(phrase.lower())}\b", text.lower()) is not None
+
+
+def _infer_links(bundle: Bundle, *, page: WikiPage) -> list[str]:
+    """Infer stable wiki links from current committed pages.
+
+    Writers cannot emit body wikilinks and ``WriteResponse`` has no
+    ``links`` field. This deterministic projection gives the wiki graph a
+    useful baseline signal from explicit mentions and shared evidence.
+    """
+    from .page import load_bundle
+
+    wiki_root = bundle.wiki_dir
+    if not wiki_root.exists():
+        return []
+    existing = load_bundle(wiki_root).pages
+    page_text = page.body_markdown.lower()
+    page_docs = {ev.doc_id for ev in page.evidence if ev.doc_id}
+    page_tokens = _norm_tokens(page.title + "\n" + page.body_markdown)
+    scored: list[tuple[int, str]] = []
+    for other in existing:
+        if other.id == page.id:
+            continue
+        names = [other.title, other.id, *list(other.aliases or [])]
+        direct = any(_phrase_present(page_text, name) for name in names)
+        other_docs = {ev.doc_id for ev in other.evidence if ev.doc_id}
+        doc_overlap = len(page_docs & other_docs)
+        other_tokens = _norm_tokens(other.title + "\n" + other.body_clean)
+        token_overlap = len(page_tokens & other_tokens)
+        score = (1000 if direct else 0) + doc_overlap * 100 + token_overlap
+        if score > 0 and (direct or doc_overlap > 0):
+            scored.append((score, other.id))
+    return [page_id for _, page_id in sorted(scored, reverse=True)[:5]]
 
 
 def commit_page(
@@ -139,6 +186,7 @@ def commit_page(
             body_markdown=body_markdown,
             evidence=evidence,
         )
+        page.links = _infer_links(bundle, page=page)
 
         target_dir = (
             bundle.wiki_articles_dir
@@ -234,7 +282,8 @@ def _render_page(page: WikiPage) -> str:
     lines.append(f"id: {page.id}")
     lines.append(f"kind: {page.kind}")
     lines.append(f"title: {page.title}")
-    lines.append(f"aliases: [{', '.join(page.aliases)}]")
+    lines.append(f"aliases: {json.dumps(list(page.aliases or []))}")
+    lines.append(f"links: {json.dumps(list(page.links or []))}")
     if page.kind == "person":
         lines.append("tags: [author]")
     lines.append("---")

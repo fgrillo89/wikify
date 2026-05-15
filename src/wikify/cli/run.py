@@ -8,6 +8,8 @@ Subcommands::
     run lock   --run <b> [--owner <id>]
     run unlock --run <b>
     run close  [--run <b>] [--status completed|failed|abandoned]
+    run record-call [--run <b>] --role <r> --model-id <m> --tier S|M|L
+                    --tokens-in N --tokens-out N [--stage <s>]
 
 ``--run <bundle>`` overrides; otherwise the current working directory
 must be a bundle root (``run/state.json`` present).
@@ -241,6 +243,80 @@ def cmd_close(
         typer.echo(json.dumps({"ok": True, "run_id": state.run_id, "status": state.status}))
     else:
         typer.echo(f"run {state.run_id} -> {state.status}")
+
+
+@app.command("record-call")
+def cmd_record_call(
+    run: Path | None = typer.Option(None, "--run"),
+    role: str = typer.Option(..., "--role"),
+    model_id: str = typer.Option(..., "--model-id"),
+    tier: str = typer.Option(..., "--tier"),
+    tokens_in: int = typer.Option(..., "--tokens-in"),
+    tokens_out: int = typer.Option(..., "--tokens-out"),
+    stage: str = typer.Option("model_call", "--stage"),
+    concept_id: str | None = typer.Option(None, "--concept-id"),
+    page_id: str | None = typer.Option(None, "--page-id"),
+    wall_seconds: float = typer.Option(0.0, "--wall-seconds"),
+    actor: str = typer.Option("agent", "--actor"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Append a model-call telemetry event emitted by an agent harness.
+
+    Python does not call the model SDK. This command gives skills a
+    deterministic bridge for token accounting after each extractor or
+    writer Task returns.
+    """
+    if tokens_in < 0 or tokens_out < 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_tokens",
+            message="--tokens-in and --tokens-out must be >= 0",
+        )
+    if wall_seconds < 0:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_wall_seconds",
+            message="--wall-seconds must be >= 0",
+        )
+    bundle = _resolve_bundle(run)
+    state = load_state(bundle)
+    try:
+        from ..bundle.run.cost import haiku_eq_for
+        cost_haiku_eq = haiku_eq_for(tier, tokens_in, tokens_out)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_tier", message=str(exc))
+
+    payload = {
+        "role": role,
+        "model_id": model_id,
+        "tier": tier,
+        "stage": stage,
+        "input_tokens": tokens_in,
+        "output_tokens": tokens_out,
+        "haiku_eq": cost_haiku_eq,
+        "cost_haiku_eq": cost_haiku_eq,
+        "cost_usd": 0.0,
+        "wall_seconds": wall_seconds,
+    }
+    append_event(
+        bundle,
+        Event(
+            run_id=state.run_id,
+            type="call",
+            actor=actor,
+            concept_id=concept_id,
+            page_id=page_id,
+            stage=stage,
+            data=payload,
+        ),
+    )
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, **payload}))
+    else:
+        typer.echo(
+            f"recorded call role={role} model={model_id} tier={tier} "
+            f"tokens={tokens_in}+{tokens_out} haiku_eq={cost_haiku_eq:.1f}"
+        )
 
 
 @app.command("set")

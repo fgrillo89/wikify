@@ -100,6 +100,12 @@ _STRIP_SECTIONS = {"evidence", "references", "boilerplate"}
 def _parse_scalar(value: str) -> str | list[str]:
     value = value.strip()
     if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
         inner = value[1:-1].strip()
         if not inner:
             return []

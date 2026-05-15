@@ -91,7 +91,17 @@ def _consolidate_concept_suggestions(bundle: Bundle) -> int:
         aliases = r.get("aliases") or []
         if not isinstance(aliases, list):
             aliases = []
-        create_concept(bundle, page_id=title, kind=kind, aliases=list(aliases))
+        seed_doc_handles = r.get("seed_doc_handles") or []
+        if not isinstance(seed_doc_handles, list):
+            seed_doc_handles = []
+        seed_doc_handles = [str(h) for h in seed_doc_handles if isinstance(h, str)]
+        create_concept(
+            bundle,
+            page_id=title,
+            kind=kind,
+            aliases=list(aliases),
+            seed_doc_handles=seed_doc_handles or None,
+        )
         existing.add(s)
         created += 1
     truncate_inbox(bundle, "concept_suggestions")
