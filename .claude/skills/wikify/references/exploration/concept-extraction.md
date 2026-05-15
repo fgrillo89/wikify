@@ -19,6 +19,11 @@ It is prompt/reference material, not an exploration strategy.
 - `equations`: formulas or equations present in supplied context.
 - `evidence_figures`: figure ids directly discussed.
 - `cited_refs`: citation ordinals directly relevant to the concept.
+- `seed_doc_handles`: corpus doc handles (e.g. `doc:abc12345`) the
+  extractor saw and judged relevant to this concept. Must be drawn ONLY
+  from the doc handles supplied in the sampled bodies; do not invent
+  handles. Used downstream as a precision prior for evidence gathering.
+  An empty list signals "no high-confidence seeds among the sample".
 - `confidence`: extracted, inferred, or ambiguous.
 - `score`: 0.0-1.0.
 
@@ -27,6 +32,10 @@ It is prompt/reference material, not an exploration strategy.
 - Reuse a canonical title if the workflow supplies one.
 - The quote must be a verbatim substring of the observed text.
 - Person candidates use `kind="person"` and omit technical parameters.
+  When the candidate resolves to a corpus author handle, include the
+  handle as an alias in the exact form `author:<key>`. Do not invent an
+  author key; add the alias only after `corpus find --by author` or
+  `corpus show author:<key>` has resolved it.
 - Prefer fewer high-value concepts over noisy phrase extraction.
 - Flag merge/split ambiguity for the workflow rather than inventing a
   final ontology decision.

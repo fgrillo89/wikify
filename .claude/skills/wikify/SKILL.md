@@ -34,7 +34,9 @@ Workflow skills own strategy. They compose the core skills and decide
 what to inspect, when to write, how much to spend, how much parallelism
 to use, and when to stop.
 
-- `wikify-baseline` - baseline strategy over a fresh or active bundle.
+- `wikify-baseline` - canonical simple-RAG baseline from corpus to
+  rendered HTML, with extractor-driven concepts, person-page attempt,
+  render, eval, and inspection.
 - `wikify-guided-explore` - model-guided exploration loop.
 - `wikify-query` - answer from wiki with corpus fallback and feedback.
 - `wikify-refine` - refine committed pages from inbox/new evidence.

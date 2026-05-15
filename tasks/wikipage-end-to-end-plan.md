@@ -1,265 +1,373 @@
-# End-to-end wikipage artifact — plan
+# End-to-end Wikify plan
 
 Status: proposed (2026-05-14)
-Decisions captured below; live until executed or superseded.
 
-## TL;DR
+## Objective
 
-Baseline conventional RAG is already shipped end-to-end (citation gate
-at write-time and re-checked at commit). The next step toward an
-end-to-end wikipage artifact is **measurement, then graph-RAG additions
-ablated against that measurement, with native graph viz built on the
-same trace artifact that drives the ablation**. Ship in this order:
+Ship a first end-to-end Wikipedia-style wiki generated from a corpus,
+rendered as a usable static HTML site, using a simple conventional
+RAG-based strategy.
 
-1. Trace + retrieval-eval instrumentation (Phase 1)
-2. Baseline gauntlet on the current ALD Docling corpus (Phase 0,
-   gated on Phase 1 so numbers are directly comparable later)
-3. Graph viz MVP and graph-RAG additions in parallel (Phase 2 + 3a)
-4. Re-run gauntlet with graph-RAG additions; compare (Phase 3c)
-5. Guided mode on the new affordances; A/B vs scripted (Phase 4)
-6. Defer figures/equations citations, reranker, summary tier
-   (Phase 5)
+That first shipped artifact is the baseline. After it exists, Wikify can
+study exploration and writing strategies by running different skill
+recipes over the same corpus/budget/eval harness and comparing quality,
+cost, wall-clock, telemetry, and evaluation metrics.
 
-## Decisions captured
+The project goal is not just "make pages once." The durable goal is a
+skill-driven laboratory for scientific-article wikification:
 
-- **Corpus**: current ALD Docling corpus under
-  `data/corpora/ald_docling_*` (latest snapshot at run time).
-- **Order**: Phase 1 first, then Phase 0. The gauntlet captures the
-  new telemetry from the start so the first baseline numbers become a
-  directly comparable anchor for every later ablation.
-- **Stale memory entry** (`project_retrieval_strategies.md` claims 5
-  strategies + hub-spoke that don't exist in code): leave for later.
+- skills own exploration and writing strategy;
+- Python exposes deterministic corpus, bundle, draft, wiki, render, and
+  eval primitives;
+- every run leaves enough telemetry to compare strategies;
+- every committed page passes citation grounding;
+- the final wiki is browsable and polished enough to inspect as a real
+  product, not only as markdown files.
 
-## Phase 1 — Trace + retrieval-eval instrumentation
+## Non-negotiable design constraints
 
-Two-for-one: prerequisite for measuring graph-RAG gains AND the data
-source for the viz.
+- Strategy lives in `.claude/skills/wikify-*`, not in Python workflow
+  controllers.
+- The simple baseline should be boring: sample/search, collect evidence,
+  write, validate, commit, render, eval.
+- `run/events.jsonl` remains the canonical telemetry ledger. Any
+  retrieval trace or visualization export is derived from events unless
+  the architecture explicitly promotes a second artifact.
+- The first run prioritizes one complete wiki bundle over advanced
+  retrieval features.
+- The renderer is part of the product surface. A run is not end-to-end
+  until `wikify render` produces a static site that can be inspected.
 
-### 1a. Promote `TraceContext` to a stable artifact
+## Phase 0 - Pick the first corpus and acceptance target
 
-Source: `src/wikify/corpus/graph.py:574` (`TraceContext`, append-only,
-debug-only today).
+Goal: define the exact "first wiki" so the workflow has a concrete
+finish line.
 
-Target: `<bundle>/run/retrieval.jsonl`, one JSON per CLI/MCP retrieval
-op, schema:
+Tasks:
 
-```
-{
-  "step": int,                  // monotonic per run
-  "tool": str,                  // corpus_find | corpus_show | ... | wiki_find | ...
-  "args": object,               // call args, redacted
-  "touched_ids": [str],         // chunk_id / doc_id / asset_id ...
-  "latency_ms": int,
-  "parent_step": int | null,    // for nested calls
-  "narrative_hint": str,        // see 1b
-  "set_hash": str               // sha1(sorted(touched_ids))
-}
-```
+1. Pick and pin one corpus snapshot, preferably the current ALD Docling
+   corpus under `data/corpora/ald_docling_*`.
+2. Record the corpus path and manifest hash in the run notes or baseline
+   report. Do not use "latest" for the artifact run.
+3. Choose a modest target size:
+   - 10-20 article pages;
+   - optional person pages only if bibliography metadata is clean enough;
+   - no query-driven refinement in the first run.
+4. Define minimum acceptance:
+   - pages are full encyclopedic articles, not stubs;
+   - citation validation passes at `draft check` and `wiki commit`;
+   - `wikify wiki check` passes;
+   - `wikify render --format html` writes a browsable site;
+   - `wikify eval --bundle ... --corpus ...` writes `derived/eval.json`;
+   - run closes with telemetry and cost summary.
 
-Stable schema so it survives ablation runs. Emitted by the same
-boundary that already writes `cli_invoked` / `chunk_read` events into
-`run/events.jsonl`.
+Exit criteria:
 
-### 1b. Derive `narrative_hint`
+- A pinned corpus and target bundle name are written in the run notes.
+- The first-wiki acceptance checklist is explicit and small enough to
+  complete before adding new retrieval features.
 
-Compute per step from the delta of `touched_ids` vs the union of
-previous steps:
+## Phase 1 - Sharpen the simple RAG baseline skill
 
-- `hub_expansion`: this step's touched set is a strict superset of
-  the previous step's set (drilled deeper into the same area)
-- `lateral_jump`: zero overlap with previous step
-- `backtrack`: non-empty intersection with a step >=2 back, but not
-  with the immediately previous step
-- `revisit`: identical `set_hash` to a prior step
-- `terminal_write`: this step deposited evidence into a `work/`
-  draft
+Goal: make `wikify-baseline` a reliable end-to-end recipe that an agent
+can follow without inventing missing workflow decisions.
 
-This is the one transferable concept from memtrace-public; everything
-else there is closed-source.
+The baseline strategy:
 
-### 1c. M7 retrieval-recall@k metric
+1. Initialize/open a bundle.
+2. Sample diverse documents from the corpus.
+3. Extract candidate article/person concepts from sampled text.
+4. Add accepted concepts to `work/`.
+5. For each concept, run conventional retrieval:
+   - `corpus find "<concept>" --rank all --top-k N`;
+   - `corpus show chunk:<id> --full` for selected chunks;
+   - optionally one-hop `corpus traverse` only when needed for context.
+6. Add grounded evidence to the concept ledger.
+7. Build the draft input.
+8. Invoke writer subagents through `wikify-write-page`.
+9. Check, commit, release, and tend.
+10. Rebuild projections, render HTML, evaluate, and close the run.
 
-New metric next to the existing M5 hit-rate in `src/wikify/eval/metrics.py`:
+Skill work:
 
-```
-M7 = | retrieved chunks ∩ chunks_used_as_evidence | / | chunks_used_as_evidence |
-```
+- Update `wikify-baseline/SKILL.md` so the end-to-end loop includes
+  render and eval as first-class final steps.
+- Make baseline defaults explicit for the first run:
+  - sample count;
+  - evidence `top_k`;
+  - maximum concepts;
+  - writer tier;
+  - writer concurrency;
+  - claim TTL;
+  - retry/escalation behavior.
+- Tighten the evidence-gathering instructions so the skill records why
+  each chunk was selected and avoids dumping low-value retrieval hits
+  into the writer.
+- Ensure the writer skill still produces Wikipedia-style prose, natural
+  titles, no visible wikilinks in prose, and citation definitions with
+  verbatim source quotes.
+- Add a brief "first artifact mode" section: no graph-RAG, no summaries,
+  no reranker, no query refinement, no figure/equation citation changes.
 
-M5 measures retrieval-to-evidence funnel quality given a strategy;
-M7 isolates retrieval recall before any selection. Together they
-ablate retrieval changes from writing changes.
+Exit criteria:
 
-### 1d. Backfill scripted + guided skills
+- The baseline skill can be followed from empty bundle to rendered site.
+- The skill makes no hidden strategy assumptions that only live in a
+  task plan.
+- Running the baseline does not require new Python strategy code.
 
-Both `wikify-baseline` and `wikify-guided-explore` skills
-auto-inherit the new artifact (it lives at the corpus-CLI boundary,
-not in skills). No skill edit needed in this phase.
+## Phase 2 - Verify the mechanical pipeline end to end
 
-### Exit criteria for Phase 1
+Goal: prove the existing deterministic primitives support the first
+artifact before broadening strategy research.
 
-- `retrieval.jsonl` written for every retrieval op in a smoke run
-- M7 computed at end-of-run alongside M1..M6
-- Schema documented in `docs/architecture.md` evidence-flow section
-- Targeted tests under `tests/wikify/eval/` and
-  `tests/wikify/corpus/`
+Checks:
 
-## Phase 0 — Baseline gauntlet on the current ALD Docling corpus
+1. Run lifecycle:
+   - `wikify run init`
+   - `wikify run show`
+   - `wikify run close`
+2. Work lifecycle:
+   - `work add concept`
+   - `work add evidence`
+   - `work claim/release`
+   - `work tend`
+3. Draft/wiki lifecycle:
+   - `draft build`
+   - writer writes `response.json`
+   - `draft check`
+   - `wiki commit`
+   - `wiki build indexes|graph|vectors` where required
+4. Render:
+   - `wikify render --bundle <bundle> --format html`
+   - inspect generated `derived/site/index.html`;
+   - verify article pages, people pages, references, navigation, and
+     links render correctly.
+5. Eval:
+   - `wikify eval --bundle <bundle> --corpus <corpus>`;
+   - verify M1, M3, M5, M6, telemetry, and cost fields are populated
+     or explicitly unavailable.
 
-Once Phase 1 lands.
+Render quality checks:
 
-- Pick latest `data/corpora/ald_docling_*`
-- `wikify-baseline` skill, K=20 concepts, 4 parallel writers,
-  claim TTL 1800 s
-- Capture M1, M2, M3, M5, M6, M7 plus token cost (haiku-equivalent)
-  and wall-clock into `eval/baselines/2026-05-XX.json` (date stamp at
-  run time)
-- Snapshot the per-page `retrieval.jsonl` so future ablations have a
-  comparable trace set
+- The static site should feel like a compact encyclopedia, not a debug
+  dump.
+- Pages need readable typography, clear reference formatting, working
+  navigation, and usable index pages.
+- Missing figures/equations should degrade gracefully.
+- Render output is deterministic and read-only.
 
-This is the "before" picture. Without it, every graph-RAG ablation is
-unmoored.
+Exit criteria:
 
-## Phase 2 — Graph viz MVP
+- A smoke-sized bundle can be built, committed, rendered, and evaluated.
+- Any blocker is fixed in the smallest deterministic primitive that owns
+  it, not papered over in the skill.
 
-Cytoscape.js, single self-contained HTML file per render. Three views:
+## Phase 3 - Ship the first end-to-end wiki
 
-```
-src/wikify/viz/
-  builder.py       # corpus_graph(), wiki_graph(), trace_graph()
-  template.html    # cytoscape UMD inlined + JSON placeholder + UI shell
-  render.py        # fills placeholder, writes single HTML to outdir
-```
+Goal: create the first real artifact with simple RAG.
 
-CLI: `wikify viz {corpus|wiki|trace} [--out path] [--compare scripted=<id> guided=<id>]`.
+Run shape:
 
-### Trace view (the novel one)
+- Corpus: pinned Phase 0 corpus.
+- Strategy: `wikify-baseline`.
+- Target: 10-20 committed article pages.
+- Retrieval: conventional hybrid/BM25/semantic retrieval through
+  `corpus find --rank all`, with selected chunks shown before evidence
+  insertion.
+- Writing: current `wikify-write-page` contract.
+- Validation: `draft check` and `wiki commit` gates.
+- Output:
+  - committed wiki under `wiki/`;
+  - rendered site under `derived/site/`;
+  - eval report under `derived/eval.json`;
+  - telemetry under `run/events.jsonl`.
 
-- Top scrubber bar: linear timeline, click any step to jump to it
-- Play / Pause / Step controls; replay animates the build-up
-- Active-step subgraph highlighted, rest dimmed
-- Edges colored by step ordinal (viridis); revisited nodes get a
-  count badge
-- Header live counters: total steps, unique nodes touched, revisit
-  rate, branching factor, longest citation chain, mean hop distance
-- Linked views: click step -> isolate induced edges; click node ->
-  filter step list to steps that touched it
+First artifact report:
 
-### Compare mode
+- bundle path;
+- corpus path and manifest hash;
+- strategy name and skill revision;
+- number of pages committed/failed;
+- cost in haiku-equivalent tokens;
+- wall-clock time;
+- M1, M3, M5, M6;
+- known content gaps;
+- render inspection notes.
 
-`--compare scripted=<id> guided=<id>` emits scripted vs guided
-side-by-side in one HTML. Directly answers "is the model being
-smart?" by visual diff of strategy shape.
+Exit criteria:
 
-### Stack rationale
+- The generated HTML site is the primary artifact for human inspection.
+- The markdown wiki, eval report, and telemetry are complete enough to
+  reproduce and critique the run.
+- The run gives a concrete baseline for later strategy comparisons.
 
-- Cytoscape.js: single ~1 MB UMD bundle inlines cleanly; force /
-  cose / dagre / breadthfirst layouts built-in; compound nodes
-  (paper -> chunks); selectors; click/hover; canvas backend handles
-  ~10k nodes
-- Self-contained HTML: aligns with the project's "files are the
-  interface" CLI philosophy; opens in Obsidian preview or any
-  browser; no server, no build step
-- Skipped: D3 (more code, larger artifact), Sigma.js (WebGL
-  complicates single-file), Pyvis (dated API, fights time-axis
-  needs), static SVG (interaction is the value)
+## Phase 4 - Strengthen eval and telemetry for strategy science
 
-## Phase 3 — Graph-RAG additions
+Goal: after the first artifact exists, make comparisons rigorous.
 
-Ordered by investment. 3a and 3b ship together; 3c is the
-measurement; 3d and 3e are gated on what 3c reveals.
+Near-term eval work:
 
-### 3a. Personalized PageRank + co-citation edges (L+L)
+- Ensure `wikify eval` reports the current core metrics cleanly:
+  - M1 coverage residual;
+  - M3 graph crystallinity on evidence/link graphs;
+  - M5 hit rate from `chunk_read` events;
+  - M6 grounding gate;
+  - telemetry/cost rollup.
+- Add or finish GT-P and GT-C reporting if the corpus metadata supports
+  them.
+- Make eval output stable enough for a run matrix: one JSON report per
+  bundle, plus a small comparison script/report if needed.
 
-- PPR: `nx.pagerank(g, personalization={node: weight})` exposed as
-  `corpus find --near-set <handles>`. Wraps next to
-  `refresh_pagerank` in `src/wikify/corpus/store/metrics_global.py`.
-- Co-citation edges: pure SQL join over
-  `chunk_citations join bib_entries on target_doc_id`. New
-  `graph_edges.kind = 'co_cited_with'`. New CLI relation:
-  `traverse doc:X --to co-cited`.
-- Audit `src/wikify/ingest/coupling.py` first; if it already builds
-  bibliographic-coupling edges, wire it through instead of
-  reimplementing.
+Telemetry work:
 
-### 3b. Leiden communities at ingest (L)
+- Keep `run/events.jsonl` as the source of truth.
+- Audit retrieval-producing surfaces so CLI and MCP reads emit comparable
+  telemetry where the active bundle is known.
+- If retrieval recall is needed, first define an event-level schema for
+  ranked retrieval candidate sets:
+  - query;
+  - tool/mode/ranker;
+  - concept/page target when known;
+  - `top_k`;
+  - ordered candidate chunk ids with scores;
+  - selected evidence ids, if selection happens in the same step.
+- Only then add an M7-style retrieval recall metric. Do not add a metric
+  before the producer is trustworthy.
 
-- Run Leiden on the `corpus_citation` view at
-  `wikify corpus build`. `eval/community.py:louvain_communities`
-  already exists; reuse.
-- Persist `community_id` per node in `node_metrics`.
-- New CLI ranker: `corpus find --by community` for
-  diversity-aware seeding.
-- No LLM summaries yet — just the partition.
+Run-matrix requirements:
 
-### 3c. Re-run baseline gauntlet with 3a + 3b
+- Pin corpus snapshot.
+- Run multiple budget points.
+- Run multiple seeds where the workflow has stochastic choices.
+- Compare curves over cost, not only one-off scalar results.
 
-- Same K=20 concepts, same writer tier, same claim TTL
-- Compare every metric to Phase 0 baseline
-- Open trace viz with `--compare baseline=<id> graph_rag=<id>` to
-  see strategy shift visually
+Exit criteria:
 
-### 3d. LLM community summaries (M, gated on 3c)
+- Eval can compare at least two bundles without manual spreadsheet work.
+- Missing metrics are reported as unavailable, not zero.
+- The telemetry needed by M5 and any future M7 has an end-to-end test.
 
-Only ship if Phase 3c shows survey-kind pages bottlenecked on global
-context.
+## Phase 5 - Create explicit strategy variants in skills
 
-- Generate summaries at one or two Leiden levels
-- Persist `community_id -> chunk_ids` so the writer cites leaves,
-  never summaries
-- New retrieval verb `corpus find --community <id>`
+Goal: turn Wikify into a controlled exploration/writing strategy lab.
 
-### 3e. Per-concept lazy RAPTOR-lite (M, deferred)
+Do this after the simple baseline artifact ships.
 
-- Per concept, cluster the ~50-200 chunks PPR returns; one summary
-  call; use summary as lede-context, leaves as evidence
-- Multi-granularity context per page without a corpus-wide tree
-- Re-evaluate after 3a-3d data lands
+Initial strategy cells:
 
-### Skipped
+- `baseline-simple-rag`: fixed sample, fixed retrieval, fixed writer.
+- `baseline-citation-walk`: conventional retrieval plus citation walk
+  expansion.
+- `guided-simple-rag`: model-guided choice of next concept/search while
+  using the same conventional retrieval primitives.
+- `guided-gap-fill`: guided loop that reads current wiki/work state and
+  chooses whether to add a concept, add evidence, refine, or stop.
 
-- Full Microsoft GraphRAG indexing (cost-prohibitive at scientific-
-  paper scale; global Leiden makes incremental ingest painful)
-- Pre-computing similarity edges (vector search IS similarity; lesson
-  already captured in `tasks/lessons.md`)
+Skill requirements:
 
-## Phase 4 — Guided mode with new affordances
+- Each strategy has explicit:
+  - loop shape;
+  - allowed retrieval primitives;
+  - budget policy;
+  - writer tier;
+  - concurrency;
+  - stop criteria;
+  - retry policy.
+- Shared mechanics stay in capability skills:
+  - `wikify-search-corpus`;
+  - `wikify-search-wiki`;
+  - `wikify-write-page`;
+  - `wikify-bundle`.
+- New strategies should be new workflow skills or clearly named skill
+  sections, not Python controllers.
 
-- `wikify-guided-explore` skill picks up PPR + community verbs
-  automatically (they're CLI verbs, the skill enumerates the catalog)
-- Re-run gauntlet on the same 20 concepts in guided mode with the
-  graph-RAG verbs available
-- Compare:
-  - Quality: M1, M2, M3, M5, M6, M7 vs scripted
-  - Cost: tokens, wall-clock
-  - Strategy: open `viz trace --compare scripted=... guided=...` and
-    inspect branching factor, revisit rate, hop distance
+Exit criteria:
 
-## Phase 5 — Deferred
+- At least two strategy recipes can produce independent bundles on the
+  same corpus.
+- Their differences are documented in skills, visible in telemetry, and
+  comparable in eval.
 
-Worth doing later, taxes both schema and writer prompt:
+## Phase 6 - Improve render as a product surface
 
-- Figures and equations as first-class citable evidence
-  (`[^fN]`, `[^xN]` markers; widen validator's substring grounding)
-- Cross-encoder or LLM reranker between RRF and writer
-- Summary-tier embeddings (paper-level abstracts and / or section-level
-  rolled-up summaries as a sibling embedding space)
+Goal: make rendered wikis useful for reading and critique.
 
-## Open questions (still pending decisions)
+Work items:
 
-1. **Community detection**: ingest-time (cluster once at
-   `corpus build`) vs lazy at first query? Friendlier-to-skills vs
-   cheaper-on-ingest.
-2. **Figure / equation citation markers**: introduce `[^fN]` /
-   `[^xN]` (cleaner schema, more validator surface) vs keep them as
-   structured side-context (current).
-3. **Summary tier unit**: paper abstract (~10^3 docs), section
-   summary (~10^4 sections), or community summary (~10^2 communities)?
-4. **HippoRAG-style entity binding**: add a NER -> entity-node ingest
-   pass, or stay chunk-as-atom? Skipping until 3a-3c numbers tell us
-   it's a bottleneck.
+- Improve index/navigation for articles and people.
+- Make reference blocks easy to scan and jump to.
+- Render page metadata cleanly without exposing internal work-state
+  noise.
+- Preserve citation anchors and backlinks.
+- Render broken/missing links gracefully.
+- Add a deterministic render smoke test over a fixture bundle.
+- Add a visual/manual checklist for the first real site.
+
+Exit criteria:
+
+- A user can open the generated site and understand what the wiki covers,
+  navigate pages, inspect references, and spot gaps.
+- Render is robust enough to be part of every strategy run.
+
+## Phase 7 - Add graph-RAG and visualization as ablations
+
+Goal: only after the first simple-RAG baseline and eval harness exist,
+add retrieval affordances and measure whether they help.
+
+Candidate retrieval additions:
+
+- Personalized PageRank over a seed set.
+- Co-citation or bibliographic-coupling traversals.
+- Community-aware seeding.
+- Optional community summaries only if measured runs show global context
+  is a bottleneck.
+- Optional lazy per-concept summary/context layers only if writing quality
+  is bottlenecked after retrieval improves.
+
+Visualization:
+
+- Prefer a derived/export artifact fed by `events.jsonl`, eval reports,
+  and corpus/wiki graph projections.
+- A trace visualization should answer concrete strategy questions:
+  - breadth vs depth;
+  - revisits;
+  - dead-end searches;
+  - evidence conversion;
+  - guided vs scripted behavior.
+- Do not block the first wiki on visualization.
+
+Exit criteria:
+
+- Each graph-RAG addition is evaluated against the simple-RAG baseline.
+- Strategy changes are ablated one at a time where practical.
+- Visualization explains observed metrics; it is not a substitute for
+  metrics.
+
+## Deferred
+
+These are valuable, but should not block the first end-to-end wiki:
+
+- figures and equations as first-class citation markers;
+- cross-encoder or LLM reranker;
+- summary-tier embeddings;
+- HippoRAG-style entity binding;
+- full GraphRAG-style global indexing;
+- trace replay UI beyond the minimum needed for strategy debugging.
 
 ## Immediate next ticket
 
-Phase 1.1a + 1.1b + 1.1c: ship `run/retrieval.jsonl` artifact with
-derived `narrative_hint`, plus M7 in `eval/metrics.py`, plus tests.
-Land before kicking off the Phase 0 gauntlet.
+Sharpen `wikify-baseline` and the supporting capability-skill references
+so an agent can run:
+
+1. initialize bundle;
+2. sample/search corpus;
+3. extract concepts;
+4. collect evidence;
+5. write/check/commit pages;
+6. render HTML;
+7. eval;
+8. close run.
+
+Then execute a smoke-sized simple-RAG wiki on the pinned corpus and fix
+only blockers that prevent that first artifact from shipping.
