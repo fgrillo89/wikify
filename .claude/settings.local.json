@@ -29,7 +29,8 @@
       "mcp__wikify__corpus_schema",
       "mcp__wikify__corpus_sample",
       "mcp__wikify__corpus_find",
-      "mcp__wikify__corpus_show"
+      "mcp__wikify__corpus_show",
+      "mcp__Claude_Preview__preview_start"
     ]
   },
   "enableAllProjectMcpServers": true,

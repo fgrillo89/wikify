@@ -480,6 +480,32 @@ class WriteEvidenceRef(BaseModel):
     definition: str = ""  # concept definition from dossier
     summary: str = ""  # dossier summary of this chunk's contribution
     evidence_figures: list[str] = Field(default_factory=list)  # image IDs flagged by extractor
+    # Optional flanking chunks (ord-1 and ord+1 of the same doc), concatenated
+    # for the writer's synthesis context. Empty string when the workflow did
+    # not request adjacent context. Citations must still target chunk_id —
+    # the validator only checks ``quote`` against ``chunk_text``, not against
+    # ``context_window``.
+    context_window: str = ""
+    # Free-form label naming the sub-query / topic that retrieved this
+    # chunk. Empty for single-concept baseline; populated by refinement
+    # and exploration strategies that gather evidence via multiple
+    # sub-queries on one page. The dossier renderer groups by this when
+    # multiple distinct values exist.
+    source: str = ""
+    # LaTeX or text bodies of equations bound to this chunk via
+    # ``chunk_assets``. The dossier renderer surfaces these inline so
+    # the writer can wrap them in ``$...$`` regions. Empty when the
+    # corpus has no equation assets for the chunk.
+    chunk_equations: list[str] = Field(default_factory=list)
+    # Tables referenced by the chunk's text (e.g. "Table 2") and
+    # resolved against assets of asset_type='table' in the same
+    # document. Each entry is the asset caption + rendered content.
+    chunk_tables: list[str] = Field(default_factory=list)
+    # Figure captions referenced by the chunk's text (e.g. "Figure 3")
+    # and resolved against assets of asset_type='figure' in the same
+    # document. Caption text only; binary image content is not
+    # surfaced to the writer.
+    chunk_figures: list[str] = Field(default_factory=list)
 
 
 class WriteRequest(BaseModel):

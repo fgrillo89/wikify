@@ -12,6 +12,9 @@ from tests.wikify.test_corpus_queries import (
     _make_corpus,  # type: ignore  # noqa: E402
     _make_sqlite_only_corpus,  # type: ignore  # noqa: E402
 )
+from wikify.api import Bundle
+from wikify.bundle.run.events import read_events
+from wikify.bundle.run.lifecycle import init_run
 from wikify.cli import app
 
 runner = CliRunner()
@@ -115,6 +118,55 @@ def test_corpus_find_text(tmp_path: Path) -> None:
     assert "paper_0__c0000" in result.output
 
 
+def test_corpus_find_run_records_chunk_reads(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "run").mkdir()
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path=str(corpus.root))
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text",
+            "--top-k", "1",
+            "--run", str(bundle.root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    events = [e for e in read_events(bundle) if e.type == "chunk_read"]
+    assert len(events) == 1
+    assert events[0].chunk_id == "paper_0__c0000"
+
+
+def test_corpus_show_doc_full_run_records_chunk_reads(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "run").mkdir()
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path=str(corpus.root))
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "show", "doc:paper_0",
+            "--corpus", str(corpus.root),
+            "--full",
+            "--run", str(bundle.root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    events = [e for e in read_events(bundle) if e.type == "chunk_read"]
+    assert {e.chunk_id for e in events} == {"paper_0__c0000", "paper_0__c0001"}
+    assert {e.data["via"] for e in events} == {"corpus_show_doc_full"}
+
+
 def test_corpus_find_requires_query(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path / "c")
     # Empty query without --seed/--text mode is rejected.
@@ -133,6 +185,17 @@ def test_corpus_show_doc(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "paper_0" in result.output
     assert "Title 0" in result.output
+
+
+def test_corpus_show_doc_full_includes_markdown_body(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        ["corpus", "show", "doc:paper_0", "--corpus", str(corpus.root), "--full"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "---" in result.output
+    assert "Some body text." in result.output
 
 
 def test_corpus_show_doc_short_handle(tmp_path: Path) -> None:
@@ -192,6 +255,80 @@ def test_corpus_find_compact_includes_cites_column(tmp_path: Path) -> None:
     line = next(line for line in result.output.splitlines() if "chunk:" in line)
     cols = line.split("\t")
     assert any(col.startswith("chunk:") for col in cols)
+
+
+def test_corpus_find_exposes_and_excludes_caption_kind(make_sqlite_corpus) -> None:
+    from wikify.models import Chunk, Document
+
+    doc = Document(
+        id="p", source_path="src/p.md", kind="md", title="P",
+        metadata={}, markdown_path="markdown/p.md",
+        image_dir="images/p/", n_chunks=2, n_tokens=50,
+    )
+    chunks = [
+        Chunk(
+            id="p__c0", doc_id="p", ord=0,
+            text="Atomic layer deposition grows conformal films.",
+            char_span=(0, 45), section_path=["Body"], section_type="body",
+        ),
+        Chunk(
+            id="p__c1", doc_id="p", ord=1,
+            text="Figure 1. Atomic layer deposition reactor schematic.",
+            char_span=(46, 100), section_path=["__image__", "p/Figure_01"],
+            section_type="caption",
+        ),
+    ]
+    corpus = make_sqlite_corpus([(doc, chunks)])
+
+    shown = runner.invoke(
+        app,
+        [
+            "corpus", "find", "reactor schematic",
+            "--corpus", str(corpus.root), "--text", "--format", "compact",
+        ],
+    )
+    assert shown.exit_code == 0, shown.output
+    assert "kind=caption" in shown.output
+
+    filtered = runner.invoke(
+        app,
+        [
+            "corpus", "find", "reactor schematic",
+            "--corpus", str(corpus.root), "--text",
+            "--exclude-kind", "caption", "--format", "json",
+        ],
+    )
+    assert filtered.exit_code == 0, filtered.output
+    assert json.loads(filtered.output)["items"] == []
+
+
+def test_corpus_show_chunk_exposes_section_type(make_sqlite_corpus) -> None:
+    from wikify.models import Chunk, Document
+
+    doc = Document(
+        id="p", source_path="src/p.md", kind="md", title="P",
+        metadata={}, markdown_path="markdown/p.md",
+        image_dir="images/p/", n_chunks=1, n_tokens=20,
+    )
+    chunks = [
+        Chunk(
+            id="p__c0", doc_id="p", ord=0,
+            text="Figure 1. Device image.",
+            char_span=(0, 23), section_path=["__image__", "p/Figure_01"],
+            section_type="caption",
+        ),
+    ]
+    corpus = make_sqlite_corpus([(doc, chunks)])
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "show", "chunk:p__c0",
+            "--corpus", str(corpus.root), "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["section_type"] == "caption"
 
 
 def test_corpus_find_quiet_pipes_into_show(tmp_path: Path) -> None:
@@ -725,7 +862,9 @@ def test_corpus_sample_quiet_emits_one_handle_per_line(
     monkeypatch.setattr(
         cli_corpus.queries,
         "doc_metrics",
-        lambda corpus, ids: {did: {} for did in ids},
+        lambda corpus, ids: {
+            did: {"pagerank": 1.0, "citation_count": 0} for did in ids
+        },
     )
     result = runner.invoke(
         app,
@@ -739,6 +878,37 @@ def test_corpus_sample_quiet_emits_one_handle_per_line(
     assert result.exit_code == 0, result.output
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
     assert lines == ["doc:paper_0", "doc:paper_1"]
+
+
+def test_corpus_sample_warns_when_sampled_pagerank_all_zero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from wikify.cli import corpus as cli_corpus
+
+    corpus = _make_corpus(tmp_path / "c")
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "sample_docs",
+        lambda corpus, **kw: ["paper_0", "paper_1"],
+    )
+    monkeypatch.setattr(
+        cli_corpus.queries,
+        "doc_metrics",
+        lambda corpus, ids: {
+            did: {"citation_count": 0, "pagerank": 0.0} for did in ids
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "sample",
+            "--corpus", str(corpus.root),
+            "--max", "2",
+            "--format", "quiet",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "pagerank=0" in result.stderr
 
 
 def test_corpus_build_exits_lock_held(tmp_path: Path) -> None:

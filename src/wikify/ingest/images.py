@@ -402,6 +402,7 @@ def caption_chunks_for(doc_id: str, images: Iterable[DocImage], ord_offset: int)
                 text=text,
                 char_span=(0, len(text)),
                 section_path=["__image__", im.id],
+                section_type="caption",
             )
         )
         ord_ += 1

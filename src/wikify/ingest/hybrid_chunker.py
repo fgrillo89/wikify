@@ -34,7 +34,7 @@ from .abstract_tagger import tag_abstracts
 from .boilerplate import is_boilerplate
 from .chunker import _is_boilerplate_chunk
 from .config import MIN_CHUNK_ALNUM
-from .section_classifier import classify_section_path
+from .non_prose import classify_chunk_kind
 
 _CHUNKER: Any = None
 _CHUNKER_KEY: tuple[str, int] | None = None
@@ -182,7 +182,7 @@ def chunk_with_hybrid(
             continue
         headings = _extract_headings(getattr(dc, "meta", None))
         section_path = headings or ["body"]
-        section_type = classify_section_path(section_path).value
+        section_type = classify_chunk_kind(text, section_path)
 
         # Best-effort char offset. Docling's markdown reader normalises
         # some whitespace, anchors, and table layout, so an exact
@@ -212,6 +212,11 @@ def chunk_with_hybrid(
 
     for c in chunks:
         c.is_boilerplate = is_boilerplate(c.text, c.section_path)
+        c.section_type = classify_chunk_kind(
+            c.text,
+            c.section_path,
+            is_boilerplate=c.is_boilerplate,
+        )
 
     tag_abstracts(chunks)
     return chunks

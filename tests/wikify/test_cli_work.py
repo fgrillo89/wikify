@@ -162,6 +162,25 @@ def test_work_set_status(tmp_path: Path) -> None:
     assert json.loads(show.output)["front"]["status"] == "needs_refine"
 
 
+def test_work_set_aliases(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    runner.invoke(app, ["work", "add", "concept", "ALD", "--run", str(bundle)])
+    result = runner.invoke(
+        app,
+        [
+            "work", "set", "ald",
+            "--run", str(bundle),
+            "--aliases", '["Atomic layer deposition", "ALD process"]',
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["front"]["aliases"] == [
+        "Atomic layer deposition",
+        "ALD process",
+    ]
+
+
 def test_work_tend_runs(tmp_path: Path) -> None:
     bundle = _init_bundle(tmp_path)
     runner.invoke(app, ["work", "add", "concept", "ALD", "--run", str(bundle)])
@@ -172,6 +191,100 @@ def test_work_tend_runs(tmp_path: Path) -> None:
     summary = json.loads(result.output)
     assert summary["concepts"] == 1
     assert "index_path" in summary
+
+
+def test_work_tend_persists_seed_doc_handles(tmp_path: Path) -> None:
+    """An extractor record carrying ``seed_doc_handles`` should survive
+    ``work tend`` and land on the concept card."""
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import load_card
+
+    bundle_dir = _init_bundle(tmp_path)
+    record = tmp_path / "concepts.jsonl"
+    record.write_text(
+        json.dumps(
+            {
+                "title": "Memristor",
+                "kind": "article",
+                "aliases": ["RRAM"],
+                "seed_doc_handles": ["doc:abc12345", "doc:def67890"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner.invoke(
+        app,
+        [
+            "work", "add", "feedback", "concept",
+            "--run", str(bundle_dir),
+            "--record", str(record),
+        ],
+    )
+    result = runner.invoke(app, ["work", "tend", "--run", str(bundle_dir)])
+    assert result.exit_code == 0, result.output
+    card = load_card(Bundle.open(bundle_dir), "memristor")
+    assert card.front["seed_doc_handles"] == ["doc:abc12345", "doc:def67890"]
+
+
+def test_work_cluster_concepts_by_doc_overlap(tmp_path: Path) -> None:
+    """Concepts that share evidence docs cluster together; persons get
+    their own cluster regardless of overlap."""
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    # Two articles with 5/6 docs overlap → cluster together
+    a_slug, _ = create_concept(bundle, page_id="Concept A", kind="article")
+    b_slug, _ = create_concept(bundle, page_id="Concept B", kind="article")
+    # Unrelated article — distinct doc set → singleton
+    c_slug, _ = create_concept(bundle, page_id="Concept C", kind="article")
+    # Person — own cluster
+    p_slug, _ = create_concept(bundle, page_id="Some Person", kind="person")
+
+    a_docs = [f"doc_{i}" for i in range(6)]
+    b_docs = [f"doc_{i}" for i in range(1, 7)]  # overlap doc_1..doc_5
+    c_docs = [f"other_{i}" for i in range(6)]
+    p_docs = [f"author_doc_{i}" for i in range(3)]
+    append_evidence(
+        bundle, a_slug,
+        [EvidenceRecord(chunk_id=f"{d}__c0", doc_id=d) for d in a_docs],
+    )
+    append_evidence(
+        bundle, b_slug,
+        [EvidenceRecord(chunk_id=f"{d}__c0", doc_id=d) for d in b_docs],
+    )
+    append_evidence(
+        bundle, c_slug,
+        [EvidenceRecord(chunk_id=f"{d}__c0", doc_id=d) for d in c_docs],
+    )
+    append_evidence(
+        bundle, p_slug,
+        [EvidenceRecord(chunk_id=f"{d}__c0", doc_id=d) for d in p_docs],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "cluster-concepts",
+            "--run", str(bundle_dir),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    clusters = {tuple(sorted(c["slugs"])): c for c in payload["clusters"]}
+    # A and B share 5/6 docs (Jaccard ≈ 5/7), should cluster.
+    ab_keys = [k for k in clusters if a_slug in k and b_slug in k]
+    assert ab_keys, f"A and B not clustered together: {clusters}"
+    # C should be alone in its article cluster.
+    c_keys = [k for k in clusters if c_slug in k]
+    assert c_keys and len(c_keys[0]) == 1
+    # Person cluster should be the person alone, marked kind=person.
+    p_clusters = [c for c in payload["clusters"] if c["kind"] == "person"]
+    assert p_clusters and p_clusters[0]["slugs"] == [p_slug]
 
 
 def test_work_add_feedback(tmp_path: Path) -> None:

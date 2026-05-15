@@ -34,6 +34,10 @@ def validation_path(bundle: Bundle, slug: str) -> Path:
     return bundle.work_concept_dir(slug) / "validation.json"
 
 
+def dossier_path(bundle: Bundle, slug: str) -> Path:
+    return bundle.work_concept_dir(slug) / "dossier.md"
+
+
 def write_json(path: Path, payload: dict) -> None:
     """Write a JSON file. Parent directories are created on demand."""
     path.parent.mkdir(parents=True, exist_ok=True)

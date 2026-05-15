@@ -62,7 +62,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
             placeholders = ",".join("?" * len(cids))
             fetched = {
                 r["chunk_id"]: r for r in store.con.execute(
-                    f"SELECT chunk_id, text, section_path_json, section_type "
+                    f"SELECT chunk_id, text, section_path_json, section_type, "
+                    f"is_boilerplate "
                     f"FROM chunks WHERE chunk_id IN ({placeholders})",
                     cids,
                 )
@@ -83,6 +84,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
                     r["section_path"] = []
             if "section_type" not in r:
                 r["section_type"] = row["section_type"] or "body"
+            if "is_boilerplate" not in r:
+                r["is_boilerplate"] = bool(row["is_boilerplate"])
         return
     # Fallback: no sqlite store. Per-chunk JSONL lookup. Used only by
     # hand-built fixtures; production corpora always have sqlite.
@@ -99,6 +102,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
             r["section_path"] = list(chunk.section_path or [])
         if "section_type" not in r:
             r["section_type"] = chunk.section_type or "body"
+        if "is_boilerplate" not in r:
+            r["is_boilerplate"] = bool(chunk.is_boilerplate)
 
 
 def _mark_traversal_stubs(corpus, rows: list[dict]) -> None:
@@ -778,6 +783,8 @@ def build_server() -> FastMCP:
             "handle": f"chunk:{short_id(chunk.id)}",
             "doc_handle": f"doc:{short_id(chunk.doc_id)}",
             "section_path": list(chunk.section_path or []),
+            "section_type": chunk.section_type or "body",
+            "is_boilerplate": bool(chunk.is_boilerplate),
             "text": chunk.text,
         }
 

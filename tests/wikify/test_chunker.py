@@ -7,8 +7,10 @@ identical across papers.
 """
 
 from wikify.ingest.chunker import _is_boilerplate_chunk, chunk_document
+from wikify.ingest.images import caption_chunks_for
 from wikify.ingest.parsers._clean import clean_markdown_text
 from wikify.ingest.parsers._sections import section_spans
+from wikify.models import DocImage
 
 _WILEY_LICENSE = (
     "16163028, 2026, 3, Downloaded from https://advanced.onlinelibrary.wiley.com"
@@ -218,3 +220,34 @@ def test_chunk_document_keeps_real_content_alongside_license() -> None:
     spans = section_spans(body)
     chunks = chunk_document("doc2", body, spans)
     assert any("atomic layer deposition" in c.text for c in chunks)
+
+
+def test_chunk_document_labels_inline_figure_and_table_chunks() -> None:
+    body = (
+        "# Paper\n\n"
+        "## Figure Panel\n\n"
+        "Figure 1. Device switching curves under pulsed voltage operation.\n\n"
+        "## Table Data\n\n"
+        "| Sample | Current density | Switching endurance |\n"
+        "| --- | --- | --- |\n"
+        "| Device A | 10 mA per square centimeter | one million cycles |\n"
+    )
+    chunks = chunk_document("doc3", body, section_spans(body))
+    assert any(c.section_type == "figure" for c in chunks)
+    assert any(c.section_type == "table" for c in chunks)
+
+
+def test_caption_chunks_are_labeled_caption() -> None:
+    chunks = caption_chunks_for(
+        "doc4",
+        [
+            DocImage(
+                id="doc4/Figure_01",
+                path="images/doc4/Figure_01.png",
+                caption="Figure 1. Device stack schematic.",
+            )
+        ],
+        ord_offset=0,
+    )
+    assert chunks[0].section_path == ["__image__", "doc4/Figure_01"]
+    assert chunks[0].section_type == "caption"

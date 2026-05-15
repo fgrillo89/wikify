@@ -37,6 +37,15 @@ _NORM_RE = re.compile(r"[^a-z0-9]+")
 def _normalize(s: str) -> str:
     return _NORM_RE.sub("-", s.lower()).strip("-")
 
+
+def _plain_excerpt(text: str, limit: int = 200) -> str:
+    """Return a compact plain-text excerpt from markdown-ish prose."""
+    text = re.sub(r"\[\^e\d+\]", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_`~]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
 _MD_EXTENSIONS = [
     "tables",
     "fenced_code",
@@ -198,7 +207,7 @@ class _PageView:
         for line in page.body_clean.splitlines():
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and not stripped.startswith("|"):
-                excerpt = stripped[:200]
+                excerpt = _plain_excerpt(stripped)
                 break
         # A page "has prose" if body_clean is at least SKELETON_MIN_BODY_LEN chars.
         has_prose = len(page.body_clean) >= SKELETON_MIN_BODY_LEN
@@ -314,9 +323,13 @@ def _render_article(
             infobox["Collaborators"] = str(prov["collaborator_count"])
 
     template = env.get_template("article.html")
+    visible_aliases = [
+        a for a in pv.aliases
+        if isinstance(a, str) and not a.lower().startswith("author:")
+    ]
     return template.render(
         title=pv.title,
-        aliases=pv.aliases,
+        aliases=visible_aliases,
         content=body_html,
         toc=toc,
         categories=categories,

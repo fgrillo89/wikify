@@ -288,6 +288,7 @@ def cmd_set(
     concept: str = typer.Argument(...),
     status: str | None = typer.Option(None, "--status"),
     needs_refine: bool | None = typer.Option(None, "--needs-refine"),
+    aliases: str | None = typer.Option(None, "--aliases", help="JSON list of aliases."),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
@@ -299,6 +300,16 @@ def cmd_set(
         card.front["status"] = status
     if needs_refine is not None:
         card.front["needs_refine"] = needs_refine
+    if aliases is not None:
+        try:
+            alias_list = json.loads(aliases)
+            if not isinstance(alias_list, list) or not all(
+                isinstance(item, str) for item in alias_list
+            ):
+                raise ValueError("aliases must be a JSON list of strings")
+        except (json.JSONDecodeError, ValueError) as exc:
+            cli_error(EXIT_VALIDATION, error="bad_aliases", message=str(exc))
+        card.front["aliases"] = alias_list
     save_card(bundle, concept, card)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "front": card.front}))
@@ -404,6 +415,344 @@ def cmd_tend(
     typer.echo(f"evidence records deduped:{summary['evidence_records_deduped']}")
     typer.echo(f"inbox files:             {len(summary['inbox_files'])}")
     typer.echo(f"index:                   {summary['index_path']}")
+
+
+# -------------------------------------------------------------- build-evidence
+
+
+_NEVER_CITE_PATTERNS = (
+    r"\bForm\s+Approved\s+OMB",
+    r"\bArticle\s+history\b",
+    r"\bReceived[:\s]+\d?\d\s+\w+\s+\d{4}",
+    r"\bAvailable\s+online\b",
+    r"^\s*Keywords?\s*:\s*\S",
+    r"^\s*ISSN[:\s-]+\d{4}",
+    r"^\s*DOI\s*:\s*10\.\d{4,9}/",
+    r"\bjournal\s+homepage\s*:",
+    r"^\s*©\s*\d{4}",
+    r"^\s*Copyright\s+©?\s*\d{4}",
+    r"\bCorresponding\s+author\b",
+    r"@[a-z0-9.-]+\.(?:edu|com|org|gov)",
+    r"\borcid\.org/",
+    r"^\s*A\s*R\s*T\s*I\s*C\s*L\s*E\s+I\s*N\s*F\s*O",
+)
+
+
+def _matches_never_cite(text: str) -> bool:
+    import re as _re
+
+    head = text[:600] if text else ""
+    return any(
+        _re.search(p, head, _re.IGNORECASE | _re.MULTILINE)
+        for p in _NEVER_CITE_PATTERNS
+    )
+
+
+def _resolve_doc_id(corpus, short_or_full: str) -> str | None:
+    """Map ``doc:<short>`` / ``<short>`` / full id to the full doc_id."""
+    from ..corpus.queries import get_doc
+
+    handle = short_or_full
+    if handle.startswith("doc:"):
+        handle = handle[4:]
+    doc = get_doc(corpus, handle)
+    return doc.id if doc is not None else None
+
+
+@app.command("build-evidence")
+def cmd_build_evidence(
+    concept: str = typer.Argument(...),
+    corpus_dir: Path = typer.Option(..., "--corpus"),
+    target: int = typer.Option(14, "--target", help="Target active records."),
+    top_k: int = typer.Option(40, "--top-k", help="Initial corpus-find depth."),
+    per_doc_cap: int = typer.Option(3, "--per-doc-cap"),
+    min_chunk_chars: int = typer.Option(80, "--min-chunk-chars"),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Gather evidence for *concept* using seed_doc_handles + corpus find.
+
+    The extractor's ``seed_doc_handles`` (persisted on the work card)
+    serve as a high-precision prior: up to ``per_doc_cap`` body chunks
+    are pulled from each seed doc first. The remainder is filled by
+    ``corpus find --rank all`` with structural exclusions, until the
+    active count reaches ``--target`` or no more candidates pass the
+    filters. Every chunk is rejected if its ``is_boilerplate`` flag is
+    set or its leading text matches a never-cite pattern (ISSN/DOI
+    banner, Article-history, Keywords, affiliation, copyright, OMB
+    form, etc.). Per-doc cap keeps a single review paper from
+    dominating the page.
+
+    Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
+    """
+    import sqlite3
+    import subprocess
+
+    from ..api import Corpus
+    from ..bundle.work.card import load_card
+    from ..bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle = _resolve_bundle(run)
+    if not corpus_dir.is_dir():
+        cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
+    corpus = Corpus(root=corpus_dir)
+    card = load_card(bundle, concept)
+    if not card.front:
+        cli_error(EXIT_VALIDATION, error="concept_not_found", concept=concept)
+    title = card.page_id
+    seed_handles = card.front.get("seed_doc_handles") or []
+
+    db_path = corpus.sqlite_path
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+
+    def fetch_chunk(chunk_id: str):
+        return con.execute(
+            "SELECT chunk_id, doc_id, text, is_boilerplate, section_type "
+            "FROM chunks WHERE chunk_id=?",
+            (chunk_id,),
+        ).fetchone()
+
+    def fetch_seed_chunks(doc_id: str, limit: int):
+        return con.execute(
+            "SELECT chunk_id, doc_id, text, is_boilerplate, section_type "
+            "FROM chunks WHERE doc_id=? AND is_boilerplate=0 "
+            "AND section_type IN "
+            "('abstract','introduction','body','discussion','conclusion','methods','results') "
+            "ORDER BY ord LIMIT ?",
+            (doc_id, limit),
+        ).fetchall()
+
+    def find_chunks(query: str, k: int):
+        cmd = [
+            "wikify", "corpus", "find", query,
+            "--rank", "all", "--top-k", str(k),
+            "--exclude-kind", "references",
+            "--exclude-kind", "acknowledgments",
+            "--exclude-kind", "appendix",
+            "--exclude-kind", "figure",
+            "--exclude-kind", "table",
+            "--exclude-kind", "caption",
+            "--exclude-kind", "boilerplate",
+            "--corpus", str(corpus_dir),
+            "--run", str(bundle.root),
+            "--format", "json",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        if r.returncode != 0:
+            return []
+        try:
+            return json.loads(r.stdout).get("items", [])
+        except Exception:
+            return []
+
+    records: list[dict] = []
+    doc_counts: dict[str, int] = {}
+    stats = {
+        "seeds_total": len(seed_handles),
+        "seed_records": 0,
+        "find_records": 0,
+        "rejected_boilerplate": 0,
+        "rejected_never_cite": 0,
+        "rejected_short": 0,
+        "rejected_doc_cap": 0,
+        "passes": 0,
+    }
+
+    def try_chunk(row, *, score: float, source: str) -> bool:
+        if row is None:
+            return False
+        if row["is_boilerplate"]:
+            stats["rejected_boilerplate"] += 1
+            return False
+        text = (row["text"] or "").strip()
+        if len(text) < min_chunk_chars:
+            stats["rejected_short"] += 1
+            return False
+        if _matches_never_cite(text):
+            stats["rejected_never_cite"] += 1
+            return False
+        if any(r["chunk_id"] == row["chunk_id"] for r in records):
+            return False
+        if doc_counts.get(row["doc_id"], 0) >= per_doc_cap:
+            stats["rejected_doc_cap"] += 1
+            return False
+        records.append(
+            {
+                "chunk_id": row["chunk_id"],
+                "doc_id": row["doc_id"],
+                "quote": text[:400],
+                "score": float(score),
+                "status": "active",
+            }
+        )
+        doc_counts[row["doc_id"]] = doc_counts.get(row["doc_id"], 0) + 1
+        if source == "seed":
+            stats["seed_records"] += 1
+        else:
+            stats["find_records"] += 1
+        return True
+
+    # Phase 1: seed doc handles (extractor prior)
+    for handle in seed_handles:
+        if len(records) >= target:
+            break
+        doc_id = _resolve_doc_id(corpus, handle)
+        if doc_id is None:
+            continue
+        seed_chunks = fetch_seed_chunks(doc_id, per_doc_cap)
+        for row in seed_chunks:
+            if len(records) >= target:
+                break
+            try_chunk(row, score=1.0, source="seed")
+
+    # Phase 2: corpus find top-up with widening k
+    for k in (top_k, top_k * 2, top_k * 3):
+        if len(records) >= target:
+            break
+        items = find_chunks(title, k)
+        for it in items:
+            if len(records) >= target:
+                break
+            row = fetch_chunk(it.get("id") or "")
+            try_chunk(row, score=float(it.get("score", 0.0)), source="find")
+        stats["passes"] += 1
+
+    con.close()
+
+    if not records:
+        if fmt == "json":
+            typer.echo(json.dumps({"ok": False, "error": "no_evidence", "stats": stats}))
+        else:
+            typer.echo(f"{concept}: no evidence gathered  stats={stats}")
+        raise typer.Exit(code=EXIT_VALIDATION)
+
+    parsed = [EvidenceRecord.model_validate(r) for r in records]
+    n = append_evidence(bundle, concept, parsed)
+    distinct_docs = len({r["doc_id"] for r in records})
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "concept": concept,
+                    "appended": n,
+                    "distinct_docs": distinct_docs,
+                    "stats": stats,
+                }
+            )
+        )
+        return
+    typer.echo(
+        f"{concept}: appended {n} records across {distinct_docs} docs  "
+        f"(seed={stats['seed_records']} find={stats['find_records']} "
+        f"rejected=bp{stats['rejected_boilerplate']}/"
+        f"nc{stats['rejected_never_cite']}/short{stats['rejected_short']}/"
+        f"cap{stats['rejected_doc_cap']})"
+    )
+
+
+# -------------------------------------------------------------- cluster-concepts
+
+
+@app.command("cluster-concepts")
+def cmd_cluster_concepts(
+    threshold: float = typer.Option(
+        0.15, "--threshold",
+        help="Minimum Jaccard overlap (over doc_id sets) to link two concepts.",
+    ),
+    max_cluster_size: int = typer.Option(
+        5, "--max-cluster-size",
+        help="Largest single cluster the algorithm emits; large clusters "
+        "are split by greedy chaining.",
+    ),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Cluster active concepts by evidence overlap (Jaccard over doc_ids).
+
+    Pages within a cluster share evidence sources and benefit from one
+    writer agent reading them together (consistent terminology, no
+    duplicate chunk reads). Person concepts are placed in their own
+    cluster regardless of overlap so the person-style prompt path stays
+    distinct from article writing.
+    """
+    from ..bundle.work.evidence import read_evidence
+
+    bundle = _resolve_bundle(run)
+    slugs = list_concept_slugs(bundle)
+    by_slug: dict[str, set[str]] = {}
+    kind_of: dict[str, str] = {}
+    for s in slugs:
+        card = load_card(bundle, s)
+        if card.front.get("status") not in ("active", "committed"):
+            continue
+        kind_of[s] = card.kind
+        recs = read_evidence(bundle, s)
+        by_slug[s] = {r.doc_id for r in recs if r.status == "active"}
+
+    def jaccard(a: set, b: set) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
+
+    article_slugs = [s for s in by_slug if kind_of[s] == "article"]
+    person_slugs = [s for s in by_slug if kind_of[s] == "person"]
+
+    # Greedy connected-component clustering with size cap. Sort slugs by
+    # evidence set size descending so high-coverage hubs anchor clusters.
+    remaining = sorted(article_slugs, key=lambda s: -len(by_slug[s]))
+    clusters: list[list[str]] = []
+    while remaining:
+        seed = remaining.pop(0)
+        cluster = [seed]
+        # Pull in neighbors above threshold up to max_cluster_size.
+        added_any = True
+        while added_any and len(cluster) < max_cluster_size:
+            added_any = False
+            best_slug = None
+            best_score = threshold
+            for cand in list(remaining):
+                score = max(jaccard(by_slug[c], by_slug[cand]) for c in cluster)
+                if score >= best_score:
+                    best_score = score
+                    best_slug = cand
+            if best_slug is not None:
+                cluster.append(best_slug)
+                remaining.remove(best_slug)
+                added_any = True
+        clusters.append(cluster)
+
+    if person_slugs:
+        # Persons travel together; split into chunks of max_cluster_size.
+        for i in range(0, len(person_slugs), max_cluster_size):
+            clusters.append(person_slugs[i : i + max_cluster_size])
+
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "clusters": [
+                        {
+                            "id": i,
+                            "kind": (
+                                "person"
+                                if all(kind_of[s] == "person" for s in c)
+                                else "article"
+                            ),
+                            "slugs": c,
+                            "size": len(c),
+                        }
+                        for i, c in enumerate(clusters)
+                    ],
+                }
+            )
+        )
+        return
+    for i, c in enumerate(clusters):
+        kind = "person" if all(kind_of[s] == "person" for s in c) else "article"
+        typer.echo(f"cluster {i:2d} ({kind}, {len(c)}): {', '.join(c)}")
 
 
 __all__ = ["app"]

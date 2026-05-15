@@ -51,6 +51,30 @@ def test_render_default_out_under_derived(tmp_path: Path) -> None:
     assert (bundle.derived_dir / "site" / "index.html").is_file()
 
 
+def test_render_search_index_uses_plain_text_excerpt(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    page_path = bundle.wiki_articles_dir / "atomic-layer-deposition.md"
+    text = page_path.read_text(encoding="utf-8")
+    page_path.write_text(
+        text.replace(
+            "Atomic Layer Deposition is",
+            "**Atomic Layer Deposition** is",
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["render", "--bundle", str(bundle.root)])
+
+    assert result.exit_code == 0, result.output
+    search_index = json.loads(
+        (bundle.derived_dir / "site" / "search-index.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "**" not in search_index[0]["excerpt"]
+    assert "[^e1]" not in search_index[0]["excerpt"]
+
+
 def test_render_rejects_unsupported_format(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
     result = runner.invoke(

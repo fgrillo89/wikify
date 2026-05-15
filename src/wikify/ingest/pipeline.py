@@ -378,9 +378,10 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
     overshoot (observed 8 k chars on dense Word-sourced papers), which
     then pushed the Jina embedder past its VRAM ceiling at infer time.
     """
+    from .boilerplate import is_boilerplate
     from .chunker import _split_oversize
     from .config import MIN_CHUNK_ALNUM
-    from .section_classifier import classify_section_path
+    from .non_prose import classify_chunk_kind
 
     chunks: list[Chunk] = []
     offset = 0
@@ -393,7 +394,7 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
         if alnum < MIN_CHUNK_ALNUM:
             continue
         heading_path = dc.get("heading_path", ["body"])
-        section_type = classify_section_path(heading_path).value
+        section_type = classify_chunk_kind(text, list(heading_path))
         for piece_start, piece_end in _split_oversize(text):
             piece = text[piece_start:piece_end].strip()
             if not piece:
@@ -416,6 +417,13 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
             )
             offset = end
             ord_ += 1
+    for c in chunks:
+        c.is_boilerplate = is_boilerplate(c.text, c.section_path)
+        c.section_type = classify_chunk_kind(
+            c.text,
+            c.section_path,
+            is_boilerplate=c.is_boilerplate,
+        )
     return chunks
 
 

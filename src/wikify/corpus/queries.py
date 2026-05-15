@@ -75,6 +75,153 @@ def get_doc(corpus: Corpus, doc_id: str) -> Document | None:
     return None
 
 
+def get_doc_markdown(corpus: Corpus, doc_id: str) -> str:
+    """Return persisted per-document markdown text, or an empty string."""
+    doc = get_doc(corpus, doc_id)
+    if doc is None:
+        return ""
+    from pathlib import Path
+
+    path = Path(doc.markdown_path)
+    if not path.is_absolute():
+        path = corpus.root / path
+    try:
+        path = path.resolve()
+        path.relative_to(corpus.root.resolve())
+    except (OSError, ValueError):
+        path = corpus.markdown_dir / f"{doc.id}.md"
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def equations_for_chunks(
+    corpus: Corpus, chunk_ids: list[str]
+) -> dict[str, list[str]]:
+    """Return ``{chunk_id: [equation_content, ...]}`` for the listed chunks.
+
+    Pulls equation assets bound to each chunk via ``chunk_assets``.
+    Empty list per chunk when the corpus has no equation assets for
+    that chunk or no SQLite store is available.
+    """
+    if not chunk_ids:
+        return {}
+    from .store.routing import open_store, sqlite_available
+
+    out: dict[str, list[str]] = {cid: [] for cid in chunk_ids}
+    if not sqlite_available(corpus.root):
+        return out
+    store = open_store(corpus.root)
+    try:
+        placeholders = ",".join("?" * len(chunk_ids))
+        rows = store.con.execute(
+            f"SELECT ca.chunk_id, a.content "
+            f"FROM chunk_assets ca JOIN assets a ON a.asset_id=ca.asset_id "
+            f"WHERE a.asset_type='equation' "
+            f"AND ca.chunk_id IN ({placeholders}) "
+            f"AND length(coalesce(a.content,'')) > 0 "
+            f"ORDER BY a.ord",
+            chunk_ids,
+        )
+        for r in rows:
+            cid = r["chunk_id"]
+            content = (r["content"] or "").strip()
+            if content and cid in out:
+                out[cid].append(content)
+    finally:
+        store.close()
+    return out
+
+
+_TABLE_REF_RE = re.compile(r"\bTab(?:le)?\.?\s*(\d{1,3})\b", re.IGNORECASE)
+_FIGURE_REF_RE = re.compile(
+    r"\bFig(?:ure)?\.?\s*(\d{1,3})\b|\bScheme\s*(\d{1,3})\b", re.IGNORECASE
+)
+
+
+def referenced_artifacts_for_chunks(
+    corpus: Corpus, chunks: list[Chunk]
+) -> dict[str, dict[str, list[str]]]:
+    """Detect "Table N" / "Figure N" mentions in each chunk's text and
+    pull the matching captioned artifacts from the same document.
+
+    Returns ``{chunk_id: {"tables": [...], "figures": [...]}}``.
+    Tables surface caption + content (markdown rendering). Figures
+    surface caption only (image bytes are not relevant to the writer).
+    Empty when the chunk text mentions no artifact or the artifact is
+    not in the corpus.
+    """
+    if not chunks:
+        return {}
+    from .store.routing import open_store, sqlite_available
+
+    out: dict[str, dict[str, list[str]]] = {
+        c.id: {"tables": [], "figures": []} for c in chunks
+    }
+    if not sqlite_available(corpus.root):
+        return out
+    by_doc: dict[str, list[Chunk]] = {}
+    for c in chunks:
+        by_doc.setdefault(c.doc_id, []).append(c)
+
+    store = open_store(corpus.root)
+    try:
+        for doc_id, doc_chunks in by_doc.items():
+            # Pull every captioned table + figure for this document once.
+            doc_assets = list(
+                store.con.execute(
+                    "SELECT asset_type, caption, content "
+                    "FROM assets WHERE doc_id=? "
+                    "AND asset_type IN ('table','figure') "
+                    "AND length(coalesce(caption,'')) > 0",
+                    (doc_id,),
+                )
+            )
+            tables_by_num: dict[str, dict] = {}
+            figures_by_num: dict[str, dict] = {}
+            for r in doc_assets:
+                cap = (r["caption"] or "").strip()
+                content = (r["content"] or "").strip()
+                m = re.match(
+                    r"\W*(Table|Fig(?:ure)?|Scheme)\.?\s*(\d{1,3})\b",
+                    cap, re.IGNORECASE,
+                )
+                if not m:
+                    continue
+                num = m.group(2)
+                bucket = (
+                    tables_by_num
+                    if r["asset_type"] == "table"
+                    else figures_by_num
+                )
+                # Keep the first asset for each number — duplicates are
+                # rare and the first wins is deterministic.
+                bucket.setdefault(num, {"caption": cap, "content": content})
+
+            for c in doc_chunks:
+                text = c.text or ""
+                tnums = {m.group(1) for m in _TABLE_REF_RE.finditer(text)}
+                fnums: set[str] = set()
+                for m in _FIGURE_REF_RE.finditer(text):
+                    fnums.add(m.group(1) or m.group(2))
+                for n in sorted(tnums):
+                    a = tables_by_num.get(n)
+                    if a is None:
+                        continue
+                    rendered = a["caption"]
+                    if a["content"]:
+                        rendered += "\n\n" + a["content"]
+                    out[c.id]["tables"].append(rendered)
+                for n in sorted(fnums):
+                    a = figures_by_num.get(n)
+                    if a is None:
+                        continue
+                    out[c.id]["figures"].append(a["caption"])
+    finally:
+        store.close()
+    return out
+
+
 def get_chunk(corpus: Corpus, chunk_id: str) -> Chunk | None:
     """Return the ``Chunk`` for *chunk_id* or ``None``.
 
@@ -499,6 +646,8 @@ def _search_chunks_sqlite(
                 "id": cid,
                 "doc_id": row["doc_id"],
                 "score": float(score),
+                "section_type": row["section_type"] or "body",
+                "is_boilerplate": bool(row["is_boilerplate"]),
             })
         return out
     finally:
@@ -904,7 +1053,8 @@ def search_text(
         store = open_store(corpus.root)
         try:
             sql = (
-                "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview "
+                "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview, "
+                "section_type, is_boilerplate "
                 "FROM chunks WHERE LOWER(text) LIKE ? "
             )
             params: list = [f"%{needle.lower()}%"]
@@ -917,6 +1067,10 @@ def search_text(
             rows = store.con.execute(sql, params).fetchall()
             return [
                 {"id": r["chunk_id"], "doc_id": r["doc_id"], "preview": r["preview"]}
+                | {
+                    "section_type": r["section_type"] or "body",
+                    "is_boilerplate": bool(r["is_boilerplate"]),
+                }
                 for r in rows
             ]
         finally:
@@ -928,7 +1082,13 @@ def search_text(
             continue
         if excluded and (c.section_type or "").lower() in excluded:
             continue
-        out.append({"id": c.id, "doc_id": c.doc_id, "preview": c.text[:160]})
+        out.append({
+            "id": c.id,
+            "doc_id": c.doc_id,
+            "preview": c.text[:160],
+            "section_type": c.section_type or "body",
+            "is_boilerplate": bool(c.is_boilerplate),
+        })
         if len(out) >= top_k:
             break
     return out
@@ -1681,7 +1841,8 @@ SCHEMA: dict = {
             "Drop chunks whose section_type matches (repeatable). "
             "Kinds: abstract | introduction | background | methods | "
             "results | discussion | conclusion | references | "
-            "acknowledgments | appendix | body. Typical: "
+            "acknowledgments | appendix | figure | table | caption | "
+            "boilerplate | body. Typical: "
             "exclude_kinds=['references','acknowledgments'] to keep "
             "bibliography and acknowledgments paragraphs out of "
             "content retrieval."

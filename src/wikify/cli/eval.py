@@ -102,6 +102,7 @@ def _grounding_payload(result: GroundingResult) -> dict:
         "g2_evidence_ok": result.g2_evidence_ok,
         "n_sentences": result.n_sentences,
         "n_markers": result.n_markers,
+        "g1_window": result.g1_window,
         "passes": result.passes,
     }
 

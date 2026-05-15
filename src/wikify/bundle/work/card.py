@@ -135,27 +135,36 @@ def create_concept(
     kind: str = "article",
     aliases: list[str] | None = None,
     slug: str | None = None,
+    seed_doc_handles: list[str] | None = None,
 ) -> tuple[str, WorkCard]:
     """Create a fresh concept folder and return ``(slug, card)``.
 
     Idempotent on slug: calling twice with the same title returns the
     same slug; the existing card is overwritten only when the caller
     explicitly opts in by passing a fresh ``slug``.
+
+    ``seed_doc_handles`` carries the extractor's high-precision evidence
+    hint — corpus doc handles the extractor saw and judged relevant. The
+    evidence-builder uses these as a prior, then tops up via corpus find
+    to reach the quota.
     """
     s = slug or slugify(page_id)
     existing = load_card(bundle, s)
     if existing.page_id == page_id:
         return s, existing
+    front: dict = {
+        "page_id": page_id,
+        "kind": kind,
+        "status": "active",
+        "aliases": list(aliases or []),
+        "evidence_chunks": 0,
+        "evidence_docs": 0,
+        "needs_refine": False,
+    }
+    if seed_doc_handles:
+        front["seed_doc_handles"] = list(seed_doc_handles)
     card = WorkCard(
-        front={
-            "page_id": page_id,
-            "kind": kind,
-            "status": "active",
-            "aliases": list(aliases or []),
-            "evidence_chunks": 0,
-            "evidence_docs": 0,
-            "needs_refine": False,
-        },
+        front=front,
         body="",
     )
     save_card(bundle, s, card)

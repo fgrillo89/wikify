@@ -23,6 +23,10 @@ class SectionType(str, Enum):
     REFERENCES = "references"
     ACKNOWLEDGMENTS = "acknowledgments"
     APPENDIX = "appendix"
+    FIGURE = "figure"
+    TABLE = "table"
+    CAPTION = "caption"
+    BOILERPLATE = "boilerplate"
     BODY = "body"
 
 

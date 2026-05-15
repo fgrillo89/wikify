@@ -160,6 +160,35 @@ async def test_corpus_show_chunk_full_text(tmp_path: Path) -> None:
     item = res["items"][0]
     assert item["type"] == "chunk"
     assert "atomic layer deposition" in item.get("text", "")
+    assert item["meta"]["kind"] == "body"
+
+
+async def test_corpus_find_exposes_caption_kind(make_sqlite_corpus) -> None:
+    from wikify.models import Chunk, Document
+
+    doc = Document(
+        id="p", source_path="src/p.md", kind="md", title="P",
+        metadata={}, markdown_path="markdown/p.md",
+        image_dir="images/p/", n_chunks=1, n_tokens=20,
+    )
+    chunks = [
+        Chunk(
+            id="p__c0", doc_id="p", ord=0,
+            text="Figure 1. Atomic layer deposition reactor schematic.",
+            char_span=(0, 54), section_path=["__image__", "p/Figure_01"],
+            section_type="caption",
+        ),
+    ]
+    corpus = make_sqlite_corpus([(doc, chunks)])
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    res = await _tool(srv, "corpus_find")(
+        query="reactor schematic", text=True, top_k=5,
+    )
+
+    assert res["ok"] is True
+    assert res["items"][0]["meta"]["kind"] == "caption"
 
 
 async def test_corpus_mcp_reads_sqlite_when_json_sidecars_absent(

@@ -50,6 +50,12 @@ scratch/
 scratch_*.py
 scratch_*.log
 
+# Wikify bundles — runtime build state, regenerated per run
+bundles/
+
+# Claude Code local launch config (carries absolute paths)
+.claude/launch.json
+
 # Claude Code session state
 .claude/scheduled_tasks.lock
 
