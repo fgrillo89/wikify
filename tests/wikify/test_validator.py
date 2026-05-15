@@ -15,6 +15,7 @@ from wikify.bundle.draft.artifact import (
     write_json,
 )
 from wikify.bundle.draft.builder import build_draft
+from wikify.bundle.draft.references import normalize_response_references
 from wikify.bundle.draft.validator import validate_response
 from wikify.bundle.work.card import create_concept
 from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
@@ -106,6 +107,41 @@ def test_validate_fabricated_quote_rejected(tmp_path: Path) -> None:
     assert verdict["ok"] is False
     codes = [e["code"] for e in verdict["errors"]]
     assert "quote_not_in_source" in codes
+
+
+def test_normalize_references_rewrites_from_draft_evidence(tmp_path: Path) -> None:
+    bundle, _, slug = _setup(tmp_path)
+    fake = "this exact phrase is not in the chunk text at all"
+    response = _good_response(slug, chunk_quote=fake)
+    response["used_markers"] = ["e99"]
+    write_json(response_path(bundle, slug), response)
+
+    result = normalize_response_references(bundle, slug)
+
+    assert result.markers == ["e1"]
+    assert result.reference_count == 1
+    normalized = read_json(response_path(bundle, slug))
+    assert normalized["used_markers"] == ["e1"]
+    assert "paper_0__c0000 (paper_0)" in normalized["body_markdown"]
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+
+
+def test_normalize_references_preserves_quotes_from_chunk_text(tmp_path: Path) -> None:
+    bundle, _, slug = _setup(tmp_path)
+    draft = read_json(draft_path(bundle, slug))
+    draft["evidence"][0]["quote"] = ""
+    draft["evidence"][0]["chunk_text"] = 'The device was called a "memristor" in the source.'
+    write_json(draft_path(bundle, slug), draft)
+    response = _good_response(slug, chunk_quote="fabricated quote")
+    write_json(response_path(bundle, slug), response)
+
+    normalize_response_references(bundle, slug)
+
+    normalized = read_json(response_path(bundle, slug))
+    assert 'called a "memristor"' in normalized["body_markdown"]
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
 
 
 def test_validate_missing_marker_rejected(tmp_path: Path) -> None:

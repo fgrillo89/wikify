@@ -4,6 +4,7 @@ Subcommands::
 
     draft build <concept> [--task create|refine] [--corpus <c>] [--run <b>]
     draft show  <concept> [--run <b>] [--full] [--format text|json]
+    draft normalize-references <concept> [--run <b>] [--format text|json]
     draft check <concept> [--run <b>] [--format text|json]
 """
 
@@ -16,13 +17,16 @@ import typer
 
 from ..api import Bundle, Corpus
 from ..bundle.draft.artifact import (
+    dossier_path,
     draft_path,
     read_json,
     response_path,
     validation_path,
 )
 from ..bundle.draft.builder import build_draft, load_draft
-from ..bundle.draft.validator import validate_response
+from ..bundle.draft.dossier import render_dossier
+from ..bundle.draft.references import normalize_response_references
+from ..bundle.draft.validator import validate_response, validate_response_data
 from ._helpers import EXIT_VALIDATION, cli_error
 
 app = typer.Typer(add_completion=False, help="Per-attempt draft IO + validation gate.")
@@ -62,6 +66,17 @@ def cmd_build(
     ),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
+    with_adjacent: bool = typer.Option(
+        False,
+        "--with-adjacent",
+        help=(
+            "For every evidence record, also load the previous and next "
+            "chunk (by ord, within the same document) into the evidence "
+            "entry's ``context_window`` so the writer sees flanking "
+            "context. Citations and quote grounding still target the "
+            "primary chunk only."
+        ),
+    ),
 ) -> None:
     """Compile a WriteRequest for *concept* and write draft.json.
 
@@ -86,6 +101,7 @@ def cmd_build(
             task=task,
             model_id=model_id,
             tier=tier,
+            with_adjacent=with_adjacent,
         )
     except FileNotFoundError as exc:
         cli_error(EXIT_VALIDATION, error="concept_not_found", message=str(exc))
@@ -143,19 +159,116 @@ def cmd_show(
             typer.echo(f"       chunk: {preview}")
 
 
-@app.command("check")
-def cmd_check(
+@app.command("render-dossier")
+def cmd_render_dossier(
+    concept: str = typer.Argument(...),
+    out: Path | None = typer.Option(
+        None, "--out",
+        help="Destination path. Defaults to work/concepts/<slug>/dossier.md.",
+    ),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Regenerate the markdown evidence dossier from ``draft.json``.
+
+    The dossier is also written automatically by ``wikify draft build``.
+    Call this directly when evidence on disk changed without rebuilding
+    the draft, or when the dossier was deleted.
+    """
+    bundle = _resolve_bundle(run)
+    if not draft_path(bundle, concept).is_file():
+        cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)
+    request = load_draft(bundle, concept)
+    target = out if out is not None else dossier_path(bundle, concept)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    body = render_dossier(request)
+    target.write_text(body, encoding="utf-8")
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "dossier_path": str(target),
+                    "evidence_records": len(request.evidence),
+                    "bytes": len(body),
+                }
+            )
+        )
+        return
+    typer.echo(f"dossier: {target}")
+    typer.echo(f"records: {len(request.evidence)}  bytes: {len(body)}")
+
+
+@app.command("normalize-references")
+def cmd_normalize_references(
     concept: str = typer.Argument(...),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Validate response.json for *concept* against draft.json. Writes validation.json."""
+    """Normalize response.json references from draft evidence markers."""
     bundle = _resolve_bundle(run)
     if not draft_path(bundle, concept).is_file():
         cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)
     if not response_path(bundle, concept).is_file():
         cli_error(EXIT_VALIDATION, error="response_not_found", concept=concept)
-    verdict = validate_response(bundle, concept)
+    try:
+        result = normalize_response_references(bundle, concept)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="normalization_failed", message=str(exc))
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "response_path": result.response_path,
+                    "markers": result.markers,
+                    "reference_count": result.reference_count,
+                }
+            )
+        )
+        return
+    typer.echo(f"response:   {result.response_path}")
+    typer.echo(f"markers:    {result.markers}")
+    typer.echo(f"references: {result.reference_count}")
+
+
+@app.command("check")
+def cmd_check(
+    concept: str = typer.Argument(...),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help=(
+            "Read a candidate response.json from stdin and validate it "
+            "against the on-disk draft. Does not write validation.json. "
+            "Use this from a writer subagent to pre-check a response "
+            "before committing it to disk."
+        ),
+    ),
+) -> None:
+    """Validate response.json for *concept* against draft.json. Writes validation.json."""
+    bundle = _resolve_bundle(run)
+    if not draft_path(bundle, concept).is_file():
+        cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)
+    if dry_run:
+        import sys as _sys
+
+        try:
+            response_data = json.loads(_sys.stdin.read())
+        except json.JSONDecodeError as exc:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_response_json",
+                message=f"stdin is not valid JSON: {exc}",
+            )
+        draft_data = read_json(draft_path(bundle, concept))
+        verdict = validate_response_data(draft_data, response_data)
+    else:
+        if not response_path(bundle, concept).is_file():
+            cli_error(EXIT_VALIDATION, error="response_not_found", concept=concept)
+        verdict = validate_response(bundle, concept)
     if fmt == "json":
         typer.echo(json.dumps(verdict))
     else:

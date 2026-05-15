@@ -54,6 +54,7 @@ class AuthorContext:
     All fields are plain data; no prose, no bullet rendering, no wikilinks.
     """
 
+    display_name: str = ""
     primary_publications: list[Publication] = field(default_factory=list)
     cited_works: list[CitedWork] = field(default_factory=list)
     collaborators: list[str] = field(default_factory=list)
@@ -158,6 +159,7 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
             year_range = (min(all_years), max(all_years))
 
         result[key] = AuthorContext(
+            display_name=info.get("display", ""),
             primary_publications=primary,
             cited_works=cited,
             collaborators=collaborators,

@@ -9,26 +9,31 @@ What this builder DOES populate:
 - page_id / page_kind / title / aliases (from work.md frontmatter)
 - evidence (from evidence.jsonl + corpus chunk text)
 - model_id / tier (caller-supplied)
+- author_context (person pages whose title or aliases match a corpus author)
 
 What is left empty (set by the writer skill before invocation):
 - style_guide / field_guide / artifact_template / corpus_persona
   and their hashes
-- author_context (person pages)
 - dossier_context_yaml / related_pages / equations_context
 - prompt_template / skeleton
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Literal
 
 from ...api import Bundle, Corpus
 from ...corpus import queries as corpus_queries
+from ...corpus.chunks import list_documents
+from ...corpus.store.authors import author_key
 from ...schema import WriteEvidenceRef, WriteRequest
 from ...types import ModelTier
 from ..work.card import load_card
 from ..work.evidence import read_evidence
-from .artifact import draft_path, read_json, write_json
+from .artifact import dossier_path, draft_path, read_json, write_json
+from .author_context import build_author_context
+from .dossier import render_dossier
 
 
 def build_draft(
@@ -39,11 +44,17 @@ def build_draft(
     model_id: str,
     tier: ModelTier | str,
     task: Literal["create", "refine"] = "create",
+    with_adjacent: bool = False,
 ) -> WriteRequest:
     """Assemble a ``WriteRequest`` for *slug* and write it to draft.json.
 
     Strategy knobs (``model_id``, ``tier``, ``task``) are required;
-    this function never picks them.
+    this function never picks them. When ``with_adjacent`` is true,
+    each evidence record's flanking chunks (ord-1 and ord+1 within the
+    same document) are concatenated into ``context_window`` so the
+    writer can read sentences that bridge into and out of the cited
+    chunk. Citations and quote grounding still target the primary
+    ``chunk_id`` only.
     """
     card = load_card(bundle, slug)
     if not card.front:
@@ -54,11 +65,55 @@ def build_draft(
     evidence_records = read_evidence(bundle, slug)
     active = [r for r in evidence_records if r.status == "active"]
 
+    doc_chunks_cache: dict[str, list] = {}
+
+    def _context_window_for(rec) -> str:
+        if not with_adjacent:
+            return ""
+        doc_chunks = doc_chunks_cache.get(rec.doc_id)
+        if doc_chunks is None:
+            doc_chunks = corpus_queries.list_chunks_for_doc(corpus, rec.doc_id)
+            doc_chunks_cache[rec.doc_id] = doc_chunks
+        pos = next(
+            (i for i, c in enumerate(doc_chunks) if c.id == rec.chunk_id),
+            None,
+        )
+        if pos is None:
+            return ""
+        parts: list[str] = []
+        if pos > 0:
+            prev = doc_chunks[pos - 1]
+            parts.append(f"[prev ord={prev.ord}]\n{prev.text or ''}")
+        if pos + 1 < len(doc_chunks):
+            nxt = doc_chunks[pos + 1]
+            parts.append(f"[next ord={nxt.ord}]\n{nxt.text or ''}")
+        return "\n\n".join(parts)
+
+    chunk_ids = [r.chunk_id for r in active]
+    equations_by_chunk = corpus_queries.equations_for_chunks(corpus, chunk_ids)
+    fetched_chunks: dict[str, object] = {}
+    for cid in chunk_ids:
+        chunk = corpus_queries.get_chunk(corpus, cid)
+        if chunk is not None:
+            fetched_chunks[cid] = chunk
+    artifacts_by_chunk = corpus_queries.referenced_artifacts_for_chunks(
+        corpus, list(fetched_chunks.values())
+    )
+
     evidence: list[WriteEvidenceRef] = []
     for rec in active:
-        chunk = corpus_queries.get_chunk(corpus, rec.chunk_id)
-        chunk_text = chunk.text if chunk is not None else ""
-        section_type = chunk.section_type if chunk is not None else ""
+        chunk = fetched_chunks.get(rec.chunk_id)
+        chunk_text = getattr(chunk, "text", "") if chunk is not None else ""
+        section_type = getattr(chunk, "section_type", "") if chunk is not None else ""
+        artifacts = artifacts_by_chunk.get(rec.chunk_id, {})
+        # `rec` may carry an out-of-schema ``source`` label written by
+        # the workflow when evidence was gathered via multiple
+        # sub-queries (refinement / guided strategies). Pass it through
+        # so the dossier renderer can group by retrieval source.
+        source_label = ""
+        extras = getattr(rec, "__pydantic_extra__", None) or {}
+        if isinstance(extras.get("source"), str):
+            source_label = extras["source"]
         evidence.append(
             WriteEvidenceRef(
                 chunk_id=rec.chunk_id,
@@ -66,6 +121,11 @@ def build_draft(
                 quote=rec.quote,
                 chunk_text=chunk_text,
                 section_type=section_type,
+                context_window=_context_window_for(rec),
+                source=source_label,
+                chunk_equations=equations_by_chunk.get(rec.chunk_id, []),
+                chunk_tables=artifacts.get("tables", []),
+                chunk_figures=artifacts.get("figures", []),
             )
         )
 
@@ -80,12 +140,21 @@ def build_draft(
         model_id=model_id,
         tier=tier_value,
         evidence=evidence,
+        author_context=_author_context_for_card(corpus, card)
+        if card.kind == "person"
+        else None,
     )
 
     payload = request.model_dump(mode="json")
     payload["schema_version"] = 1
     payload["task"] = task
     write_json(draft_path(bundle, slug), payload)
+    # Regenerate the markdown evidence dossier so iterative strategies
+    # (refine / guided / query) that re-run ``draft build`` after
+    # appending evidence always see a fresh dossier alongside draft.json.
+    dossier_p = dossier_path(bundle, slug)
+    dossier_p.parent.mkdir(parents=True, exist_ok=True)
+    dossier_p.write_text(render_dossier(request), encoding="utf-8")
     return request
 
 
@@ -95,3 +164,18 @@ def load_draft(bundle: Bundle, slug: str) -> WriteRequest:
     payload.pop("schema_version", None)
     payload.pop("task", None)
     return WriteRequest.model_validate(payload)
+
+
+def _author_context_for_card(corpus: Corpus, card) -> dict | None:
+    context = build_author_context(list_documents(corpus))
+    for name in [card.page_id, *card.aliases]:
+        keys = []
+        if isinstance(name, str) and name.lower().startswith("author:"):
+            payload = name.split(":", 1)[1].strip().replace("_", " ")
+            keys.extend([payload, author_key(payload)])
+        else:
+            keys.append(author_key(name))
+        for key in keys:
+            if key in context:
+                return asdict(context[key])
+    return None

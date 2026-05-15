@@ -200,6 +200,18 @@ def _quote_grounding_errors(
     return errors
 
 
+def validate_response_data(draft_data: dict, response_data: dict) -> dict:
+    """Run every check on raw draft + response dicts. Does not touch disk.
+
+    Used by ``wikify draft check --dry-run`` so a writer subagent can
+    pre-validate a response candidate before committing it to disk.
+    Returns the verdict dict in the same shape as ``validate_response``.
+    """
+    draft_data = _strip_envelope(draft_data)
+    response_data = _strip_envelope(response_data)
+    return _run_checks(draft_data, response_data, draft_p="", response_p="")
+
+
 def validate_response(bundle: Bundle, slug: str) -> dict:
     """Run every check on draft.json + response.json and write
     validation.json. Returns the verdict dict.
@@ -210,6 +222,21 @@ def validate_response(bundle: Bundle, slug: str) -> dict:
     draft_data = _strip_envelope(read_json(draft_p))
     response_data = _strip_envelope(read_json(response_p))
 
+    verdict = _run_checks(
+        draft_data, response_data,
+        draft_p=str(draft_p), response_p=str(response_p),
+    )
+    write_json(validation_path(bundle, slug), verdict)
+    return verdict
+
+
+def _run_checks(
+    draft_data: dict,
+    response_data: dict,
+    *,
+    draft_p: str,
+    response_p: str,
+) -> dict:
     errors: list[dict] = []
     structural: dict[str, bool] = {}
 
@@ -279,15 +306,13 @@ def validate_response(bundle: Bundle, slug: str) -> dict:
         errors.extend(grounding_errors)
         structural["quote_grounding"] = not grounding_errors
 
-    verdict = {
+    return {
         "schema_version": VALIDATION_SCHEMA_VERSION,
         "ok": len(errors) == 0,
         "page_id": page_id,
-        "response_path": str(response_p),
-        "draft_path": str(draft_p),
+        "response_path": response_p,
+        "draft_path": draft_p,
         "errors": errors,
         "structural_checks": structural,
         "checked_at": _utcnow(),
     }
-    write_json(validation_path(bundle, slug), verdict)
-    return verdict
