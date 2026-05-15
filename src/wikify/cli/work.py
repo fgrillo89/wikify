@@ -485,7 +485,6 @@ def cmd_build_evidence(
 
     Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
     """
-    import re as _re
     import sqlite3
     import subprocess
 
@@ -737,7 +736,11 @@ def cmd_cluster_concepts(
                     "clusters": [
                         {
                             "id": i,
-                            "kind": "person" if all(kind_of[s] == "person" for s in c) else "article",
+                            "kind": (
+                                "person"
+                                if all(kind_of[s] == "person" for s in c)
+                                else "article"
+                            ),
                             "slugs": c,
                             "size": len(c),
                         }

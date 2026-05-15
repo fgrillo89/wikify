@@ -143,7 +143,10 @@ def render_dossier(draft: WriteRequest) -> str:
     fm_lines.append("---")
 
     out = ["\n".join(fm_lines), ""]
-    out.append("<!-- generated artifact; do not edit. Re-run `wikify draft build` or `wikify draft render-dossier <slug>` to regenerate. -->")
+    out.append(
+        "<!-- generated artifact; do not edit. Re-run `wikify draft build` "
+        "or `wikify draft render-dossier <slug>` to regenerate. -->"
+    )
     out.append("")
     out.append(f"# Evidence Dossier — {draft.page_id}")
     out.append("")
@@ -208,7 +211,10 @@ def render_dossier(draft: WriteRequest) -> str:
                         out.append(f"- {fig.strip()}")
                     out.append("")
                 if ref.context_window:
-                    out.append("<details><summary>Adjacent chunks (synthesis context, do not cite)</summary>")
+                    out.append(
+                        "<details><summary>Adjacent chunks "
+                        "(synthesis context, do not cite)</summary>"
+                    )
                     out.append("")
                     out.append("```")
                     out.append(ref.context_window.rstrip())
