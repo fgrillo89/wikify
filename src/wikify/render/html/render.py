@@ -95,6 +95,11 @@ def build_site(
     (out_dir / "static").mkdir(exist_ok=True)
     (out_dir / "assets").mkdir(exist_ok=True)
 
+    # Load doc_id -> source URL map from the corpus and stage cited PDFs
+    # into ``assets/sources/`` so the rendered reference list can hyperlink
+    # straight to the paper a reader is clicking on.
+    doc_source_map = _load_doc_source_map(corpus_root, out_dir)
+
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
         autoescape=select_autoescape(["html"]),
@@ -159,6 +164,7 @@ def build_site(
             shared_ctx=shared_ctx,
             page_by_id=page_by_id,
             root="../",
+            doc_source_map=doc_source_map,
         )
         html_path.write_text(html_str, encoding="utf-8")
 
@@ -235,6 +241,7 @@ def _render_article(
     shared_ctx: dict[str, Any],
     page_by_id: dict[str, Page],
     root: str,
+    doc_source_map: dict[str, str] | None = None,
 ) -> str:
     # Reconstruct the full body (frontmatter-stripped) including the
     # ## Evidence block, so the markdown footnotes extension can render
@@ -254,7 +261,7 @@ def _render_article(
     )
 
     # Clean up evidence footnote lines: format as bibliographic references.
-    body_md = _clean_evidence_lines(body_md)
+    body_md = _clean_evidence_lines(body_md, doc_source_map=doc_source_map)
 
     # Format bibliography section: convert [N] markers to superscript links
     body_md = _format_bibliography_section(body_md)
@@ -340,6 +347,76 @@ def _render_article(
     )
 
 
+def _load_doc_source_map(
+    corpus_root: Path | None, out_dir: Path,
+) -> dict[str, str]:
+    """Return ``{doc_id: url}`` for every doc the corpus knows about.
+
+    Preference order per doc:
+
+    1. ``doi`` — rendered as ``https://doi.org/<doi>``. Always portable.
+    2. ``source_path`` — the original PDF (or markdown) the doc was
+       ingested from. Copied into ``<out_dir>/assets/sources/`` so the
+       wiki carries the file and the rendered ``<a>`` points at the
+       relative path. The reader clicks and the PDF opens in their
+       browser.
+
+    Returns an empty dict when no corpus is provided or the corpus
+    has no SQLite store.
+    """
+    if corpus_root is None:
+        return {}
+    db_path = Path(corpus_root) / "wikify.db"
+    if not db_path.is_file():
+        return {}
+    import sqlite3 as _sqlite
+
+    sources_dir = out_dir / "assets" / "sources"
+    out: dict[str, str] = {}
+    con = _sqlite.connect(str(db_path))
+    con.row_factory = _sqlite.Row
+    try:
+        rows = list(con.execute(
+            "SELECT doc_id, source_path, doi FROM documents"
+        ))
+    finally:
+        con.close()
+    for r in rows:
+        doc_id = r["doc_id"]
+        doi = (r["doi"] or "").strip()
+        if doi:
+            out[doc_id] = f"https://doi.org/{doi}"
+            continue
+        source_path = (r["source_path"] or "").strip()
+        if not source_path:
+            continue
+        # source_path may be Windows-style (backslashes) from an older ingest.
+        src = Path(source_path.replace("\\", "/"))
+        if not src.is_absolute() and not src.is_file():
+            # Try relative to corpus_root's parent (typical layout).
+            alt = Path(corpus_root).parent.parent / src
+            if alt.is_file():
+                src = alt
+        if not src.is_file():
+            continue
+        # Stage under assets/sources/ with a stable short-handle filename
+        # so the per-page link is a fixed relative URL regardless of where
+        # the corpus lives on disk.
+        short = doc_id[-12:] if len(doc_id) > 12 else doc_id
+        suffix = src.suffix or ".pdf"
+        dest = sources_dir / f"{short}{suffix}"
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(src, dest)
+            except OSError:
+                continue
+        # Per-page HTML lives at out_dir/<sub>/<id>.html (depth 1), so
+        # the relative URL to assets/sources/<short>.pdf is one level up.
+        out[doc_id] = f"../assets/sources/{short}{suffix}"
+    return out
+
+
 def _strip_frontmatter(text: str) -> str:
     body = text
     if body.startswith("---"):
@@ -384,25 +461,33 @@ _CHUNK_HASH_RE = re.compile(r"__c\d{4}__[0-9a-f]{6,}")
 _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
 
 
-def _clean_evidence_lines(body: str) -> str:
+def _clean_evidence_lines(
+    body: str, *, doc_source_map: dict[str, str] | None = None,
+) -> str:
     """Reformat evidence footnote definitions as bibliographic references.
 
     Transforms raw evidence like:
         ``[^e1]: chunk_hash (doc_id) > "quote"``
     into clean references like:
-        ``[^e1]: Author (Year). *Paper Title.* "quote"``
+        ``[^e1]: [Author (Year). *Paper Title.*](url) "quote"``
+
+    When ``doc_source_map`` resolves the doc_id to a URL (DOI link or
+    locally-staged PDF path) the bibliographic head is wrapped in a
+    markdown link so the rendered footnote becomes clickable.
     """
     lines = body.split("\n")
     out: list[str] = []
     for line in lines:
         if line.startswith("[^") and "]:" in line:
             line = _CHUNK_HASH_RE.sub("", line)
-            line = _format_evidence_as_reference(line)
+            line = _format_evidence_as_reference(line, doc_source_map=doc_source_map)
         out.append(line)
     return "\n".join(out)
 
 
-def _format_evidence_as_reference(line: str) -> str:
+def _format_evidence_as_reference(
+    line: str, *, doc_source_map: dict[str, str] | None = None,
+) -> str:
     """Format a single evidence footnote line as a bibliographic reference."""
     # Extract marker prefix
     marker_end = line.index("]:") + 2
@@ -413,7 +498,7 @@ def _format_evidence_as_reference(line: str) -> str:
     sep = rest.find(' > "')
     if sep == -1:
         # No quote separator -- just clean up what we have
-        return f"{marker} {_format_doc_id(rest)}"
+        return f"{marker} {_format_doc_id(rest, doc_source_map=doc_source_map)}"
 
     head = rest[:sep].strip()
     quote = rest[sep + 4 :].rstrip('"').strip()
@@ -425,7 +510,7 @@ def _format_evidence_as_reference(line: str) -> str:
     if paren_open > 0 and paren_close > paren_open:
         doc_id = head[paren_open + 1 : paren_close].strip()
 
-    formatted = _format_doc_id(doc_id)
+    formatted = _format_doc_id(doc_id, doc_source_map=doc_source_map)
     if quote:
         return f'{marker} {formatted} -- "{quote}"'
     return f"{marker} {formatted}"
@@ -496,11 +581,23 @@ def _format_bibliography_section(body: str) -> str:
 _TRAILING_HASH_RE = re.compile(r"_[0-9a-f]{5,}$")
 
 
-def _format_doc_id(doc_id: str) -> str:
-    """Turn a doc_id like '[2020 Liu] Paper Title_hash' into 'Liu (2020). *Paper Title*.'"""
+def _format_doc_id(
+    doc_id: str, *, doc_source_map: dict[str, str] | None = None,
+) -> str:
+    """Turn a doc_id like '[2020 Liu] Paper Title_hash' into 'Liu (2020). *Paper Title*.'
+
+    When ``doc_source_map`` has a URL for the doc, wrap the reference
+    text in a markdown link so the rendered footnote becomes clickable
+    (DOI link, or a locally-staged PDF copy in the site's assets dir).
+    """
+    raw_doc_id = doc_id
     # Strip chunk and content hash suffixes
     doc_id = _CHUNK_HASH_RE.sub("", doc_id).strip().rstrip("_")
     doc_id = _TRAILING_HASH_RE.sub("", doc_id).strip().rstrip("_")
+
+    # Resolve URL once; the lookup key is the raw doc_id (the form
+    # the source map was built with).
+    url = (doc_source_map or {}).get(raw_doc_id) or (doc_source_map or {}).get(doc_id)
 
     # Try to extract [Year Author] prefix
     m = _DOC_YEAR_RE.match(doc_id)
@@ -512,12 +609,17 @@ def _format_doc_id(doc_id: str) -> str:
         title = _TRAILING_HASH_RE.sub("", title).strip().rstrip("_")
         title = title.replace("_", " ").strip()
         if title:
-            return f"{author} ({year}). *{title}.*"
-        return f"{author} ({year})."
+            label = f"{author} ({year}). *{title}.*"
+        else:
+            label = f"{author} ({year})."
+    else:
+        # Fallback: just clean underscores and present as-is
+        clean = doc_id.replace("_", " ").strip()
+        label = f"*{clean}.*" if clean else doc_id
 
-    # Fallback: just clean underscores and present as-is
-    clean = doc_id.replace("_", " ").strip()
-    return f"*{clean}.*" if clean else doc_id
+    if url:
+        return f"[{label}]({url})"
+    return label
 
 
 def _stage_and_rewrite_figures(
