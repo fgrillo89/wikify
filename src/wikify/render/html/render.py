@@ -627,9 +627,11 @@ def _resolve_wikilinks(
     return _WIKILINK_RE.sub(_replace, body)
 
 
-# Matches the internal chunk hash suffix in evidence lines, e.g.
-# "__c0000__fec9f3fb" at the end of a chunk_id.
-_CHUNK_HASH_RE = re.compile(r"__c\d{4}__[0-9a-f]{6,}")
+# Matches the internal chunk-id suffix, e.g. ``__c0000_fec9f3fb`` or
+# ``__c0000__fec9f3fb`` at the end of a chunk_id. The hyphen-vs-double
+# underscore between the chunk index and the hash has varied across
+# ingest paths; both forms are accepted so legacy bundles also clean up.
+_CHUNK_HASH_RE = re.compile(r"__c\d{4}_+[0-9a-f]{6,}")
 
 # Extracts [Year Author] prefix from doc_id, e.g. "[2020 Liu]"
 _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
@@ -661,10 +663,10 @@ def _clean_evidence_lines(
     the rendered reference list reads 1, 2, 3 top to bottom.
     """
     # First pass: classify every line as either a footnote definition or
-    # body prose, and format each definition. ``formatted_body`` is the
-    # bibliographic head only (no ``[^eN]:`` prefix), used as the dedup
-    # key so multiple chunks of the same paper collapse into one entry.
-    formatted_body: dict[str, str] = {}
+    # body prose. For each definition, capture ``(doc_id, citation_text)``;
+    # the doc_id (normalized through the meta map's DOI when available)
+    # is the stable identity used for dedup, not the rendered text.
+    parsed: dict[str, tuple[str, str]] = {}
     body_lines: list[str] = []
     in_def_block = False
     for line in body.split("\n"):
@@ -672,7 +674,7 @@ def _clean_evidence_lines(
             in_def_block = True
             marker = line[2:line.index("]:")]
             cleaned = _CHUNK_HASH_RE.sub("", line)
-            formatted_body[marker] = _format_evidence_body(
+            parsed[marker] = _format_evidence_body(
                 cleaned, doc_meta_map=doc_meta_map,
             )
             continue
@@ -683,10 +685,22 @@ def _clean_evidence_lines(
         in_def_block = False
         body_lines.append(line)
 
-    if not formatted_body:
+    if not parsed:
         return "\n".join(body_lines)
 
-    # Pick the prose-first marker per rendered body as the canonical one,
+    # Resolve each marker to a stable identity: DOI first when present
+    # (so two doc_ids that share a DOI collapse), else the doc_id, else
+    # the rendered citation text as a last-resort fallback.
+    def _identity(doc_id: str, citation: str) -> str:
+        meta = (doc_meta_map or {}).get(doc_id) or {}
+        doi = (meta.get("doi") or "").strip().lower()
+        if doi:
+            return f"doi:{doi}"
+        if doc_id:
+            return f"id:{doc_id}"
+        return f"text:{citation}"
+
+    # Pick the prose-first marker per identity as the canonical one,
     # then rewrite uses of duplicates to the canonical marker. The python-
     # markdown footnotes extension naturally folds multiple ``[^eN]`` uses
     # of the same marker into one ``<li>`` with multiple backrefs.
@@ -695,20 +709,21 @@ def _clean_evidence_lines(
     seen_in_prose: set[str] = set()
     for m in _MARKER_USE_RE.finditer(prose):
         marker = m.group(1)
-        if marker in formatted_body and marker not in seen_in_prose:
+        if marker in parsed and marker not in seen_in_prose:
             prose_order.append(marker)
             seen_in_prose.add(marker)
-    canonical_for_body: dict[str, str] = {}
+    canonical_for_identity: dict[str, str] = {}
     canonical_per_marker: dict[str, str] = {}
     for marker in prose_order:
-        body_text = formatted_body[marker]
-        canonical = canonical_for_body.setdefault(body_text, marker)
+        doc_id, citation = parsed[marker]
+        ident = _identity(doc_id, citation)
+        canonical = canonical_for_identity.setdefault(ident, marker)
         canonical_per_marker[marker] = canonical
     # Markers defined but never cited keep themselves as canonical so
     # they still emit (they fall through the rewrite below untouched).
-    for marker in formatted_body:
+    for marker, (doc_id, citation) in parsed.items():
         canonical_per_marker.setdefault(marker, marker)
-        canonical_for_body.setdefault(formatted_body[marker], marker)
+        canonical_for_identity.setdefault(_identity(doc_id, citation), marker)
 
     if any(c != m for m, c in canonical_per_marker.items()):
         def _rewrite_use(match: re.Match[str]) -> str:
@@ -725,7 +740,7 @@ def _clean_evidence_lines(
         if canonical not in emitted:
             emitted_order.append(canonical)
             emitted.add(canonical)
-    for marker in sorted(formatted_body):
+    for marker in sorted(parsed):
         canonical = canonical_per_marker[marker]
         if canonical not in emitted:
             emitted_order.append(canonical)
@@ -735,7 +750,8 @@ def _clean_evidence_lines(
     if out and out[-1].strip():
         out.append("")
     for marker in emitted_order:
-        out.append(f"[^{marker}]: {formatted_body[marker]}")
+        _doc_id, citation = parsed[marker]
+        out.append(f"[^{marker}]: {citation}")
     return "\n".join(out)
 
 
@@ -794,16 +810,17 @@ def _isolate_display_math(body: str) -> str:
 
 def _format_evidence_body(
     line: str, *, doc_meta_map: dict[str, dict] | None = None,
-) -> str:
-    """Return the citation text only (no ``[^eN]:`` prefix).
+) -> tuple[str, str]:
+    """Return ``(doc_id, citation_text)`` for one ``[^eN]:`` definition.
 
-    Input shape (post chunk-hash strip): ``[^eN]: chunk_id (doc_id) > "quote"``
-    or ``[^eN]: doc_id`` when no quote was attached. The quote is
-    discarded; only the doc_id is used.
+    Input shape: ``[^eN]: chunk_id (doc_id) > "quote"``, or
+    ``[^eN]: doc_id`` when no wrapper was attached (legacy / hand-
+    written pages). The quote is discarded; only the doc_id is used.
 
-    When the corpus has a metadata row for the doc, the citation is
-    rendered in Wikipedia CS1 style. Otherwise the doc_id string is
-    parsed for ``[Year Author] Title`` as a fallback.
+    ``doc_id`` is what downstream dedup uses to identify the paper;
+    ``citation_text`` is the rendered CS1 string. Decoupling the two
+    means two papers that format to identical CS1 text (e.g. missing
+    DOI / venue) don't accidentally collapse during dedup.
     """
     marker_end = line.index("]:") + 2
     rest = line[marker_end:].strip()
@@ -812,11 +829,22 @@ def _format_evidence_body(
     sep = rest.find(' > "')
     head = rest[:sep].strip() if sep != -1 else rest
 
-    # ``head`` is ``chunk_id (doc_id)``. Titles can contain parens
-    # (e.g. ``(RRAM)``), so walk back from the trailing ``)`` with paren
-    # balance to find the matching wrapper ``(``. ``rfind("(")`` lands
-    # on the inner paren of titles like ``(RRAM)`` and mis-extracts.
-    doc_id = head
+    doc_id = _extract_doc_id(head, doc_meta_map=doc_meta_map)
+    return doc_id, _format_citation(doc_id, doc_meta_map=doc_meta_map)
+
+
+def _extract_doc_id(
+    head: str, *, doc_meta_map: dict[str, dict] | None = None,
+) -> str:
+    """Pull the doc_id out of a ``chunk_id (doc_id)`` head string.
+
+    The wrapper is extracted via balanced-paren walk so titles
+    containing ``(RRAM)`` etc. don't fool the parser. The unwrapped
+    form is preferred only when it resolves in ``doc_meta_map``;
+    otherwise the entire head is treated as the doc_id. This keeps
+    unwrapped legacy lines like ``[^e1]: [2020 Smith] Title (RRAM)``
+    from being mis-parsed as a wrapped reference.
+    """
     if head.endswith(")"):
         depth = 0
         for i in range(len(head) - 1, -1, -1):
@@ -826,10 +854,14 @@ def _format_evidence_body(
             elif ch == "(":
                 depth -= 1
                 if depth == 0:
-                    doc_id = head[i + 1 : -1].strip()
+                    candidate = head[i + 1 : -1].strip()
+                    # Only accept the unwrap when the inner string
+                    # resolves to a known doc. Otherwise the trailing
+                    # ``(...)`` was part of the title, not a wrapper.
+                    if candidate and (doc_meta_map or {}).get(candidate):
+                        return candidate
                     break
-
-    return _format_citation(doc_id, doc_meta_map=doc_meta_map)
+    return head
 
 
 def _format_citation(
