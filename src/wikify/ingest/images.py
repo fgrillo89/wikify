@@ -268,28 +268,30 @@ def _build_alias_map(images: Iterable[DocImage]) -> dict[str, list[str]]:
             continue
         _push(_normalize_alias(stem), im.id)
 
-        triple: tuple[str, int, str] | None = None
-        # 1. Stem-derived: "Figure_01" / "Table_2a" / "Scheme_3"
-        m = _STEM_OR_LABEL_RE.match(stem)
-        if m:
+        # Register aliases from BOTH the stem and the caption when each
+        # parses to a (kind, num, sub) triple. Stem-only or caption-only
+        # docs still work; docs where the parser used sequential
+        # ``fig_NNN`` stems and captions carry the real figure number
+        # (e.g. ``fig_011.png`` whose caption is ``"Figure 9. ..."``) now
+        # link under both ``fig 11`` (stem) and ``fig 9`` (caption).
+        triples: list[tuple[str, int, str]] = []
+
+        def _add_triple(m: re.Match | None) -> None:
+            if m is None:
+                return
             kind_raw = m.group("kind").lower()
             kind = "figure" if kind_raw.startswith("fig") else kind_raw
-            triple = (kind, int(m.group("num")), (m.group("sub") or "").lower())
-        else:
-            # 2. Caption-derived: only used when the stem didn't parse
-            #    (parser fell back to ``fig_001``-style names).
-            caption = (im.caption or "").strip()
-            m = _STEM_OR_LABEL_RE.match(caption) if caption else None
-            if m:
-                kind_raw = m.group("kind").lower()
-                kind = "figure" if kind_raw.startswith("fig") else kind_raw
-                triple = (kind, int(m.group("num")), (m.group("sub") or "").lower())
+            t = (kind, int(m.group("num")), (m.group("sub") or "").lower())
+            if t not in triples:
+                triples.append(t)
 
-        if triple is None:
-            continue
-        kind, num, sub = triple
-        for alias in _expand_aliases(kind, num, sub):
-            _push(alias, im.id)
+        _add_triple(_STEM_OR_LABEL_RE.match(stem))
+        caption = (im.caption or "").strip()
+        if caption:
+            _add_triple(_STEM_OR_LABEL_RE.match(caption))
+        for kind, num, sub in triples:
+            for alias in _expand_aliases(kind, num, sub):
+                _push(alias, im.id)
     return aliases
 
 

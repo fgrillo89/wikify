@@ -1405,6 +1405,190 @@ def cmd_metrics_reclassify(
         store.close()
 
 
+@metrics_app.command("reclassify-figure-captions")
+def cmd_metrics_reclassify_figure_captions(
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report planned changes without writing.",
+    ),
+) -> None:
+    """Reassign figure captions that the parser bound to publisher banners.
+
+    The Docling parser occasionally binds a figure caption to a same-page
+    journal/publisher banner whose ``PictureItem`` precedes the real
+    figure in layout order. This walks every doc's ``assets`` rows, reads
+    each image's pixel dimensions from disk, and on each page moves
+    captions from banner-sized assets to the first caption-less
+    real-sized asset that follows. Banners whose caption was moved are
+    deleted; chunk<->asset edges are rebuilt for affected docs.
+    """
+    import sqlite3 as _sqlite3
+
+    from PIL import Image, UnidentifiedImageError
+
+    from ..corpus.chunks import list_documents
+    from ..corpus.images_index import plan_caption_reassignment
+    from ..corpus.store.routing import open_store
+    from ..ingest.images import link_chunks_to_images
+    from ..models import Chunk, DocImage
+
+    corpus = _resolve_corpus(corpus_dir)
+    store = open_store(corpus.root)
+    docs_touched = 0
+    captions_moved = 0
+    banners_dropped = 0
+    try:
+        doc_ids = [d.id for d in list_documents(corpus)]
+        for doc_id in doc_ids:
+            rows = list(
+                store.con.execute(
+                    "SELECT asset_id, page, ord, path, caption "
+                    "FROM assets WHERE doc_id=? AND asset_type IN ('figure','image') "
+                    "ORDER BY ord",
+                    (doc_id,),
+                )
+            )
+            if not rows:
+                continue
+            items: list[tuple[object, int | None, int | None, int | None, str]] = []
+            for r in rows:
+                stored = r["path"] or ""
+                # Path may be stored as: project-rooted relative
+                # ("data\\corpora\\..."), corpus-rooted relative
+                # ("images\\..."), or absolute. Try each in order and
+                # pick the first that resolves to an existing file.
+                candidates = [Path(stored), corpus.root / stored.lstrip("\\/")]
+                abs_path = next(
+                    (c for c in candidates if c.is_file()),
+                    candidates[0],
+                )
+                w: int | None = None
+                h: int | None = None
+                if abs_path.is_file():
+                    try:
+                        with Image.open(abs_path) as im:
+                            w, h = im.size
+                    except (OSError, UnidentifiedImageError):
+                        pass
+                items.append((r["asset_id"], r["page"], w, h, r["caption"] or ""))
+            plan = plan_caption_reassignment(items)
+            target_caption_updates: list[tuple[str, str]] = []
+            banner_ids: list[str] = []
+            for src_idx, tgt_idx in plan:
+                src_id, _sp, _sw, _sh, src_cap = items[src_idx]
+                tgt_id, _tp, _tw, _th, _tcap = items[tgt_idx]
+                target_caption_updates.append((src_cap, str(tgt_id)))
+                banner_ids.append(str(src_id))
+            if plan:
+                docs_touched += 1
+                captions_moved += len(plan)
+                banners_dropped += len(banner_ids)
+            if dry_run:
+                continue
+            try:
+                with store.con:
+                    if target_caption_updates:
+                        store.con.executemany(
+                            "UPDATE assets SET caption=? WHERE asset_id=?",
+                            target_caption_updates,
+                        )
+                    if banner_ids:
+                        placeholders = ",".join("?" * len(banner_ids))
+                        store.con.execute(
+                            f"DELETE FROM chunk_assets WHERE asset_id IN ({placeholders})",
+                            tuple(banner_ids),
+                        )
+                        store.con.execute(
+                            f"DELETE FROM assets WHERE asset_id IN ({placeholders})",
+                            tuple(banner_ids),
+                        )
+                    # Always rebuild near-chunk edges. Idempotent and
+                    # picks up alias-map changes (caption vs. stem) even
+                    # when the doc had no banner reassignment.
+                    surviving = list(
+                        store.con.execute(
+                            "SELECT asset_id, path, caption, page FROM assets "
+                            "WHERE doc_id=? AND asset_type IN ('figure','image') "
+                            "ORDER BY ord",
+                            (doc_id,),
+                        )
+                    )
+                    doc_images = [
+                        DocImage(
+                            id=a["asset_id"],
+                            path=a["path"] or "",
+                            caption=a["caption"] or "",
+                            page=a["page"],
+                        )
+                        for a in surviving
+                    ]
+                    chunk_rows = list(
+                        store.con.execute(
+                            "SELECT chunk_id, doc_id, ord, text, char_start, char_end, "
+                            "section_path_json, section_type FROM chunks WHERE doc_id=?",
+                            (doc_id,),
+                        )
+                    )
+                    chunks: list[Chunk] = []
+                    for cr in chunk_rows:
+                        try:
+                            sp = json.loads(cr["section_path_json"] or "[]")
+                        except Exception:
+                            sp = []
+                        chunks.append(
+                            Chunk(
+                                id=cr["chunk_id"],
+                                doc_id=cr["doc_id"],
+                                ord=cr["ord"],
+                                text=cr["text"] or "",
+                                char_span=(cr["char_start"], cr["char_end"]),
+                                section_path=sp if isinstance(sp, list) else [],
+                                section_type=cr["section_type"] or "body",
+                            )
+                        )
+                    near = link_chunks_to_images(chunks, doc_images)
+                    # Rebuild ONLY the 'near' (chunk -> image) edges;
+                    # preserve 'contains' (chunk -> equation) edges and
+                    # any other relations the linker doesn't own.
+                    store.con.execute(
+                        "DELETE FROM chunk_assets "
+                        "WHERE relation='near' "
+                        "AND chunk_id IN (SELECT chunk_id FROM chunks WHERE doc_id=?)",
+                        (doc_id,),
+                    )
+                    image_ids = {a["asset_id"] for a in surviving}
+                    rows = [
+                        (cid, img_id, "near", None)
+                        for img_id, cids in near.items()
+                        if img_id in image_ids
+                        for cid in cids
+                    ]
+                    if rows:
+                        store.con.executemany(
+                            "INSERT OR IGNORE INTO chunk_assets"
+                            "(chunk_id, asset_id, relation, confidence) "
+                            "VALUES (?, ?, ?, ?)",
+                            rows,
+                        )
+            except _sqlite3.Error as exc:
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="db_write_failed",
+                    doc_id=doc_id,
+                    message=str(exc),
+                )
+        verb = "would move" if dry_run else "moved"
+        typer.echo(
+            f"reclassified figure captions: {verb} {captions_moved} caption(s) "
+            f"and dropped {banners_dropped} banner asset(s) across "
+            f"{docs_touched}/{len(doc_ids)} docs"
+        )
+    finally:
+        store.close()
+
+
 @metrics_app.command("list")
 def cmd_metrics_list(
     corpus_dir: Path | None = typer.Option(None, "--corpus"),
