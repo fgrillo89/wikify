@@ -44,14 +44,15 @@ This note records the file contract for skill-driven wikification.
 
   derived/
     index.json
-    graph.json
+    navigation.json
     vectors.npz
     vectors.ids.json
+  wiki.db
 ```
 
 `wiki/` is the committed human-facing wiki. `work/` is the living build
-state. `run/` is execution control and telemetry. `derived/` is rebuildable
-machine output.
+state. `run/` is execution control and telemetry. `wiki.db` is the committed
+wiki query store. `derived/` is rebuildable machine and render output.
 
 ## Concept folder contract
 
@@ -277,7 +278,7 @@ Files that should not be treated as monitoring:
 - `validation.json` is a page-attempt gate.
 - `draft.json` is a per-attempt writer input snapshot.
 - `response.json` is a per-attempt writer output.
-- `derived/index.json` and `derived/graph.json` are rebuildable projections.
+- `derived/index.json` and `derived/navigation.json` are rebuildable projections.
 - processed inbox records are garbage-collected after consolidation.
 
 ## Event log telemetry
@@ -449,7 +450,8 @@ work/inbox/*.jsonl                     -> wikify work list inbox [kind]
 work/concepts/<slug>/draft.json        -> wikify draft show <slug>
 work/concepts/<slug>/validation.json   -> wikify draft check/show <slug>
 derived/index.json                     -> wikify wiki list/find/show
-derived/graph.json                     -> wikify wiki find --links/--co-evidence/--overlaps
+wiki.db                                -> wikify wiki find/traverse
+derived/navigation.json                -> wikify render, category fallback
 ```
 
 Decision: wrap basic file exploration inside the CLI. Skill instructions should
@@ -683,8 +685,8 @@ Responsibilities:
 `DerivedStore` owns rebuildable machine projections:
 
 - `derived/index.json`
-- `derived/graph.json`
-- vector caches
+- `derived/navigation.json`
+- vector compatibility caches
 
 Responsibilities:
 
@@ -799,12 +801,12 @@ Wiki commands:
 
 ```text
 wikify wiki list [articles|people|pages]
-wikify wiki find "ALD temperature window"
-wikify wiki find --links "Atomic Layer Deposition"
-wikify wiki find --linked-by "Memristor"
-wikify wiki find --co-evidence "Atomic Layer Deposition"
-wikify wiki find --orphans
-wikify wiki find --overlaps "Atomic Layer Deposition"
+wikify wiki find "ALD temperature window" [--mode text|bm25|semantic|hybrid]
+wikify wiki traverse "Atomic Layer Deposition" --to links
+wikify wiki traverse "Memristor" --to linked-by
+wikify wiki traverse "Atomic Layer Deposition" --to co-evidence
+wikify wiki traverse "Atomic Layer Deposition" --to categories
+wikify wiki traverse category:materials --to pages
 wikify wiki show "Atomic Layer Deposition" [--full]
 wikify wiki repl
 wikify wiki build indexes|graph|vectors
@@ -813,6 +815,14 @@ wikify wiki apply-navigation <path> [--run <bundle>]
 wikify wiki check
 wikify wiki commit <concept>
 ```
+
+`wiki navigation-context` is the first-class organizer query projection. It
+writes compact page metadata, deterministic cluster hints from links, shared
+evidence documents, and title/excerpt token overlap, the existing navigation
+tree when present, and freshness deltas for new or changed page ids.
+`wiki apply-navigation` validates and persists `derived/navigation.json`.
+The render contract remains `groups` with recursive `children` and `page_ids`;
+additional metadata is for organizer agents and freshness checks.
 
 Rendering and eval remain downstream deterministic tools. They consume a wiki
 bundle and should never mutate corpus/work state. They use `--bundle <b>`
@@ -1266,14 +1276,15 @@ wikify wiki list files
 
 ```text
 wikify wiki find "resistive switching mechanism" --top-k 5
-wikify wiki find "atomic layer deposition" --text
-wikify wiki find --links "Atomic Layer Deposition"
-wikify wiki find --linked-by "Memristor"
-wikify wiki find --co-evidence "Atomic Layer Deposition"
-wikify wiki find --evidence "Atomic Layer Deposition"
-wikify wiki find --thin --max-evidence 3 --top-k 20
-wikify wiki find --orphans
-wikify wiki find --overlaps "Atomic Layer Deposition" --top-k 5
+wikify wiki find "atomic layer deposition" --mode text
+wikify wiki find "hafnium oxide switching" --mode semantic
+wikify wiki traverse "Atomic Layer Deposition" --to links
+wikify wiki traverse "Memristor" --to linked-by
+wikify wiki traverse "Atomic Layer Deposition" --to co-evidence
+wikify wiki traverse "Atomic Layer Deposition" --to evidence
+wikify wiki traverse "Atomic Layer Deposition" --to similar --top-k 5
+wikify wiki traverse "Atomic Layer Deposition" --to categories
+wikify wiki traverse category:materials --to pages
 ```
 
 This maps to the fluent API:
@@ -1286,25 +1297,25 @@ wkg.page("Atomic Layer Deposition").co_evidence().collect()
 wkg.page("Atomic Layer Deposition").evidence().collect()
 ```
 
-`wiki find <query> --text` is the bundle-aware grep path. It should search
-titles, aliases, frontmatter, and committed Markdown bodies, then return compact
-matches with page id, path, line number, and a short snippet:
+`wiki find <query> --mode text` is the bundle-aware grep path. It searches
+committed Markdown bodies and returns compact matches with page path and a short
+snippet:
 
 ```text
 wiki/articles/atomic-layer-deposition.md:1  Atomic Layer Deposition
 wiki/articles/atomic-layer-deposition.md:14 atomic layer deposition (ALD) is...
 ```
 
-Without `--text`, `wiki find <query>` may use a hybrid order:
+Without `--mode`, `wiki find <query>` uses hybrid search:
 
 ```text
-1. exact title/alias match
-2. lexical body/frontmatter match
-3. semantic page search
+1. wiki.db BM25 over committed page title/body
+2. page-vector semantic search when wiki embeddings exist
+3. reciprocal-rank fusion over the available result lists
 ```
 
-This makes simple article lookup cheap and predictable while preserving semantic
-retrieval for fuzzy queries.
+If neither wiki.db nor page vectors are available, hybrid mode falls back to the
+text path so legacy bundles remain searchable.
 
 Cross-graph workflows should stay explicit. The CLI should not hide whether the
 agent is reading the committed wiki or the underlying corpus:
@@ -1353,7 +1364,8 @@ work/concepts/<slug>/response.json     Record, per-attempt
 work/concepts/<slug>/validation.json   Record, per-attempt
 wiki/index.md                          Projection, agent-facing
 derived/index.json                     Projection, machine-facing
-derived/graph.json                     Projection
+derived/navigation.json                Projection, render-facing
+wiki.db                                Query store
 ```
 
 ### Tool output contract

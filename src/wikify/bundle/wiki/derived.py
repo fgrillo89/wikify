@@ -141,18 +141,25 @@ def rebuild_graph(bundle: Bundle) -> Path:
 
 
 def rebuild_vectors(bundle: Bundle) -> Path:
-    """Rebuild ``derived/vectors.npz`` — per-page embeddings.
+    """Rebuild committed-page embeddings.
 
-    Uses the project's current embedding backend in passage mode.
-    The vectors file is the input the ``wiki find`` semantic-search
-    path will consume.
+    ``wiki.db`` is the canonical query store. ``derived/vectors.npz`` is
+    still written as a compatibility projection for older readers.
     """
     from ...corpus.vectors import save_vectors
-    from ...embedding import embed_passages
+    from ...embedding import current_backend, embed_passages
     from .graph import build_wiki_vectors
+    from .store import (
+        open_wiki_store,
+        upsert_wiki_embedding_space,
+        upsert_wiki_embeddings,
+    )
 
     bundle.derived_dir.mkdir(parents=True, exist_ok=True)
+    rebuild_graph(bundle)
     pages = _load_pages(bundle)
+    cfg = current_backend()
+    space_id = _wiki_space_id(cfg)
     if not pages:
         # No committed pages — write an empty vectors file so callers can
         # still ``np.load`` without branching.
@@ -162,7 +169,39 @@ def rebuild_vectors(bundle: Bundle) -> Path:
 
         empty = VectorStore(matrix=_np.zeros((0, 0), dtype="float32"), ids=[])
         save_vectors(bundle.derived_vectors_path, empty)
+        con = open_wiki_store(bundle.sqlite_path)
+        try:
+            upsert_wiki_embedding_space(
+                con,
+                space_id,
+                str(cfg["backend"]),
+                cfg.get("model") if isinstance(cfg.get("model"), str) else None,
+                int(cfg["dim"] or 0),
+            )
+            con.execute("DELETE FROM wiki_embeddings WHERE space_id = ?", (space_id,))
+        finally:
+            con.close()
         return bundle.derived_vectors_path
     vectors = build_wiki_vectors(pages, embed_passages)
     save_vectors(bundle.derived_vectors_path, vectors)
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        dim = int(vectors.matrix.shape[1] if vectors.matrix.ndim == 2 else cfg["dim"] or 0)
+        upsert_wiki_embedding_space(
+            con,
+            space_id,
+            str(cfg["backend"]),
+            cfg.get("model") if isinstance(cfg.get("model"), str) else None,
+            dim,
+        )
+        con.execute("DELETE FROM wiki_embeddings WHERE space_id = ?", (space_id,))
+        upsert_wiki_embeddings(con, space_id, zip(vectors.ids, vectors.matrix, strict=True))
+    finally:
+        con.close()
     return bundle.derived_vectors_path
+
+
+def _wiki_space_id(cfg: dict) -> str:
+    backend = str(cfg.get("backend") or "unknown").replace("/", "_").replace(":", "_")
+    model = str(cfg.get("model") or "default").replace("/", "_").replace(":", "_")
+    return f"{backend}:{model}"

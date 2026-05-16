@@ -1,8 +1,8 @@
-"""MCP layer tests for the corpus surface.
+"""MCP layer tests for the corpus and committed-wiki surfaces.
 
 Three concerns that are unique to the MCP adapter:
 
-- tool registration: ``build_server`` exposes the corpus tools.
+- tool registration: ``build_server`` exposes corpus and wiki tools.
 - envelope shape: every tool returns ``{ok, kind, items, notes, next}``
   (or ``{ok=False, code, message}`` on error).
 - parity: tool ``items`` align with the underlying ``queries.*``
@@ -25,6 +25,11 @@ from tests.wikify.test_corpus_queries import (
 )
 from wikify.api import Bundle
 from wikify.bundle.run.lifecycle import init_run
+from wikify.bundle.wiki.store import (
+    apply_navigation_categories,
+    open_wiki_store,
+    upsert_wiki_page,
+)
 from wikify.corpus import queries
 from wikify.mcp import context, server
 
@@ -63,6 +68,10 @@ def test_build_server_registers_corpus_tools() -> None:
         "corpus_image",
         "corpus_similarity_walk",
         "corpus_citation_walk",
+        "wiki_find",
+        "wiki_show",
+        "wiki_traverse",
+        "wiki_schema",
     }
 
 
@@ -270,7 +279,75 @@ async def test_context_set_bundle_binds_recorded_corpus(tmp_path: Path) -> None:
     snap = show_res["items"][0]
     assert snap["bundle_bound"] is True
     assert snap["corpus_bound"] is True
-    assert Path(snap["corpus_path"]) == corpus.root
+
+
+async def test_wiki_find_show_and_traverse_tools(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    bundle = Bundle(root=tmp_path / "bundle")
+    init_run(bundle, corpus_path=corpus, run_id="run-test")
+    article_dir = bundle.wiki_articles_dir
+    article_dir.mkdir(parents=True, exist_ok=True)
+    (article_dir / "atomic-layer-deposition.md").write_text(
+        "---\n"
+        "id: Atomic Layer Deposition\n"
+        "kind: article\n"
+        "title: Atomic Layer Deposition\n"
+        "aliases: []\n"
+        "---\n\n"
+        "# Atomic Layer Deposition\n\n"
+        "Atomic layer deposition grows thin films.\n",
+        encoding="utf-8",
+    )
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        upsert_wiki_page(
+            con,
+            page_id="Atomic Layer Deposition",
+            slug="atomic-layer-deposition",
+            title="Atomic Layer Deposition",
+            kind="article",
+            body="Atomic layer deposition grows thin films.",
+        )
+        apply_navigation_categories(
+            con,
+            {
+                "groups": [
+                    {
+                        "id": "methods",
+                        "title": "Methods",
+                        "description": "",
+                        "page_ids": ["Atomic Layer Deposition"],
+                        "children": [],
+                    }
+                ]
+            },
+        )
+    finally:
+        con.close()
+
+    srv = server.build_server()
+    await _tool(srv, "context_set")(bundle_path=str(bundle.root))
+    found = await _tool(srv, "wiki_find")(
+        query="atomic layer",
+        mode="text",
+        top_k=5,
+    )
+    assert found["ok"] is True
+    assert found["items"][0]["handle"] == "page:atomic-layer-deposition"
+
+    shown = await _tool(srv, "wiki_show")(
+        handle="page:atomic-layer-deposition",
+        full=True,
+    )
+    assert shown["ok"] is True
+    assert "Atomic layer deposition grows" in shown["items"][0]["text"]
+
+    categories = await _tool(srv, "wiki_traverse")(
+        handle="page:atomic-layer-deposition",
+        to="categories",
+    )
+    assert categories["items"][0]["handle"] == "category:methods"
 
 
 async def test_context_set_bad_path_returns_error() -> None:

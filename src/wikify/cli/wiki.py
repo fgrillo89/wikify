@@ -31,12 +31,15 @@ from ..bundle.wiki.navigation import (
 )
 from ..bundle.wiki.queries import (
     AmbiguousSlugError,
-    find_text,
     list_articles,
     list_files,
     list_people,
     show_page,
+    traverse_category,
     traverse_page,
+)
+from ..bundle.wiki.queries import (
+    find as find_wiki,
 )
 from ..bundle.wiki.session import WikiSearchSession
 from ._format import FormatError, format_row, resolve_format
@@ -167,6 +170,11 @@ def cmd_find(
     run: Path | None = typer.Option(None, "--run"),
     top_k: int = typer.Option(20, "--top-k"),
     text: bool = typer.Option(False, "--text"),
+    mode: str = typer.Option(
+        "hybrid",
+        "--mode",
+        help="Search mode: text | bm25 | semantic | hybrid.",
+    ),
     fmt: str = typer.Option(
         "auto",
         "--format",
@@ -176,18 +184,20 @@ def cmd_find(
         ),
     ),
 ) -> None:
-    """Substring grep over committed pages (text mode is the only mode today).
+    """Search committed pages.
 
     Compact output columns: ``kind \\t page-handle \\t snippet``.
     """
     bundle = _resolve_bundle(run)
-    if not text:
-        # Default to text mode; graph + vector queries are a follow-up.
-        text = True
-    hits = find_text(bundle, query, top_k=top_k)
+    if text:
+        mode = "text"
+    try:
+        hits = find_wiki(bundle, query, mode=mode, top_k=top_k)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_find_mode", message=str(exc))
     fmt_resolved = _resolve_format_or_error(fmt)
     if fmt_resolved == "json":
-        typer.echo(json.dumps({"ok": True, "items": hits}))
+        typer.echo(json.dumps({"ok": True, "mode": mode, "items": hits}))
         return
     if fmt_resolved == "quiet":
         for h in hits:
@@ -419,6 +429,7 @@ _WIKI_SCHEMA: dict = {
     "node_types": {
         "page": "A committed wiki page (article or person). Handle: page:<slug>.",
         "evidence": "An evidence entry attached to a page (chunk_id + doc_id + quote).",
+        "category": "A navigation category/group. Handle: category:<id>.",
     },
     "edge_kinds": [
         "LINKS_TO",       # page -> page
@@ -427,13 +438,27 @@ _WIKI_SCHEMA: dict = {
         "SIMILAR",        # page <-> page (cosine over body embeddings)
     ],
     "traverse_relations": {
-        "page": ["links", "linked-by", "co-evidence", "evidence"],
+        "page": [
+            "links",
+            "linked-by",
+            "co-evidence",
+            "evidence",
+            "similar",
+            "see-also",
+            "category",
+            "categories",
+        ],
+        "category": ["children", "parent", "pages"],
     },
     "rank_metrics": {
         "page": ["n_links", "n_evidence"],
     },
     "find_modes": {
-        "--text": "Substring grep over committed page bodies (only mode today).",
+        "text": "Literal substring grep over committed page markdown.",
+        "bm25": "FTS5 BM25 over wiki.db pages.",
+        "semantic": "Cosine search over derived/vectors.npz page embeddings.",
+        "hybrid": "RRF fusion over BM25 and semantic search (default).",
+        "--text": "Backward-compatible alias for --mode text.",
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
@@ -482,7 +507,18 @@ def cmd_schema(
 # --------------------------------------------------------------- traverse
 
 
-_PAGE_RELATIONS = {"links", "linked-by", "co-evidence", "evidence"}
+_PAGE_RELATIONS = {
+    "links",
+    "linked-by",
+    "co-evidence",
+    "evidence",
+    "similar",
+    "see-also",
+    "category",
+    "categories",
+}
+_CATEGORY_RELATIONS = {"children", "parent", "pages"}
+_TRAVERSE_RELATIONS = _PAGE_RELATIONS | _CATEGORY_RELATIONS
 
 
 @app.command("traverse")
@@ -493,7 +529,8 @@ def cmd_traverse(
         ...,
         "--to",
         help=(
-            "Relation: links | linked-by | co-evidence | evidence. "
+            "Relation: links | linked-by | co-evidence | evidence | similar | "
+            "see-also | category | categories | children | parent | pages. "
             "evidence emits chunk handles for the corpus."
         ),
     ),
@@ -528,14 +565,44 @@ def cmd_traverse(
     """
     bundle = _resolve_bundle(run)
     fmt_resolved = _resolve_format_or_error(fmt)
-    if to not in _PAGE_RELATIONS:
+    if to not in _TRAVERSE_RELATIONS:
         cli_error(
             EXIT_VALIDATION,
             error="bad_relation",
             message=(
                 f"unknown wiki relation {to!r}; expected "
-                f"{' | '.join(sorted(_PAGE_RELATIONS))}"
+                f"{' | '.join(sorted(_TRAVERSE_RELATIONS))}"
             ),
+        )
+
+    if handle.startswith("category:"):
+        category_id = handle[len("category:"):]
+        if to not in _CATEGORY_RELATIONS:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_relation",
+                message=(
+                    f"category handles support "
+                    f"{' | '.join(sorted(_CATEGORY_RELATIONS))}; got {to!r}"
+                ),
+            )
+        try:
+            rows = traverse_category(
+                bundle,
+                category_id=category_id,
+                relation=to,
+                top_k=(top_k if top_k > 0 else None),
+            )
+        except ValueError as exc:
+            cli_error(EXIT_VALIDATION, error="bad_relation", message=str(exc))
+        _emit_wiki_traverse_rows(rows, fmt=fmt_resolved)
+        return
+
+    if to in _CATEGORY_RELATIONS:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_relation",
+            message=f"{to!r} requires a category:<id> handle",
         )
 
     handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
@@ -575,6 +642,8 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
                 items.append({**r, "handle": f"page:{r.get('slug', r.get('id', ''))}"})
             elif ntype == "evidence":
                 items.append({**r, "handle": f"chunk:{r.get('chunk_id', '')}"})
+            elif ntype == "category":
+                items.append({**r, "handle": f"category:{r.get('id', '')}"})
             else:
                 items.append(r)
         typer.echo(json.dumps({"ok": True, "items": items}))
@@ -588,6 +657,10 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
                 cid = str(r.get("chunk_id", ""))
                 if cid:
                     typer.echo(f"chunk:{cid}")
+            elif ntype == "category":
+                cid = str(r.get("id", ""))
+                if cid:
+                    typer.echo(f"category:{cid}")
         return
     for r in rows:
         ntype = r.get("type", "")
@@ -606,6 +679,16 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
             did = str(r.get("doc_id", ""))
             quote = str(r.get("quote", "") or "").replace("\n", " ")[:120]
             typer.echo(format_row([f"chunk:{cid}", f"doc:{did}", quote]))
+        elif ntype == "category":
+            cid = str(r.get("id", ""))
+            typer.echo(
+                format_row([
+                    f"children={r.get('n_children', 0)}",
+                    f"pages={r.get('n_pages', 0)}",
+                    f"category:{cid}",
+                    str(r.get("title", "") or ""),
+                ])
+            )
 
 
 # --------------------------------------------------------------- repl

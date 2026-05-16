@@ -96,10 +96,11 @@ acquisition with TTL) or by per-concept `.claim` files.
 |   |-- articles/<slug>.md                  canonical article pages
 |   |-- people/<slug>.md                    canonical biography pages
 |   `-- index.md
+|-- wiki.db                                 committed page query store
 `-- derived/
     |-- index.json                          page list projection
-    |-- graph.json                          wiki KG projection
-    `-- vectors.npz                         per-page embeddings
+    |-- navigation.json                     render navigation export
+    `-- vectors.npz                         compatibility page-vector projection
 ```
 
 Every durable artifact carries a `schema_version` envelope. Pydantic

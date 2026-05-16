@@ -19,7 +19,23 @@ wikify wiki navigation-context --run <bundle> --out <bundle>/derived/navigation_
 ```
 
 Read that JSON. It contains page ids, titles, kinds, aliases, excerpts,
-links, evidence counts, and source counts.
+links, evidence counts, source counts, compact cluster hints, existing
+navigation when present, and freshness deltas.
+
+Use `freshness.has_navigation` to choose the organizing mode:
+
+- Full organization: no existing navigation, or the existing hierarchy is
+  too weak to preserve. Build the whole tree from `pages` and
+  `cluster_hints`.
+- Incremental subtree update: existing navigation is present and only
+  `freshness.new_page_ids` or `freshness.changed_page_ids` need placement.
+  Preserve stable groups and update only the closest affected branch unless
+  the new evidence clearly changes the top-level structure.
+
+Use `cluster_hints` as deterministic neighbor suggestions. They rank related
+pages by explicit links, backlinks, shared evidence documents, and title or
+excerpt token overlap. Treat them as organizing evidence, not as mandatory
+edges.
 
 ## Output
 
@@ -52,6 +68,10 @@ wikify wiki apply-navigation <path-to-json> --run <bundle>
 - Group articles by scientific topic and article role: materials,
   devices, mechanisms, methods, characterization, applications, theory,
   and people when applicable.
+- Prefer moving a changed page inside its current broad topic when
+  `existing_navigation` already has a sensible location for it.
+- Place new pages near their strongest `cluster_hints` neighbors when the
+  scientific topic agrees with the page title and excerpt.
 - Use two levels for small or narrow wikis. Use three or four levels
   only when the page set clearly has nested subtopics.
 - Do not force every group to have the same depth.

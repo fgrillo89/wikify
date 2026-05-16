@@ -147,6 +147,18 @@ def test_navigation_context_apply_and_render_grouped_front_page(tmp_path: Path) 
         ["wiki", "apply-navigation", str(nav_path), "--run", str(bundle.root)],
     )
     assert result.exit_code == 0, result.output
+    import sqlite3
+
+    con = sqlite3.connect(bundle.sqlite_path)
+    try:
+        category_count = con.execute("SELECT COUNT(*) FROM wiki_categories").fetchone()[0]
+        membership_count = con.execute(
+            "SELECT COUNT(*) FROM wiki_category_pages"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert category_count == 1
+    assert membership_count == 1
 
     out = tmp_path / "site"
     result = runner.invoke(
@@ -167,6 +179,142 @@ def test_navigation_context_apply_and_render_grouped_front_page(tmp_path: Path) 
     assert "Thin films" in html
     assert "source articles used" in html
     assert "chunks" not in html.lower()
+
+
+def _write_committed_article(
+    bundle,
+    *,
+    slug: str,
+    page_id: str,
+    title: str,
+    links: list[str] | None = None,
+    doc_id: str = "paper_0",
+    body_term: str = "deposition",
+) -> Path:
+    body = (
+        "---\n"
+        f"id: {json.dumps(page_id)}\n"
+        "kind: article\n"
+        f"title: {json.dumps(title)}\n"
+        "aliases: []\n"
+        f"links: {json.dumps(links or [])}\n"
+        "---\n\n"
+        f"# {title}\n\n"
+        f"{title} is a {body_term} topic connected to thin-film processing and "
+        "surface reactions in the same evidence base.\n\n"
+        "## References\n\n"
+        f'[^e1]: {doc_id}__c0001 ({doc_id}) > "shared evidence quote"\n'
+    )
+    path = bundle.wiki_articles_dir / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_navigation_context_includes_cluster_hints(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    _write_committed_article(
+        bundle,
+        slug="chemical-vapor-deposition",
+        page_id="Chemical Vapor Deposition",
+        title="Chemical Vapor Deposition",
+        links=["Atomic Layer Deposition"],
+        doc_id="paper_0",
+    )
+    _write_committed_article(
+        bundle,
+        slug="surface-chemistry",
+        page_id="Surface Chemistry",
+        title="Surface Chemistry",
+        links=[],
+        doc_id="paper_9",
+        body_term="surface chemistry",
+    )
+
+    context_path = tmp_path / "navigation_context.json"
+    result = runner.invoke(
+        app,
+        [
+            "wiki",
+            "navigation-context",
+            "--run",
+            str(bundle.root),
+            "--out",
+            str(context_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    hints = {item["page_id"]: item["related"] for item in context["cluster_hints"]}
+    atomic_related = hints["Atomic Layer Deposition"]
+    cvd_hint = next(
+        item for item in atomic_related if item["page_id"] == "Chemical Vapor Deposition"
+    )
+    assert cvd_hint["score"] > 0
+    assert cvd_hint["reasons"]["linked_by"] is True
+    assert cvd_hint["reasons"]["shared_evidence_doc_ids"] == ["paper_0"]
+    assert "deposition" in cvd_hint["reasons"]["overlap_terms"]
+
+
+def test_navigation_context_includes_existing_navigation_and_freshness(
+    tmp_path: Path,
+) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    nav_path = tmp_path / "navigation.json"
+    nav_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy": "test",
+                "groups": [
+                    {
+                        "id": "thin-films",
+                        "title": "Thin films",
+                        "description": "Thin-film methods.",
+                        "page_ids": ["Atomic Layer Deposition"],
+                        "children": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        ["wiki", "apply-navigation", str(nav_path), "--run", str(bundle.root)],
+    )
+    assert result.exit_code == 0, result.output
+
+    _write_committed_article(
+        bundle,
+        slug="chemical-vapor-deposition",
+        page_id="Chemical Vapor Deposition",
+        title="Chemical Vapor Deposition",
+        links=["Atomic Layer Deposition"],
+        doc_id="paper_0",
+    )
+
+    context_path = tmp_path / "navigation_context.json"
+    result = runner.invoke(
+        app,
+        [
+            "wiki",
+            "navigation-context",
+            "--run",
+            str(bundle.root),
+            "--out",
+            str(context_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    assert context["existing_navigation"]["groups"][0]["id"] == "thin-films"
+    assert "page_fingerprints" not in context["existing_navigation"]
+    assert context["freshness"]["has_navigation"] is True
+    assert context["freshness"]["is_fresh"] is False
+    assert context["freshness"]["new_page_ids"] == ["Chemical Vapor Deposition"]
 
 
 def test_render_selected_figure_placeholder(tmp_path: Path) -> None:
