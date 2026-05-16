@@ -392,6 +392,12 @@ def _render_article(
         page_url_depth=1,
     )
 
+    # Isolate ``$$...$$`` display math so arithmatex's BlockProcessor
+    # picks it up. Without blank lines around the block, arithmatex
+    # falls back to inline matching and produces stray ``$`` outside
+    # the rendered span.
+    body_md = _isolate_display_math(body_md)
+
     # Clean up evidence footnote lines: format as bibliographic references.
     body_md = _clean_evidence_lines(body_md, doc_meta_map=doc_meta_map)
 
@@ -734,6 +740,30 @@ def _clean_evidence_lines(
 
 
 _MARKER_USE_RE = re.compile(r"\[\^([^\]]+)\](?!:)")
+
+# ``$$...$$`` display math, including multi-line. Negative lookbehind
+# and lookahead prevent matching ``$$$`` (which would catch the tail
+# of a triple-dollar run).
+_DISPLAY_MATH_RE = re.compile(r"(?<!\$)\$\$(.+?)\$\$(?!\$)", re.DOTALL)
+
+
+def _isolate_display_math(body: str) -> str:
+    """Insert blank lines around ``$$...$$`` blocks.
+
+    pymdownx.arithmatex's BlockProcessor only picks up display math
+    when the ``$$`` delimiters sit in their own paragraph. Writers
+    typically emit ``...sentence:\n$$eq$$\nnext sentence...`` which
+    leaves the block adjacent to prose; arithmatex then falls back
+    to inline matching and produces stray ``$`` glyphs flanking the
+    rendered span.
+
+    This pass surrounds every ``$$...$$`` with blank lines so the
+    block matcher always wins.
+    """
+    def _sub(match: re.Match[str]) -> str:
+        return f"\n\n$$\n{match.group(1).strip()}\n$$\n\n"
+
+    return _DISPLAY_MATH_RE.sub(_sub, body)
 
 
 def _format_evidence_body(
