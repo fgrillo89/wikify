@@ -164,6 +164,26 @@ def render_dossier(draft: WriteRequest) -> str:
         )
     out.append("")
 
+    if draft.figures:
+        out.append("## Figure candidates")
+        out.append("")
+        out.append("| Figure | Page | Near markers | Caption | Path |")
+        out.append("|---|---:|---|---|---|")
+        marker_by_chunk = {
+            ref.chunk_id: marker for marker, ref in by_marker.items()
+        }
+        for fig in draft.figures:
+            near_markers = [
+                marker_by_chunk[cid]
+                for cid in fig.near_chunk_ids
+                if cid in marker_by_chunk
+            ]
+            out.append(
+                f"| {fig.id} | {fig.page or ''} | {', '.join(near_markers) or '-'} "
+                f"| {(fig.caption or '').replace('|', '/')} | {fig.path} |"
+            )
+        out.append("")
+
     # Body groups
     out.append("## Evidence")
     out.append("")

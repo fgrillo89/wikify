@@ -455,6 +455,74 @@ a.wiki-redlink:visited {
   column-gap: 20px;
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0 0 20px 0;
+}
+
+.stats-grid div {
+  border: 1px solid #c8ccd1;
+  background: #f8f9fa;
+  padding: 10px 12px;
+  font-family: sans-serif;
+}
+
+.stats-grid strong {
+  display: block;
+  font-size: 1.35em;
+  color: #202122;
+}
+
+.stats-grid span {
+  display: block;
+  font-size: 0.85em;
+  color: #54595d;
+}
+
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.portal-group {
+  border: 1px solid #c8ccd1;
+  background: #f8f9fa;
+  padding: 10px 14px;
+}
+
+.portal-group h3 {
+  margin-top: 0;
+}
+
+.portal-group p {
+  font-size: 0.9em;
+  color: #54595d;
+}
+
+.portal-group ul {
+  margin-left: 1em;
+}
+
+.portal-children {
+  border-left: 2px solid #c8ccd1;
+  margin-top: 8px;
+  padding-left: 10px;
+}
+
+.portal-children .portal-group {
+  border: 0;
+  padding: 4px 0;
+}
+
+.render-date {
+  color: #54595d;
+  font-family: sans-serif;
+  font-size: 0.9em;
+}
+
 /* ── Badges ───────────────────────────────────────────────────── */
 .status-badge {
   display: inline-block;

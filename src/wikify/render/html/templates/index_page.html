@@ -1,13 +1,72 @@
 {% extends "base.html" %}
+{% macro nav_group(group) -%}
+  <section class="portal-group">
+    <h3>{{ group.title }}</h3>
+    {% if group.description %}<p>{{ group.description }}</p>{% endif %}
+    {% if group.pages %}
+    <ul>
+      {% for p in group.pages %}
+      <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if group.children %}
+    <div class="portal-children">
+      {% for child in group.children %}
+      {{ nav_group(child) }}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+{%- endmacro %}
 {% block content %}
-<article class="wiki-article">
+<article class="wiki-article main-page">
   <h1>Welcome to {{ wiki_name }}</h1>
   <div class="main-page-banner">
-    <p>A knowledge wiki with <strong>{{ stats.total_articles }}</strong> articles
-    ({{ stats.total_concepts }} articles, {{ stats.total_people }} people).</p>
+    <p>A scientific wiki compiled from <strong>{{ stats.source_articles_used }}</strong> source articles{% if stats.date_range %} spanning <strong>{{ stats.date_range }}</strong>{% endif %}.</p>
   </div>
-  {% if concepts %}
-  <div class="main-page-section">
+
+  <div class="stats-grid">
+    <div><strong>{{ stats.total_concepts }}</strong><span>article pages</span></div>
+    <div><strong>{{ stats.total_people }}</strong><span>people pages</span></div>
+    <div><strong>{{ stats.source_articles_used }}</strong><span>source articles used</span></div>
+    {% if stats.words_processed %}
+    <div><strong>{{ "{:,}".format(stats.words_processed) }}</strong><span>approx. words processed</span></div>
+    {% endif %}
+    {% if stats.figures_included %}
+    <div><strong>{{ stats.figures_included }}</strong><span>figures included</span></div>
+    {% endif %}
+  </div>
+
+  {% if navigation and navigation.groups %}
+  <section class="main-page-section">
+    <h2>Browse by topic</h2>
+    <div class="portal-grid">
+      {% for group in navigation.groups %}
+      {{ nav_group(group) }}
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if key_articles %}
+  <section class="main-page-section">
+    <h2>Key articles</h2>
+    <div class="article-grid">
+      {% for c in key_articles %}
+      <div class="article-card">
+        <a href="{{ root }}{{ c.url }}" class="article-card-title">{{ c.title }}</a>
+        {% if c.excerpt %}
+        <p class="article-card-excerpt">{{ c.excerpt }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not navigation and concepts %}
+  <section class="main-page-section">
     <h2>Articles</h2>
     <div class="article-grid">
       {% for c in concepts %}
@@ -19,17 +78,24 @@
       </div>
       {% endfor %}
     </div>
-  </div>
+  </section>
   {% endif %}
+
   {% if people %}
-  <div class="main-page-section">
+  <section class="main-page-section">
     <h2>People</h2>
     <ul class="article-list people-list">
-      {% for p in people %}
+      {% for p in people[:20] %}
       <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
       {% endfor %}
     </ul>
-  </div>
+  </section>
   {% endif %}
+
+  <section class="main-page-section">
+    <h2>About this wiki</h2>
+    <p>This site summarizes the source article collection as interlinked encyclopedia pages. The front page highlights topic structure and source scope; detailed run telemetry and evaluation reports remain in the bundle artifacts.</p>
+    <p class="render-date">Last rendered {{ stats.rendered_at }}.</p>
+  </section>
 </article>
 {% endblock %}

@@ -2,7 +2,9 @@
 
 Tools: ``context_show`` / ``context_set`` for binding;
 ``corpus_find`` / ``corpus_traverse`` / ``corpus_show`` /
-``corpus_sample`` / ``corpus_schema`` for read-side corpus access.
+``corpus_sample`` / ``corpus_schema`` for read-side corpus access, plus
+``wiki_find`` / ``wiki_show`` / ``wiki_traverse`` / ``wiki_schema`` for
+read-side committed-wiki access.
 Resources: ``wikify://corpus/{docs,chunks,figures,equations,authors}/...``
 plus ``wikify://schemas/corpus``.
 
@@ -29,6 +31,7 @@ from .envelope import (
     author_item,
     chunk_item,
     chunk_row_item,
+    chunk_uri,
     doc_item,
     doc_row_item,
     equation_item,
@@ -753,6 +756,181 @@ def build_server() -> FastMCP:
                 f"image file does not exist: {path}",
             )
         return Image(path=path)
+
+    # ------------------------------------------------------------- wiki
+
+    def _wiki_page_item(row: dict) -> dict:
+        slug = str(row.get("slug") or row.get("id") or "")
+        title = str(row.get("title") or slug)
+        return {
+            "handle": f"page:{slug}",
+            "type": "page",
+            "title": title,
+            "score": row.get("score"),
+            "rank": None,
+            "resource_uri": f"wikify://wiki/pages/{slug}",
+            "preview": str(row.get("snippet") or "")[:240],
+            "meta": {
+                "kind": row.get("kind", ""),
+                "page_id": row.get("page_id") or row.get("id") or "",
+                "n_links": row.get("n_links"),
+                "n_evidence": row.get("n_evidence"),
+                "modes": row.get("modes"),
+            },
+        }
+
+    def _wiki_category_item(row: dict) -> dict:
+        cid = str(row.get("id") or "")
+        return {
+            "handle": f"category:{cid}",
+            "type": "category",
+            "title": str(row.get("title") or cid),
+            "score": None,
+            "rank": None,
+            "resource_uri": f"wikify://wiki/categories/{cid}",
+            "preview": str(row.get("description") or "")[:240],
+            "meta": {
+                "n_pages": row.get("n_pages", 0),
+                "n_children": row.get("n_children", 0),
+                "parent": row.get("parent", ""),
+            },
+        }
+
+    def _wiki_evidence_item(row: dict) -> dict:
+        chunk_id = str(row.get("chunk_id") or "")
+        doc_id = str(row.get("doc_id") or "")
+        return {
+            "handle": f"chunk:{chunk_id}",
+            "type": "evidence",
+            "title": "",
+            "score": None,
+            "rank": None,
+            "resource_uri": chunk_uri(chunk_id) if chunk_id else "",
+            "preview": str(row.get("quote") or "")[:240],
+            "meta": {
+                "page_id": row.get("page_id", ""),
+                "chunk_handle": f"chunk:{chunk_id}" if chunk_id else "",
+                "doc_handle": format_handle("doc", doc_id) if doc_id else "",
+            },
+        }
+
+    def _wiki_item(row: dict) -> dict:
+        ntype = row.get("type")
+        if ntype == "category":
+            return _wiki_category_item(row)
+        if ntype == "evidence":
+            return _wiki_evidence_item(row)
+        return _wiki_page_item(row)
+
+    @srv.tool()
+    async def wiki_find(query: str, mode: str = "hybrid",
+                        top_k: int = 8) -> dict:
+        """Search committed wiki pages in the bound bundle.
+
+        ``mode`` is ``text`` | ``bm25`` | ``semantic`` | ``hybrid``.
+        Hybrid searches the wiki SQLite store where available and falls
+        back gracefully when vectors are missing.
+        """
+        try:
+            bundle = context.require_bundle()
+        except context.ContextError as exc:
+            return err("no_bundle_bound", str(exc))
+        from ..bundle.wiki import queries as wiki_queries
+
+        try:
+            rows = wiki_queries.find(bundle, query, mode=mode, top_k=top_k)
+        except ValueError as exc:
+            return err("bad_mode", str(exc))
+        return ok("wiki_find_result", items=[_wiki_page_item(r) for r in rows])
+
+    @srv.tool()
+    async def wiki_show(handle: str, full: bool = False) -> dict:
+        """Dereference a committed wiki page handle."""
+        try:
+            bundle = context.require_bundle()
+        except context.ContextError as exc:
+            return err("no_bundle_bound", str(exc))
+        from ..bundle.wiki import queries as wiki_queries
+
+        handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
+        try:
+            info = wiki_queries.show_page(bundle, handle=handle_clean)
+        except wiki_queries.AmbiguousSlugError as exc:
+            return err("ambiguous_handle", str(exc), matches=exc.matches)
+        if info is None:
+            return err("page_not_found", f"page not found: {handle}")
+        text = str(info["text"])
+        item = {
+            "handle": f"page:{info['slug']}",
+            "type": "page",
+            "title": str(info["slug"]),
+            "score": None,
+            "rank": None,
+            "resource_uri": f"wikify://wiki/pages/{info['slug']}",
+            "preview": text[:240],
+            "meta": {"kind": info["kind"], "path": info["path"]},
+        }
+        if full:
+            item["text"] = text
+        return ok("wiki_show_result", items=[item])
+
+    @srv.tool()
+    async def wiki_traverse(handle: str, to: str, top_k: int = 0) -> dict:
+        """Traverse from a wiki page or category handle."""
+        try:
+            bundle = context.require_bundle()
+        except context.ContextError as exc:
+            return err("no_bundle_bound", str(exc))
+        from ..bundle.wiki import queries as wiki_queries
+
+        limit = top_k or None
+        try:
+            if handle.startswith("category:"):
+                rows = wiki_queries.traverse_category(
+                    bundle,
+                    category_id=handle[len("category:"):],
+                    relation=to,
+                    top_k=limit,
+                )
+            else:
+                handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
+                info = wiki_queries.show_page(bundle, handle=handle_clean)
+                if info is None:
+                    return err("page_not_found", f"page not found: {handle}")
+                rows = wiki_queries.traverse_page(
+                    bundle,
+                    slug=info["slug"],
+                    relation=to,
+                    top_k=limit,
+                )
+        except ValueError as exc:
+            return err("bad_relation", str(exc))
+        except wiki_queries.AmbiguousSlugError as exc:
+            return err("ambiguous_handle", str(exc), matches=exc.matches)
+        return ok("wiki_traverse_result", items=[_wiki_item(r) for r in rows])
+
+    @srv.tool()
+    async def wiki_schema() -> dict:
+        """Describe the committed-wiki query surface."""
+        return ok(
+            "wiki_schema",
+            items=[
+                {
+                    "find_modes": ["text", "bm25", "semantic", "hybrid"],
+                    "page_relations": [
+                        "links",
+                        "linked-by",
+                        "co-evidence",
+                        "evidence",
+                        "similar",
+                        "see-also",
+                        "category",
+                        "categories",
+                    ],
+                    "category_relations": ["children", "parent", "pages"],
+                }
+            ],
+        )
 
     # ------------------------------------------------------------ resources
 

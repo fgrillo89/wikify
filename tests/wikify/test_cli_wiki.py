@@ -77,6 +77,45 @@ def test_wiki_find_text(tmp_path: Path) -> None:
     assert slug in result.output
 
 
+def test_wiki_find_modes_default_and_text_alias(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+    default = runner.invoke(
+        app,
+        [
+            "wiki",
+            "find",
+            "atomic layer",
+            "--run",
+            str(bundle.root),
+            "--format",
+            "json",
+        ],
+    )
+    assert default.exit_code == 0, default.output
+    default_data = json.loads(default.output)
+    assert default_data["mode"] == "hybrid"
+    assert any(item["slug"] == slug for item in default_data["items"])
+
+    text = runner.invoke(
+        app,
+        [
+            "wiki",
+            "find",
+            "atomic layer",
+            "--run",
+            str(bundle.root),
+            "--text",
+            "--format",
+            "json",
+        ],
+    )
+    assert text.exit_code == 0, text.output
+    text_data = json.loads(text.output)
+    assert text_data["mode"] == "text"
+    assert any(item["slug"] == slug for item in text_data["items"])
+
+
 def test_wiki_build_indexes(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
@@ -87,6 +126,81 @@ def test_wiki_build_indexes(tmp_path: Path) -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "path" in data
+
+
+def test_wiki_build_vectors_populates_wiki_db_embeddings(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "build", "vectors", "--run", str(bundle.root), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    import sqlite3
+
+    con = sqlite3.connect(bundle.sqlite_path)
+    try:
+        n_spaces = con.execute("SELECT COUNT(*) FROM wiki_embedding_spaces").fetchone()[0]
+        n_embeddings = con.execute("SELECT COUNT(*) FROM wiki_embeddings").fetchone()[0]
+    finally:
+        con.close()
+    assert n_spaces == 1
+    assert n_embeddings == 1
+
+
+def test_wiki_traverse_category_pages_from_navigation(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    (bundle_dir / "run" / "state.json").write_text(
+        json.dumps({"run_id": "test", "corpus_path": "data/corpora/foo"}),
+        encoding="utf-8",
+    )
+    articles_dir = bundle_dir / "wiki" / "articles"
+    articles_dir.mkdir(parents=True)
+    slug = "Atomic Layer Deposition"
+    (articles_dir / f"{slug}.md").write_text(
+        "---\nid: Atomic Layer Deposition\nkind: article\n"
+        "title: Atomic Layer Deposition\n---\n\n# ALD\n\nBody.\n",
+        encoding="utf-8",
+    )
+    derived_dir = bundle_dir / "derived"
+    derived_dir.mkdir()
+    (derived_dir / "navigation.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "groups": [
+                    {
+                        "id": "methods",
+                        "title": "Methods",
+                        "description": "",
+                        "page_ids": ["Atomic Layer Deposition"],
+                        "children": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "wiki",
+            "traverse",
+            "category:methods",
+            "--run",
+            str(bundle_dir),
+            "--to",
+            "pages",
+            "--format",
+            "quiet",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert f"page:{slug}" in result.output
 
 
 def test_wiki_traverse_page_handles_round_trip_when_slug_differs_from_id(

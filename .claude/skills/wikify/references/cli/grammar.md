@@ -22,11 +22,18 @@ Common verbs:
 
 ```text
 init, show, list, find, traverse, schema, repl, add, set, build, check, commit, tend, close
+navigation-context, apply-navigation
 ```
 
+`wiki navigation-context` writes the compact organizer projection for committed
+pages. It includes page summaries, cluster hints from links/shared evidence/text
+overlap, existing navigation when available, and freshness deltas for new or
+changed page ids. `wiki apply-navigation` validates the hierarchy and persists
+the render-compatible navigation projection.
+
 `traverse` walks one graph hop from a typed handle (corpus:
-`doc:`/`chunk:`/`figure:`/`equation:`/`author:`; wiki: `page:`),
-emitting handles for further commands.
+`doc:`/`chunk:`/`figure:`/`equation:`/`author:`; wiki: `page:` or
+`category:`), emitting handles for further commands.
 
 `schema` self-describes the available node types, edge kinds, traverse
 relations, and rank metrics for a given noun (`corpus schema`,

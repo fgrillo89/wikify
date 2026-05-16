@@ -198,6 +198,8 @@ Minimum complete baseline:
     wikify wiki build vectors
     wikify wiki build indexes
     wikify wiki build graph
+    wikify wiki navigation-context --run <bundle> --out <bundle>/derived/navigation_context.json
+    # Invoke wikify-organize-wiki to write and apply derived/navigation.json.
     wikify render --bundle <bundle> --format html
     wikify run close --status completed --run <bundle>
     wikify eval --bundle <bundle> --corpus <corpus>
@@ -237,6 +239,7 @@ judgment, deterministic blockers, and next fix.
 - `../wikify-search-corpus/SKILL.md`
 - `../wikify-bundle/SKILL.md`
 - `../wikify-write-page/SKILL.md`
+- `../wikify-organize-wiki/SKILL.md`
 - `../wikify/references/exploration/concept-extraction.md`
 - `../wikify/references/exploration/sampling-patterns.md`
 - `../wikify/references/writing/escalation.md`

@@ -106,6 +106,16 @@ def require_corpus() -> Corpus:
     return _corpus
 
 
+def require_bundle() -> Bundle:
+    """Return the bound bundle or raise :class:`ContextError`."""
+    if _bundle is None:
+        raise ContextError(
+            "no bundle bound; set WIKIFY_BUNDLE at launch or call "
+            "context_set(bundle_path=...)"
+        )
+    return _bundle
+
+
 def snapshot() -> dict:
     """Return a serialisable summary of the current binding."""
     return {

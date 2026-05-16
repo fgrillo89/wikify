@@ -50,6 +50,7 @@ _REF_DEF_RE = re.compile(
     re.MULTILINE,
 )
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
+_FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
 
 
 def _utcnow() -> str:
@@ -200,6 +201,83 @@ def _quote_grounding_errors(
     return errors
 
 
+def _figure_selection_errors(
+    draft: WriteRequest, response: WriteResponse
+) -> list[dict]:
+    request_by_id = {fig.id: fig for fig in draft.figures}
+    placeholders = _FIGURE_PLACEHOLDER_RE.findall(response.body_markdown)
+    placeholder_set = set(placeholders)
+    selected_by_anchor = {fig.placement_anchor: fig for fig in response.figures}
+    errors: list[dict] = []
+
+    if len(selected_by_anchor) != len(response.figures):
+        errors.append(
+            {
+                "path": "figures",
+                "code": "duplicate_figure_anchor",
+                "message": "figures must use unique placement_anchor values",
+            }
+        )
+
+    for anchor in sorted(placeholder_set - set(selected_by_anchor)):
+        errors.append(
+            {
+                "path": "body_markdown",
+                "code": "unknown_figure_placeholder",
+                "message": f"figure placeholder {anchor!r} has no matching figures entry",
+            }
+        )
+
+    for fig in response.figures:
+        if fig.placement_anchor not in placeholder_set:
+            errors.append(
+                {
+                    "path": "figures",
+                    "code": "unused_selected_figure",
+                    "message": (
+                        f"selected figure {fig.figure_id!r} has no "
+                        f"{{{{figure:{fig.placement_anchor}}}}} placeholder"
+                    ),
+                }
+            )
+        allowed = request_by_id.get(fig.figure_id)
+        if allowed is None:
+            errors.append(
+                {
+                    "path": "figures",
+                    "code": "unknown_figure_id",
+                    "message": (
+                        f"selected figure {fig.figure_id!r} is not in "
+                        "the draft figures list"
+                    ),
+                }
+            )
+            continue
+        if fig.path.replace("\\", "/") != allowed.path.replace("\\", "/"):
+            errors.append(
+                {
+                    "path": "figures",
+                    "code": "figure_path_mismatch",
+                    "message": (
+                        f"selected figure {fig.figure_id!r} path does not match "
+                        "the draft figure candidate"
+                    ),
+                }
+            )
+        if fig.source_marker and fig.source_marker not in response.used_markers:
+            errors.append(
+                {
+                    "path": "figures",
+                    "code": "unknown_figure_source_marker",
+                    "message": (
+                        f"selected figure {fig.figure_id!r} cites source_marker "
+                        f"{fig.source_marker!r}, which is not in used_markers"
+                    ),
+                }
+            )
+    return errors
+
+
 def validate_response_data(draft_data: dict, response_data: dict) -> dict:
     """Run every check on raw draft + response dicts. Does not touch disk.
 
@@ -305,6 +383,9 @@ def _run_checks(
             ]
         errors.extend(grounding_errors)
         structural["quote_grounding"] = not grounding_errors
+        figure_errors = _figure_selection_errors(draft, response)
+        errors.extend(figure_errors)
+        structural["figure_selection"] = not figure_errors
 
     return {
         "schema_version": VALIDATION_SCHEMA_VERSION,

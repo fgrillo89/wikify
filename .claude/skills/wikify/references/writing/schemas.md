@@ -10,6 +10,8 @@ Important model-facing artifacts:
 
 - `WriteRequest`: writer input compiled by `wikify draft build`.
 - `WriteResponse`: writer output written to `response.json`.
+- `ImageRef` / `SelectedFigure`: figure candidates and writer-selected
+  figures. Writers may only select figures supplied in `WriteRequest`.
 - `EvidenceRecord`: evidence ledger record appended under work state.
 - Inbox records: suggestions applied by `work tend`.
 

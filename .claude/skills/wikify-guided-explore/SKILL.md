@@ -28,6 +28,8 @@ Each iteration:
    - `wikify-bundle` for add concept, add evidence, claim, tend,
      validate, commit, and projection mechanics.
    - `wikify-write-page` for writer subagents.
+   - `wikify-organize-wiki` after each committed batch of at least five
+     pages, or once before final render if fewer pages changed.
 4. Stop on budget, coverage, or no useful next action.
 
 ## Strategy Owned Here

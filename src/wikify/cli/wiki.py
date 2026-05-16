@@ -22,14 +22,24 @@ from ..api import Bundle
 from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
 from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
+from ..bundle.wiki.navigation import (
+    NavigationError,
+    build_navigation_context,
+    navigation_is_fresh,
+    navigation_path,
+    write_navigation,
+)
 from ..bundle.wiki.queries import (
     AmbiguousSlugError,
-    find_text,
     list_articles,
     list_files,
     list_people,
     show_page,
+    traverse_category,
     traverse_page,
+)
+from ..bundle.wiki.queries import (
+    find as find_wiki,
 )
 from ..bundle.wiki.session import WikiSearchSession
 from ._format import FormatError, format_row, resolve_format
@@ -160,6 +170,11 @@ def cmd_find(
     run: Path | None = typer.Option(None, "--run"),
     top_k: int = typer.Option(20, "--top-k"),
     text: bool = typer.Option(False, "--text"),
+    mode: str = typer.Option(
+        "hybrid",
+        "--mode",
+        help="Search mode: text | bm25 | semantic | hybrid.",
+    ),
     fmt: str = typer.Option(
         "auto",
         "--format",
@@ -169,18 +184,20 @@ def cmd_find(
         ),
     ),
 ) -> None:
-    """Substring grep over committed pages (text mode is the only mode today).
+    """Search committed pages.
 
     Compact output columns: ``kind \\t page-handle \\t snippet``.
     """
     bundle = _resolve_bundle(run)
-    if not text:
-        # Default to text mode; graph + vector queries are a follow-up.
-        text = True
-    hits = find_text(bundle, query, top_k=top_k)
+    if text:
+        mode = "text"
+    try:
+        hits = find_wiki(bundle, query, mode=mode, top_k=top_k)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_find_mode", message=str(exc))
     fmt_resolved = _resolve_format_or_error(fmt)
     if fmt_resolved == "json":
-        typer.echo(json.dumps({"ok": True, "items": hits}))
+        typer.echo(json.dumps({"ok": True, "mode": mode, "items": hits}))
         return
     if fmt_resolved == "quiet":
         for h in hits:
@@ -270,6 +287,65 @@ def cmd_build(
     typer.echo(f"{kind}: {p}")
 
 
+@app.command("navigation-context")
+def cmd_navigation_context(
+    run: Path | None = typer.Option(None, "--run"),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Destination JSON path. Defaults to derived/navigation_context.json.",
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Write page metadata for an organizer agent."""
+    bundle = _resolve_bundle(run)
+    payload = build_navigation_context(bundle)
+    target = out if out is not None else bundle.derived_dir / "navigation_context.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "path": str(target),
+                    "pages": len(payload.get("pages", [])),
+                }
+            )
+        )
+        return
+    typer.echo(f"navigation_context: {target}")
+    typer.echo(f"pages: {len(payload.get('pages', []))}")
+
+
+@app.command("apply-navigation")
+def cmd_apply_navigation(
+    path: Path = typer.Argument(..., help="Agent-authored navigation JSON."),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Validate and persist derived/navigation.json."""
+    bundle = _resolve_bundle(run)
+    if not path.is_file():
+        cli_error(EXIT_VALIDATION, error="navigation_not_found", path=str(path))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_navigation_json",
+            message=f"{path} is not valid JSON: {exc}",
+        )
+    try:
+        written = write_navigation(bundle, payload)
+    except NavigationError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_navigation", message=str(exc))
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, "path": str(written)}))
+        return
+    typer.echo(f"navigation: {written}")
+
+
 # --------------------------------------------------------------- check
 
 
@@ -283,11 +359,16 @@ def cmd_check(
     n_articles = len(list_articles(bundle))
     n_people = len(list_people(bundle))
     has_index = bundle.derived_index_path.exists()
+    nav_path = navigation_path(bundle)
+    has_navigation = nav_path.exists()
+    navigation_fresh = navigation_is_fresh(bundle)
     summary = {
         "ok": True,
         "articles": n_articles,
         "people": n_people,
         "has_derived_index": has_index,
+        "has_navigation": has_navigation,
+        "navigation_fresh": navigation_fresh,
     }
     if fmt == "json":
         typer.echo(json.dumps(summary))
@@ -295,6 +376,8 @@ def cmd_check(
     typer.echo(f"articles:           {n_articles}")
     typer.echo(f"people:             {n_people}")
     typer.echo(f"derived/index.json: {has_index}")
+    typer.echo(f"navigation.json:    {has_navigation}")
+    typer.echo(f"navigation fresh:   {navigation_fresh}")
 
 
 # --------------------------------------------------------------- commit
@@ -346,6 +429,7 @@ _WIKI_SCHEMA: dict = {
     "node_types": {
         "page": "A committed wiki page (article or person). Handle: page:<slug>.",
         "evidence": "An evidence entry attached to a page (chunk_id + doc_id + quote).",
+        "category": "A navigation category/group. Handle: category:<id>.",
     },
     "edge_kinds": [
         "LINKS_TO",       # page -> page
@@ -354,13 +438,27 @@ _WIKI_SCHEMA: dict = {
         "SIMILAR",        # page <-> page (cosine over body embeddings)
     ],
     "traverse_relations": {
-        "page": ["links", "linked-by", "co-evidence", "evidence"],
+        "page": [
+            "links",
+            "linked-by",
+            "co-evidence",
+            "evidence",
+            "similar",
+            "see-also",
+            "category",
+            "categories",
+        ],
+        "category": ["children", "parent", "pages"],
     },
     "rank_metrics": {
         "page": ["n_links", "n_evidence"],
     },
     "find_modes": {
-        "--text": "Substring grep over committed page bodies (only mode today).",
+        "text": "Literal substring grep over committed page markdown.",
+        "bm25": "FTS5 BM25 over wiki.db pages.",
+        "semantic": "Cosine search over derived/vectors.npz page embeddings.",
+        "hybrid": "RRF fusion over BM25 and semantic search (default).",
+        "--text": "Backward-compatible alias for --mode text.",
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
@@ -409,7 +507,18 @@ def cmd_schema(
 # --------------------------------------------------------------- traverse
 
 
-_PAGE_RELATIONS = {"links", "linked-by", "co-evidence", "evidence"}
+_PAGE_RELATIONS = {
+    "links",
+    "linked-by",
+    "co-evidence",
+    "evidence",
+    "similar",
+    "see-also",
+    "category",
+    "categories",
+}
+_CATEGORY_RELATIONS = {"children", "parent", "pages"}
+_TRAVERSE_RELATIONS = _PAGE_RELATIONS | _CATEGORY_RELATIONS
 
 
 @app.command("traverse")
@@ -420,7 +529,8 @@ def cmd_traverse(
         ...,
         "--to",
         help=(
-            "Relation: links | linked-by | co-evidence | evidence. "
+            "Relation: links | linked-by | co-evidence | evidence | similar | "
+            "see-also | category | categories | children | parent | pages. "
             "evidence emits chunk handles for the corpus."
         ),
     ),
@@ -455,14 +565,44 @@ def cmd_traverse(
     """
     bundle = _resolve_bundle(run)
     fmt_resolved = _resolve_format_or_error(fmt)
-    if to not in _PAGE_RELATIONS:
+    if to not in _TRAVERSE_RELATIONS:
         cli_error(
             EXIT_VALIDATION,
             error="bad_relation",
             message=(
                 f"unknown wiki relation {to!r}; expected "
-                f"{' | '.join(sorted(_PAGE_RELATIONS))}"
+                f"{' | '.join(sorted(_TRAVERSE_RELATIONS))}"
             ),
+        )
+
+    if handle.startswith("category:"):
+        category_id = handle[len("category:"):]
+        if to not in _CATEGORY_RELATIONS:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_relation",
+                message=(
+                    f"category handles support "
+                    f"{' | '.join(sorted(_CATEGORY_RELATIONS))}; got {to!r}"
+                ),
+            )
+        try:
+            rows = traverse_category(
+                bundle,
+                category_id=category_id,
+                relation=to,
+                top_k=(top_k if top_k > 0 else None),
+            )
+        except ValueError as exc:
+            cli_error(EXIT_VALIDATION, error="bad_relation", message=str(exc))
+        _emit_wiki_traverse_rows(rows, fmt=fmt_resolved)
+        return
+
+    if to in _CATEGORY_RELATIONS:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_relation",
+            message=f"{to!r} requires a category:<id> handle",
         )
 
     handle_clean = handle[len("page:"):] if handle.startswith("page:") else handle
@@ -502,6 +642,8 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
                 items.append({**r, "handle": f"page:{r.get('slug', r.get('id', ''))}"})
             elif ntype == "evidence":
                 items.append({**r, "handle": f"chunk:{r.get('chunk_id', '')}"})
+            elif ntype == "category":
+                items.append({**r, "handle": f"category:{r.get('id', '')}"})
             else:
                 items.append(r)
         typer.echo(json.dumps({"ok": True, "items": items}))
@@ -515,6 +657,10 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
                 cid = str(r.get("chunk_id", ""))
                 if cid:
                     typer.echo(f"chunk:{cid}")
+            elif ntype == "category":
+                cid = str(r.get("id", ""))
+                if cid:
+                    typer.echo(f"category:{cid}")
         return
     for r in rows:
         ntype = r.get("type", "")
@@ -533,6 +679,16 @@ def _emit_wiki_traverse_rows(rows: list[dict], *, fmt: str) -> None:
             did = str(r.get("doc_id", ""))
             quote = str(r.get("quote", "") or "").replace("\n", " ")[:120]
             typer.echo(format_row([f"chunk:{cid}", f"doc:{did}", quote]))
+        elif ntype == "category":
+            cid = str(r.get("id", ""))
+            typer.echo(
+                format_row([
+                    f"children={r.get('n_children', 0)}",
+                    f"pages={r.get('n_pages', 0)}",
+                    f"category:{cid}",
+                    str(r.get("title", "") or ""),
+                ])
+            )
 
 
 # --------------------------------------------------------------- repl
