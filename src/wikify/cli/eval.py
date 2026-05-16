@@ -255,6 +255,7 @@ def cmd_eval(
         corpus = Corpus(root=corpus_dir)
         extra = _compute_corpus_metrics(page_bundle, corpus)
         payload.update(extra)
+        payload["figures"] = figure_reference_counts(page_bundle, corpus)
         payload["corpus_dependent_unavailable"] = []
 
     payload = _to_jsonable(payload)

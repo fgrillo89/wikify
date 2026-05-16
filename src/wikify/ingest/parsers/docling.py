@@ -929,7 +929,43 @@ def _doc_walk(
             if record is not None:
                 formulas.append(record)
     ref_count = counted_refs
+    images = _reassign_misbound_captions(images)
     return ref_count, images, formulas
+
+
+def _reassign_misbound_captions(images: list[RawImage]) -> list[RawImage]:
+    """Move captions off banner-sized PictureItems to the next caption-less
+    real-sized PictureItem on the same page.
+
+    Docling occasionally binds a figure caption to a publisher banner
+    that sits on the same PDF page as the real figure (the banner is
+    layout-stitched first, so the caption attaches to it). After this
+    pass the real figure carries the caption and the now-uncaptioned
+    banner is dropped from the returned list. Idempotent and
+    order-preserving for the surviving images.
+    """
+    from ...corpus.images_index import plan_caption_reassignment
+
+    if not images:
+        return images
+    plan = plan_caption_reassignment(
+        [(None, img.page, img.width, img.height, img.caption or "") for img in images]
+    )
+    if not plan:
+        return images
+    drop: set[int] = set()
+    for src_idx, tgt_idx in plan:
+        src, tgt = images[src_idx], images[tgt_idx]
+        tgt.caption = src.caption
+        if src.label and not tgt.label:
+            tgt.label = src.label
+        if src.media_type and not tgt.media_type:
+            tgt.media_type = src.media_type
+        if src.alt_text and not tgt.alt_text:
+            tgt.alt_text = src.alt_text
+        src.caption = ""
+        drop.add(src_idx)
+    return [img for i, img in enumerate(images) if i not in drop]
 
 
 def _picture_to_raw_image(item, doc) -> RawImage | None:
@@ -953,6 +989,8 @@ def _picture_to_raw_image(item, doc) -> RawImage | None:
     if data is None:
         return None
 
+    w: int | None = None
+    h: int | None = None
     try:
         from PIL import Image as PilImage  # noqa: N813
 
@@ -989,6 +1027,8 @@ def _picture_to_raw_image(item, doc) -> RawImage | None:
         ext="png",
         caption=caption,
         page=page,
+        width=w,
+        height=h,
         content_hash=content_hash,
     )
 

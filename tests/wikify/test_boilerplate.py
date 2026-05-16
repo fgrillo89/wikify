@@ -172,3 +172,124 @@ def test_section_path_kwarg_is_optional() -> None:
     text = "All rights reserved. Reprints and permissions."
     assert is_boilerplate(text) is True
     assert is_boilerplate(text, None) is True
+
+
+# --------------------------- Stage 3 extensions -----------------------------
+
+
+def test_frontiers_edited_by_block_flagged() -> None:
+    """Frontiers editorial-board header at the top of an article."""
+    text = (
+        "EDITED BY\nCarlo Ricciardi,\nPolytechnic University of Turin, Italy\n"
+        "REVIEWED BY\nItir Koymen,\nTOBB University of Economics and Technology"
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_frontiers_reviewed_by_block_flagged() -> None:
+    """A chunk that starts with REVIEWED BY alone (no EDITED BY) is enough."""
+    text = (
+        "REVIEWED BY\nMaria Elias Pereira,\nInstituto de Desenvolvimento de "
+        "Novas Tecnologias (UNINOVA), Portugal"
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_multi_stage_received_accepted_published_paragraph_flagged() -> None:
+    """All-caps publication-history run-on (Frontiers form)."""
+    text = (
+        "RECEIVED 02 May 2025 ACCEPTED 10 June 2025 PUBLISHED 19 June 2025 "
+        "CORRECTED 26 June 2025"
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_cs1_citation_header_flagged() -> None:
+    """CS1-style bibliographic citation header at the top of a chunk."""
+    text = (
+        "Kumar S, Yadav D, Stathopoulos S and Prodromakis T (2025) "
+        "Performance and variability analysis of ALD-grown wafer scale "
+        "HfO 2 /Ta 2 O 5 -based memristive devices for neuromorphic "
+        "computing. Front. Nanotechnol. 7:1621554. "
+        "doi: 10.3389/fnano.2025.1621554"
+    )
+    assert is_boilerplate(text) is True
+
+
+def test_real_abstract_with_doi_link_not_flagged() -> None:
+    """A real abstract that mentions a doi URL must not trip the CS1 pattern."""
+    text = (
+        "We report a novel HfO2/Al2O3 memristor stack with 600 DC cycles "
+        "of endurance. Supplementary data are available at "
+        "https://doi.org/10.1038/example. The device demonstrates 95.6% "
+        "recognition accuracy on MNIST."
+    )
+    assert is_boilerplate(text) is False
+
+
+def test_real_abstract_with_inline_paper_mention_not_flagged() -> None:
+    """Inline references like 'Smith J (2024) showed ...' must not match CS1."""
+    text = (
+        "Recent work by Smith J (2024) showed that conductive filament "
+        "rupture dominates the reset transition in HfO2 memristors. "
+        "Here we extend this analysis to bilayer stacks."
+    )
+    assert is_boilerplate(text) is False
+
+
+def test_real_abstract_with_received_word_elsewhere_not_flagged() -> None:
+    """Prose using 'received'/'accepted'/'published' as verbs must not trip.
+
+    The multi-stage pattern requires each marker to be followed by a
+    "DD Month YYYY" date, so casual verb usage in an abstract is safe.
+    """
+    text = (
+        "The deposited films received post-anneal treatment at 400 C. "
+        "Endurance was accepted as the primary figure of merit. "
+        "The paper was published in 2025."
+    )
+    assert is_boilerplate(text) is False
+
+
+def test_edited_by_prose_does_not_trip() -> None:
+    """Lowercase 'Edited by ...' in a sentence is legitimate prose.
+
+    The Frontiers editorial-board header is ALWAYS all-caps
+    ('EDITED BY' / 'REVIEWED BY'); the lowercase form is regular prose
+    and must not be flagged.
+    """
+    text = (
+        "Edited by Smith and colleagues, this volume collects ten "
+        "recent papers on memristor reliability and discusses their "
+        "implications for neuromorphic computing benchmarks."
+    )
+    assert is_boilerplate(text) is False
+
+
+def test_inline_cs1_citation_does_not_trip() -> None:
+    """A mid-sentence Smith (2021) inline citation must not match CS1.
+
+    The CS1 chunk-header pattern is anchored to chunk start AND requires
+    the doi suffix to be the chunk's tail; inline mid-prose citations
+    followed by more text fail both anchors.
+    """
+    text = (
+        "As shown by Smith J (2021) Recent advances in memristive devices. "
+        "Nature Methods. 18:455. doi: 10.1038/x. Our work extends this finding."
+    )
+    assert is_boilerplate(text) is False
+
+
+def test_received_accepted_published_lowercase_verbs_do_not_trip() -> None:
+    """Lowercase 'received DD Month YYYY ... accepted ... published' is prose.
+
+    The all-caps Frontiers publication-history block is metadata; the
+    same words used as verbs with dates in a sentence (a real, if rare,
+    PI-narrative construction) are not.
+    """
+    text = (
+        "The PI received 25 March 2024 funding from NSF and accepted "
+        "10 May 2024 collaboration with MIT and published 30 June 2024 "
+        "the first protocol."
+    )
+    assert is_boilerplate(text) is False

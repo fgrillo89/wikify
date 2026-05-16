@@ -24,6 +24,79 @@ from ..api import Corpus
 
 _LABEL_NORM_RE = re.compile(r"[^a-z0-9]+")
 
+# Decoration thresholds. A raster is "likely decoration" (publisher
+# banner, page-header logo, or sub-100px icon) when ANY of these hold:
+#   - smaller dimension under 120 px
+#   - total area under 40 000 px (e.g. 200x200 or smaller)
+#   - aspect ratio over 4:1 (extreme banner shape)
+# Calibrated against the ALD corpus where real scientific figures span
+# ~691-1485 px on the long axis and recurring publisher banners are
+# ~236x99 (Advanced Materials section banner).
+_DECORATION_MIN_SHORT = 120
+_DECORATION_MIN_AREA = 40_000
+_DECORATION_MAX_ASPECT = 4.0
+
+
+def is_decoration_dims(width: int, height: int) -> bool:
+    """True when ``width x height`` describes a likely publisher
+    decoration (banner, logo, icon) rather than a real figure."""
+    short = min(width, height)
+    if short < _DECORATION_MIN_SHORT:
+        return True
+    if width * height < _DECORATION_MIN_AREA:
+        return True
+    if max(width, height) / max(short, 1) > _DECORATION_MAX_ASPECT:
+        return True
+    return False
+
+
+def plan_caption_reassignment(
+    items: list[tuple[object, int | None, int | None, int | None, str]],
+) -> list[tuple[int, int]]:
+    """Plan caption moves off banner-sized assets to real ones on the same page.
+
+    ``items`` is an ordered list of ``(key, page, width, height, caption)``
+    tuples. ``key`` is opaque (caller-side identifier). Returns a list of
+    ``(banner_index, target_index)`` pairs into ``items``: the caption on
+    ``banner_index`` should be moved to ``target_index`` and the banner
+    asset dropped. Items with missing dims are skipped.
+
+    Pairing rule, per page in walk order: each banner-with-caption pairs
+    to the first caption-less real-sized asset that follows it on the
+    same page. Items already used as a banner or target are not reused.
+    """
+    pages: dict[object, list[int]] = {}
+    for idx, (_key, page, _w, _h, _cap) in enumerate(items):
+        pages.setdefault(page, []).append(idx)
+    plan: list[tuple[int, int]] = []
+    used: set[int] = set()
+    for idx_list in pages.values():
+        for pos, src_idx in enumerate(idx_list):
+            if src_idx in used:
+                continue
+            _key, _page, w, h, cap = items[src_idx]
+            if not (cap or "").strip():
+                continue
+            if w is None or h is None:
+                continue
+            if not is_decoration_dims(w, h):
+                continue
+            for tgt_idx in idx_list[pos + 1 :]:
+                if tgt_idx in used:
+                    continue
+                _tkey, _tpage, tw, th, tcap = items[tgt_idx]
+                if (tcap or "").strip():
+                    continue
+                if tw is None or th is None:
+                    continue
+                if is_decoration_dims(tw, th):
+                    continue
+                plan.append((src_idx, tgt_idx))
+                used.add(src_idx)
+                used.add(tgt_idx)
+                break
+    return plan
+
 
 def _norm(s: str) -> str:
     return _LABEL_NORM_RE.sub("_", s.lower()).strip("_")

@@ -256,7 +256,7 @@ def cmd_check(
         import sys as _sys
 
         try:
-            response_data = json.loads(_sys.stdin.read())
+            response_data = json.loads(_sys.stdin.buffer.read().decode("utf-8"))
         except json.JSONDecodeError as exc:
             cli_error(
                 EXIT_VALIDATION,

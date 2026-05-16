@@ -31,6 +31,7 @@ from wikify.bundle.wiki.navigation import read_navigation
 from wikify.bundle.wiki.page import Bundle, Page
 from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
+from wikify.render.html.citation import format_cs1
 
 WIKI_NAME = "Wikify Simple"
 
@@ -98,10 +99,10 @@ def build_site(
     (out_dir / "static").mkdir(exist_ok=True)
     (out_dir / "assets").mkdir(exist_ok=True)
 
-    # Load doc_id -> source URL map from the corpus and stage cited PDFs
-    # into ``assets/sources/`` so the rendered reference list can hyperlink
-    # straight to the paper a reader is clicking on.
-    doc_source_map = _load_doc_source_map(corpus_root, out_dir)
+    # Load doc_id -> bibliographic metadata + source URL from the corpus
+    # and stage cited PDFs into ``assets/sources/`` so the rendered
+    # reference list can hyperlink straight to the paper.
+    doc_meta_map = _load_doc_meta_map(corpus_root, out_dir)
 
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -173,7 +174,7 @@ def build_site(
             shared_ctx=shared_ctx,
             page_by_id=page_by_id,
             root="../",
-            doc_source_map=doc_source_map,
+            doc_meta_map=doc_meta_map,
         )
         html_path.write_text(html_str, encoding="utf-8")
 
@@ -365,7 +366,7 @@ def _render_article(
     shared_ctx: dict[str, Any],
     page_by_id: dict[str, Page],
     root: str,
-    doc_source_map: dict[str, str] | None = None,
+    doc_meta_map: dict[str, dict] | None = None,
 ) -> str:
     # Reconstruct the full body (frontmatter-stripped) including the
     # ## Evidence block, so the markdown footnotes extension can render
@@ -391,8 +392,14 @@ def _render_article(
         page_url_depth=1,
     )
 
+    # Isolate ``$$...$$`` display math so arithmatex's BlockProcessor
+    # picks it up. Without blank lines around the block, arithmatex
+    # falls back to inline matching and produces stray ``$`` outside
+    # the rendered span.
+    body_md = _isolate_display_math(body_md)
+
     # Clean up evidence footnote lines: format as bibliographic references.
-    body_md = _clean_evidence_lines(body_md, doc_source_map=doc_source_map)
+    body_md = _clean_evidence_lines(body_md, doc_meta_map=doc_meta_map)
 
     # Format bibliography section: convert [N] markers to superscript links
     body_md = _format_bibliography_section(body_md)
@@ -478,19 +485,21 @@ def _render_article(
     )
 
 
-def _load_doc_source_map(
+def _load_doc_meta_map(
     corpus_root: Path | None, out_dir: Path,
-) -> dict[str, str]:
-    """Return ``{doc_id: url}`` for every doc the corpus knows about.
+) -> dict[str, dict]:
+    """Return ``{doc_id: meta}`` for every doc the corpus knows about.
 
-    Preference order per doc:
+    ``meta`` carries the fields needed for a Wikipedia CS1 citation
+    (``authors``, ``year``, ``title``, ``venue``, ``volume``, ``issue``,
+    ``pages``, ``doi``) plus a ``url`` field with the click target.
 
-    1. ``doi`` — rendered as ``https://doi.org/<doi>``. Always portable.
-    2. ``source_path`` — the original PDF (or markdown) the doc was
-       ingested from. Copied into ``<out_dir>/assets/sources/`` so the
-       wiki carries the file and the rendered ``<a>`` points at the
-       relative path. The reader clicks and the PDF opens in their
-       browser.
+    URL preference per doc:
+
+    1. ``doi`` -> ``https://doi.org/<doi>`` (always portable).
+    2. ``source_path`` -> original PDF, copied into
+       ``<out_dir>/assets/sources/`` so the wiki carries the file and
+       the link is a stable relative path.
 
     Returns an empty dict when no corpus is provided or the corpus
     has no SQLite store.
@@ -503,49 +512,83 @@ def _load_doc_source_map(
     import sqlite3 as _sqlite
 
     sources_dir = out_dir / "assets" / "sources"
-    out: dict[str, str] = {}
+    out: dict[str, dict] = {}
     con = _sqlite.connect(str(db_path))
     con.row_factory = _sqlite.Row
     try:
         rows = list(con.execute(
-            "SELECT doc_id, source_path, doi FROM documents"
+            "SELECT doc_id, source_path, doi, title, year, container_title, "
+            "authors_json, metadata_json FROM documents"
         ))
     finally:
         con.close()
     for r in rows:
         doc_id = r["doc_id"]
         doi = (r["doi"] or "").strip()
+        url = ""
         if doi:
-            out[doc_id] = f"https://doi.org/{doi}"
-            continue
-        source_path = (r["source_path"] or "").strip()
-        if not source_path:
-            continue
-        # source_path may be Windows-style (backslashes) from an older ingest.
-        src = Path(source_path.replace("\\", "/"))
-        if not src.is_absolute() and not src.is_file():
-            # Try relative to corpus_root's parent (typical layout).
-            alt = Path(corpus_root).parent.parent / src
-            if alt.is_file():
-                src = alt
-        if not src.is_file():
-            continue
-        # Stage under assets/sources/ with a stable short-handle filename
-        # so the per-page link is a fixed relative URL regardless of where
-        # the corpus lives on disk.
-        short = doc_id[-12:] if len(doc_id) > 12 else doc_id
-        suffix = src.suffix or ".pdf"
-        dest = sources_dir / f"{short}{suffix}"
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.copy2(src, dest)
-            except OSError:
-                continue
-        # Per-page HTML lives at out_dir/<sub>/<id>.html (depth 1), so
-        # the relative URL to assets/sources/<short>.pdf is one level up.
-        out[doc_id] = f"../assets/sources/{short}{suffix}"
+            url = f"https://doi.org/{doi}"
+        else:
+            source_path = (r["source_path"] or "").strip()
+            if source_path:
+                # source_path may be Windows-style (backslashes) from older ingests.
+                src = Path(source_path.replace("\\", "/"))
+                if not src.is_absolute() and not src.is_file():
+                    alt = Path(corpus_root).parent.parent / src
+                    if alt.is_file():
+                        src = alt
+                if src.is_file():
+                    short = doc_id[-12:] if len(doc_id) > 12 else doc_id
+                    suffix = src.suffix or ".pdf"
+                    dest = sources_dir / f"{short}{suffix}"
+                    if not dest.exists():
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            shutil.copy2(src, dest)
+                        except OSError:
+                            dest = None  # type: ignore[assignment]
+                    if dest is not None and dest.exists():
+                        # Per-page HTML lives at out_dir/<sub>/<id>.html,
+                        # so assets/sources/<short>.pdf is one level up.
+                        url = f"../assets/sources/{short}{suffix}"
+
+        meta: dict = {
+            "url": url,
+            "authors": _safe_json_list(r["authors_json"]),
+            "year": r["year"],
+            "title": (r["title"] or "").strip(),
+            "venue": (r["container_title"] or "").strip(),
+            "doi": doi,
+        }
+        # Volume/issue/pages live in metadata_json (the OpenAlex/Crossref
+        # blob); pull them out so CS1 can render the locator line.
+        extra = _safe_json_dict(r["metadata_json"])
+        for key in ("volume", "issue", "pages"):
+            value = extra.get(key)
+            if value:
+                meta[key] = str(value).strip()
+        out[doc_id] = meta
     return out
+
+
+def _safe_json_list(raw) -> list[str]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(str(raw))
+    except (ValueError, json.JSONDecodeError):
+        return []
+    return [str(v) for v in data] if isinstance(data, list) else []
+
+
+def _safe_json_dict(raw) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(str(raw))
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -584,67 +627,261 @@ def _resolve_wikilinks(
     return _WIKILINK_RE.sub(_replace, body)
 
 
-# Matches the internal chunk hash suffix in evidence lines, e.g.
-# "__c0000__fec9f3fb" at the end of a chunk_id.
-_CHUNK_HASH_RE = re.compile(r"__c\d{4}__[0-9a-f]{6,}")
+# Matches the internal chunk-id suffix, e.g. ``__c0000_fec9f3fb`` or
+# ``__c0000__fec9f3fb`` at the end of a chunk_id. The hyphen-vs-double
+# underscore between the chunk index and the hash has varied across
+# ingest paths; both forms are accepted so legacy bundles also clean up.
+_CHUNK_HASH_RE = re.compile(r"__c\d{4}_+[0-9a-f]{6,}")
 
 # Extracts [Year Author] prefix from doc_id, e.g. "[2020 Liu]"
 _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
 
 
 def _clean_evidence_lines(
-    body: str, *, doc_source_map: dict[str, str] | None = None,
+    body: str, *, doc_meta_map: dict[str, dict] | None = None,
 ) -> str:
-    """Reformat evidence footnote definitions as bibliographic references.
+    """Reformat evidence footnote definitions as Wikipedia CS1 citations.
 
     Transforms raw evidence like:
         ``[^e1]: chunk_hash (doc_id) > "quote"``
-    into clean references like:
-        ``[^e1]: [Author (Year). *Paper Title.*](url) "quote"``
+    into a CS1-style reference like:
+        ``[^e1]: Last, F. M. (Year). "[Title](url)". *Venue*. **Vol** (Issue): pages. doi:X``
 
-    When ``doc_source_map`` resolves the doc_id to a URL (DOI link or
-    locally-staged PDF path) the bibliographic head is wrapped in a
-    markdown link so the rendered footnote becomes clickable.
+    The trailing chunk-text quote is dropped -- it was the first ~240
+    chars of the chunk (build-evidence stores ``text[:400]``), which
+    rarely matches what the writer cited. The upstream ``quote`` field
+    on each evidence record stays -- the M6/G2 grounding metric
+    substring-matches it against the chunk text.
+
+    Two markers that resolve to the same paper are collapsed into one
+    definition, with the prose-first marker kept as canonical. The
+    duplicate uses in prose are rewritten to the canonical marker so
+    python-markdown's footnotes extension emits a single ``<li>`` with
+    multiple backref arrows.
+
+    Definitions are emitted in the order they first appear in prose so
+    the rendered reference list reads 1, 2, 3 top to bottom.
     """
-    lines = body.split("\n")
-    out: list[str] = []
-    for line in lines:
+    # First pass: classify every line as either a footnote definition or
+    # body prose. For each definition, capture ``(doc_id, citation_text)``;
+    # the doc_id (normalized through the meta map's DOI when available)
+    # is the stable identity used for dedup, not the rendered text.
+    parsed: dict[str, tuple[str, str]] = {}
+    body_lines: list[str] = []
+    in_def_block = False
+    for line in body.split("\n"):
         if line.startswith("[^") and "]:" in line:
-            line = _CHUNK_HASH_RE.sub("", line)
-            line = _format_evidence_as_reference(line, doc_source_map=doc_source_map)
-        out.append(line)
+            in_def_block = True
+            marker = line[2:line.index("]:")]
+            cleaned = _CHUNK_HASH_RE.sub("", line)
+            parsed[marker] = _format_evidence_body(
+                cleaned, doc_meta_map=doc_meta_map,
+            )
+            continue
+        if in_def_block and not line.strip():
+            # Blank line between footnote definitions stays in the prose
+            # buffer; we re-emit footnotes in a single block at the end.
+            continue
+        in_def_block = False
+        body_lines.append(line)
+
+    if not parsed:
+        return "\n".join(body_lines)
+
+    # Resolve each marker to a stable identity: DOI first when present
+    # (so two doc_ids that share a DOI collapse), else the doc_id, else
+    # the rendered citation text as a last-resort fallback.
+    def _identity(doc_id: str, citation: str) -> str:
+        meta = (doc_meta_map or {}).get(doc_id) or {}
+        doi = (meta.get("doi") or "").strip().lower()
+        if doi:
+            return f"doi:{doi}"
+        if doc_id:
+            return f"id:{doc_id}"
+        return f"text:{citation}"
+
+    # Pick the prose-first marker per identity as the canonical one,
+    # then rewrite uses of duplicates to the canonical marker. The python-
+    # markdown footnotes extension naturally folds multiple ``[^eN]`` uses
+    # of the same marker into one ``<li>`` with multiple backrefs.
+    prose = "\n".join(body_lines)
+    prose_order: list[str] = []
+    seen_in_prose: set[str] = set()
+    for m in _MARKER_USE_RE.finditer(prose):
+        marker = m.group(1)
+        if marker in parsed and marker not in seen_in_prose:
+            prose_order.append(marker)
+            seen_in_prose.add(marker)
+    canonical_for_identity: dict[str, str] = {}
+    canonical_per_marker: dict[str, str] = {}
+    for marker in prose_order:
+        doc_id, citation = parsed[marker]
+        ident = _identity(doc_id, citation)
+        canonical = canonical_for_identity.setdefault(ident, marker)
+        canonical_per_marker[marker] = canonical
+    # Markers defined but never cited keep themselves as canonical so
+    # they still emit (they fall through the rewrite below untouched).
+    for marker, (doc_id, citation) in parsed.items():
+        canonical_per_marker.setdefault(marker, marker)
+        canonical_for_identity.setdefault(_identity(doc_id, citation), marker)
+
+    if any(c != m for m, c in canonical_per_marker.items()):
+        def _rewrite_use(match: re.Match[str]) -> str:
+            m = match.group(1)
+            return f"[^{canonical_per_marker.get(m, m)}]"
+
+        prose = _MARKER_USE_RE.sub(_rewrite_use, prose)
+
+    # Emit one definition per canonical marker, in prose-first order.
+    emitted_order: list[str] = []
+    emitted: set[str] = set()
+    for marker in prose_order:
+        canonical = canonical_per_marker[marker]
+        if canonical not in emitted:
+            emitted_order.append(canonical)
+            emitted.add(canonical)
+    for marker in sorted(parsed):
+        canonical = canonical_per_marker[marker]
+        if canonical not in emitted:
+            emitted_order.append(canonical)
+            emitted.add(canonical)
+
+    out = prose.split("\n")
+    if out and out[-1].strip():
+        out.append("")
+    for marker in emitted_order:
+        _doc_id, citation = parsed[marker]
+        out.append(f"[^{marker}]: {citation}")
     return "\n".join(out)
 
 
-def _format_evidence_as_reference(
-    line: str, *, doc_source_map: dict[str, str] | None = None,
-) -> str:
-    """Format a single evidence footnote line as a bibliographic reference."""
-    # Extract marker prefix
+_MARKER_USE_RE = re.compile(r"\[\^([^\]]+)\](?!:)")
+
+# ``$$...$$`` display math, including multi-line. Each delimiter pair
+# requires no flanking ``$`` on either side so ``$$$$x$$$$`` (a stray
+# quad-dollar run) doesn't get swallowed as one block.
+_DISPLAY_MATH_RE = re.compile(
+    r"(?<!\$)\$\$(?!\$)(.+?)(?<!\$)\$\$(?!\$)", re.DOTALL,
+)
+
+# Fenced code blocks: matched as a whole so ``$$...$$`` inside code
+# never participates in display-math isolation. Both backtick (```)
+# and tilde (~~~) fences are recognized; the closing fence must use
+# the same character at the same column.
+_FENCED_CODE_RE = re.compile(
+    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)\s*$",
+)
+
+
+def _isolate_display_math(body: str) -> str:
+    """Insert blank lines around ``$$...$$`` blocks.
+
+    pymdownx.arithmatex's BlockProcessor only picks up display math
+    when the ``$$`` delimiters sit in their own paragraph. Writers
+    typically emit ``...sentence:\n$$eq$$\nnext sentence...`` which
+    leaves the block adjacent to prose; arithmatex then falls back
+    to inline matching and produces stray ``$`` glyphs flanking the
+    rendered span.
+
+    This pass surrounds every ``$$...$$`` with blank lines so the
+    block matcher always wins. Fenced code blocks are excised before
+    the substitution and restored verbatim afterward so example math
+    inside a code block isn't rewritten.
+    """
+    # Replace fenced blocks with placeholders, apply substitution, restore.
+    placeholders: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        placeholders.append(match.group(0))
+        return f"\x00FENCE{len(placeholders) - 1}\x00"
+
+    stashed = _FENCED_CODE_RE.sub(_stash, body)
+
+    def _sub(match: re.Match[str]) -> str:
+        return f"\n\n$$\n{match.group(1).strip()}\n$$\n\n"
+
+    rewritten = _DISPLAY_MATH_RE.sub(_sub, stashed)
+
+    def _restore(match: re.Match[str]) -> str:
+        return placeholders[int(match.group(1))]
+
+    return re.sub(r"\x00FENCE(\d+)\x00", _restore, rewritten)
+
+
+def _format_evidence_body(
+    line: str, *, doc_meta_map: dict[str, dict] | None = None,
+) -> tuple[str, str]:
+    """Return ``(doc_id, citation_text)`` for one ``[^eN]:`` definition.
+
+    Input shape: ``[^eN]: chunk_id (doc_id) > "quote"``, or
+    ``[^eN]: doc_id`` when no wrapper was attached (legacy / hand-
+    written pages). The quote is discarded; only the doc_id is used.
+
+    ``doc_id`` is what downstream dedup uses to identify the paper;
+    ``citation_text`` is the rendered CS1 string. Decoupling the two
+    means two papers that format to identical CS1 text (e.g. missing
+    DOI / venue) don't accidentally collapse during dedup.
+    """
     marker_end = line.index("]:") + 2
-    marker = line[:marker_end]
     rest = line[marker_end:].strip()
 
-    # Parse the evidence value: look for ' > "quote"'
+    # Strip the ' > "quote"' tail if present.
     sep = rest.find(' > "')
-    if sep == -1:
-        # No quote separator -- just clean up what we have
-        return f"{marker} {_format_doc_id(rest, doc_source_map=doc_source_map)}"
+    head = rest[:sep].strip() if sep != -1 else rest
 
-    head = rest[:sep].strip()
-    quote = rest[sep + 4 :].rstrip('"').strip()
+    doc_id = _extract_doc_id(head, doc_meta_map=doc_meta_map)
+    return doc_id, _format_citation(doc_id, doc_meta_map=doc_meta_map)
 
-    # Head may be "chunk_id (doc_id)" or just "doc_id"
-    doc_id = head
-    paren_open = head.rfind("(")
-    paren_close = head.rfind(")")
-    if paren_open > 0 and paren_close > paren_open:
-        doc_id = head[paren_open + 1 : paren_close].strip()
 
-    formatted = _format_doc_id(doc_id, doc_source_map=doc_source_map)
-    if quote:
-        return f'{marker} {formatted} -- "{quote}"'
-    return f"{marker} {formatted}"
+def _extract_doc_id(
+    head: str, *, doc_meta_map: dict[str, dict] | None = None,
+) -> str:
+    """Pull the doc_id out of a ``chunk_id (doc_id)`` head string.
+
+    The wrapper is extracted via balanced-paren walk so titles
+    containing ``(RRAM)`` etc. don't fool the parser. The unwrapped
+    form is preferred only when it resolves in ``doc_meta_map``;
+    otherwise the entire head is treated as the doc_id. This keeps
+    unwrapped legacy lines like ``[^e1]: [2020 Smith] Title (RRAM)``
+    from being mis-parsed as a wrapped reference.
+    """
+    if head.endswith(")"):
+        depth = 0
+        for i in range(len(head) - 1, -1, -1):
+            ch = head[i]
+            if ch == ")":
+                depth += 1
+            elif ch == "(":
+                depth -= 1
+                if depth == 0:
+                    candidate = head[i + 1 : -1].strip()
+                    # Only accept the unwrap when the inner string
+                    # resolves to a known doc. Otherwise the trailing
+                    # ``(...)`` was part of the title, not a wrapper.
+                    if candidate and (doc_meta_map or {}).get(candidate):
+                        return candidate
+                    break
+    return head
+
+
+def _format_citation(
+    doc_id: str, *, doc_meta_map: dict[str, dict] | None = None,
+) -> str:
+    """Build the citation text for ``doc_id``.
+
+    Prefers DB-backed CS1 rendering when ``doc_meta_map`` carries a
+    row for this doc; falls back to ``_format_doc_id`` (legacy
+    ``Author (Year). *Title.*`` extracted from the doc_id string) when
+    no row is available -- this keeps tests and bundles whose corpus
+    isn't available (or whose docs lack metadata) rendering cleanly.
+    """
+    meta = (doc_meta_map or {}).get(doc_id)
+    if meta is None:
+        meta = (doc_meta_map or {}).get(_CHUNK_HASH_RE.sub("", doc_id).strip().rstrip("_"))
+    if meta and (meta.get("authors") or meta.get("title") or meta.get("year")):
+        return format_cs1(meta, url=meta.get("url", ""))
+    # Legacy fallback: parse [Year Author] Title from the doc_id string.
+    return _format_doc_id(doc_id)
 
 
 # Bibliography: inline [N] markers and ## Bibliography section
@@ -712,45 +949,27 @@ def _format_bibliography_section(body: str) -> str:
 _TRAILING_HASH_RE = re.compile(r"_[0-9a-f]{5,}$")
 
 
-def _format_doc_id(
-    doc_id: str, *, doc_source_map: dict[str, str] | None = None,
-) -> str:
-    """Turn a doc_id like '[2020 Liu] Paper Title_hash' into 'Liu (2020). *Paper Title*.'
+def _format_doc_id(doc_id: str) -> str:
+    """Legacy fallback: parse ``[Year Author] Title`` from the doc_id string.
 
-    When ``doc_source_map`` has a URL for the doc, wrap the reference
-    text in a markdown link so the rendered footnote becomes clickable
-    (DOI link, or a locally-staged PDF copy in the site's assets dir).
+    Used only when the corpus has no metadata row for this doc (e.g.
+    tests with synthetic doc_ids, or older bundles whose corpus is no
+    longer reachable). Produces ``Author (Year). *Title.*``.
     """
-    raw_doc_id = doc_id
-    # Strip chunk and content hash suffixes
     doc_id = _CHUNK_HASH_RE.sub("", doc_id).strip().rstrip("_")
     doc_id = _TRAILING_HASH_RE.sub("", doc_id).strip().rstrip("_")
-
-    # Resolve URL once; the lookup key is the raw doc_id (the form
-    # the source map was built with).
-    url = (doc_source_map or {}).get(raw_doc_id) or (doc_source_map or {}).get(doc_id)
-
-    # Try to extract [Year Author] prefix
     m = _DOC_YEAR_RE.match(doc_id)
     if m:
         year = m.group(1)
         author = m.group(2).strip()
         title = doc_id[m.end() :].strip().lstrip("_ ").replace("_", " ")
-        # Strip trailing hashes from title too
         title = _TRAILING_HASH_RE.sub("", title).strip().rstrip("_")
         title = title.replace("_", " ").strip()
         if title:
-            label = f"{author} ({year}). *{title}.*"
-        else:
-            label = f"{author} ({year})."
-    else:
-        # Fallback: just clean underscores and present as-is
-        clean = doc_id.replace("_", " ").strip()
-        label = f"*{clean}.*" if clean else doc_id
-
-    if url:
-        return f"[{label}]({url})"
-    return label
+            return f"{author} ({year}). *{title}.*"
+        return f"{author} ({year})."
+    clean = doc_id.replace("_", " ").strip()
+    return f"*{clean}.*" if clean else doc_id
 
 
 def _stage_and_rewrite_figures(

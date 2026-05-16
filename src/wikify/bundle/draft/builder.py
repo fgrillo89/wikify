@@ -21,12 +21,15 @@ What is left empty (set by the writer skill before invocation):
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import Literal
+
+from PIL import Image, UnidentifiedImageError
 
 from ...api import Bundle, Corpus
 from ...corpus import queries as corpus_queries
 from ...corpus.chunks import list_documents
-from ...corpus.images_index import ImageIndex
+from ...corpus.images_index import ImageIndex, ImageRecord, is_decoration_dims
 from ...corpus.store.authors import author_key
 from ...schema import ImageRef, WriteEvidenceRef, WriteRequest
 from ...types import ModelTier
@@ -107,6 +110,7 @@ def build_draft(
         chunk = fetched_chunks.get(rec.chunk_id)
         chunk_text = getattr(chunk, "text", "") if chunk is not None else ""
         section_type = getattr(chunk, "section_type", "") if chunk is not None else ""
+        chunk_ord = getattr(chunk, "ord", -1) if chunk is not None else -1
         artifacts = artifacts_by_chunk.get(rec.chunk_id, {})
         # `rec` may carry an out-of-schema ``source`` label written by
         # the workflow when evidence was gathered via multiple
@@ -123,6 +127,8 @@ def build_draft(
                 quote=rec.quote,
                 chunk_text=chunk_text,
                 section_type=section_type,
+                score=rec.score,
+                chunk_ord=chunk_ord,
                 context_window=_context_window_for(rec),
                 source=source_label,
                 chunk_equations=equations_by_chunk.get(rec.chunk_id, []),
@@ -184,6 +190,27 @@ def _author_context_for_card(corpus: Corpus, card) -> dict | None:
     return None
 
 
+def _is_likely_decoration(img: ImageRecord, corpus_root: Path) -> bool:
+    """Reject publisher banners, logos, and tiny rasters by raster size.
+
+    Prefers ``img.width``/``img.height`` from the assets table; falls back
+    to opening the file with Pillow when the metadata is missing. Returns
+    ``False`` on any I/O or decoding error so a flaky read never silently
+    drops a legitimate figure.
+    """
+    width, height = img.width, img.height
+    if width is None or height is None:
+        abs_path = corpus_root / img.path
+        if not abs_path.is_file():
+            return False
+        try:
+            with Image.open(abs_path) as im:
+                width, height = im.size
+        except (OSError, UnidentifiedImageError):
+            return False
+    return is_decoration_dims(width, height)
+
+
 def _figure_candidates_for_evidence(corpus: Corpus, records, *, limit: int) -> list[ImageRef]:
     """Return captioned figures near the active evidence chunks.
 
@@ -213,6 +240,8 @@ def _figure_candidates_for_evidence(corpus: Corpus, records, *, limit: int) -> l
             if rec.chunk_id not in img.near_chunk_ids and img.id not in flagged:
                 continue
             if img.id in seen:
+                continue
+            if _is_likely_decoration(img, index.corpus_root):
                 continue
             seen.add(img.id)
             out.append(

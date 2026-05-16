@@ -47,7 +47,7 @@ VALIDATION_SCHEMA_VERSION = 1
 
 _REF_DEF_RE = re.compile(
     r'^\[\^e(\d+)\]:\s*(?P<body>.*?)\s*>\s*"(?P<quote>.+?)"\s*$',
-    re.MULTILINE,
+    re.MULTILINE | re.DOTALL,
 )
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
 _FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
