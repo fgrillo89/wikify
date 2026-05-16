@@ -78,11 +78,6 @@ DEFINITIVE_BOILERPLATE_MARKERS: tuple[str, ...] = (
     # DoD / DTIC standard cover-sheet (SF298) preamble.
     r"\bForm\s+Approved\s+OMB\s+No\.",
     r"\bpublic\s+reporting\s+burden\b",
-    # Journal "Article history / Received / Accepted / Available online".
-    r"\bArticle\s+history\b",
-    r"\bReceived\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
-    r"\bAccepted\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
-    r"\bAvailable\s+online\s+\d",
     # Keyword block at the head of a paper.
     r"^\s*Keywords?\s*:\s*\S",
     r"^\s*A\s*R\s*T\s*I\s*C\s*L\s*E\s+I\s*N\s*F\s*O\b",
@@ -101,6 +96,48 @@ DEFINITIVE_BOILERPLATE_MARKERS: tuple[str, ...] = (
 )
 _DEFINITIVE_PATTERNS = tuple(
     re.compile(p, re.IGNORECASE | re.MULTILINE) for p in DEFINITIVE_BOILERPLATE_MARKERS
+)
+
+# Patterns that are unambiguous metadata markers ONLY in ALL-CAPS form;
+# the corresponding lowercase / mixed-case phrasing is a legitimate prose
+# construction (e.g. "Edited by the journal editorial team, this special
+# issue ..." or "The PI received 25 March 2024 funding ... and accepted
+# 10 May 2024 collaboration ..."). Compiled WITHOUT ``re.IGNORECASE`` so
+# the case requirement is structural.
+DEFINITIVE_BOILERPLATE_MARKERS_CASE_SENSITIVE: tuple[str, ...] = (
+    # Journal "Article history / Received / Accepted / Available online".
+    # Always Capitalized in real journal metadata; lowercase forms like
+    # "the PI received 25 March 2024 funding ..." are legitimate prose.
+    r"\bArticle\s+history\b",
+    r"\bReceived\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"\bAccepted\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"\bAvailable\s+online\s+\d",
+    # Frontiers-style editorial-board header blocks at the top of an article.
+    # Calibrated against the Kumar 2025 (Front. Nanotechnol.) chunk c0000
+    # which is verbatim "EDITED BY\nCarlo Ricciardi,...\nREVIEWED BY\n...".
+    r"^\s*EDITED\s+BY\b",
+    r"^\s*REVIEWED\s+BY\b",
+    # Multi-stage publication-history paragraph (the all-caps Frontiers form
+    # "RECEIVED 02 May 2025 ACCEPTED 10 June 2025 PUBLISHED 19 June 2025").
+    # The existing single-stage "Received: DD Month YYYY" pattern above
+    # already catches the colon form; this covers the run-on variant.
+    # Each marker must be followed by a "DD Month YYYY" date so prose like
+    # "the film received post-anneal ... was accepted ... was published" does
+    # not false-positive.
+    r"\bRECEIVED\b\s*\d?\d\s+\w+\s+\d{4}[\s\S]{0,200}"
+    r"\bACCEPTED\b\s*\d?\d\s+\w+\s+\d{4}[\s\S]{0,200}\bPUBLISHED\b",
+    # CS1-style citation header that IS the chunk (Kumar 2025 c0002 verbatim
+    # "Kumar S, Yadav D, Stathopoulos S and Prodromakis T (2025) Performance
+    # ... Front. Nanotechnol. 7:1621554. doi: 10.3389/fnano.2025.1621554").
+    # Anchored with ``\A`` so the citation must start the chunk, and ending
+    # with the doi suffix followed by only whitespace / end-of-chunk so
+    # inline mid-sentence citations like "As shown by Smith J (2021) ...
+    # doi: 10.1038/x. Our work extends ..." do not trip.
+    r"\A\s*[A-Z][A-Za-z\-]+\s+[A-Z](?:[A-Za-z\.\s,]+?)\(\d{4}\)\s+[^.]{5,300}\."
+    r"\s+(?:[A-Z][A-Za-z]*\.?\s*){1,6}\d+(?::\d+)?[.;]\s*doi\s*:\s*10\.\S+\s*\Z",
+)
+_DEFINITIVE_PATTERNS_CASE_SENSITIVE = tuple(
+    re.compile(p, re.MULTILINE) for p in DEFINITIVE_BOILERPLATE_MARKERS_CASE_SENSITIVE
 )
 
 # A chunk this long is almost certainly substantive content even if it
@@ -163,6 +200,9 @@ def is_boilerplate(text: str, section_path: list[str] | None = None) -> bool:
     # chunk does not trigger. The patterns themselves are unambiguous.
     head = text[:600]
     for pattern in _DEFINITIVE_PATTERNS:
+        if pattern.search(head):
+            return True
+    for pattern in _DEFINITIVE_PATTERNS_CASE_SENSITIVE:
         if pattern.search(head):
             return True
     if len(text.split()) > BOILERPLATE_MAX_WORDS:

@@ -110,6 +110,7 @@ def build_draft(
         chunk = fetched_chunks.get(rec.chunk_id)
         chunk_text = getattr(chunk, "text", "") if chunk is not None else ""
         section_type = getattr(chunk, "section_type", "") if chunk is not None else ""
+        chunk_ord = getattr(chunk, "ord", -1) if chunk is not None else -1
         artifacts = artifacts_by_chunk.get(rec.chunk_id, {})
         # `rec` may carry an out-of-schema ``source`` label written by
         # the workflow when evidence was gathered via multiple
@@ -126,6 +127,8 @@ def build_draft(
                 quote=rec.quote,
                 chunk_text=chunk_text,
                 section_type=section_type,
+                score=rec.score,
+                chunk_ord=chunk_ord,
                 context_window=_context_window_for(rec),
                 source=source_label,
                 chunk_equations=equations_by_chunk.get(rec.chunk_id, []),

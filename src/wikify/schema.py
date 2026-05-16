@@ -494,6 +494,17 @@ class WriteEvidenceRef(BaseModel):
     locator: str = ""
     chunk_text: str = ""  # full chunk text for synthesis context
     section_type: str = ""  # abstract/methods/results/conclusion
+    # Retrieval score from the evidence record (higher = more relevant).
+    # Used by the dossier renderer to order source papers by per-doc
+    # max-score so the strongest paper leads. Zero when the workflow
+    # did not record a score.
+    score: float = 0.0
+    # Source-doc-relative chunk ordinal (matches Chunk.ord on the
+    # corpus row). Used by the dossier renderer to present chunks
+    # from a single paper in narrative order (intro before methods).
+    # -1 when the corpus could not be queried (lets the renderer
+    # fall back to insertion order without raising).
+    chunk_ord: int = -1
     definition: str = ""  # concept definition from dossier
     summary: str = ""  # dossier summary of this chunk's contribution
     evidence_figures: list[str] = Field(default_factory=list)  # image IDs flagged by extractor

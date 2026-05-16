@@ -12,13 +12,14 @@ Grouping order (deterministic):
    (refinement / guided strategies that gather via sub-queries).
    Baseline evidence has a single empty ``source`` so this level
    collapses.
-2. Within a source group, by ``doc_id``. Documents appear in their
-   first-marker order (the order their earliest cited chunk appears
-   in the evidence list) so the most-prominent source leads.
-3. Within a document, chunks are sorted by section priority (abstract
-   → introduction → background → methods → results → discussion →
-   conclusion → body → other) and then by chunk ord. This gives the
-   writer a coherent "read the paper" flow per source.
+2. Within a source group, by ``doc_id``. Documents are ordered by
+   their per-doc max evidence score (descending) so the strongest
+   source leads. Ties break on ``doc_id`` for deterministic output.
+3. Within a document, chunks are ordered by ``chunk_ord`` (ascending)
+   so the dossier reads in narrative order — intros before methods,
+   methods before results — regardless of retrieval order. Chunks
+   without a known ``chunk_ord`` (corpus lookup failed) sort last,
+   preserving their insertion order.
 
 Marker numbering (``eN``) stays positional against the underlying
 ``draft.evidence`` array. The dossier is presentation only; it does
@@ -30,21 +31,6 @@ from __future__ import annotations
 from collections import OrderedDict
 
 from ...schema import WriteEvidenceRef, WriteRequest
-
-_SECTION_ORDER = {
-    "abstract": 0,
-    "introduction": 1,
-    "background": 2,
-    "methods": 3,
-    "results": 4,
-    "discussion": 5,
-    "conclusion": 6,
-    "body": 7,
-}
-
-
-def _section_rank(s: str) -> int:
-    return _SECTION_ORDER.get(s or "body", 8)
 
 
 def _short_doc(doc_id: str) -> str:
@@ -104,7 +90,11 @@ def render_dossier(draft: WriteRequest) -> str:
     markers = [f"e{i + 1}" for i in range(len(refs))]
     by_marker: dict[str, WriteEvidenceRef] = dict(zip(markers, refs))
 
-    # Group: source → doc → chunks (sorted by section then text length).
+    # Group: source → doc → chunks.
+    # Within a doc, sort by chunk_ord ascending (narrative order); unknown
+    # ord (-1) sorts last and falls back to insertion order via the marker.
+    # Across docs within a source, sort by per-doc max score descending so
+    # the strongest paper leads; tie-break on doc_id for determinism.
     groups: "OrderedDict[str, OrderedDict[str, list[tuple[str, WriteEvidenceRef]]]]"
     groups = OrderedDict()
     for marker, ref in by_marker.items():
@@ -117,10 +107,15 @@ def render_dossier(draft: WriteRequest) -> str:
         for doc, items in by_doc.items():
             items.sort(
                 key=lambda kv: (
-                    _section_rank(kv[1].section_type),
-                    kv[1].chunk_id,
+                    kv[1].chunk_ord if kv[1].chunk_ord >= 0 else float("inf"),
+                    kv[0],
                 )
             )
+        ordered_docs = sorted(
+            by_doc.items(),
+            key=lambda kv: (-max(r.score for _, r in kv[1]), kv[0]),
+        )
+        groups[src] = OrderedDict(ordered_docs)
 
     section_types = sorted(
         {r.section_type for r in refs if r.section_type}
@@ -224,12 +219,10 @@ def render_dossier(draft: WriteRequest) -> str:
                     for tbl in ref.chunk_tables:
                         out.append("> " + tbl.replace("\n", "\n> "))
                         out.append("")
-                if ref.chunk_figures:
-                    out.append("**Figures referenced in this chunk (caption only):**")
-                    out.append("")
-                    for fig in ref.chunk_figures:
-                        out.append(f"- {fig.strip()}")
-                    out.append("")
+                # Per-chunk figure captions are intentionally omitted: the
+                # top-of-dossier "## Figure candidates" table already lists
+                # every figure with its near-marker mapping, so repeating
+                # the captions here only triples the token spend.
                 if ref.context_window:
                     out.append(
                         "<details><summary>Adjacent chunks "

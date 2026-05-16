@@ -234,6 +234,213 @@ def test_build_draft_unknown_concept(tmp_path: Path) -> None:
         build_draft(bundle, slug="no-such", corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
 
 
+def test_dossier_orders_chunks_within_doc_by_chunk_ord(tmp_path: Path) -> None:
+    """Within a single paper, chunks render in ``ord`` order (intro before body),
+    not in evidence-list insertion order."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    # Append in reverse ord order so insertion order != desired render order.
+    append_evidence(
+        bundle,
+        slug,
+        [
+            EvidenceRecord(chunk_id="paper_0__c0001", doc_id="paper_0"),
+            EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0"),
+        ],
+    )
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    # The lower-ord chunk (c0000, marker e2) must appear before c0001 (e1)
+    # in the body section. _short_chunk renders the last 12 chars of the id.
+    after = body.split("## Evidence", 1)[1]
+    i0 = after.index("c0000")
+    i1 = after.index("c0001")
+    assert i0 < i1
+
+
+def test_dossier_orders_docs_by_max_score_desc(tmp_path: Path) -> None:
+    """Across docs, the paper with the higher per-doc max score leads.
+    Tie-break is doc_id ascending."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    # paper_0 has a max score of 0.2; paper_1 has 0.9 → paper_1 must lead.
+    append_evidence(
+        bundle,
+        slug,
+        [
+            EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0", score=0.2),
+            EvidenceRecord(chunk_id="paper_1__c0000", doc_id="paper_1", score=0.9),
+        ],
+    )
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    # In the body section (after "## Evidence"), paper_1 must appear before paper_0.
+    after = body.split("## Evidence", 1)[1]
+    assert after.index("### paper_1") < after.index("### paper_0")
+
+
+def test_dossier_doc_order_tiebreaks_on_doc_id(tmp_path: Path) -> None:
+    """Equal max scores → docs sorted by doc_id ascending for determinism."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle,
+        slug,
+        [
+            EvidenceRecord(chunk_id="paper_1__c0000", doc_id="paper_1", score=0.5),
+            EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0", score=0.5),
+        ],
+    )
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    after = body.split("## Evidence", 1)[1]
+    assert after.index("### paper_0") < after.index("### paper_1")
+
+
+def test_dossier_empty_evidence_renders_no_op(tmp_path: Path) -> None:
+    """No evidence → dossier still renders with the placeholder line."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    assert "_No evidence records._" in body
+
+
+def test_dossier_omits_adjacent_block_by_default(tmp_path: Path) -> None:
+    """Default ``draft build`` (no ``--with-adjacent``) must not emit the
+    ``<details>Adjacent chunks ...`` block — it misled writers in earlier
+    smoke runs and tripled token spend by duplicating primary chunks."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle, slug, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
+    )
+    build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    assert "Adjacent chunks" not in body
+    assert "synthesis context" not in body
+
+
+def test_dossier_includes_adjacent_block_when_opted_in(tmp_path: Path) -> None:
+    """``--with-adjacent`` still produces the ``<details>`` block as before."""
+    from wikify.bundle.draft.artifact import dossier_path
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle, slug, [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")]
+    )
+    build_draft(
+        bundle,
+        slug=slug,
+        corpus=corpus,
+        model_id="claude-sonnet-4-6",
+        tier="M",
+        with_adjacent=True,
+    )
+    body = dossier_path(bundle, slug).read_text(encoding="utf-8")
+    assert "Adjacent chunks" in body
+
+
+def test_dossier_omits_inline_figures_caption_block(tmp_path: Path) -> None:
+    """The per-chunk ``**Figures referenced in this chunk ...**`` listing
+    duplicates the top-of-dossier ``## Figure candidates`` table and is
+    intentionally dropped from the renderer."""
+    from wikify.bundle.draft.dossier import render_dossier
+    from wikify.schema import WriteEvidenceRef, WriteRequest
+
+    req = WriteRequest(
+        page_id="X",
+        page_kind="article",
+        title="X",
+        aliases=[],
+        skeleton="",
+        prompt_template="",
+        model_id="claude-sonnet-4-6",
+        tier="M",
+        evidence=[
+            WriteEvidenceRef(
+                chunk_id="paper_0__c0000",
+                doc_id="paper_0",
+                quote="",
+                chunk_text="Body text.",
+                chunk_figures=["Figure 1. A caption that should NOT appear inline."],
+            ),
+        ],
+    )
+    body = render_dossier(req)
+    assert "**Figures referenced in this chunk" not in body
+    assert "A caption that should NOT appear inline" not in body
+
+
+def test_dossier_orders_unknown_chunk_ord_last() -> None:
+    """Within a doc, a record with ``chunk_ord=-1`` (corpus lookup failed)
+    must render AFTER records with a known ``chunk_ord``.
+
+    The dossier sorts ascending on ``chunk_ord`` with unknown ord (-1)
+    coerced to +infinity so it lands at the tail rather than at the head
+    (where a naive numeric sort would put -1).
+    """
+    from wikify.bundle.draft.dossier import render_dossier
+    from wikify.schema import WriteEvidenceRef, WriteRequest
+
+    req = WriteRequest(
+        page_id="X",
+        page_kind="article",
+        title="X",
+        aliases=[],
+        skeleton="",
+        prompt_template="",
+        model_id="claude-sonnet-4-6",
+        tier="M",
+        evidence=[
+            WriteEvidenceRef(
+                chunk_id="paper_0__cUNKNOWN",
+                doc_id="paper_0",
+                quote="",
+                chunk_text="Unknown-ord body.",
+                chunk_ord=-1,
+            ),
+            WriteEvidenceRef(
+                chunk_id="paper_0__c0002",
+                doc_id="paper_0",
+                quote="",
+                chunk_text="Known-ord body.",
+                chunk_ord=2,
+            ),
+        ],
+    )
+    body = render_dossier(req)
+    after = body.split("## Evidence", 1)[1]
+    i_known = after.index("c0002")
+    i_unknown = after.index("cUNKNOWN")
+    assert i_known < i_unknown
+
+
+def test_write_evidence_ref_round_trip_preserves_score_and_chunk_ord() -> None:
+    """``WriteEvidenceRef`` survives a ``model_dump`` / ``model_validate``
+    round trip with ``score`` and ``chunk_ord`` intact (the two PR #72
+    follow-up fields the builder now populates from the corpus row)."""
+    from wikify.schema import WriteEvidenceRef
+
+    ref = WriteEvidenceRef(
+        chunk_id="paper_0__c0003",
+        doc_id="paper_0",
+        quote="",
+        chunk_text="body",
+        score=0.75,
+        chunk_ord=3,
+    )
+    dumped = ref.model_dump(mode="json")
+    reloaded = WriteEvidenceRef.model_validate(dumped)
+    assert reloaded.score == 0.75
+    assert reloaded.chunk_ord == 3
+
+
 def test_load_draft_roundtrip(tmp_path: Path) -> None:
     bundle, corpus, slug = _bundle_with_concept(tmp_path)
     append_evidence(
