@@ -22,6 +22,7 @@ Common verbs:
 
 ```text
 init, show, list, find, traverse, schema, repl, add, set, build, check, commit, tend, close
+navigation-context, apply-navigation
 ```
 
 `traverse` walks one graph hop from a typed handle (corpus:

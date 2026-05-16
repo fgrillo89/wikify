@@ -25,6 +25,8 @@ normal write, validate, and commit gate.
 5. Use `wikify-write-page` with `refinement-style.md`.
 6. Use `wikify-bundle` to validate, commit, release, and refresh
    projections.
+7. Use `wikify-organize-wiki` after a committed batch of at least five
+   pages, or once before final render if fewer pages changed.
 
 ## Strategy Owned Here
 
@@ -37,5 +39,6 @@ normal write, validate, and commit gate.
 
 - `../wikify-bundle/SKILL.md`
 - `../wikify-search-corpus/SKILL.md`
+- `../wikify-organize-wiki/SKILL.md`
 - `../wikify-write-page/references/refinement-style.md`
 - `../wikify/references/writing/escalation.md`

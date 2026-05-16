@@ -22,6 +22,13 @@ from ..api import Bundle
 from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
 from ..bundle.wiki.derived import rebuild_graph, rebuild_index, rebuild_vectors
+from ..bundle.wiki.navigation import (
+    NavigationError,
+    build_navigation_context,
+    navigation_is_fresh,
+    navigation_path,
+    write_navigation,
+)
 from ..bundle.wiki.queries import (
     AmbiguousSlugError,
     find_text,
@@ -270,6 +277,65 @@ def cmd_build(
     typer.echo(f"{kind}: {p}")
 
 
+@app.command("navigation-context")
+def cmd_navigation_context(
+    run: Path | None = typer.Option(None, "--run"),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Destination JSON path. Defaults to derived/navigation_context.json.",
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Write page metadata for an organizer agent."""
+    bundle = _resolve_bundle(run)
+    payload = build_navigation_context(bundle)
+    target = out if out is not None else bundle.derived_dir / "navigation_context.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "path": str(target),
+                    "pages": len(payload.get("pages", [])),
+                }
+            )
+        )
+        return
+    typer.echo(f"navigation_context: {target}")
+    typer.echo(f"pages: {len(payload.get('pages', []))}")
+
+
+@app.command("apply-navigation")
+def cmd_apply_navigation(
+    path: Path = typer.Argument(..., help="Agent-authored navigation JSON."),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Validate and persist derived/navigation.json."""
+    bundle = _resolve_bundle(run)
+    if not path.is_file():
+        cli_error(EXIT_VALIDATION, error="navigation_not_found", path=str(path))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_navigation_json",
+            message=f"{path} is not valid JSON: {exc}",
+        )
+    try:
+        written = write_navigation(bundle, payload)
+    except NavigationError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_navigation", message=str(exc))
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, "path": str(written)}))
+        return
+    typer.echo(f"navigation: {written}")
+
+
 # --------------------------------------------------------------- check
 
 
@@ -283,11 +349,16 @@ def cmd_check(
     n_articles = len(list_articles(bundle))
     n_people = len(list_people(bundle))
     has_index = bundle.derived_index_path.exists()
+    nav_path = navigation_path(bundle)
+    has_navigation = nav_path.exists()
+    navigation_fresh = navigation_is_fresh(bundle)
     summary = {
         "ok": True,
         "articles": n_articles,
         "people": n_people,
         "has_derived_index": has_index,
+        "has_navigation": has_navigation,
+        "navigation_fresh": navigation_fresh,
     }
     if fmt == "json":
         typer.echo(json.dumps(summary))
@@ -295,6 +366,8 @@ def cmd_check(
     typer.echo(f"articles:           {n_articles}")
     typer.echo(f"people:             {n_people}")
     typer.echo(f"derived/index.json: {has_index}")
+    typer.echo(f"navigation.json:    {has_navigation}")
+    typer.echo(f"navigation fresh:   {navigation_fresh}")
 
 
 # --------------------------------------------------------------- commit

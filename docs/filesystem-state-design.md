@@ -808,6 +808,8 @@ wikify wiki find --overlaps "Atomic Layer Deposition"
 wikify wiki show "Atomic Layer Deposition" [--full]
 wikify wiki repl
 wikify wiki build indexes|graph|vectors
+wikify wiki navigation-context [--run <bundle>] [--out <path>]
+wikify wiki apply-navigation <path> [--run <bundle>]
 wikify wiki check
 wikify wiki commit <concept>
 ```

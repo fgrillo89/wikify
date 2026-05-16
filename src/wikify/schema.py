@@ -91,6 +91,23 @@ class ImageRef(BaseModel):
     near_chunk_ids: list[str] = Field(default_factory=list)
 
 
+class SelectedFigure(BaseModel):
+    """Figure the writer elected to place in the article body.
+
+    ``placement_anchor`` is the token used by ``{{figure:<anchor>}}`` in
+    ``body_markdown``. ``figure_id`` and ``path`` must come from
+    ``WriteRequest.figures``.
+    """
+
+    model_config = _STRICT
+
+    figure_id: str
+    path: str
+    caption: str
+    placement_anchor: str
+    source_marker: str = ""
+
+
 class EquationRef(BaseModel):
     """Equation occurring inside the chunk currently being extracted.
 
@@ -576,6 +593,11 @@ class WriteResponse(BaseModel):
     # Equations the writer used in the article body. Each: {latex, label,
     # kind, context}. Populated from the writer's structured output.
     equations: list[Equation] = Field(default_factory=list)
+    # Figures the writer selected from WriteRequest.figures. Each one
+    # must have a matching ``{{figure:<placement_anchor>}}`` placeholder
+    # in body_markdown; render replaces those placeholders with figure
+    # blocks and staged image assets.
+    figures: list[SelectedFigure] = Field(default_factory=list)
     # Populated only when WriteRequest.verbalize is true. Empty otherwise.
     reasoning: str = ""
 

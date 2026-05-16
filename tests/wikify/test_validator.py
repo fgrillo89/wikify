@@ -174,6 +174,59 @@ def test_validate_writes_validation_json(tmp_path: Path) -> None:
     assert "structural_checks" in payload
 
 
+def test_validate_selected_figure_must_match_draft_candidate(tmp_path: Path) -> None:
+    bundle, _, slug = _setup(tmp_path)
+    draft = read_json(draft_path(bundle, slug))
+    draft["figures"] = [
+        {
+            "id": "paper_0/Figure_01",
+            "label": "Figure 1",
+            "caption": "Figure 1. ALD growth schematic.",
+            "page": 2,
+            "path": "images/paper_0/Figure_01.png",
+            "near_chunk_ids": ["paper_0__c0000"],
+        }
+    ]
+    write_json(draft_path(bundle, slug), draft)
+    chunk_text = draft["evidence"][0]["chunk_text"]
+    response = _good_response(slug, chunk_quote=chunk_text[:30].strip())
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Applications",
+        "Figure 1 summarizes the deposition sequence.\n\n{{figure:fig1}}\n\n## Applications",
+    )
+    response["figures"] = [
+        {
+            "figure_id": "paper_0/Figure_01",
+            "path": "images/paper_0/Figure_01.png",
+            "caption": "Schematic overview of the ALD cycle.",
+            "placement_anchor": "fig1",
+            "source_marker": "e1",
+        }
+    ]
+    write_json(response_path(bundle, slug), response)
+
+    verdict = validate_response(bundle, slug)
+
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    assert verdict["structural_checks"]["figure_selection"] is True
+
+
+def test_validate_unknown_figure_placeholder_rejected(tmp_path: Path) -> None:
+    bundle, _, slug = _setup(tmp_path)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    response = _good_response(slug, chunk_quote=chunk_text[:30].strip())
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Applications",
+        "Figure 1 shows the relevant process.\n\n{{figure:missing}}\n\n## Applications",
+    )
+    write_json(response_path(bundle, slug), response)
+
+    verdict = validate_response(bundle, slug)
+
+    assert verdict["ok"] is False
+    assert "unknown_figure_placeholder" in [e["code"] for e in verdict["errors"]]
+
+
 def test_validate_undeclared_marker_flagged(tmp_path: Path) -> None:
     """Body uses [^e1] but used_markers list is empty: undeclared_prose_marker."""
     bundle, _, slug = _setup(tmp_path)

@@ -4,14 +4,25 @@
     <li><a href="{{ root }}index.html">Main page</a></li>
   </ul>
 </div>
+{% if navigation and navigation.groups %}
+<div class="sidebar-section">
+  <h3>Topics</h3>
+  <ul>
+    {% for group in navigation.groups %}
+    <li>{{ group.title }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 <div class="sidebar-section">
   <h3>Statistics</h3>
   <ul>
-    <li>{{ stats.total_articles }} articles</li>
+    <li>{{ stats.total_concepts }} articles</li>
     <li>{{ stats.total_people }} people</li>
+    <li>{{ stats.source_articles_used }} sources</li>
   </ul>
 </div>
-{% if concepts %}
+{% if concepts and not navigation %}
 <div class="sidebar-section">
   <h3>Articles</h3>
   <ul>

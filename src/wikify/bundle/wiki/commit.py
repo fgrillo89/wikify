@@ -176,6 +176,7 @@ def commit_page(
         page_id = response.get("page_id") or load_card(bundle, slug).page_id
         page_kind = response.get("page_kind") or load_card(bundle, slug).kind
         body_markdown = response["body_markdown"]
+        figures = response.get("figures") or []
         evidence = _parse_evidence_from_body(body_markdown)
 
         page = WikiPage(
@@ -185,6 +186,7 @@ def commit_page(
             aliases=load_card(bundle, slug).aliases,
             body_markdown=body_markdown,
             evidence=evidence,
+            figures=figures,
         )
         page.links = _infer_links(bundle, page=page)
 
@@ -196,6 +198,14 @@ def commit_page(
         target_dir.mkdir(parents=True, exist_ok=True)
         page_path = target_dir / f"{slug}.md"
         page_path.write_text(_render_page(page), encoding="utf-8")
+        if figures:
+            page_path.with_suffix(".figures.json").write_text(
+                json.dumps(figures, indent=2), encoding="utf-8"
+            )
+        else:
+            fig_sidecar = page_path.with_suffix(".figures.json")
+            if fig_sidecar.exists():
+                fig_sidecar.unlink()
 
         card = load_card(bundle, slug)
         card.front["status"] = "committed"

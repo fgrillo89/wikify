@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ...schema import (
     QuoteNotInChunkError,
+    SelectedFigure,
     WriteEvidenceRef,
     WriteRequest,
     WriteResponse,
@@ -15,6 +16,7 @@ from ...schema import (
 
 __all__ = [
     "QuoteNotInChunkError",
+    "SelectedFigure",
     "WriteEvidenceRef",
     "WriteRequest",
     "WriteResponse",

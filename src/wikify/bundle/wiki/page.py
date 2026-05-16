@@ -59,6 +59,7 @@ class Page:
     # any "## References" / "## Boilerplate" stripped
     evidence: list[Evidence]
     path: Path  # source file
+    figures: list[dict] = field(default_factory=list)
     equations: list[dict] = field(default_factory=list)  # {latex, label, kind, context}
     provenance: dict = field(default_factory=dict)  # from sidecar JSON
 
@@ -349,6 +350,15 @@ def parse_page(path: Path) -> Page:
         except json.JSONDecodeError:
             equations = []
 
+    fig_sidecar = path.with_suffix(".figures.json")
+    figures: list[dict] = []
+    if fig_sidecar.exists():
+        try:
+            loaded = json.loads(fig_sidecar.read_text(encoding="utf-8"))
+            figures = loaded if isinstance(loaded, list) else []
+        except json.JSONDecodeError:
+            figures = []
+
     return Page(
         id=str(fm.get("id", path.stem)),
         kind=str(fm.get("kind", "article")),
@@ -358,6 +368,7 @@ def parse_page(path: Path) -> Page:
         body_clean=body_clean,
         evidence=evidence,
         path=path,
+        figures=figures,
         equations=equations,
         provenance=provenance,
     )

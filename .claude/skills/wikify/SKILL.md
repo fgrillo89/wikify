@@ -22,6 +22,8 @@ tree when another runtime needs them.
 - `wikify-search-wiki` - read/search committed wiki pages.
 - `wikify-write-page` - produce `WriteResponse` page prose from supplied
   context and evidence.
+- `wikify-organize-wiki` - create the validated topic hierarchy consumed
+  by the renderer.
 - `wikify-bundle` - inspect and mutate bundle state mechanically.
 
 These skills expose capabilities. They do not decide exploration order,

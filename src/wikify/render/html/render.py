@@ -19,12 +19,15 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 from typing import Any, Self
 
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from wikify.bundle.wiki.navigation import read_navigation
 from wikify.bundle.wiki.page import Bundle, Page
 from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
@@ -129,23 +132,29 @@ def build_site(
         [pv for pv in page_views if pv.kind == "person"],
         key=lambda v: v.title.lower(),
     )
-    stats = {
-        "total_articles": len(page_views),
-        "total_concepts": len(concepts),
-        "total_people": len(people),
-    }
+    page_by_id = {p.id: p for p in loaded.pages}
+    stats = _build_site_stats(
+        pages=[page_by_id[pv.id] for pv in page_views if pv.id in page_by_id],
+        concepts=concepts,
+        people=people,
+        corpus_root=corpus_root,
+    )
+    navigation = _build_navigation_view(
+        read_navigation(loaded.root.parent),
+        page_views={pv.id: pv for pv in page_views},
+    )
+    key_articles = _key_articles(concepts, page_by_id=page_by_id)
     shared_ctx = {
         "wiki_name": WIKI_NAME,
         "stats": stats,
         "concepts": concepts,
         "people": people,
+        "navigation": navigation,
+        "key_articles": key_articles,
     }
 
     slug_to_url = {pv.id: pv.url for pv in page_views}
     alias_to_id = {_normalize(name): pv.id for pv in page_views for name in (pv.title, *pv.aliases)}
-
-    # Build a lookup from page_view id to the source Page object.
-    page_by_id = {p.id: p for p in loaded.pages}
 
     for pv in page_views:
         page = page_by_id.get(pv.id)
@@ -188,6 +197,121 @@ def build_site(
     )
 
     return out_dir
+
+
+def _build_site_stats(
+    *,
+    pages: list[Page],
+    concepts: list["_PageView"],
+    people: list["_PageView"],
+    corpus_root: Path | None,
+) -> dict[str, Any]:
+    used_docs = sorted({ev.doc_id for page in pages for ev in page.evidence if ev.doc_id})
+    years = _years_from_doc_ids(used_docs)
+    words_processed: int | None = None
+    if corpus_root is not None and used_docs:
+        corpus_stats = _corpus_used_doc_stats(Path(corpus_root), used_docs)
+        if corpus_stats["years"]:
+            years = corpus_stats["years"]
+        words_processed = corpus_stats["words"]
+    date_range = ""
+    if years:
+        date_range = f"{min(years)}-{max(years)}"
+    return {
+        "total_articles": len(pages),
+        "total_concepts": len(concepts),
+        "total_people": len(people),
+        "source_articles_used": len(used_docs),
+        "words_processed": words_processed,
+        "date_range": date_range,
+        "figures_included": sum(len(page.figures or []) for page in pages),
+        "rendered_at": datetime.now(UTC).strftime("%Y-%m-%d"),
+    }
+
+
+def _years_from_doc_ids(doc_ids: list[str]) -> list[int]:
+    years: list[int] = []
+    for doc_id in doc_ids:
+        m = re.match(r"\[(\d{4})\b", doc_id or "")
+        if m:
+            years.append(int(m.group(1)))
+    return years
+
+
+def _corpus_used_doc_stats(corpus_root: Path, doc_ids: list[str]) -> dict[str, Any]:
+    db_path = corpus_root / "wikify.db"
+    if not db_path.is_file():
+        return {"years": [], "words": None}
+    import sqlite3 as _sqlite
+
+    placeholders = ",".join("?" * len(doc_ids))
+    years: list[int] = []
+    words = 0
+    con = _sqlite.connect(str(db_path))
+    con.row_factory = _sqlite.Row
+    try:
+        for r in con.execute(
+            f"SELECT year FROM documents WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ):
+            if r["year"]:
+                years.append(int(r["year"]))
+        for r in con.execute(
+            f"SELECT text FROM chunks WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ):
+            words += len(re.findall(r"\b\w+\b", r["text"] or ""))
+    finally:
+        con.close()
+    return {"years": years, "words": words or None}
+
+
+def _build_navigation_view(
+    navigation: dict[str, Any] | None,
+    *,
+    page_views: dict[str, "_PageView"],
+) -> dict[str, Any] | None:
+    if not navigation or not isinstance(navigation.get("groups"), list):
+        return None
+
+    def group_view(group: dict[str, Any]) -> dict[str, Any]:
+        pages = [
+            page_views[page_id]
+            for page_id in group.get("page_ids", [])
+            if page_id in page_views
+        ]
+        children = [
+            group_view(child)
+            for child in group.get("children", [])
+            if isinstance(child, dict)
+        ]
+        return {
+            "id": group.get("id", ""),
+            "title": group.get("title", ""),
+            "description": group.get("description", ""),
+            "pages": pages,
+            "children": children,
+        }
+
+    groups = [
+        group_view(group)
+        for group in navigation.get("groups", [])
+        if isinstance(group, dict)
+    ]
+    return {"groups": groups}
+
+
+def _key_articles(
+    concepts: list["_PageView"], *, page_by_id: dict[str, Page]
+) -> list["_PageView"]:
+    return sorted(
+        concepts,
+        key=lambda pv: (
+            -len(page_by_id.get(pv.id).links if page_by_id.get(pv.id) else []),
+            -pv.n_evidence,
+            pv.title.lower(),
+        ),
+    )[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +377,13 @@ def _render_article(
     # relative to the page's HTML location (which lives at
     # out_dir/<sub>/<id>.html, i.e. one level deep).
     body_md = _stage_and_rewrite_figures(
+        body_md,
+        page=page,
+        out_dir=out_dir,
+        corpus_root=corpus_root,
+        page_url_depth=1,
+    )
+    body_md = _replace_selected_figure_placeholders(
         body_md,
         page=page,
         out_dir=out_dir,
@@ -659,6 +790,62 @@ def _stage_and_rewrite_figures(
         return f"![{alt}]({rewritten})"
 
     return _FIGURE_REF_RE.sub(_replace, body)
+
+
+_FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
+
+
+def _safe_asset_name(value: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
+    return clean or "figure"
+
+
+def _replace_selected_figure_placeholders(
+    body: str,
+    *,
+    page: Page,
+    out_dir: Path,
+    corpus_root: Path | None,
+    page_url_depth: int,
+) -> str:
+    if not page.figures:
+        return body
+    by_anchor = {
+        str(fig.get("placement_anchor", "")): fig
+        for fig in page.figures
+        if isinstance(fig, dict)
+    }
+    assets_dir = out_dir / "assets" / "figures"
+
+    def _replace(match: re.Match[str]) -> str:
+        anchor = match.group(1)
+        fig = by_anchor.get(anchor)
+        if fig is None:
+            return match.group(0)
+        rel_path = str(fig.get("path") or "").strip().replace("\\", "/")
+        src = Path(rel_path)
+        if corpus_root is not None and rel_path and not src.is_absolute():
+            src = Path(corpus_root) / rel_path
+        if not src.is_file():
+            return match.group(0)
+        suffix = src.suffix or ".png"
+        figure_name = _safe_asset_name(str(fig.get("figure_id") or "figure"))
+        dest_name = f"{_safe_asset_name(anchor)}-{figure_name}{suffix}"
+        dest = assets_dir / dest_name
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        url = ("../" * page_url_depth) + f"assets/figures/{dest_name}"
+        caption = escape(str(fig.get("caption") or ""))
+        alt = escape(str(fig.get("figure_id") or anchor))
+        return (
+            f'\n\n<figure class="wiki-figure" id="figure-{escape(anchor)}">'
+            f'<img src="{url}" alt="{alt}">'
+            f"<figcaption>{caption}</figcaption>"
+            "</figure>\n\n"
+        )
+
+    return _FIGURE_PLACEHOLDER_RE.sub(_replace, body)
 
 
 def _build_toc(html: str) -> list[dict[str, str]]:

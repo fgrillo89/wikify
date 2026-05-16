@@ -26,8 +26,9 @@ from typing import Literal
 from ...api import Bundle, Corpus
 from ...corpus import queries as corpus_queries
 from ...corpus.chunks import list_documents
+from ...corpus.images_index import ImageIndex
 from ...corpus.store.authors import author_key
-from ...schema import WriteEvidenceRef, WriteRequest
+from ...schema import ImageRef, WriteEvidenceRef, WriteRequest
 from ...types import ModelTier
 from ..work.card import load_card
 from ..work.evidence import read_evidence
@@ -99,6 +100,7 @@ def build_draft(
     artifacts_by_chunk = corpus_queries.referenced_artifacts_for_chunks(
         corpus, list(fetched_chunks.values())
     )
+    figures = _figure_candidates_for_evidence(corpus, active, limit=6)
 
     evidence: list[WriteEvidenceRef] = []
     for rec in active:
@@ -140,6 +142,7 @@ def build_draft(
         model_id=model_id,
         tier=tier_value,
         evidence=evidence,
+        figures=figures,
         author_context=_author_context_for_card(corpus, card)
         if card.kind == "person"
         else None,
@@ -179,3 +182,49 @@ def _author_context_for_card(corpus: Corpus, card) -> dict | None:
             if key in context:
                 return asdict(context[key])
     return None
+
+
+def _figure_candidates_for_evidence(corpus: Corpus, records, *, limit: int) -> list[ImageRef]:
+    """Return captioned figures near the active evidence chunks.
+
+    The writer chooses whether to use any of these. This helper only
+    supplies deterministic candidates already linked to cited chunks or
+    explicitly flagged on the evidence record.
+    """
+    import sqlite3
+
+    try:
+        index = ImageIndex.load(corpus)
+    except (OSError, sqlite3.Error, ValueError):
+        return []
+
+    out: list[ImageRef] = []
+    seen: set[str] = set()
+    for rec in records:
+        extras = getattr(rec, "__pydantic_extra__", None) or {}
+        flagged = {
+            str(x)
+            for x in (extras.get("evidence_figures") or extras.get("figures") or [])
+            if x
+        }
+        for img in index.for_doc(rec.doc_id):
+            if not img.caption or not img.path:
+                continue
+            if rec.chunk_id not in img.near_chunk_ids and img.id not in flagged:
+                continue
+            if img.id in seen:
+                continue
+            seen.add(img.id)
+            out.append(
+                ImageRef(
+                    id=img.id,
+                    label=img.label,
+                    caption=img.caption,
+                    page=img.page,
+                    path=img.path,
+                    near_chunk_ids=list(img.near_chunk_ids),
+                )
+            )
+            if len(out) >= limit:
+                return out
+    return out

@@ -91,6 +91,7 @@ def _load_pages(bundle: Bundle) -> list:
                     body_markdown=page.body_clean or "",
                     evidence=evidence,
                     links=list(page.links or []),
+                    figures=list(page.figures or []),
                 )
             )
     return out
