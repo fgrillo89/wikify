@@ -741,10 +741,20 @@ def _clean_evidence_lines(
 
 _MARKER_USE_RE = re.compile(r"\[\^([^\]]+)\](?!:)")
 
-# ``$$...$$`` display math, including multi-line. Negative lookbehind
-# and lookahead prevent matching ``$$$`` (which would catch the tail
-# of a triple-dollar run).
-_DISPLAY_MATH_RE = re.compile(r"(?<!\$)\$\$(.+?)\$\$(?!\$)", re.DOTALL)
+# ``$$...$$`` display math, including multi-line. Each delimiter pair
+# requires no flanking ``$`` on either side so ``$$$$x$$$$`` (a stray
+# quad-dollar run) doesn't get swallowed as one block.
+_DISPLAY_MATH_RE = re.compile(
+    r"(?<!\$)\$\$(?!\$)(.+?)(?<!\$)\$\$(?!\$)", re.DOTALL,
+)
+
+# Fenced code blocks: matched as a whole so ``$$...$$`` inside code
+# never participates in display-math isolation. Both backtick (```)
+# and tilde (~~~) fences are recognized; the closing fence must use
+# the same character at the same column.
+_FENCED_CODE_RE = re.compile(
+    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)\s*$",
+)
 
 
 def _isolate_display_math(body: str) -> str:
@@ -758,12 +768,28 @@ def _isolate_display_math(body: str) -> str:
     rendered span.
 
     This pass surrounds every ``$$...$$`` with blank lines so the
-    block matcher always wins.
+    block matcher always wins. Fenced code blocks are excised before
+    the substitution and restored verbatim afterward so example math
+    inside a code block isn't rewritten.
     """
+    # Replace fenced blocks with placeholders, apply substitution, restore.
+    placeholders: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        placeholders.append(match.group(0))
+        return f"\x00FENCE{len(placeholders) - 1}\x00"
+
+    stashed = _FENCED_CODE_RE.sub(_stash, body)
+
     def _sub(match: re.Match[str]) -> str:
         return f"\n\n$$\n{match.group(1).strip()}\n$$\n\n"
 
-    return _DISPLAY_MATH_RE.sub(_sub, body)
+    rewritten = _DISPLAY_MATH_RE.sub(_sub, stashed)
+
+    def _restore(match: re.Match[str]) -> str:
+        return placeholders[int(match.group(1))]
+
+    return re.sub(r"\x00FENCE(\d+)\x00", _restore, rewritten)
 
 
 def _format_evidence_body(
