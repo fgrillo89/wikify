@@ -602,18 +602,64 @@ def _clean_evidence_lines(
     into clean references like:
         ``[^e1]: [Author (Year). *Paper Title.*](url) "quote"``
 
+    Definitions are also reordered to match the order of first
+    appearance of each marker in the prose. The python-markdown
+    ``footnotes`` extension emits the rendered list in the order the
+    definitions appear in the source, so this is what produces a
+    1, 2, 3 reader-order rather than alphabetical-by-marker.
+
     When ``doc_source_map`` resolves the doc_id to a URL (DOI link or
     locally-staged PDF path) the bibliographic head is wrapped in a
     markdown link so the rendered footnote becomes clickable.
     """
-    lines = body.split("\n")
-    out: list[str] = []
-    for line in lines:
+    # First pass: classify every line as either a footnote definition or
+    # body prose, and format each definition.
+    formatted: dict[str, str] = {}
+    body_lines: list[str] = []
+    in_def_block = False
+    for line in body.split("\n"):
         if line.startswith("[^") and "]:" in line:
-            line = _CHUNK_HASH_RE.sub("", line)
-            line = _format_evidence_as_reference(line, doc_source_map=doc_source_map)
-        out.append(line)
+            in_def_block = True
+            marker = line[2:line.index("]:")]
+            cleaned = _CHUNK_HASH_RE.sub("", line)
+            formatted[marker] = _format_evidence_as_reference(
+                cleaned, doc_source_map=doc_source_map,
+            )
+            continue
+        if in_def_block and not line.strip():
+            # Blank line between footnote definitions stays in the prose
+            # buffer; we re-emit footnotes in a single block at the end.
+            continue
+        in_def_block = False
+        body_lines.append(line)
+
+    if not formatted:
+        return "\n".join(body_lines)
+
+    # Discover first-appearance order in the body prose only.
+    prose = "\n".join(body_lines)
+    order: list[str] = []
+    seen: set[str] = set()
+    for m in _MARKER_USE_RE.finditer(prose):
+        marker = m.group(1)
+        if marker in formatted and marker not in seen:
+            order.append(marker)
+            seen.add(marker)
+    # Any defined-but-unused markers go at the end, alphanumerically,
+    # so they still render but don't reorder the visible footnotes.
+    for marker in sorted(formatted):
+        if marker not in seen:
+            order.append(marker)
+
+    out = list(body_lines)
+    if out and out[-1].strip():
+        out.append("")
+    for marker in order:
+        out.append(formatted[marker])
     return "\n".join(out)
+
+
+_MARKER_USE_RE = re.compile(r"\[\^([^\]]+)\](?!:)")
 
 
 def _format_evidence_as_reference(
