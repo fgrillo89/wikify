@@ -600,7 +600,14 @@ def _clean_evidence_lines(
     Transforms raw evidence like:
         ``[^e1]: chunk_hash (doc_id) > "quote"``
     into clean references like:
-        ``[^e1]: [Author (Year). *Paper Title.*](url) "quote"``
+        ``[^e1]: [Author (Year). *Paper Title.*](url)``
+
+    The trailing chunk-text quote is dropped — it was the first ~240
+    chars of the chunk (build-evidence stores ``text[:400]``), which
+    rarely matches what the writer cited and reads as a non-sequitur
+    against a paragraph-anchored marker. The upstream ``quote`` field
+    on each evidence record stays — the M6/G2 grounding metric
+    substring-matches it against the chunk text.
 
     Definitions are also reordered to match the order of first
     appearance of each marker in the prose. The python-markdown
@@ -665,32 +672,29 @@ _MARKER_USE_RE = re.compile(r"\[\^([^\]]+)\](?!:)")
 def _format_evidence_as_reference(
     line: str, *, doc_source_map: dict[str, str] | None = None,
 ) -> str:
-    """Format a single evidence footnote line as a bibliographic reference."""
-    # Extract marker prefix
+    """Format a single evidence footnote line as a bibliographic reference.
+
+    Input shape (post chunk-hash strip): ``[^eN]: chunk_id (doc_id) > "quote"``
+    or ``[^eN]: doc_id`` when no quote was attached. The quote is
+    discarded; only the doc_id is used.
+    """
     marker_end = line.index("]:") + 2
     marker = line[:marker_end]
     rest = line[marker_end:].strip()
 
-    # Parse the evidence value: look for ' > "quote"'
+    # Strip the ' > "quote"' tail if present; the rendered reference
+    # carries only the bibliographic head.
     sep = rest.find(' > "')
-    if sep == -1:
-        # No quote separator -- just clean up what we have
-        return f"{marker} {_format_doc_id(rest, doc_source_map=doc_source_map)}"
+    head = rest[:sep].strip() if sep != -1 else rest
 
-    head = rest[:sep].strip()
-    quote = rest[sep + 4 :].rstrip('"').strip()
-
-    # Head may be "chunk_id (doc_id)" or just "doc_id"
+    # Head may be "chunk_id (doc_id)" or just "doc_id".
     doc_id = head
     paren_open = head.rfind("(")
     paren_close = head.rfind(")")
     if paren_open > 0 and paren_close > paren_open:
         doc_id = head[paren_open + 1 : paren_close].strip()
 
-    formatted = _format_doc_id(doc_id, doc_source_map=doc_source_map)
-    if quote:
-        return f'{marker} {formatted} -- "{quote}"'
-    return f"{marker} {formatted}"
+    return f"{marker} {_format_doc_id(doc_id, doc_source_map=doc_source_map)}"
 
 
 # Bibliography: inline [N] markers and ## Bibliography section
