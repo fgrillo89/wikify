@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% macro nav_group(group) -%}
-  <section class="portal-group">
+  <section class="portal-group" id="group-{{ group.id }}">
     <h3>{{ group.title }}</h3>
     {% if group.description %}<p>{{ group.description }}</p>{% endif %}
     {% if group.pages %}

@@ -106,6 +106,7 @@ def coverage_residual(
 # =========================================================================
 
 _FIGURE_REF_RE = re.compile(r"!\[Figure\s+\d+\]", re.IGNORECASE)
+_FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
 
 
 def image_coverage_residual(
@@ -135,18 +136,54 @@ def image_coverage_residual(
     return max(float((1.0 - nearest).mean()), 0.0)
 
 
-def figure_reference_counts(bundle: Bundle) -> dict[str, int | float]:
+def figure_reference_counts(
+    bundle: Bundle,
+    corpus=None,  # Corpus | None
+) -> dict[str, int | float]:
     """Count figure references across all page bodies and compute the reference rate.
 
+    Counts ``{{figure:<anchor>}}`` placeholders (preferred) and also the legacy
+    ``![Figure N]`` markdown embeds, summed across all page bodies.
+
+    When ``corpus`` is provided, ``n_total_captions`` is the number of captioned
+    asset records across the docs cited by any page (via the corpus image
+    index). Otherwise it falls back to ``bundle.run_meta['n_caption_chunks']``
+    when that key is set, else 0.
+
     Returns:
-        n_figures_referenced_in_bodies: int -- number of ``![Figure N]`` embeds found
-        figure_reference_rate: float -- n_referenced / n_total_captions (or NaN if no captions)
-        n_total_captions: int -- total caption count from run_meta, or 0 if absent
+        n_figures_referenced_in_bodies: int -- placeholder + legacy embed count
+        n_total_captions: int -- captioned assets denominator (see above)
+        figure_reference_rate: float -- ratio, or NaN when the denominator is 0
     """
     n_referenced = sum(
-        len(_FIGURE_REF_RE.findall(p.body_clean)) for p in bundle.pages
+        len(_FIGURE_PLACEHOLDER_RE.findall(p.body_clean))
+        + len(_FIGURE_REF_RE.findall(p.body_clean))
+        for p in bundle.pages
     )
-    n_total = bundle.run_meta.get("n_caption_chunks", 0)
+
+    n_total = 0
+    if corpus is not None:
+        from wikify.corpus.images_index import ImageIndex
+
+        cited_doc_ids: set[str] = set()
+        for page in bundle.pages:
+            for ev in page.evidence:
+                doc_id = getattr(ev, "doc_id", None)
+                if doc_id:
+                    cited_doc_ids.add(str(doc_id))
+        if cited_doc_ids:
+            try:
+                index = ImageIndex.load(corpus)
+            except Exception:
+                index = None
+            if index is not None:
+                for doc_id in cited_doc_ids:
+                    for img in index.for_doc(doc_id):
+                        if img.caption:
+                            n_total += 1
+    if n_total == 0:
+        n_total = bundle.run_meta.get("n_caption_chunks", 0)
+
     rate = (n_referenced / n_total) if n_total > 0 else float("nan")
     return {
         "n_figures_referenced_in_bodies": n_referenced,

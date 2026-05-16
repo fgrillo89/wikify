@@ -9,7 +9,7 @@
   <h3>Topics</h3>
   <ul>
     {% for group in navigation.groups %}
-    <li>{{ group.title }}</li>
+    <li><a href="{{ root }}index.html#group-{{ group.id }}">{{ group.title }}</a></li>
     {% endfor %}
   </ul>
 </div>

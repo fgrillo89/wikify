@@ -657,6 +657,33 @@ a.wiki-redlink:visited {
   font-family: sans-serif;
 }
 
+.wiki-article figure.wiki-figure {
+  float: none;
+  margin: 1em auto;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: center;
+  max-width: 720px;
+}
+
+.wiki-article figure.wiki-figure img {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #c8ccd1;
+  background: #fff;
+}
+
+.wiki-article figure.wiki-figure figcaption {
+  font-size: 0.9em;
+  color: #54595d;
+  margin-top: 6px;
+  text-align: left;
+  font-family: sans-serif;
+}
+
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar-toggle {
