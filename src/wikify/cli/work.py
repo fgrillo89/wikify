@@ -467,6 +467,17 @@ def cmd_build_evidence(
     top_k: int = typer.Option(40, "--top-k", help="Initial corpus-find depth."),
     per_doc_cap: int = typer.Option(3, "--per-doc-cap"),
     min_chunk_chars: int = typer.Option(80, "--min-chunk-chars"),
+    from_ids: str = typer.Option(
+        "",
+        "--from-ids",
+        help=(
+            "Commit-only mode: comma-separated chunk_ids. Skips the "
+            "seed + corpus-find phases and validates the supplied ids "
+            "against the boilerplate, never-cite, and min-chars filters "
+            "before appending. Use after an external vetter (e.g. the "
+            "wikify-gather-evidence skill) has curated the chunk list."
+        ),
+    ),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
@@ -483,6 +494,11 @@ def cmd_build_evidence(
     form, etc.). Per-doc cap keeps a single review paper from
     dominating the page.
 
+    With ``--from-ids <a,b,c>`` the seed + find phases are bypassed and
+    the supplied chunk_ids are validated and appended as-is, each with
+    ``score=1.0`` and a ``source="vetter"`` tag. ``--target``,
+    ``--top-k`` and ``--per-doc-cap`` are ignored in this mode.
+
     Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
     """
     import sqlite3
@@ -490,7 +506,11 @@ def cmd_build_evidence(
 
     from ..api import Corpus
     from ..bundle.work.card import load_card
-    from ..bundle.work.evidence import EvidenceRecord, append_evidence
+    from ..bundle.work.evidence import (
+        EvidenceRecord,
+        append_evidence,
+        read_evidence,
+    )
 
     bundle = _resolve_bundle(run)
     if not corpus_dir.is_dir():
@@ -512,6 +532,104 @@ def cmd_build_evidence(
             "FROM chunks WHERE chunk_id=?",
             (chunk_id,),
         ).fetchone()
+
+    # ----- commit-only mode: skip seed/find, just validate + append.
+    if from_ids:
+        raw_ids = [s.strip() for s in from_ids.split(",") if s.strip()]
+        # Preserve caller order while deduping.
+        seen_in: set[str] = set()
+        ordered_ids: list[str] = []
+        for cid in raw_ids:
+            if cid in seen_in:
+                continue
+            seen_in.add(cid)
+            ordered_ids.append(cid)
+        if not ordered_ids:
+            con.close()
+            cli_error(
+                EXIT_VALIDATION,
+                error="no_ids_provided",
+                message="--from-ids requires at least one chunk_id",
+            )
+        committed = {r.chunk_id for r in read_evidence(bundle, concept)}
+        vetter_stats = {
+            "ids_total": len(ordered_ids),
+            "appended": 0,
+            "rejected_not_found": 0,
+            "rejected_boilerplate": 0,
+            "rejected_never_cite": 0,
+            "rejected_short": 0,
+            "rejected_already_committed": 0,
+        }
+        vetter_records: list[dict] = []
+        for cid in ordered_ids:
+            if cid in committed:
+                vetter_stats["rejected_already_committed"] += 1
+                continue
+            row = fetch_chunk(cid)
+            if row is None:
+                vetter_stats["rejected_not_found"] += 1
+                continue
+            if row["is_boilerplate"]:
+                vetter_stats["rejected_boilerplate"] += 1
+                continue
+            text = (row["text"] or "").strip()
+            if len(text) < min_chunk_chars:
+                vetter_stats["rejected_short"] += 1
+                continue
+            if _matches_never_cite(text):
+                vetter_stats["rejected_never_cite"] += 1
+                continue
+            vetter_records.append(
+                {
+                    "chunk_id": row["chunk_id"],
+                    "doc_id": row["doc_id"],
+                    "quote": text[:400],
+                    "score": 1.0,
+                    "status": "active",
+                    "source": "vetter",
+                }
+            )
+        con.close()
+        if not vetter_records:
+            if fmt == "json":
+                typer.echo(
+                    json.dumps(
+                        {"ok": False, "error": "no_evidence", "stats": vetter_stats}
+                    )
+                )
+            else:
+                typer.echo(
+                    f"{concept}: no evidence appended from --from-ids  "
+                    f"stats={vetter_stats}"
+                )
+            raise typer.Exit(code=EXIT_VALIDATION)
+        parsed = [EvidenceRecord.model_validate(r) for r in vetter_records]
+        n = append_evidence(bundle, concept, parsed)
+        vetter_stats["appended"] = n
+        distinct_docs = len({r["doc_id"] for r in vetter_records})
+        if fmt == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "concept": concept,
+                        "appended": n,
+                        "distinct_docs": distinct_docs,
+                        "stats": vetter_stats,
+                    }
+                )
+            )
+            return
+        typer.echo(
+            f"{concept}: appended {n} records across {distinct_docs} docs "
+            f"(from-ids; rejected=nf{vetter_stats['rejected_not_found']}/"
+            f"bp{vetter_stats['rejected_boilerplate']}/"
+            f"nc{vetter_stats['rejected_never_cite']}/"
+            f"short{vetter_stats['rejected_short']}/"
+            f"dup{vetter_stats['rejected_already_committed']})"
+        )
+        return
 
     def fetch_seed_chunks(doc_id: str, limit: int):
         return con.execute(

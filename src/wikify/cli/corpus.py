@@ -594,6 +594,16 @@ def cmd_find(
             "appendix|figure|table|caption|boilerplate|body."
         ),
     ),
+    with_text: bool = typer.Option(
+        False,
+        "--with-text",
+        help=(
+            "Inline each chunk's full text in the JSON output (truncated "
+            "to 2000 chars; sets `text_truncated`). Lets a caller judge "
+            "candidates in one round-trip instead of N follow-up "
+            "`corpus show` calls. Ignored for non-JSON formats."
+        ),
+    ),
     explain: bool = typer.Option(
         False,
         "--explain",
@@ -680,7 +690,10 @@ def cmd_find(
         via=via,
     )
     score_key = "score" if result.get("scored") else None
-    _emit_chunk_rows(corpus, rows, fmt=fmt_resolved, score_key=score_key)
+    _emit_chunk_rows(
+        corpus, rows, fmt=fmt_resolved, score_key=score_key,
+        with_text=with_text,
+    )
 
 
 @app.command("sample")
@@ -789,18 +802,49 @@ def _warn_if_all_pagerank_zero(
     )
 
 
+_CHUNK_TEXT_MAX = 2000
+
+
+def _fetch_chunk_texts(corpus: Corpus, chunk_ids: list[str]) -> dict[str, str]:
+    """Batch-fetch chunk bodies in one SQLite round-trip.
+
+    Returns a ``{chunk_id: text}`` map for every id that exists; missing
+    ids are simply absent from the result.
+    """
+    import sqlite3
+
+    ids = [cid for cid in chunk_ids if cid]
+    if not ids:
+        return {}
+    con = sqlite3.connect(str(corpus.sqlite_path))
+    try:
+        placeholders = ",".join("?" * len(ids))
+        rows = con.execute(
+            f"SELECT chunk_id, text FROM chunks WHERE chunk_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    finally:
+        con.close()
+    return {str(cid): (txt or "") for cid, txt in rows}
+
+
 def _emit_chunk_rows(
     corpus: Corpus,
     hits: list[dict],
     *,
     fmt: str,
     score_key: str | None,
+    with_text: bool = False,
 ) -> None:
     """Print chunk-level search results in the chosen format.
 
     Chunk handles are disambiguated within the result set: bare short
     suffix when unique, ``chunk:<doc-short>/<chunk-short>`` when two
     chunks would otherwise share the same printed handle.
+
+    When ``with_text`` is set and ``fmt='json'``, each item is augmented
+    with a ``text`` field (truncated to 2000 chars) and a
+    ``text_truncated`` bool. Non-JSON formats ignore the flag.
     """
     doc_ids_in_order: list[str] = []
     seen: set[str] = set()
@@ -815,18 +859,27 @@ def _emit_chunk_rows(
         for h in hits
     )
     if fmt == "json":
+        texts: dict[str, str] = {}
+        if with_text:
+            texts = _fetch_chunk_texts(
+                corpus, [str(h.get("id", "")) for h in hits if h.get("id")]
+            )
         items = []
         for h in hits:
             did = str(h.get("doc_id") or h.get("source_id") or "")
             cid = str(h.get("id", ""))
-            items.append(
-                {
-                    **h,
-                    "chunk_handle": chunk_handles.get(cid, format_handle("chunk", cid)),
-                    "doc_handle": format_handle("doc", did) if did else "",
-                    "citation_count": metrics.get(did, {}).get("citation_count", 0),
-                }
-            )
+            item = {
+                **h,
+                "chunk_handle": chunk_handles.get(cid, format_handle("chunk", cid)),
+                "doc_handle": format_handle("doc", did) if did else "",
+                "citation_count": metrics.get(did, {}).get("citation_count", 0),
+            }
+            if with_text:
+                full = texts.get(cid, "")
+                truncated = len(full) > _CHUNK_TEXT_MAX
+                item["text"] = full[:_CHUNK_TEXT_MAX]
+                item["text_truncated"] = truncated
+            items.append(item)
         typer.echo(json.dumps({"ok": True, "items": items}))
         return
     if fmt == "quiet":

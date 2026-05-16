@@ -304,3 +304,230 @@ def test_work_add_feedback(tmp_path: Path) -> None:
     data = json.loads(result.output)
     assert data["kind"] == "query_feedback"
     assert data["appended"] == 1
+
+
+# -------------------------------------------------------- build-evidence --from-ids
+
+
+def _build_evidence_bundle(tmp_path: Path):
+    """Init a bundle and a SQLite corpus with 4 chunks the vetter mode hits.
+
+    Returns ``(bundle_path, corpus_path, chunk_ids)`` where ``chunk_ids``
+    is a dict with named ids used across the tests.
+    """
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus_root)],
+    )
+
+    doc = Document(
+        id="paper_x", source_path="src/paper_x.md", kind="md", title="Paper X",
+        metadata={}, markdown_path="markdown/paper_x.md",
+        image_dir="images/paper_x/", n_chunks=4, n_tokens=200,
+    )
+    body = (
+        "Atomic layer deposition (ALD) is a vapor-phase thin-film growth "
+        "technique that uses sequential self-limiting surface reactions to "
+        "deposit conformal films one monolayer at a time."
+    )
+    chunks = [
+        Chunk(
+            id="paper_x__c0000", doc_id="paper_x", ord=0,
+            text=body, char_span=(0, len(body)), section_path=["Intro"],
+            section_type="introduction",
+        ),
+        Chunk(
+            id="paper_x__c0001", doc_id="paper_x", ord=1,
+            text=body + " Additional methods discussion follows.",
+            char_span=(0, len(body) + 50), section_path=["Methods"],
+            section_type="methods",
+        ),
+        Chunk(
+            id="paper_x__c0002", doc_id="paper_x", ord=2,
+            text=body, char_span=(0, len(body)), section_path=["Boiler"],
+            section_type="boilerplate",
+            is_boilerplate=True,
+        ),
+        Chunk(
+            id="paper_x__c0003", doc_id="paper_x", ord=3,
+            text="short", char_span=(0, 5), section_path=["Body"],
+            section_type="body",
+        ),
+    ]
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {doc.id: chunks})
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    from wikify.api import Bundle as BundleApi
+    create_concept(
+        BundleApi.open(bundle), page_id="Atomic Layer Deposition", kind="article",
+    )
+    return bundle, corpus_root, {
+        "ok_a": "paper_x__c0000",
+        "ok_b": "paper_x__c0001",
+        "boilerplate": "paper_x__c0002",
+        "short": "paper_x__c0003",
+    }
+
+
+def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", f"{ids['ok_a']},{ids['ok_b']}",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 2
+    assert data["distinct_docs"] == 1
+    stats = data["stats"]
+    assert stats["ids_total"] == 2
+    assert stats["appended"] == 2
+    assert stats["rejected_not_found"] == 0
+    assert stats["rejected_boilerplate"] == 0
+
+
+def test_build_evidence_from_ids_rejects_boilerplate(tmp_path: Path) -> None:
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["boilerplate"],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "no_evidence"
+    assert data["stats"]["rejected_boilerplate"] == 1
+
+
+def test_build_evidence_from_ids_rejects_short(tmp_path: Path) -> None:
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["short"],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["stats"]["rejected_short"] == 1
+
+
+def test_build_evidence_from_ids_rejects_unknown(tmp_path: Path) -> None:
+    bundle, corpus_root, _ = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", "no-such-chunk",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["stats"]["rejected_not_found"] == 1
+
+
+def test_build_evidence_from_ids_rejects_already_committed(tmp_path: Path) -> None:
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    # First commit succeeds.
+    first = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["ok_a"],
+            "--format", "json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    # Second commit of the same id is rejected as already committed.
+    second = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["ok_a"],
+            "--format", "json",
+        ],
+    )
+    assert second.exit_code != 0, second.output
+    data = json.loads(second.output)
+    assert data["stats"]["rejected_already_committed"] == 1
+
+
+def test_build_evidence_from_ids_only_commas_errors(tmp_path: Path) -> None:
+    """`--from-ids ' , , '` reaches the from-ids branch but parses to []."""
+    bundle, corpus_root, _ = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", " , , ",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["error"] == "no_ids_provided"
+
+
+def test_build_evidence_from_ids_mixed_valid_invalid(tmp_path: Path) -> None:
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids",
+            f"{ids['ok_a']},{ids['boilerplate']},no-such,{ids['ok_b']},{ids['ok_a']}",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    # ok_a deduped to 1; ok_b counted once; boilerplate + unknown rejected.
+    assert data["appended"] == 2
+    stats = data["stats"]
+    assert stats["ids_total"] == 4  # dedupe of ok_a brings it down from 5
+    assert stats["rejected_boilerplate"] == 1
+    assert stats["rejected_not_found"] == 1
