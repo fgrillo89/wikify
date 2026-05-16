@@ -620,8 +620,10 @@ def _clean_evidence_lines(
     markdown link so the rendered footnote becomes clickable.
     """
     # First pass: classify every line as either a footnote definition or
-    # body prose, and format each definition.
-    formatted: dict[str, str] = {}
+    # body prose, and format each definition. ``formatted_body`` is the
+    # bibliographic head only (no ``[^eN]:`` prefix), used as the dedup
+    # key so multiple chunks of the same paper collapse into one entry.
+    formatted_body: dict[str, str] = {}
     body_lines: list[str] = []
     in_def_block = False
     for line in body.split("\n"):
@@ -629,9 +631,13 @@ def _clean_evidence_lines(
             in_def_block = True
             marker = line[2:line.index("]:")]
             cleaned = _CHUNK_HASH_RE.sub("", line)
-            formatted[marker] = _format_evidence_as_reference(
+            ref = _format_evidence_as_reference(
                 cleaned, doc_source_map=doc_source_map,
             )
+            # ``ref`` is ``[^eN]: {body}`` -- split the marker back off so
+            # the dedup key is paper-identifying only.
+            sep = ref.find("]:")
+            formatted_body[marker] = ref[sep + 2 :].strip() if sep != -1 else ref
             continue
         if in_def_block and not line.strip():
             # Blank line between footnote definitions stays in the prose
@@ -640,29 +646,59 @@ def _clean_evidence_lines(
         in_def_block = False
         body_lines.append(line)
 
-    if not formatted:
+    if not formatted_body:
         return "\n".join(body_lines)
 
-    # Discover first-appearance order in the body prose only.
+    # Pick the prose-first marker per rendered body as the canonical one,
+    # then rewrite uses of duplicates to the canonical marker. The python-
+    # markdown footnotes extension naturally folds multiple ``[^eN]`` uses
+    # of the same marker into one ``<li>`` with multiple backrefs.
     prose = "\n".join(body_lines)
-    order: list[str] = []
-    seen: set[str] = set()
+    prose_order: list[str] = []
+    seen_in_prose: set[str] = set()
     for m in _MARKER_USE_RE.finditer(prose):
         marker = m.group(1)
-        if marker in formatted and marker not in seen:
-            order.append(marker)
-            seen.add(marker)
-    # Any defined-but-unused markers go at the end, alphanumerically,
-    # so they still render but don't reorder the visible footnotes.
-    for marker in sorted(formatted):
-        if marker not in seen:
-            order.append(marker)
+        if marker in formatted_body and marker not in seen_in_prose:
+            prose_order.append(marker)
+            seen_in_prose.add(marker)
+    canonical_for_body: dict[str, str] = {}
+    canonical_per_marker: dict[str, str] = {}
+    for marker in prose_order:
+        body_text = formatted_body[marker]
+        canonical = canonical_for_body.setdefault(body_text, marker)
+        canonical_per_marker[marker] = canonical
+    # Markers defined but never cited keep themselves as canonical so
+    # they still emit (they fall through the rewrite below untouched).
+    for marker in formatted_body:
+        canonical_per_marker.setdefault(marker, marker)
+        canonical_for_body.setdefault(formatted_body[marker], marker)
 
-    out = list(body_lines)
+    if any(c != m for m, c in canonical_per_marker.items()):
+        def _rewrite_use(match: re.Match[str]) -> str:
+            m = match.group(1)
+            return f"[^{canonical_per_marker.get(m, m)}]"
+
+        prose = _MARKER_USE_RE.sub(_rewrite_use, prose)
+
+    # Emit one definition per canonical marker, in prose-first order.
+    emitted_order: list[str] = []
+    emitted: set[str] = set()
+    for marker in prose_order:
+        canonical = canonical_per_marker[marker]
+        if canonical not in emitted:
+            emitted_order.append(canonical)
+            emitted.add(canonical)
+    for marker in sorted(formatted_body):
+        canonical = canonical_per_marker[marker]
+        if canonical not in emitted:
+            emitted_order.append(canonical)
+            emitted.add(canonical)
+
+    out = prose.split("\n")
     if out and out[-1].strip():
         out.append("")
-    for marker in order:
-        out.append(formatted[marker])
+    for marker in emitted_order:
+        out.append(f"[^{marker}]: {formatted_body[marker]}")
     return "\n".join(out)
 
 
