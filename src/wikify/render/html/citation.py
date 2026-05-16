@@ -107,6 +107,15 @@ def _to_surname_first(name: str) -> str:
     tokens = raw.split()
     if len(tokens) == 1:
         return tokens[0]
+    # "Surname I." or "Surname I I." form (no comma, trailing initials):
+    # if the first token is multi-character and every remaining token is a
+    # single letter (with optional period), treat the first as the surname.
+    # Example: ``Kumar S`` -> ``Kumar, S.``; ``Stathopoulos S`` -> ``Stathopoulos, S.``.
+    if (
+        len(tokens[0].rstrip(".")) >= 2
+        and all(len(t.rstrip(".")) == 1 and t.rstrip(".").isalpha() for t in tokens[1:])
+    ):
+        return f"{tokens[0]}, {_make_initials(tokens[1:])}"
     surname = tokens[-1]
     initials = _make_initials(tokens[:-1])
     return f"{surname}, {initials}" if initials else surname

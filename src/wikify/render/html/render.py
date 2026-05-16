@@ -756,12 +756,22 @@ def _format_evidence_body(
     sep = rest.find(' > "')
     head = rest[:sep].strip() if sep != -1 else rest
 
-    # Head may be "chunk_id (doc_id)" or just "doc_id".
+    # ``head`` is ``chunk_id (doc_id)``. Titles can contain parens
+    # (e.g. ``(RRAM)``), so walk back from the trailing ``)`` with paren
+    # balance to find the matching wrapper ``(``. ``rfind("(")`` lands
+    # on the inner paren of titles like ``(RRAM)`` and mis-extracts.
     doc_id = head
-    paren_open = head.rfind("(")
-    paren_close = head.rfind(")")
-    if paren_open > 0 and paren_close > paren_open:
-        doc_id = head[paren_open + 1 : paren_close].strip()
+    if head.endswith(")"):
+        depth = 0
+        for i in range(len(head) - 1, -1, -1):
+            ch = head[i]
+            if ch == ")":
+                depth += 1
+            elif ch == "(":
+                depth -= 1
+                if depth == 0:
+                    doc_id = head[i + 1 : -1].strip()
+                    break
 
     return _format_citation(doc_id, doc_meta_map=doc_meta_map)
 
