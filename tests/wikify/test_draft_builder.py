@@ -441,6 +441,93 @@ def test_write_evidence_ref_round_trip_preserves_score_and_chunk_ord() -> None:
     assert reloaded.chunk_ord == 3
 
 
+def test_dossier_renders_curated_quote_when_vetter_supplied_one() -> None:
+    """A vetter-supplied ``quote`` (different from the chunk's leading
+    text) renders as a "Selected quote" block above the chunk text so
+    the writer reads the on-topic sentence first."""
+    from wikify.bundle.draft.dossier import render_dossier
+    from wikify.schema import WriteEvidenceRef, WriteRequest
+
+    chunk_text = (
+        "Ryan Goul, Angelo Marshall, Sierra Seacat. "
+        "Herein, we report atomically tunable Pd/M1/M2/Al ultrathin "
+        "memristors using in vacuo atomic layer deposition by controlled "
+        "insertion of MgO atomic layers."
+    )
+    curated_quote = (
+        "Herein, we report atomically tunable Pd/M1/M2/Al ultrathin "
+        "memristors using in vacuo atomic layer deposition by controlled "
+        "insertion of MgO atomic layers."
+    )
+    req = WriteRequest(
+        page_id="Atomic Layer Deposition",
+        page_kind="article",
+        title="Atomic Layer Deposition",
+        aliases=["ALD"],
+        skeleton="",
+        prompt_template="",
+        model_id="claude-sonnet-4-6",
+        tier="M",
+        evidence=[
+            WriteEvidenceRef(
+                chunk_id="paper_0__c0000",
+                doc_id="paper_0",
+                quote=curated_quote,
+                chunk_text=chunk_text,
+                section_type="body",
+                score=1.0,
+                chunk_ord=0,
+            )
+        ],
+    )
+    body = render_dossier(req)
+    assert "**Selected quote:**" in body
+    assert curated_quote in body
+    # Selected quote block appears BEFORE the chunk_text head ("Ryan Goul,
+    # Angelo Marshall, Sierra Seacat.") so the writer reads it first.
+    i_quote = body.index("**Selected quote:**")
+    i_byline = body.index("Ryan Goul, Angelo Marshall")
+    assert i_quote < i_byline
+
+
+def test_dossier_suppresses_selected_quote_when_default_text_head_fallback() -> None:
+    """When ``quote`` equals the chunk's leading text (i.e., the default
+    ``text[:400]`` fallback because no vetter curated it), the "Selected
+    quote" block is suppressed — repeating the chunk head adds noise."""
+    from wikify.bundle.draft.dossier import render_dossier
+    from wikify.schema import WriteEvidenceRef, WriteRequest
+
+    chunk_text = "The first sentence is the lead. The second is detail."
+    # Default fallback shape: quote IS the chunk head.
+    default_quote = chunk_text[:30]
+    assert chunk_text.startswith(default_quote)  # sanity
+    req = WriteRequest(
+        page_id="Atomic Layer Deposition",
+        page_kind="article",
+        title="Atomic Layer Deposition",
+        aliases=[],
+        skeleton="",
+        prompt_template="",
+        model_id="claude-sonnet-4-6",
+        tier="M",
+        evidence=[
+            WriteEvidenceRef(
+                chunk_id="paper_0__c0000",
+                doc_id="paper_0",
+                quote=default_quote,
+                chunk_text=chunk_text,
+                section_type="body",
+                score=1.0,
+                chunk_ord=0,
+            )
+        ],
+    )
+    body = render_dossier(req)
+    assert "**Selected quote:**" not in body
+    # Chunk text still renders.
+    assert chunk_text in body
+
+
 def test_load_draft_roundtrip(tmp_path: Path) -> None:
     bundle, corpus, slug = _bundle_with_concept(tmp_path)
     append_evidence(

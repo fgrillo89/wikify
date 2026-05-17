@@ -486,11 +486,13 @@ def cmd_build_evidence(
         "",
         "--from-ids",
         help=(
-            "Commit-only mode: comma-separated chunk_ids. Skips the "
-            "seed + corpus-find phases and validates the supplied ids "
-            "against the boilerplate, never-cite, and min-chars filters "
-            "before appending. Use after an external vetter (e.g. the "
-            "wikify-gather-evidence skill) has curated the chunk list."
+            "Commit-only mode: comma-separated chunk_ids, OR the literal "
+            "value '@-' to read a JSON list of records from stdin. Each "
+            "JSON entry: {\"chunk_id\": <id>, \"score\"?: <float>, "
+            "\"quote\"?: <str>}. Quotes are verified to appear literally "
+            "in the chunk's text (anti-hallucination); ids whose quote "
+            "is fabricated are rejected with rejected_quote_not_in_chunk. "
+            "CSV mode uses score=1.0 and text[:400] as quote."
         ),
     ),
     run: Path | None = typer.Option(None, "--run"),
@@ -513,6 +515,11 @@ def cmd_build_evidence(
     the supplied chunk_ids are validated and appended as-is, each with
     ``score=1.0`` and a ``source="vetter"`` tag. ``--target``,
     ``--top-k`` and ``--per-doc-cap`` are ignored in this mode.
+
+    With ``--from-ids @-`` the CLI reads a JSON list from stdin where
+    each entry is ``{"chunk_id": <id>, "score"?: <float>, "quote"?:
+    <str>}``. Supplied quotes are verified to appear literally in the
+    chunk's text; rejected as ``rejected_quote_not_in_chunk`` if not.
 
     Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
     """
@@ -550,16 +557,83 @@ def cmd_build_evidence(
 
     # ----- commit-only mode: skip seed/find, just validate + append.
     if from_ids:
-        raw_ids = [s.strip() for s in from_ids.split(",") if s.strip()]
-        # Preserve caller order while deduping.
+        # Parse either JSON-from-stdin (@-) or CSV form into a uniform
+        # list of {chunk_id, score?, quote?} entries.
+        entries: list[dict] = []
+        if from_ids.strip() == "@-":
+            import sys as _sys
+
+            # Prefer the binary path (matches draft check --dry-run);
+            # the CLI-IO tee wraps stdin in a text-only _TeeReader that
+            # has no .buffer attribute, so fall back to text read there.
+            buf = getattr(_sys.stdin, "buffer", None)
+            if buf is not None:
+                stdin_text = buf.read().decode("utf-8")
+            else:
+                stdin_text = _sys.stdin.read()
+            try:
+                payload = json.loads(stdin_text)
+            except json.JSONDecodeError as exc:
+                con.close()
+                cli_error(EXIT_VALIDATION, error="bad_json", message=str(exc))
+            if not isinstance(payload, list):
+                con.close()
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="bad_json",
+                    message="expected JSON list",
+                )
+            for item in payload:
+                if not isinstance(item, dict):
+                    con.close()
+                    cli_error(
+                        EXIT_VALIDATION,
+                        error="bad_json",
+                        message="each entry must be a JSON object",
+                    )
+                cid = item.get("chunk_id")
+                if not isinstance(cid, str) or not cid.strip():
+                    con.close()
+                    cli_error(
+                        EXIT_VALIDATION,
+                        error="bad_json",
+                        message="each entry needs a non-empty 'chunk_id' string",
+                    )
+                entry: dict = {"chunk_id": cid.strip()}
+                if "score" in item and item["score"] is not None:
+                    try:
+                        entry["score"] = float(item["score"])
+                    except (TypeError, ValueError) as exc:
+                        con.close()
+                        cli_error(
+                            EXIT_VALIDATION,
+                            error="bad_json",
+                            message=f"score must be numeric: {exc}",
+                        )
+                if "quote" in item and item["quote"] is not None:
+                    if not isinstance(item["quote"], str):
+                        con.close()
+                        cli_error(
+                            EXIT_VALIDATION,
+                            error="bad_json",
+                            message="quote must be a string",
+                        )
+                    entry["quote"] = item["quote"]
+                entries.append(entry)
+        else:
+            raw_ids = [s.strip() for s in from_ids.split(",") if s.strip()]
+            for cid in raw_ids:
+                entries.append({"chunk_id": cid})
+        # Preserve caller order while deduping by chunk_id (first wins).
         seen_in: set[str] = set()
-        ordered_ids: list[str] = []
-        for cid in raw_ids:
+        ordered_entries: list[dict] = []
+        for entry in entries:
+            cid = entry["chunk_id"]
             if cid in seen_in:
                 continue
             seen_in.add(cid)
-            ordered_ids.append(cid)
-        if not ordered_ids:
+            ordered_entries.append(entry)
+        if not ordered_entries:
             con.close()
             cli_error(
                 EXIT_VALIDATION,
@@ -576,7 +650,7 @@ def cmd_build_evidence(
             if r.status == "active"
         }
         vetter_stats = {
-            "ids_total": len(ordered_ids),
+            "ids_total": len(ordered_entries),
             "appended": 0,
             "rejected_not_found": 0,
             "rejected_boilerplate": 0,
@@ -584,9 +658,11 @@ def cmd_build_evidence(
             "rejected_never_cite": 0,
             "rejected_short": 0,
             "rejected_already_committed": 0,
+            "rejected_quote_not_in_chunk": 0,
         }
         vetter_records: list[dict] = []
-        for cid in ordered_ids:
+        for entry in ordered_entries:
+            cid = entry["chunk_id"]
             if cid in committed:
                 vetter_stats["rejected_already_committed"] += 1
                 continue
@@ -608,12 +684,22 @@ def cmd_build_evidence(
             if _matches_never_cite(text):
                 vetter_stats["rejected_never_cite"] += 1
                 continue
+            raw_text = row["text"] or ""
+            supplied_quote = entry.get("quote")
+            if supplied_quote is not None:
+                if supplied_quote not in raw_text:
+                    vetter_stats["rejected_quote_not_in_chunk"] += 1
+                    continue
+                quote = supplied_quote
+            else:
+                quote = text[:400]
+            score = entry.get("score", 1.0)
             vetter_records.append(
                 {
                     "chunk_id": row["chunk_id"],
                     "doc_id": row["doc_id"],
-                    "quote": text[:400],
-                    "score": 1.0,
+                    "quote": quote,
+                    "score": float(score),
                     "status": "active",
                     "source": "vetter",
                 }
@@ -656,6 +742,7 @@ def cmd_build_evidence(
             f"xk{vetter_stats['rejected_excluded_kind']}/"
             f"nc{vetter_stats['rejected_never_cite']}/"
             f"short{vetter_stats['rejected_short']}/"
+            f"q{vetter_stats['rejected_quote_not_in_chunk']}/"
             f"dup{vetter_stats['rejected_already_committed']})"
         )
         return

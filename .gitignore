@@ -61,3 +61,11 @@ bundles/
 
 # Claude Code MCP server config (carries absolute paths)
 .mcp.json
+
+# Vetter and exploration scratch — agent-produced run artifacts
+tmp_writes/
+/VETTING_REPORT.md
+/accepted_ids.txt
+/candidates_aggregated.json
+/q*.json
+/q_*.json

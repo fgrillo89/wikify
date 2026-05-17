@@ -205,6 +205,17 @@ def render_dossier(draft: WriteRequest) -> str:
                 )
                 out.append("")
                 text = (ref.chunk_text or "").rstrip()
+                # When the vetter supplied a curated `quote` via
+                # `wikify work build-evidence --from-ids @-`, surface it
+                # above the chunk text so the writer reads the on-topic
+                # sentence first instead of the chunk head (which is often
+                # a byline). Default text[:400] fallbacks are not curated
+                # — they match the chunk's leading text and add nothing,
+                # so suppress the block in that case.
+                quote = (ref.quote or "").strip()
+                if quote and not text.startswith(quote):
+                    out.append(f"> **Selected quote:** {quote}")
+                    out.append("")
                 out.append(text or "_(empty chunk)_")
                 out.append("")
                 if ref.chunk_equations:

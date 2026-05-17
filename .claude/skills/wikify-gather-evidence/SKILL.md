@@ -6,24 +6,48 @@ allowed-tools: Bash(wikify *)
 
 # wikify-gather-evidence
 
-This workflow runs a vetter loop separately from the writer loop. The
-vetter knows the corpus tooling and produces a curated
-`evidence.jsonl`. The writer never sees the vetting machinery — it
-receives the rendered `dossier.md` only. The committed `evidence.jsonl`
-is the contract between them.
-
-Run this skill on a haiku-class model. The reasoning is shallow
-per-candidate (accept/reject + one-line reason); cost should track
-candidates seen, not page complexity.
+You assemble `evidence.jsonl` for one concept slug. Read every
+candidate chunk, judge it on what it says, and commit the accepted
+ids in one CLI call.
 
 ## Inputs
 
 - `slug` (required) — concept slug under `work/concepts/<slug>/`.
 - `run` (required) — bundle path passed to every CLI call.
 - `corpus` (required) — corpus path passed to every CLI call.
-- `quota` (default 16) — stop after this many records accepted.
-- `max_query_rounds` (default 3) — stop after this many candidate
-  batches return nothing new.
+- `quota` (default 16) — stop after this many records accepted. Land
+  fewer if you cannot find more on-topic chunks; never pad with weak
+  acceptances.
+- `max_query_rounds` (default 3) — max gap-driven query iterations
+  (Step 4) after the initial plan.
+
+## Non-negotiable rules
+
+1. **Read every chunk.** Every accept and every reject decision row
+   MUST include a verbatim quote of one sentence from the chunk's
+   `text`. No quote means you did not read it.
+2. **Do not rank by metadata.** `citation_count`, `score`,
+   `semantic_score`, `bm25_score` are diagnostic. Judge on text.
+3. **Iterate queries.** After the first vetting round, identify
+   sub-topics an encyclopedia article on `<slug>` needs but your
+   accepted set lacks. Craft 2–4 fresh queries to fill those gaps.
+   Repeat until quota or `max_query_rounds` exhausts.
+4. **Score = topic role.** Set per-chunk `score` to reflect its
+   narrative role in the encyclopedia article so the dossier orders
+   chunks the way a writer should read them:
+   - 1.00 — definition chunk ("<title> is …")
+   - 0.95 — core mechanism / principle
+   - 0.85 — materials systems / process variants
+   - 0.75 — applications / device-level examples
+   - 0.60 — marginal but cluster-useful chunks (sibling-relevant)
+   Definitions land first in the dossier; applications last. Do not
+   set 1.0 for everything — that re-creates the alphabetical tie-break
+   problem.
+5. **Definition chunks are gold.** A chunk that opens with
+   "`<title>` is …" / "`<title>` refers to …" / "`<title>` (`<acronym>`)
+   is a …" is the highest-value evidence for an encyclopedia page.
+   Hunt for at least one such chunk in Step 4 if Step 2 didn't return
+   one.
 
 ## Step 1: read the work card and the cluster
 
@@ -32,21 +56,15 @@ wikify work show <slug> --run <run> --format json
 wikify work cluster-concepts --run <run> --format json
 ```
 
-From the card pull `title` (= `page_id`), `kind`, `aliases`, and
-`seed_doc_handles`. From the cluster output find the cluster that
-contains `<slug>` and remember the sibling slugs — chunks useful to a
-sibling are acceptable too.
+Pull `title`, `kind`, `aliases`, and `seed_doc_handles` from the card.
+From the cluster output, find the cluster containing `<slug>` and
+remember the sibling slugs — chunks useful to a sibling are
+acceptable too.
 
-If the card has no body and no `seed_doc_handles`, the extractor never
-gave the concept a prior; rely on the title + aliases queries below.
+## Step 2: initial candidate pool
 
-## Step 2: build the candidate pool
-
-Issue one `corpus find` per query and one per seed doc. Every call
-returns JSON with inline chunk text so the vetter can judge without
-follow-up `corpus show` round-trips.
-
-Base flags (apply to every call):
+Issue one `corpus find` per query and one per seed. Base flags
+(apply to every call):
 
 ```
 --rank all --top-k 25 --with-text
@@ -56,210 +74,291 @@ Base flags (apply to every call):
 --corpus <corpus> --run <run> --format json
 ```
 
-Queries to issue:
+Queries:
 
 ```bash
-wikify corpus find "<title>"            <base-flags>
-wikify corpus find "<alias-1>"          <base-flags>
-wikify corpus find "<alias-2>"          <base-flags>
-# ... one per alias, including author:<key> aliases for person pages.
+wikify corpus find "<title>"                 <base-flags>
+wikify corpus find "<alias-1>"               <base-flags>
+wikify corpus find "<alias-2>"               <base-flags>
+# ... one per alias
 
-# Per-seed scoped find: pulls the title's best chunks from one paper.
 wikify corpus find "<title>" --in-doc <seed-handle>  <base-flags>
+# ... one per seed_doc_handle
 ```
 
-For technique / process pages, an additional kind-aware query often
-surfaces methods sections that the title query misses (only run this
-when the title-query batch is light on methods/results coverage):
+Merge batches in-context by `chunk_id`. Drop duplicates.
 
-```bash
-wikify corpus find "<title> precursor"  <base-flags>
-wikify corpus find "<title> process"    <base-flags>
-```
+### Beyond title + aliases + per-seed
 
-Merge the batches in-context by `chunk_id`. Drop duplicates. Each
-candidate has `text`, `section_type`, `doc_handle`, `citation_count`,
-`modes`, and `score` available — that is everything the vetter needs.
+The full `wikify corpus find` surface — use the right primitive for the gap:
+
+| primitive | when to use |
+|---|---|
+| `corpus find --text "<exact phrase>"` | Literal substring grep, no semantic dilution. Best for definition hunting: `--text "atomic layer deposition is"`, `--text "refers to"`, `--text "defined as"`. The semantic ranker often dilutes these exact phrasings. |
+| `corpus find --rank pagerank --by paper "<title>"` | Rank PAPERS by in-corpus PageRank. Surfaces foundational works on the topic that aren't necessarily the highest semantic match. Use to find which papers a writer should cite as anchors. |
+| `corpus find --rank citation_count --by paper "<title>"` | Rank papers by external citation count. Use to surface seminal references. |
+| `corpus sample --strategy diverse --max <N> --corpus <c>` | When `seed_doc_handles` is thin or absent, get a diverse seed set across the corpus by topical coverage. |
+| `corpus citation-walk <doc_handle>` | Given an accepted seminal paper, walk to what it cites and what cites it — surfaces the surrounding scholarly conversation, often containing the technique's origin papers. |
+| `corpus similarity-walk <chunk_handle>` | Given an accepted chunk, surface other chunks semantically nearby — the "find more like this" pattern after a strong accept. |
+
+Mix these into Step 4 when the title + alias + seed plan leaves gaps.
 
 ## Step 3: vet each candidate
 
-For each unique candidate, accept or reject with a one-line reason.
-Accept iff **all** of:
+For every unique candidate emit one decision row:
 
-- The chunk is on-topic for `<slug>` OR genuinely useful for a cluster
-  sibling. "Could a writer covering this slug or any sibling cite this
-  chunk?" If no, reject.
-- The chunk is not pure metadata: no pure author byline, no editorial
-  header, no DOI banner, no citation header, no acknowledgments-style
-  text. The CLI already drops boilerplate-flagged and never-cite-match
-  chunks at commit; reject the survivors that read as metadata too.
-- The chunk is not a near-duplicate of an already-accepted chunk's
-  argument. Semantic duplication, not byte duplication — two chunks
-  making the same point in different words count as one.
-- The chunk does not drown out underused section types. Track accepted
-  `section_type` counts; if the pool already has 4 introductions and
-  zero results, prefer methods/results candidates over yet another
-  introduction. Keep at least one introduction; cap any single
-  section_type at roughly half the quota.
+```
+[accept|reject] chunk_id=<id> doc=<doc_handle> section=<section_type>
+  quote="<one verbatim sentence from the chunk text>"
+  reason=<short phrase>
+```
 
-Maintain two ledgers in-context: `accepted_ids` (committed once at the
-end) and `rejected` (slug + chunk_id + one-line reason; per-run only,
-never persisted).
+The quote MUST appear literally in the chunk's `text`. This is the
+discipline that enforces reading.
 
-### Section-mix target
+Accept iff ALL of these hold (verify each in the quote and reason):
 
-Aim for evidence that covers at least introduction + methods + results
-across the accepted set — not 14 introductions. After each accept,
-scan the accepted-so-far set's `section_type` distribution; when
-choosing between two marginal candidates, prefer the one whose
-`section_type` is underrepresented. An accepted set with five
-introductions and zero methods is a worse dossier than one with three
-introductions, one methods, and one results.
+- **Substantive claim about `<slug>` or a cluster sibling.** The
+  quote contains a concrete fact, definition, mechanism, parameter,
+  process step, or result tied to the concept. Passing keyword
+  mentions don't count: "deposited by ALD at 250 °C" IS on-topic for
+  ALD; "this work is in neuromorphic computing where techniques like
+  ALD are common" is NOT.
+- **Not pure metadata.** No author bylines, editorial headers, DOI
+  banners, citation headers, acknowledgments paragraphs, copyright
+  notices.
+- **Not a references list disguised as body.** If the chunk text
+  contains 3+ numbered citation entries (`(N) Author, Initial.`) or
+  opens with one, reject as `looks like references list`. The
+  section classifier sometimes misses these.
+- **Not a near-duplicate of an already-accepted chunk's argument.**
+  Two chunks making the same point in different words count as one.
+- **Helps the section mix.** Track accepted `section_type` counts.
+  Cap any single section_type at roughly half the quota. Keep at
+  least one introduction. Methods and results should be represented
+  if available.
 
-### Accept / reject examples
+When choosing between two on-topic candidates, prefer the one that:
+- contains a definition-style sentence ("`<title>` is …"),
+- covers an underrepresented sub-topic (Step 4 list),
+- or covers an underused `section_type`.
 
-The four examples below are real chunks from the ALD baseline run.
-They are calibrated against the same accept rule. Use them to anchor
-borderline calls.
+Maintain two ledgers in-context: `accepted` (decision rows for
+commits) and `rejected` (per-run only, never persisted).
 
-**Accept — on-topic, methods-grade ALD discussion** (Goul 2022, e7-equivalent).
-Chunk text opens "Continuous device downsizing and circuit complexity
-have motivated atomic-scale tuning of memristors. Herein, we report
-atomically tunable Pd/M1/M2/Al ultrathin (<2.5 nm M1/M2 bilayer oxide
-thickness) memristors using in vacuo atomic layer deposition by
-controlled insertion of MgO atomic layers …". Verdict: accept.
-Reason: explicit in vacuo ALD process detail, on-topic for the ALD
-page.
+### Calibration examples (well-formed decision rows)
 
-**Reject — editorial header** (Kumar 2025, e4-equivalent). Chunk text
-is "EDITED BY / Carlo Ricciardi, / Polytechnic University of Turin,
-Italy / REVIEWED BY / Itir Koymen, …". Verdict: reject. Reason: pure
-editorial metadata; survives the boilerplate filter only because the
-upstream flag missed it — vetter must catch it.
+Real chunks from the ALD baseline. Copy this format.
 
-**Reject — author byline + abstract** (Li 2018, e1-equivalent). Chunk
-text is "Can Li 1 , Daniel Belkin1,4, Yunning Li 1 … Abstract—Memristors
-with tunable non-volatile resistance states offer the potential for
-in-memory computing that mitigates the von-Neumann bottleneck. We build
-a large scale memristor array by integrating a transistor array with
-Ta/HfO2 memristors …". Verdict: reject. Reason: byline-and-abstract
-chunk where the ALD reference is incidental; no concrete ALD claim a
-writer could cite. Accept the same paper's later body chunk that
-describes the HfO2 ALD step explicitly (e3-equivalent), not this one.
+**Accept — definition chunk** (Gou 2024):
+```
+accept chunk_id=...Gou...aa932d61 doc=doc:... section=introduction
+  quote="Atomic layer deposition (ALD) is a technique used to
+         manufacture ultra-thin films that deposit material layer by
+         layer by chemical reaction by alternately introducing
+         different chemical vapor phase precursors on the substrate
+         surface."
+  reason=textbook ALD definition; gold for encyclopedia opening
+```
 
-**Marginal accept — device fab chunk that names ALD as one step**
-(Gao 2014, e9-equivalent). Chunk discusses 3D oxide-based memristor
-fabrication, with ALD referenced as the HfO2 deposition step among
-others. Verdict: accept when a hafnium-oxide cluster sibling is in
-scope. Reason: the cluster-relevance test — "could a writer covering
-a sibling cite this chunk?" — passes; the same chunk would be a
-borderline reject if ALD were the only concept in the cluster.
+**Accept — process detail** (Goul 2022):
+```
+accept chunk_id=...Goul...c0001_bf52b61a doc=doc:0b46c4a097e4
+  section=body
+  quote="Herein, we report atomically tunable Pd/M1/M2/Al ultrathin
+         memristors using in vacuo atomic layer deposition by
+         controlled insertion of MgO atomic layers into pristine
+         Al2O3 atomic layer stacks."
+  reason=concrete in-vacuo ALD process used to tune memristor stack
+```
 
-## Step 4: stop conditions
+**Reject — editorial header** (Kumar 2025):
+```
+reject chunk_id=...Kumar...c0000_bce549e2 doc=doc:507844b996c7
+  section=body
+  quote="EDITED BY Carlo Ricciardi, Polytechnic University of Turin,
+         Italy REVIEWED BY Itir Koymen, TOBB University of Economics
+         and Technology, Türkiye"
+  reason=Frontiers editorial board metadata, zero ALD content
+```
 
-Stop when **any** of:
+**Reject — byline plus abstract, no ALD claim** (Li 2018):
+```
+reject chunk_id=...Li...c0000_238acd1a doc=doc:88ba30b3ca12
+  section=body
+  quote="We build a large scale memristor array by integrating a
+         transistor array with Ta/HfO2 memristors that have stable
+         multilevel resistance states and linear IV characteristic."
+  reason=abstract about memristor arrays; ALD never mentioned in
+         this chunk even though paper uses ALD elsewhere
+```
 
-- `len(accepted_ids) >= quota`.
-- The last `max_query_rounds` candidate batches added zero new accepted
-  records.
-- The query plan is exhausted (every title / alias / seed scoped find
-  has been issued and merged) and no new acceptances are landing.
+**Anti-pattern — shortcut by ranking, not reading:**
+```
+accept chunk_id=... doc=... section=body
+  quote=N/A
+  reason=high citation count (200), keep
+```
+Invalid. No quote means no reading. Reject this shape of decision
+from yourself.
 
-If a particular seed contributes zero accepted chunks, drop it from
-further iteration — do not re-query it.
+## Step 4: iterative query crafting
 
-## Step 5: commit
+After the initial batch is vetted, **do not commit yet**. Inspect
+your `accepted` ledger:
 
-One call at the end. The CLI re-validates each id against the
-boilerplate flag, never-cite regex, and min-chunk-chars filter before
-appending; ids already in `evidence.jsonl` are skipped with
-`rejected_already_committed`:
+- What sub-topics are now covered? Make a short list from the quotes.
+- What sub-topics that an encyclopedia article on `<slug>` would
+  obviously need are **missing**?
+- Is there a definition chunk? If not, prioritise finding one.
+
+Craft 2–4 fresh queries in your own words to close those gaps.
+Issue them with the same base flags as Step 2 and merge results
+into the candidate pool. Vet the new candidates (Step 3 format).
+
+### Sample query plans
+
+**Definition-hunting queries (always try one if you don't have a
+definition chunk yet)**:
+
+```
+"<title> is"
+"<title> refers to"
+"<title> definition"
+"<acronym> stands for"
+```
+
+**Process / technique concepts** (ALD, CVD, sputtering, photolithography):
+
+| missing sub-topic | sample query |
+|---|---|
+| precursor chemistry | `"<title> precursor"`, e.g. `"TMA water"` |
+| half-cycle / self-limiting growth | `"<title> half cycle"`, `"self-limiting reaction"` |
+| growth-per-cycle / temperature window | `"<title> growth per cycle"`, `"<title> temperature window"` |
+| plasma vs thermal variants | `"plasma-enhanced <title>"`, `"thermal vs plasma <title>"` |
+| materials systems | `"<title> HfO2"`, `"<title> Al2O3"` |
+| conformality / aspect ratio | `"<title> conformality"`, `"high aspect ratio <title>"` |
+| nucleation / interface | `"<title> nucleation"`, `"incubation layer <title>"` |
+| applications | `"<title> memristor"`, `"<title> gate dielectric"` |
+
+For other concept kinds (device, material, person) construct
+analogous gap-driven queries. The point: do not stop at title +
+aliases. Craft queries from the holes in what you've accepted.
+
+## Step 5: stop conditions
+
+Stop when ANY of:
+
+- `len(accepted) >= quota`.
+- You have run `max_query_rounds` gap-driven query iterations and the
+  latest round added zero accepts.
+- Every reasonable query has been issued and no new ids appear after
+  dedup.
+
+If a seed contributes zero accepted chunks across the loop, drop it
+from further iteration.
+
+**Land fewer than quota if necessary.** Ten high-quality on-topic
+chunks beats sixteen padded with marginal ones.
+
+## Step 6: commit
+
+The vetter commits via `--from-ids @-` reading JSON from stdin, so it
+can attach per-chunk `score` (topic role) and `quote` (the on-topic
+sentence selected during vetting):
 
 ```bash
 wikify work build-evidence <slug> \
-  --from-ids <id-1>,<id-2>,...,<id-N> \
-  --run <run> --corpus <corpus> --format json
+  --from-ids @- \
+  --run <run> --corpus <corpus> --format json <<'EOF'
+[
+  {"chunk_id": "...Gou...aa932d61", "score": 1.00, "quote": "Atomic layer deposition (ALD) is a technique used to manufacture ultra-thin films..."},
+  {"chunk_id": "...Zhang...81a0f480", "score": 0.95, "quote": "When all possible reaction ligands are occupied, the reactions will not take place anymore..."},
+  {"chunk_id": "...Porro...66e71bc3", "score": 0.85, "quote": "iron oxide (Fe2O3) thin films grown by atomic layer deposition (ALD) using ferrocene as iron precursor..."}
+]
+EOF
 ```
 
-The output is `{ok, concept, appended, distinct_docs, stats}`. If
-`appended` is materially lower than `len(accepted_ids)`, inspect
-`stats` to see which filter rejected what — never re-commit without
-addressing the cause.
+The heredoc redirection (`<<'EOF'`) is part of the `wikify` invocation, so
+this command stays inside the skill's `allowed-tools: Bash(wikify *)`
+allowlist. Do not pipe via `cat <<EOF | wikify ...` — that introduces
+`cat` as a separate shell command outside the allowlist and the commit
+step will be blocked.
 
-The vetter does not write `evidence.jsonl` directly. Only
-`build-evidence` writes that file.
+The supplied `quote` replaces the default `text[:400]` truncation so
+the dossier displays the vetter's chosen on-topic sentence instead of
+the chunk head (which is often a byline). The CLI verifies each quote
+appears literally in the chunk text; missing or fabricated quotes get
+rejected with `rejected_quote_not_in_chunk` in the stats.
+
+The CSV form (`--from-ids "id1,id2,id3"`) still works as a fallback;
+all records get the default score=1.0 and the text[:400] quote.
+
+Output: `{ok, concept, appended, distinct_docs, stats}`. The CLI
+re-validates each id against boilerplate / never-cite / min-chars /
+structural-kind filters before appending; ids already in
+`evidence.jsonl` are skipped with `rejected_already_committed`. If
+`appended` is materially lower than `len(accepted)`, inspect `stats`
+to see which filter rejected what — never re-commit without
+addressing the cause.
 
 ### Same-slug concurrency
 
 If another agent might be vetting the same slug concurrently, the
 caller must hold the concept claim (`wikify work claim <slug>`) or
-the orchestrator must serialize per slug. The CLI does not lock
-`evidence.jsonl` atomically across multiple writers: `wikify work
-build-evidence` reads the ledger, computes a new set, and appends —
-rapid concurrent commits could interleave records and double-write a
-chunk_id. Single-writer-per-slug is the contract.
+the orchestrator must serialize per slug. `evidence.jsonl` is not
+locked atomically across writers; concurrent commits can interleave.
 
-## Step 6: sanity-check the dossier
-
-After commit, regenerate and skim the dossier:
+## Step 7: sanity-check the dossier
 
 ```bash
 wikify draft build <slug> \
   --task create --corpus <corpus> --run <run> \
-  --model-id <writer-model> --tier M --with-adjacent
+  --model-id <writer-model> --tier M
 ```
 
-Open the resulting `work/concepts/<slug>/dossier.md`. Verify:
+Read `work/concepts/<slug>/dossier.md`. Verify:
 
 - evidence reads as on-topic;
-- methods + results are represented, not buried by introductions;
-- no obvious noise (byline / DOI / acknowledgments) survived the
-  filters;
+- methods + results represented when available;
+- no obvious noise (byline / DOI / acknowledgments) survived;
 - distinct docs and total active records are within the quota window.
 
-If a problem is visible, mark the bad ids as `status="archived"` via a
-follow-up `work add evidence` call rather than mutating the JSONL by
-hand. Then re-run this skill to top up.
+If a problem is visible, mark the bad ids as `status="archived"` via
+a follow-up `wikify work add evidence` call rather than mutating
+the JSONL by hand. Then re-run this skill to top up.
 
-## Step 7: telemetry
+## Step 8: telemetry
 
-The vetter is itself a metered agent invocation. After the vetter's
-Agent-tool call returns token usage, record the call:
+The vetter is itself a metered agent invocation. After the call
+returns token usage, record it:
 
 ```bash
-wikify run record-call --help        # confirms the current signature
 wikify run record-call --run <run> --role vetter \
   --model-id <vetter-model> --tier S \
   --tokens-in <n> --tokens-out <n> --stage evidence
 ```
 
-If the controlling workflow already records the call on the agent's
+If the controlling workflow already records the call on the vetter's
 behalf, skip this step.
 
 ## Hard rules
 
+- Read every chunk. Decision row without a verbatim quote is
+  invalid; discard and re-vet.
+- Do not rank candidates by `citation_count`, `score`,
+  `semantic_score`, or `bm25_score`. Judge on text.
+- Set per-chunk score to topic role (1.0 definition, 0.95 mechanism,
+  ...). Uniform 1.0 scores defeat the dossier ordering.
+- Do not stop at title + alias queries. Step 4 gap-driven querying
+  is mandatory unless quota is met on the first round.
+- Hunt for one definition-style chunk per slug.
 - Do not edit `work/concepts/<slug>/evidence.jsonl` directly.
-- Do not bypass `--with-text` and ask for chunk bodies via
-  `corpus show` — the round-trip cost is the reason the vetter loop
-  exists.
-- Do not accept a chunk whose only relevance is keyword overlap; the
-  vetter is the layer that catches "matches the query, is not useful".
-- Do not add seeds to the work card. Seeds come from the extractor
-  (`cluster-concepts` upstream).
-- Do not invent biography for person pages. Person pages still need
-  evidence chunks that quote actual contributions — author bylines
-  alone do not count.
-
-## Does not do
-
-- Pick the slug to gather for (the controlling workflow chooses).
-- Decide whether the page is ready to write (the writer workflow
-  judges).
-- Refine or rewrite committed pages (use `wikify-refine`).
-
-## References
-
-- `../wikify-search-corpus/SKILL.md` — corpus CLI surface.
-- `../wikify-bundle/SKILL.md` — bundle / work state mechanics.
-- `../wikify/references/exploration/workflow-contracts.md` — slug,
-  card, and evidence contracts.
+- Do not bypass `--with-text` and use `corpus show` per candidate —
+  the round-trip cost defeats the loop.
+- Do not accept a chunk whose only relevance is keyword overlap.
+- Do not pad to quota with weak acceptances; land fewer if the
+  corpus does not offer more on-topic chunks.
+- Do not add seeds to the work card; seeds come from the extractor.
+- Person pages need evidence chunks that quote actual contributions;
+  author bylines alone do not count.
