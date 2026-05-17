@@ -47,6 +47,72 @@ Always consult:
 Do not browse all field guides. Use `generic.md` by default and load at
 most one additional matching field guide when the field is clear.
 
+## Evidence-grounding contract
+
+The dossier is the substrate, not a hint. The writer's prose must
+track what the dossier actually says; memory is the fallback layer,
+not the primary one.
+
+Three categories of sentence and what is permitted in each:
+
+1. **Substantive factual sentences** — anything that asserts a value,
+   parameter, mechanism, material system, year, name, comparison,
+   measurement, or quoted claim — MUST end with at least one `[^eN]`
+   marker pointing at the dossier chunk that supports it. If the
+   dossier does not support the claim, do not make the claim. Do not
+   reach into memory for specific facts that the dossier does not
+   cover. Specific examples of what requires a citation: a precursor
+   name (TMA, ferrocene, ozone), a temperature window (275–300 °C), a
+   growth-per-cycle value (~0.43 Å/cycle), an author / paper name, a
+   year, a stoichiometry, a synthesis step, a device parameter, an
+   on/off ratio, an endurance count.
+
+2. **Scaffolding sentences** — short transitions, definitions that
+   the dossier itself supplies (use the dossier's `Selected quote` or
+   the chunk text), and standard encyclopedia framing ("This article
+   describes...", "Applications include...") may go uncited. The
+   ratio of uncited to cited sentences should be low; if a section
+   has more uncited than cited sentences, you are drifting into
+   memory mode.
+
+3. **Memory-derived sentences** — permitted only for general
+   background that the dossier omits AND that is uncontroversial AND
+   that an undergraduate textbook would cover ("Thin-film deposition
+   techniques include physical vapor deposition and chemical vapor
+   deposition"). Do not introduce specific entities, papers, values,
+   or claims from memory that are absent from the dossier. If the
+   dossier covers the topic at all, use its framing — do not
+   substitute your own general-knowledge phrasing.
+
+Hard rules around grounding:
+
+- **When the dossier covers a topic, the dossier wins.** Even if you
+  remember a different value, mechanism, or framing, use the
+  dossier's version. The dossier was curated by an upstream vetter;
+  your job is to render its content as encyclopedia prose, not to
+  re-derive the article from your training data.
+- **Never contradict the dossier from memory.** If the dossier says
+  "growth per cycle is ~0.43 Å/cycle" and your memory says
+  "~1 Å/cycle", use 0.43. If you suspect the dossier is wrong, surface
+  it as a workflow signal in your own reasoning channel — do not
+  silently overwrite.
+- **Definition leads.** When the dossier contains a definition-style
+  chunk for the page concept (the vetter usually scores it 1.0 and
+  renders it under a `> **Selected quote:**` block at the top of the
+  evidence section), open the article with prose that paraphrases or
+  quotes that chunk. Do not write your own definition from memory
+  when the dossier supplies one.
+- **Quote means quote.** When you cite a `[^eN]` chunk, the reference
+  definition `[^eN]:` must contain a verbatim quote of one sentence
+  from that chunk's text. The validator enforces this. Pick the
+  sentence that actually carries the claim you're making — not the
+  chunk head, not a transition sentence.
+- **Memory mode triggers a self-flag.** If you find yourself writing
+  multiple sentences in a section without `[^eN]` markers, stop and
+  ask: is the dossier silent on this, or did I just not look hard
+  enough? Re-read the relevant section of the dossier before falling
+  back to general knowledge.
+
 ## Output
 
 Write strict JSON matching `WriteResponse`. The usual target path is:
@@ -69,7 +135,18 @@ Before creating or updating `response.json`, perform a writer self-check:
 - the page uses enough of the supplied high-quality evidence to be
   comprehensive, not merely valid;
 - math regions use double-backslash JSON escapes (`\\Delta`, `\\text`,
-  `\\,`) so the JSON parses and the markdown ends up with one backslash.
+  `\\,`) so the JSON parses and the markdown ends up with one backslash;
+- **evidence-grounding spot-check**: walk each section and confirm
+  every substantive factual sentence ends with at least one `[^eN]`
+  marker; uncited sentences are restricted to transitions,
+  definitions the dossier itself supplies, and undergraduate-level
+  encyclopedia framing. If a section has more uncited substantive
+  sentences than cited ones, rewrite it against the dossier;
+- **no memory contradictions**: no number, date, name, value, or
+  mechanism in the prose contradicts what the dossier states;
+- **no smuggled specifics from memory**: every specific paper,
+  precursor name, parameter value, year, or research group named in
+  the prose appears in the dossier.
 
 For a deterministic structural pre-check, pipe the candidate JSON into
 `wikify draft check --dry-run`:
@@ -84,9 +161,13 @@ or `validation.json`. Fix any errors before persisting.
 
 ## Hard Rules
 
-- Ground factual claims in supplied evidence.
+- Ground every substantive factual claim in the supplied dossier
+  (see "Evidence-grounding contract" above). The dossier wins over
+  memory whenever the two could disagree.
 - Use `[^eN]` markers and matching `[^eN]:` reference definitions.
-- Reference quotes must be verbatim substrings of source chunks.
+- Reference quotes must be verbatim substrings of source chunks. The
+  quoted sentence should be the one that carries the cited claim, not
+  the chunk's leading byline or a generic transition sentence.
 - Prefer explanatory prose chunks over author headers, affiliation
   blocks, bibliography/reference-list chunks, acknowledgments, generic
   figure captions, tables, ORCID/contact fragments, and other
