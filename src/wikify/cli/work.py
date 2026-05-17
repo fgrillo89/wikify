@@ -448,6 +448,21 @@ def _matches_never_cite(text: str) -> bool:
     )
 
 
+# Section kinds the vetter excludes structurally via corpus-find
+# --exclude-kind flags. The --from-ids commit path must enforce the
+# same blacklist so a manually-supplied references / caption / etc.
+# chunk cannot slip in past the boilerplate + length filters.
+_FROM_IDS_EXCLUDED_KINDS = frozenset({
+    "references",
+    "acknowledgments",
+    "appendix",
+    "figure",
+    "table",
+    "caption",
+    "boilerplate",
+})
+
+
 def _resolve_doc_id(corpus, short_or_full: str) -> str | None:
     """Map ``doc:<short>`` / ``<short>`` / full id to the full doc_id."""
     from ..corpus.queries import get_doc
@@ -467,6 +482,19 @@ def cmd_build_evidence(
     top_k: int = typer.Option(40, "--top-k", help="Initial corpus-find depth."),
     per_doc_cap: int = typer.Option(3, "--per-doc-cap"),
     min_chunk_chars: int = typer.Option(80, "--min-chunk-chars"),
+    from_ids: str = typer.Option(
+        "",
+        "--from-ids",
+        help=(
+            "Commit-only mode: comma-separated chunk_ids, OR the literal "
+            "value '@-' to read a JSON list of records from stdin. Each "
+            "JSON entry: {\"chunk_id\": <id>, \"score\"?: <float>, "
+            "\"quote\"?: <str>}. Quotes are verified to appear literally "
+            "in the chunk's text (anti-hallucination); ids whose quote "
+            "is fabricated are rejected with rejected_quote_not_in_chunk. "
+            "CSV mode uses score=1.0 and text[:400] as quote."
+        ),
+    ),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
@@ -483,6 +511,16 @@ def cmd_build_evidence(
     form, etc.). Per-doc cap keeps a single review paper from
     dominating the page.
 
+    With ``--from-ids <a,b,c>`` the seed + find phases are bypassed and
+    the supplied chunk_ids are validated and appended as-is, each with
+    ``score=1.0`` and a ``source="vetter"`` tag. ``--target``,
+    ``--top-k`` and ``--per-doc-cap`` are ignored in this mode.
+
+    With ``--from-ids @-`` the CLI reads a JSON list from stdin where
+    each entry is ``{"chunk_id": <id>, "score"?: <float>, "quote"?:
+    <str>}``. Supplied quotes are verified to appear literally in the
+    chunk's text; rejected as ``rejected_quote_not_in_chunk`` if not.
+
     Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
     """
     import sqlite3
@@ -490,7 +528,11 @@ def cmd_build_evidence(
 
     from ..api import Corpus
     from ..bundle.work.card import load_card
-    from ..bundle.work.evidence import EvidenceRecord, append_evidence
+    from ..bundle.work.evidence import (
+        EvidenceRecord,
+        append_evidence,
+        read_evidence,
+    )
 
     bundle = _resolve_bundle(run)
     if not corpus_dir.is_dir():
@@ -512,6 +554,198 @@ def cmd_build_evidence(
             "FROM chunks WHERE chunk_id=?",
             (chunk_id,),
         ).fetchone()
+
+    # ----- commit-only mode: skip seed/find, just validate + append.
+    if from_ids:
+        # Parse either JSON-from-stdin (@-) or CSV form into a uniform
+        # list of {chunk_id, score?, quote?} entries.
+        entries: list[dict] = []
+        if from_ids.strip() == "@-":
+            import sys as _sys
+
+            # Prefer the binary path (matches draft check --dry-run);
+            # the CLI-IO tee wraps stdin in a text-only _TeeReader that
+            # has no .buffer attribute, so fall back to text read there.
+            buf = getattr(_sys.stdin, "buffer", None)
+            if buf is not None:
+                stdin_text = buf.read().decode("utf-8")
+            else:
+                stdin_text = _sys.stdin.read()
+            try:
+                payload = json.loads(stdin_text)
+            except json.JSONDecodeError as exc:
+                con.close()
+                cli_error(EXIT_VALIDATION, error="bad_json", message=str(exc))
+            if not isinstance(payload, list):
+                con.close()
+                cli_error(
+                    EXIT_VALIDATION,
+                    error="bad_json",
+                    message="expected JSON list",
+                )
+            for item in payload:
+                if not isinstance(item, dict):
+                    con.close()
+                    cli_error(
+                        EXIT_VALIDATION,
+                        error="bad_json",
+                        message="each entry must be a JSON object",
+                    )
+                cid = item.get("chunk_id")
+                if not isinstance(cid, str) or not cid.strip():
+                    con.close()
+                    cli_error(
+                        EXIT_VALIDATION,
+                        error="bad_json",
+                        message="each entry needs a non-empty 'chunk_id' string",
+                    )
+                entry: dict = {"chunk_id": cid.strip()}
+                if "score" in item and item["score"] is not None:
+                    try:
+                        entry["score"] = float(item["score"])
+                    except (TypeError, ValueError) as exc:
+                        con.close()
+                        cli_error(
+                            EXIT_VALIDATION,
+                            error="bad_json",
+                            message=f"score must be numeric: {exc}",
+                        )
+                if "quote" in item and item["quote"] is not None:
+                    if not isinstance(item["quote"], str):
+                        con.close()
+                        cli_error(
+                            EXIT_VALIDATION,
+                            error="bad_json",
+                            message="quote must be a string",
+                        )
+                    entry["quote"] = item["quote"]
+                entries.append(entry)
+        else:
+            raw_ids = [s.strip() for s in from_ids.split(",") if s.strip()]
+            for cid in raw_ids:
+                entries.append({"chunk_id": cid})
+        # Preserve caller order while deduping by chunk_id (first wins).
+        seen_in: set[str] = set()
+        ordered_entries: list[dict] = []
+        for entry in entries:
+            cid = entry["chunk_id"]
+            if cid in seen_in:
+                continue
+            seen_in.add(cid)
+            ordered_entries.append(entry)
+        if not ordered_entries:
+            con.close()
+            cli_error(
+                EXIT_VALIDATION,
+                error="no_ids_provided",
+                message="--from-ids requires at least one chunk_id",
+            )
+        # Only currently-active records block a fresh commit. Archived
+        # records sit in the ledger as history; the same chunk_id may be
+        # re-accepted (a fresh "active" row supersedes archived ones at
+        # dedup time).
+        committed = {
+            r.chunk_id
+            for r in read_evidence(bundle, concept)
+            if r.status == "active"
+        }
+        vetter_stats = {
+            "ids_total": len(ordered_entries),
+            "appended": 0,
+            "rejected_not_found": 0,
+            "rejected_boilerplate": 0,
+            "rejected_excluded_kind": 0,
+            "rejected_never_cite": 0,
+            "rejected_short": 0,
+            "rejected_already_committed": 0,
+            "rejected_quote_not_in_chunk": 0,
+        }
+        vetter_records: list[dict] = []
+        for entry in ordered_entries:
+            cid = entry["chunk_id"]
+            if cid in committed:
+                vetter_stats["rejected_already_committed"] += 1
+                continue
+            row = fetch_chunk(cid)
+            if row is None:
+                vetter_stats["rejected_not_found"] += 1
+                continue
+            if row["is_boilerplate"]:
+                vetter_stats["rejected_boilerplate"] += 1
+                continue
+            section_type = (row["section_type"] or "").lower()
+            if section_type in _FROM_IDS_EXCLUDED_KINDS:
+                vetter_stats["rejected_excluded_kind"] += 1
+                continue
+            text = (row["text"] or "").strip()
+            if len(text) < min_chunk_chars:
+                vetter_stats["rejected_short"] += 1
+                continue
+            if _matches_never_cite(text):
+                vetter_stats["rejected_never_cite"] += 1
+                continue
+            raw_text = row["text"] or ""
+            supplied_quote = entry.get("quote")
+            if supplied_quote is not None:
+                if supplied_quote not in raw_text:
+                    vetter_stats["rejected_quote_not_in_chunk"] += 1
+                    continue
+                quote = supplied_quote
+            else:
+                quote = text[:400]
+            score = entry.get("score", 1.0)
+            vetter_records.append(
+                {
+                    "chunk_id": row["chunk_id"],
+                    "doc_id": row["doc_id"],
+                    "quote": quote,
+                    "score": float(score),
+                    "status": "active",
+                    "source": "vetter",
+                }
+            )
+        con.close()
+        if not vetter_records:
+            if fmt == "json":
+                typer.echo(
+                    json.dumps(
+                        {"ok": False, "error": "no_evidence", "stats": vetter_stats}
+                    )
+                )
+            else:
+                typer.echo(
+                    f"{concept}: no evidence appended from --from-ids  "
+                    f"stats={vetter_stats}"
+                )
+            raise typer.Exit(code=EXIT_VALIDATION)
+        parsed = [EvidenceRecord.model_validate(r) for r in vetter_records]
+        n = append_evidence(bundle, concept, parsed)
+        vetter_stats["appended"] = n
+        distinct_docs = len({r["doc_id"] for r in vetter_records})
+        if fmt == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "concept": concept,
+                        "appended": n,
+                        "distinct_docs": distinct_docs,
+                        "stats": vetter_stats,
+                    }
+                )
+            )
+            return
+        typer.echo(
+            f"{concept}: appended {n} records across {distinct_docs} docs "
+            f"(from-ids; rejected=nf{vetter_stats['rejected_not_found']}/"
+            f"bp{vetter_stats['rejected_boilerplate']}/"
+            f"xk{vetter_stats['rejected_excluded_kind']}/"
+            f"nc{vetter_stats['rejected_never_cite']}/"
+            f"short{vetter_stats['rejected_short']}/"
+            f"q{vetter_stats['rejected_quote_not_in_chunk']}/"
+            f"dup{vetter_stats['rejected_already_committed']})"
+        )
+        return
 
     def fetch_seed_chunks(doc_id: str, limit: int):
         return con.execute(

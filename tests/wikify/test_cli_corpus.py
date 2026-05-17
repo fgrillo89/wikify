@@ -257,6 +257,143 @@ def test_corpus_find_compact_includes_cites_column(tmp_path: Path) -> None:
     assert any(col.startswith("chunk:") for col in cols)
 
 
+def test_corpus_find_without_with_text_omits_text_field(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "2",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    items = json.loads(result.output)["items"]
+    assert items
+    for item in items:
+        assert "text" not in item
+        assert "text_truncated" not in item
+
+
+def test_corpus_find_with_text_inlines_chunk_text(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "2",
+            "--with-text",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    items = json.loads(result.output)["items"]
+    assert items
+    for item in items:
+        assert "text" in item
+        assert "atomic layer deposition" in item["text"]
+        assert item["text_truncated"] is False
+
+
+def test_corpus_find_with_text_compact_keeps_terse_output(tmp_path: Path) -> None:
+    corpus = _make_corpus(tmp_path / "c")
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "1",
+            "--with-text",
+            "--format", "compact",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Chunk text would contain the search phrase verbatim; the compact
+    # row must not echo it.
+    line = next(line for line in result.output.splitlines() if "chunk:" in line)
+    assert "atomic layer deposition" not in line
+
+
+def test_corpus_find_with_text_truncates_long_chunks(make_sqlite_corpus) -> None:
+    from wikify.models import Chunk, Document
+
+    long_body = "atomic layer deposition. " * 200  # ~5000 chars > 2000 cap.
+    doc = Document(
+        id="p", source_path="src/p.md", kind="md", title="P",
+        metadata={}, markdown_path="markdown/p.md",
+        image_dir="images/p/", n_chunks=1, n_tokens=500,
+    )
+    chunks = [
+        Chunk(
+            id="p__c0", doc_id="p", ord=0,
+            text=long_body,
+            char_span=(0, len(long_body)), section_path=["Body"],
+            section_type="body",
+        ),
+    ]
+    corpus = make_sqlite_corpus([(doc, chunks)])
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus", "find", "atomic layer",
+            "--corpus", str(corpus.root),
+            "--text", "--top-k", "1",
+            "--with-text",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    items = json.loads(result.output)["items"]
+    assert items
+    assert len(items[0]["text"]) == 2000
+    assert items[0]["text_truncated"] is True
+
+
+def test_fetch_chunk_texts_batches_large_id_lists(make_sqlite_corpus) -> None:
+    """Helper batches the IN list so it stays under SQLite's variable cap.
+
+    With 750 ids and the default 500-batch the helper must issue two
+    SELECTs and merge results; with the 999-variable default the
+    single-query implementation would still pass here, but the test
+    pins the batched path and protects against a future regression to
+    one oversize query.
+    """
+    from wikify.cli.corpus import _CHUNK_TEXT_BATCH, _fetch_chunk_texts
+    from wikify.models import Chunk, Document
+
+    n_chunks = 750
+    doc = Document(
+        id="p", source_path="src/p.md", kind="md", title="P",
+        metadata={}, markdown_path="markdown/p.md",
+        image_dir="images/p/", n_chunks=n_chunks, n_tokens=n_chunks * 5,
+    )
+    chunks = [
+        Chunk(
+            id=f"p__c{i:04d}", doc_id="p", ord=i,
+            text=f"chunk {i} text body",
+            char_span=(i * 20, i * 20 + 20),
+            section_path=["Body"], section_type="body",
+        )
+        for i in range(n_chunks)
+    ]
+    corpus = make_sqlite_corpus([(doc, chunks)])
+
+    ids = [c.id for c in chunks]
+    # Sanity: the test only exercises the batched path if the input
+    # actually exceeds one batch.
+    assert len(ids) > _CHUNK_TEXT_BATCH
+
+    out = _fetch_chunk_texts(corpus, ids)
+    assert len(out) == n_chunks
+    # Spot-check first, middle, and last to confirm merge correctness.
+    assert out["p__c0000"] == "chunk 0 text body"
+    assert out["p__c0374"] == "chunk 374 text body"
+    assert out["p__c0749"] == "chunk 749 text body"
+
+
 def test_corpus_find_exposes_and_excludes_caption_kind(make_sqlite_corpus) -> None:
     from wikify.models import Chunk, Document
 
