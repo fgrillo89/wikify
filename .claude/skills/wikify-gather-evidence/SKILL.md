@@ -317,38 +317,35 @@ caller must hold the concept claim (`wikify work claim <slug>`) or
 the orchestrator must serialize per slug. `evidence.jsonl` is not
 locked atomically across writers; concurrent commits can interleave.
 
-## Step 7: sanity-check the dossier
+## Step 7: return a terse summary to the caller
 
-```bash
-wikify draft build <slug> \
-  --task create --corpus <corpus> --run <run> \
-  --model-id <writer-model> --tier M
+**Your final response MUST be ONLY this JSON object, ≤300 tokens
+total.** Do not include decision rows, candidate dumps, full quotes,
+or narrative report in the final response. They belong in your
+internal reasoning, not in the message that returns to the parent
+agent. Returning long reports to the parent destroys its context
+budget and is the reason this contract exists.
+
+```json
+{
+  "slug": "<slug>",
+  "appended": <int>,
+  "distinct_docs": <int>,
+  "iterations": <int 1..max_query_rounds>,
+  "stop_reason": "quota_met" | "max_rounds" | "pool_exhausted" | "error",
+  "definition_chunk": true | false,
+  "score_tiers": <int distinct score values across the committed set>,
+  "errors": []
+}
 ```
 
-Read `work/concepts/<slug>/dossier.md`. Verify:
+If a step errored (commit rejected ids, malformed JSON, CLI failure),
+populate `errors` with one-line strings and set `stop_reason` to
+`"error"`. The caller decides whether to retry.
 
-- evidence reads as on-topic;
-- methods + results represented when available;
-- no obvious noise (byline / DOI / acknowledgments) survived;
-- distinct docs and total active records are within the quota window.
-
-If a problem is visible, mark the bad ids as `status="archived"` via
-a follow-up `wikify work add evidence` call rather than mutating
-the JSONL by hand. Then re-run this skill to top up.
-
-## Step 8: telemetry
-
-The vetter is itself a metered agent invocation. After the call
-returns token usage, record it:
-
-```bash
-wikify run record-call --run <run> --role vetter \
-  --model-id <vetter-model> --tier S \
-  --tokens-in <n> --tokens-out <n> --stage evidence
-```
-
-If the controlling workflow already records the call on the vetter's
-behalf, skip this step.
+Sanity-check and telemetry are the orchestrator's job, not yours. The
+orchestrator regenerates the dossier with `wikify draft build` and
+records the vetter call via `wikify run record-call` after you return.
 
 ## Hard rules
 
@@ -370,3 +367,6 @@ behalf, skip this step.
 - Do not add seeds to the work card; seeds come from the extractor.
 - Person pages need evidence chunks that quote actual contributions;
   author bylines alone do not count.
+- Final response is the Step 7 JSON, ≤300 tokens. Returning a long
+  report to the parent agent inflates its context budget and breaks
+  baseline at scale.

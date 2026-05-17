@@ -35,6 +35,11 @@ Minimum complete baseline:
 - Do not choose the article list by reading sampled titles only.
 - Do not bypass `concept_suggestions.jsonl` for the initial concept set.
 - Do not use graph-RAG, summaries, rerankers, or query refinement.
+- Do not call `wikify work build-evidence <slug>` directly (without
+  `--from-ids`). That is the pre-vetter, seed-first-N-by-ord path which
+  ships byline / references-list / off-topic noise into the dossier.
+  Evidence gathering goes through the `wikify-gather-evidence` vetter
+  subagent (Step 8).
 - Do not repair committed pages with ad hoc scripts as the normal path.
   Fix the skill, evidence, draft, or writer output and re-run the gate.
 - Do not call cost curves valid while `type="call"` events are absent.
@@ -45,8 +50,9 @@ Minimum complete baseline:
 - Sample PageRank weight: 0.7.
 - Target articles: 10-20.
 - Target people: 3-5 when author metadata exists.
-- Evidence per page: gather 20-30 candidates, then keep 12-18 active
-  records after quality filtering.
+- Evidence per page: vetter quota 14 records, max 3 gap-driven query
+  rounds. The vetter handles candidate sourcing internally — do not
+  pre-set top-k or per-doc cap from this layer.
 - Retrieval: `corpus find --rank all`.
 - Writer tier: M.
 - Extractor tier: S.
@@ -125,22 +131,46 @@ Minimum complete baseline:
    wikify work add concept "<Display Name>" --kind person --aliases '["author:<key>"]'
    ```
 
-8. Gather evidence per concept. Use the CLI: it consumes the extractor's
-   `seed_doc_handles` as a precision prior, then tops up via
-   `corpus find` to reach the quota, applying the boilerplate filter,
-   never-cite regex, and per-doc cap deterministically.
+8. Gather evidence per concept via the `wikify-gather-evidence` skill.
+
+   For each concept slug, spawn ONE sonnet-class subagent that runs
+   the skill. The skill is in `.claude/skills/wikify-gather-evidence/`;
+   read it once at start so you understand the contract.
+
+   Spawn pattern (one Task per slug, serial — no parallel vetters; one
+   vetter at a time keeps the orchestrator's context predictable):
+
+   - Subagent type: sonnet
+   - Skill: `wikify-gather-evidence`
+   - Inputs: `slug`, `run=<bundle>`, `corpus=<corpus>`, `quota=14`,
+     `max_query_rounds=3`
+   - Expected return: a single JSON object only (`{slug, appended,
+     distinct_docs, iterations, stop_reason, definition_chunk,
+     score_tiers, errors}`). If the vetter returns a long report
+     instead, the skill contract is being violated — flag and stop.
+
+   The vetter reads every candidate chunk, applies score+quote+reject
+   discipline, and commits the accepted ids via `wikify work
+   build-evidence --from-ids @-`. It writes the curated `evidence.jsonl`
+   for the slug. The orchestrator (you) does NOT run `build-evidence`
+   directly — that's the pre-vetter path which produces the noisy
+   dossiers we built the vetter to eliminate.
+
+   After each vetter returns, record the call:
 
    ```bash
-   wikify work build-evidence <slug> \
-     --corpus <corpus> --run <bundle> \
-     --target 14 --top-k 40 --per-doc-cap 3
+   wikify run record-call --run <bundle> --role vetter \
+     --model-id claude-sonnet-4-6 --tier M \
+     --tokens-in <n> --tokens-out <n> --stage evidence
    ```
 
-   Articles: ≥12-14 active records across ≥5 source docs. Person pages
-   reuse the same command; the seed pass naturally pulls from the
-   author's own papers when those handles are in `seed_doc_handles`.
-   Persons require grounded research contributions / publications;
-   never invent biography.
+   Targets: articles ≥10-14 appended across ≥5 distinct docs, at least
+   one definition chunk per article slug. Person pages require grounded
+   research contributions / publications; never invent biography.
+
+   If the vetter returns `stop_reason="error"` or `appended < 6`, mark
+   the slug as failed and continue — do not retry the same slug more
+   than once.
 
 9. Cluster concepts, claim, draft, write:
 
