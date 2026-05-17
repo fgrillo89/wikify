@@ -64,6 +64,9 @@ def plan_caption_reassignment(
     Pairing rule, per page in walk order: each banner-with-caption pairs
     to the first caption-less real-sized asset that follows it on the
     same page. Items already used as a banner or target are not reused.
+    Items with ``page is None`` are never paired (a missing page means
+    Docling could not localize the asset, so we cannot assert same-page
+    co-occurrence with anything else).
     """
     pages: dict[object, list[int]] = {}
     for idx, (_key, page, _w, _h, _cap) in enumerate(items):
@@ -74,7 +77,9 @@ def plan_caption_reassignment(
         for pos, src_idx in enumerate(idx_list):
             if src_idx in used:
                 continue
-            _key, _page, w, h, cap = items[src_idx]
+            _key, page, w, h, cap = items[src_idx]
+            if page is None:
+                continue
             if not (cap or "").strip():
                 continue
             if w is None or h is None:
@@ -84,7 +89,9 @@ def plan_caption_reassignment(
             for tgt_idx in idx_list[pos + 1 :]:
                 if tgt_idx in used:
                     continue
-                _tkey, _tpage, tw, th, tcap = items[tgt_idx]
+                _tkey, tpage, tw, th, tcap = items[tgt_idx]
+                if tpage is None:
+                    continue
                 if (tcap or "").strip():
                     continue
                 if tw is None or th is None:

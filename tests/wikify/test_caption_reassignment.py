@@ -1,8 +1,19 @@
 """Caption reassignment planner + Docling parser hook."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
+from PIL import Image
+from typer.testing import CliRunner
+
+from wikify.api import Corpus
+from wikify.cli import app
 from wikify.corpus.images_index import is_decoration_dims, plan_caption_reassignment
+from wikify.corpus.store import Store
 from wikify.ingest.parsers.docling import _reassign_misbound_captions
 from wikify.ingest.parsers.registry import RawImage
+from wikify.models import Chunk, Document
 
 
 def test_is_decoration_dims_short_side():
@@ -76,6 +87,37 @@ def test_plan_caption_reassignment_skips_missing_dims():
     assert plan_caption_reassignment(items) == []
 
 
+def test_plan_caption_reassignment_skips_none_page_source():
+    # banner has page=None; real has page=5. A None-page source must
+    # never pair with a known-page target.
+    items = [
+        ("banner", None, 237, 98, "Figure 9. ..."),
+        ("real", 5, 1474, 779, ""),
+    ]
+    assert plan_caption_reassignment(items) == []
+
+
+def test_plan_caption_reassignment_skips_none_page_target():
+    # banner has page=5; real has page=None. A known-page banner must
+    # never pair with a None-page target.
+    items = [
+        ("banner", 5, 237, 98, "Figure 9. ..."),
+        ("real", None, 1474, 779, ""),
+    ]
+    assert plan_caption_reassignment(items) == []
+
+
+def test_plan_caption_reassignment_two_none_page_items_do_not_pair():
+    # Both items have page=None: the previous behaviour bucketed them
+    # together under the None key and paired them as if same-page,
+    # which is wrong. They must not pair.
+    items = [
+        ("banner", None, 237, 98, "Figure 9. ..."),
+        ("real", None, 1474, 779, ""),
+    ]
+    assert plan_caption_reassignment(items) == []
+
+
 def test_reassign_misbound_captions_drops_banner_and_carries_metadata():
     images = [
         RawImage(data=b"x", page=5, width=237, height=98, caption="Figure 9. ...",
@@ -110,3 +152,117 @@ def test_reassign_misbound_captions_preserves_order():
     # banner at index 1 should drop; remaining order: a, c (now captioned), d
     assert [im.data for im in out] == [b"a", b"c", b"d"]
     assert out[1].caption == "Figure 5. ..."
+
+
+# ---------------------------------------------------------------------------
+# CLI: reclassify-figure-captions must refresh graph_edges (no stale targets)
+# ---------------------------------------------------------------------------
+
+
+def _write_png(path: Path, width: int, height: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, height), color=(200, 200, 200)).save(path, "PNG")
+
+
+def _seed_reclassify_fixture(corpus: Corpus) -> tuple[str, str, str, str]:
+    """Build a minimal corpus with a banner-with-caption + real uncaptioned
+    asset on the same page, a chunk that mentions ``Fig. 1``, and
+    pre-populated graph_edges that point at the banner.
+
+    Returns ``(doc_id, banner_asset_id, real_asset_id, chunk_id)``.
+    """
+    doc_id = "paper_b"
+    banner_id = f"{doc_id}/Figure_01_banner"
+    real_id = f"{doc_id}/Figure_01"
+    chunk_id = f"{doc_id}__c0000"
+    banner_rel = f"images/{doc_id}/Figure_01_banner.png"
+    real_rel = f"images/{doc_id}/Figure_01.png"
+    _write_png(corpus.root / banner_rel, 237, 98)         # decoration dims
+    _write_png(corpus.root / real_rel, 1474, 779)         # real figure dims
+
+    store = Store(corpus.sqlite_path)
+    try:
+        store.upsert_document(Document(
+            id=doc_id, source_path=f"/p/{doc_id}.pdf", kind="pdf",
+            title="Banner test", metadata={},
+            markdown_path=f"markdown/{doc_id}.md",
+            image_dir=f"images/{doc_id}/",
+        ))
+        store.upsert_chunks([Chunk(
+            id=chunk_id, doc_id=doc_id, ord=0,
+            text="See Fig. 1 for the device schematic.",
+            char_span=(0, 36), section_path=["Body"], section_type="body",
+        )])
+        store.upsert_assets(doc_id, [
+            {"id": banner_id, "type": "figure", "page": 5, "ord": 0,
+             "path": banner_rel, "caption": "Figure 1. Real caption text."},
+            {"id": real_id, "type": "figure", "page": 5, "ord": 1,
+             "path": real_rel, "caption": ""},
+        ])
+        # Pre-populate the chunk_assets + graph_edges to simulate the
+        # pre-reclassification state where the chunk's "Fig. 1" reference
+        # was wired to the banner asset.
+        store.upsert_chunk_assets(doc_id, [
+            {"chunk_id": chunk_id, "asset_id": banner_id, "relation": "near",
+             "confidence": 0.9},
+        ])
+        store.con.commit()
+    finally:
+        store.close()
+    (corpus.markdown_dir / f"{doc_id}.md").write_text(
+        "# Banner test\n\nSee Fig. 1.\n", encoding="utf-8",
+    )
+    corpus.manifest_path.write_text("{}", encoding="utf-8")
+    return doc_id, banner_id, real_id, chunk_id
+
+
+def test_reclassify_figure_captions_refreshes_graph_edges(tmp_path: Path) -> None:
+    """After reassignment, graph_edges must not reference the dropped
+    banner asset_id; it must reference the real asset_id with the right
+    relation. Regression: prior to upsert_asset_edges being called,
+    chunk->near->banner and document->has_asset->banner persisted.
+    """
+    corpus = Corpus(root=tmp_path / "c")
+    corpus.ensure()
+    doc_id, banner_id, real_id, chunk_id = _seed_reclassify_fixture(corpus)
+
+    # Pre-condition: graph_edges DO reference the banner.
+    pre = Store(corpus.sqlite_path)
+    try:
+        rows = list(pre.con.execute(
+            "SELECT src_id, dst_id, kind FROM graph_edges WHERE dst_id=?",
+            (banner_id,),
+        ))
+        assert rows, "fixture must seed banner-pointing edges"
+    finally:
+        pre.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["corpus", "metrics", "reclassify-figure-captions",
+         "--corpus", str(corpus.root)],
+    )
+    assert result.exit_code == 0, result.output
+
+    post = Store(corpus.sqlite_path)
+    try:
+        banner_edges = list(post.con.execute(
+            "SELECT src_type, src_id, kind, dst_type, dst_id "
+            "FROM graph_edges WHERE dst_id=?",
+            (banner_id,),
+        ))
+        real_edges = list(post.con.execute(
+            "SELECT src_type, src_id, kind, dst_type, dst_id "
+            "FROM graph_edges WHERE dst_id=?",
+            (real_id,),
+        ))
+    finally:
+        post.close()
+
+    # No stale targets: the banner is gone from graph_edges entirely.
+    assert banner_edges == [], banner_edges
+    # And the real asset picked up the chunk->near and document->has_asset.
+    relations = {(r[0], r[2]) for r in real_edges}
+    assert ("document", "has_asset") in relations
+    assert ("chunk", "near") in relations
