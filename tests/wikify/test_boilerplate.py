@@ -293,3 +293,31 @@ def test_received_accepted_published_lowercase_verbs_do_not_trip() -> None:
         "the first protocol."
     )
     assert is_boilerplate(text) is False
+
+
+def test_received_mid_sentence_does_not_trip() -> None:
+    """Title-cased 'Received'/'Accepted'/'Available online' mid-sentence is prose.
+
+    Real journal metadata always places these markers at the start of a
+    line ("Received: 25 March 2024"). The single-stage patterns are
+    anchored to start-of-line so prose like "The lab received 25 March
+    2024 the new reagent ..." (Title-case at sentence start) does not
+    false-positive against the case-sensitive variant.
+    """
+    sentences = (
+        "The lab Received 25 March 2024 the new reagent shipment and "
+        "began calibration the following week.",
+        "Editors Accepted 12 May 2024 the revised submission after "
+        "two rounds of peer review.",
+        "Repositories Available online 03 June 2024 the supplementary "
+        "datasets for community use.",
+    )
+    for text in sentences:
+        assert is_boilerplate(text) is False, text
+
+
+def test_received_at_line_start_still_flags() -> None:
+    """Anchoring did not regress the real metadata case."""
+    assert is_boilerplate("Received: 25 March 2024") is True
+    assert is_boilerplate("Accepted 10 May 2024") is True
+    assert is_boilerplate("Available online 03 June 2024") is True

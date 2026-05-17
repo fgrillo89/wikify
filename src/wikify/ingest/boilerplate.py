@@ -108,10 +108,14 @@ DEFINITIVE_BOILERPLATE_MARKERS_CASE_SENSITIVE: tuple[str, ...] = (
     # Journal "Article history / Received / Accepted / Available online".
     # Always Capitalized in real journal metadata; lowercase forms like
     # "the PI received 25 March 2024 funding ..." are legitimate prose.
+    # Anchored to start-of-line (with MULTILINE flag) so a Title-Case
+    # word appearing mid-prose ("The lab received 25 March 2024 the new
+    # reagent ...") does not false-positive on the all-caps-vs-prose
+    # boundary.
     r"\bArticle\s+history\b",
-    r"\bReceived\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
-    r"\bAccepted\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
-    r"\bAvailable\s+online\s+\d",
+    r"^\s*Received\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"^\s*Accepted\s*:?\s*\d?\d\s+\w+\s+\d{4}\b",
+    r"^\s*Available\s+online\s+\d",
     # Frontiers-style editorial-board header blocks at the top of an article.
     # Calibrated against the Kumar 2025 (Front. Nanotechnol.) chunk c0000
     # which is verbatim "EDITED BY\nCarlo Ricciardi,...\nREVIEWED BY\n...".

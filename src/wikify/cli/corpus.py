@@ -1430,6 +1430,7 @@ def cmd_metrics_reclassify_figure_captions(
 
     from ..corpus.chunks import list_documents
     from ..corpus.images_index import plan_caption_reassignment
+    from ..corpus.store.assets import upsert_asset_edges
     from ..corpus.store.routing import open_store
     from ..ingest.images import link_chunks_to_images
     from ..models import Chunk, DocImage
@@ -1572,6 +1573,10 @@ def cmd_metrics_reclassify_figure_captions(
                             "VALUES (?, ?, ?, ?)",
                             rows,
                         )
+                    # Refresh document/chunk -> asset graph edges so
+                    # traversal does not return stale targets pointing
+                    # at the just-dropped banner asset_ids.
+                    upsert_asset_edges(store.con, doc_id)
             except _sqlite3.Error as exc:
                 cli_error(
                     EXIT_VALIDATION,
