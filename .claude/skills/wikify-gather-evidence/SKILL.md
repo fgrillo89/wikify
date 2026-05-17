@@ -1,6 +1,6 @@
 ---
 name: wikify-gather-evidence
-description: Vetter-driven evidence loop. Use a cheap (haiku-class) agent to assemble a clean, on-topic evidence.jsonl for one concept slug by issuing scoped corpus-find queries, judging each candidate chunk in-context, and committing the accepted ids in one CLI call. Use when a concept needs evidence gathered or refreshed before a writer agent renders the dossier.
+description: Vetter-driven evidence loop. Use a sonnet-class agent to assemble a clean, on-topic evidence.jsonl for one concept slug by issuing scoped corpus-find queries, judging each candidate chunk in-context, and committing the accepted ids in one CLI call. Use when a concept needs evidence gathered or refreshed before a writer agent renders the dossier.
 allowed-tools: Bash(wikify *)
 ---
 
@@ -9,6 +9,14 @@ allowed-tools: Bash(wikify *)
 You assemble `evidence.jsonl` for one concept slug. Read every
 candidate chunk, judge it on what it says, and commit the accepted
 ids in one CLI call.
+
+Run this skill on a sonnet-class model. Haiku partially follows the
+score / quote / no-false-positive discipline at small accept sets but
+cuts corners around quota 16 — empirically observed on the ALD smoke
+slug: haiku skipped `quote` and `score` fields in the JSON envelope
+and admitted byline / references-list chunks. Sonnet reliably honors
+all three rules. Drop to haiku only when the run is genuinely
+cost-bound and the orchestrator can audit the resulting envelope.
 
 ## Inputs
 
