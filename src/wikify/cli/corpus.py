@@ -804,28 +804,41 @@ def _warn_if_all_pagerank_zero(
 
 _CHUNK_TEXT_MAX = 2000
 
+# Stay well under SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999 on
+# the SQLite shipped with Python's stdlib through 3.12); batch the IN
+# list rather than emitting a single oversize query.
+_CHUNK_TEXT_BATCH = 500
+
 
 def _fetch_chunk_texts(corpus: Corpus, chunk_ids: list[str]) -> dict[str, str]:
-    """Batch-fetch chunk bodies in one SQLite round-trip.
+    """Batch-fetch chunk bodies in batched SQLite round-trips.
 
     Returns a ``{chunk_id: text}`` map for every id that exists; missing
-    ids are simply absent from the result.
+    ids are simply absent from the result. The IN-list is chunked at
+    ``_CHUNK_TEXT_BATCH`` rows per query to avoid
+    ``OperationalError: too many SQL variables`` on large result sets.
     """
     import sqlite3
 
     ids = [cid for cid in chunk_ids if cid]
     if not ids:
         return {}
+    out: dict[str, str] = {}
     con = sqlite3.connect(str(corpus.sqlite_path))
     try:
-        placeholders = ",".join("?" * len(ids))
-        rows = con.execute(
-            f"SELECT chunk_id, text FROM chunks WHERE chunk_id IN ({placeholders})",
-            ids,
-        ).fetchall()
+        for start in range(0, len(ids), _CHUNK_TEXT_BATCH):
+            batch = ids[start : start + _CHUNK_TEXT_BATCH]
+            placeholders = ",".join("?" * len(batch))
+            rows = con.execute(
+                f"SELECT chunk_id, text FROM chunks "
+                f"WHERE chunk_id IN ({placeholders})",
+                batch,
+            ).fetchall()
+            for cid, txt in rows:
+                out[str(cid)] = txt or ""
     finally:
         con.close()
-    return {str(cid): (txt or "") for cid, txt in rows}
+    return out
 
 
 def _emit_chunk_rows(

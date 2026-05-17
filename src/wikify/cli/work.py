@@ -448,6 +448,21 @@ def _matches_never_cite(text: str) -> bool:
     )
 
 
+# Section kinds the vetter excludes structurally via corpus-find
+# --exclude-kind flags. The --from-ids commit path must enforce the
+# same blacklist so a manually-supplied references / caption / etc.
+# chunk cannot slip in past the boilerplate + length filters.
+_FROM_IDS_EXCLUDED_KINDS = frozenset({
+    "references",
+    "acknowledgments",
+    "appendix",
+    "figure",
+    "table",
+    "caption",
+    "boilerplate",
+})
+
+
 def _resolve_doc_id(corpus, short_or_full: str) -> str | None:
     """Map ``doc:<short>`` / ``<short>`` / full id to the full doc_id."""
     from ..corpus.queries import get_doc
@@ -551,12 +566,21 @@ def cmd_build_evidence(
                 error="no_ids_provided",
                 message="--from-ids requires at least one chunk_id",
             )
-        committed = {r.chunk_id for r in read_evidence(bundle, concept)}
+        # Only currently-active records block a fresh commit. Archived
+        # records sit in the ledger as history; the same chunk_id may be
+        # re-accepted (a fresh "active" row supersedes archived ones at
+        # dedup time).
+        committed = {
+            r.chunk_id
+            for r in read_evidence(bundle, concept)
+            if r.status == "active"
+        }
         vetter_stats = {
             "ids_total": len(ordered_ids),
             "appended": 0,
             "rejected_not_found": 0,
             "rejected_boilerplate": 0,
+            "rejected_excluded_kind": 0,
             "rejected_never_cite": 0,
             "rejected_short": 0,
             "rejected_already_committed": 0,
@@ -572,6 +596,10 @@ def cmd_build_evidence(
                 continue
             if row["is_boilerplate"]:
                 vetter_stats["rejected_boilerplate"] += 1
+                continue
+            section_type = (row["section_type"] or "").lower()
+            if section_type in _FROM_IDS_EXCLUDED_KINDS:
+                vetter_stats["rejected_excluded_kind"] += 1
                 continue
             text = (row["text"] or "").strip()
             if len(text) < min_chunk_chars:
@@ -625,6 +653,7 @@ def cmd_build_evidence(
             f"{concept}: appended {n} records across {distinct_docs} docs "
             f"(from-ids; rejected=nf{vetter_stats['rejected_not_found']}/"
             f"bp{vetter_stats['rejected_boilerplate']}/"
+            f"xk{vetter_stats['rejected_excluded_kind']}/"
             f"nc{vetter_stats['rejected_never_cite']}/"
             f"short{vetter_stats['rejected_short']}/"
             f"dup{vetter_stats['rejected_already_committed']})"

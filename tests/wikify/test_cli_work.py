@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wikify.cli import app
@@ -362,6 +363,41 @@ def _build_evidence_bundle(tmp_path: Path):
             text="short", char_span=(0, 5), section_path=["Body"],
             section_type="body",
         ),
+        Chunk(
+            id="paper_x__c0004", doc_id="paper_x", ord=4,
+            text=body, char_span=(0, len(body)),
+            section_path=["References"], section_type="references",
+        ),
+        Chunk(
+            id="paper_x__c0005", doc_id="paper_x", ord=5,
+            text=body, char_span=(0, len(body)),
+            section_path=["Figure"], section_type="figure",
+        ),
+        Chunk(
+            id="paper_x__c0006", doc_id="paper_x", ord=6,
+            text=body, char_span=(0, len(body)),
+            section_path=["Caption"], section_type="caption",
+        ),
+        Chunk(
+            id="paper_x__c0007", doc_id="paper_x", ord=7,
+            text=body, char_span=(0, len(body)),
+            section_path=["Acknowledgments"], section_type="acknowledgments",
+        ),
+        Chunk(
+            id="paper_x__c0008", doc_id="paper_x", ord=8,
+            text=body, char_span=(0, len(body)),
+            section_path=["Appendix"], section_type="appendix",
+        ),
+        Chunk(
+            id="paper_x__c0009", doc_id="paper_x", ord=9,
+            text=body, char_span=(0, len(body)),
+            section_path=["Table"], section_type="table",
+        ),
+        Chunk(
+            id="paper_x__c0010", doc_id="paper_x", ord=10,
+            text=body, char_span=(0, len(body)),
+            section_path=["Body"], section_type="body",
+        ),
     ]
     corpus = Corpus(root=corpus_root)
     corpus.ensure()
@@ -382,6 +418,13 @@ def _build_evidence_bundle(tmp_path: Path):
         "ok_b": "paper_x__c0001",
         "boilerplate": "paper_x__c0002",
         "short": "paper_x__c0003",
+        "references": "paper_x__c0004",
+        "figure": "paper_x__c0005",
+        "caption": "paper_x__c0006",
+        "acknowledgments": "paper_x__c0007",
+        "appendix": "paper_x__c0008",
+        "table": "paper_x__c0009",
+        "body": "paper_x__c0010",
     }
 
 
@@ -531,3 +574,128 @@ def test_build_evidence_from_ids_mixed_valid_invalid(tmp_path: Path) -> None:
     assert stats["ids_total"] == 4  # dedupe of ok_a brings it down from 5
     assert stats["rejected_boilerplate"] == 1
     assert stats["rejected_not_found"] == 1
+
+
+def test_from_ids_rejects_references_section_chunk(tmp_path: Path) -> None:
+    """A manually-supplied references chunk must be blocked structurally."""
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["references"],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "no_evidence"
+    assert data["stats"]["rejected_excluded_kind"] == 1
+    assert data["stats"]["appended"] == 0
+
+
+@pytest.mark.parametrize(
+    "kind_key",
+    ["figure", "caption", "acknowledgments", "appendix", "table", "boilerplate"],
+)
+def test_from_ids_rejects_figure_caption_acknowledgments(
+    tmp_path: Path, kind_key: str
+) -> None:
+    """Every structural-blacklist kind is rejected via --from-ids.
+
+    ``boilerplate`` is included for completeness: the row has both
+    ``is_boilerplate=True`` and ``section_type='boilerplate'``, so the
+    earlier ``is_boilerplate`` guard wins and increments
+    ``rejected_boilerplate`` rather than ``rejected_excluded_kind`` —
+    asserted explicitly below to lock that ordering down.
+    """
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids[kind_key],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    stats = data["stats"]
+    assert stats["appended"] == 0
+    if kind_key == "boilerplate":
+        assert stats["rejected_boilerplate"] == 1
+        assert stats["rejected_excluded_kind"] == 0
+    else:
+        assert stats["rejected_excluded_kind"] == 1
+        assert stats["rejected_boilerplate"] == 0
+
+
+def test_from_ids_accepts_normal_body_chunk(tmp_path: Path) -> None:
+    """Regression guard: ``section_type='body'`` is not in the blacklist."""
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["body"],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    assert data["stats"]["rejected_excluded_kind"] == 0
+
+
+def test_from_ids_archived_does_not_block_fresh_commit(tmp_path: Path) -> None:
+    """An archived record in the ledger must not block a fresh active commit.
+
+    The ledger is append-only-with-status-tracking: superseded records
+    persist as ``status='archived'``. A vetter re-accepting the same
+    chunk_id should produce a new active row, not be filtered out.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    # Seed the ledger with an archived record for ok_a.
+    bundle_api = BundleApi.open(bundle)
+    append_evidence(
+        bundle_api,
+        "atomic-layer-deposition",
+        [
+            EvidenceRecord(
+                chunk_id=ids["ok_a"],
+                doc_id="paper_x",
+                quote="historical quote",
+                score=1.0,
+                status="archived",
+                source="vetter",
+            )
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["ok_a"],
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    assert data["stats"]["rejected_already_committed"] == 0

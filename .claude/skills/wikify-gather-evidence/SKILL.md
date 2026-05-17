@@ -106,6 +106,55 @@ Maintain two ledgers in-context: `accepted_ids` (committed once at the
 end) and `rejected` (slug + chunk_id + one-line reason; per-run only,
 never persisted).
 
+### Section-mix target
+
+Aim for evidence that covers at least introduction + methods + results
+across the accepted set — not 14 introductions. After each accept,
+scan the accepted-so-far set's `section_type` distribution; when
+choosing between two marginal candidates, prefer the one whose
+`section_type` is underrepresented. An accepted set with five
+introductions and zero methods is a worse dossier than one with three
+introductions, one methods, and one results.
+
+### Accept / reject examples
+
+The four examples below are real chunks from the ALD baseline run.
+They are calibrated against the same accept rule. Use them to anchor
+borderline calls.
+
+**Accept — on-topic, methods-grade ALD discussion** (Goul 2022, e7-equivalent).
+Chunk text opens "Continuous device downsizing and circuit complexity
+have motivated atomic-scale tuning of memristors. Herein, we report
+atomically tunable Pd/M1/M2/Al ultrathin (<2.5 nm M1/M2 bilayer oxide
+thickness) memristors using in vacuo atomic layer deposition by
+controlled insertion of MgO atomic layers …". Verdict: accept.
+Reason: explicit in vacuo ALD process detail, on-topic for the ALD
+page.
+
+**Reject — editorial header** (Kumar 2025, e4-equivalent). Chunk text
+is "EDITED BY / Carlo Ricciardi, / Polytechnic University of Turin,
+Italy / REVIEWED BY / Itir Koymen, …". Verdict: reject. Reason: pure
+editorial metadata; survives the boilerplate filter only because the
+upstream flag missed it — vetter must catch it.
+
+**Reject — author byline + abstract** (Li 2018, e1-equivalent). Chunk
+text is "Can Li 1 , Daniel Belkin1,4, Yunning Li 1 … Abstract—Memristors
+with tunable non-volatile resistance states offer the potential for
+in-memory computing that mitigates the von-Neumann bottleneck. We build
+a large scale memristor array by integrating a transistor array with
+Ta/HfO2 memristors …". Verdict: reject. Reason: byline-and-abstract
+chunk where the ALD reference is incidental; no concrete ALD claim a
+writer could cite. Accept the same paper's later body chunk that
+describes the HfO2 ALD step explicitly (e3-equivalent), not this one.
+
+**Marginal accept — device fab chunk that names ALD as one step**
+(Gao 2014, e9-equivalent). Chunk discusses 3D oxide-based memristor
+fabrication, with ALD referenced as the HfO2 deposition step among
+others. Verdict: accept when a hafnium-oxide cluster sibling is in
+scope. Reason: the cluster-relevance test — "could a writer covering
+a sibling cite this chunk?" — passes; the same chunk would be a
+borderline reject if ALD were the only concept in the cluster.
+
 ## Step 4: stop conditions
 
 Stop when **any** of:
@@ -139,6 +188,16 @@ addressing the cause.
 
 The vetter does not write `evidence.jsonl` directly. Only
 `build-evidence` writes that file.
+
+### Same-slug concurrency
+
+If another agent might be vetting the same slug concurrently, the
+caller must hold the concept claim (`wikify work claim <slug>`) or
+the orchestrator must serialize per slug. The CLI does not lock
+`evidence.jsonl` atomically across multiple writers: `wikify work
+build-evidence` reads the ledger, computes a new set, and appends —
+rapid concurrent commits could interleave records and double-write a
+chunk_id. Single-writer-per-slug is the contract.
 
 ## Step 6: sanity-check the dossier
 
