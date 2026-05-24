@@ -1056,6 +1056,16 @@ def _replace_selected_figure_placeholders(
             shutil.copy2(src, dest)
         url = ("../" * page_url_depth) + f"assets/figures/{dest_name}"
         caption = escape(str(fig.get("caption") or ""))
+        marker = str(fig.get("source_marker") or "").strip()
+        if marker:
+            # python-markdown's footnotes extension anchors definitions
+            # at ``fn:<id>``; the figure-citation link targets that so a
+            # reader can jump from the caption to the source quote.
+            caption += (
+                f'<sup class="figure-citation">'
+                f'<a href="#fn:{escape(marker)}">[{escape(marker)}]</a>'
+                f"</sup>"
+            )
         alt = escape(str(fig.get("figure_id") or anchor))
         return (
             f'\n\n<figure class="wiki-figure" id="figure-{escape(anchor)}">'
