@@ -149,6 +149,143 @@ def test_run_record_call_appends_cost_event(tmp_path: Path) -> None:
     assert events[-1]["data"]["input_tokens"] == 100
 
 
+def _init_bundle(tmp_path: Path) -> Path:
+    bundle = _bundle_dir(tmp_path)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)],
+    )
+    return bundle
+
+
+def _call_events(bundle: Path) -> list[dict]:
+    out = runner.invoke(
+        app,
+        [
+            "run", "list", "events",
+            "--run", str(bundle),
+            "--type", "call",
+            "--tail", "0",
+            "--format", "json",
+        ],
+    )
+    return json.loads(out.output)
+
+
+def test_record_calls_batch_happy(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    lines = [
+        json.dumps(
+            {
+                "role": "writer",
+                "model_id": "claude-sonnet-4-6",
+                "tier": "M",
+                "tokens_in": 100 + i,
+                "tokens_out": 25 + i,
+                "stage": "write",
+                "concept_id": f"c-{i}",
+            }
+        )
+        for i in range(5)
+    ]
+    stdin = "\n".join(lines) + "\n"
+    result = runner.invoke(
+        app,
+        ["run", "record-calls", "--run", str(bundle), "--from-stdin"],
+        input=stdin,
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["ok"] is True
+    assert summary["appended"] == 5
+    assert summary["rejected"] == 0
+    assert summary["errors"] == []
+    events = _call_events(bundle)
+    assert len(events) == 5
+    # Order preserved.
+    assert [e["concept_id"] for e in events] == [f"c-{i}" for i in range(5)]
+    assert events[0]["data"]["input_tokens"] == 100
+    assert events[-1]["data"]["output_tokens"] == 29
+    assert events[0]["data"]["role"] == "writer"
+
+
+def test_record_calls_mixed_validity(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    good = [
+        json.dumps(
+            {
+                "role": "writer",
+                "model_id": "claude-sonnet-4-6",
+                "tier": "M",
+                "tokens_in": 10,
+                "tokens_out": 5,
+                "stage": "write",
+            }
+        )
+        for _ in range(3)
+    ]
+    bad_missing = json.dumps(
+        {
+            "role": "writer",
+            "model_id": "claude-sonnet-4-6",
+            "tier": "M",
+            "tokens_in": 10,
+            # missing tokens_out and stage
+        }
+    )
+    bad_json = "{not-json"
+    stdin = "\n".join([good[0], bad_missing, good[1], bad_json, good[2]]) + "\n"
+    result = runner.invoke(
+        app,
+        ["run", "record-calls", "--run", str(bundle), "--from-stdin"],
+        input=stdin,
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["appended"] == 3
+    assert summary["rejected"] == 2
+    assert len(summary["errors"]) == 2
+    assert any("line 2" in e for e in summary["errors"])
+    assert any("line 4" in e for e in summary["errors"])
+    events = _call_events(bundle)
+    assert len(events) == 3
+
+
+def test_record_calls_fail_fast(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    bad_first = "{not-json"
+    good = json.dumps(
+        {
+            "role": "writer",
+            "model_id": "claude-sonnet-4-6",
+            "tier": "M",
+            "tokens_in": 10,
+            "tokens_out": 5,
+            "stage": "write",
+        }
+    )
+    stdin = "\n".join([bad_first, good, good]) + "\n"
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-calls",
+            "--run", str(bundle),
+            "--from-stdin",
+            "--fail-fast",
+        ],
+        input=stdin,
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["appended"] == 0
+    assert summary["rejected"] == 1
+    assert len(summary["errors"]) == 1
+    events = _call_events(bundle)
+    assert events == []
+
+
 def test_run_lock_then_unlock(tmp_path: Path) -> None:
     bundle = _bundle_dir(tmp_path)
     corpus = tmp_path / "corpus"

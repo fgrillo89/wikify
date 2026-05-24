@@ -10,6 +10,7 @@ Subcommands::
     run close  [--run <b>] [--status completed|failed|abandoned]
     run record-call [--run <b>] --role <r> --model-id <m> --tier S|M|L
                     --tokens-in N --tokens-out N [--stage <s>]
+    run record-calls --run <b> --from-stdin [--fail-fast] [--format json|compact]
 
 ``--run <bundle>`` overrides; otherwise the current working directory
 must be a bundle root (``run/state.json`` present).
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import typer
@@ -328,6 +330,143 @@ def cmd_record_call(
             f"recorded call role={role} model={model_id} tier={tier} "
             f"tokens={tokens_in}+{tokens_out} haiku_eq={cost_haiku_eq:.1f}"
         )
+
+
+_REQUIRED_BATCH_FIELDS: tuple[tuple[str, type], ...] = (
+    ("role", str),
+    ("model_id", str),
+    ("tier", str),
+    ("tokens_in", int),
+    ("tokens_out", int),
+    ("stage", str),
+)
+
+
+def _validate_batch_line(obj: object) -> tuple[dict | None, str | None]:
+    """Return ``(payload, None)`` or ``(None, error_message)`` for one line.
+
+    ``payload`` is a normalised dict ready to hand to ``Event``. Errors
+    are short human-readable strings ("missing role", "tokens_in must
+    be int", etc.); the caller prefixes the line number.
+    """
+    if not isinstance(obj, dict):
+        return None, "line is not a JSON object"
+    for name, typ in _REQUIRED_BATCH_FIELDS:
+        if name not in obj:
+            return None, f"missing {name}"
+        val = obj[name]
+        # bool is a subclass of int; reject explicitly for the int fields.
+        if typ is int and (not isinstance(val, int) or isinstance(val, bool)):
+            return None, f"{name} must be int"
+        if typ is str and not isinstance(val, str):
+            return None, f"{name} must be str"
+    if obj["tokens_in"] < 0 or obj["tokens_out"] < 0:
+        return None, "tokens_in and tokens_out must be >= 0"
+    return obj, None
+
+
+@app.command("record-calls")
+def cmd_record_calls(
+    run: Path = typer.Option(..., "--run"),
+    from_stdin: bool = typer.Option(False, "--from-stdin"),
+    fail_fast: bool = typer.Option(False, "--fail-fast"),
+    fmt: str = typer.Option("json", "--format", help="json | compact"),
+) -> None:
+    """Batched ingest of call telemetry: one JSON object per stdin line.
+
+    Each line must carry ``role``, ``model_id``, ``tier``, ``tokens_in``,
+    ``tokens_out``, ``stage``. Optional keys: ``concept_id``, ``page_id``,
+    ``chunk_id``, ``doc_id``, ``at``, ``wall_seconds``, ``actor``. Valid
+    lines append a ``call`` event preserving input order; malformed lines
+    are skipped (or abort the batch under ``--fail-fast``).
+    """
+    if not from_stdin:
+        cli_error(
+            EXIT_VALIDATION,
+            error="missing_input_mode",
+            message="--from-stdin is required",
+        )
+    bundle = _resolve_bundle(run)
+    state = load_state(bundle)
+    from ..bundle.run.cost import haiku_eq_for
+
+    appended = 0
+    errors: list[str] = []
+    for lineno, raw in enumerate(sys.stdin, start=1):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            err = f"line {lineno}: invalid json ({exc.msg})"
+            errors.append(err)
+            if fail_fast:
+                break
+            continue
+        payload, reason = _validate_batch_line(obj)
+        if payload is None:
+            errors.append(f"line {lineno}: {reason}")
+            if fail_fast:
+                break
+            continue
+        try:
+            cost_haiku_eq = haiku_eq_for(
+                payload["tier"], payload["tokens_in"], payload["tokens_out"]
+            )
+        except ValueError as exc:
+            errors.append(f"line {lineno}: {exc}")
+            if fail_fast:
+                break
+            continue
+        wall_seconds = payload.get("wall_seconds", 0.0)
+        actor = payload.get("actor", "agent")
+        data = {
+            "role": payload["role"],
+            "model_id": payload["model_id"],
+            "tier": payload["tier"],
+            "stage": payload["stage"],
+            "input_tokens": payload["tokens_in"],
+            "output_tokens": payload["tokens_out"],
+            "haiku_eq": cost_haiku_eq,
+            "cost_haiku_eq": cost_haiku_eq,
+            "cost_usd": 0.0,
+            "wall_seconds": wall_seconds,
+        }
+        event_kwargs: dict = {
+            "run_id": state.run_id,
+            "type": "call",
+            "actor": actor,
+            "stage": payload["stage"],
+            "data": data,
+        }
+        for opt in ("concept_id", "page_id", "chunk_id", "doc_id"):
+            if opt in payload and payload[opt] is not None:
+                event_kwargs[opt] = payload[opt]
+        if "at" in payload and payload["at"] is not None:
+            event_kwargs["at"] = payload["at"]
+        try:
+            append_event(bundle, Event(**event_kwargs))
+        except Exception as exc:
+            errors.append(f"line {lineno}: append failed ({exc})")
+            if fail_fast:
+                break
+            continue
+        appended += 1
+
+    summary = {
+        "ok": True,
+        "run": str(bundle.root),
+        "appended": appended,
+        "rejected": len(errors),
+        "errors": errors,
+    }
+    if fmt == "compact":
+        typer.echo(
+            f"appended={appended} rejected={len(errors)} run={bundle.root}"
+        )
+    else:
+        typer.echo(json.dumps(summary))
 
 
 @app.command("set")
