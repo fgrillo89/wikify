@@ -76,23 +76,46 @@ def get_doc(corpus: Corpus, doc_id: str) -> Document | None:
 
 
 def get_doc_markdown(corpus: Corpus, doc_id: str) -> str:
-    """Return persisted per-document markdown text, or an empty string."""
+    """Return persisted per-document markdown text, or an empty string.
+
+    Tries the stored ``markdown_path`` first (absolute or relative to
+    the corpus root) and falls back to ``markdown_dir/<doc_id>.md``.
+    Path separators in the stored value are normalised to ``/`` so a
+    bundle ingested on Windows still resolves under POSIX checkout.
+    """
+    import warnings
+    from pathlib import Path
+
     doc = get_doc(corpus, doc_id)
     if doc is None:
         return ""
-    from pathlib import Path
 
-    path = Path(doc.markdown_path)
-    if not path.is_absolute():
-        path = corpus.root / path
-    try:
-        path = path.resolve()
-        path.relative_to(corpus.root.resolve())
-    except (OSError, ValueError):
-        path = corpus.markdown_dir / f"{doc.id}.md"
-    if not path.is_file():
-        return ""
-    return path.read_text(encoding="utf-8")
+    stored_raw = str(doc.markdown_path or "").strip()
+    candidates: list[Path] = []
+    if stored_raw:
+        stored = Path(stored_raw.replace("\\", "/"))
+        if stored.is_absolute():
+            candidates.append(stored)
+        else:
+            candidates.append(corpus.root / stored)
+            candidates.append(Path.cwd() / stored)
+    candidates.append(corpus.markdown_dir / f"{doc.id}.md")
+
+    corpus_root = corpus.root.resolve()
+    for cand in candidates:
+        try:
+            resolved = cand.resolve()
+            resolved.relative_to(corpus_root)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved.read_text(encoding="utf-8")
+    warnings.warn(
+        f"get_doc_markdown: no candidate path resolved for {doc_id!r}; "
+        f"tried {[str(c) for c in candidates]}",
+        stacklevel=2,
+    )
+    return ""
 
 
 def equations_for_chunks(
@@ -1223,6 +1246,7 @@ def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
             "sqlite_n_embeddings": n_emb,
             "sqlite_embedding_spaces": spaces,
             "metrics_corpus_citation_stale": is_stale(store.con, "corpus_citation"),
+            "available_metrics": _available_metrics(store.con),
         }
         if full:
             out["sqlite_n_edges"] = store.con.execute(
@@ -1231,6 +1255,38 @@ def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
         return out
     finally:
         store.close()
+
+
+def _available_metrics(con) -> dict:
+    """Per node_type, which metrics have at least one nonzero value.
+
+    Lets callers (and `corpus_find(by=..., rank=<m>)` users) pick a
+    populated metric without trial-and-error. Document `citation_count`
+    is reported when nonzero; author `citation_count` is reported as
+    available whenever any document `citation_count` is nonzero, because
+    the KG loader derives it at read time from document totals.
+    """
+    out: dict[str, dict[str, float]] = {}
+    rows = list(con.execute(
+        "SELECT node_type, metric, MAX(value) FROM node_metrics "
+        "WHERE value > 0 GROUP BY node_type, metric",
+    ))
+    for node_type, metric, max_val in rows:
+        out.setdefault(node_type, {})[metric] = float(max_val)
+    # n_papers is always available (derived at query time from
+    # document_authors).
+    n_papers_row = con.execute(
+        "SELECT MAX(c) FROM ("
+        "SELECT COUNT(*) AS c FROM document_authors GROUP BY author_id)",
+    ).fetchone()
+    if n_papers_row and n_papers_row[0]:
+        out.setdefault("author", {})["n_papers"] = float(n_papers_row[0])
+    # Author citation_count is derived at KG load time from doc
+    # citation_count; available iff doc citation_count is populated.
+    doc_cite = out.get("document", {}).get("citation_count")
+    if doc_cite and doc_cite > 0:
+        out.setdefault("author", {}).setdefault("citation_count", float(doc_cite))
+    return out
 
 
 def _ord_refs_coverage(corpus: Corpus, docs: list[Document]) -> dict:

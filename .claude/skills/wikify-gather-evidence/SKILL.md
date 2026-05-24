@@ -1,7 +1,7 @@
 ---
 name: wikify-gather-evidence
-description: Vetter-driven evidence loop. Use a sonnet-class agent to assemble a clean, on-topic evidence.jsonl for one concept slug by issuing scoped corpus-find queries, judging each candidate chunk in-context, and committing the accepted ids in one CLI call. Use when a concept needs evidence gathered or refreshed before a writer agent renders the dossier.
-allowed-tools: Bash(wikify *)
+description: Vetter-driven evidence loop. Use a sonnet-class agent to assemble a clean, on-topic evidence.jsonl for one concept slug by issuing scoped corpus-find queries via the wikify MCP server, judging each candidate chunk in-context, and committing the accepted ids in one CLI call. Use when a concept needs evidence gathered or refreshed before a writer agent renders the dossier.
+allowed-tools: Bash(wikify work *) mcp__wikify__context_set mcp__wikify__context_show mcp__wikify__corpus_find mcp__wikify__corpus_show mcp__wikify__corpus_sample mcp__wikify__corpus_citation_walk mcp__wikify__corpus_similarity_walk mcp__wikify__corpus_traverse mcp__wikify__corpus_schema
 ---
 
 # wikify-gather-evidence
@@ -9,6 +9,12 @@ allowed-tools: Bash(wikify *)
 You assemble `evidence.jsonl` for one concept slug. Read every
 candidate chunk, judge it on what it says, and commit the accepted
 ids in one CLI call.
+
+Read/search uses the wikify MCP server (`mcp__wikify__corpus_*`). The
+MCP session keeps the embedder warm and the indexes loaded across
+calls — switching to bash `wikify corpus find` re-pays a ~3.6 s
+cold-start per query. Use bash only for the `wikify work
+build-evidence` mutation at Step 6 and the work-card reads at Step 1.
 
 Run this skill on a sonnet-class model. Haiku partially follows the
 score / quote / no-false-positive discipline at small accept sets but
@@ -57,7 +63,23 @@ cost-bound and the orchestrator can audit the resulting envelope.
    Hunt for at least one such chunk in Step 4 if Step 2 didn't return
    one.
 
+## Step 0: bind the corpus once per session
+
+Before the first search, bind the corpus on the MCP session so every
+subsequent `corpus_*` call resolves the same backend without paying a
+re-load:
+
+```
+mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<run>")
+```
+
+Verify with `mcp__wikify__context_show()`. The corpus path is now
+implicit — `corpus_find`, `corpus_show`, etc. do not take a `corpus`
+argument.
+
 ## Step 1: read the work card and the cluster
+
+The work CLI has no MCP equivalent; use bash for these two reads:
 
 ```bash
 wikify work show <slug> --run <run> --format json
@@ -71,26 +93,70 @@ acceptable too.
 
 ## Step 2: initial candidate pool
 
-Issue one `corpus find` per query and one per seed. Base flags
-(apply to every call):
+This step ALWAYS searches chunks (the default `by="chunk"`). Issue
+one `corpus_find` per query and one per seed. Base arguments (apply
+to every call):
 
 ```
---rank all --top-k 25 --with-text
---exclude-kind references --exclude-kind acknowledgments
---exclude-kind figure --exclude-kind table
---exclude-kind caption --exclude-kind boilerplate
---corpus <corpus> --run <run> --format json
+by="chunk"      # default; do not change for the candidate pool
+top_k=25
+rank="all"
+exclude_kinds=["references", "acknowledgments", "figure", "table", "caption", "boilerplate"]
 ```
+
+### What `corpus_find` returns and what it does NOT return
+
+Each chunk row has: `handle` (e.g. `chunk:aac091f7`), `score`,
+`preview` (the first ~240 chars of the chunk text), `meta.doc_handle`,
+`meta.section_path`, `meta.kind`. **`preview` is a truncated head, not
+the full chunk body.** For most rows this is enough to recognize
+editorial headers, bylines, and obvious definition openers ("X is …").
+It is NOT enough to honor the "read every chunk" rule or to lift a
+verbatim quote that lives mid-chunk.
+
+### Mandatory full-text follow-up (Step 2b)
+
+After merging `corpus_find` batches and deduping by `chunk_id`,
+fetch the full body for every unique candidate handle:
+
+```
+mcp__wikify__corpus_show(handle="chunk:<short>", full=True)
+```
+
+This returns the chunk's full `text`. The vetter cannot honor the
+"read every chunk" rule from preview alone — preview is a triage
+signal; the full text is the substrate.
+
+**Batch the `corpus_show` calls in parallel in one tool turn.** Claude
+can issue many tool calls in a single assistant turn; do that so
+all candidates resolve concurrently. Serial per-candidate
+`corpus_show` is the anti-pattern — each adds API round-trip
+overhead. A pool of 60 unique candidates resolved in one parallel
+turn lands in seconds; resolved serially it lands in minutes.
+
+When the preview alone unambiguously rules a chunk out (e.g. it is
+a clear editorial header), you may skip the `corpus_show` for that
+handle. Record the reject decision row with the preview sentence as
+the quote. When in doubt, fetch the full body.
+
+### `by` other than chunk
+
+Use `by="paper"` only for the seminal-papers / definition-paper
+lookups described in the table below — those return doc rows whose
+preview is the title, not a chunk body. Use `by="author"` only when
+seeding person concepts (Step 1 already covers persons; the vetter
+rarely needs it). Do not use `by="paper"` or `by="author"` for the
+chunk candidate pool — that returns the wrong row shape.
 
 Queries:
 
-```bash
-wikify corpus find "<title>"                 <base-flags>
-wikify corpus find "<alias-1>"               <base-flags>
-wikify corpus find "<alias-2>"               <base-flags>
+```
+mcp__wikify__corpus_find(query="<title>",   ...base)
+mcp__wikify__corpus_find(query="<alias-1>", ...base)
+mcp__wikify__corpus_find(query="<alias-2>", ...base)
 # ... one per alias
 
-wikify corpus find "<title>" --in-doc <seed-handle>  <base-flags>
+mcp__wikify__corpus_find(query="<title>", in_doc="<seed-handle>", ...base)
 # ... one per seed_doc_handle
 ```
 
@@ -98,16 +164,17 @@ Merge batches in-context by `chunk_id`. Drop duplicates.
 
 ### Beyond title + aliases + per-seed
 
-The full `wikify corpus find` surface — use the right primitive for the gap:
+The full `corpus_find` surface — use the right primitive for the gap:
 
 | primitive | when to use |
 |---|---|
-| `corpus find --text "<exact phrase>"` | Literal substring grep, no semantic dilution. Best for definition hunting: `--text "atomic layer deposition is"`, `--text "refers to"`, `--text "defined as"`. The semantic ranker often dilutes these exact phrasings. |
-| `corpus find --rank pagerank --by paper "<title>"` | Rank PAPERS by in-corpus PageRank. Surfaces foundational works on the topic that aren't necessarily the highest semantic match. Use to find which papers a writer should cite as anchors. |
-| `corpus find --rank citation_count --by paper "<title>"` | Rank papers by external citation count. Use to surface seminal references. |
-| `corpus sample --strategy diverse --max <N> --corpus <c>` | When `seed_doc_handles` is thin or absent, get a diverse seed set across the corpus by topical coverage. |
-| `corpus citation-walk <doc_handle>` | Given an accepted seminal paper, walk to what it cites and what cites it — surfaces the surrounding scholarly conversation, often containing the technique's origin papers. |
-| `corpus similarity-walk <chunk_handle>` | Given an accepted chunk, surface other chunks semantically nearby — the "find more like this" pattern after a strong accept. |
+| `corpus_find(query="<exact phrase>", text=True)` | Literal substring grep, no semantic dilution. Best for definition hunting: `text=True, query="atomic layer deposition is"`, `query="refers to"`, `query="defined as"`. The semantic ranker often dilutes these exact phrasings. |
+| `corpus_find(query="<title>", by="paper", rank="pagerank")` | Rank PAPERS by in-corpus PageRank. Surfaces foundational works on the topic that aren't necessarily the highest semantic match. Use to find which papers a writer should cite as anchors. |
+| `corpus_find(query="<title>", by="paper", rank="citation_count")` | Rank papers by external citation count. Use to surface seminal references. |
+| `corpus_sample(strategy="diverse", max_docs=<N>)` | When `seed_doc_handles` is thin or absent, get a diverse seed set across the corpus by topical coverage. |
+| `corpus_traverse(handle="doc:<short>", to="references")` and `corpus_traverse(handle="doc:<short>", to="cited-by")` | Paper-neighborhood walk from an accepted seminal paper. `references` returns the in-corpus papers it cites; `cited-by` returns the in-corpus papers that cite it. Surfaces the surrounding scholarly conversation, often containing the technique's origin papers. |
+| `corpus_citation_walk(query="<concept>", depth=2, top_k=5)` | Concept-grounded recursive citation walk. Seeds with top-k chunks for the query, then follows in-text [N] markers across `chunk_citations` hops. Takes a query string, NOT a doc handle. |
+| `corpus_similarity_walk(from_chunk="chunk:<short>", depth=2, neighbors=3)` | Chunk-seeded cosine-similar expansion — the "find more like this" pattern after a strong accept. `from_chunk` and `query` are mutually exclusive seed modes; pass `from_chunk` for the post-accept use case, `query` for concept-grounded similarity. |
 
 Mix these into Step 4 when the title + alias + seed plan leaves gaps.
 
@@ -221,19 +288,20 @@ your `accepted` ledger:
 - Is there a definition chunk? If not, prioritise finding one.
 
 Craft 2–4 fresh queries in your own words to close those gaps.
-Issue them with the same base flags as Step 2 and merge results
-into the candidate pool. Vet the new candidates (Step 3 format).
+Issue them with the same base arguments as Step 2 (via
+`mcp__wikify__corpus_find`) and merge results into the candidate
+pool. Vet the new candidates (Step 3 format).
 
 ### Sample query plans
 
 **Definition-hunting queries (always try one if you don't have a
-definition chunk yet)**:
+definition chunk yet)** — use `text=True` for these literal patterns:
 
 ```
-"<title> is"
-"<title> refers to"
-"<title> definition"
-"<acronym> stands for"
+corpus_find(query="<title> is",         text=True, top_k=12)
+corpus_find(query="<title> refers to",  text=True, top_k=12)
+corpus_find(query="<title> definition", text=True, top_k=12)
+corpus_find(query="<acronym> stands for", text=True, top_k=12)
 ```
 
 **Process / technique concepts** (ALD, CVD, sputtering, photolithography):
@@ -271,9 +339,10 @@ chunks beats sixteen padded with marginal ones.
 
 ## Step 6: commit
 
-The vetter commits via `--from-ids @-` reading JSON from stdin, so it
-can attach per-chunk `score` (topic role) and `quote` (the on-topic
-sentence selected during vetting):
+The commit is a bundle mutation; MCP does not cover it. Use bash
+`wikify work build-evidence` with `--from-ids @-` reading JSON from
+stdin, so the vetter can attach per-chunk `score` (topic role) and
+`quote` (the on-topic sentence selected during vetting):
 
 ```bash
 wikify work build-evidence <slug> \
@@ -287,8 +356,8 @@ wikify work build-evidence <slug> \
 EOF
 ```
 
-The heredoc redirection (`<<'EOF'`) is part of the `wikify` invocation, so
-this command stays inside the skill's `allowed-tools: Bash(wikify *)`
+The heredoc redirection (`<<'EOF'`) is part of the `wikify` invocation,
+so this command stays inside the skill's `Bash(wikify work *)`
 allowlist. Do not pipe via `cat <<EOF | wikify ...` — that introduces
 `cat` as a separate shell command outside the allowlist and the commit
 step will be blocked.
@@ -359,14 +428,29 @@ records the vetter call via `wikify run record-call` after you return.
   is mandatory unless quota is met on the first round.
 - Hunt for one definition-style chunk per slug.
 - Do not edit `work/concepts/<slug>/evidence.jsonl` directly.
-- Do not bypass `--with-text` and use `corpus show` per candidate —
-  the round-trip cost defeats the loop.
+- Always follow `corpus_find` with batched-parallel
+  `corpus_show(handle, full=True)` for the candidate pool. Preview
+  alone is not enough to honor "read every chunk". Serial per-
+  candidate `corpus_show` is the anti-pattern.
+- Always call `corpus_find` with `by="chunk"` (the default) when
+  building the candidate pool. `by="paper"` and `by="author"`
+  return different row shapes and do not give you chunk text.
 - Do not accept a chunk whose only relevance is keyword overlap.
 - Do not pad to quota with weak acceptances; land fewer if the
   corpus does not offer more on-topic chunks.
 - Do not add seeds to the work card; seeds come from the extractor.
 - Person pages need evidence chunks that quote actual contributions;
   author bylines alone do not count.
-- Final response is the Step 7 JSON, ≤300 tokens. Returning a long
-  report to the parent agent inflates its context budget and breaks
-  baseline at scale.
+- Final response is the Step 7 JSON, ≤300 tokens. The final assistant
+  message must contain ONLY the JSON object — no preamble, no
+  reasoning prose, no decision-row dumps, no "let me recount" notes.
+  Anything outside the envelope is a contract violation; notes that
+  do not fit in the JSON do not reach the orchestrator usefully, so
+  drop them.
+- Do not commit more than `quota` records. If a second `wikify work
+  build-evidence` batch would push the active count past `quota`,
+  stop after the first. Re-read `evidence.jsonl` between batches and
+  subtract its size from the remaining slots before committing more.
+- Use `mcp__wikify__corpus_*` for read/search; do not invoke `wikify
+  corpus *` via bash. The bash CLI re-pays embedder cold-start every
+  call (~3.6 s each); MCP holds one warm session across the loop.

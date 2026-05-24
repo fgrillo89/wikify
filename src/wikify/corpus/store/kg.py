@@ -274,12 +274,29 @@ class SqliteGraphBackend:
             self._h_index[r[0]] = int(r[1])
             if r[0] in self._node_attrs:
                 self._node_attrs[r[0]]["h_index"] = int(r[1])
+        doc_citation: dict[str, int] = {}
         for r in self.con.execute(
             "SELECT node_id, value FROM node_metrics "
             "WHERE graph_name='corpus_citation' AND metric='citation_count'",
         ):
+            doc_citation[r[0]] = int(r[1])
             if r[0] in self._node_attrs:
                 self._node_attrs[r[0]]["citation_count"] = int(r[1])
+
+        # Derive per-author citation_count = sum(citation_count of authored
+        # docs). The projection only writes this metric for documents; without
+        # this pass, authors would always report citation_count=0 and rankings
+        # by that metric would be useless.
+        author_citation: dict[str, int] = {}
+        for r in self.con.execute(
+            "SELECT author_id, doc_id FROM document_authors",
+        ):
+            author_citation[r[0]] = (
+                author_citation.get(r[0], 0) + doc_citation.get(r[1], 0)
+            )
+        for author_id, total in author_citation.items():
+            if author_id in self._node_attrs:
+                self._node_attrs[author_id]["citation_count"] = int(total)
 
     def _load_edges(self) -> int:
         n = 0

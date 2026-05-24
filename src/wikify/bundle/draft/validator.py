@@ -264,7 +264,20 @@ def _figure_selection_errors(
                     ),
                 }
             )
-        if fig.source_marker and fig.source_marker not in response.used_markers:
+        if not fig.source_marker:
+            errors.append(
+                {
+                    "path": "figures",
+                    "code": "missing_figure_source_marker",
+                    "message": (
+                        f"selected figure {fig.figure_id!r} must set "
+                        "source_marker to the [^eN] marker whose evidence "
+                        "chunk the figure is sourced from; the renderer "
+                        "uses it to cite the source paper in the caption"
+                    ),
+                }
+            )
+        elif fig.source_marker not in response.used_markers:
             errors.append(
                 {
                     "path": "figures",

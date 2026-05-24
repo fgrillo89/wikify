@@ -28,6 +28,7 @@ from ..bundle.draft.dossier import render_dossier
 from ..bundle.draft.references import normalize_response_references
 from ..bundle.draft.validator import validate_response, validate_response_data
 from ._helpers import EXIT_VALIDATION, cli_error
+from ._io import _clean_slug_arg
 
 app = typer.Typer(add_completion=False, help="Per-attempt draft IO + validation gate.")
 
@@ -83,6 +84,7 @@ def cmd_build(
     ``--model-id`` and ``--tier`` are required; strategy lives in
     skills, not Python defaults.
     """
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if task not in {"create", "refine"}:
         cli_error(EXIT_VALIDATION, error="bad_task", task=task)
@@ -131,6 +133,7 @@ def cmd_show(
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Print the draft.json for a concept."""
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     p = draft_path(bundle, concept)
     if not p.is_file():
@@ -175,6 +178,7 @@ def cmd_render_dossier(
     Call this directly when evidence on disk changed without rebuilding
     the draft, or when the dossier was deleted.
     """
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not draft_path(bundle, concept).is_file():
         cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)
@@ -206,6 +210,7 @@ def cmd_normalize_references(
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Normalize response.json references from draft evidence markers."""
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not draft_path(bundle, concept).is_file():
         cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)
@@ -249,6 +254,7 @@ def cmd_check(
     ),
 ) -> None:
     """Validate response.json for *concept* against draft.json. Writes validation.json."""
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not draft_path(bundle, concept).is_file():
         cli_error(EXIT_VALIDATION, error="draft_not_found", concept=concept)

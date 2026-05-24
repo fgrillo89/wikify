@@ -6,6 +6,7 @@ metrics) are reachable through the appropriate noun (``corpus build``,
 ``render``, ``eval``).
 """
 
+import os
 import sys
 
 import typer
@@ -36,6 +37,12 @@ def _force_utf8_stdio() -> None:
       ``doc:abc123\\r`` and resolves to ``handle_not_found``. Force
       ``newline=""`` so quiet output is byte-identical across platforms.
     """
+    # Propagate UTF-8 to subprocesses (e.g. ``wikify work build-evidence``
+    # invoked from a skill that pipes JSON over stdin). Without this, a
+    # Windows child interprets stdin via cp1252 and rejects chunk_ids
+    # containing characters like U+2082 (subscript 2) as not-found.
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:

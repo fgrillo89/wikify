@@ -49,69 +49,41 @@ most one additional matching field guide when the field is clear.
 
 ## Evidence-grounding contract
 
-The dossier is the substrate, not a hint. The writer's prose must
-track what the dossier actually says; memory is the fallback layer,
-not the primary one.
+The dossier is the substrate, not a hint. Memory is the fallback
+layer, not the primary one. Three sentence categories:
 
-Three categories of sentence and what is permitted in each:
+1. **Substantive factual** — any value, parameter, mechanism,
+   material, year, name, comparison, or measurement (precursor names,
+   temperature windows, GPC values, authors, stoichiometries, device
+   parameters, on/off ratios, endurance counts) MUST end with at
+   least one `[^eN]` marker pointing at the supporting dossier chunk.
+   If the dossier does not support the claim, do not make it.
+2. **Scaffolding** — short transitions, definitions the dossier
+   itself supplies, and standard encyclopedia framing may go uncited.
+   If a section has more uncited than cited sentences, you are
+   drifting into memory mode.
+3. **Memory-derived** — permitted only for uncontroversial
+   undergraduate-textbook background the dossier omits. Never
+   introduce specific entities, papers, values, or claims from
+   memory that are absent from the dossier.
 
-1. **Substantive factual sentences** — anything that asserts a value,
-   parameter, mechanism, material system, year, name, comparison,
-   measurement, or quoted claim — MUST end with at least one `[^eN]`
-   marker pointing at the dossier chunk that supports it. If the
-   dossier does not support the claim, do not make the claim. Do not
-   reach into memory for specific facts that the dossier does not
-   cover. Specific examples of what requires a citation: a precursor
-   name (TMA, ferrocene, ozone), a temperature window (275–300 °C), a
-   growth-per-cycle value (~0.43 Å/cycle), an author / paper name, a
-   year, a stoichiometry, a synthesis step, a device parameter, an
-   on/off ratio, an endurance count.
+Hard grounding rules:
 
-2. **Scaffolding sentences** — short transitions, definitions that
-   the dossier itself supplies (use the dossier's `Selected quote` or
-   the chunk text), and standard encyclopedia framing ("This article
-   describes...", "Applications include...") may go uncited. The
-   ratio of uncited to cited sentences should be low; if a section
-   has more uncited than cited sentences, you are drifting into
-   memory mode.
-
-3. **Memory-derived sentences** — permitted only for general
-   background that the dossier omits AND that is uncontroversial AND
-   that an undergraduate textbook would cover ("Thin-film deposition
-   techniques include physical vapor deposition and chemical vapor
-   deposition"). Do not introduce specific entities, papers, values,
-   or claims from memory that are absent from the dossier. If the
-   dossier covers the topic at all, use its framing — do not
-   substitute your own general-knowledge phrasing.
-
-Hard rules around grounding:
-
-- **When the dossier covers a topic, the dossier wins.** Even if you
-  remember a different value, mechanism, or framing, use the
-  dossier's version. The dossier was curated by an upstream vetter;
-  your job is to render its content as encyclopedia prose, not to
-  re-derive the article from your training data.
-- **Never contradict the dossier from memory.** If the dossier says
-  "growth per cycle is ~0.43 Å/cycle" and your memory says
-  "~1 Å/cycle", use 0.43. If you suspect the dossier is wrong, surface
-  it as a workflow signal in your own reasoning channel — do not
-  silently overwrite.
+- **Dossier wins.** When the dossier covers a topic, use its
+  version even if memory disagrees. The dossier was curated by an
+  upstream vetter; the writer renders, not re-derives.
+- **No contradictions.** If the dossier says "~0.43 Å/cycle" and
+  memory says "~1 Å/cycle", use 0.43. Surface suspected dossier
+  errors as a workflow signal; do not silently overwrite.
 - **Definition leads.** When the dossier contains a definition-style
-  chunk for the page concept (the vetter usually scores it 1.0 and
-  renders it under a `> **Selected quote:**` block at the top of the
-  evidence section), open the article with prose that paraphrases or
-  quotes that chunk. Do not write your own definition from memory
-  when the dossier supplies one.
-- **Quote means quote.** When you cite a `[^eN]` chunk, the reference
-  definition `[^eN]:` must contain a verbatim quote of one sentence
-  from that chunk's text. The validator enforces this. Pick the
-  sentence that actually carries the claim you're making — not the
-  chunk head, not a transition sentence.
-- **Memory mode triggers a self-flag.** If you find yourself writing
-  multiple sentences in a section without `[^eN]` markers, stop and
-  ask: is the dossier silent on this, or did I just not look hard
-  enough? Re-read the relevant section of the dossier before falling
-  back to general knowledge.
+  chunk (vetter scores it 1.0, rendered under `> **Selected quote:**`
+  at the top of the evidence section), open with prose that
+  paraphrases or quotes it.
+- **Quote means quote.** Each `[^eN]:` reference definition contains
+  a verbatim sentence from that chunk's text, carrying the claim
+  you're citing — not the chunk head or a transition.
+- **Self-flag memory mode.** Multiple sentences in a row without
+  `[^eN]` markers means stop and re-read the dossier.
 
 ## Output
 
@@ -131,6 +103,14 @@ Before creating or updating `response.json`, perform a writer self-check:
 - every reference quote is copied verbatim from supplied evidence;
 - every `{{figure:<anchor>}}` placeholder has a matching `figures[]`
   entry selected from the draft figure candidates;
+- every `figures[]` entry sets all five fields, including a non-empty
+  `source_marker` that appears in `used_markers`; the validator
+  rejects empty markers and the renderer appends a citation link to
+  the caption pointing at the source footnote;
+- **figure-candidate scan**: if the dossier's Figure candidates table
+  contains a mechanism / process / device-structure / characterization
+  figure that depicts something the prose discusses, include one. If
+  no candidate fits, proceed without a figure; do not invent one;
 - person pages have at least two non-appendix `## H2` sections;
 - the page uses enough of the supplied high-quality evidence to be
   comprehensive, not merely valid;
@@ -173,35 +153,26 @@ or `validation.json`. Fix any errors before persisting.
   figure captions, tables, ORCID/contact fragments, and other
   boilerplate. If the workflow accidentally supplies those records,
   ignore them unless the page scope explicitly requires them.
-- NEVER cite a chunk whose text matches any of the following patterns,
-  even if it appears in `evidence`. Treat the supplied evidence list as
-  best-effort, not authoritative; the writer is the last line of
-  defense against junk citations.
-    - ISSN / DOI / journal-homepage banner: `ISSN: 1234-5678`,
-      `DOI: 10.xxxx/...`, `journal homepage: www...`.
-    - Article-history line: `Article history`, `Received ... Accepted ...`,
-      `Available online ...`.
-    - Keyword block: `Keywords: <comma-separated terms>`.
-    - Affiliation / corresponding-author block: chunks dominated by
-      university / lab / city / country names, `@institution.edu`
-      emails, or ORCID URLs.
-    - Copyright / rights-reserved one-liner: `© 2024 Elsevier`,
-      `All rights reserved`, `Copyright Holder`.
-    - DoD / DTIC SF298 cover sheet: `Form Approved OMB No. 0704-0188`,
-      `public reporting burden`.
-    - Pure references list dumps: chunks that are mostly numbered
-      bibliography entries `(1) Author, A. ...; (2) Author, B. ...`.
-    - Pure figure / table captions when a body chunk would do.
-  If after filtering you cannot field 6 evidence markers per page,
+- NEVER cite a chunk whose text is metadata or boilerplate, even if
+  it appears in `evidence`: ISSN/DOI/journal-homepage banners,
+  article-history lines, keyword blocks, affiliation /
+  corresponding-author blocks, copyright lines, DoD SF298 covers,
+  bibliography-list dumps, or pure figure/table captions when a body
+  chunk would do. See `../wikify/references/writing/write-constraints.md`
+  for the pattern list. The writer is the last line of defense — if
+  after filtering you cannot field 6 evidence markers per page,
   surface that as a workflow signal rather than padding with junk.
 - For normal articles, use evidence across definitions, mechanisms,
   materials/properties, methods, evidence/results, applications, and
   limitations when those facets are present in the draft.
 - No visible `[[wikilinks]]`.
-- Figures are optional and parsimonious. Use zero by default, one when
-  a corpus figure materially improves understanding, and two only for a
-  page that is inherently visual or structural. Never invent image
-  paths or captions.
+- Figures are parsimonious but not skipped by default. When the
+  dossier's Figure candidates table contains a labeled mechanism,
+  process, device-structure, or characterization figure depicting
+  something the prose discusses, include exactly one. Zero only when
+  no candidate aids understanding; two only when the page is
+  inherently visual. Never invent paths or captions. Person pages
+  stay figure-free.
 - No corpus meta-commentary.
 - No page commit. Validation and commit are `wikify-bundle` operations.
 
