@@ -38,6 +38,17 @@ _SENSITIVE_FLAG_PARTS = ("key", "token", "secret", "password", "credential")
 _PREVIEW_CHARS = 500
 
 
+def _clean_slug_arg(s: str) -> str:
+    """Normalize a slug Argument: strip whitespace and trailing path separators.
+
+    ``ls bundles/.../concepts/`` emits names with a trailing ``/``;
+    shells also frequently complete with one. Without this, ``wikify
+    wiki commit foo/`` writes to ``wiki/articles/foo/.md`` instead of
+    ``wiki/articles/foo.md``.
+    """
+    return s.strip().rstrip("/\\")
+
+
 class _TeeWriter(io.TextIOBase):
     def __init__(self, primary: TextIO, capture: TextIO) -> None:
         self._primary = primary
@@ -79,6 +90,10 @@ class _TeeReader(io.TextIOBase):
     @property
     def errors(self) -> str | None:
         return getattr(self._primary, "errors", None)
+
+    @property
+    def buffer(self):
+        return getattr(self._primary, "buffer", None)
 
     def readable(self) -> bool:
         return True

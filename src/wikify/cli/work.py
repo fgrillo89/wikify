@@ -41,6 +41,7 @@ from ..bundle.work.evidence import EvidenceRecord, append_evidence, read_evidenc
 from ..bundle.work.inbox import append_inbox, list_inbox_files
 from ..bundle.work.tend import tend_bundle
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error, cli_owner
+from ._io import _clean_slug_arg
 
 app = typer.Typer(add_completion=False, help="In-flight build state.")
 
@@ -81,9 +82,14 @@ def cmd_list_default(
     bundle = _resolve_bundle(run)
     slugs = list_concept_slugs(bundle)
     if fmt == "json":
+        claim_owner_by_slug = {
+            c.get("slug"): c.get("owner") for c in list_claims(bundle)
+        }
         items = []
         for s in slugs:
             card = load_card(bundle, s)
+            recs = read_evidence(bundle, s)
+            active = [r for r in recs if r.status == "active"]
             items.append(
                 {
                     "slug": s,
@@ -91,6 +97,9 @@ def cmd_list_default(
                     "kind": card.kind,
                     "status": card.status,
                     "needs_refine": card.needs_refine,
+                    "evidence_chunks": len(active),
+                    "evidence_docs": len({r.doc_id for r in active}),
+                    "claim_owner": claim_owner_by_slug.get(s),
                 }
             )
         typer.echo(json.dumps({"ok": True, "items": items}))
@@ -136,6 +145,7 @@ def cmd_list_evidence(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     records = read_evidence(bundle, concept)
     if fmt == "json":
@@ -157,6 +167,7 @@ def cmd_show(
     full: bool = typer.Option(False, "--full"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     card = load_card(bundle, concept)
     if not card.front:
@@ -220,6 +231,7 @@ def cmd_add_evidence(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not records.is_file():
         cli_error(EXIT_VALIDATION, error="records_not_found", path=str(records))
@@ -292,6 +304,7 @@ def cmd_set(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     card = load_card(bundle, concept)
     if not card.front:
@@ -328,6 +341,7 @@ def cmd_claim(
     ttl_seconds: int = typer.Option(1800, "--ttl-seconds"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     o = cli_owner(owner)
     try:
@@ -365,6 +379,7 @@ def cmd_release(
     owner: str | None = typer.Option(None, "--owner"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     o = cli_owner(owner)
     ok = release_claim(bundle, concept, owner=o)
@@ -403,9 +418,17 @@ def cmd_release(
 def cmd_tend(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
+    keep_inbox: bool = typer.Option(
+        False,
+        "--keep-inbox",
+        help=(
+            "Preserve work/inbox/concept_suggestions.jsonl after "
+            "consolidation. The other inboxes always drain."
+        ),
+    ),
 ) -> None:
     bundle = _resolve_bundle(run)
-    summary = tend_bundle(bundle)
+    summary = tend_bundle(bundle, keep_inbox=keep_inbox)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, **summary}))
         return
@@ -534,6 +557,7 @@ def cmd_build_evidence(
         read_evidence,
     )
 
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not corpus_dir.is_dir():
         cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
@@ -891,9 +915,15 @@ def cmd_build_evidence(
 
 @app.command("cluster-concepts")
 def cmd_cluster_concepts(
+    by: str = typer.Option(
+        "evidence", "--by",
+        help="Signal to cluster on: 'evidence' (Jaccard over evidence "
+        "doc_ids, requires evidence committed) or 'seeds' (Jaccard over "
+        "seed_doc_handles from the work card, usable pre-evidence).",
+    ),
     threshold: float = typer.Option(
         0.15, "--threshold",
-        help="Minimum Jaccard overlap (over doc_id sets) to link two concepts.",
+        help="Minimum Jaccard overlap to link two concepts.",
     ),
     max_cluster_size: int = typer.Option(
         5, "--max-cluster-size",
@@ -903,15 +933,26 @@ def cmd_cluster_concepts(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Cluster active concepts by evidence overlap (Jaccard over doc_ids).
+    """Cluster active concepts by doc-set overlap (Jaccard).
 
-    Pages within a cluster share evidence sources and benefit from one
-    writer agent reading them together (consistent terminology, no
-    duplicate chunk reads). Person concepts are placed in their own
-    cluster regardless of overlap so the person-style prompt path stays
-    distinct from article writing.
+    Choose the signal with ``--by``:
+
+    - ``evidence`` (default): overlap of evidence.jsonl doc_ids. Used
+      between vetting and writing so one writer agent handles pages
+      that share source documents.
+    - ``seeds``: overlap of ``seed_doc_handles`` from each work card.
+      Used pre-evidence (e.g. to group vetters into parallel waves).
+
+    Person concepts are placed in their own cluster regardless of
+    overlap so the person-style prompt path stays distinct from
+    article writing.
     """
     from ..bundle.work.evidence import read_evidence
+
+    by = (by or "evidence").lower()
+    if by not in ("evidence", "seeds"):
+        cli_error(EXIT_VALIDATION, error="invalid_by",
+                  message=f"--by must be 'evidence' or 'seeds', got {by!r}")
 
     bundle = _resolve_bundle(run)
     slugs = list_concept_slugs(bundle)
@@ -922,8 +963,12 @@ def cmd_cluster_concepts(
         if card.front.get("status") not in ("active", "committed"):
             continue
         kind_of[s] = card.kind
-        recs = read_evidence(bundle, s)
-        by_slug[s] = {r.doc_id for r in recs if r.status == "active"}
+        if by == "evidence":
+            recs = read_evidence(bundle, s)
+            by_slug[s] = {r.doc_id for r in recs if r.status == "active"}
+        else:  # by == "seeds"
+            handles = card.front.get("seed_doc_handles") or []
+            by_slug[s] = {h.split(":", 1)[-1] for h in handles if h}
 
     def jaccard(a: set, b: set) -> float:
         if not a or not b:

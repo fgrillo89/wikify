@@ -32,6 +32,7 @@ def init_run(
     target_haiku_eq: int = 0,
     actor: str = "cli",
     run_id: str | None = None,
+    corpus_fingerprint: str | None = None,
 ) -> RunState:
     """Create the bundle directory layout, write the initial ``run/state.json``,
     and emit the first event.
@@ -44,6 +45,7 @@ def init_run(
         run_id=run_id or _new_run_id(),
         strategy=strategy,
         corpus_path=str(corpus_path),
+        corpus_fingerprint=corpus_fingerprint,
         budget=Budget(target_haiku_eq=target_haiku_eq),
     )
     save_state(bundle, state)

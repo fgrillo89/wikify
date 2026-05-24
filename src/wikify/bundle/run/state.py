@@ -48,6 +48,11 @@ class RunState(BaseModel):
     # Passive metadata for replay + comparison; no Python branches on it.
     strategy: str = ""
     corpus_path: str
+    # SHA-256[:16] of the corpus ``manifest.json`` at run init. Identity
+    # field for replay / comparison: the same ``corpus_path`` may carry
+    # different content across re-ingests, so the fingerprint is what
+    # ties a run to a specific snapshot of the corpus.
+    corpus_fingerprint: str | None = None
     wiki_path: str = "wiki"
     work_path: str = "work"
     budget: Budget = Field(default_factory=Budget)

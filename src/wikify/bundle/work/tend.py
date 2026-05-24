@@ -66,12 +66,15 @@ def _consolidate_evidence_suggestions(bundle: Bundle) -> int:
     return appended
 
 
-def _consolidate_concept_suggestions(bundle: Bundle) -> int:
+def _consolidate_concept_suggestions(bundle: Bundle, keep_inbox: bool = False) -> int:
     """Drain ``concept_suggestions.jsonl`` into new concept folders.
 
     Records have shape ``{"title": <str>, "kind": "article|person",
     "aliases": [...]}``. Existing concepts (matched by slug) are
     skipped. Returns the count of concepts created.
+
+    With ``keep_inbox=True`` the inbox file is preserved post-drain so
+    the orchestrator can re-inspect or replay the suggestions.
     """
     records = read_inbox(bundle, "concept_suggestions")
     if not records:
@@ -104,7 +107,8 @@ def _consolidate_concept_suggestions(bundle: Bundle) -> int:
         )
         existing.add(s)
         created += 1
-    truncate_inbox(bundle, "concept_suggestions")
+    if not keep_inbox:
+        truncate_inbox(bundle, "concept_suggestions")
     return created
 
 
@@ -208,14 +212,21 @@ def regenerate_work_index(bundle: Bundle) -> Path:
     return bundle.work_index_path
 
 
-def tend_bundle(bundle: Bundle) -> dict:
-    """Run the full tend pass and return a summary dict."""
+def tend_bundle(bundle: Bundle, *, keep_inbox: bool = False) -> dict:
+    """Run the full tend pass and return a summary dict.
+
+    ``keep_inbox=True`` preserves ``concept_suggestions.jsonl`` after
+    consolidation. The other inboxes always drain — they are append-on-
+    action with stable semantics and no replay use case.
+    """
     summary: dict = {}
     summary["claims_expired"] = expire_stale_claims(bundle)
 
     # Consolidate inbox first so freshly-appended evidence is deduped
     # and freshly-created concepts appear in the regenerated index.
-    summary["concepts_created"] = _consolidate_concept_suggestions(bundle)
+    summary["concepts_created"] = _consolidate_concept_suggestions(
+        bundle, keep_inbox=keep_inbox
+    )
     summary["evidence_appended"] = _consolidate_evidence_suggestions(bundle)
     summary["query_feedback_marks"] = _consolidate_query_feedback(bundle)
     summary["merge_suggestion_marks"] = _consolidate_merge_suggestions(bundle)
@@ -224,6 +235,19 @@ def tend_bundle(bundle: Bundle) -> dict:
     for slug in list_concept_slugs(bundle):
         deduped += dedup_evidence(bundle, slug)
     summary["evidence_records_deduped"] = deduped
+
+    # Refresh ``evidence_chunks`` / ``evidence_docs`` on each work card
+    # from the on-disk ledger so ``work show`` / ``work list`` reflect
+    # the current state, not the count at card creation.
+    for slug in list_concept_slugs(bundle):
+        recs = read_evidence(bundle, slug)
+        active = [r for r in recs if r.status == "active"]
+        card = load_card(bundle, slug)
+        if not card.front:
+            continue
+        card.front["evidence_chunks"] = len(active)
+        card.front["evidence_docs"] = len({r.doc_id for r in active})
+        save_card(bundle, slug, card)
 
     regenerate_work_index(bundle)
     summary["index_path"] = str(bundle.work_index_path)

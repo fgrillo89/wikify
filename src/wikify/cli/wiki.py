@@ -44,6 +44,7 @@ from ..bundle.wiki.queries import (
 from ..bundle.wiki.session import WikiSearchSession
 from ._format import FormatError, format_row, resolve_format
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
+from ._io import _clean_slug_arg
 
 
 def _resolve_format_or_error(fmt: str) -> str:
@@ -391,6 +392,7 @@ def cmd_commit(
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Promote a validated response to wiki/articles/<slug>.md or wiki/people/<slug>.md."""
+    concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     try:
         result = commit_page(

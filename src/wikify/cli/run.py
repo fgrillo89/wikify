@@ -17,6 +17,7 @@ must be a bundle root (``run/state.json`` present).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -76,6 +77,12 @@ def cmd_init(
             error="bundle_already_initialised",
             message=f"{bundle_dir} already has run/state.json; refusing to re-init",
         )
+    manifest_path = corpus_dir / "manifest.json"
+    corpus_fingerprint: str | None = None
+    if manifest_path.is_file():
+        corpus_fingerprint = hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest()[:16]
     # ``init_run`` writes ``run/state.json``; until that happens
     # ``Bundle.open`` would refuse this directory. Construct the Bundle
     # dataclass directly — ``run init`` is the privileged bootstrap path.
@@ -85,6 +92,7 @@ def cmd_init(
         corpus_path=corpus_dir,
         strategy=strategy,
         target_haiku_eq=target_haiku_eq,
+        corpus_fingerprint=corpus_fingerprint,
     )
     # The cli_invoked event for `run init` is emitted by
     # ``_io.run_with_io_logging``: it detects ``run init --bundle <b>`` at
@@ -100,14 +108,17 @@ def cmd_init(
                     "bundle": str(bundle.root),
                     "state_path": str(bundle.state_path),
                     "events_path": str(bundle.events_path),
+                    "corpus_fingerprint": state.corpus_fingerprint,
                 }
             )
         )
     else:
-        typer.echo(f"run_id:  {state.run_id}")
-        typer.echo(f"bundle:  {bundle.root}")
-        typer.echo(f"state:   {bundle.state_path}")
-        typer.echo(f"events:  {bundle.events_path}")
+        typer.echo(f"run_id:           {state.run_id}")
+        typer.echo(f"bundle:           {bundle.root}")
+        typer.echo(f"state:            {bundle.state_path}")
+        typer.echo(f"events:           {bundle.events_path}")
+        if state.corpus_fingerprint:
+            typer.echo(f"corpus_fingerprint: {state.corpus_fingerprint}")
 
 
 @app.command("show")
