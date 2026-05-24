@@ -70,6 +70,15 @@ _MCP_TOKEN_RE = re.compile(
 )
 
 
+# Matches a single ``corpus_show(...)`` call's argument list. Picks up
+# ``mcp__wikify__corpus_show`` and bare ``corpus_show`` since both
+# appear in skill prose. ``[^)]*`` keeps the match single-line; multi-
+# line calls are caught by joining the surrounding lines below.
+_CORPUS_SHOW_CALL_RE = re.compile(
+    r"(?:mcp__wikify__)?corpus_show\(([^)]*)\)"
+)
+
+
 def _filter_mcp_tokens(tokens) -> set[str]:
     """Drop family wildcards (``mcp__server__foo_*``) and trailing
     underscores from a raw token list, leaving only concrete tool
@@ -236,6 +245,26 @@ def _violations_for_skill(skill_path: Path) -> list[str]:
                     f"but allowed-tools only permits "
                     f"{sorted(allowed_mcp) or '<no MCP tools>'}"
                 )
+
+    # ``corpus_show(mode="full")`` without ``include_text=True`` is a
+    # known footgun: the mode flag only reshapes the response; the body
+    # text is loaded by ``include_text``. Catches drift in skill recipes
+    # that document full-document reads. Search the joined body so
+    # multi-line calls are detected too.
+    body_joined = " ".join(body.splitlines())
+    for match in _CORPUS_SHOW_CALL_RE.finditer(body_joined):
+        args = match.group(1)
+        has_full = re.search(r"""mode\s*=\s*['"]full['"]""", args) is not None
+        has_include_text = re.search(
+            r"include_text\s*=\s*True", args
+        ) is not None
+        if has_full and not has_include_text:
+            violations.append(
+                f"{skill_path.name}: corpus_show(...mode=\"full\"...) "
+                f"call omits include_text=True; mode reshapes the "
+                f"response but include_text is what loads the body. "
+                f"Args: {args.strip()!r}"
+            )
     return violations
 
 
@@ -356,6 +385,48 @@ def test_skill_layout_helper_ignores_mcp_mentioned_only_in_bash_block(
         "# alternative MCP path: mcp__wikify__corpus_show\n"
         "wikify wiki find foo\n"
         "```\n",
+        encoding="utf-8",
+    )
+    assert _violations_for_skill(skill) == []
+
+
+def test_skill_layout_helper_catches_corpus_show_full_without_include_text(
+    tmp_path: Path,
+) -> None:
+    """A ``corpus_show(mode=\"full\")`` recipe without ``include_text=True``
+    is a footgun — the body text is never loaded. Catches the Codex
+    finding where wikify-search-corpus documented `corpus_show(mode=
+    "full")` alone."""
+    skill = tmp_path / "SKILL.md"
+    skill.write_text(
+        "---\n"
+        "name: test-skill\n"
+        "allowed-tools: Bash(wikify *) mcp__wikify__corpus_show\n"
+        "---\n"
+        "\n"
+        'For the whole body, use `corpus_show(mode="full")`.\n',
+        encoding="utf-8",
+    )
+    violations = _violations_for_skill(skill)
+    assert any("mode=\"full\"" in v and "include_text" in v for v in violations), (
+        violations
+    )
+
+
+def test_skill_layout_helper_passes_corpus_show_full_with_include_text(
+    tmp_path: Path,
+) -> None:
+    """The correct recipe (`corpus_show(include_text=True, mode=\"full\")`)
+    must NOT produce a violation."""
+    skill = tmp_path / "SKILL.md"
+    skill.write_text(
+        "---\n"
+        "name: test-skill\n"
+        "allowed-tools: Bash(wikify *) mcp__wikify__corpus_show\n"
+        "---\n"
+        "\n"
+        'Use `corpus_show(handle="doc:abc", include_text=True, '
+        'mode="full")` for the whole body.\n',
         encoding="utf-8",
     )
     assert _violations_for_skill(skill) == []
