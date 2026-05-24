@@ -572,6 +572,47 @@ async def test_context_show_omits_health_when_unbound() -> None:
     assert "health" not in snap
 
 
+async def test_context_show_rank_metrics(tmp_path: Path) -> None:
+    """``health`` carries rank_metrics so callers skip a corpus_schema round trip."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+    res = await _tool(srv, "context_show")()
+    health = res["items"][0]["health"]
+    assert "pagerank" in health["rank_metrics"]["source"]
+    assert "citation_count" in health["rank_metrics"]["author"]
+
+
+# ---------------------------------------------- corpus_find include_text
+
+
+async def test_corpus_find_include_text(tmp_path: Path) -> None:
+    """``include_text=True`` inlines full chunk body; default keeps row text-free."""
+    corpus = _make_corpus(tmp_path / "c")
+    context.bind(corpus_path=corpus.root)
+    srv = server.build_server()
+
+    default_res = await _tool(srv, "corpus_find")(
+        query="atomic layer", text=True, top_k=2,
+    )
+    assert default_res["ok"] is True
+    assert default_res["items"]
+    for it in default_res["items"]:
+        assert not it.get("text")
+
+    res = await _tool(srv, "corpus_find")(
+        query="atomic layer", text=True, top_k=2, include_text=True,
+    )
+    assert res["ok"] is True
+    assert res["items"]
+    first = res["items"][0]
+    chunk_id = first["handle"].split(":", 1)[1]
+    chunk = queries.get_chunk(corpus, chunk_id)
+    assert chunk is not None
+    assert first["text"] == chunk.text
+    assert first["text"]
+
+
 # ----------------------------------------------------- corpus_image tool
 
 
