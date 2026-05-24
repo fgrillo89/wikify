@@ -1,7 +1,7 @@
 ---
 name: wikify-query
 description: Query workflow for answering from the committed Wikify wiki, falling back to corpus search when needed, and recording bundle feedback for refinement. Use when answer sufficiency, corpus fallback, and feedback policies are supplied.
-allowed-tools: Bash(wikify *) Task
+allowed-tools: Bash(wikify *) Task mcp__wikify__context_set mcp__wikify__context_show mcp__wikify__corpus_find mcp__wikify__corpus_show mcp__wikify__corpus_traverse mcp__wikify__wiki_find mcp__wikify__wiki_show mcp__wikify__wiki_traverse
 ---
 
 # wikify-query
@@ -18,13 +18,18 @@ structured query feedback so `wikify-refine` can improve the wiki later.
 
 ## Composition
 
-1. Use `wikify-search-wiki` to find and inspect relevant committed
-   pages.
+Bind the bundle and corpus on the MCP session first:
+`mcp__wikify__context_set(corpus_path=<corpus>, bundle_path=<bundle>)`.
+
+1. Use `wikify-search-wiki` (MCP `wiki_find` / `wiki_show` /
+   `wiki_traverse`) to find and inspect relevant committed pages.
 2. Decide whether the wiki evidence is sufficient.
-3. If insufficient, use `wikify-search-corpus` to retrieve source
-   evidence for missing claims.
+3. If insufficient, use `wikify-search-corpus` (MCP `corpus_find` /
+   `corpus_show` / `corpus_traverse`) to retrieve source evidence for
+   missing claims.
 4. Answer with only supported claims.
-5. Use `wikify-bundle` to append query feedback for missing coverage.
+5. Use `wikify-bundle` to append query feedback for missing coverage
+   (bash — bundle mutation).
 
 ## Strategy Owned Here
 
