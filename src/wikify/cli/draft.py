@@ -375,6 +375,21 @@ def cmd_finalize(
     steps: list[dict] = []
     envelope: dict = {"ok": False, "slug": concept, "steps": steps}
 
+    # Step 0: ownership gate. If another owner holds a live claim on this
+    # slug, do not normalize / check / commit — exit before any mutation.
+    canonical_owner = cli_owner(owner)
+    existing_claim = read_claim(bundle, concept)
+    if existing_claim and existing_claim.get("owner") != canonical_owner:
+        steps.append({
+            "step": "claim-check",
+            "ok": False,
+            "error": "claim_held",
+            "owner": existing_claim.get("owner"),
+            "acquired_at": existing_claim.get("acquired_at"),
+        })
+        _emit_finalize(envelope, fmt_resolved)
+        raise typer.Exit(code=EXIT_LOCK_HELD)
+
     # Step 1: normalize references.
     if not draft_path(bundle, concept).is_file():
         steps.append({
@@ -459,22 +474,11 @@ def cmd_finalize(
         "path": str(result.page_path.relative_to(bundle.root)).replace("\\", "/"),
     })
 
-    # Step 4: release the per-concept claim.
+    # Step 4: release the per-concept claim. Ownership was gated at Step 0,
+    # so a False return here means "no live claim" (the no-claim branch
+    # matches `work release`'s behaviour).
     typer.echo(f"finalize: release {concept}", err=True)
-    canonical_owner = cli_owner(owner)
     released = release_claim(bundle, concept, owner=canonical_owner)
-    if not released:
-        existing = read_claim(bundle, concept)
-        if existing and existing.get("owner") != canonical_owner:
-            steps.append({
-                "step": "release",
-                "ok": False,
-                "error": "claim_held",
-                "owner": existing.get("owner"),
-                "acquired_at": existing.get("acquired_at"),
-            })
-            _emit_finalize(envelope, fmt_resolved)
-            raise typer.Exit(code=EXIT_LOCK_HELD)
     steps.append({"step": "release", "ok": True, "released": released})
 
     envelope["ok"] = True

@@ -234,3 +234,45 @@ def test_draft_finalize_dry_run(tmp_path: Path) -> None:
     assert not validation_path(bundle, slug).exists()
     post_articles = list(article_dir.iterdir()) if article_dir.exists() else []
     assert post_articles == pre_articles
+
+
+def test_draft_finalize_wrong_owner_does_not_mutate(tmp_path: Path) -> None:
+    """A live claim held by another owner must gate every step."""
+    bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)
+    _build_draft(bundle_dir, corpus_dir, slug)
+    bundle = Bundle.open(bundle_dir)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    write_json(response_path(bundle, slug), _good_response(quote))
+
+    # Another owner holds the claim.
+    acquire_claim(bundle, slug, owner="other-owner", ttl_seconds=1800)
+
+    article_dir = bundle.root / "wiki" / "articles"
+    pre_articles = list(article_dir.iterdir()) if article_dir.exists() else []
+    pre_validation_exists = validation_path(bundle, slug).exists()
+
+    result = runner.invoke(
+        app,
+        [
+            "draft", "finalize", slug,
+            "--run", str(bundle_dir),
+            "--owner", "intruder",
+            "--format", "json",
+        ],
+    )
+    # Exit non-zero (lock-held); envelope reports the claim-check step.
+    assert result.exit_code != 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is False
+    assert envelope["steps"][0]["step"] == "claim-check"
+    assert envelope["steps"][0]["error"] == "claim_held"
+    assert envelope["steps"][0]["owner"] == "other-owner"
+
+    # No mutation happened: no validation.json was written, no article was
+    # promoted, and the other owner's claim is still intact.
+    assert validation_path(bundle, slug).exists() == pre_validation_exists
+    post_articles = list(article_dir.iterdir()) if article_dir.exists() else []
+    assert post_articles == pre_articles
+    still_held = read_claim(bundle, slug)
+    assert still_held and still_held.get("owner") == "other-owner"

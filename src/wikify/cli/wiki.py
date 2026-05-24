@@ -331,11 +331,24 @@ def cmd_rebuild(
     fmt_resolved = _resolve_format_or_error(fmt)
     bundle = _resolve_bundle(run)
 
+    will_run_vectors = "vectors" not in skip_list
+    # rebuild_vectors() calls rebuild_graph() internally; when vectors
+    # runs in the same wave, the explicit graph step is redundant work.
+    covered_by_vectors = {"graph"}
+
     skipped: list[str] = []
     steps_done: list[dict] = []
     for name, fn in _REBUILD_STEPS:
         if name in skip_list:
             skipped.append(name)
+            continue
+        if name in covered_by_vectors and will_run_vectors:
+            steps_done.append({
+                "step": name,
+                "ok": True,
+                "duration_ms": 0,
+                "covered_by": "vectors",
+            })
             continue
         t0 = time.monotonic()
         try:

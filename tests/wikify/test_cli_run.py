@@ -286,6 +286,40 @@ def test_record_calls_fail_fast(tmp_path: Path) -> None:
     assert events == []
 
 
+def test_record_calls_rejects_non_object_lines(tmp_path: Path) -> None:
+    """A bare JSON string or array is valid JSON but not a call record."""
+    bundle = _init_bundle(tmp_path)
+    bare_string = '"just-a-string"'
+    bare_array = "[1, 2, 3]"
+    good = json.dumps(
+        {
+            "role": "writer",
+            "model_id": "claude-sonnet-4-6",
+            "tier": "M",
+            "tokens_in": 10,
+            "tokens_out": 5,
+            "stage": "write",
+        }
+    )
+    stdin = "\n".join([bare_string, bare_array, good]) + "\n"
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-calls",
+            "--run", str(bundle),
+            "--from-stdin",
+        ],
+        input=stdin,
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["appended"] == 1
+    assert summary["rejected"] == 2
+    assert len(summary["errors"]) == 2
+    events = _call_events(bundle)
+    assert len(events) == 1
+
+
 def test_run_lock_then_unlock(tmp_path: Path) -> None:
     bundle = _bundle_dir(tmp_path)
     corpus = tmp_path / "corpus"

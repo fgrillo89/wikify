@@ -384,6 +384,24 @@ def test_cluster_concepts_auto_records_mode_in_output(tmp_path: Path) -> None:
     assert payload["mode_selected"] in ("seeds", "evidence")
 
 
+def test_cluster_concepts_auto_empty_bundle(tmp_path: Path) -> None:
+    """Empty bundle (no concepts at all): auto picks seeds, clusters empty."""
+    bundle_dir = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "cluster-concepts",
+            "--run", str(bundle_dir),
+            "--by", "auto",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode_selected"] == "seeds"
+    assert payload.get("clusters") in ([], None) or len(payload.get("clusters", [])) == 0
+
+
 def test_work_add_feedback(tmp_path: Path) -> None:
     bundle = _init_bundle(tmp_path)
     record = tmp_path / "fb.json"
