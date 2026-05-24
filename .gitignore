@@ -69,3 +69,34 @@ tmp_writes/
 /candidates_aggregated.json
 /q*.json
 /q_*.json
+
+# Repo-root vetter / extractor / debug scratch (one-off, never checked in).
+# These are produced by subagents that drop intermediate JSON/TXT in the
+# project root during evidence loops. Keep the patterns specific to root
+# so subdirectories aren't accidentally ignored.
+/evidence_*.json
+/evidence_*.txt
+/build_evidence_*.txt
+/build_evidence_*.json
+/_tmp_*
+/chunk_*.json
+/chunk_*.txt
+/corpus_find_result*.json
+/payload_*.json
+/imc_*.json
+/fs_evidence_*.json
+/exact_quotes*.txt
+/quote_verify*.txt
+/final_verify*.txt
+/fix_snippets*.txt
+/long*.txt
+/snippets*.txt
+/*_snippet.txt
+/*_snippets.txt
+/df*_id.txt
+# Mis-quoted tool-result paths from Claude harness leaking project root.
+# Filenames have a non-printable byte right after the leading ``C`` that
+# git status displays as ``\357\200\272`` (octal), so we can't anchor on
+# it. Match instead on the distinctive ``.claudeprojectsC--dev-scholarforge``
+# substring the harness embeds inside the leaked filenames.
+/C*.claudeprojectsC--dev-scholarforge*
