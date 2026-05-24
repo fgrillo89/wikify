@@ -288,6 +288,102 @@ def test_work_cluster_concepts_by_doc_overlap(tmp_path: Path) -> None:
     assert p_clusters and p_clusters[0]["slugs"] == [p_slug]
 
 
+def test_cluster_concepts_auto_picks_seeds_pre_evidence(tmp_path: Path) -> None:
+    """Fresh bundle with concepts but no evidence: --by auto picks seeds."""
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    a_slug, _ = create_concept(bundle, page_id="Concept A", kind="article")
+    b_slug, _ = create_concept(bundle, page_id="Concept B", kind="article")
+    # Seed-handle overlap so seeds mode produces a non-empty cluster.
+    for slug, handles in (
+        (a_slug, ["doc:s1", "doc:s2", "doc:s3"]),
+        (b_slug, ["doc:s2", "doc:s3", "doc:s4"]),
+    ):
+        card = load_card(bundle, slug)
+        card.front["seed_doc_handles"] = handles
+        save_card(bundle, slug, card)
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "cluster-concepts",
+            "--run", str(bundle_dir),
+            "--by", "auto",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode_selected"] == "seeds"
+    # A and B share 2/4 seed docs (Jaccard = 0.5 >= 0.15) → cluster together.
+    grouped = [tuple(sorted(c["slugs"])) for c in payload["clusters"]]
+    assert (a_slug, b_slug) in [tuple(sorted(g)) for g in grouped]
+
+
+def test_cluster_concepts_auto_picks_evidence_post_evidence(
+    tmp_path: Path,
+) -> None:
+    """Bundle with at least one slug carrying evidence: --by auto picks
+    evidence."""
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    a_slug, _ = create_concept(bundle, page_id="Concept A", kind="article")
+    b_slug, _ = create_concept(bundle, page_id="Concept B", kind="article")
+    # Only one slug has evidence — still enough to flip auto into 'evidence'.
+    append_evidence(
+        bundle, a_slug,
+        [EvidenceRecord(chunk_id=f"doc_{i}__c0", doc_id=f"doc_{i}") for i in range(3)],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "cluster-concepts",
+            "--run", str(bundle_dir),
+            "--by", "auto",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode_selected"] == "evidence"
+    # B has no evidence → empty doc set → singleton cluster.
+    flat = {s for c in payload["clusters"] for s in c["slugs"]}
+    assert a_slug in flat
+    assert b_slug in flat
+
+
+def test_cluster_concepts_auto_records_mode_in_output(tmp_path: Path) -> None:
+    """JSON output includes the resolved mode under 'mode_selected'."""
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    create_concept(bundle, page_id="Concept A", kind="article")
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "cluster-concepts",
+            "--run", str(bundle_dir),
+            "--by", "auto",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "mode_selected" in payload
+    assert payload["mode_selected"] in ("seeds", "evidence")
+
+
 def test_work_add_feedback(tmp_path: Path) -> None:
     bundle = _init_bundle(tmp_path)
     record = tmp_path / "fb.json"
