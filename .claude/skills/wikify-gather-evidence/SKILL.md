@@ -101,43 +101,19 @@ to every call):
 by="chunk"      # default; do not change for the candidate pool
 top_k=25
 rank="all"
+include_text=True    # inlines the full chunk body in the response
 exclude_kinds=["references", "acknowledgments", "figure", "table", "caption", "boilerplate"]
 ```
 
-### What `corpus_find` returns and what it does NOT return
+### What `corpus_find` returns with `include_text=True`
 
 Each chunk row has: `handle` (e.g. `chunk:aac091f7`), `score`,
-`preview` (the first ~240 chars of the chunk text), `meta.doc_handle`,
-`meta.section_path`, `meta.kind`. **`preview` is a truncated head, not
-the full chunk body.** For most rows this is enough to recognize
-editorial headers, bylines, and obvious definition openers ("X is …").
-It is NOT enough to honor the "read every chunk" rule or to lift a
-verbatim quote that lives mid-chunk.
+`preview` (~240 chars), `text` (the full chunk body), `meta.doc_handle`,
+`meta.section_path`, `meta.kind`. The vetter reads `text` to honor the
+"read every chunk" rule and lifts the verbatim quote from it. No
+follow-up `corpus_show` call is needed for the candidate pool.
 
-### Mandatory full-text follow-up (Step 2b)
-
-After merging `corpus_find` batches and deduping by `chunk_id`,
-fetch the full body for every unique candidate handle:
-
-```
-mcp__wikify__corpus_show(handle="chunk:<short>", full=True)
-```
-
-This returns the chunk's full `text`. The vetter cannot honor the
-"read every chunk" rule from preview alone — preview is a triage
-signal; the full text is the substrate.
-
-**Batch the `corpus_show` calls in parallel in one tool turn.** Claude
-can issue many tool calls in a single assistant turn; do that so
-all candidates resolve concurrently. Serial per-candidate
-`corpus_show` is the anti-pattern — each adds API round-trip
-overhead. A pool of 60 unique candidates resolved in one parallel
-turn lands in seconds; resolved serially it lands in minutes.
-
-When the preview alone unambiguously rules a chunk out (e.g. it is
-a clear editorial header), you may skip the `corpus_show` for that
-handle. Record the reject decision row with the preview sentence as
-the quote. When in doubt, fetch the full body.
+(`include_text` is chunk-only; paper/author rows ignore it.)
 
 ### `by` other than chunk
 
@@ -428,10 +404,11 @@ records the vetter call via `wikify run record-call` after you return.
   is mandatory unless quota is met on the first round.
 - Hunt for one definition-style chunk per slug.
 - Do not edit `work/concepts/<slug>/evidence.jsonl` directly.
-- Always follow `corpus_find` with batched-parallel
-  `corpus_show(handle, full=True)` for the candidate pool. Preview
-  alone is not enough to honor "read every chunk". Serial per-
-  candidate `corpus_show` is the anti-pattern.
+- Always call `corpus_find` with `include_text=True` so chunk bodies
+  arrive inline. The verbatim quote must come from the `text` field of
+  each chunk row, not the truncated `preview`. (Falling back to
+  per-candidate `corpus_show(full=True)` is the slow path; only use it
+  if `include_text` is unavailable in your environment.)
 - Always call `corpus_find` with `by="chunk"` (the default) when
   building the candidate pool. `by="paper"` and `by="author"`
   return different row shapes and do not give you chunk text.
