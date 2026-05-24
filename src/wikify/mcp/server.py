@@ -78,6 +78,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
             row = fetched.get(cid)
             if row is None:
                 continue
+            if "text" not in r:
+                r["text"] = row["text"] or ""
             if not r.get("preview"):
                 r["preview"] = (row["text"] or "")[:240]
             if "section_path" not in r:
@@ -99,6 +101,8 @@ def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
         chunk = queries.get_chunk(corpus, cid)
         if chunk is None:
             continue
+        if "text" not in r:
+            r["text"] = chunk.text or ""
         if not r.get("preview"):
             r["preview"] = (chunk.text or "")[:240]
         if "section_path" not in r:
@@ -226,14 +230,19 @@ def _shape_walk_chunks(
     return items, handle_map
 
 
-def _shape_find_items(corpus, result: dict) -> list[dict]:
+def _shape_find_items(corpus, result: dict, *,
+                      include_text: bool = False) -> list[dict]:
     kind = result["kind"]
     rows = result["rows"]
     scored = result.get("scored")
     if kind == "chunks":
         _enrich_chunk_rows(corpus, rows)
         items = [
-            chunk_row_item(r, score=(r.get("score") if scored else None))
+            chunk_row_item(
+                r,
+                score=(r.get("score") if scored else None),
+                include_text=include_text,
+            )
             for r in rows
         ]
         _disambiguate_chunk_items(rows, items)
@@ -337,7 +346,9 @@ def build_server() -> FastMCP:
         corpus = context.get_corpus()
         if corpus is not None:
             try:
-                snap["health"] = queries.check_corpus(corpus, full=False)
+                health = queries.check_corpus(corpus, full=False)
+                health["rank_metrics"] = dict(queries.SCHEMA["rank_metrics"])
+                snap["health"] = health
             except Exception as exc:
                 snap["health_error"] = str(exc)
         return ok("context", items=[snap])
@@ -370,7 +381,8 @@ def build_server() -> FastMCP:
                           text: bool = False,
                           field: str = "chunk_text",
                           in_doc: str | None = None,
-                          exclude_kinds: list[str] | None = None) -> dict:
+                          exclude_kinds: list[str] | None = None,
+                          include_text: bool = False) -> dict:
         """Search the corpus.
 
         ``by`` is ``chunk`` | ``paper`` | ``author``. ``rank`` is
@@ -393,6 +405,12 @@ def build_server() -> FastMCP:
         for keeping bibliography and acknowledgments paragraphs out
         of content retrieval. Returned chunk rows carry ``meta.kind``
         so callers can see what they got.
+
+        ``include_text=True`` inlines each chunk's full body text on
+        its row under ``text`` (chunk rows only; no-op for ``by=paper``
+        and ``by=author``). Saves the per-candidate
+        ``corpus_show(handle, full=True)`` round trip vetters otherwise
+        pay to read a hit's body.
 
         Paper rows include ``best_chunk_section`` so the agent can tell
         whether a hit came from the abstract vs. references without
@@ -421,7 +439,9 @@ def build_server() -> FastMCP:
         except queries.QueryError as exc:
             return _handle_query_error(exc)
         return ok("corpus_find_result",
-                  items=_shape_find_items(corpus, result))
+                  items=_shape_find_items(
+                      corpus, result, include_text=include_text,
+                  ))
 
     @srv.tool()
     async def corpus_traverse(handle: str, to: str, rank: str = "",
