@@ -251,7 +251,14 @@ def cmd_close(
             error="bad_status",
             message="--status must be completed|failed|abandoned",
         )
+    has_call_events = any(e.type == "call" for e in iter_events(bundle))
     state = close_run(bundle, status=status)
+    if not has_call_events:
+        typer.echo(
+            "WARNING: no agent call telemetry recorded; eval cost curves will "
+            "be empty. Use 'wikify run record-calls' before closing.",
+            err=True,
+        )
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "run_id": state.run_id, "status": state.status}))
     else:

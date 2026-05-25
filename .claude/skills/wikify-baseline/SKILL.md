@@ -141,13 +141,13 @@ Then run the Inspection Loop and write the Final Report.
 | vetter | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
 | writer | sonnet M | `wikify-write-page` | cluster slugs + dossier paths | per-slug `response.json` paths |
 
-Every Task return must also yield `{tokens_in, tokens_out, model_id}`
-for the Telemetry pass below.
-
 ## Telemetry
 
-Collect `{role, model_id, tier, tokens_in, tokens_out, stage}` lines as
-each subagent returns, then ingest one batch per wave:
+Token counts must come from the harness `<usage>` payload delivered at
+the Agent tool boundary, not from subagent self-reports. Subagents
+cannot reliably introspect their tool-result intake; self-reported
+`tokens_in` routinely undershoots the harness total by 5-10x. The
+orchestrator reads the harness usage block and records it via:
 
 ```bash
 wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
@@ -157,7 +157,8 @@ EOF
 ```
 
 Stages: `extract`, `evidence`, `write`. Cost curves are invalid
-without these events — a hard rule of the workflow.
+without these events — a hard rule of the workflow. `wikify run close`
+warns on stderr if no `call` events exist when closing.
 
 ## Defaults
 

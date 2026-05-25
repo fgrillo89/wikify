@@ -255,6 +255,11 @@ class ExtractedConcept(BaseModel):
     equations: list[Equation] = Field(default_factory=list)
     # Citation references relevant to this concept (bibkeys or ordinals).
     cited_refs: list[str] = Field(default_factory=list)
+    # Corpus doc handles the extractor saw and judged relevant (e.g.
+    # "doc:abc12345"). Used as a high-precision prior for evidence
+    # gathering. Must be drawn from handles supplied in the sampled
+    # bodies; do not invent handles.
+    seed_doc_handles: list[str] = Field(default_factory=list)
 
     @field_validator("score")
     @classmethod

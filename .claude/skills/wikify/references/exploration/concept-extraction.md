@@ -24,6 +24,8 @@ It is prompt/reference material, not an exploration strategy.
   from the doc handles supplied in the sampled bodies; do not invent
   handles. Used downstream as a precision prior for evidence gathering.
   An empty list signals "no high-confidence seeds among the sample".
+  This is a typed field on `ExtractedConcept` (not JSONL-only) and is
+  persisted on the work card by `wikify work tend`.
 - `confidence`: extracted, inferred, or ambiguous.
 - `score`: 0.0-1.0.
 

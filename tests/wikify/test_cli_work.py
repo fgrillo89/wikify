@@ -1024,3 +1024,109 @@ def test_from_ids_archived_does_not_block_fresh_commit(tmp_path: Path) -> None:
     assert data["ok"] is True
     assert data["appended"] == 1
     assert data["stats"]["rejected_already_committed"] == 0
+
+
+def test_work_show_evidence_count_from_disk(tmp_path: Path) -> None:
+    """``work show`` must reflect the on-disk evidence count, not the stale
+    card frontmatter value. Regression for the display/cache bug where
+    ``evidence_chunks: 0`` appeared even after ``build-evidence`` wrote records.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle = _init_bundle(tmp_path)
+    runner.invoke(app, ["work", "add", "concept", "ALD", "--run", str(bundle)])
+    # Directly append evidence without going through tend (which would refresh
+    # the card). The card frontmatter still shows evidence_chunks=0.
+    bundle_api = BundleApi.open(bundle)
+    append_evidence(
+        bundle_api,
+        "ald",
+        [
+            EvidenceRecord(chunk_id="d1:001", doc_id="d1", score=0.9),
+            EvidenceRecord(chunk_id="d1:002", doc_id="d1", score=0.8),
+            EvidenceRecord(chunk_id="d2:001", doc_id="d2", score=0.7),
+        ],
+    )
+    result = runner.invoke(
+        app, ["work", "show", "ald", "--run", str(bundle), "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    # Must show 3 active records and 2 distinct docs from disk, not the stale 0.
+    assert data["front"]["evidence_chunks"] == 3
+    assert data["front"]["evidence_docs"] == 2
+
+
+def test_from_ids_nfkc_normalizes_unicode_confusables(tmp_path: Path) -> None:
+    """A vetter quote using ASCII equivalents of superscript chars (e.g. Fe2+
+    instead of Fe2+) must pass the verbatim check after NFKC normalization.
+    Regression for the unicode confusable rejection that dropped one evidence
+    record per chemistry/math slug.
+    """
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle_dir = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle_dir), "--corpus", str(corpus_root)],
+    )
+
+    # Chunk body uses Unicode superscript numerals and math glyphs.
+    body_with_superscripts = (
+        "The oxidation of iron produces Fe²⁺ ions in solution, "
+        "which react with oxygen to form Fe₂O₃ compounds at "
+        "elevated temperatures above 200 degrees Celsius or more."
+    )
+    doc = Document(
+        id="paper_u", source_path="src/paper_u.md", kind="md",
+        title="Iron Chemistry", metadata={}, markdown_path="markdown/paper_u.md",
+        image_dir="images/paper_u/", n_chunks=1, n_tokens=50,
+    )
+    chunks = [
+        Chunk(
+            id="paper_u__c0000", doc_id="paper_u", ord=0,
+            text=body_with_superscripts,
+            char_span=(0, len(body_with_superscripts)),
+            section_path=["Body"], section_type="body",
+        )
+    ]
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {doc.id: chunks})
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    from wikify.api import Bundle as BundleApi
+    create_concept(BundleApi.open(bundle_dir), page_id="Iron Chemistry", kind="article")
+
+    # Vetter submits quote using ASCII equivalents of the superscript chars.
+    # "Fe2+" is the NFKC form of "Fe²⁺"; must pass after normalization.
+    ascii_quote = "Fe2+ ions in solution"
+    payload = json.dumps([{"chunk_id": "paper_u__c0000", "quote": ascii_quote}])
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "iron-chemistry",
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    assert data["stats"]["rejected_quote_not_in_chunk"] == 0

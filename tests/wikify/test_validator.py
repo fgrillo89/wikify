@@ -240,3 +240,50 @@ def test_validate_undeclared_marker_flagged(tmp_path: Path) -> None:
     assert verdict["ok"] is False
     codes = [e["code"] for e in verdict["errors"]]
     assert "undeclared_prose_marker" in codes
+
+
+def test_validate_literal_unicode_escape_rejected(tmp_path: Path) -> None:
+    """A response containing a literal \\uXXXX escape in prose must fail check
+    with code ``literal_unicode_escape``. Regression for the writer emitting
+    six-character strings like ``\\u2013`` instead of the U+2013 en-dash.
+    """
+    bundle, _, slug = _setup(tmp_path)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    response = _good_response(slug, chunk_quote=quote)
+    # Build the literal six-character escape sequence (backslash + u + 2013).
+    # chr(0x5c) is the backslash character; this avoids Python string escape
+    # interpretation so the string truly contains the six chars, not U+2013.
+    literal_escape = chr(0x5C) + "u2013"
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Mechanism",
+        f"## Mechanism {literal_escape} Overview",
+    )
+    write_json(response_path(bundle, slug), response)
+
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"] is False
+    codes = [e["code"] for e in verdict["errors"]]
+    assert "literal_unicode_escape" in codes
+    assert verdict["structural_checks"]["no_unicode_escapes"] is False
+    # The error message must name the escape sequence.
+    msg = next(e["message"] for e in verdict["errors"] if e["code"] == "literal_unicode_escape")
+    assert "u2013" in msg
+
+
+def test_validate_real_unicode_char_ok(tmp_path: Path) -> None:
+    """A body using the actual U+2013 character (not an escape) must pass."""
+    bundle, _, slug = _setup(tmp_path)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    response = _good_response(slug, chunk_quote=quote)
+    # Insert the real en-dash character U+2013, not an escape sequence.
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Mechanism",
+        "## Mechanism – Overview",
+    )
+    write_json(response_path(bundle, slug), response)
+
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    assert verdict["structural_checks"].get("no_unicode_escapes") is True

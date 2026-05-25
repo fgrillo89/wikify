@@ -172,6 +172,12 @@ def cmd_show(
     card = load_card(bundle, concept)
     if not card.front:
         cli_error(EXIT_VALIDATION, error="concept_not_found", slug=concept)
+    # Recount from disk so the display is always current regardless of
+    # whether tend has run since the last build-evidence call.
+    recs = read_evidence(bundle, concept)
+    active = [r for r in recs if r.status == "active"]
+    card.front["evidence_chunks"] = len(active)
+    card.front["evidence_docs"] = len({r.doc_id for r in active})
     if fmt == "json":
         body_payload = card.body if full else card.body[:500]
         typer.echo(
@@ -711,7 +717,10 @@ def cmd_build_evidence(
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
             if supplied_quote is not None:
-                if supplied_quote not in raw_text:
+                import unicodedata as _ud
+                norm_text = _ud.normalize("NFKC", raw_text)
+                norm_quote = _ud.normalize("NFKC", supplied_quote)
+                if norm_quote not in norm_text:
                     vetter_stats["rejected_quote_not_in_chunk"] += 1
                     continue
                 quote = supplied_quote
