@@ -1240,3 +1240,39 @@ def test_from_ids_ocr_completely_different_content_rejects(tmp_path: Path) -> No
     assert data["stats"]["rejected_quote_not_in_chunk"] == 1
     assert data["stats"]["rejected_quote_then_whitespace_recovered"] == 0
 
+
+# ---- Friction E: chunk-handle short-form acceptance
+
+
+def test_from_ids_chunk_handle_short_form_resolves(tmp_path: Path) -> None:
+    """Passing chunk:c0000 (suffix of paper_x__c0000) must commit successfully
+    with the full id resolved from the corpus store.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import read_evidence
+
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    # The fixture id is paper_x__c0000; its suffix after the last _ is c0000.
+    short_handle = "chunk:c0000"
+    payload = json.dumps([{"chunk_id": short_handle, "score": 0.88}])
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    assert data["stats"]["rejected_not_found"] == 0
+    records = read_evidence(BundleApi.open(bundle), "atomic-layer-deposition")
+    assert len(records) == 1
+    # Committed under the full id, not the handle.
+    assert records[0].chunk_id == ids["ok_a"]
+    assert records[0].score == 0.88

@@ -586,6 +586,66 @@ def cmd_build_evidence(
             (chunk_id,),
         ).fetchone()
 
+    def resolve_chunk_handle(raw_cid: str) -> tuple[str, str | None]:
+        """Map a chunk handle to a full chunk_id.
+
+        Accepts:
+        - Full chunk_id: returned as-is. If not found in the store, returns
+          (raw_cid, error_message).
+        - ``chunk:<short>``: the short suffix (8+ hex chars) is looked up
+          via a LIKE query. Returns (full_id, None) on unique match or
+          (raw_cid, error_message) on zero / multiple matches.
+
+        Returns ``(resolved_id, error_or_None)``.
+        """
+        if not raw_cid.startswith("chunk:"):
+            # Full id path: verify it exists.
+            row = con.execute(
+                "SELECT chunk_id FROM chunks WHERE chunk_id=?", (raw_cid,)
+            ).fetchone()
+            if row is None:
+                return (
+                    raw_cid,
+                    (
+                        f"chunk id {raw_cid!r} not found in corpus store; "
+                        "check that the corpus path matches the one used "
+                        "during retrieval"
+                    ),
+                )
+            return (raw_cid, None)
+        short = raw_cid[len("chunk:"):]
+        rows = con.execute(
+            "SELECT chunk_id FROM chunks WHERE chunk_id LIKE ?",
+            (f"%_{short}",),
+        ).fetchall()
+        # Also accept exact match (test fixtures use plain ids without hash).
+        exact = con.execute(
+            "SELECT chunk_id FROM chunks WHERE chunk_id=?", (short,)
+        ).fetchone()
+        if exact is not None:
+            rows = [exact] + [r for r in rows if r["chunk_id"] != short]
+        if len(rows) == 0:
+            return (
+                raw_cid,
+                (
+                    f"chunk handle {raw_cid!r} did not resolve; "
+                    "no chunk id ends with that suffix"
+                ),
+            )
+        if len(rows) > 1:
+            matched = [r["chunk_id"] for r in rows]
+            display = matched[:5]
+            extra = f" (+{len(matched) - 5} more)" if len(matched) > 5 else ""
+            return (
+                raw_cid,
+                (
+                    f"chunk handle {raw_cid!r} did not resolve uniquely; "
+                    f"matched {len(matched)} chunks: "
+                    f"{', '.join(display)}{extra}"
+                ),
+            )
+        return (rows[0]["chunk_id"], None)
+
     # ----- commit-only mode: skip seed/find, just validate + append.
     if from_ids:
         # Parse either JSON-from-stdin (@-) or CSV form into a uniform
@@ -694,7 +754,11 @@ def cmd_build_evidence(
         }
         vetter_records: list[dict] = []
         for entry in ordered_entries:
-            cid = entry["chunk_id"]
+            raw_cid = entry["chunk_id"]
+            cid, resolve_err = resolve_chunk_handle(raw_cid)
+            if resolve_err is not None:
+                vetter_stats["rejected_not_found"] += 1
+                continue
             if cid in committed:
                 vetter_stats["rejected_already_committed"] += 1
                 continue
