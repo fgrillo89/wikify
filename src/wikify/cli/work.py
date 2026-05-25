@@ -19,6 +19,7 @@ Subcommands::
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 
 import typer
@@ -717,9 +718,8 @@ def cmd_build_evidence(
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
             if supplied_quote is not None:
-                import unicodedata as _ud
-                norm_text = _ud.normalize("NFKC", raw_text)
-                norm_quote = _ud.normalize("NFKC", supplied_quote)
+                norm_text = unicodedata.normalize("NFKC", raw_text)
+                norm_quote = unicodedata.normalize("NFKC", supplied_quote)
                 if norm_quote not in norm_text:
                     vetter_stats["rejected_quote_not_in_chunk"] += 1
                     continue

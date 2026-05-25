@@ -131,10 +131,13 @@ each batch, spawn one haiku Task. The judge's contract:
 **Judge input (you supply in the prompt):**
 - Sibling slugs with `{slug, title, aliases, definition_priors?}` —
   one tiny block per slug.
-- The batch's chunk handles + their full text (fetched via
-  `corpus_find(top_k=batch_size, include_text=True)` scoped by
-  `chunk_id`, or by passing the texts inline if the supervisor
-  pre-fetched them).
+- The batch's chunk handles + their full text. The supervisor
+  pre-fetches text by calling
+  `mcp__wikify__corpus_show(handle="chunk:<short>", full=True)` once
+  per chunk in the batch, caches the result, and passes the texts
+  inline in the judge's prompt. `corpus_find` cannot be scoped by
+  `chunk_id` — only `in_doc` (one document handle) is available —
+  so the per-chunk `corpus_show` is the only reliable path.
 - The scoring ladder (same as Rule 4 above).
 
 **Judge output (strict JSON, ≤400 tokens):**
@@ -169,8 +172,15 @@ For each accepted row the supervisor receives:
 3. If the quote is missing or not present, drop that accept row and
    log a `judge_discipline_failure` event.
 4. If a judge batch returns ≥2 discipline failures, re-run that batch
-   with `Task(model="sonnet")` as a fallback. Sonnet is more expensive
-   but reliable on the quote rule.
+   once with `Task(model="sonnet")` as a fallback. Sonnet is more
+   expensive but reliable on the quote rule.
+5. If the sonnet re-run also returns ≥2 discipline failures, discard
+   the entire batch's accepts, log a `judge_batch_abandoned` event
+   naming the chunk_ids, and continue. Do not retry a third time. A
+   batch that fails twice usually means the chunks themselves are
+   malformed (OCR garbage, byline-only, references-list dump that
+   the section classifier missed); padding the ledger from them
+   would degrade dossier quality.
 
 ## Step 5: route accepts to per-slug ledgers
 

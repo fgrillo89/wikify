@@ -84,10 +84,9 @@ Route each cluster by size:
   with that slug. The per-slug path has no fan-out overhead and beats
   the cluster pattern at size 1.
 
-Run cluster Tasks in parallel across clusters of the same kind
-(article-clusters parallel with each other, person-clusters parallel
-with each other); do not mix article and person clusters in the same
-parallel wave since person evidence has different acceptance rules.
+Run cluster Tasks in parallel across clusters. Each cluster Task
+holds its own MCP session and ledger state, so article and person
+clusters can share a wave without contamination.
 
 Targets per slug (both paths): **≥10 records across ≥5 distinct
 docs**, at least one definition chunk. Persons need quoted research
