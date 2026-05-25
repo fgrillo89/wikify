@@ -147,6 +147,42 @@ The supervisor's context now holds N×≤25 rows of preview-size data
 
 ## Step 4: fan out haiku judges
 
+### Cluster heterogeneity gate
+
+Before partitioning chunks into judge batches, inspect the cluster's
+composition using the canonical concept categories from
+`wikify/references/exploration/concept-extraction.md`: `phenomenon`,
+`method`, `material`, `device`, `theory`, `metric`, `organization`,
+`other`. Person clusters are always treated as homogeneous — skip
+this gate for them.
+
+Count `distinct_categories` among the slugs in this cluster:
+
+- **`distinct_categories >= 3` (heterogeneous cluster):** reduce
+  `judge_batch_size` from the default 6 to **4**. Haiku reliably
+  tracks fewer distinct topics per call; tighter batches keep the
+  quote-routing task within its reliable operating range.
+- **`distinct_categories < 3` (homogeneous cluster):** keep the
+  configured `judge_batch_size` (default 6).
+
+The supervisor passes the resolved batch size to every haiku judge
+Task automatically — no manual override needed.
+
+**Round-1 failure escalation:** after the first wave of judge Tasks
+completes, compute:
+
+```
+failure_rate = judge_discipline_failures / total_judge_calls
+```
+
+If `failure_rate >= 0.30` (30% or more of calls produced at least one
+discipline failure), switch **all subsequent batches in this cluster**
+to `Task(model="sonnet", ...)`. Sonnet is roughly 5x the per-token
+cost of haiku but reliably satisfies the verbatim-quote rule on
+heterogeneous topic mixes; the cost trade-off is justified when haiku
+failure rate exceeds 30% because discarded batches waste more compute
+than the upgrade saves.
+
 Partition the pool into batches of `judge_batch_size` chunks. For
 each batch, spawn one haiku Task. The judge's contract:
 
@@ -258,24 +294,63 @@ per-slug `wikify-gather-evidence` path.
 
 ## Step 8: return one envelope per slug
 
-Final response is a JSON object keyed by slug (≤600 tokens total):
+The final assistant message MUST contain ONLY the JSON object below —
+no preamble prose, no trailing notes. Any deviation (extra fields,
+renamed keys, alternate shape) is a contract violation and breaks
+orchestrator parsing. If you must record narrative notes, put them
+inside the `errors[]` list on the relevant slug, one short string per
+entry.
+
+**Exact schema (all fields required, exact key names, exact types):**
+
+```
+{
+  "cluster_size":              int,          // number of slugs in this cluster
+  "queries_issued":            int,          // total corpus_find calls across all rounds
+  "unique_chunks_judged":      int,          // deduplicated chunk_ids sent to any judge
+  "judge_calls":               int,          // total haiku/sonnet Task invocations
+  "judge_discipline_failures": int,          // rows dropped by the quote guard
+  "results": {
+    "<slug>": {
+      "appended":          int,             // rows committed via build-evidence
+      "distinct_docs":     int,             // unique doc handles in accepted rows
+      "iterations":        int,             // query rounds used (1 = initial plan only)
+      "stop_reason":       "quota_met" | "max_rounds" | "pool_exhausted" | "error",
+      "definition_chunk":  true | false,    // at least one def_for row committed
+      "score_tiers":       int,             // distinct score values among accepted rows
+      "errors":            []               // short strings; empty list when clean
+    }
+  }
+}
+```
+
+**Well-formed example (two slugs):**
 
 ```json
 {
-  "cluster_size": <int>,
-  "queries_issued": <int>,
-  "unique_chunks_judged": <int>,
-  "judge_calls": <int>,
-  "judge_discipline_failures": <int>,
+  "cluster_size": 2,
+  "queries_issued": 14,
+  "unique_chunks_judged": 87,
+  "judge_calls": 15,
+  "judge_discipline_failures": 1,
   "results": {
-    "<slug>": {
-      "appended": <int>,
-      "distinct_docs": <int>,
-      "iterations": <int>,
-      "stop_reason": "quota_met" | "max_rounds" | "pool_exhausted" | "error",
-      "definition_chunk": true | false,
-      "score_tiers": <int>,
+    "atomic-layer-deposition": {
+      "appended": 12,
+      "distinct_docs": 6,
+      "iterations": 2,
+      "stop_reason": "quota_met",
+      "definition_chunk": true,
+      "score_tiers": 4,
       "errors": []
+    },
+    "al2o3-film": {
+      "appended": 8,
+      "distinct_docs": 4,
+      "iterations": 3,
+      "stop_reason": "pool_exhausted",
+      "definition_chunk": false,
+      "score_tiers": 3,
+      "errors": ["no definition chunk found after 3 rounds; writer should open with alias expansion"]
     }
   }
 }
@@ -287,6 +362,12 @@ tokens.
 
 ## Hard rules
 
+- **Scratch files go to temp, never to project dirs.** Judge prompts,
+  intermediate payloads, and judge response dumps MUST be written to
+  the system temp directory (`/tmp/` on POSIX, `$TEMP` on Windows) or
+  under `<run>/scratch/`. NEVER write to `tasks/`, `src/`, `.claude/`,
+  or any other directory in the project source tree. A clean working
+  tree after the cluster run is a workflow invariant.
 - Supervisor calls `corpus_find` with `include_text=False`. Always.
 - Judges set per-chunk score on the same ladder as
   `wikify-gather-evidence` (1.0 definition, 0.95 mechanism, ...).
