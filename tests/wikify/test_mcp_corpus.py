@@ -1126,3 +1126,32 @@ async def test_corpus_schema_advertises_exclude_kinds() -> None:
         "exclude" in k.lower() or "exclude_kind" in k.lower()
         for k in schema["find_modes"]
     )
+
+
+# -------------------------------------------------- server_build in health
+
+
+async def test_context_show_carries_server_build(monkeypatch) -> None:
+    """context_show always includes server_build with required keys."""
+    import wikify.mcp.server as srv_mod
+
+    # Patch _SERVER_BUILD with a known fixture so the test is deterministic
+    # and does not require a live git repo.
+    fake_build = {
+        "package_version": "0.0.test",
+        "git_sha": "abc1234",
+        "started_at": "2026-01-01T00:00:00+00:00",
+    }
+    monkeypatch.setattr(srv_mod, "_SERVER_BUILD", fake_build)
+
+    srv = server.build_server()
+    res = await _tool(srv, "context_show")()
+    assert res["ok"] is True
+    snap = res["items"][0]
+    sb = snap.get("server_build")
+    assert sb is not None, "server_build missing from context_show snapshot"
+    assert "package_version" in sb
+    assert "git_sha" in sb
+    assert "started_at" in sb
+    assert sb["git_sha"] == "abc1234"
+    assert sb["package_version"] == "0.0.test"
