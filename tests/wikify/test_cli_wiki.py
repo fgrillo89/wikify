@@ -202,6 +202,41 @@ def test_wiki_rebuild_skip(tmp_path: Path) -> None:
     assert "graph" not in names
 
 
+def test_wiki_rebuild_happy_path_marks_graph_covered_by_vectors(
+    tmp_path: Path,
+) -> None:
+    """rebuild_vectors() internally calls rebuild_graph(); the explicit
+    graph step is recorded as covered to avoid duplicate work."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    graph_step = next(s for s in data["steps"] if s["step"] == "graph")
+    assert graph_step["ok"] is True
+    assert graph_step["duration_ms"] == 0
+    assert graph_step["covered_by"] == "vectors"
+
+
+def test_wiki_rebuild_compact_format_handles_covered_step(
+    tmp_path: Path,
+) -> None:
+    """--format compact must not KeyError on the covered-by step (no path)."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "compact"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "graph: ok (covered by vectors)" in result.output
+
+
 def test_wiki_rebuild_propagates_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

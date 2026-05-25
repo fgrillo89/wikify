@@ -390,7 +390,14 @@ def cmd_rebuild(
         typer.echo(json.dumps(payload))
         return
     for s in steps_done:
-        typer.echo(f"{s['step']}: ok ({s['duration_ms']} ms) -> {s['path']}")
+        if "covered_by" in s:
+            typer.echo(
+                f"{s['step']}: ok (covered by {s['covered_by']})"
+            )
+        else:
+            typer.echo(
+                f"{s['step']}: ok ({s['duration_ms']} ms) -> {s['path']}"
+            )
     for s in skipped:
         typer.echo(f"{s}: skipped")
 

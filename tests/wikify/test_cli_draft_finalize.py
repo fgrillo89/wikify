@@ -261,8 +261,8 @@ def test_draft_finalize_wrong_owner_does_not_mutate(tmp_path: Path) -> None:
             "--format", "json",
         ],
     )
-    # Exit non-zero (lock-held); envelope reports the claim-check step.
-    assert result.exit_code != 0, result.output
+    # EXIT_LOCK_HELD (2); envelope reports the claim-check step.
+    assert result.exit_code == 2, result.output
     envelope = json.loads(result.stdout)
     assert envelope["ok"] is False
     assert envelope["steps"][0]["step"] == "claim-check"
