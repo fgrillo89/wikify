@@ -84,60 +84,33 @@ Route each cluster by size:
   with that slug. The per-slug path has no fan-out overhead and beats
   the cluster pattern at size 1.
 
-Run cluster Tasks in parallel across clusters. Each cluster Task
-holds its own MCP session and ledger state, so article and person
-clusters can share a wave without contamination.
+Run cluster Tasks in parallel; each holds its own MCP session.
 
-**Rescue wave (after every cluster Task returns).** Inspect each
-cluster supervisor's Step-8 envelope. For any slug where
-`stop_reason == "pool_exhausted" AND appended < 10`, spawn one
-`wikify-gather-evidence` (per-slug) Task as a top-up. The per-slug
-vetter reads the existing `evidence.jsonl` to set its remaining
-quota and runs its own independent query plan; `wikify work
-build-evidence` dedups against committed chunk_ids so duplicates
-cannot be re-inserted. The rescue restores per-slug recall on the
-specific slugs that the shared cluster pool starved, without
-re-running cluster mode for slugs that already hit quota. Run
-rescue Tasks in parallel.
+**Rescue wave (after each cluster Task).** For any slug with
+`stop_reason == "pool_exhausted" AND appended < 10` in the
+supervisor envelope, spawn a `wikify-gather-evidence` Task as a
+top-up. The per-slug vetter sees the existing `evidence.jsonl` and
+sizes its remaining quota; `build-evidence` dedups by chunk_id so
+duplicates cannot land. Run rescues in parallel.
 
 Targets per slug (both paths, after rescue): **≥10 records across
 ≥5 distinct docs**, at least one definition chunk. Persons need
 quoted research contributions; never invent biography. If a Task
-returns `stop_reason="error"` or `appended < 6` for any slug, mark
-that slug failed — at most one retry, switching to the per-slug
-path on the retry.
+returns `stop_reason="error"` or `appended < 6`, mark the slug
+failed — at most one retry, switching to the per-slug path.
 
 ### P4 — Write + commit
 
-Re-cluster (chunks now drive grouping):
+Re-cluster (chunks now drive grouping) via `wikify work cluster-concepts
+--by auto`. Per slug: `wikify work claim` then `wikify draft build`
+with `--task create --tier M --with-adjacent` (loads ord-1/ord+1
+flanking chunks for synthesis). Spawn **one** `wikify-write-page`
+Task per cluster.
 
-```bash
-wikify work cluster-concepts --by auto --run <bundle> --format json
-```
-
-For each cluster:
-
-```bash
-for slug in <cluster-slugs>; do
-  wikify work claim "$slug" --owner baseline --ttl-seconds 1800
-  wikify draft build "$slug" --task create --corpus <corpus> --model-id <model> --tier M --with-adjacent
-done
-```
-
-Spawn **one** `wikify-write-page` Task per cluster covering all of its
-slugs. `--with-adjacent` loads each evidence chunk's flanking ord-1/
-ord+1 chunks for synthesis.
-
-Per page, run the single-shot finalize chain (normalize → check →
-commit → release):
-
-```bash
-wikify draft finalize <slug> --run <bundle> --owner baseline --format json
-```
-
-`finalize` short-circuits on the first failure. If `check` fails,
-inspect `validation.json` and re-invoke the writer for that slug. **Do
-not patch committed markdown directly.**
+Per page, run `wikify draft finalize <slug> --owner baseline` — the
+single-shot normalize → check → commit → release chain, short-
+circuits on first failure. If check fails, inspect `validation.json`
+and re-invoke the writer. **Do not patch committed markdown.**
 
 ### P5 — Finalize
 
@@ -170,11 +143,9 @@ Then run the Inspection Loop and write the Final Report.
 
 ## Telemetry
 
-Token counts must come from the harness `<usage>` payload delivered at
-the Agent tool boundary, not from subagent self-reports. Subagents
-cannot reliably introspect their tool-result intake; self-reported
-`tokens_in` routinely undershoots the harness total by 5-10x. The
-orchestrator reads the harness usage block and records it via:
+Token counts come from the harness `<usage>` payload at each Agent
+tool boundary, NOT from subagent self-reports (subagents undershoot
+their tool-result intake by 5-10x). Orchestrator records via:
 
 ```bash
 wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
@@ -183,9 +154,8 @@ wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
 EOF
 ```
 
-Stages: `extract`, `evidence`, `write`. Cost curves are invalid
-without these events — a hard rule of the workflow. `wikify run close`
-warns on stderr if no `call` events exist when closing.
+Stages: `extract`, `evidence`, `write`. `wikify run close` warns on
+stderr if no `call` events exist.
 
 ## Defaults
 
