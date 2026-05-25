@@ -19,6 +19,7 @@ Subcommands::
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from pathlib import Path
 
@@ -469,11 +470,9 @@ _NEVER_CITE_PATTERNS = (
 
 
 def _matches_never_cite(text: str) -> bool:
-    import re as _re
-
     head = text[:600] if text else ""
     return any(
-        _re.search(p, head, _re.IGNORECASE | _re.MULTILINE)
+        re.search(p, head, re.IGNORECASE | re.MULTILINE)
         for p in _NEVER_CITE_PATTERNS
     )
 
@@ -614,9 +613,12 @@ def cmd_build_evidence(
                 )
             return (raw_cid, None)
         short = raw_cid[len("chunk:"):]
+        # Escape SQLite LIKE wildcards so a suffix containing % or _
+        # is matched literally, not as a wildcard pattern.
+        short_esc = short.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = con.execute(
-            "SELECT chunk_id FROM chunks WHERE chunk_id LIKE ?",
-            (f"%_{short}",),
+            "SELECT chunk_id FROM chunks WHERE chunk_id LIKE ? ESCAPE '\\'",
+            (f"%_{short_esc}",),
         ).fetchall()
         # Also accept exact match (test fixtures use plain ids without hash).
         exact = con.execute(
@@ -783,19 +785,19 @@ def cmd_build_evidence(
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
             if supplied_quote is not None:
-                import re as _re
-
                 norm_text = unicodedata.normalize("NFKC", raw_text)
                 norm_quote = unicodedata.normalize("NFKC", supplied_quote)
                 if norm_quote in norm_text:
                     quote = supplied_quote
                 else:
-                    # Tier 2: strip all whitespace on both sides for
-                    # comparison (handles OCR artefacts like "SiN x" vs
-                    # "SiNx" where a space is inserted inside a token).
-                    ws_text = _re.sub(r"\s+", "", norm_text)
-                    ws_quote = _re.sub(r"\s+", "", norm_quote)
-                    if ws_quote in ws_text:
+                    # Tier 2: strip all whitespace on both sides
+                    # (handles OCR artefacts like "SiN x" vs "SiNx").
+                    # Gate on min length 12 so a short collapsed quote
+                    # cannot substring-match an unrelated token region
+                    # ("SiNx" inside "GeSiNxO").
+                    ws_text = re.sub(r"\s+", "", norm_text)
+                    ws_quote = re.sub(r"\s+", "", norm_quote)
+                    if len(ws_quote) >= 12 and ws_quote in ws_text:
                         vetter_stats["rejected_quote_then_whitespace_recovered"] += 1
                         quote = supplied_quote  # keep writer's spelling
                     else:

@@ -1276,3 +1276,61 @@ def test_from_ids_chunk_handle_short_form_resolves(tmp_path: Path) -> None:
     # Committed under the full id, not the handle.
     assert records[0].chunk_id == ids["ok_a"]
     assert records[0].score == 0.88
+
+
+def test_from_ids_short_quote_rejected_to_block_collision(tmp_path: Path) -> None:
+    """A quote whose whitespace-stripped form is <12 chars must NOT pass
+    Tier-2 even when it substring-matches the stripped chunk text; otherwise
+    a 4-char quote like 'SiNx' could falsely match a different token region
+    such as 'GeSiNxO' in an unrelated chunk.
+    """
+    bundle_dir, corpus_root = _build_ocr_corpus(tmp_path)
+    short_collision_quote = "SiNx"  # 4 chars stripped, present in the chunk
+    payload = json.dumps(
+        [{"chunk_id": "paper_ocr__c0000", "quote": short_collision_quote}]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "sinx-synaptic-device",
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["stats"]["rejected_quote_not_in_chunk"] == 1
+    assert data["stats"]["rejected_quote_then_whitespace_recovered"] == 0
+
+
+def test_from_ids_chunk_handle_short_form_like_wildcards_escaped(
+    tmp_path: Path,
+) -> None:
+    """A chunk:&lt;suffix&gt; whose suffix contains SQLite LIKE wildcards (% or _)
+    must be matched literally, not expanded as a wildcard pattern. Otherwise
+    a suffix of '%' would match every chunk in the store.
+    """
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    # '%' is the SQL LIKE 'match any string' wildcard. Without escaping,
+    # 'chunk:%' would match every row; with the ESCAPE clause it matches
+    # nothing (no chunk_id literally ends in '_%').
+    payload = json.dumps([{"chunk_id": "chunk:%", "score": 0.5}])
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["stats"]["rejected_not_found"] == 1

@@ -149,24 +149,23 @@ The supervisor's context now holds N×≤25 rows of preview-size data
 
 ### Cluster heterogeneity gate
 
-Before partitioning chunks into judge batches, inspect the cluster's
-composition using the canonical concept categories from
-`wikify/references/exploration/concept-extraction.md`: `phenomenon`,
-`method`, `material`, `device`, `theory`, `metric`, `organization`,
-`other`. Person clusters are always treated as homogeneous — skip
-this gate for them.
+Before partitioning chunks into judge batches, set the working
+`judge_batch_size` based on cluster size:
 
-Count `distinct_categories` among the slugs in this cluster:
+- **`cluster_size >= 4`:** reduce `judge_batch_size` from the
+  default 6 to **4**. Larger sibling sets carry more distinct
+  sub-topics in the judge's prior block, which crowds haiku's
+  attention. Smaller batches keep the quote-routing task within
+  haiku's reliable operating range.
+- **`cluster_size < 4`:** keep the configured `judge_batch_size`
+  (default 6).
 
-- **`distinct_categories >= 3` (heterogeneous cluster):** reduce
-  `judge_batch_size` from the default 6 to **4**. Haiku reliably
-  tracks fewer distinct topics per call; tighter batches keep the
-  quote-routing task within its reliable operating range.
-- **`distinct_categories < 3` (homogeneous cluster):** keep the
-  configured `judge_batch_size` (default 6).
+Person clusters use the same size rule. The supervisor passes the
+resolved batch size to every haiku judge Task automatically.
 
-The supervisor passes the resolved batch size to every haiku judge
-Task automatically — no manual override needed.
+Size is the right proxy because it is directly readable from
+`cluster_slugs` at runtime, with no dependency on per-concept
+category metadata.
 
 **Round-1 failure escalation:** after the first wave of judge Tasks
 completes, compute:

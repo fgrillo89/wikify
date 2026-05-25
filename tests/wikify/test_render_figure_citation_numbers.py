@@ -136,3 +136,20 @@ def test_multiple_figures_all_remapped():
     assert "[2]" in result
     assert "[e1]" not in result
     assert "[e2]" not in result
+
+
+# ---------------------------------------------------------------------------
+# No-op: page with zero figure citations must not emit stderr or alter HTML
+# ---------------------------------------------------------------------------
+
+
+def test_no_figure_citations_noop(capsys):
+    body_md = (
+        "Plain prose with a body footnote.[^e1]\n\n"
+        "[^e1]: Doc > 'quote.'\n"
+    )
+    body_html = _make_body_html(body_md)
+    result = _remap_figure_citation_numbers(body_html)
+    captured = capsys.readouterr()
+    assert result == body_html
+    assert captured.err == ""

@@ -154,8 +154,9 @@ wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
 EOF
 ```
 
-Stages: `extract`, `evidence`, `write`. `wikify run close` warns on
-stderr if no `call` events exist.
+Stages: `extract`, `evidence`, `write`. Recording is mandatory —
+`wikify run close` warns on stderr if no `call` events exist, and
+cost curves in `wikify eval` are invalid without them.
 
 ## Defaults
 

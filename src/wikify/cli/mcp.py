@@ -27,8 +27,6 @@ import typer
 
 app = typer.Typer(add_completion=False, help="MCP server controls.")
 
-_PID_FILE = Path(tempfile.gettempdir()) / "wikify_mcp.pid"
-
 
 def _pid_file_path() -> Path:
     """Return the PID file path (``$TMPDIR/wikify_mcp.pid``)."""
