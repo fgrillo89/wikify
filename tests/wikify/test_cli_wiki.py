@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from tests.wikify.test_wiki_commit import _setup_validated  # noqa: E402
@@ -148,6 +149,127 @@ def test_wiki_build_vectors_populates_wiki_db_embeddings(tmp_path: Path) -> None
         con.close()
     assert n_spaces == 1
     assert n_embeddings == 1
+
+
+def test_wiki_rebuild_happy_path(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["run"] == str(bundle.root)
+    assert data["skipped"] == []
+    names = [s["step"] for s in data["steps"]]
+    assert names == ["vectors", "indexes", "graph"]
+    assert all(s["ok"] for s in data["steps"])
+    assert all("duration_ms" in s for s in data["steps"])
+    assert bundle.derived_vectors_path.exists()
+    assert bundle.derived_index_path.exists()
+    assert bundle.sqlite_path.exists()
+
+
+def test_wiki_rebuild_skip(tmp_path: Path) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    # Wipe wiki.db so we can prove `--skip graph` does not touch it.
+    if bundle.sqlite_path.exists():
+        bundle.sqlite_path.unlink()
+
+    result = runner.invoke(
+        app,
+        [
+            "wiki", "rebuild",
+            "--run", str(bundle.root),
+            "--skip", "graph",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["skipped"] == ["graph"]
+    names = [s["step"] for s in data["steps"]]
+    assert names == ["vectors", "indexes"]
+    assert all(s["ok"] for s in data["steps"])
+    # vectors internally rebuilds wiki.db; to prove `graph` was the skipped
+    # step, assert the explicit graph step is absent from steps_done.
+    assert "graph" not in names
+
+
+def test_wiki_rebuild_happy_path_marks_graph_covered_by_vectors(
+    tmp_path: Path,
+) -> None:
+    """rebuild_vectors() internally calls rebuild_graph(); the explicit
+    graph step is recorded as covered to avoid duplicate work."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    graph_step = next(s for s in data["steps"] if s["step"] == "graph")
+    assert graph_step["ok"] is True
+    assert graph_step["duration_ms"] == 0
+    assert graph_step["covered_by"] == "vectors"
+
+
+def test_wiki_rebuild_compact_format_handles_covered_step(
+    tmp_path: Path,
+) -> None:
+    """--format compact must not KeyError on the covered-by step (no path)."""
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "compact"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "graph: ok (covered by vectors)" in result.output
+
+
+def test_wiki_rebuild_propagates_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, slug = _setup_validated(tmp_path)
+    runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])
+
+    from wikify.cli import wiki as wiki_cli
+
+    def _boom(_bundle: object) -> None:
+        raise RuntimeError("indexes blew up")
+
+    original_steps = wiki_cli._REBUILD_STEPS
+    patched_steps = tuple(
+        (name, _boom if name == "indexes" else fn)
+        for name, fn in original_steps
+    )
+    monkeypatch.setattr(wiki_cli, "_REBUILD_STEPS", patched_steps)
+
+    result = runner.invoke(
+        app,
+        ["wiki", "rebuild", "--run", str(bundle.root), "--format", "json"],
+    )
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"] == "rebuild_failed"
+    assert payload["failed_step"] == "indexes"
+    assert "indexes blew up" in payload["message"]
+    # vectors ran and succeeded; graph never ran (short-circuit).
+    step_names = [s["step"] for s in payload["steps"]]
+    assert step_names == ["vectors", "indexes"]
+    assert payload["steps"][0]["ok"] is True
+    assert payload["steps"][1]["ok"] is False
 
 
 def test_wiki_traverse_category_pages_from_navigation(tmp_path: Path) -> None:

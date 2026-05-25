@@ -916,10 +916,12 @@ def cmd_build_evidence(
 @app.command("cluster-concepts")
 def cmd_cluster_concepts(
     by: str = typer.Option(
-        "evidence", "--by",
-        help="Signal to cluster on: 'evidence' (Jaccard over evidence "
-        "doc_ids, requires evidence committed) or 'seeds' (Jaccard over "
-        "seed_doc_handles from the work card, usable pre-evidence).",
+        "auto", "--by",
+        help="Signal to cluster on: 'auto' (pick 'evidence' if any "
+        "concept has active evidence, else 'seeds'), 'evidence' "
+        "(Jaccard over evidence doc_ids, requires evidence committed) "
+        "or 'seeds' (Jaccard over seed_doc_handles from the work card, "
+        "usable pre-evidence).",
     ),
     threshold: float = typer.Option(
         0.15, "--threshold",
@@ -937,11 +939,18 @@ def cmd_cluster_concepts(
 
     Choose the signal with ``--by``:
 
-    - ``evidence`` (default): overlap of evidence.jsonl doc_ids. Used
-      between vetting and writing so one writer agent handles pages
-      that share source documents.
+    - ``auto`` (default): inspect the bundle and pick ``evidence`` if
+      at least one concept has an active evidence record, otherwise
+      ``seeds``. Removes the trap of calling cluster pre-evidence with
+      the default and getting empty clusters.
+    - ``evidence``: overlap of evidence.jsonl doc_ids. Used between
+      vetting and writing so one writer agent handles pages that share
+      source documents.
     - ``seeds``: overlap of ``seed_doc_handles`` from each work card.
       Used pre-evidence (e.g. to group vetters into parallel waves).
+
+    When ``--by auto`` is used the JSON output includes a
+    ``mode_selected`` field naming the resolved mode.
 
     Person concepts are placed in their own cluster regardless of
     overlap so the person-style prompt path stays distinct from
@@ -949,13 +958,25 @@ def cmd_cluster_concepts(
     """
     from ..bundle.work.evidence import read_evidence
 
-    by = (by or "evidence").lower()
-    if by not in ("evidence", "seeds"):
+    requested = (by or "auto").lower()
+    if requested not in ("auto", "evidence", "seeds"):
         cli_error(EXIT_VALIDATION, error="invalid_by",
-                  message=f"--by must be 'evidence' or 'seeds', got {by!r}")
+                  message=f"--by must be 'auto', 'evidence' or 'seeds', "
+                          f"got {by!r}")
 
     bundle = _resolve_bundle(run)
     slugs = list_concept_slugs(bundle)
+
+    if requested == "auto":
+        mode = "seeds"
+        for s in slugs:
+            recs = read_evidence(bundle, s)
+            if any(r.status == "active" for r in recs):
+                mode = "evidence"
+                break
+    else:
+        mode = requested
+
     by_slug: dict[str, set[str]] = {}
     kind_of: dict[str, str] = {}
     for s in slugs:
@@ -963,10 +984,10 @@ def cmd_cluster_concepts(
         if card.front.get("status") not in ("active", "committed"):
             continue
         kind_of[s] = card.kind
-        if by == "evidence":
+        if mode == "evidence":
             recs = read_evidence(bundle, s)
             by_slug[s] = {r.doc_id for r in recs if r.status == "active"}
-        else:  # by == "seeds"
+        else:  # mode == "seeds"
             handles = card.front.get("seed_doc_handles") or []
             by_slug[s] = {h.split(":", 1)[-1] for h in handles if h}
 
@@ -1008,26 +1029,25 @@ def cmd_cluster_concepts(
             clusters.append(person_slugs[i : i + max_cluster_size])
 
     if fmt == "json":
-        typer.echo(
-            json.dumps(
+        payload = {
+            "ok": True,
+            "clusters": [
                 {
-                    "ok": True,
-                    "clusters": [
-                        {
-                            "id": i,
-                            "kind": (
-                                "person"
-                                if all(kind_of[s] == "person" for s in c)
-                                else "article"
-                            ),
-                            "slugs": c,
-                            "size": len(c),
-                        }
-                        for i, c in enumerate(clusters)
-                    ],
+                    "id": i,
+                    "kind": (
+                        "person"
+                        if all(kind_of[s] == "person" for s in c)
+                        else "article"
+                    ),
+                    "slugs": c,
+                    "size": len(c),
                 }
-            )
-        )
+                for i, c in enumerate(clusters)
+            ],
+        }
+        if requested == "auto":
+            payload["mode_selected"] = mode
+        typer.echo(json.dumps(payload))
         return
     for i, c in enumerate(clusters):
         kind = "person" if all(kind_of[s] == "person" for s in c) else "article"

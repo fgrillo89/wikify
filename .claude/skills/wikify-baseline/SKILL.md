@@ -6,250 +6,236 @@ allowed-tools: Bash(wikify *) Task mcp__wikify__context_set mcp__wikify__context
 
 # wikify-baseline
 
-Baseline is the canonical simple-RAG workflow. It owns sample count,
-concept extraction, evidence top-k, writer tier, concurrency, retry
-policy, render/eval closure, and stop conditions. Core capability
-skills explain mechanics.
+Canonical simple-RAG workflow. Owns sample count, concept extraction,
+evidence quotas, writer tier, concurrency, retry policy, render/eval
+closure, and stop conditions. Core capability skills explain mechanics.
 
-## Success Criteria
+## Workflow (5 phases)
 
-Fresh bundle with corpus pinned (path + manifest hash in run notes);
-extractor-produced `work/inbox/concept_suggestions.jsonl`; `work tend`
-promotes the accepted concepts; 10-20 committed article pages plus 3+
-attempted persons when author metadata exists; every committed page
-passes `draft check` and `wiki commit`; `wikify wiki check` passes;
-`wikify render --format html` succeeds; the rendered site is inspected
-for navigation, references, math, and quality; `wikify run close
---status completed` runs before the final `wikify eval`; unresolved
-failures are named as blockers, not hidden.
+### P1 — Bootstrap
 
-## Hard Rules
-- Do not choose the article list by reading sampled titles only.
-- Do not bypass `concept_suggestions.jsonl` for the initial concept set.
-- Do not use graph-RAG, summaries, rerankers, or query refinement.
-- Do not call `wikify work build-evidence <slug>` directly (without
-  `--from-ids`). That is the pre-vetter, seed-first-N-by-ord path which
-  ships byline / references-list / off-topic noise into the dossier.
-  Evidence gathering goes through the `wikify-gather-evidence` vetter
-  subagent (Step 8).
-- Do not repair committed pages with ad hoc scripts as the normal path.
-  Fix the skill, evidence, draft, or writer output and re-run the gate.
-- Do not call cost curves valid while `type="call"` events are absent.
+```bash
+wikify run init --bundle <bundle> --corpus <corpus> --strategy baseline --target-haiku-eq 25000000
+```
+
+Capture `corpus_fingerprint` from stdout — pin it as the manifest hash
+in run notes. Then bind MCP and sample:
+
+```
+mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<bundle>")
+mcp__wikify__context_show()
+mcp__wikify__corpus_sample(strategy="diverse", max_docs=16, pagerank_weight=0.7)
+```
+
+`context_show().health` carries doc/chunk counts, detected field, AND
+`rank_metrics.{source,author}` — use the author list when seeding
+persons (P2). No separate `corpus_schema` round trip needed.
+
+### P2 — Concept extraction + optional persons
+
+Map-reduce over the sampled docs. Full contract in
+`../wikify/references/exploration/concept-extraction.md`.
+
+- **Map**: one haiku Task per sampled doc, in parallel. Each Task
+  fetches its own doc body via MCP and emits 0–8 candidates from its
+  doc only.
+- **Reduce**: one sonnet Task (or orchestrator) dedupes by canonical
+  title, scores by cross-doc frequency, trims to target.
+
+Append staged concepts and consolidate:
+
+```bash
+wikify work add feedback concept --record <bundle>/scratch/concepts_staging.jsonl
+wikify work tend
+```
+
+Staging path MUST be outside `work/inbox/` (pointing `--record` at
+the inbox file re-appends it to itself).
+
+Optionally seed person pages. Pick a populated author rank metric from
+`context_show().health.rank_metrics.author`, then:
+
+```
+mcp__wikify__corpus_find(by="author", rank="<metric>", top_k=10)
+```
+
+Add 3–5 valid authors:
+
+```bash
+wikify work add concept "<Display Name>" --kind person --aliases '["author:<key>"]'
+```
+
+### P3 — Evidence (vetter per cluster)
+
+```bash
+wikify work cluster-concepts --by auto --run <bundle> --format json
+```
+
+`--by auto` picks `seeds` pre-evidence and `evidence` post-evidence;
+the response's `mode_selected` reports which it chose.
+
+For each cluster, spawn one `wikify-gather-evidence` Task per slug **in
+parallel within the cluster**; run waves serially across clusters.
+
+Targets per slug: **≥10 records across ≥5 distinct docs**, at least one
+definition chunk. Persons need quoted research contributions; never
+invent biography. If a vetter returns `stop_reason="error"` or
+`appended < 6`, mark the slug failed — at most one retry.
+
+### P4 — Write + commit
+
+Re-cluster (chunks now drive grouping):
+
+```bash
+wikify work cluster-concepts --by auto --run <bundle> --format json
+```
+
+For each cluster:
+
+```bash
+for slug in <cluster-slugs>; do
+  wikify work claim "$slug" --owner baseline --ttl-seconds 1800
+  wikify draft build "$slug" --task create --corpus <corpus> --model-id <model> --tier M --with-adjacent
+done
+```
+
+Spawn **one** `wikify-write-page` Task per cluster covering all of its
+slugs. `--with-adjacent` loads each evidence chunk's flanking ord-1/
+ord+1 chunks for synthesis.
+
+Per page, run the single-shot finalize chain (normalize → check →
+commit → release):
+
+```bash
+wikify draft finalize <slug> --run <bundle> --owner baseline --format json
+```
+
+`finalize` short-circuits on the first failure. If `check` fails,
+inspect `validation.json` and re-invoke the writer for that slug. **Do
+not patch committed markdown directly.**
+
+### P5 — Finalize
+
+```bash
+wikify work tend
+wikify wiki check
+wikify wiki rebuild --run <bundle>
+wikify wiki navigation-context --run <bundle> --out <bundle>/derived/navigation_context.json
+# Invoke wikify-organize-wiki to write and apply derived/navigation.json.
+wikify render --bundle <bundle> --format html
+wikify run close --status completed --run <bundle>
+wikify eval --bundle <bundle> --corpus <corpus>
+```
+
+`wiki rebuild` runs `vectors → indexes → graph` in one process; use
+`--skip <kind>` (repeatable) when only some projections changed.
+
+Then run the Inspection Loop and write the Final Report.
+
+## Subagent contracts
+
+| role | tier | skill | inputs | return |
+|---|---|---|---|---|
+| extractor-map | haiku | this skill (P2) | `doc_handle`, `corpus`, `bundle` | ≤8 candidates JSON (≤400 tok) |
+| extractor-reducer | sonnet | this skill (P2) | all map arrays | staging JSONL path |
+| vetter | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
+| writer | sonnet M | `wikify-write-page` | cluster slugs + dossier paths | per-slug `response.json` paths |
+
+Every Task return must also yield `{tokens_in, tokens_out, model_id}`
+for the Telemetry pass below.
+
+## Telemetry
+
+Collect `{role, model_id, tier, tokens_in, tokens_out, stage}` lines as
+each subagent returns, then ingest one batch per wave:
+
+```bash
+wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
+{"role":"vetter","model_id":"...","tier":"M","tokens_in":12000,"tokens_out":300,"stage":"evidence"}
+... one line per Task ...
+EOF
+```
+
+Stages: `extract`, `evidence`, `write`. Cost curves are invalid
+without these events — a hard rule of the workflow.
 
 ## Defaults
 
-- Sampled documents: 12-16 via `corpus sample --strategy diverse`.
-- Sample PageRank weight: 0.7.
-- Target articles: 10-20.
-- Target people: 3-5 when author metadata exists.
-- Evidence per page: vetter quota 14 records, max 3 gap-driven query
-  rounds. The vetter handles candidate sourcing internally — do not
-  pre-set top-k or per-doc cap from this layer.
-- Retrieval: MCP `corpus_find` with `rank="all"`. Bash `wikify corpus
-  find` is only the fallback for environments without the MCP server.
-- Writer tier: M.
-- Extractor tier: S.
-- Concurrent writers: up to 4 claimed concepts (contractual cap). On
-  rate-limited Sonnet accounts the practical safe parallelism is 2;
-  the smoke run lost a writer wave to a per-minute limit at 3-way
-  parallel. Drop to 2 if you see the limit warning.
-- Claim owner: `baseline`.
-- Claim TTL: 1800 seconds.
+- Sampled documents: 12–16; `corpus sample --strategy diverse`,
+  `pagerank_weight=0.7`.
+- Target articles: 10–20. Target people: 3–5 when author metadata
+  exists.
+- Vetter quota: **12** records, max 3 gap-driven query rounds.
+- Retrieval: MCP `corpus_find(rank="all", include_text=True)`. The
+  `include_text` flag inlines chunk bodies in the search response —
+  vetters skip the per-candidate `corpus_show` follow-up. Bash `wikify
+  corpus find` is the fallback only when the MCP server is unbound.
+- Writer tier: M. Extractor tier: S.
+- Concurrent writers: **default 2** (rate-limit safe on Sonnet); raise
+  to 4 only after confirming no rate-limit warnings.
+- Claim owner: `baseline`. Claim TTL: 1800 seconds.
 - Retry: one evidence/writer repair, then mark failed.
-- Budget: observed envelope on a 12-16-doc baseline is ~22M haiku-eq
-  (dominated by 28 sonnet vetters). Pass `--target-haiku-eq 25000000`
-  to `wikify run init` to track headroom, or leave at 0 — the field
-  is informational, not enforced.
-- Concept extraction: parallel map (haiku per doc) + sonnet reducer.
-  Map batches of 1 doc per haiku Task; reduce in one sonnet Task.
+- Budget: ~22M haiku-eq on a 12–16-doc baseline (dominated by ~28
+  sonnet vetters). `--target-haiku-eq 25000000` tracks headroom;
+  informational, not enforced.
 
-## Workflow
+## Hard Rules
 
-1. Initialize a fresh bundle (bash, mutation):
+- Do not bypass `concept_suggestions.jsonl` for the initial concept set.
+- Do not call `wikify work build-evidence <slug>` directly (without
+  `--from-ids`). That is the pre-vetter seed-first-N-by-ord path and
+  ships byline / references-list / off-topic noise. Evidence gathering
+  goes through the vetter subagent.
+- Do not repair committed pages with ad hoc scripts. Fix the skill,
+  evidence, draft, or writer output and re-run the gate.
+- Do not call cost curves valid while `type="call"` events are absent.
 
-   ```bash
-   wikify run init --bundle <bundle> --corpus <corpus> --strategy baseline --target-haiku-eq <n>
-   ```
+## Common mistakes
 
-2. Bind the MCP session to the corpus + bundle and pin:
-
-   ```
-   mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<bundle>")
-   mcp__wikify__context_show()   # confirms doc/chunk counts, derived artifacts, detected field
-   ```
-
-   `context_show` folds in the use case of `wikify corpus check`; no
-   separate health call. Record corpus path + manifest hash in the
-   run notes.
-
-3. Sample documents (MCP):
-
-   ```
-   mcp__wikify__corpus_sample(strategy="diverse", max_docs=16, pagerank_weight=0.7)
-   ```
-
-4. (No orchestrator-side text read.) The orchestrator does NOT
-   pre-fetch doc bodies. Map extractors fetch their own assigned doc
-   body via MCP, keeping body text out of the orchestrator's context.
-
-5. Concept extraction is a **map-reduce**: one haiku Task per sampled
-   doc (parallel map), then a sonnet/orchestrator pass that dedupes
-   and scores by cross-doc frequency. Full contract in
-   `../wikify/references/exploration/concept-extraction.md` (Map-reduce
-   orchestration section). Per map Task and once for the reduce,
-   record telemetry via `wikify run record-call --stage extract`.
-
-6. Append staging concepts to the inbox and consolidate:
-
-   ```bash
-   wikify work add feedback concept --record <scratch/concepts_staging.jsonl>
-   wikify work tend
-   wikify work list
-   ```
-
-   The staging path must be OUTSIDE `work/inbox/`. Pointing
-   `--record` at the inbox file itself re-appends it to itself.
-
-7. Seed person pages from author metadata. Read
-   `health.available_metrics.author` from `context_show()` to see
-   which author metrics are populated, then rank by a populated one:
-
-   ```
-   mcp__wikify__corpus_find(by="author", rank="<populated metric>", top_k=10)
-   ```
-
-   Add 3-5 valid authors (bash — concept mutation):
-
-   ```bash
-   wikify work add concept "<Display Name>" --kind person --aliases '["author:<key>"]'
-   ```
-
-8. Gather evidence via `wikify-gather-evidence` (sonnet subagents).
-
-   Pre-cluster by seed overlap, then spawn one vetter per slug
-   concurrently within each cluster:
-
-   ```bash
-   wikify work cluster-concepts --by seeds --run <bundle> --format json
-   ```
-
-   `--by seeds` works pre-evidence (default `--by evidence` is used
-   later in Step 9). Run waves serially across clusters to bound
-   orchestrator context; one wave for small concept sets.
-
-   Each vetter Task: subagent type sonnet, skill
-   `wikify-gather-evidence`, inputs `slug` / `run` / `corpus` /
-   `quota=14` / `max_query_rounds=3`. Vetters return ONLY the Step 7
-   JSON envelope (≤300 tokens); flag any vetter that returns prose.
-
-   After each vetter returns, record (bash — telemetry mutation):
-
-   ```bash
-   wikify run record-call --run <bundle> --role vetter \
-     --model-id <model> --tier M \
-     --tokens-in <n> --tokens-out <n> --stage evidence
-   ```
-
-   Targets: articles ≥10-14 appended across ≥5 distinct docs, at
-   least one definition chunk per article. Person pages need quoted
-   research contributions; never invent biography.
-
-   If a vetter returns `stop_reason="error"` or `appended < 6`, mark
-   the slug failed and continue — do not retry more than once. Each
-   vetter operates on its own slug, so concurrent vetters never
-   collide on `evidence.jsonl`.
-
-9. Cluster concepts, claim, draft, write:
-
-   ```bash
-   wikify work cluster-concepts --run <bundle> --format json
-   ```
-
-   Clusters group concepts that share evidence docs (Jaccard ≥ 0.15)
-   so one writer agent can handle a coherent topical neighborhood with
-   no duplicate chunk reads. Persons go in their own cluster.
-
-   For each cluster, claim its concepts, build drafts, and spawn ONE
-   writer agent that handles all pages in that cluster:
-
-   ```bash
-   for slug in <cluster-slugs>; do
-     wikify work claim "$slug" --owner baseline --ttl-seconds 1800
-     wikify draft build "$slug" --task create --corpus <corpus> \
-       --model-id <model> --tier M --with-adjacent
-   done
-   # Spawn one wikify-write-page agent per cluster.
-   ```
-
-   `--with-adjacent` loads each evidence chunk's flanking ord-1/ord+1
-   chunks into `context_window` for synthesis. After each Task returns
-   token usage:
-
-   ```bash
-   wikify run record-call --run <bundle> --role writer \
-     --model-id <model> --tier M \
-     --tokens-in <n> --tokens-out <n> --stage write
-   ```
-
-10. Normalize, validate, commit, release. The writer's prose is what
-    matters; `normalize-references` deterministically projects the
-    `## References` block from `evidence[N-1]` so quote-grounding is
-    correct by construction:
-
-    ```bash
-    wikify draft normalize-references <slug>
-    wikify draft check <slug>
-    wikify wiki commit <slug>
-    wikify work release <slug> --owner baseline
-    ```
-
-    If validation fails, inspect `validation.json`, then repair through
-    the normal work/draft/write path (re-invoke the writer for that
-    slug). Do not patch committed markdown directly.
-
-11. Build projections, render, close, and eval:
-
-    ```bash
-    wikify work tend
-    wikify wiki check
-    wikify wiki build vectors
-    wikify wiki build indexes
-    wikify wiki build graph
-    wikify wiki navigation-context --run <bundle> --out <bundle>/derived/navigation_context.json
-    # Invoke wikify-organize-wiki to write and apply derived/navigation.json.
-    wikify render --bundle <bundle> --format html
-    wikify run close --status completed --run <bundle>
-    wikify eval --bundle <bundle> --corpus <corpus>
-    ```
+- Choosing the article list by reading sampled titles only (bypasses
+  the extractor).
+- Using graph-RAG, summaries, rerankers, or query refinement
+  (off-protocol for baseline).
+- Falling back to bash `wikify corpus find` while MCP is bound — pays
+  ~3.6 s cold-start per query.
 
 ## Inspection Loop
 
-After render, inspect ≥5 pages: one strong central article, one
-weak/thin article, one person page (if any), the index/sidebar/search
-surface, and one page with equations or chemical notation. Assess
-title/scope, lead quality, coverage, citation density, math/chem
-rendering, frontmatter `links`, and whether person pages avoid
-invented biography. Iterate (add evidence, refine, add missing
-concepts; re-render and re-eval) when weak.
+After render, inspect ≥5 pages:
+
+| page kind | what to check |
+|---|---|
+| strong central article | lead quality, coverage breadth, citation density |
+| weak / thin article | how the writer handled sparse evidence |
+| person page (if any) | quoted contributions, no invented biography |
+| index / sidebar / search | navigation correctness, link integrity |
+| page with equations / chemistry | math and chemical notation rendering |
+
+Iterate (add evidence, refine, add missing concepts; re-render and
+re-eval) when weak.
 
 ## Stop Conditions
 
-Success criteria pass; budget exhausted; or a deterministic blocker
-is documented.
+Success criteria pass; budget exhausted; or a deterministic blocker is
+documented.
 
-## Final Report
+## Final Report (checklist)
 
-Bundle + corpus path + manifest hash; sampled doc count; extractor
-output count; promoted concept count; committed/failed article and
-person pages; rendered `index.html` path; eval report path; per-page
-evidence (active records, distinct source docs, used references);
-M1, M3, M5, M6; GT-P/GT-C availability; call-cost telemetry status;
-qualitative site judgment; deterministic blockers; next fix.
+- [ ] Bundle + corpus path + `corpus_fingerprint`
+- [ ] Sampled doc count, extractor output count, promoted concept count
+- [ ] Committed / failed article and person pages
+- [ ] Rendered `index.html` path, eval report path
+- [ ] Per-page evidence (active records, distinct source docs, used
+      references)
+- [ ] Eval metrics M1, M3, M5, M6; GT-P / GT-C availability
+- [ ] Call-cost telemetry status (must be non-empty)
+- [ ] Qualitative site judgment; deterministic blockers + next fix
 
 ## References
 
 - `../wikify-search-corpus/SKILL.md`
 - `../wikify-bundle/SKILL.md`
+- `../wikify-gather-evidence/SKILL.md`
 - `../wikify-write-page/SKILL.md`
 - `../wikify-organize-wiki/SKILL.md`
 - `../wikify/references/exploration/concept-extraction.md`

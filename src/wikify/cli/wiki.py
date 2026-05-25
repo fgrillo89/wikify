@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from pathlib import Path
 
 import typer
@@ -286,6 +287,119 @@ def cmd_build(
         typer.echo(json.dumps({"ok": True, "path": str(p)}))
         return
     typer.echo(f"{kind}: {p}")
+
+
+_REBUILD_STEPS: tuple[tuple[str, "callable[[Bundle], Path]"], ...] = (  # type: ignore[name-defined]
+    ("vectors", rebuild_vectors),
+    ("indexes", rebuild_index),
+    ("graph", rebuild_graph),
+)
+_REBUILD_STEP_NAMES = tuple(name for name, _ in _REBUILD_STEPS)
+
+
+@app.command("rebuild")
+def cmd_rebuild(
+    run: Path | None = typer.Option(None, "--run"),
+    skip: list[str] = typer.Option(
+        None,
+        "--skip",
+        help="Skip a step: vectors | indexes | graph (repeatable).",
+    ),
+    fmt: str = typer.Option(
+        "auto",
+        "--format",
+        help="Output format: auto | compact | json.",
+    ),
+) -> None:
+    """Run the three derived projection builds in order: vectors, indexes, graph.
+
+    Composes ``rebuild_vectors``, ``rebuild_index``, and ``rebuild_graph``
+    from ``bundle/wiki/derived.py``. Short-circuits on the first failing
+    step. ``--skip`` accepts the step name and may be repeated.
+    """
+    skip_list = list(skip or [])
+    for s in skip_list:
+        if s not in _REBUILD_STEP_NAMES:
+            cli_error(
+                EXIT_VALIDATION,
+                error="bad_skip",
+                message=(
+                    f"unknown rebuild step {s!r}; expected "
+                    f"{' | '.join(_REBUILD_STEP_NAMES)}"
+                ),
+            )
+    fmt_resolved = _resolve_format_or_error(fmt)
+    bundle = _resolve_bundle(run)
+
+    will_run_vectors = "vectors" not in skip_list
+    # rebuild_vectors() calls rebuild_graph() internally; when vectors
+    # runs in the same wave, the explicit graph step is redundant work.
+    covered_by_vectors = {"graph"}
+
+    skipped: list[str] = []
+    steps_done: list[dict] = []
+    for name, fn in _REBUILD_STEPS:
+        if name in skip_list:
+            skipped.append(name)
+            continue
+        if name in covered_by_vectors and will_run_vectors:
+            steps_done.append({
+                "step": name,
+                "ok": True,
+                "duration_ms": 0,
+                "covered_by": "vectors",
+            })
+            continue
+        t0 = time.monotonic()
+        try:
+            path = fn(bundle)
+        except Exception as exc:  # noqa: BLE001
+            steps_done.append(
+                {
+                    "step": name,
+                    "ok": False,
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "error": str(exc),
+                }
+            )
+            cli_error(
+                EXIT_VALIDATION,
+                error="rebuild_failed",
+                failed_step=name,
+                message=str(exc),
+                run=str(bundle.root),
+                steps=steps_done,
+                skipped=skipped,
+            )
+        steps_done.append(
+            {
+                "step": name,
+                "ok": True,
+                "duration_ms": int((time.monotonic() - t0) * 1000),
+                "path": str(path),
+            }
+        )
+
+    payload = {
+        "ok": True,
+        "run": str(bundle.root),
+        "steps": steps_done,
+        "skipped": skipped,
+    }
+    if fmt_resolved == "json":
+        typer.echo(json.dumps(payload))
+        return
+    for s in steps_done:
+        if "covered_by" in s:
+            typer.echo(
+                f"{s['step']}: ok (covered by {s['covered_by']})"
+            )
+        else:
+            typer.echo(
+                f"{s['step']}: ok ({s['duration_ms']} ms) -> {s['path']}"
+            )
+    for s in skipped:
+        typer.echo(f"{s}: skipped")
 
 
 @app.command("navigation-context")

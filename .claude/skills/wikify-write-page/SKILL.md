@@ -178,16 +178,9 @@ or `validation.json`. Fix any errors before persisting.
 
 ## Optional Substeps
 
-Workflows may choose direct writing or a staged path:
-
-```text
-evidence -> write
-evidence -> compaction -> write
-evidence -> compaction -> editor brief -> write
-```
-
-Use `compaction.md` and `editor-brief.md` only when the workflow asks
-for those stages.
+Workflows may stage as `evidence -> write`, `evidence -> compaction
+-> write`, or `evidence -> compaction -> editor brief -> write`. Use
+`compaction.md` and `editor-brief.md` only when the workflow asks.
 
 ## References
 

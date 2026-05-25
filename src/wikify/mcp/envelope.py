@@ -234,13 +234,17 @@ def chunk_item(chunk: Chunk, *,
     return item
 
 
-def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
+def chunk_row_item(row: dict, *, score: float | None = None,
+                   include_text: bool = False) -> dict:
     """Build a chunk item from a search-result dict.
 
     Reads ``preview`` directly when present; otherwise truncates
     ``text`` for the preview. ``section_path`` (when present on the
     row) lands under ``meta`` so the agent can tell whether a hit came
     from intro / methods / references without an extra round-trip.
+
+    When ``include_text=True``, the chunk's full body text is inlined
+    into the item under ``text`` (mirrors ``chunk_item(full=True)``).
     """
     chunk_id = str(row.get("id", ""))
     doc_id = str(row.get("doc_id") or row.get("source_id") or "")
@@ -254,7 +258,7 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
         meta["kind"] = str(row.get("section_type") or "body")
     if "is_boilerplate" in row:
         meta["is_boilerplate"] = bool(row.get("is_boilerplate"))
-    return {
+    item: dict[str, Any] = {
         "handle": format_handle("chunk", chunk_id),
         "type": "chunk",
         "title": "",
@@ -264,6 +268,9 @@ def chunk_row_item(row: dict, *, score: float | None = None) -> dict:
         "preview": preview[:_PREVIEW_CHARS],
         "meta": meta,
     }
+    if include_text:
+        item["text"] = str(row.get("text") or "")
+    return item
 
 
 def figure_item(fig: dict) -> dict:
