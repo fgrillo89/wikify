@@ -88,12 +88,24 @@ Run cluster Tasks in parallel across clusters. Each cluster Task
 holds its own MCP session and ledger state, so article and person
 clusters can share a wave without contamination.
 
-Targets per slug (both paths): **≥10 records across ≥5 distinct
-docs**, at least one definition chunk. Persons need quoted research
-contributions; never invent biography. If a Task returns
-`stop_reason="error"` or `appended < 6` for any slug, mark that slug
-failed — at most one retry, switching to the per-slug path on the
-retry.
+**Rescue wave (after every cluster Task returns).** Inspect each
+cluster supervisor's Step-8 envelope. For any slug where
+`stop_reason == "pool_exhausted" AND appended < 10`, spawn one
+`wikify-gather-evidence` (per-slug) Task as a top-up. The per-slug
+vetter reads the existing `evidence.jsonl` to set its remaining
+quota and runs its own independent query plan; `wikify work
+build-evidence` dedups against committed chunk_ids so duplicates
+cannot be re-inserted. The rescue restores per-slug recall on the
+specific slugs that the shared cluster pool starved, without
+re-running cluster mode for slugs that already hit quota. Run
+rescue Tasks in parallel.
+
+Targets per slug (both paths, after rescue): **≥10 records across
+≥5 distinct docs**, at least one definition chunk. Persons need
+quoted research contributions; never invent biography. If a Task
+returns `stop_reason="error"` or `appended < 6` for any slug, mark
+that slug failed — at most one retry, switching to the per-slug
+path on the retry.
 
 ### P4 — Write + commit
 

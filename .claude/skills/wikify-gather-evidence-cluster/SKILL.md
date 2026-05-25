@@ -86,19 +86,41 @@ For person slugs, also pull the `author:<key>` alias.
 
 ## Step 2: shared query plan
 
-Build a deduped query list across all sibling slugs:
+Build a deduped query list across all sibling slugs.
+
+**Mandatory queries (run every cluster run, no exceptions):**
+
+For each slug in the cluster, add three literal-substring queries
+with `text=True` so the semantic ranker does not dilute the exact
+phrasing the corpus uses for definitions:
+
+```
+corpus_find(query='<title> is',         text=True, top_k=15)
+corpus_find(query='<title> refers to',  text=True, top_k=15)
+corpus_find(query='<acronym> stands for', text=True, top_k=15)
+```
+
+Skip the third when no alias is an acronym. The judge will mark
+hits with `def_for: [<slug>]` when a returned chunk opens with the
+matched phrase. Treat these as the lowest-cost, highest-yield way
+to land definition chunks for every slug. Do NOT make these
+conditional on "no committed evidence yet" — the supervisor needs a
+definition for the writer's lead even when other facets are already
+populated.
+
+**Coverage queries (semantic):**
 
 - One query per unique title.
 - One query per unique alias (skip aliases that are substrings of
   another slug's title to avoid redundancy).
 - For each seed doc handle (across all slugs), one
   `in_doc=<handle>` query using the most central sibling title.
-- For each slug with no committed evidence yet, two
-  definition-hunters: `corpus_find(query="<title> is", text=True)`
-  and `corpus_find(query="<title> refers to", text=True)`.
-- Cap initial plan at `2 * (cluster_size + 2)` queries. Drop the
-  lowest-value ones (longest aliases, redundant doc-scoped queries)
-  to fit.
+
+**Query cap.** Mandatory definition-hunters never count against the
+cap. Cap the coverage queries at `2 * cluster_size + 2`; drop the
+lowest-value coverage queries (longest aliases, redundant doc-scoped
+queries) to fit. Definition coverage is more important than
+incrementally broader semantic recall.
 
 Mark each query with which slugs it is primarily aimed at — judges
 need this to route accepts.
