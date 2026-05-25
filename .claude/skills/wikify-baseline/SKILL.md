@@ -74,13 +74,27 @@ wikify work cluster-concepts --by auto --run <bundle> --format json
 `--by auto` picks `seeds` pre-evidence and `evidence` post-evidence;
 the response's `mode_selected` reports which it chose.
 
-For each cluster, spawn one `wikify-gather-evidence` Task per slug **in
-parallel within the cluster**; run waves serially across clusters.
+Route each cluster by size:
 
-Targets per slug: **≥10 records across ≥5 distinct docs**, at least one
-definition chunk. Persons need quoted research contributions; never
-invent biography. If a vetter returns `stop_reason="error"` or
-`appended < 6`, mark the slug failed — at most one retry.
+- **`cluster.size >= 2`** — spawn one `wikify-gather-evidence-cluster`
+  Task with `cluster_slugs=<all slugs in cluster>`. The supervisor
+  plans one shared query set, fans out haiku judges, and commits one
+  ledger per slug. Returns a per-slug envelope dict.
+- **`cluster.size == 1`** — spawn one `wikify-gather-evidence` Task
+  with that slug. The per-slug path has no fan-out overhead and beats
+  the cluster pattern at size 1.
+
+Run cluster Tasks in parallel across clusters of the same kind
+(article-clusters parallel with each other, person-clusters parallel
+with each other); do not mix article and person clusters in the same
+parallel wave since person evidence has different acceptance rules.
+
+Targets per slug (both paths): **≥10 records across ≥5 distinct
+docs**, at least one definition chunk. Persons need quoted research
+contributions; never invent biography. If a Task returns
+`stop_reason="error"` or `appended < 6` for any slug, mark that slug
+failed — at most one retry, switching to the per-slug path on the
+retry.
 
 ### P4 — Write + commit
 
@@ -138,7 +152,9 @@ Then run the Inspection Loop and write the Final Report.
 |---|---|---|---|---|
 | extractor-map | haiku | this skill (P2) | `doc_handle`, `corpus`, `bundle` | ≤8 candidates JSON (≤400 tok) |
 | extractor-reducer | sonnet | this skill (P2) | all map arrays | staging JSONL path |
-| vetter | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
+| vetter (singleton) | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
+| supervisor (cluster) | sonnet | `wikify-gather-evidence-cluster` | `cluster_slugs`, `run`, `corpus`, `quota_per_slug=12`, `max_query_rounds=3` | per-slug envelope dict (≤600 tok) |
+| chunk-judge | haiku | `wikify-gather-evidence-cluster` (judge role) | sibling slugs + batch of ≤8 chunks with text | per-chunk routing+score+quote JSON |
 | writer | sonnet M | `wikify-write-page` | cluster slugs + dossier paths | per-slug `response.json` paths |
 
 ## Telemetry
@@ -236,6 +252,7 @@ documented.
 
 - `../wikify-search-corpus/SKILL.md`
 - `../wikify-bundle/SKILL.md`
+- `../wikify-gather-evidence-cluster/SKILL.md`
 - `../wikify-gather-evidence/SKILL.md`
 - `../wikify-write-page/SKILL.md`
 - `../wikify-organize-wiki/SKILL.md`
