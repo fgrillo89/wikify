@@ -1130,3 +1130,113 @@ def test_from_ids_nfkc_normalizes_unicode_confusables(tmp_path: Path) -> None:
     assert data["ok"] is True
     assert data["appended"] == 1
     assert data["stats"]["rejected_quote_not_in_chunk"] == 0
+
+
+# ---- Friction B: OCR-whitespace-tolerant quote matching
+
+
+def _build_ocr_corpus(tmp_path: Path):
+    """Init bundle + corpus with one chunk whose text has OCR-inserted spaces."""
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle_dir = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle_dir), "--corpus", str(corpus_root)],
+    )
+
+    # Chunk text as stored by OCR: "SiN x" (space inserted mid-token).
+    ocr_body = (
+        "Fe2+ ion migration through the SiN x dielectric layer was confirmed "
+        "by impedance spectroscopy measurements at elevated temperatures."
+    )
+    doc = Document(
+        id="paper_ocr", source_path="src/paper_ocr.md", kind="md",
+        title="SiNx Synaptic Device", metadata={},
+        markdown_path="markdown/paper_ocr.md",
+        image_dir="images/paper_ocr/", n_chunks=1, n_tokens=40,
+    )
+    chunk = Chunk(
+        id="paper_ocr__c0000", doc_id="paper_ocr", ord=0,
+        text=ocr_body, char_span=(0, len(ocr_body)),
+        section_path=["Body"], section_type="body",
+    )
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {doc.id: [chunk]})
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    from wikify.api import Bundle as BundleApi
+    create_concept(
+        BundleApi.open(bundle_dir), page_id="SiNx Synaptic Device", kind="article"
+    )
+    return bundle_dir, corpus_root
+
+
+def test_from_ids_ocr_whitespace_recovered(tmp_path: Path) -> None:
+    """A quote with collapsed OCR whitespace (SiNx vs SiN x) must commit
+    and increment rejected_quote_then_whitespace_recovered.
+    """
+    bundle_dir, corpus_root = _build_ocr_corpus(tmp_path)
+    # Writer quotes natural prose; OCR stored it with an extra space.
+    natural_quote = "Fe2+ ion migration through the SiNx dielectric"
+    payload = json.dumps(
+        [{"chunk_id": "paper_ocr__c0000", "quote": natural_quote}]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "sinx-synaptic-device",
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    stats = data["stats"]
+    assert stats["rejected_quote_not_in_chunk"] == 0
+    assert stats["rejected_quote_then_whitespace_recovered"] == 1
+
+
+def test_from_ids_ocr_completely_different_content_rejects(tmp_path: Path) -> None:
+    """A quote with completely different content must still be rejected even
+    after whitespace collapsing.
+    """
+    bundle_dir, corpus_root = _build_ocr_corpus(tmp_path)
+    unrelated_quote = "this content is entirely unrelated to the chunk text"
+    payload = json.dumps(
+        [{"chunk_id": "paper_ocr__c0000", "quote": unrelated_quote}]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "sinx-synaptic-device",
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_root),
+            "--from-ids", "@-",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code != 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["stats"]["rejected_quote_not_in_chunk"] == 1
+    assert data["stats"]["rejected_quote_then_whitespace_recovered"] == 0
+

@@ -690,6 +690,7 @@ def cmd_build_evidence(
             "rejected_short": 0,
             "rejected_already_committed": 0,
             "rejected_quote_not_in_chunk": 0,
+            "rejected_quote_then_whitespace_recovered": 0,
         }
         vetter_records: list[dict] = []
         for entry in ordered_entries:
@@ -718,12 +719,24 @@ def cmd_build_evidence(
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
             if supplied_quote is not None:
+                import re as _re
+
                 norm_text = unicodedata.normalize("NFKC", raw_text)
                 norm_quote = unicodedata.normalize("NFKC", supplied_quote)
-                if norm_quote not in norm_text:
-                    vetter_stats["rejected_quote_not_in_chunk"] += 1
-                    continue
-                quote = supplied_quote
+                if norm_quote in norm_text:
+                    quote = supplied_quote
+                else:
+                    # Tier 2: strip all whitespace on both sides for
+                    # comparison (handles OCR artefacts like "SiN x" vs
+                    # "SiNx" where a space is inserted inside a token).
+                    ws_text = _re.sub(r"\s+", "", norm_text)
+                    ws_quote = _re.sub(r"\s+", "", norm_quote)
+                    if ws_quote in ws_text:
+                        vetter_stats["rejected_quote_then_whitespace_recovered"] += 1
+                        quote = supplied_quote  # keep writer's spelling
+                    else:
+                        vetter_stats["rejected_quote_not_in_chunk"] += 1
+                        continue
             else:
                 quote = text[:400]
             score = entry.get("score", 1.0)
