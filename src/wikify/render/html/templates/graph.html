@@ -42,7 +42,6 @@
   const node = g.append("g").selectAll("g").data(data.nodes).join("g")
     .attr("class", d => "graph-node graph-node-" + d.type)
     .style("cursor", d => d.url ? "pointer" : "grab")
-    .on("click", (e, d) => { if (d.url) window.location.href = root + d.url; })
     .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd));
 
   node.append("circle")
@@ -54,7 +53,7 @@
     .attr("dx", d => radius(d) + 4).attr("dy", 4)
     .style("font", "12px sans-serif")
     .style("fill", "#202122")
-    .style("pointer-events", "none")
+    .style("user-select", "none")
     .text(d => d.label);
 
   node.append("title").text(d => `${d.label} (${degree[d.id] || 0} links)`);
@@ -78,9 +77,20 @@
     node.attr("transform", d => `translate(${d.x},${d.y})`);
   });
 
-  function dragStart(e, d) { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
-  function dragged(e, d)   { d.fx = e.x; d.fy = e.y; }
-  function dragEnd(e, d)   { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+  // d3-drag preventDefaults the mousedown, which blocks the synthesized
+  // click event. Track whether a real drag happened; if not, treat the
+  // gesture as a click and navigate.
+  function dragStart(e, d) {
+    if (!e.active) sim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+    d.__moved = false;
+  }
+  function dragged(e, d)   { d.__moved = true; d.fx = e.x; d.fy = e.y; }
+  function dragEnd(e, d) {
+    if (!e.active) sim.alphaTarget(0);
+    d.fx = null; d.fy = null;
+    if (!d.__moved && d.url) window.location.href = root + d.url;
+  }
 })();
 </script>
 {% endblock %}
