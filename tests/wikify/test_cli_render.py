@@ -83,6 +83,35 @@ def test_render_rejects_unsupported_format(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_wiki_name_derives_from_corpus_basename(tmp_path: Path) -> None:
+    from wikify.render.html.render import derive_wiki_name
+
+    assert derive_wiki_name(Path("data/corpora/ald_docling_2026_05_15")) == "ALD Wiki"
+    assert derive_wiki_name(Path("/tmp/cvd_marker_rechunked")) == "CVD Wiki"
+    assert derive_wiki_name(None) == "ScholarForge"
+
+
+def test_render_wiki_name_override(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    out = tmp_path / "site"
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "--bundle",
+            str(bundle.root),
+            "--out",
+            str(out),
+            "--wiki-name",
+            "My Custom Wiki",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert "My Custom Wiki" in index_html
+    assert "ScholarForge" not in index_html
+
+
 def test_render_json_envelope(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
     out = tmp_path / "site"

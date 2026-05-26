@@ -33,9 +33,45 @@ from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
 from wikify.render.html.citation import format_cs1
 
-WIKI_NAME = "Wikify Simple"
+DEFAULT_WIKI_NAME = "ScholarForge"
+
+# Tokens stripped when deriving a wiki name from a corpus directory basename.
+# Parser/date noise that shouldn't show up in the displayed name.
+_CORPUS_NAME_STOPWORDS = frozenset(
+    {"docling", "marker", "lite", "all", "default", "rechunked", "test", "validation"}
+)
+# Short alphabetic tokens (<=4 chars) are rendered ALL CAPS so e.g. "ald" -> "ALD".
+_ALLCAPS_MAX_LEN = 4
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def derive_wiki_name(corpus_root: Path | None) -> str:
+    """Derive a display name from a corpus path; fall back to DEFAULT_WIKI_NAME.
+
+    ``data/corpora/ald_docling_2026_05_15`` -> ``"ALD Wiki"``.
+    Strips 4-digit years, 1-2 digit numerics, and parser-name stopwords;
+    upper-cases short alphabetic tokens (likely acronyms) and title-cases
+    the rest. Appends "Wiki" so the header reads as a wiki name.
+    """
+    if corpus_root is None:
+        return DEFAULT_WIKI_NAME
+    basename = Path(corpus_root).name
+    tokens: list[str] = []
+    for tok in re.split(r"[_\-\s]+", basename):
+        if not tok:
+            continue
+        if tok.isdigit():
+            continue
+        if tok.lower() in _CORPUS_NAME_STOPWORDS:
+            continue
+        if tok.isalpha() and len(tok) <= _ALLCAPS_MAX_LEN:
+            tokens.append(tok.upper())
+        else:
+            tokens.append(tok[:1].upper() + tok[1:])
+    if not tokens:
+        return DEFAULT_WIKI_NAME
+    return " ".join(tokens) + " Wiki"
 
 
 def _normalize(s: str) -> str:
@@ -86,13 +122,17 @@ def build_site(
     out_dir: Path,
     *,
     corpus_root: Path | None = None,
+    wiki_name: str | None = None,
 ) -> Path:
     """Render a wiki bundle to a static HTML site under ``out_dir``.
 
     Takes a pre-loaded ``Bundle`` (the wiki-bundle view of
-    ``<bundle>/wiki/``). Returns ``out_dir``.
+    ``<bundle>/wiki/``). ``wiki_name`` overrides the header/title text;
+    when ``None`` the name is derived from ``corpus_root``'s basename.
+    Returns ``out_dir``.
     """
     loaded = bundle
+    resolved_wiki_name = wiki_name if wiki_name else derive_wiki_name(corpus_root)
 
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +186,7 @@ def build_site(
     )
     key_articles = _key_articles(concepts, page_by_id=page_by_id)
     shared_ctx = {
-        "wiki_name": WIKI_NAME,
+        "wiki_name": resolved_wiki_name,
         "stats": stats,
         "concepts": concepts,
         "people": people,
