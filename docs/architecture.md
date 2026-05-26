@@ -100,7 +100,10 @@ acquisition with TTL) or by per-concept `.claim` files.
 `-- derived/
     |-- index.json                          page list projection
     |-- navigation.json                     render navigation export
-    `-- vectors.npz                         compatibility page-vector projection
+    |-- navigation_context.json             page metadata for organizer agent
+    |-- vectors.npz                         compatibility page-vector projection
+    |-- eval.json                           wikify eval output
+    `-- site/                               wikify render html site output
 ```
 
 Every durable artifact carries a `schema_version` envelope. Pydantic
@@ -185,11 +188,13 @@ Skills live in `.claude/skills/`. The shared reference skill
 `references/` (bundle state, CLI grammar, writing schemas, citation
 format, field guides, exploration patterns, and workflow contracts).
 Core capability skills expose reusable surfaces without owning strategy:
-`wikify-search-corpus`, `wikify-search-wiki`, `wikify-write-page`, and
-`wikify-bundle`. Workflow skills (`wikify-baseline`,
-`wikify-guided-explore`, `wikify-query`, `wikify-refine`) dispatch those
-capabilities with their own loop shape, budget, parallelism, retry
-policy, and stop conditions.
+`wikify-search-corpus`, `wikify-search-wiki`, `wikify-write-page`,
+`wikify-organize-wiki`, and `wikify-bundle`. The
+`wikify-gather-evidence-cluster` skill is the canonical evidence loop
+(sonnet supervisor + haiku judges) and handles clusters of any size.
+Workflow skills (`wikify-baseline`, `wikify-guided-explore`,
+`wikify-query`, `wikify-refine`) dispatch those capabilities with their
+own loop shape, budget, parallelism, retry policy, and stop conditions.
 
 ## Design invariants
 
