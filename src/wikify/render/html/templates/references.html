@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="wiki-article references-page">
+  <h1>References</h1>
+  <p>All {{ references|length }} sources cited across the {{ stats.total_concepts }} articles in this wiki, sorted by first-author surname.</p>
+  {% if references %}
+  <ol class="references-list">
+    {% for ref in references %}
+    <li>
+      <div class="reference-citation">{{ ref.citation_html|safe }}</div>
+      {% if ref.cited_in %}
+      <div class="reference-cited-in">Cited in:
+        {% for c in ref.cited_in -%}
+          <a href="{{ root }}{{ c.url }}">{{ c.title }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p><em>No cited sources found.</em></p>
+  {% endif %}
+</article>
+{% endblock %}
