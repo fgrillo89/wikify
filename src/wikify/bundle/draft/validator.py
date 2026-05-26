@@ -51,6 +51,8 @@ _REF_DEF_RE = re.compile(
 )
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
 _FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
+# Literal \uXXXX escape sequences in prose (six chars: backslash u + 4 hex digits).
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
 
 
 def _utcnow() -> str:
@@ -381,6 +383,27 @@ def _run_checks(
                     "message": str(exc),
                 }
             )
+        # Reject literal \uXXXX escape sequences in prose fields. JSON
+        # output is UTF-8; emit unicode characters directly instead of
+        # JSON-style escapes (they render as six-character garbage).
+        prose_fields = {"body_markdown": response.body_markdown}
+        for field_name, field_text in prose_fields.items():
+            hit = _UNICODE_ESCAPE_RE.search(field_text)
+            if hit:
+                structural["no_unicode_escapes"] = False
+                errors.append(
+                    {
+                        "path": field_name,
+                        "code": "literal_unicode_escape",
+                        "message": (
+                            f"prose contains a literal \\uXXXX escape sequence "
+                            f"({hit.group()!r}); emit the unicode character "
+                            "directly instead"
+                        ),
+                    }
+                )
+            else:
+                structural.setdefault("no_unicode_escapes", True)
 
     # --- Quote grounding ------------------------------------------------
     if draft is not None and response is not None:

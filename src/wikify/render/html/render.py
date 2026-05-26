@@ -33,9 +33,45 @@ from wikify.bundle.wiki.page_naming import url_slug
 from wikify.ingest.metadata import _is_valid_author
 from wikify.render.html.citation import format_cs1
 
-WIKI_NAME = "Wikify Simple"
+DEFAULT_WIKI_NAME = "ScholarForge"
+
+# Tokens stripped when deriving a wiki name from a corpus directory basename.
+# Parser/date noise that shouldn't show up in the displayed name.
+_CORPUS_NAME_STOPWORDS = frozenset(
+    {"docling", "marker", "lite", "all", "default", "rechunked", "test", "validation"}
+)
+# Short alphabetic tokens (<=4 chars) are rendered ALL CAPS so e.g. "ald" -> "ALD".
+_ALLCAPS_MAX_LEN = 4
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def derive_wiki_name(corpus_root: Path | None) -> str:
+    """Derive a display name from a corpus path; fall back to DEFAULT_WIKI_NAME.
+
+    ``data/corpora/ald_docling_2026_05_15`` -> ``"ALD Wiki"``.
+    Strips 4-digit years, 1-2 digit numerics, and parser-name stopwords;
+    upper-cases short alphabetic tokens (likely acronyms) and title-cases
+    the rest. Appends "Wiki" so the header reads as a wiki name.
+    """
+    if corpus_root is None:
+        return DEFAULT_WIKI_NAME
+    basename = Path(corpus_root).name
+    tokens: list[str] = []
+    for tok in re.split(r"[_\-\s]+", basename):
+        if not tok:
+            continue
+        if tok.isdigit():
+            continue
+        if tok.lower() in _CORPUS_NAME_STOPWORDS:
+            continue
+        if tok.isalpha() and len(tok) <= _ALLCAPS_MAX_LEN:
+            tokens.append(tok.upper())
+        else:
+            tokens.append(tok[:1].upper() + tok[1:])
+    if not tokens:
+        return DEFAULT_WIKI_NAME
+    return " ".join(tokens) + " Wiki"
 
 
 def _normalize(s: str) -> str:
@@ -86,13 +122,17 @@ def build_site(
     out_dir: Path,
     *,
     corpus_root: Path | None = None,
+    wiki_name: str | None = None,
 ) -> Path:
     """Render a wiki bundle to a static HTML site under ``out_dir``.
 
     Takes a pre-loaded ``Bundle`` (the wiki-bundle view of
-    ``<bundle>/wiki/``). Returns ``out_dir``.
+    ``<bundle>/wiki/``). ``wiki_name`` overrides the header/title text;
+    when ``None`` the name is derived from ``corpus_root``'s basename.
+    Returns ``out_dir``.
     """
     loaded = bundle
+    resolved_wiki_name = wiki_name if wiki_name else derive_wiki_name(corpus_root)
 
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +186,7 @@ def build_site(
     )
     key_articles = _key_articles(concepts, page_by_id=page_by_id)
     shared_ctx = {
-        "wiki_name": WIKI_NAME,
+        "wiki_name": resolved_wiki_name,
         "stats": stats,
         "concepts": concepts,
         "people": people,
@@ -421,6 +461,7 @@ def _render_article(
         extension_configs=_MD_EXTENSION_CONFIGS,
     )
     body_html = md.convert(body_md)
+    body_html = _remap_figure_citation_numbers(body_html, page_id=pv.id)
 
     toc = _build_toc(body_html)
     categories = [pv.kind]
@@ -1013,6 +1054,17 @@ def _stage_and_rewrite_figures(
 
 _FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
 
+# Matches body footnote refs emitted by python-markdown's footnotes extension:
+#   <a class="footnote-ref" href="#fn:eN">3</a>
+_FNREF_BODY_RE = re.compile(
+    r'<a class="footnote-ref" href="#fn:([^"]+)">(\d+)</a>'
+)
+# Matches the display text inside a figure-citation sup that we want to renumber:
+#   <a href="#fn:eN">[eN]</a>
+_FNREF_FIG_RE = re.compile(
+    r'(<sup class="figure-citation"><a href="#fn:([^"]+)">\[)([^\]]+)(\]</a></sup>)'
+)
+
 
 def _safe_asset_name(value: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
@@ -1075,6 +1127,50 @@ def _replace_selected_figure_placeholders(
         )
 
     return _FIGURE_PLACEHOLDER_RE.sub(_replace, body)
+
+
+def _remap_figure_citation_numbers(html: str, *, page_id: str = "") -> str:
+    """Rewrite ``[eN]`` display text in figure-citation sups to match the
+    numeric index assigned by python-markdown's footnotes extension.
+
+    python-markdown renumbers footnote refs sequentially (1, 2, 3…).  The
+    body already shows the renumbered integer; figure captions still show the
+    raw marker (e.g. ``[e6]``).  This pass scans the body for
+    ``<a class="footnote-ref" href="#fn:eN">K</a>`` entries to build a
+    marker->number map, then rewrites every
+    ``<sup class="figure-citation"><a href="#fn:eN">[eN]</a></sup>``
+    using that map.  Markers cited only in figures (no body ref) keep their
+    raw display so the link still works; a warning is emitted for each.
+    """
+    marker_to_num: dict[str, str] = {}
+    for m in _FNREF_BODY_RE.finditer(html):
+        marker_to_num[m.group(1)] = m.group(2)
+
+    orphan_markers: list[str] = []
+
+    def _replace_fig(m: re.Match) -> str:
+        prefix = m.group(1)   # '<sup class="figure-citation"><a href="#fn:eN">['
+        marker = m.group(2)   # 'eN'
+        _display = m.group(3) # current display (same as marker on first pass)
+        suffix = m.group(4)   # ']</a></sup>'
+        if marker in marker_to_num:
+            return prefix + marker_to_num[marker] + suffix
+        # Marker has no body reference — keep raw display, record for warning.
+        orphan_markers.append(marker)
+        return m.group(0)
+
+    result = _FNREF_FIG_RE.sub(_replace_fig, html)
+
+    if orphan_markers:
+        label = f" (page {page_id})" if page_id else ""
+        print(
+            f"[html] figure-citation marker(s) with no body footnote ref{label}: "
+            + ", ".join(sorted(set(orphan_markers)))
+            + " -- add inline [^marker] citations in prose to get numeric display",
+            file=sys.stderr,
+        )
+
+    return result
 
 
 def _build_toc(html: str) -> list[dict[str, str]]:

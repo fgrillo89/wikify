@@ -10,10 +10,22 @@ plus ``wikify://schemas/corpus``.
 
 All tools call into :mod:`wikify.corpus.queries` — the same domain
 APIs the CLI calls — so behaviour parity is enforced by construction.
+
+Server staleness
+----------------
+The MCP server caches loaded modules for its process lifetime. After
+wikify source edits, the running server keeps serving the old code until
+it is restarted. Clients can detect staleness by comparing
+``context_show().server_build.git_sha`` against the current HEAD sha
+(``git rev-parse --short HEAD``). If the shas differ, restart the server
+so it loads the updated modules.
 """
 
 from __future__ import annotations
 
+import subprocess
+from datetime import datetime, timezone
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -40,6 +52,31 @@ from .envelope import (
     ok,
     traverse_row_item,
 )
+
+
+def _capture_git_sha() -> str:
+    """Return the short HEAD sha, or ``"unknown"`` if git is unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+# Captured once at module import (i.e. server startup). Intentionally
+# frozen for the process lifetime so staleness is detectable.
+_SERVER_BUILD: dict[str, str] = {
+    "package_version": _pkg_version("wikify"),
+    "git_sha": _capture_git_sha(),
+    "started_at": datetime.now(timezone.utc).isoformat(),
+}
 
 
 def _enrich_chunk_rows(corpus, rows: list[dict]) -> None:
@@ -343,6 +380,7 @@ def build_server() -> FastMCP:
         usable.
         """
         snap = context.snapshot()
+        snap["server_build"] = dict(_SERVER_BUILD)
         corpus = context.get_corpus()
         if corpus is not None:
             try:

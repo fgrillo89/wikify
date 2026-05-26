@@ -19,6 +19,8 @@ Subcommands::
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from pathlib import Path
 
 import typer
@@ -172,6 +174,12 @@ def cmd_show(
     card = load_card(bundle, concept)
     if not card.front:
         cli_error(EXIT_VALIDATION, error="concept_not_found", slug=concept)
+    # Recount from disk so the display is always current regardless of
+    # whether tend has run since the last build-evidence call.
+    recs = read_evidence(bundle, concept)
+    active = [r for r in recs if r.status == "active"]
+    card.front["evidence_chunks"] = len(active)
+    card.front["evidence_docs"] = len({r.doc_id for r in active})
     if fmt == "json":
         body_payload = card.body if full else card.body[:500]
         typer.echo(
@@ -462,11 +470,9 @@ _NEVER_CITE_PATTERNS = (
 
 
 def _matches_never_cite(text: str) -> bool:
-    import re as _re
-
     head = text[:600] if text else ""
     return any(
-        _re.search(p, head, _re.IGNORECASE | _re.MULTILINE)
+        re.search(p, head, re.IGNORECASE | re.MULTILINE)
         for p in _NEVER_CITE_PATTERNS
     )
 
@@ -579,6 +585,69 @@ def cmd_build_evidence(
             (chunk_id,),
         ).fetchone()
 
+    def resolve_chunk_handle(raw_cid: str) -> tuple[str, str | None]:
+        """Map a chunk handle to a full chunk_id.
+
+        Accepts:
+        - Full chunk_id: returned as-is. If not found in the store, returns
+          (raw_cid, error_message).
+        - ``chunk:<short>``: the short suffix (8+ hex chars) is looked up
+          via a LIKE query. Returns (full_id, None) on unique match or
+          (raw_cid, error_message) on zero / multiple matches.
+
+        Returns ``(resolved_id, error_or_None)``.
+        """
+        if not raw_cid.startswith("chunk:"):
+            # Full id path: verify it exists.
+            row = con.execute(
+                "SELECT chunk_id FROM chunks WHERE chunk_id=?", (raw_cid,)
+            ).fetchone()
+            if row is None:
+                return (
+                    raw_cid,
+                    (
+                        f"chunk id {raw_cid!r} not found in corpus store; "
+                        "check that the corpus path matches the one used "
+                        "during retrieval"
+                    ),
+                )
+            return (raw_cid, None)
+        short = raw_cid[len("chunk:"):]
+        # Escape SQLite LIKE wildcards so a suffix containing % or _
+        # is matched literally, not as a wildcard pattern.
+        short_esc = short.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = con.execute(
+            "SELECT chunk_id FROM chunks WHERE chunk_id LIKE ? ESCAPE '\\'",
+            (f"%_{short_esc}",),
+        ).fetchall()
+        # Also accept exact match (test fixtures use plain ids without hash).
+        exact = con.execute(
+            "SELECT chunk_id FROM chunks WHERE chunk_id=?", (short,)
+        ).fetchone()
+        if exact is not None:
+            rows = [exact] + [r for r in rows if r["chunk_id"] != short]
+        if len(rows) == 0:
+            return (
+                raw_cid,
+                (
+                    f"chunk handle {raw_cid!r} did not resolve; "
+                    "no chunk id ends with that suffix"
+                ),
+            )
+        if len(rows) > 1:
+            matched = [r["chunk_id"] for r in rows]
+            display = matched[:5]
+            extra = f" (+{len(matched) - 5} more)" if len(matched) > 5 else ""
+            return (
+                raw_cid,
+                (
+                    f"chunk handle {raw_cid!r} did not resolve uniquely; "
+                    f"matched {len(matched)} chunks: "
+                    f"{', '.join(display)}{extra}"
+                ),
+            )
+        return (rows[0]["chunk_id"], None)
+
     # ----- commit-only mode: skip seed/find, just validate + append.
     if from_ids:
         # Parse either JSON-from-stdin (@-) or CSV form into a uniform
@@ -683,10 +752,15 @@ def cmd_build_evidence(
             "rejected_short": 0,
             "rejected_already_committed": 0,
             "rejected_quote_not_in_chunk": 0,
+            "rejected_quote_then_whitespace_recovered": 0,
         }
         vetter_records: list[dict] = []
         for entry in ordered_entries:
-            cid = entry["chunk_id"]
+            raw_cid = entry["chunk_id"]
+            cid, resolve_err = resolve_chunk_handle(raw_cid)
+            if resolve_err is not None:
+                vetter_stats["rejected_not_found"] += 1
+                continue
             if cid in committed:
                 vetter_stats["rejected_already_committed"] += 1
                 continue
@@ -711,10 +785,24 @@ def cmd_build_evidence(
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
             if supplied_quote is not None:
-                if supplied_quote not in raw_text:
-                    vetter_stats["rejected_quote_not_in_chunk"] += 1
-                    continue
-                quote = supplied_quote
+                norm_text = unicodedata.normalize("NFKC", raw_text)
+                norm_quote = unicodedata.normalize("NFKC", supplied_quote)
+                if norm_quote in norm_text:
+                    quote = supplied_quote
+                else:
+                    # Tier 2: strip all whitespace on both sides
+                    # (handles OCR artefacts like "SiN x" vs "SiNx").
+                    # Gate on min length 12 so a short collapsed quote
+                    # cannot substring-match an unrelated token region
+                    # ("SiNx" inside "GeSiNxO").
+                    ws_text = re.sub(r"\s+", "", norm_text)
+                    ws_quote = re.sub(r"\s+", "", norm_quote)
+                    if len(ws_quote) >= 12 and ws_quote in ws_text:
+                        vetter_stats["rejected_quote_then_whitespace_recovered"] += 1
+                        quote = supplied_quote  # keep writer's spelling
+                    else:
+                        vetter_stats["rejected_quote_not_in_chunk"] += 1
+                        continue
             else:
                 quote = text[:400]
             score = entry.get("score", 1.0)

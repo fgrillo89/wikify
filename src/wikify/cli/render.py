@@ -51,6 +51,10 @@ def cmd_render(
     fmt: str = typer.Option("html", "--format"),
     out: Path | None = typer.Option(None, "--out"),
     corpus: Path | None = typer.Option(None, "--corpus"),
+    wiki_name: str | None = typer.Option(
+        None, "--wiki-name",
+        help="Display name shown in the header. Defaults to a name derived from --corpus.",
+    ),
     output_format: str = typer.Option("text", "--output-format"),
 ) -> None:
     """Render the committed wiki to a static site.
@@ -58,7 +62,9 @@ def cmd_render(
     ``--format`` selects the renderer; only ``html`` is implemented.
     ``--out`` defaults to ``<bundle>/derived/site``. ``--corpus`` lets
     callers override the corpus path used to stage figures (defaults to
-    the value recorded in ``run/state.json``).
+    the value recorded in ``run/state.json``). ``--wiki-name`` overrides
+    the header display name; without it, the name is derived from the
+    corpus directory basename.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -86,7 +92,7 @@ def cmd_render(
         f"render expected page bundle rooted at {resolved.wiki_dir}, "
         f"got {page_bundle.root}"
     )
-    site_dir = build_site(page_bundle, out_dir, corpus_root=corpus)
+    site_dir = build_site(page_bundle, out_dir, corpus_root=corpus, wiki_name=wiki_name)
 
     if output_format == "json":
         typer.echo(

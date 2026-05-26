@@ -1,3 +1,27 @@
+{% macro sidebar_group(group, root) %}
+{%- set MAX_SIDEBAR_PAGES = 12 -%}
+<li class="sidebar-group">
+  <details>
+    <summary>
+      <span class="sidebar-disclosure" aria-hidden="true"></span>
+      <a href="{{ root }}index.html#group-{{ group.id }}" class="sidebar-group-title">{{ group.title }}</a>
+    </summary>
+    {% if group.pages or group.children %}
+    <ul class="sidebar-group-pages">
+      {% for p in group.pages[:MAX_SIDEBAR_PAGES] %}
+      <li><a href="{{ root }}{{ p.url }}">{{ p.title }}</a></li>
+      {% endfor %}
+      {% if group.pages|length > MAX_SIDEBAR_PAGES %}
+      <li class="sidebar-more"><a href="{{ root }}index.html#group-{{ group.id }}">+{{ group.pages|length - MAX_SIDEBAR_PAGES }} more &rarr;</a></li>
+      {% endif %}
+      {% for child in group.children %}
+      {{ sidebar_group(child, root) }}
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </details>
+</li>
+{% endmacro %}
 <div class="sidebar-section">
   <h3>Navigation</h3>
   <ul>
@@ -7,9 +31,9 @@
 {% if navigation and navigation.groups %}
 <div class="sidebar-section">
   <h3>Topics</h3>
-  <ul>
+  <ul class="sidebar-topics">
     {% for group in navigation.groups %}
-    <li><a href="{{ root }}index.html#group-{{ group.id }}">{{ group.title }}</a></li>
+    {{ sidebar_group(group, root) }}
     {% endfor %}
   </ul>
 </div>

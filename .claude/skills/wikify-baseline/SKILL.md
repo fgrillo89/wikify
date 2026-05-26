@@ -74,45 +74,43 @@ wikify work cluster-concepts --by auto --run <bundle> --format json
 `--by auto` picks `seeds` pre-evidence and `evidence` post-evidence;
 the response's `mode_selected` reports which it chose.
 
-For each cluster, spawn one `wikify-gather-evidence` Task per slug **in
-parallel within the cluster**; run waves serially across clusters.
+Route each cluster by size:
 
-Targets per slug: **≥10 records across ≥5 distinct docs**, at least one
-definition chunk. Persons need quoted research contributions; never
-invent biography. If a vetter returns `stop_reason="error"` or
-`appended < 6`, mark the slug failed — at most one retry.
+- **`cluster.size >= 2`** — spawn one `wikify-gather-evidence-cluster`
+  Task with `cluster_slugs=<all slugs in cluster>`. The supervisor
+  plans one shared query set, fans out haiku judges, and commits one
+  ledger per slug. Returns a per-slug envelope dict.
+- **`cluster.size == 1`** — spawn one `wikify-gather-evidence` Task
+  with that slug. The per-slug path has no fan-out overhead and beats
+  the cluster pattern at size 1.
+
+Run cluster Tasks in parallel; each holds its own MCP session.
+
+**Rescue wave (after each cluster Task).** For any slug with
+`stop_reason == "pool_exhausted" AND appended < 10` in the
+supervisor envelope, spawn a `wikify-gather-evidence` Task as a
+top-up. The per-slug vetter sees the existing `evidence.jsonl` and
+sizes its remaining quota; `build-evidence` dedups by chunk_id so
+duplicates cannot land. Run rescues in parallel.
+
+Targets per slug (both paths, after rescue): **≥10 records across
+≥5 distinct docs**, at least one definition chunk. Persons need
+quoted research contributions; never invent biography. If a Task
+returns `stop_reason="error"` or `appended < 6`, mark the slug
+failed — at most one retry, switching to the per-slug path.
 
 ### P4 — Write + commit
 
-Re-cluster (chunks now drive grouping):
+Re-cluster (chunks now drive grouping) via `wikify work cluster-concepts
+--by auto`. Per slug: `wikify work claim` then `wikify draft build`
+with `--task create --tier M --with-adjacent` (loads ord-1/ord+1
+flanking chunks for synthesis). Spawn **one** `wikify-write-page`
+Task per cluster.
 
-```bash
-wikify work cluster-concepts --by auto --run <bundle> --format json
-```
-
-For each cluster:
-
-```bash
-for slug in <cluster-slugs>; do
-  wikify work claim "$slug" --owner baseline --ttl-seconds 1800
-  wikify draft build "$slug" --task create --corpus <corpus> --model-id <model> --tier M --with-adjacent
-done
-```
-
-Spawn **one** `wikify-write-page` Task per cluster covering all of its
-slugs. `--with-adjacent` loads each evidence chunk's flanking ord-1/
-ord+1 chunks for synthesis.
-
-Per page, run the single-shot finalize chain (normalize → check →
-commit → release):
-
-```bash
-wikify draft finalize <slug> --run <bundle> --owner baseline --format json
-```
-
-`finalize` short-circuits on the first failure. If `check` fails,
-inspect `validation.json` and re-invoke the writer for that slug. **Do
-not patch committed markdown directly.**
+Per page, run `wikify draft finalize <slug> --owner baseline` — the
+single-shot normalize → check → commit → release chain, short-
+circuits on first failure. If check fails, inspect `validation.json`
+and re-invoke the writer. **Do not patch committed markdown.**
 
 ### P5 — Finalize
 
@@ -138,16 +136,16 @@ Then run the Inspection Loop and write the Final Report.
 |---|---|---|---|---|
 | extractor-map | haiku | this skill (P2) | `doc_handle`, `corpus`, `bundle` | ≤8 candidates JSON (≤400 tok) |
 | extractor-reducer | sonnet | this skill (P2) | all map arrays | staging JSONL path |
-| vetter | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
+| vetter (singleton) | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
+| supervisor (cluster) | sonnet | `wikify-gather-evidence-cluster` | `cluster_slugs`, `run`, `corpus`, `quota_per_slug=12`, `max_query_rounds=3` | per-slug envelope dict (≤600 tok) |
+| chunk-judge | haiku | `wikify-gather-evidence-cluster` (judge role) | sibling slugs + batch of ≤8 chunks with text | per-chunk routing+score+quote JSON |
 | writer | sonnet M | `wikify-write-page` | cluster slugs + dossier paths | per-slug `response.json` paths |
-
-Every Task return must also yield `{tokens_in, tokens_out, model_id}`
-for the Telemetry pass below.
 
 ## Telemetry
 
-Collect `{role, model_id, tier, tokens_in, tokens_out, stage}` lines as
-each subagent returns, then ingest one batch per wave:
+Token counts come from the harness `<usage>` payload at each Agent
+tool boundary, NOT from subagent self-reports (subagents undershoot
+their tool-result intake by 5-10x). Orchestrator records via:
 
 ```bash
 wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
@@ -156,8 +154,9 @@ wikify run record-calls --from-stdin --run <bundle> --format json <<'EOF'
 EOF
 ```
 
-Stages: `extract`, `evidence`, `write`. Cost curves are invalid
-without these events — a hard rule of the workflow.
+Stages: `extract`, `evidence`, `write`. Recording is mandatory —
+`wikify run close` warns on stderr if no `call` events exist, and
+cost curves in `wikify eval` are invalid without them.
 
 ## Defaults
 
@@ -235,6 +234,7 @@ documented.
 
 - `../wikify-search-corpus/SKILL.md`
 - `../wikify-bundle/SKILL.md`
+- `../wikify-gather-evidence-cluster/SKILL.md`
 - `../wikify-gather-evidence/SKILL.md`
 - `../wikify-write-page/SKILL.md`
 - `../wikify-organize-wiki/SKILL.md`

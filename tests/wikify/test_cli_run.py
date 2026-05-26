@@ -369,3 +369,56 @@ def test_run_show_no_bundle_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["run", "show"])
     assert result.exit_code == 1
+
+
+def test_run_close_warns_when_no_call_events(tmp_path: Path) -> None:
+    """``run close`` must emit a WARNING to stderr when the event ledger
+    contains no ``call`` events. The close must still succeed (exit 0).
+    Regression for eval silently producing empty cost curves.
+    """
+    bundle = _bundle_dir(tmp_path)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)],
+    )
+    result = runner.invoke(
+        app,
+        ["run", "close", "--run", str(bundle), "--status", "completed"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "WARNING" in result.output
+    assert "no agent call telemetry" in result.output
+
+
+def test_run_close_no_warning_when_call_events_exist(tmp_path: Path) -> None:
+    """``run close`` must NOT emit a warning when at least one call event
+    exists on the timeline before close is invoked.
+    """
+    bundle = _bundle_dir(tmp_path)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus)],
+    )
+    runner.invoke(
+        app,
+        [
+            "run", "record-call",
+            "--run", str(bundle),
+            "--role", "vetter",
+            "--model-id", "claude-haiku-4-5",
+            "--tier", "S",
+            "--tokens-in", "5000",
+            "--tokens-out", "300",
+            "--stage", "evidence",
+        ],
+    )
+    result = runner.invoke(
+        app,
+        ["run", "close", "--run", str(bundle), "--status", "completed"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "WARNING" not in result.output

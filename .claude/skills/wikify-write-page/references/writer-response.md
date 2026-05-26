@@ -79,3 +79,8 @@ set. Do not include stale fields from older prompts, such as `links`, or
 workflow-only commentary outside the JSON object. If uncertain, inspect
 the current draft request and this contract; Python is the schema
 authority and rejects extra fields.
+
+Emit unicode characters directly in all prose fields; JSON output is
+UTF-8. Do not emit `\uXXXX` escapes (e.g. write `–` not `–`).
+`wikify draft check` rejects any prose containing literal escape
+sequences.
