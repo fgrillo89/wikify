@@ -125,49 +125,57 @@ def test_render_emits_references_page(tmp_path: Path) -> None:
     assert "Atomic Layer Deposition" in refs_html
 
 
-def test_render_emits_topics_graph_when_navigation_present(tmp_path: Path) -> None:
-    """graph.html exists only when a navigation.json file is present."""
+def test_render_emits_article_graph(tmp_path: Path) -> None:
+    """graph.html renders a force-directed view of article wikilinks."""
     bundle, _ = _commit_one_article(tmp_path)
-    nav_path = bundle.derived_dir / "navigation.json"
-    nav_path.parent.mkdir(parents=True, exist_ok=True)
-    nav_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "strategy": "test",
-                "groups": [
-                    {
-                        "id": "thin-films",
-                        "title": "Thin films",
-                        "description": "",
-                        "page_ids": ["Atomic Layer Deposition"],
-                        "children": [],
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
     out = tmp_path / "site"
     result = runner.invoke(
         app, ["render", "--bundle", str(bundle.root), "--out", str(out)]
     )
     assert result.exit_code == 0, result.output
     graph_html = (out / "graph.html").read_text(encoding="utf-8")
-    assert "Topics graph" in graph_html
+    assert "Article graph" in graph_html
     assert "d3@7" in graph_html
-    # Page node id should be embedded in the JSON-encoded graph data.
-    assert "page:Atomic Layer Deposition" in graph_html
+    assert "Atomic Layer Deposition" in graph_html
+    # No topic scaffolding remains in graph_data
+    assert "group:" not in graph_html
 
 
-def test_render_skips_topics_graph_without_navigation(tmp_path: Path) -> None:
-    bundle, _ = _commit_one_article(tmp_path)
-    out = tmp_path / "site"
-    result = runner.invoke(
-        app, ["render", "--bundle", str(bundle.root), "--out", str(out)]
-    )
-    assert result.exit_code == 0, result.output
-    assert not (out / "graph.html").exists()
+def test_build_article_graph_data_dedupes_pairs_and_counts_mutual(
+    tmp_path: Path,
+) -> None:
+    """Mutual wikilinks collapse to one edge with weight 2."""
+    from dataclasses import dataclass
+
+    from wikify.render.html.render import _build_article_graph_data
+
+    @dataclass
+    class _FakePV:
+        id: str
+        kind: str
+        title: str
+        url: str
+
+    @dataclass
+    class _FakePage:
+        id: str
+        links: list[str]
+
+    page_views = {
+        "A": _FakePV("A", "article", "A", "articles/a.html"),
+        "B": _FakePV("B", "article", "B", "articles/b.html"),
+        "C": _FakePV("C", "article", "C", "articles/c.html"),
+    }
+    page_by_id = {
+        "A": _FakePage("A", ["B", "C"]),     # A -> B, A -> C
+        "B": _FakePage("B", ["A"]),           # B -> A (mutual with A->B)
+        "C": _FakePage("C", ["MISSING"]),     # C -> ? (dropped)
+    }
+    graph = _build_article_graph_data(page_views=page_views, page_by_id=page_by_id)
+
+    assert len(graph["nodes"]) == 3
+    pairs = {(edge["source"], edge["target"]): edge["weight"] for edge in graph["links"]}
+    assert pairs == {("A", "B"): 2, ("A", "C"): 1}
 
 
 def test_render_json_envelope(tmp_path: Path) -> None:

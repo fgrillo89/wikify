@@ -240,11 +240,14 @@ def build_site(
     )
     (out_dir / "references.html").write_text(refs_html, encoding="utf-8")
 
-    # Topics graph: D3 force-directed view of the navigation tree.
-    if navigation and navigation.get("groups"):
-        graph_data = _build_graph_data(navigation)
+    # Article graph: D3 force-directed view of wikilinks between pages.
+    if page_views:
+        graph_data = _build_article_graph_data(
+            page_views={pv.id: pv for pv in page_views},
+            page_by_id=page_by_id,
+        )
         graph_html = env.get_template("graph.html").render(
-            title="Topics graph",
+            title="Article graph",
             root="",
             graph_data=graph_data,
             **shared_ctx,
@@ -437,40 +440,38 @@ def _reference_sort_key(meta: dict, doc_id: str) -> tuple[str, str]:
     return (title.lower() or doc_id.lower(), "")
 
 
-def _build_graph_data(navigation: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Flatten the navigation tree into D3 force-directed graph data.
+def _build_article_graph_data(
+    *,
+    page_views: dict[str, "_PageView"],
+    page_by_id: dict[str, Page],
+) -> dict[str, list[dict[str, Any]]]:
+    """Build a D3 force-directed graph of article-article wikilinks.
 
-    Nodes: each group (``type="group"``) and each page (``type="article"``
-    or ``type="person"``). Pages deduplicate across groups so a page that
-    appears in two groups becomes a single node with two incoming edges.
-    Links connect parent group -> child group and group -> page.
+    Nodes: every page (article + person). Edges: undirected pairs derived
+    from each page's ``links`` field, deduplicated and weighted by the
+    directional link count (1 = one-way crosslink, 2 = mutual).
+    Self-links and links to pages not in the rendered set are dropped.
     """
-    nodes: dict[str, dict[str, Any]] = {}
-    links: list[dict[str, str]] = []
-
-    def walk(group: dict[str, Any], parent_id: str | None) -> None:
-        gid = f"group:{group['id']}"
-        if gid not in nodes:
-            nodes[gid] = {"id": gid, "label": group["title"], "type": "group"}
-        if parent_id is not None:
-            links.append({"source": parent_id, "target": gid})
-        for pv in group.get("pages", []):
-            pid = f"page:{pv.id}"
-            if pid not in nodes:
-                nodes[pid] = {
-                    "id": pid,
-                    "label": pv.title,
-                    "type": pv.kind,
-                    "url": pv.url,
-                }
-            links.append({"source": gid, "target": pid})
-        for child in group.get("children", []):
-            walk(child, gid)
-
-    for top in navigation.get("groups", []):
-        walk(top, None)
-
-    return {"nodes": list(nodes.values()), "links": links}
+    nodes = [
+        {"id": pv.id, "label": pv.title, "type": pv.kind, "url": pv.url}
+        for pv in page_views.values()
+    ]
+    valid = set(page_views)
+    pair_weights: dict[tuple[str, str], int] = {}
+    for pid, pv in page_views.items():
+        page = page_by_id.get(pid)
+        if page is None:
+            continue
+        for target in page.links:
+            if target == pid or target not in valid:
+                continue
+            key = tuple(sorted([pid, target]))
+            pair_weights[key] = pair_weights.get(key, 0) + 1
+    links = [
+        {"source": a, "target": b, "weight": w}
+        for (a, b), w in pair_weights.items()
+    ]
+    return {"nodes": nodes, "links": links}
 
 
 def _key_articles(
