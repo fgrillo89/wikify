@@ -226,6 +226,31 @@ def build_site(
     )
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
 
+    # References page: aggregate every cited doc across all pages.
+    references = _aggregate_references(
+        pages=[page_by_id[pv.id] for pv in page_views if pv.id in page_by_id],
+        page_views={pv.id: pv for pv in page_views},
+        doc_meta_map=doc_meta_map,
+    )
+    refs_html = env.get_template("references.html").render(
+        title="References",
+        root="",
+        references=references,
+        **shared_ctx,
+    )
+    (out_dir / "references.html").write_text(refs_html, encoding="utf-8")
+
+    # Topics graph: D3 force-directed view of the navigation tree.
+    if navigation and navigation.get("groups"):
+        graph_data = _build_graph_data(navigation)
+        graph_html = env.get_template("graph.html").render(
+            title="Topics graph",
+            root="",
+            graph_data=graph_data,
+            **shared_ctx,
+        )
+        (out_dir / "graph.html").write_text(graph_html, encoding="utf-8")
+
     # Static assets: CSS + search.js stub.
     shutil.copy2(_TEMPLATES_DIR / "wiki.css", out_dir / "static" / "wiki.css")
     (out_dir / "static" / "search.js").write_text(_SEARCH_JS, encoding="utf-8")
@@ -340,6 +365,112 @@ def _build_navigation_view(
         if isinstance(group, dict)
     ]
     return {"groups": groups}
+
+
+def _aggregate_references(
+    *,
+    pages: list[Page],
+    page_views: dict[str, "_PageView"],
+    doc_meta_map: dict[str, dict],
+) -> list[dict[str, Any]]:
+    """Aggregate every cited doc into a CS1-formatted reference list.
+
+    Each entry carries ``citation_html`` (CS1 markdown converted to HTML),
+    a sorted list of pages that cite the doc, and a sort key derived
+    from first-author surname + year. Docs cited by zero pages are
+    omitted; docs missing from ``doc_meta_map`` render as a bare
+    ``doc_id`` so nothing silently disappears.
+    """
+    doc_to_pages: dict[str, set[str]] = {}
+    for page in pages:
+        for ev in page.evidence:
+            if not ev.doc_id:
+                continue
+            doc_to_pages.setdefault(ev.doc_id, set()).add(page.id)
+
+    out: list[dict[str, Any]] = []
+    md = markdown.Markdown(extensions=["smarty"])
+    for doc_id, citing_page_ids in doc_to_pages.items():
+        meta = doc_meta_map.get(doc_id, {})
+        # Rewrite the meta URL: _load_doc_meta_map emits "../assets/sources/X"
+        # (relative to per-page HTML one level deep). References lives at the
+        # site root, so drop one "../".
+        url = meta.get("url", "")
+        if url.startswith("../"):
+            url = url[3:]
+        if meta:
+            citation_md = format_cs1(meta, url=url)
+            citation_html = md.reset().convert(citation_md)
+        else:
+            citation_html = f"<code>{escape(doc_id)}</code>"
+        cited_in = sorted(
+            [
+                {"title": page_views[pid].title, "url": page_views[pid].url}
+                for pid in citing_page_ids
+                if pid in page_views
+            ],
+            key=lambda c: c["title"].lower(),
+        )
+        sort_key = _reference_sort_key(meta, doc_id)
+        out.append(
+            {
+                "doc_id": doc_id,
+                "citation_html": citation_html,
+                "cited_in": cited_in,
+                "_sort": sort_key,
+            }
+        )
+    out.sort(key=lambda r: r["_sort"])
+    for ref in out:
+        del ref["_sort"]
+    return out
+
+
+def _reference_sort_key(meta: dict, doc_id: str) -> tuple[str, str]:
+    """Surname-then-year sort key. Falls back to doc_id when meta is empty."""
+    authors = meta.get("authors") or []
+    if authors:
+        first = str(authors[0])
+        surname = first.split(",", 1)[0] if "," in first else first.split()[-1]
+        return (surname.lower(), str(meta.get("year") or ""))
+    title = (meta.get("title") or "").strip()
+    return (title.lower() or doc_id.lower(), "")
+
+
+def _build_graph_data(navigation: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Flatten the navigation tree into D3 force-directed graph data.
+
+    Nodes: each group (``type="group"``) and each page (``type="article"``
+    or ``type="person"``). Pages deduplicate across groups so a page that
+    appears in two groups becomes a single node with two incoming edges.
+    Links connect parent group -> child group and group -> page.
+    """
+    nodes: dict[str, dict[str, Any]] = {}
+    links: list[dict[str, str]] = []
+
+    def walk(group: dict[str, Any], parent_id: str | None) -> None:
+        gid = f"group:{group['id']}"
+        if gid not in nodes:
+            nodes[gid] = {"id": gid, "label": group["title"], "type": "group"}
+        if parent_id is not None:
+            links.append({"source": parent_id, "target": gid})
+        for pv in group.get("pages", []):
+            pid = f"page:{pv.id}"
+            if pid not in nodes:
+                nodes[pid] = {
+                    "id": pid,
+                    "label": pv.title,
+                    "type": pv.kind,
+                    "url": pv.url,
+                }
+            links.append({"source": gid, "target": pid})
+        for child in group.get("children", []):
+            walk(child, gid)
+
+    for top in navigation.get("groups", []):
+        walk(top, None)
+
+    return {"nodes": list(nodes.values()), "links": links}
 
 
 def _key_articles(

@@ -112,6 +112,64 @@ def test_render_wiki_name_override(tmp_path: Path) -> None:
     assert "ScholarForge" not in index_html
 
 
+def test_render_emits_references_page(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    out = tmp_path / "site"
+    result = runner.invoke(
+        app, ["render", "--bundle", str(bundle.root), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    refs_html = (out / "references.html").read_text(encoding="utf-8")
+    assert "<h1>References</h1>" in refs_html
+    assert "Cited in:" in refs_html
+    assert "Atomic Layer Deposition" in refs_html
+
+
+def test_render_emits_topics_graph_when_navigation_present(tmp_path: Path) -> None:
+    """graph.html exists only when a navigation.json file is present."""
+    bundle, _ = _commit_one_article(tmp_path)
+    nav_path = bundle.derived_dir / "navigation.json"
+    nav_path.parent.mkdir(parents=True, exist_ok=True)
+    nav_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy": "test",
+                "groups": [
+                    {
+                        "id": "thin-films",
+                        "title": "Thin films",
+                        "description": "",
+                        "page_ids": ["Atomic Layer Deposition"],
+                        "children": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "site"
+    result = runner.invoke(
+        app, ["render", "--bundle", str(bundle.root), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    graph_html = (out / "graph.html").read_text(encoding="utf-8")
+    assert "Topics graph" in graph_html
+    assert "d3@7" in graph_html
+    # Page node id should be embedded in the JSON-encoded graph data.
+    assert "page:Atomic Layer Deposition" in graph_html
+
+
+def test_render_skips_topics_graph_without_navigation(tmp_path: Path) -> None:
+    bundle, _ = _commit_one_article(tmp_path)
+    out = tmp_path / "site"
+    result = runner.invoke(
+        app, ["render", "--bundle", str(bundle.root), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (out / "graph.html").exists()
+
+
 def test_render_json_envelope(tmp_path: Path) -> None:
     bundle, _ = _commit_one_article(tmp_path)
     out = tmp_path / "site"
