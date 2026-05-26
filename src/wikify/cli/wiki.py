@@ -461,6 +461,58 @@ def cmd_apply_navigation(
     typer.echo(f"navigation: {written}")
 
 
+# --------------------------------------------------------------- relink
+
+
+@app.command("relink")
+def cmd_relink(
+    run: Path | None = typer.Option(None, "--run"),
+    max_links: int = typer.Option(5, "--max-links"),
+    min_overlap: int = typer.Option(2, "--min-overlap"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Recompute per-page ``links`` from shared-evidence overlap.
+
+    Walks every committed page, scores peers by how many evidence
+    doc_ids they share, and rewrites each page's ``links`` frontmatter
+    field to the top peers. Deterministic. Useful after incremental
+    adds, when older pages' link sets don't know about newer pages.
+    """
+    from ..bundle.wiki.page import load_bundle as load_page_bundle
+    from ..bundle.wiki.relink import apply_relinks
+
+    bundle = _resolve_bundle(run)
+    page_bundle = load_page_bundle(bundle.wiki_dir)
+    result = apply_relinks(
+        page_bundle,
+        max_links=max_links,
+        min_overlap=min_overlap,
+        dry_run=dry_run,
+    )
+
+    if fmt == "json":
+        typer.echo(json.dumps({
+            "ok": True,
+            "updated": len(result.updated),
+            "unchanged": len(result.unchanged),
+            "dry_run": dry_run,
+            "max_links": max_links,
+            "min_overlap": min_overlap,
+        }))
+        return
+
+    state = "would update" if dry_run else "updated"
+    typer.echo(
+        f"{state} {len(result.updated)} page(s); {len(result.unchanged)} unchanged "
+        f"(max_links={max_links}, min_overlap={min_overlap})"
+    )
+    if result.updated and len(result.updated) <= 20:
+        for pid in result.updated:
+            n = len(result.links_per_page[pid])
+            typer.echo(f"  {pid}: {n} link(s)")
+
+
 # --------------------------------------------------------------- check
 
 
