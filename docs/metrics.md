@@ -24,11 +24,13 @@ corpus, never the core loop.
 Every strategy produces an independent, self-contained wiki bundle:
 
 ```
-data/wikis/{strategy}_{budget}_{seed}/
-  concepts/*.md
-  people/*.md
-  _graph.json
-  _run.json       # cost, wallclock, tier breakdown, sampled chunks
+data/wikify_bundles/{strategy}_{budget}_{seed}/
+  wiki/articles/*.md
+  wiki/people/*.md
+  run/state.json       # corpus path, strategy, budget, schema version
+  run/events.jsonl     # call telemetry, cli invocations, stage changes
+  derived/index.json   # page list projection
+  derived/eval.json    # metric values (this doc's outputs)
 ```
 
 Benchmarking = loading two bundles side by side. No shared state between
