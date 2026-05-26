@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <article class="wiki-article graph-page">
-  <h1>Topics graph</h1>
-  <p>Force-directed view of the {{ navigation.groups|length }} top-level topic(s) and their pages. Drag a node to reposition; click a page node to navigate.</p>
+  <h1>Article graph</h1>
+  <p>Force-directed view of wikilinks between articles. Each edge represents a crosslink chosen by the writer; thicker edges are mutual links. Drag a node to reposition, scroll to zoom, click a node to navigate.</p>
   <div class="graph-legend">
-    <span class="legend-item"><span class="legend-dot legend-group"></span>Topic</span>
     <span class="legend-item"><span class="legend-dot legend-article"></span>Article</span>
     <span class="legend-item"><span class="legend-dot legend-person"></span>Person</span>
+    <span class="legend-item legend-meta">{{ graph_data.nodes|length }} nodes, {{ graph_data.links|length }} edges</span>
   </div>
   <div id="topics-graph" class="topics-graph"></div>
 </article>
@@ -26,12 +26,18 @@
   const g = svg.append("g");
   svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
 
-  const link = g.append("g")
-    .attr("stroke", "#a2a9b1").attr("stroke-opacity", 0.6).attr("stroke-width", 1)
-    .selectAll("line").data(data.links).join("line");
+  // Node degree drives radius so well-connected articles stand out.
+  const degree = {};
+  data.nodes.forEach(n => degree[n.id] = 0);
+  data.links.forEach(l => { degree[l.source]++; degree[l.target]++; });
 
-  const colors = { group: "#36c", article: "#0645ad", person: "#7c3aed" };
-  const radii  = { group: 9,        article: 4.5,        person: 4.5 };
+  const link = g.append("g")
+    .attr("stroke", "#7a8088").attr("stroke-opacity", 0.55)
+    .selectAll("line").data(data.links).join("line")
+    .attr("stroke-width", d => 0.8 + (d.weight || 1) * 0.8);
+
+  const colors = { article: "#0645ad", person: "#7c3aed" };
+  const radius = d => 5 + Math.min(degree[d.id] || 0, 8);
 
   const node = g.append("g").selectAll("g").data(data.nodes).join("g")
     .attr("class", d => "graph-node graph-node-" + d.type)
@@ -40,28 +46,28 @@
     .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd));
 
   node.append("circle")
-    .attr("r", d => radii[d.type] || 4)
+    .attr("r", radius)
     .attr("fill", d => colors[d.type] || "#999")
-    .attr("stroke", "#fff").attr("stroke-width", 1.2);
+    .attr("stroke", "#fff").attr("stroke-width", 1.5);
 
   node.append("text")
-    .attr("dx", d => (radii[d.type] || 4) + 4).attr("dy", 4)
-    .style("font", d => d.type === "group" ? "bold 12px sans-serif" : "11px sans-serif")
+    .attr("dx", d => radius(d) + 4).attr("dy", 4)
+    .style("font", "12px sans-serif")
     .style("fill", "#202122")
     .style("pointer-events", "none")
     .text(d => d.label);
 
-  node.append("title").text(d => d.label);
+  node.append("title").text(d => `${d.label} (${degree[d.id] || 0} links)`);
 
   const sim = d3.forceSimulation(data.nodes)
-    .force("link", d3.forceLink(data.links).id(d => d.id).distance(d => d.target.type === "group" ? 70 : 35))
-    .force("charge", d3.forceManyBody().strength(d => d.type === "group" ? -260 : -90))
+    .force("link", d3.forceLink(data.links).id(d => d.id).distance(110).strength(d => 0.3 + (d.weight - 1) * 0.2))
+    .force("charge", d3.forceManyBody().strength(-450))
     .force("center", d3.forceCenter(width/2, height/2))
-    .force("x", d3.forceX(width/2).strength(0.08))
-    .force("y", d3.forceY(height/2).strength(0.08))
-    .force("collide", d3.forceCollide(d => (radii[d.type] || 4) + 14));
+    .force("x", d3.forceX(width/2).strength(0.04))
+    .force("y", d3.forceY(height/2).strength(0.04))
+    .force("collide", d3.forceCollide(d => radius(d) + 28));
 
-  const PAD = 16;
+  const PAD = 18;
   sim.on("tick", () => {
     data.nodes.forEach(d => {
       d.x = Math.max(PAD, Math.min(width - PAD, d.x));

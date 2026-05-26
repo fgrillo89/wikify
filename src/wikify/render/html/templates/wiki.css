@@ -902,9 +902,14 @@ a.wiki-redlink:visited {
   box-shadow: 0 0 0 1px #c8ccd1;
 }
 
-.legend-group { background: #36c; }
 .legend-article { background: #0645ad; }
 .legend-person { background: #7c3aed; }
+
+.graph-legend .legend-meta {
+  margin-left: auto;
+  color: #72777d;
+  font-style: italic;
+}
 
 /* ── Equations (KaTeX) ────────────────────────────────────────── */
 .katex-display {
