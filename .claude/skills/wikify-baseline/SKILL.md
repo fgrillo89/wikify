@@ -74,30 +74,29 @@ wikify work cluster-concepts --by auto --run <bundle> --format json
 `--by auto` picks `seeds` pre-evidence and `evidence` post-evidence;
 the response's `mode_selected` reports which it chose.
 
-Route each cluster by size:
-
-- **`cluster.size >= 2`** — spawn one `wikify-gather-evidence-cluster`
-  Task with `cluster_slugs=<all slugs in cluster>`. The supervisor
-  plans one shared query set, fans out haiku judges, and commits one
-  ledger per slug. Returns a per-slug envelope dict.
-- **`cluster.size == 1`** — spawn one `wikify-gather-evidence` Task
-  with that slug. The per-slug path has no fan-out overhead and beats
-  the cluster pattern at size 1.
+For every cluster (any size), spawn one
+`wikify-gather-evidence-cluster` Task with
+`cluster_slugs=<all slugs in cluster>`. The supervisor plans one
+shared query set, fans out haiku judges, and commits one ledger per
+slug. Returns a per-slug envelope dict. Singletons use the same
+contract — no fan-out savings but the judge discipline guard still
+applies.
 
 Run cluster Tasks in parallel; each holds its own MCP session.
 
 **Rescue wave (after each cluster Task).** For any slug with
 `stop_reason == "pool_exhausted" AND appended < 10` in the
-supervisor envelope, spawn a `wikify-gather-evidence` Task as a
-top-up. The per-slug vetter sees the existing `evidence.jsonl` and
-sizes its remaining quota; `build-evidence` dedups by chunk_id so
-duplicates cannot land. Run rescues in parallel.
+supervisor envelope, spawn another single-slug
+`wikify-gather-evidence-cluster` Task as a top-up. The new
+supervisor sees the existing `evidence.jsonl` and sizes its
+remaining quota; `build-evidence` dedups by chunk_id so duplicates
+cannot land. Run rescues in parallel.
 
-Targets per slug (both paths, after rescue): **≥10 records across
-≥5 distinct docs**, at least one definition chunk. Persons need
-quoted research contributions; never invent biography. If a Task
-returns `stop_reason="error"` or `appended < 6`, mark the slug
-failed — at most one retry, switching to the per-slug path.
+Targets per slug (after rescue): **≥10 records across ≥5 distinct
+docs**, at least one definition chunk. Persons need quoted research
+contributions; never invent biography. If a Task returns
+`stop_reason="error"` or `appended < 6`, mark the slug failed — at
+most one retry.
 
 ### P4 — Write + commit
 
@@ -136,8 +135,7 @@ Then run the Inspection Loop and write the Final Report.
 |---|---|---|---|---|
 | extractor-map | haiku | this skill (P2) | `doc_handle`, `corpus`, `bundle` | ≤8 candidates JSON (≤400 tok) |
 | extractor-reducer | sonnet | this skill (P2) | all map arrays | staging JSONL path |
-| vetter (singleton) | sonnet | `wikify-gather-evidence` | `slug`, `run`, `corpus`, `quota=12`, `max_query_rounds=3` | Step-7 JSON (≤300 tok) |
-| supervisor (cluster) | sonnet | `wikify-gather-evidence-cluster` | `cluster_slugs`, `run`, `corpus`, `quota_per_slug=12`, `max_query_rounds=3` | per-slug envelope dict (≤600 tok) |
+| supervisor | sonnet | `wikify-gather-evidence-cluster` | `cluster_slugs`, `run`, `corpus`, `quota_per_slug=12`, `max_query_rounds=3` | per-slug envelope dict (≤600 tok) |
 | chunk-judge | haiku | `wikify-gather-evidence-cluster` (judge role) | sibling slugs + batch of ≤8 chunks with text | per-chunk routing+score+quote JSON |
 | writer | sonnet M | `wikify-write-page` | cluster slugs + dossier paths | per-slug `response.json` paths |
 
@@ -235,7 +233,6 @@ documented.
 - `../wikify-search-corpus/SKILL.md`
 - `../wikify-bundle/SKILL.md`
 - `../wikify-gather-evidence-cluster/SKILL.md`
-- `../wikify-gather-evidence/SKILL.md`
 - `../wikify-write-page/SKILL.md`
 - `../wikify-organize-wiki/SKILL.md`
 - `../wikify/references/exploration/concept-extraction.md`

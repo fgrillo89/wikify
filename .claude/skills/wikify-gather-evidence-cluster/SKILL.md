@@ -1,14 +1,16 @@
 ---
 name: wikify-gather-evidence-cluster
-description: Cluster-supervised evidence loop. A sonnet supervisor plans one shared query plan for all sibling slugs in a cluster, fans out cheap haiku judges that read chunks and emit per-chunk routing+score+quote, then commits one evidence ledger per slug. Use when a cluster has 2+ slugs that share corpus material. Singletons use wikify-gather-evidence instead.
+description: Canonical evidence-gathering skill. A sonnet supervisor plans one shared query plan for all sibling slugs in a cluster, fans out cheap haiku judges that read chunks and emit per-chunk routing+score+quote, then commits one evidence ledger per slug. Handles clusters of any size (including singletons).
 allowed-tools: Bash(wikify work *) Task mcp__wikify__context_set mcp__wikify__context_show mcp__wikify__corpus_find mcp__wikify__corpus_show mcp__wikify__corpus_sample mcp__wikify__corpus_citation_walk mcp__wikify__corpus_similarity_walk mcp__wikify__corpus_traverse mcp__wikify__corpus_schema
 ---
 
 # wikify-gather-evidence-cluster
 
-You are the supervisor of a fleet of haiku chunk-judges. The cluster's
-slugs share corpus material, so one query plan and one chunk pool are
-amortised across N slugs instead of paid N times.
+You are the supervisor of a fleet of haiku chunk-judges. When the
+cluster has 2+ slugs the shared query plan and chunk pool are
+amortised across siblings. Singletons (size 1) run through the same
+contract — same judge discipline guard, same envelope shape — without
+the fan-out savings.
 
 Read/search uses the wikify MCP server (`mcp__wikify__corpus_*`). Keep
 the supervisor's context light: in Step 3 you issue searches **without**
@@ -17,8 +19,6 @@ not to yourself. The verbatim-quote and score decisions live in the
 judges; the supervisor sees their compact JSON verdicts.
 
 This skill runs on a sonnet-class supervisor. Judges run on haiku.
-For singleton clusters use `wikify-gather-evidence` instead — the
-supervisor pattern adds overhead that does not pay back at size 1.
 
 ## Inputs
 
@@ -47,11 +47,11 @@ supervisor pattern adds overhead that does not pay back at size 1.
    lands in both per-slug ledgers. The supervisor de-dupes
    chunk_ids within each ledger but routes one accept to multiple
    ledgers when the judge says so.
-4. **Score = topic role, per slug.** The ladder is identical to
-   `wikify-gather-evidence`: 1.00 definition, 0.95 mechanism, 0.85
-   materials/process, 0.75 application, 0.60 sibling-relevant. The
-   judge sets the score in the context of the slug it routes to;
-   a chunk routed to two slugs may carry two different scores.
+4. **Score = topic role, per slug.** The ladder: 1.00 definition,
+   0.95 mechanism, 0.85 materials/process, 0.75 application, 0.60
+   sibling-relevant. The judge sets the score in the context of the
+   slug it routes to; a chunk routed to two slugs may carry two
+   different scores.
 5. **Definition chunks are gold.** A judge MUST mark `def_for: [slug]`
    when the chunk opens with `<title> is …` / `<title> refers to …` /
    `<acronym> stands for …`. The supervisor inspects per-slug
@@ -288,8 +288,11 @@ EOF
 ```
 
 For slugs with `< 6` accepts, do NOT commit; mark them as a workflow
-signal and let the orchestrator decide whether to retry with the
-per-slug `wikify-gather-evidence` path.
+signal in the per-slug envelope (`stop_reason: "pool_exhausted"`,
+`appended: <count>`) and let the orchestrator decide whether to
+re-spawn this skill as a single-slug top-up. The next invocation
+will see the existing `evidence.jsonl` and size its remaining quota
+accordingly; `build-evidence` dedups by chunk_id.
 
 ## Step 8: return one envelope per slug
 
@@ -371,34 +374,20 @@ tokens.
 - Judges set per-chunk score on the same ladder as
   `wikify-gather-evidence` (1.0 definition, 0.95 mechanism, ...).
 - Judge batch size ≤ 8. Larger batches break haiku discipline on the
-  quote rule (documented in `wikify-gather-evidence` lines 19-25).
+  quote rule — haiku partially follows the score / quote / no-false-
+  positive discipline at small accept sets but cuts corners around
+  quota 16. Sonnet reliably honors all three rules.
 - Every supervisor-accepted row carries a verbatim quote from the
   chunk's `text` field, validated post-NFKC.
 - Do not commit a slug whose accept list is `< 6`. Surface as a
-  workflow signal; the per-slug path may rescue it.
+  workflow signal; the orchestrator may re-spawn this skill on the
+  failed slug as a top-up.
 - Do not add seeds to work cards; seeds come from the extractor.
 - Person slugs: judges accept chunks that quote actual contributions
   by that author; author bylines alone do not count.
-- For cluster_size == 1, do NOT use this skill. Switch to
-  `wikify-gather-evidence`.
-
-## When to fall back to per-slug
-
-The orchestrator should pick the per-slug skill when:
-
-- The cluster has exactly 1 slug.
-- Two cluster-mode runs in a row hit `judge_discipline_failures > N/2`
-  for the same cluster (the corpus may have noisy chunk bodies that
-  haiku trips on).
-- The supervisor exceeds 60 s on Step 2/3 (most likely indicates a
-  malformed cluster).
 
 ## References
 
-- `../wikify-gather-evidence/SKILL.md` — the per-slug path; contracts
-  for chunk vetting, the score ladder, decision-row format, and
-  judge anti-patterns live there. This cluster skill is a fan-out
-  layer on top, not a replacement.
 - `../wikify-search-corpus/SKILL.md` — corpus_find / corpus_show
   primitives and `include_text` semantics.
 - `../wikify-bundle/SKILL.md` — `wikify work build-evidence` commit
