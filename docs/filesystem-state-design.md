@@ -28,7 +28,6 @@ This note records the file contract for skill-driven wikification.
       concept_suggestions.jsonl
       merge_suggestions.jsonl
       query_feedback.jsonl
-    extracts/
     concepts/
       <slug>/
         work.md
@@ -246,6 +245,7 @@ not in run state.
   "status": "active",
   "strategy": "baseline",
   "corpus_path": "data/corpora/foo",
+  "corpus_fingerprint": "1a2b3c4d5e6f7890",
   "wiki_path": "wiki",
   "work_path": "work",
   "budget": {
@@ -278,7 +278,7 @@ Files that should not be treated as monitoring:
 - `validation.json` is a page-attempt gate.
 - `draft.json` is a per-attempt writer input snapshot.
 - `response.json` is a per-attempt writer output.
-- `derived/index.json` and `derived/navigation.json` are rebuildable projections.
+- `derived/index.json`, `derived/navigation.json`, `derived/vectors.npz`, and `wiki.db` are rebuildable projections.
 - processed inbox records are garbage-collected after consolidation.
 
 ## Event log telemetry
@@ -446,9 +446,9 @@ file an agent may need to inspect:
 run/state.json                         -> wikify run show
 run/events.jsonl                       -> wikify run list events
 work/concepts/<slug>/evidence.jsonl    -> wikify work list evidence <slug>
-work/inbox/*.jsonl                     -> wikify work list inbox [kind]
+work/inbox/*.jsonl                     -> wikify work list inbox
 work/concepts/<slug>/draft.json        -> wikify draft show <slug>
-work/concepts/<slug>/validation.json   -> wikify draft check/show <slug>
+work/concepts/<slug>/validation.json   -> wikify draft check <slug>
 derived/index.json                     -> wikify wiki list/find/show
 wiki.db                                -> wikify wiki find/traverse
 derived/navigation.json                -> wikify render, category fallback
@@ -475,9 +475,9 @@ wikify wiki list files
 wikify wiki find "atomic layer deposition" --text
 wikify wiki show wiki/articles/atomic-layer-deposition.md --full
 
-wikify work list files
-wikify work find "needs_refine" --text
-wikify work show work/concepts/atomic-layer-deposition/work.md
+wikify work list claims
+wikify work list inbox
+wikify work show atomic-layer-deposition
 ```
 
 This keeps the model's familiar shell workflow:
@@ -686,7 +686,8 @@ Responsibilities:
 
 - `derived/index.json`
 - `derived/navigation.json`
-- vector compatibility caches
+- `derived/vectors.npz` (+ `derived/vectors.ids.json`)
+- `wiki.db` (the committed-wiki query + graph store)
 
 Responsibilities:
 
@@ -717,7 +718,7 @@ Run commands:
 ```text
 wikify run init   --bundle <bundle> --corpus <corpus> [--strategy <name>] [--target-haiku-eq N]
 wikify run show   [--detail|--full] [--format text|json]
-wikify run list   events [--tail 50] [--type <type>]
+wikify run list   events [--tail N] [--type <type>]
 wikify run set    [--target-haiku-eq N] [--strategy-note <text>]
 wikify run lock   [--owner <id>] [--ttl-seconds N]
 wikify run unlock
@@ -732,19 +733,20 @@ Corpus build/read commands (every flag below is on the actual CLI; consult
 
 ```text
 wikify corpus build    <source> --out <corpus> [--mode additive|sync] [--parser default|lite|marker|docling]
-wikify corpus refresh  <corpus>
+wikify corpus refresh  <corpus> [--no-openalex]
 wikify corpus schema   [--format text|json]
-wikify corpus check    [<corpus>] [--format text|json]
-wikify corpus list     docs|chunks|files [--corpus <c>] [--doc <doc>]
+wikify corpus check    [<corpus>] [--full] [--format text|json]
+wikify corpus list     docs|chunks|files [--corpus <c>] [--doc <doc>] [--long]
 wikify corpus find     "<query>" [--corpus <c>] [--top-k N] \
                        [--by chunk|paper|author] \
-                       [--rank semantic|citation_count|pagerank|h_index|n_papers] \
-                       [--format auto|quiet|compact|json] [--explain]
+                       [--rank semantic|bm25|hybrid|all|citation_count|pagerank|h_index|n_papers] \
+                       [--field chunk_text|title] [--in-doc <doc>] [--exclude-kind <kind>] \
+                       [--with-text] [--format auto|quiet|compact|json] [--explain]
 wikify corpus find     "<query>" [--corpus <c>] --text
 wikify corpus sample   [--corpus <c>] [--max N] [--strategy diverse] [--pagerank-weight W]
-wikify corpus show     <doc:|chunk:|figure:|equation:|author:><id> [--corpus <c>] [--full]
+wikify corpus show     <doc:|chunk:|figure:|equation:|author:><id> [--corpus <c>] [--full] [--long]
 wikify corpus traverse <handle> --to <relation> [--corpus <c>] \
-                       [--rank citation_count|pagerank|h_index|n_papers] [--top-k N] \
+                       [--rank citation_count|pagerank] [--top-k N] \
                        [--format auto|quiet|compact|json] [--explain]
 wikify corpus repl     [--corpus <c>]
 ```
@@ -776,44 +778,54 @@ papers ranked by their best matching chunks.
 Work commands:
 
 ```text
-wikify work list [--status ready]
+wikify work list claims|inbox
 wikify work list evidence <concept>
-wikify work list inbox [evidence|concept|merge|query_feedback]
-wikify work find "Atomic Layer Deposition"
-wikify work show <concept> [--detail|--full]
-wikify work add concept "Atomic Layer Deposition" --kind article
-wikify work add evidence <concept> --chunk <chunk>
+wikify work show <concept> [--full]
+wikify work add concept "Atomic Layer Deposition" --kind article [--aliases '[...]']
 wikify work add evidence <concept> --records <jsonl-path>
-wikify work add feedback query --record <json-or-path>
-wikify work set <concept> --status needs_refine
-wikify work tend
+wikify work add feedback evidence|concept|merge|query --record <json-or-path>
+wikify work set <concept> [--status <s>] [--needs-refine] [--aliases '[...]']
+wikify work claim <concept> [--owner <id>] [--ttl-seconds N]
+wikify work release <concept> [--owner <id>]
+wikify work tend [--keep-inbox]
+wikify work build-evidence <concept> ...
+wikify work cluster-concepts ...
 ```
 
 Draft commands:
 
 ```text
-wikify draft build <concept> --task create|refine
-wikify draft show <concept>
-wikify draft check <concept>
+wikify draft build <concept> --task create|refine --corpus <c> --model-id <id> --tier S|M|L [--with-adjacent]
+wikify draft show <concept> [--full]
+wikify draft check <concept> [--dry-run]
+wikify draft render-dossier <concept>
+wikify draft normalize-references <concept>
+wikify draft finalize <concept>
 ```
 
 Wiki commands:
 
 ```text
-wikify wiki list [articles|people|pages]
-wikify wiki find "ALD temperature window" [--mode text|bm25|semantic|hybrid]
+wikify wiki list articles|people|files
+wikify wiki find "ALD temperature window" [--mode text|bm25|semantic|hybrid] [--top-k N]
 wikify wiki traverse "Atomic Layer Deposition" --to links
 wikify wiki traverse "Memristor" --to linked-by
 wikify wiki traverse "Atomic Layer Deposition" --to co-evidence
+wikify wiki traverse "Atomic Layer Deposition" --to evidence
+wikify wiki traverse "Atomic Layer Deposition" --to similar
+wikify wiki traverse "Atomic Layer Deposition" --to see-also
 wikify wiki traverse "Atomic Layer Deposition" --to categories
-wikify wiki traverse category:materials --to pages
+wikify wiki traverse category:materials --to pages|children|parent
 wikify wiki show "Atomic Layer Deposition" [--full]
+wikify wiki schema [--format text|json]
 wikify wiki repl
 wikify wiki build indexes|graph|vectors
+wikify wiki rebuild [--skip vectors|indexes|graph]
+wikify wiki relink [--max-links N] [--min-overlap N] [--dry-run]
 wikify wiki navigation-context [--run <bundle>] [--out <path>]
 wikify wiki apply-navigation <path> [--run <bundle>]
 wikify wiki check
-wikify wiki commit <concept>
+wikify wiki commit <concept> [--ensure-projections]
 ```
 
 `wiki navigation-context` is the first-class organizer query projection. It
@@ -829,9 +841,12 @@ bundle and should never mutate corpus/work state. They use `--bundle <b>`
 since they never resolve through `run/state.json`:
 
 ```text
-wikify render --bundle <bundle> --format html [--out <dir>]
+wikify render --bundle <bundle> [--format html] [--out <dir>] [--corpus <corpus>] [--wiki-name <name>]
 wikify eval --bundle <bundle> [--corpus <corpus>] [--report <path>]
 ```
+
+`render` writes per-page HTML plus `references.html` and `graph.html` site
+outputs from the committed wiki.
 
 ### Design rules for atoms
 
@@ -1005,7 +1020,7 @@ wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --top-
 wikify corpus find    "Atomic Layer Deposition" --corpus data/corpora/ald --text
 wikify corpus show    chunk:doc1__c003 --corpus data/corpora/ald --full
 
-wikify work list --status ready
+wikify work list claims
 wikify work show "Atomic Layer Deposition"
 wikify work add concept  "Atomic Layer Deposition" --kind article --aliases '["ALD"]'
 wikify work add evidence "Atomic Layer Deposition" --records evidence.jsonl
@@ -1072,7 +1087,11 @@ corpus refresh
 corpus show
 corpus list
 corpus find
+corpus sample
+corpus traverse
+corpus schema
 corpus check
+corpus repl
 ```
 
 `corpus build` is ingest:
@@ -1096,20 +1115,16 @@ wikify run init --bundle data/wikis/ald --corpus data/corpora/ald
 ```text
 wikify corpus show doc:paper_A
 wikify corpus show chunk:paper_A__c0003__a1b2 --full
-wikify corpus show author:"smith j"
+wikify corpus show author:smith_j
 wikify corpus show figure:paper_A/fig_01
 wikify corpus show equation:paper_A_eq1
-wikify corpus show markdown/paper_A.md --full
 ```
 
 `corpus list` enumerates handles without content:
 
 ```text
-wikify corpus list docs --limit 50
-wikify corpus list chunks --doc paper_A --limit 50
-wikify corpus list authors --limit 50
-wikify corpus list figures --doc paper_A
-wikify corpus list equations --doc paper_A
+wikify corpus list docs
+wikify corpus list chunks --doc paper_A
 wikify corpus list files
 ```
 
@@ -1144,77 +1159,25 @@ and gives the LLM more control than a large graph DSL.
 1. corpus find "concept A" --corpus <c>
 2. choose a chunk handle from the ranked results
 3. corpus show chunk:<id> --corpus <c> --full
-4. note its doc_id, look at neighbours via the fluent KG when needed
+4. corpus traverse doc:<id> --to cited-by --corpus <c>
 5. corpus find "concept B" --corpus <c> --top-k 8
 6. corpus show chunk:<best-chunk> --corpus <c> --full
 ```
 
-Cross-document graph traversals (cited-by, neighbours, refs) are not
-yet on the CLI; reach for the fluent corpus KG.
-
-If a traversal is known upfront and too awkward for flags, use a `--scope-file`.
-This is an escape hatch, not the primary agent pattern. The scope file is a
-small JSON recipe that builds the candidate universe before the final operation
-runs.
-
-```text
-wikify corpus find "topic C" --scope-file work/tmp/cited-by-scope.json --top-k 10
-```
-
-Example:
-
-```json
-{
-  "schema_version": 1,
-  "start": {"type": "source", "id": "paper_A"},
-  "steps": [
-    {"op": "cited_by"},
-    {"op": "sections", "type": "conclusions"},
-    {"op": "chunks"}
-  ]
-}
-```
-
-This maps to:
-
-```text
-kg.source("paper_A").cited_by().sections(type="conclusions").chunks()
-```
-
-The final `find` command then searches only within that scoped chunk set.
-
-Initial scope-file operations should be limited to the stable fluent graph
-atoms:
-
-```text
-start: source | author | chunks | sources | authors
-ops: cited_by | references | authors | sources | coauthors | sections |
-     chunks | figures | equations | nearby_figures | nearby_equations |
-     neighborhood | of_type | where | match | since | top
-```
-
-Rules for agents:
-
-- Use direct flags for common one-hop scopes.
-- Use recursive CLI calls when each step requires inspection or judgement before
-  choosing the next step.
-- Use `--scope-file` when the traversal is known upfront and should run
-  deterministically in one call.
-- Keep scope files short and write them under `work/tmp/` or another transient
-  run workspace.
-- Do not put large text in scope files; use handles, filters, and small
-  parameters only.
-- The command should echo the resolved scope size before returning ranked
-  results, so agents can detect empty or over-broad scopes.
-
-This keeps the skill in charge of strategy and judgement while the CLI remains
-deterministic and small.
+Cross-document graph traversals (cited-by, references, near-chunk
+figures/equations, authored-by, coauthors) are exposed via
+`corpus traverse <handle> --to <relation>`. Multi-hop scoping is
+performed by chaining traversals through shell pipes; each step
+prints handles that feed directly into the next call. For arbitrary
+graph-program composition use the Python fluent API in a deterministic
+helper script.
 
 Like `wiki find --text`, `corpus find <query> --text` is the corpus-aware grep
-path. It should search source markdown, chunk text, titles, authors, and
-metadata, returning relative path or handle, line/chunk id, and snippet. It is
-useful when the agent is looking for an exact phrase, acronym, equation label,
-or section heading and semantic search would be wasteful.
+path. It does literal substring matching over chunk text and returns chunk +
+doc handles with a short snippet. Pair with `--field title` (and `--by paper`)
+for title-only substring search. It is useful when the agent is looking for an
+exact phrase, acronym, equation label, or section heading and semantic search
+would be wasteful.
 
 If a strategy needs arbitrary graph-program composition, it should use the
 Python fluent API inside a deterministic helper or skill-owned script and write
@@ -1253,14 +1216,18 @@ wiki find
 wiki check
 ```
 
-`wiki show` dereferences one committed wiki handle:
+`wiki show` dereferences one committed page handle:
 
 ```text
 wikify wiki show "Atomic Layer Deposition"
-wikify wiki show evidence:"Atomic Layer Deposition::e1"
+wikify wiki show page:atomic-layer-deposition
 wikify wiki show wiki/articles/atomic-layer-deposition.md
 wikify wiki show "Atomic Layer Deposition" --full
 ```
+
+Per-page evidence entries are read via
+`wiki traverse "<page>" --to evidence`, which emits `chunk:<id>`
+handles that pipe into `corpus show` / `corpus traverse`.
 
 `wiki list` enumerates committed wiki handles:
 
@@ -1268,7 +1235,6 @@ wikify wiki show "Atomic Layer Deposition" --full
 wikify wiki list
 wikify wiki list articles
 wikify wiki list people
-wikify wiki list evidence --page "Atomic Layer Deposition"
 wikify wiki list files
 ```
 
@@ -1315,7 +1281,7 @@ Without `--mode`, `wiki find <query>` uses hybrid search:
 ```
 
 If neither wiki.db nor page vectors are available, hybrid mode falls back to the
-text path so legacy bundles remain searchable.
+text path.
 
 Cross-graph workflows should stay explicit. The CLI should not hide whether the
 agent is reading the committed wiki or the underlying corpus:
@@ -1323,7 +1289,7 @@ agent is reading the committed wiki or the underlying corpus:
 ```text
 wikify wiki find "hafnium oxide switching" --top-k 3
 wikify corpus find "hafnium oxide switching" --top-k 10
-wikify corpus find "temperature window" --in evidence-docs:"Hafnium Oxide"
+wikify corpus find "temperature window" --in-doc doc:hafnium_oxide_review
 ```
 
 The wiki graph is used for lifecycle decisions:
@@ -1365,7 +1331,8 @@ work/concepts/<slug>/validation.json   Record, per-attempt
 wiki/index.md                          Projection, agent-facing
 derived/index.json                     Projection, machine-facing
 derived/navigation.json                Projection, render-facing
-wiki.db                                Query store
+derived/vectors.npz                    Projection, search-facing
+wiki.db                                Query store + wiki graph
 ```
 
 ### Tool output contract
@@ -1382,14 +1349,17 @@ article  Atomic Layer Deposition
 person   Stuart Parkin
 
 $ wikify corpus find "ALD" --top-k 3
-0.84  paper_A__c0012  paper_A  Atomic layer deposition...
-0.79  paper_B__c0007  paper_B  ALD proceeds through alternating...
+0.840  cites=12  chunk:5f92b0389ccd  doc:paper_a_short
+0.790  cites=4   chunk:1a2b3c4d5e6f  doc:paper_b_short
 
-$ wikify corpus show chunk:paper_A__c0012
-chunk: paper_A__c0012
-doc: paper_A
-section: methods
-preview: Atomic layer deposition...
+$ wikify corpus show chunk:5f92b0389ccd
+id:           chunk:5f92b0389ccd
+doc:          doc:paper_a_short
+section_type: methods
+boilerplate:  False
+section_path: ['Methods']
+---
+Atomic layer deposition...
 ```
 
 `--format json` is the opt-in automation contract. In JSON mode, every tool
@@ -1478,12 +1448,12 @@ article  Atomic Layer Deposition
 person   Stuart Parkin
 
 $ wikify corpus list docs
-paper_A
-paper_B
+doc:paper_a_short
+doc:paper_b_short
 
-$ wikify corpus list chunks --doc paper_A
-paper_A__c0001
-paper_A__c0002
+$ wikify corpus list chunks --doc doc:paper_a_short
+chunk:5f92b0389ccd
+chunk:1a2b3c4d5e6f
 ```
 
 Use JSON when the caller needs stable machine parsing:
