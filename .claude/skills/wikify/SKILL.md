@@ -39,7 +39,10 @@ to use, and when to stop.
 - `wikify-baseline` - canonical simple-RAG baseline from corpus to
   rendered HTML, with extractor-driven concepts, person-page attempt,
   render, eval, and inspection.
-- `wikify-guided-explore` - model-guided exploration loop.
+- `wikify-investigate` - researcher-style iterative loop. Editor
+  orchestrator dispatches `wikify-investigate-explore` Tasks running
+  one of five named recursive patterns (P1-P5). Tracks chunk coverage
+  as the primary objective; re-entrant on the same bundle.
 - `wikify-query` - answer from wiki with corpus fallback and feedback.
 - `wikify-refine` - refine committed pages from inbox/new evidence.
 
@@ -76,6 +79,8 @@ Exploration:
 
 - `references/exploration/concept-extraction.md`
 - `references/exploration/sampling-patterns.md`
+- `references/exploration/patterns.md`
+- `references/exploration/maturity.md`
 - `references/exploration/workflow-contracts.md`
 
 ## Field Guide Rule

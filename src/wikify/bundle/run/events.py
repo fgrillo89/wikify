@@ -45,6 +45,13 @@ EventType = Literal[
     "page_refined",
     "budget_exceeded",
     "run_closed",
+    "round_started",
+    "round_completed",
+    "dossier_promoted",
+    "dossier_stalled",
+    "dossier_parked",
+    "pattern_dispatched",
+    "corpus_drift_detected",
 ]
 
 
