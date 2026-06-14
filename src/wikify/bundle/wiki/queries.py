@@ -9,7 +9,9 @@ queries the CLI uses by default.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -290,30 +292,63 @@ class AmbiguousSlugError(LookupError):
         self.matches = matches
 
 
-def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
-    """Resolve a short slug to ``(slug, kind)`` against committed pages.
+def _normalize_handle(text: str) -> str:
+    """Casefold and collapse separators so titles and file slugs compare equal.
 
-    Tier 1: exact match in articles/ then people/.
-    Tier 2: case-insensitive prefix match if unique.
-    Returns ``None`` if no candidate matches; raises
-    ``AmbiguousSlugError`` on multiple prefix matches.
+    Wiki pages are named by their title, but the on-disk filename
+    convention has changed over time: current bundles keep spaces
+    (``Atomic Layer Deposition.md``) while older bundles used kebab-case
+    (``atomic-layer-deposition.md``). Both name the same concept. This
+    normalisation maps runs of whitespace, hyphens, and underscores to a
+    single space and casefolds, so a handle resolves regardless of which
+    convention produced the file.
     """
-    for kind in ("article", "person"):
-        p = page_path(bundle, slug=short, kind=kind)
-        if p.is_file():
-            return (short, kind)
+    s = unicodedata.normalize("NFKC", text).strip().casefold()
+    return re.sub(r"[\s_-]+", " ", s).strip()
+
+
+def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
+    """Resolve a handle to ``(slug, kind)`` against committed pages.
+
+    Tier 1: exact filename-stem match in articles/ then people/.
+    Tier 2: case- and separator-insensitive exact match (so the natural
+    title ``"Atomic Layer Deposition"`` resolves a kebab-case
+    ``atomic-layer-deposition.md`` file and vice versa).
+    Tier 3: case-insensitive prefix match if unique.
+    Always returns the page's real on-disk stem so emitted handles
+    round-trip. Returns ``None`` if no candidate matches; raises
+    ``AmbiguousSlugError`` when a tier matches more than one page.
+
+    Stem comparison is done in Python (case-sensitive) rather than via
+    ``Path.is_file`` so a case-insensitive filesystem cannot report the
+    queried casing as the slug instead of the true filename.
+    """
+    norm_target = _normalize_handle(short)
     short_l = short.lower()
-    matches: list[tuple[str, str]] = []
+    exact_matches: list[tuple[str, str]] = []
+    norm_matches: list[tuple[str, str]] = []
+    prefix_matches: list[tuple[str, str]] = []
     for kind, sub in (("article", bundle.wiki_articles_dir), ("person", bundle.wiki_people_dir)):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
-            if p.stem.lower().startswith(short_l):
-                matches.append((p.stem, kind))
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        raise AmbiguousSlugError(short, [s for s, _ in matches])
+            stem = p.stem
+            if stem == short:
+                exact_matches.append((stem, kind))
+            if _normalize_handle(stem) == norm_target:
+                norm_matches.append((stem, kind))
+            if stem.lower().startswith(short_l):
+                prefix_matches.append((stem, kind))
+    if exact_matches:
+        return exact_matches[0]
+    if len(norm_matches) == 1:
+        return norm_matches[0]
+    if len(norm_matches) > 1:
+        raise AmbiguousSlugError(short, [s for s, _ in norm_matches])
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if len(prefix_matches) > 1:
+        raise AmbiguousSlugError(short, [s for s, _ in prefix_matches])
     return None
 
 
@@ -626,16 +661,27 @@ def traverse_page(
     return rows
 
 
+def _page_title(path: Path, slug: str) -> str:
+    """Return a page's frontmatter title, falling back to *slug*."""
+    from .page import parse_page
+
+    try:
+        return parse_page(path).title or slug
+    except (OSError, ValueError):
+        return slug
+
+
 def show_page(bundle: Bundle, *, handle: str) -> dict | None:
-    """Return ``{"path", "kind", "slug", "text"}`` for one wiki page handle.
+    """Return ``{"path", "kind", "slug", "title", "text"}`` for one page handle.
 
     The handle may be:
 
     - a relative file path within the bundle root,
     - an exact slug (article first, then person),
+    - the natural title (case- and separator-insensitive),
     - a unique case-insensitive prefix of a slug.
 
-    Raises ``AmbiguousSlugError`` when a prefix match is ambiguous.
+    Raises ``AmbiguousSlugError`` when a handle matches more than one page.
     """
     # Direct path?
     candidate = bundle.root / handle
@@ -646,6 +692,7 @@ def show_page(bundle: Bundle, *, handle: str) -> dict | None:
             "path": str(candidate.relative_to(bundle.root)).replace("\\", "/"),
             "kind": kind,
             "slug": candidate.stem,
+            "title": _page_title(candidate, candidate.stem),
             "text": text,
         }
     resolved = resolve_slug(bundle, handle)
@@ -657,5 +704,6 @@ def show_page(bundle: Bundle, *, handle: str) -> dict | None:
         "path": str(p.relative_to(bundle.root)).replace("\\", "/"),
         "kind": kind,
         "slug": slug,
+        "title": _page_title(p, slug),
         "text": p.read_text(encoding="utf-8"),
     }

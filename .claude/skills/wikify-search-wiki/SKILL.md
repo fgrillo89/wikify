@@ -28,8 +28,11 @@ mcp__wikify__context_show()
 
 - List committed pages with `wiki_find()` (empty query lists all).
 - `wiki_show(handle="<title-or-slug>")` returns the page; pass
-  `full=True` for the body. Handles accept exact slugs or a unique
-  case-insensitive prefix.
+  `full=True` for the body. Handles accept the natural title or file
+  slug, matched case- and separator-insensitively (so
+  `"Atomic Layer Deposition"` resolves whether the file is
+  `Atomic Layer Deposition.md` or `atomic-layer-deposition.md`), or a
+  unique case-insensitive prefix.
 - Search committed pages with `wiki_find(query="X", mode="hybrid")`.
   Modes: `hybrid` (default), `bm25`, `semantic`, `text`.
 - `wiki_traverse(handle="<slug>", to="<relation>")` walks one wiki
