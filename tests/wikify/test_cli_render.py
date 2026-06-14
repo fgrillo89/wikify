@@ -272,7 +272,9 @@ def test_navigation_context_apply_and_render_grouped_front_page(tmp_path: Path) 
     html = (out / "index.html").read_text(encoding="utf-8")
     assert "Browse by topic" in html
     assert "Thin films" in html
-    assert "source articles used" in html
+    # When corpus_doc_count is available the template renders "corpus sources cited";
+    # otherwise it falls back to "source articles used". Accept either.
+    assert "corpus sources cited" in html or "source articles used" in html
     assert "chunks" not in html.lower()
 
 
@@ -465,3 +467,84 @@ def test_render_selected_figure_placeholder(tmp_path: Path) -> None:
     assert '<figure class="wiki-figure"' in html
     assert "Schematic overview of an ALD cycle." in html
     assert list((out / "assets" / "figures").glob("*.png"))
+
+
+def test_index_stats_show_corpus_doc_count(tmp_path: Path) -> None:
+    """When a corpus is provided, the index page stats show 'corpus sources cited'
+    (N of M) instead of the bare source-articles-used count."""
+    bundle, _ = _commit_one_article(tmp_path)
+    out = tmp_path / "site"
+    corpus = tmp_path / "corpus"
+    # _commit_one_article builds the corpus at tmp_path/corpus via _setup_validated.
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "--bundle",
+            str(bundle.root),
+            "--corpus",
+            str(corpus),
+            "--out",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    html = (out / "index.html").read_text(encoding="utf-8")
+    # Corpus has 2 docs; 1 is cited. Expect "1 of 2 corpus sources cited".
+    assert "corpus sources cited" in html
+
+
+def test_index_stats_resolve_short_doc_hex_handles(tmp_path: Path) -> None:
+    """Stats must resolve ``doc:<hex>`` evidence handles to full corpus doc_ids
+    so that date_range and words_processed are populated from the DB.
+
+    Uses a corpus whose doc_id ends in a real hex suffix, and evidence
+    stored as ``doc:<hex>`` (as written by the workflow).
+    """
+    from wikify.api import Corpus
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+    from wikify.render.html.render import _corpus_used_doc_stats
+
+    # Build a minimal corpus with a hex-suffixed doc_id.
+    full_doc_id = "[2021 Smith] Test_112233445566"
+    hex_suffix = "112233445566"
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+
+    doc = Document(
+        id=full_doc_id,
+        source_path=f"src/{full_doc_id}.pdf",
+        kind="pdf",
+        title="Test Paper",
+        metadata={"year": 2021},
+        markdown_path=f"markdown/{full_doc_id}.md",
+        image_dir="images/",
+    )
+    chunk = Chunk(
+        id=f"{full_doc_id}__c0000",
+        doc_id=full_doc_id,
+        ord=0,
+        text="Atomic layer deposition is a thin film technique.",
+        char_span=(0, 50),
+        section_path=["body"],
+        section_type="body",
+    )
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {full_doc_id: [chunk]})
+    finally:
+        store.close()
+
+    # Simulate evidence using short handle form.
+    short_handle = f"doc:{hex_suffix}"
+    stats = _corpus_used_doc_stats(corpus_root, [short_handle])
+
+    assert stats["total_docs"] == 1
+    assert 2021 in stats["years"], f"Year 2021 not resolved; stats={stats}"
+    assert stats["words"] is not None and stats["words"] > 0

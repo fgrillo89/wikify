@@ -220,10 +220,24 @@ def _figure_candidates_for_evidence(corpus: Corpus, records, *, limit: int) -> l
     """
     import sqlite3
 
+    from ...corpus.handles import HandleNotFoundError
+    from ...corpus.handles import resolve as resolve_handle
+
     try:
         index = ImageIndex.load(corpus)
     except (OSError, sqlite3.Error, ValueError):
         return []
+
+    doc_keys = list(index.by_doc.keys())
+
+    def _resolve_doc_id(raw: str) -> str | None:
+        """Resolve a possibly-short ``doc:<hex>`` handle to the full doc_id key."""
+        # Strip the "doc:" prefix if present, leaving the bare hex or full id.
+        short = raw[4:] if raw.startswith("doc:") else raw
+        try:
+            return resolve_handle(short, iter(doc_keys))
+        except (HandleNotFoundError, LookupError):
+            return None
 
     out: list[ImageRef] = []
     seen: set[str] = set()
@@ -234,7 +248,10 @@ def _figure_candidates_for_evidence(corpus: Corpus, records, *, limit: int) -> l
             for x in (extras.get("evidence_figures") or extras.get("figures") or [])
             if x
         }
-        for img in index.for_doc(rec.doc_id):
+        resolved_doc_id = _resolve_doc_id(rec.doc_id)
+        if resolved_doc_id is None:
+            continue
+        for img in index.for_doc(resolved_doc_id):
             if not img.caption or not img.path:
                 continue
             if rec.chunk_id not in img.near_chunk_ids and img.id not in flagged:

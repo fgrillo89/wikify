@@ -23,13 +23,17 @@
 <article class="wiki-article main-page">
   <h1>Welcome to {{ wiki_name }}</h1>
   <div class="main-page-banner">
-    <p>A scientific wiki compiled from <strong>{{ stats.source_articles_used }}</strong> source articles{% if stats.date_range %} spanning <strong>{{ stats.date_range }}</strong>{% endif %}.</p>
+    <p>A scientific wiki compiled from <strong>{{ stats.source_articles_used }}</strong>{% if stats.corpus_doc_count %} of <strong>{{ stats.corpus_doc_count }}</strong>{% endif %} source articles{% if stats.date_range %} spanning <strong>{{ stats.date_range }}</strong>{% endif %}.</p>
   </div>
 
   <div class="stats-grid">
     <div><strong>{{ stats.total_concepts }}</strong><span>article pages</span></div>
     <div><strong>{{ stats.total_people }}</strong><span>people pages</span></div>
+    {% if stats.corpus_doc_count %}
+    <div><strong>{{ stats.source_articles_used }} of {{ stats.corpus_doc_count }}</strong><span>corpus sources cited</span></div>
+    {% else %}
     <div><strong>{{ stats.source_articles_used }}</strong><span>source articles used</span></div>
+    {% endif %}
     {% if stats.words_processed %}
     <div><strong>{{ "{:,}".format(stats.words_processed) }}</strong><span>approx. words processed</span></div>
     {% endif %}
