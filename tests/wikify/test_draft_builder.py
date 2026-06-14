@@ -537,3 +537,174 @@ def test_load_draft_roundtrip(tmp_path: Path) -> None:
     loaded = load_draft(bundle, slug)
     assert loaded.page_id == built.page_id
     assert loaded.evidence[0].chunk_id == built.evidence[0].chunk_id
+
+
+# ---------------------------------------------------------------------------
+# Figure-candidate resolution via short doc:hex handles
+# ---------------------------------------------------------------------------
+
+PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"
+    b"\xff?\x00\x05\xfe\x02\xfeA5\xc8\x91\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def _corpus_with_hex_doc_and_image(root: Path):
+    """Return a Corpus whose doc_id ends in a 12-hex suffix.
+
+    The evidence workflow stores these as ``doc:<hex>`` short handles,
+    so ``_figure_candidates_for_evidence`` must resolve the short form
+    to the full doc_id to locate figures.
+    """
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.ingest.images import save_doc_images
+    from wikify.ingest.parsers.registry import RawImage
+    from wikify.models import Chunk, Document
+
+    full_doc_id = "[2020 Test] Sample Paper_aabbccddeeff"
+    hex_suffix = "aabbccddeeff"
+
+    corpus = Corpus(root=root)
+    corpus.ensure()
+
+    folder = corpus.images_dir / "2020_Test_Sample"
+    raw_images = [
+        RawImage(
+            data=PNG_1x1,
+            ext="png",
+            page=1,
+            caption="Schematic of the ALD cycle.",
+            label="Fig. 1",
+            media_type="figure",
+            width=400,
+            height=300,
+        ),
+    ]
+    saved = save_doc_images(full_doc_id, folder, raw_images)
+
+    doc = Document(
+        id=full_doc_id,
+        source_path=f"src/{full_doc_id}.pdf",
+        kind="pdf",
+        title="Sample Paper",
+        metadata={"year": 2020},
+        markdown_path=f"markdown/{full_doc_id}.md",
+        image_dir=str(folder),
+        images=saved,
+    )
+    chunk = Chunk(
+        id=f"{full_doc_id}__c0000",
+        doc_id=full_doc_id,
+        ord=0,
+        text="The ALD cycle schematic (Fig. 1) shows the precursor sequence.",
+        char_span=(0, 60),
+        section_path=["body"],
+        section_type="body",
+    )
+
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {full_doc_id: [chunk]})
+    finally:
+        store.close()
+
+    asset_stem = "Figure_01"
+    asset_id_str = f"{full_doc_id}/{asset_stem}"
+
+    import json as _json
+    import sqlite3
+    con = sqlite3.connect(str(corpus.sqlite_path))
+    try:
+        # Patch metadata_json to include dimensions so the decoration filter
+        # sees real (non-tiny) dimensions without opening the 1x1 test PNG.
+        con.execute(
+            "UPDATE assets SET metadata_json = ? WHERE asset_id = ?",
+            (_json.dumps({"width": 500, "height": 400, "label": "Fig. 1"}), asset_id_str),
+        )
+        # Link the chunk to the figure via chunk_assets so the near-chunk filter passes.
+        con.execute(
+            "INSERT OR IGNORE INTO chunk_assets"
+            " (chunk_id, asset_id, relation) VALUES (?, ?, 'near')",
+            (chunk.id, asset_id_str),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    return corpus, full_doc_id, hex_suffix
+
+
+def test_figure_candidates_resolves_short_doc_hex_handle(tmp_path: Path) -> None:
+    """``_figure_candidates_for_evidence`` must find figures even when the
+    evidence record stores ``doc:<hex>`` rather than the full doc_id.
+
+    This is the primary fix: ``ImageIndex.by_doc`` is keyed by full doc_ids,
+    but evidence records carry short handles like ``doc:aabbccddeeff``.
+    """
+    from wikify.bundle.draft.builder import _figure_candidates_for_evidence
+    from wikify.bundle.work.evidence import EvidenceRecord
+
+    corpus, full_doc_id, hex_suffix = _corpus_with_hex_doc_and_image(tmp_path / "corpus")
+
+    # Simulate what the workflow writes: short handle form.
+    short_handle = f"doc:{hex_suffix}"
+    chunk_id = f"{full_doc_id}__c0000"
+    records = [
+        EvidenceRecord(chunk_id=chunk_id, doc_id=short_handle, status="active"),
+    ]
+
+    figures = _figure_candidates_for_evidence(corpus, records, limit=6)
+    assert figures, (
+        "No figures returned — short doc:hex handle was not resolved to the full doc_id"
+    )
+    assert figures[0].caption == "Schematic of the ALD cycle."
+
+
+def test_figure_candidates_returns_empty_for_unknown_handle(tmp_path: Path) -> None:
+    """An unresolvable short handle must return an empty list, not raise."""
+    from wikify.bundle.draft.builder import _figure_candidates_for_evidence
+    from wikify.bundle.work.evidence import EvidenceRecord
+
+    corpus, _, _ = _corpus_with_hex_doc_and_image(tmp_path / "corpus")
+
+    records = [
+        EvidenceRecord(chunk_id="x__c0000", doc_id="doc:000000000000", status="active"),
+    ]
+    figures = _figure_candidates_for_evidence(corpus, records, limit=6)
+    assert figures == []
+
+
+def test_build_draft_figures_populated_with_hex_doc_id(tmp_path: Path) -> None:
+    """``build_draft`` must populate ``request.figures`` when the evidence
+    record's ``doc_id`` is in short ``doc:<hex>`` form and the corpus has
+    a captioned, chunk-linked figure for that doc."""
+    corpus, full_doc_id, hex_suffix = _corpus_with_hex_doc_and_image(tmp_path / "corpus")
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "run").mkdir()
+    bundle = Bundle(root=bundle_dir)
+    slug, _ = create_concept(bundle, page_id="ALD Cycle")
+
+    short_handle = f"doc:{hex_suffix}"
+    chunk_id = f"{full_doc_id}__c0000"
+    append_evidence(
+        bundle,
+        slug,
+        [EvidenceRecord(chunk_id=chunk_id, doc_id=short_handle, status="active")],
+    )
+
+    request = build_draft(
+        bundle,
+        slug=slug,
+        corpus=corpus,
+        model_id="claude-sonnet-4-6",
+        tier="M",
+    )
+    assert request.figures, (
+        "build_draft returned no figures — short doc:hex handle not resolved"
+    )
+    assert request.figures[0].caption == "Schematic of the ALD cycle."

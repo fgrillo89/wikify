@@ -144,6 +144,10 @@ def build_site(
     # reference list can hyperlink straight to the paper.
     doc_meta_map = _load_doc_meta_map(corpus_root, out_dir)
 
+    # Load the corpus image index once so _render_article can inject a
+    # fallback figure for pages whose body has no embedded figures yet.
+    image_index = _load_image_index(corpus_root)
+
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
         autoescape=select_autoescape(["html"]),
@@ -215,6 +219,7 @@ def build_site(
             page_by_id=page_by_id,
             root="../",
             doc_meta_map=doc_meta_map,
+            image_index=image_index,
         )
         html_path.write_text(html_str, encoding="utf-8")
 
@@ -282,11 +287,13 @@ def _build_site_stats(
     used_docs = sorted({ev.doc_id for page in pages for ev in page.evidence if ev.doc_id})
     years = _years_from_doc_ids(used_docs)
     words_processed: int | None = None
-    if corpus_root is not None and used_docs:
+    corpus_doc_count: int | None = None
+    if corpus_root is not None:
         corpus_stats = _corpus_used_doc_stats(Path(corpus_root), used_docs)
         if corpus_stats["years"]:
             years = corpus_stats["years"]
         words_processed = corpus_stats["words"]
+        corpus_doc_count = corpus_stats.get("total_docs")
     date_range = ""
     if years:
         date_range = f"{min(years)}-{max(years)}"
@@ -295,6 +302,7 @@ def _build_site_stats(
         "total_concepts": len(concepts),
         "total_people": len(people),
         "source_articles_used": len(used_docs),
+        "corpus_doc_count": corpus_doc_count,
         "words_processed": words_processed,
         "date_range": date_range,
         "figures_included": sum(len(page.figures or []) for page in pages),
@@ -314,29 +322,46 @@ def _years_from_doc_ids(doc_ids: list[str]) -> list[int]:
 def _corpus_used_doc_stats(corpus_root: Path, doc_ids: list[str]) -> dict[str, Any]:
     db_path = corpus_root / "wikify.db"
     if not db_path.is_file():
-        return {"years": [], "words": None}
+        return {"years": [], "words": None, "total_docs": None}
     import sqlite3 as _sqlite
 
-    placeholders = ",".join("?" * len(doc_ids))
-    years: list[int] = []
-    words = 0
     con = _sqlite.connect(str(db_path))
     con.row_factory = _sqlite.Row
     try:
-        for r in con.execute(
-            f"SELECT year FROM documents WHERE doc_id IN ({placeholders})",
-            doc_ids,
-        ):
-            if r["year"]:
-                years.append(int(r["year"]))
-        for r in con.execute(
-            f"SELECT text FROM chunks WHERE doc_id IN ({placeholders})",
-            doc_ids,
-        ):
-            words += len(re.findall(r"\b\w+\b", r["text"] or ""))
+        # Fetch all full doc_ids from the corpus so we can resolve short handles.
+        all_full_ids = [r[0] for r in con.execute("SELECT doc_id FROM documents")]
+        total_docs: int | None = len(all_full_ids) if all_full_ids else None
+
+        # Resolve short ``doc:<hex>`` handles to full doc_ids for SQL queries.
+        # Evidence records store the handle form; the documents table uses full ids.
+        full_ids: list[str] = []
+        suffix_map: dict[str, str] = {fid[-12:]: fid for fid in all_full_ids if len(fid) >= 12}
+        for did in doc_ids:
+            short = did[4:] if did.startswith("doc:") else did
+            if short in all_full_ids:
+                full_ids.append(short)
+            elif short in suffix_map:
+                full_ids.append(suffix_map[short])
+            # If not resolvable, skip — don't inject unmatched ids into the query.
+
+        years: list[int] = []
+        words = 0
+        if full_ids:
+            placeholders = ",".join("?" * len(full_ids))
+            for r in con.execute(
+                f"SELECT year FROM documents WHERE doc_id IN ({placeholders})",
+                full_ids,
+            ):
+                if r["year"]:
+                    years.append(int(r["year"]))
+            for r in con.execute(
+                f"SELECT text FROM chunks WHERE doc_id IN ({placeholders})",
+                full_ids,
+            ):
+                words += len(re.findall(r"\b\w+\b", r["text"] or ""))
     finally:
         con.close()
-    return {"years": years, "words": words or None}
+    return {"years": years, "words": words or None, "total_docs": total_docs}
 
 
 def _build_navigation_view(
@@ -530,6 +555,124 @@ class _PageView:
         )
 
 
+def _load_image_index(corpus_root: Path | None) -> "Any | None":
+    """Load the corpus image index; return ``None`` if unavailable."""
+    if corpus_root is None:
+        return None
+    try:
+        from wikify.api import Corpus
+        from wikify.corpus.images_index import ImageIndex
+
+        corpus = Corpus(root=Path(corpus_root))
+        return ImageIndex.load(corpus)
+    except Exception:
+        return None
+
+
+# Decoration thresholds mirror images_index.is_decoration_dims so that
+# the fallback injector skips the same publisher banners the builder skips.
+_RENDER_DECORATION_MIN_SHORT = 120
+_RENDER_DECORATION_MIN_AREA = 40_000
+_RENDER_DECORATION_MAX_ASPECT = 4.0
+
+
+def _inject_fallback_figure(
+    body_md: str,
+    *,
+    page: "Page",
+    out_dir: Path,
+    image_index: Any,
+    page_url_depth: int,
+) -> str:
+    """Inject the top captioned corpus figure after the first paragraph.
+
+    Called only when the page body has no inline figure references and the
+    corpus image index is available. Picks the first captioned, non-decoration
+    figure whose doc_id matches one of the page's evidence records. Copies the
+    image into ``assets/figures/`` and emits an HTML ``<figure>`` block.
+    Degrades cleanly (returns ``body_md`` unchanged) when no suitable figure
+    is found or the file cannot be copied.
+    """
+    # Build a set of full doc_ids from evidence (handles short ``doc:<hex>`` forms).
+    doc_keys = list(image_index.by_doc.keys())
+    suffix_map: dict[str, str] = {
+        k[-12:]: k for k in doc_keys if len(k) >= 12
+    }
+    candidate_docs: list[str] = []
+    for ev in page.evidence:
+        did = ev.doc_id or ""
+        short = did[4:] if did.startswith("doc:") else did
+        if short in doc_keys:
+            candidate_docs.append(short)
+        elif short in suffix_map:
+            candidate_docs.append(suffix_map[short])
+
+    # Pick the first captioned, non-decoration figure from those docs.
+    chosen = None
+    for doc_id in candidate_docs:
+        for img in image_index.for_doc(doc_id):
+            if not img.caption or not img.path:
+                continue
+            w, h = img.width, img.height
+            if w is None or h is None:
+                # Try to read dims from file.
+                abs_src = image_index.corpus_root / img.path
+                if abs_src.is_file():
+                    try:
+                        from PIL import Image as _PilImage
+                        with _PilImage.open(abs_src) as im:
+                            w, h = im.size
+                    except Exception:
+                        pass
+            if w is not None and h is not None:
+                short_side = min(w, h)
+                if (
+                    short_side < _RENDER_DECORATION_MIN_SHORT
+                    or w * h < _RENDER_DECORATION_MIN_AREA
+                    or max(w, h) / max(short_side, 1) > _RENDER_DECORATION_MAX_ASPECT
+                ):
+                    continue
+            src = image_index.corpus_root / img.path
+            if not src.is_file():
+                continue
+            chosen = img
+            break
+        if chosen is not None:
+            break
+
+    if chosen is None:
+        return body_md
+
+    # Copy the file into assets/figures/.
+    suffix = src.suffix or ".png"
+    dest_name = _safe_asset_name(chosen.id.replace("/", "--")) + suffix
+    assets_dir = out_dir / "assets" / "figures"
+    dest = assets_dir / dest_name
+    if not dest.exists():
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except OSError:
+            return body_md
+
+    url = ("../" * page_url_depth) + f"assets/figures/{dest_name}"
+    caption = escape(chosen.caption)
+    if chosen.label:
+        caption = escape(chosen.label) + ": " + caption
+    figure_html = (
+        f'\n\n<figure class="wiki-figure wiki-figure-fallback">'
+        f'<img src="{url}" alt="{escape(chosen.label or chosen.id)}">'
+        f"<figcaption>{caption}</figcaption>"
+        "</figure>\n\n"
+    )
+
+    # Insert after the first non-empty paragraph (ends at first double newline).
+    first_para_end = body_md.find("\n\n")
+    if first_para_end == -1:
+        return body_md + figure_html
+    return body_md[: first_para_end + 2] + figure_html + body_md[first_para_end + 2 :]
+
+
 def _render_article(
     pv: _PageView,
     page: Page,
@@ -543,6 +686,7 @@ def _render_article(
     page_by_id: dict[str, Page],
     root: str,
     doc_meta_map: dict[str, dict] | None = None,
+    image_index: "Any | None" = None,
 ) -> str:
     # Reconstruct the full body (frontmatter-stripped) including the
     # ## Evidence block, so the markdown footnotes extension can render
@@ -567,6 +711,18 @@ def _render_article(
         corpus_root=corpus_root,
         page_url_depth=1,
     )
+
+    # Fallback: if the body has no embedded figures, inject the top captioned
+    # figure from the evidence docs so older committed pages (built before the
+    # figure pipeline fix) still render with at least one image.
+    if image_index is not None and not _FIGURE_REF_RE.search(body_md):
+        body_md = _inject_fallback_figure(
+            body_md,
+            page=page,
+            out_dir=out_dir,
+            image_index=image_index,
+            page_url_depth=1,
+        )
 
     # Isolate ``$$...$$`` display math so arithmatex's BlockProcessor
     # picks it up. Without blank lines around the block, arithmatex
@@ -745,6 +901,15 @@ def _load_doc_meta_map(
             if value:
                 meta[key] = str(value).strip()
         out[doc_id] = meta
+        # Evidence footnotes reference a doc by its short handle
+        # (``doc:<hex>``, the trailing hex of the doc_id) rather than the
+        # full doc_id. Register the meta under those handle forms too so
+        # citation resolution succeeds regardless of which form the
+        # reference carries. ``setdefault`` keeps the full-id mapping
+        # authoritative if a short handle ever collides.
+        handle_hex = doc_id[-12:] if len(doc_id) > 12 else doc_id
+        out.setdefault(f"doc:{handle_hex}", meta)
+        out.setdefault(handle_hex, meta)
     return out
 
 
