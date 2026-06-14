@@ -316,13 +316,18 @@ def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
     ``atomic-layer-deposition.md`` file and vice versa).
     Tier 3: case-insensitive prefix match if unique.
     Always returns the page's real on-disk stem so emitted handles
-    round-trip. Returns ``None`` if no candidate matches; raises
-    ``AmbiguousSlugError`` when a tier matches more than one page.
+    round-trip. Returns ``None`` for an empty handle or no match; raises
+    ``AmbiguousSlugError`` when a tier matches more than one page. A
+    collision spanning both an article and a person (same normalized
+    title) is treated as ambiguous, except an exact filename match which
+    resolves article-first.
 
     Stem comparison is done in Python (case-sensitive) rather than via
     ``Path.is_file`` so a case-insensitive filesystem cannot report the
     queried casing as the slug instead of the true filename.
     """
+    if not short.strip():
+        return None
     norm_target = _normalize_handle(short)
     short_l = short.lower()
     exact_matches: list[tuple[str, str]] = []
@@ -661,7 +666,7 @@ def traverse_page(
     return rows
 
 
-def _page_title(path: Path, slug: str) -> str:
+def page_title(path: Path, slug: str) -> str:
     """Return a page's frontmatter title, falling back to *slug*."""
     from .page import parse_page
 
@@ -692,7 +697,7 @@ def show_page(bundle: Bundle, *, handle: str) -> dict | None:
             "path": str(candidate.relative_to(bundle.root)).replace("\\", "/"),
             "kind": kind,
             "slug": candidate.stem,
-            "title": _page_title(candidate, candidate.stem),
+            "title": page_title(candidate, candidate.stem),
             "text": text,
         }
     resolved = resolve_slug(bundle, handle)
@@ -704,6 +709,6 @@ def show_page(bundle: Bundle, *, handle: str) -> dict | None:
         "path": str(p.relative_to(bundle.root)).replace("\\", "/"),
         "kind": kind,
         "slug": slug,
-        "title": _page_title(p, slug),
+        "title": page_title(p, slug),
         "text": p.read_text(encoding="utf-8"),
     }

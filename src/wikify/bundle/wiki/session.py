@@ -15,15 +15,27 @@ class WikiSearchSession:
     bundle: Bundle
 
     def __post_init__(self) -> None:
+        # The slugs come straight from the directory listing, so they are
+        # already real on-disk stems with a known kind. Build each record
+        # directly instead of routing through show_page -> resolve_slug,
+        # which would re-scan the whole wiki once per page (O(N^2)).
         self._pages: dict[str, dict] = {}
-        for slug in queries.list_articles(self.bundle):
-            info = queries.show_page(self.bundle, handle=slug)
-            if info is not None:
-                self._pages[slug] = info
-        for slug in queries.list_people(self.bundle):
-            info = queries.show_page(self.bundle, handle=slug)
-            if info is not None:
-                self._pages[slug] = info
+        listings = (
+            ("article", queries.list_articles(self.bundle)),
+            ("person", queries.list_people(self.bundle)),
+        )
+        for kind, slugs in listings:
+            for slug in slugs:
+                path = queries.page_path(self.bundle, slug=slug, kind=kind)
+                if not path.is_file():
+                    continue
+                self._pages[slug] = {
+                    "path": str(path.relative_to(self.bundle.root)).replace("\\", "/"),
+                    "kind": kind,
+                    "slug": slug,
+                    "title": queries.page_title(path, slug),
+                    "text": path.read_text(encoding="utf-8"),
+                }
 
     @property
     def n_pages(self) -> int:

@@ -92,6 +92,68 @@ def test_unknown_handle_returns_none(tmp_path: Path) -> None:
     assert resolve_slug(b, "nonexistent concept") is None
 
 
+@pytest.mark.parametrize("handle", ["", "   ", "\t"])
+def test_empty_or_blank_handle_returns_none(tmp_path: Path, handle: str) -> None:
+    # A blank handle must not match every page via the prefix tier
+    # (``"".startswith("")`` is True for every stem).
+    b = _bundle(tmp_path)
+    _write_page(b, filename="atomic-layer-deposition", title="Atomic Layer Deposition")
+    _write_page(b, filename="memristor", title="Memristor")
+    assert resolve_slug(b, handle) is None
+    assert show_page(b, handle=handle) is None
+
+
+def test_person_page_resolves_by_natural_title(tmp_path: Path) -> None:
+    b = _bundle(tmp_path)
+    _write_page(b, filename="leon-chua", title="Leon Chua", kind="person")
+    assert resolve_slug(b, "Leon Chua") == ("leon-chua", "person")
+
+
+def test_article_wins_over_person_on_exact_filename(tmp_path: Path) -> None:
+    b = _bundle(tmp_path)
+    _write_page(b, filename="Memristor", title="Memristor")
+    _write_page(b, filename="Memristor", title="Memristor", kind="person")
+    assert resolve_slug(b, "Memristor") == ("Memristor", "article")
+
+
+def test_cross_kind_normalized_collision_is_ambiguous(tmp_path: Path) -> None:
+    # An article and a person whose titles normalize identically, neither
+    # an exact filename match, are deliberately treated as ambiguous.
+    b = _bundle(tmp_path)
+    _write_page(b, filename="marie-curie", title="Marie Curie")
+    _write_page(b, filename="Marie Curie", title="Marie Curie", kind="person")
+    with pytest.raises(AmbiguousSlugError):
+        resolve_slug(b, "marie curie")
+
+
+def test_unicode_nfkc_normalized_match(tmp_path: Path) -> None:
+    # Composed vs decomposed accents must resolve the same page.
+    b = _bundle(tmp_path)
+    _write_page(b, filename="Schottky Barrier über", title="Schottky Barrier über")
+    assert resolve_slug(b, "schottky-barrier-über") == (
+        "Schottky Barrier über",
+        "article",
+    )
+
+
+def test_show_page_direct_path_handle_carries_title(tmp_path: Path) -> None:
+    b = _bundle(tmp_path)
+    _write_page(b, filename="atomic-layer-deposition", title="Atomic Layer Deposition")
+    info = show_page(b, handle="wiki/articles/atomic-layer-deposition.md")
+    assert info is not None
+    assert info["slug"] == "atomic-layer-deposition"
+    assert info["title"] == "Atomic Layer Deposition"
+
+
+def test_show_page_title_falls_back_to_slug_without_frontmatter(tmp_path: Path) -> None:
+    b = _bundle(tmp_path)
+    b.wiki_articles_dir.mkdir(parents=True, exist_ok=True)
+    (b.wiki_articles_dir / "stub.md").write_text("no frontmatter here\n", encoding="utf-8")
+    info = show_page(b, handle="stub")
+    assert info is not None
+    assert info["title"] == "stub"
+
+
 def test_show_page_surfaces_title_for_kebab_file(tmp_path: Path) -> None:
     b = _bundle(tmp_path)
     _write_page(b, filename="atomic-layer-deposition", title="Atomic Layer Deposition")
