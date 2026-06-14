@@ -40,9 +40,18 @@ multiple parallel Tasks per round.
                  "depth_zero" | "ok",
   "tokens_in": 14000,
   "tokens_out": 320,
-  "model_id": "claude-sonnet-4-6"
+  "model_id": "claude-sonnet-4-6",
+  "escalate": null
 }
 ```
+
+`escalate` is `null` unless the Task hit a decision outside its
+mandate (concept-vs-evidence routing, kind/stencil choice, merge of
+near-duplicate titles, slug create/destroy). In that case set it to
+`{"question": ..., "context": ..., "options": [...]}` and stop short
+of guessing — the editor adjudicates (see
+`wikify-investigate/SKILL.md`, Escalation). Routine accept/reject of a
+single chunk is the Task's own job and is never escalated.
 
 The editor folds `covered_*_delta` into the notebook frontmatter via
 the `notebook.merge_covered_docs` / `append_exploration_log` helpers
@@ -302,6 +311,11 @@ Patterns themselves do not choose. The editor's precedence rubric
   This skill produces candidates only.
 - **Respect `seen_chunks`.** Re-judging the same chunk wastes budget
   and produces nothing.
+- **Escalate, don't guess.** On a decision outside this Task's mandate
+  (concept-vs-evidence routing, kind/stencil, merge, slug
+  create/destroy), return an `escalate` block and stop short of the
+  call; the top-tier editor resolves it. Do not silently invent a
+  concept or re-route evidence on an ambiguous signal.
 
 ## References
 

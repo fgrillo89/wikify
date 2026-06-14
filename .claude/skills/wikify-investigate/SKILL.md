@@ -13,6 +13,12 @@ once a composite maturity score passes a gate. Pushed to its limit,
 the loop's gap-explorer pattern (P5) drives `chunk_coverage_ratio`
 toward 1.0.
 
+The editor runs on a **top-tier model** (e.g. Opus): it owns every
+dispatch, kind, merge, park, and stop decision, and it adjudicates
+escalations from subagents. Subagents run on cheaper tiers and escalate
+out-of-mandate judgements back to the editor rather than guessing
+(see Escalation).
+
 The explorer mechanics live in
 `../wikify-investigate-explore/SKILL.md` (the recursive pattern
 library). The maturity formula lives in
@@ -28,9 +34,14 @@ SENSE -> DECIDE -> DISPATCH -> CONSOLIDATE -> REASSESS -> [CURATE] -> EMIT -> ST
 
 ### Setup (round 0 only)
 
+Size the run to the corpus first (see Sizing and defaults):
+
 ```bash
+# Read D (docs) + Kc (chunks); budget_est = 2_000_000 + 5_000 * Kc.
+read D Kc < <(wikify corpus check <corpus> --format json \
+  | python -c "import sys,json;d=json.load(sys.stdin);print(d['n_docs'],d['n_chunks'])")
 wikify run init --bundle <bundle> --corpus <corpus> \
-  --strategy investigate --target-haiku-eq 30000000
+  --strategy investigate --target-haiku-eq $((2000000 + 5000 * Kc))
 ```
 
 Bind MCP:
@@ -69,8 +80,8 @@ Build a dispatch plan that is **slug-disjoint by construction**: at
 most one Task per slug per round. Walk the precedence list, attaching
 targets to the plan in order, removing them from later bands.
 
-1. **WRITE wave.** Every slug in `ready` band. Up to `wave_size = 2`
-   per round. Eager — writing is terminal.
+1. **WRITE wave.** Every slug in `ready` band. Up to `wave_size`
+   (from Sizing) per round. Eager — writing is terminal.
 2. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
    with `growth_stalled == False`. Up to `wave_size`, slug-disjoint
    from WRITE. Per-slug pattern selection:
@@ -83,10 +94,10 @@ targets to the plan in order, removing them from later bands.
    weakest such edge, running P3 over the *union* of the two endpoint
    notebooks' chunk sets. Emits `concept_suggestion` only; never
    appends evidence to either endpoint.
-4. **SEED wave.** Fires when `concept_count < target_min` (default
-   `target_min = max(10, ceil(0.6 * baseline_target))`) OR every dossier
-   is `ready`/`stalled`. One **P1** Task per top-K uncovered
-   PageRank doc, where K is `max(target_min - concept_count, wave_size)`.
+4. **SEED wave.** Fires when `concept_count < target_min` (`target_min`
+   from Sizing and defaults) OR every dossier is `ready`/`stalled`. One
+   **P1** Task per top-K uncovered PageRank doc, where K is
+   `max(target_min - concept_count, wave_size)`.
 5. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
 
@@ -127,6 +138,13 @@ EOF
 P5 produces `evidence_suggestion` and `concept_suggestion` inbox
 records; `work tend` consolidates them. P1 may also append concept
 suggestions.
+
+**Adjudicate escalations.** For each Task that returned an `escalate`
+block, the editor decides now (it is top-tier) and encodes the ruling:
+create / merge / park the slug, route the evidence, or adjust the
+`kind_stencil`. If the ruling changes a target, queue one focused
+follow-up Task for next round with the decision baked into its target
+spec. Never carry an unresolved escalation past CONSOLIDATE.
 
 ### 5. REASSESS
 
@@ -169,8 +187,10 @@ wikify run record-event --type round_completed --stage round \
 
 Stop if ANY:
 
-- `budget_haiku_eq >= target`
-- `rounds >= max_rounds` (hard ceiling 8)
+- `budget_haiku_eq >= target` (on a MAX subscription this is set high
+  enough that rate limits + re-entry govern instead — see Sizing)
+- `rounds >= max_rounds` (a scaled safety ceiling, not a target — see
+  Sizing and defaults)
 - `chunk_coverage_ratio >= coverage_target` (default 0.85)
 - `delta_coverage_per_round < 0.01` for 2 consecutive rounds AND no
   new dossier crossed the promotion threshold in those rounds
@@ -199,9 +219,10 @@ When invoked on a bundle that already has `round_completed` events:
      any matched dossier (via a CLI subcommand or direct yaml edit
      through `notebook` helpers).
    - Queue unmatched docs for the next SEED wave (P1 on those docs).
-   - Update `state.json.corpus_fingerprint` (`wikify run set` if
-     available; otherwise emit a `corpus_drift_detected` event with
-     the new fingerprint and rely on it as state).
+   - After the new docs are absorbed, re-stamp the stored fingerprint
+     so drift does not re-fire next round:
+     `wikify run set --corpus-fingerprint <new> --run <bundle>` (the
+     `<new>` value is `context_show().health.fingerprint`).
 
 ## Finalize (after STOP)
 
@@ -225,29 +246,86 @@ Then run the Inspection Loop and write the Final Report.
 
 ## Subagent contracts
 
+The editor (this skill's main loop) runs at tier **L** (top-tier). All
+roles below are subagents it dispatches; each may add an optional
+`escalate` block to its return when a decision exceeds its mandate
+(see Escalation).
+
 | role | tier | skill | inputs | return |
 |---|---|---|---|---|
+| editor | **L** | this skill (main loop) | bundle, corpus | round events, dispatch plan, escalation rulings |
 | explorer | sonnet M | `wikify-investigate-explore` | `pattern`, `target`, `run`, `corpus`, `budget_chunks`, `depth` | per-target envelope (see explorer skill) |
 | classifier | haiku S | this skill (Re-entry) | `doc_id`, dossier index | `{overlapping_slugs: [...]}` |
 | writer | sonnet M | `wikify-write-page` | `slug`, dossier path, evidence path | response.json path |
 | organizer | sonnet M | `wikify-organize-wiki` | navigation context | navigation.json |
 
 Every Task return must yield `{tokens_in, tokens_out, model_id}` for
-the Telemetry pass below.
+the Telemetry pass below, plus an optional `escalate` block.
 
-## Defaults
+## Escalation (subagent -> editor)
 
-- `max_rounds = 8`, `wave_size = 2`, `curate_every = 2`.
-- `target_min = max(10, ceil(0.6 * 16))` = 10 concepts.
-- `coverage_target = 0.85`.
-- Vetter / explorer budget per Task: `budget_chunks = 30`,
-  `depth = 2` for P1, `depth = 1` for P2.
-- Writer tier: M. Explorer tier: M. Classifier tier: S.
-- Concurrent explorers: **default 2**, raise to 4 only if rate limits hold.
-- Claim owner: `investigate`. Claim TTL: 1800 seconds.
-- Budget: ~30M haiku-eq for a fresh 12-16-doc corpus. Investigate
-  spends more than baseline by design — extra cost buys deeper
-  evidence + coverage.
+Any subagent that hits a decision **outside its mandate** returns an
+`escalate` block instead of guessing, e.g.:
+
+```json
+"escalate": {"question": "new concept or evidence for 'Atomic Layer Deposition'?",
+             "context": "chunk:3ce6__c0007 frames the TiN/HfO2 stack as a distinct device",
+             "options": ["new_concept", "evidence_for:atomic-layer-deposition", "drop"]}
+```
+
+The top-tier editor adjudicates in CONSOLIDATE: it encodes the decision
+(create / route / merge / park / adjust `kind_stencil`) and, if that
+changes a target, re-dispatches one focused Task next round. Escalate —
+never silently pick — on concept-vs-evidence routing, kind/stencil
+choice, near-duplicate merges, or slug create/destroy. Routine
+accept/reject of a chunk is the subagent's own job. (Distinct from the
+writer's validator-retry **tier** escalation in
+`../wikify/references/writing/escalation.md`, which just re-runs at a
+higher tier.)
+
+## Sizing and defaults
+
+Round-level knobs scale with corpus size; per-Task depth is fixed. At
+setup read `D = health.n_docs` and `Kc = health.n_chunks`, then derive
+(`clamp(x,lo,hi) = max(lo, min(hi, x))`):
+
+```
+wave_size            = clamp(ceil(D / 80), 2, 12)
+target_min           = clamp(round(42 * log10(D) - 27), 10, 200)        # SEED concept floor, ~log(D)
+concurrent_explorers = clamp(wave_size, 2, 8)                           # throttled by live rate limits
+max_rounds           = clamp(round(Kc / (wave_size * 25)) + 12, 12, 250) # coverage-bound safety ceiling
+budget_est_haiku_eq  = 2_000_000 + 5_000 * Kc                          # ~5k haiku-eq/chunk + editor base
+```
+
+| corpus (~18 chunks/doc) | wave_size | target_min | concurrent | max_rounds | budget est |
+|---|---|---|---|---|---|
+| 15 docs   | 2  | 22 | 2 | 17 | ~3M  |
+| 100 docs  | 2  | 57 | 2 | 48 | ~11M |
+| 500 docs  | 7  | 86 | 7 | 63 | ~47M |
+| 1000 docs | 12 | 99 | 8 | 72 | ~92M |
+
+All three are **non-binding ceilings, not targets** — the loop stops
+first on `coverage_target`, plateau, or (on a MAX plan) rate limits.
+`target_min` is the SEED floor only and grows ~log(D) because distinct
+concepts saturate far below paper count; concepts past it emerge from
+P5 coverage, not seeding. `budget_est` is ~5k haiku-eq per chunk (a
+few reads + judging + each chunk's share of writing), so per-doc cost
+falls with scale (~0.2M/doc small, ~0.1M/doc large).
+
+### Fixed per-Task knobs
+- Explorer budget per Task: `budget_chunks = 30`, `depth = 2` (P1),
+  `depth = 1` (P2). `curate_every = 2`. `coverage_target = 0.85`.
+- Editor tier: **L (top-tier, e.g. Opus)**. Explorer M. Writer M.
+  Classifier S. Claim owner `investigate`, TTL 1800 s.
+
+### Rate limits (large corpora / MAX)
+
+A 1k-doc build far exceeds one 5-hour MAX window — expected and fine;
+rate limits + re-entry are the real throttle, not budget. Each round
+ends with a `round_completed` checkpoint, so an interruption costs at
+most the in-flight round; re-invoke on the same bundle when the window
+resets and it resumes from the last checkpoint (see Re-entry). Evidence
+persists on disk, so `chunk_coverage_ratio` is monotonic across windows.
 
 ## Hard Rules
 
@@ -256,6 +334,10 @@ the Telemetry pass below.
 - **The editor never reads chunk text.** It reads slug-level
   summaries, scores, and event envelopes. Explorers do all chunk
   reading.
+- **Editor is top-tier; subagents escalate, don't guess.** Run the
+  editor on the strongest model (e.g. Opus); subagents return an
+  `escalate` block on out-of-mandate calls (see Escalation) rather than
+  resolving them silently.
 - **Do not bypass the maturity gate.** A slug that has not crossed
   T = 0.70 does not get written. If a curator wants to promote a
   stalled slug, change its `kind_stencil` (which may loosen the kind
@@ -277,11 +359,6 @@ investigate over baseline:
 | bridge-emitted concept | does it actually bridge the two endpoints? |
 | person page | quoted contributions, temporal anchors, no biography invention |
 | chunk-residual map | which corpus regions are still uncovered |
-
-## Stop Conditions
-
-(Mirrors STOP CHECK above; restated here for the final report.) Budget,
-max_rounds, coverage_target, plateau, or no candidate action.
 
 ## Final Report (checklist)
 

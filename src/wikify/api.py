@@ -15,6 +15,7 @@ goes through ``Bundle.open``.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +53,17 @@ class Corpus:
     @property
     def manifest_path(self) -> Path:
         return self.root / "manifest.json"
+
+    def manifest_fingerprint(self) -> str | None:
+        """Stable 16-hex digest of ``manifest.json``, or ``None`` if absent.
+
+        The single source of truth for corpus identity: ``run init``
+        records it into ``state.json`` and corpus-health summaries echo it,
+        so drift detection across re-entries compares like with like.
+        """
+        if not self.manifest_path.is_file():
+            return None
+        return hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()[:16]
 
     @property
     def library_bib_path(self) -> Path:
