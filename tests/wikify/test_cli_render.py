@@ -66,11 +66,11 @@ def test_render_search_index_uses_plain_text_excerpt(tmp_path: Path) -> None:
     result = runner.invoke(app, ["render", "--bundle", str(bundle.root)])
 
     assert result.exit_code == 0, result.output
-    search_index = json.loads(
-        (bundle.derived_dir / "site" / "search-index.json").read_text(
-            encoding="utf-8"
-        )
+    sidecar = (bundle.derived_dir / "site" / "static" / "search-index.js").read_text(
+        encoding="utf-8"
     )
+    payload = sidecar.removeprefix("window.__WIKI_SEARCH_INDEX__ = ").rstrip().removesuffix(";")
+    search_index = json.loads(payload)
     assert "**" not in search_index[0]["excerpt"]
     assert "[^e1]" not in search_index[0]["excerpt"]
 

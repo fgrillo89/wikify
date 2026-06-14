@@ -258,10 +258,14 @@ def build_site(
     shutil.copy2(_TEMPLATES_DIR / "wiki.css", out_dir / "static" / "wiki.css")
     (out_dir / "static" / "search.js").write_text(_SEARCH_JS, encoding="utf-8")
 
-    # Search index sidecar (title + url + first paragraph).
+    # Search index sidecar (title + url + first paragraph), emitted as a JS
+    # file that assigns a global. Loaded via a <script> tag rather than
+    # fetched, so search works when the site is opened from disk (file://).
     search_index = [{"title": pv.title, "url": pv.url, "excerpt": pv.excerpt} for pv in page_views]
-    (out_dir / "search-index.json").write_text(
-        json.dumps(search_index, ensure_ascii=False),
+    (out_dir / "static" / "search-index.js").write_text(
+        "window.__WIKI_SEARCH_INDEX__ = "
+        + json.dumps(search_index, ensure_ascii=False)
+        + ";\n",
         encoding="utf-8",
     )
 
@@ -1316,22 +1320,17 @@ def _build_toc(html: str) -> list[dict[str, str]]:
     return toc
 
 
-# Minimal client-side search; loads search-index.json on focus.
+# Minimal client-side search. Reads the index from a global populated by
+# the search-index.js sidecar (loaded via <script>), so search works when
+# the site is opened directly from disk -- fetch() is blocked over file://.
 _SEARCH_JS = """\
 (function() {
-  var idx = null;
   var input = document.getElementById('search-input');
   var results = document.getElementById('search-results');
   if (!input || !results) return;
-  function load() {
-    if (idx) return Promise.resolve(idx);
-    var root = (document.documentElement.getAttribute('data-root') || '');
-    return fetch(root + 'search-index.json')
-      .then(function(r) { return r.json(); })
-      .then(function(d) { idx = d; return d; });
-  }
+  var idx = window.__WIKI_SEARCH_INDEX__ || [];
   function run(q) {
-    if (!idx || !q) { results.innerHTML = ''; results.style.display = 'none'; return; }
+    if (!q) { results.innerHTML = ''; results.style.display = 'none'; return; }
     var ql = q.toLowerCase();
     var hits = idx.filter(function(it) {
       return it.title.toLowerCase().indexOf(ql) !== -1
@@ -1350,8 +1349,7 @@ _SEARCH_JS = """\
     }).join('');
     results.style.display = 'block';
   }
-  input.addEventListener('focus', load);
-  input.addEventListener('input', function() { load().then(function() { run(input.value); }); });
+  input.addEventListener('input', function() { run(input.value); });
   document.addEventListener('click', function(e) {
     if (!input.contains(e.target) && !results.contains(e.target)) {
       results.style.display = 'none';
