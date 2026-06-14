@@ -2000,7 +2000,10 @@ def _validate_find_params(*, query: str, by: str, rank: str, top_k: int,
             "bad_field_by_combo",
             f"field='title' only applies with by='paper'; got by={by!r}",
         )
-    if by == "chunk" and rank not in {"semantic", _MULTI_RANK, *_LEXICAL_RANKS}:
+    # When no query is given and rank is a source metric, find() routes to
+    # rank_docs() before any chunk search — the by=chunk default is harmless.
+    if by == "chunk" and rank not in {"semantic", _MULTI_RANK, *_LEXICAL_RANKS} \
+            and not (rank in _SOURCE_RANKS and not query):
         raise QueryError(
             "bad_rank_by_combo",
             f"rank {rank!r} only applies when chunks are aggregated to a "
