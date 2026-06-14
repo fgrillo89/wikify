@@ -186,15 +186,17 @@ src/wikify/
 Skills live in `.claude/skills/`. The shared reference skill
 (`.claude/skills/wikify/`) carries project-wide knowledge in
 `references/` (bundle state, CLI grammar, writing schemas, citation
-format, field guides, exploration patterns, and workflow contracts).
-Core capability skills expose reusable surfaces without owning strategy:
-`wikify-search-corpus`, `wikify-search-wiki`, `wikify-write-page`,
-`wikify-organize-wiki`, and `wikify-bundle`. The
+format, field guides, exploration patterns, maturity scoring, and
+workflow contracts). Core capability skills expose reusable surfaces
+without owning strategy: `wikify-search-corpus`, `wikify-search-wiki`,
+`wikify-write-page`, `wikify-organize-wiki`, and `wikify-bundle`. The
 `wikify-gather-evidence-cluster` skill is the canonical evidence loop
 (sonnet supervisor + haiku judges) and handles clusters of any size.
-Workflow skills (`wikify-baseline`, `wikify-guided-explore`,
-`wikify-query`, `wikify-refine`) dispatch those capabilities with their
-own loop shape, budget, parallelism, retry policy, and stop conditions.
+The `wikify-investigate-explore` skill is the recursive exploration
+pattern library (P1-P5) invoked by the investigate editor. Workflow
+skills (`wikify-baseline`, `wikify-investigate`, `wikify-query`,
+`wikify-refine`) dispatch those capabilities with their own loop
+shape, budget, parallelism, retry policy, and stop conditions.
 
 ## Design invariants
 

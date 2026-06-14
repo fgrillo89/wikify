@@ -174,7 +174,7 @@ for now; do not hand-maintain a parallel `.agents/skills/` tree.
     and failures.
 - **Workflow skills** encode strategy: loop shape, sampling pattern,
   stopping criteria, parallelism, budget, model tier, and retry policy.
-  Current workflows are `wikify-baseline`, `wikify-guided-explore`,
+  Current workflows are `wikify-baseline`, `wikify-investigate`,
   `wikify-query`, and `wikify-refine`.
 
 A new strategy is a new workflow skill, not new Python.

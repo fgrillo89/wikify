@@ -1142,4 +1142,160 @@ def cmd_cluster_concepts(
         typer.echo(f"cluster {i:2d} ({kind}, {len(c)}): {', '.join(c)}")
 
 
+# -------------------------------------------------------------- maturity
+
+
+@app.command("maturity")
+def cmd_maturity(
+    slugs: list[str] = typer.Argument(None),
+    all_slugs: bool = typer.Option(False, "--all"),
+    threshold: float = typer.Option(0.70, "--threshold"),
+    current_round: int = typer.Option(0, "--round"),
+    stencil: str | None = typer.Option(
+        None, "--stencil",
+        help="Override kind_stencil for article concepts.",
+    ),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Score one or more concepts against the maturity gate.
+
+    Without ``--all`` and no slug arguments, scores every concept slug
+    on disk. The score formula and gates are documented in
+    ``.claude/skills/wikify/references/exploration/maturity.md``.
+    """
+    from ..bundle.work.maturity import compute_maturity
+
+    bundle = _resolve_bundle(run)
+    if not slugs and not all_slugs:
+        # Default to listing everything; matches `work list` behavior.
+        target = list_concept_slugs(bundle)
+    elif all_slugs:
+        target = list_concept_slugs(bundle)
+    else:
+        target = [_clean_slug_arg(s) for s in slugs]
+    reports = [
+        compute_maturity(
+            bundle, s,
+            kind_stencil=stencil,
+            current_round=current_round,
+            threshold=threshold,
+        )
+        for s in target
+    ]
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "threshold": threshold,
+                    "items": [r.to_dict() for r in reports],
+                }
+            )
+        )
+        return
+    for r in reports:
+        typer.echo(
+            f"{r.slug:<32}  {r.kind:<8}  {r.band:<8}  "
+            f"score={r.score:.2f}  gates={'ok' if r.gates_passed else 'fail'}  "
+            f"n_chunks={r.n_chunks} n_docs={r.n_docs} "
+            f"kinds={','.join(r.kinds_present) or '-'}"
+        )
+
+
+# -------------------------------------------------------------- coverage
+
+
+@app.command("coverage")
+def cmd_coverage(
+    corpus_dir: Path = typer.Option(
+        ..., "--corpus", help="Corpus root used to count total chunks."
+    ),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Report ``chunk_coverage_ratio`` for this bundle against the corpus.
+
+    Unions chunk_ids from committed wiki pages (``wiki.db``) and
+    in-flight notebooks / evidence ledgers, divided by the corpus
+    chunk count.
+    """
+    from ..api import Corpus
+    from ..bundle.work.coverage import compute_coverage
+
+    if not corpus_dir.is_dir():
+        cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
+    bundle = _resolve_bundle(run)
+    corpus = Corpus(root=corpus_dir)
+    report = compute_coverage(bundle, corpus)
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, **report.to_dict()}))
+        return
+    typer.echo(
+        f"covered: {report.n_covered}/{report.n_total} "
+        f"({report.chunk_coverage_ratio:.3f})"
+    )
+    typer.echo(
+        f"  committed: {report.n_covered_committed}  "
+        f"in-flight: {report.n_covered_in_flight}"
+    )
+
+
+# -------------------------------------------------------------- notebook-init
+
+
+@app.command("notebook-init")
+def cmd_notebook_init(
+    concept: str = typer.Argument(...),
+    seed_docs: str = typer.Option(
+        "[]", "--seed-docs", help='JSON list of seed doc handles.'
+    ),
+    stencil: str | None = typer.Option(None, "--stencil"),
+    kind: str | None = typer.Option(
+        None, "--kind",
+        help="Override card kind (defaults to the work card's kind).",
+    ),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Create a ``work/concepts/<slug>/notebook.md`` skeleton.
+
+    Idempotent: returns the existing notebook if one is already on
+    disk. The investigate explorer calls this on first acceptance for a
+    new slug.
+    """
+    from ..bundle.work.notebook import init_notebook, notebook_path
+
+    concept = _clean_slug_arg(concept)
+    bundle = _resolve_bundle(run)
+    try:
+        seeds = json.loads(seed_docs)
+        if not isinstance(seeds, list):
+            raise ValueError("seed-docs must be a JSON list")
+    except (json.JSONDecodeError, ValueError) as exc:
+        cli_error(EXIT_VALIDATION, error="bad_seed_docs", message=str(exc))
+    card = load_card(bundle, concept)
+    effective_kind = kind or (card.kind if card.front else "article")
+    init_notebook(
+        bundle,
+        slug=concept,
+        kind=effective_kind,
+        seed_docs=seeds,
+        kind_stencil=stencil,
+    )
+    p = notebook_path(bundle, concept)
+    if fmt == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": True,
+                    "slug": concept,
+                    "path": str(p.relative_to(bundle.root)).replace("\\", "/"),
+                }
+            )
+        )
+        return
+    typer.echo(f"notebook at {p.relative_to(bundle.root)}")
+
+
 __all__ = ["app"]

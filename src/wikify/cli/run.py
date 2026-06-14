@@ -11,6 +11,9 @@ Subcommands::
     run record-call [--run <b>] --role <r> --model-id <m> --tier S|M|L
                     --tokens-in N --tokens-out N [--stage <s>]
     run record-calls --run <b> --from-stdin [--fail-fast] [--format json|compact]
+    run record-event [--run <b>] --type <t> [--stage <s>] [--concept-id <c>]
+                     [--page-id <p>] [--chunk-id <c>] [--doc-id <d>]
+                     [--actor <a>] [--data <json>]
 
 ``--run <bundle>`` overrides; otherwise the current working directory
 must be a bundle root (``run/state.json`` present).
@@ -337,6 +340,73 @@ def cmd_record_call(
             f"recorded call role={role} model={model_id} tier={tier} "
             f"tokens={tokens_in}+{tokens_out} haiku_eq={cost_haiku_eq:.1f}"
         )
+
+
+@app.command("record-event")
+def cmd_record_event(
+    type_: str = typer.Option(..., "--type", help="Event type literal."),
+    run: Path | None = typer.Option(None, "--run"),
+    stage: str | None = typer.Option(None, "--stage"),
+    concept_id: str | None = typer.Option(None, "--concept-id"),
+    page_id: str | None = typer.Option(None, "--page-id"),
+    chunk_id: str | None = typer.Option(None, "--chunk-id"),
+    doc_id: str | None = typer.Option(None, "--doc-id"),
+    actor: str = typer.Option("agent", "--actor"),
+    data: str = typer.Option("{}", "--data", help="JSON object payload."),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Append a non-call event (round_started, round_completed, etc.).
+
+    Use this for the investigate workflow's round + pattern lifecycle
+    events. ``call`` events stay on ``record-call`` / ``record-calls``
+    where the cost machinery enforces token validation.
+
+    The ``--type`` value is validated against ``EventType``; unknown
+    types are rejected.
+    """
+    from typing import get_args
+
+    from ..bundle.run.events import EventType
+    allowed = set(get_args(EventType))
+    if type_ == "call":
+        cli_error(
+            EXIT_VALIDATION,
+            error="use_record_call",
+            message="use 'wikify run record-call' for type=call.",
+        )
+    if type_ not in allowed:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_event_type",
+            message=f"unknown event type: {type_!r}",
+            allowed=sorted(allowed),
+        )
+    try:
+        payload = json.loads(data)
+        if not isinstance(payload, dict):
+            raise ValueError("--data must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as exc:
+        cli_error(EXIT_VALIDATION, error="bad_data", message=str(exc))
+    bundle = _resolve_bundle(run)
+    state = load_state(bundle)
+    event = Event(
+        run_id=state.run_id,
+        type=type_,
+        actor=actor,
+        stage=stage,
+        concept_id=concept_id,
+        page_id=page_id,
+        chunk_id=chunk_id,
+        doc_id=doc_id,
+        data=payload,
+    )
+    append_event(bundle, event)
+    if fmt == "json":
+        typer.echo(
+            json.dumps({"ok": True, "event_id": event.event_id, "type": type_})
+        )
+        return
+    typer.echo(f"recorded {type_} event_id={event.event_id}")
 
 
 _REQUIRED_BATCH_FIELDS: tuple[tuple[str, type], ...] = (
