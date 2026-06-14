@@ -160,18 +160,19 @@ def _growth_stalled(
     Falls back to True when the bundle has no ``round_started`` events
     (baseline-style bundle, no investigate loop yet).
     """
-    rounds_seen: list[int] = []
+    any_round = False
+    latest_round: int = -1
     last_evidence_round: int | None = None
     for ev in iter_events(bundle):
         if ev.type == "round_started":
+            any_round = True
             r = int(ev.data.get("round", 0))
-            if r not in rounds_seen:
-                rounds_seen.append(r)
+            if r > latest_round:
+                latest_round = r
         elif ev.type == "evidence_added" and ev.concept_id == slug:
-            # Tie evidence-added events to the most recent round_started.
-            if rounds_seen:
-                last_evidence_round = rounds_seen[-1]
-    if not rounds_seen:
+            if any_round:
+                last_evidence_round = latest_round
+    if not any_round:
         return True  # no investigate loop -> treat as stalled
     if last_evidence_round is None:
         return True
@@ -207,7 +208,7 @@ def _link_neighbours_chunk_sets(
             r["dst_id"]
             for r in con.execute(
                 "SELECT dst_id FROM wiki_edges "
-                "WHERE src_id = ? AND kind = 'links_to' AND dst_type = 'page'",
+                "WHERE src_id = ? AND kind = 'links_to' AND dst_type = 'wiki_page'",
                 (page_id,),
             )
         }
@@ -215,7 +216,7 @@ def _link_neighbours_chunk_sets(
             r["src_id"]
             for r in con.execute(
                 "SELECT src_id FROM wiki_edges "
-                "WHERE dst_id = ? AND kind = 'links_to' AND dst_type = 'page'",
+                "WHERE dst_id = ? AND kind = 'links_to' AND dst_type = 'wiki_page'",
                 (page_id,),
             )
         }
@@ -313,7 +314,16 @@ def compute_maturity(
             bundle, slug, records
         )
         all_gates = all(gates.values())
-        band = _band(score, all_gates, threshold)
+        growth_stalled = _growth_stalled(
+            bundle, slug, current_round=current_round
+        )
+        band = _band(
+            score if all_gates else 0.0,
+            all_gates,
+            threshold,
+            growth_stalled=growth_stalled,
+            has_evidence=bool(records),
+        )
         return MaturityReport(
             slug=slug,
             kind=kind,
@@ -321,9 +331,7 @@ def compute_maturity(
             score=score if all_gates else 0.0,
             band=band,
             gates_passed=all_gates,
-            growth_stalled=_growth_stalled(
-                bundle, slug, current_round=current_round
-            ),
+            growth_stalled=growth_stalled,
             last_computed_round=current_round,
             components=components,
             gates=gates,
@@ -376,7 +384,13 @@ def compute_maturity(
         "diversity_bonus": 0.10 * _diversity_bonus(records),
     }
     score = sum(components.values()) if all_gates else 0.0
-    band = _band(score, all_gates, threshold)
+    band = _band(
+        score,
+        all_gates,
+        threshold,
+        growth_stalled=growth_stalled,
+        has_evidence=bool(records),
+    )
 
     return MaturityReport(
         slug=slug,
@@ -395,9 +409,20 @@ def compute_maturity(
     )
 
 
-def _band(score: float, gates_passed: bool, threshold: float) -> str:
+def _band(
+    score: float,
+    gates_passed: bool,
+    threshold: float,
+    *,
+    growth_stalled: bool,
+    has_evidence: bool,
+) -> str:
     if not gates_passed:
-        return "growing" if score == 0.0 else "growing"
+        if not has_evidence:
+            return "new"
+        if growth_stalled:
+            return "stalled"
+        return "growing"
     if score >= threshold:
         return "ready"
     if score >= 0.50:

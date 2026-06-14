@@ -79,21 +79,23 @@ def _committed_chunk_ids(bundle: Bundle) -> set[str]:
 
 
 def _in_flight_chunk_ids(bundle: Bundle) -> set[str]:
-    """Union of covered_chunks from notebooks + active evidence ledgers.
+    """Union of ``covered_chunks`` from notebooks AND active evidence
+    ledgers from every work-concept folder.
 
-    Falls back to ``evidence.jsonl`` when a slug has no notebook (e.g.
-    pre-investigate bundles produced by baseline).
+    Always unions both sources. Notebook provenance may lag the evidence
+    ledger by one round (the editor folds explorer deltas in between
+    Tasks), so taking the union keeps coverage monotonic regardless of
+    where the ground truth currently sits. Also picks up pre-investigate
+    bundles that have evidence ledgers but no notebooks at all.
     """
     out: set[str] = set()
-    notebook_slugs = set(list_notebook_slugs(bundle))
-    for slug in notebook_slugs:
+    for slug in list_notebook_slugs(bundle):
         nb = read_notebook(bundle, slug)
         out.update(nb.front.provenance.covered_chunks)
-    # Pick up baseline-era work folders that have evidence but no notebook.
     concepts_dir = bundle.work_concepts_dir
     if concepts_dir.is_dir():
         for entry in concepts_dir.iterdir():
-            if not entry.is_dir() or entry.name in notebook_slugs:
+            if not entry.is_dir():
                 continue
             for r in read_evidence(bundle, entry.name):
                 if r.status == "active" and r.chunk_id:

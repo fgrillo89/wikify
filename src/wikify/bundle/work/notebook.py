@@ -198,6 +198,33 @@ def merge_covered_docs(
     return list(by_doc.values())
 
 
+def merge_covered_chunks(existing: list[str], additions: list[str]) -> list[str]:
+    """Union ``existing`` with ``additions``, preserving insertion order."""
+    seen = set(existing)
+    out = list(existing)
+    for cid in additions:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
+
+
+def set_new_doc_action_needed(
+    bundle: Bundle, slug: str, value: bool
+) -> Notebook:
+    """Flip ``new_doc_action_needed`` on a notebook. Materialises an
+    empty notebook if one does not exist yet.
+    """
+    if not notebook_path(bundle, slug).exists():
+        nb = init_notebook(bundle, slug=slug)
+    else:
+        nb = read_notebook(bundle, slug)
+    nb.front.new_doc_action_needed = value
+    save_notebook(bundle, slug, nb)
+    return nb
+
+
 def append_exploration_log(
     log: list[ExplorationLogEntry], entry: ExplorationLogEntry
 ) -> list[ExplorationLogEntry]:

@@ -79,6 +79,32 @@ def test_compute_coverage_counts_in_flight_notebook(tmp_path: Path) -> None:
     assert report.chunk_coverage_ratio == 0.5
 
 
+def test_compute_coverage_unions_notebook_and_evidence_for_same_slug(
+    tmp_path: Path,
+) -> None:
+    """Regression: evidence.jsonl chunks must count even when a notebook
+    exists for the same slug. The explorer may lag the notebook by one
+    round; coverage should not dip while that lag persists.
+    """
+    corpus = _make_corpus(
+        tmp_path / "corpus",
+        [("c1", "d1"), ("c2", "d1"), ("c3", "d2")],
+    )
+    bundle = _make_bundle(tmp_path / "bundle")
+    init_notebook(bundle, slug="alpha", kind="article")
+    nb = read_notebook(bundle, "alpha")
+    nb.front.provenance.covered_chunks = ["c1"]
+    save_notebook(bundle, "alpha", nb)
+    # Explorer appended c2 to the ledger but has not folded it into
+    # the notebook frontmatter yet.
+    append_evidence(
+        bundle, "alpha",
+        [EvidenceRecord(chunk_id="c2", doc_id="d1", status="active")],
+    )
+    report = compute_coverage(bundle, corpus)
+    assert report.n_covered == 2  # c1 (notebook) union c2 (ledger)
+
+
 def test_compute_coverage_counts_evidence_jsonl_fallback(tmp_path: Path) -> None:
     """Baseline-era bundles have evidence.jsonl but no notebook.md."""
     corpus = _make_corpus(

@@ -16,6 +16,7 @@ from wikify.bundle.work.maturity import (
     STENCILS,
     _detect_kinds,
     _diversity_bonus,
+    _link_neighbours_chunk_sets,
     compute_maturity,
 )
 from wikify.cli import app
@@ -69,7 +70,8 @@ def test_article_fails_gates_with_thin_evidence(tmp_path: Path) -> None:
     ])
     report = compute_maturity(bundle, "memristor")
     assert report.gates_passed is False
-    assert report.band in {"new", "growing"}
+    # Has evidence but no round events -> growth_stalled gate fails -> stalled.
+    assert report.band == "stalled"
     assert report.score == 0.0
     assert report.gates["has_definition_evidence"] is True
     assert report.gates["n_chunks_ge_8"] is False
@@ -224,6 +226,97 @@ def test_stencils_define_three_kinds_each() -> None:
         if name == "person":
             continue
         assert len(kinds) == 3
+
+
+def test_band_returns_new_for_empty_concept(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    create_concept(bundle, page_id="Empty", kind="article")
+    report = compute_maturity(bundle, "empty")
+    assert report.band == "new"
+    assert report.gates_passed is False
+
+
+def test_band_returns_stalled_when_evidence_but_gates_fail(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(tmp_path)
+    create_concept(bundle, page_id="Thin", kind="article")
+    append_evidence(bundle, "thin", [_ev("c1", "d1", "Thin is a thing.")])
+    report = compute_maturity(bundle, "thin")
+    assert report.gates_passed is False
+    assert report.growth_stalled is True
+    assert report.band == "stalled"
+
+
+def test_band_returns_growing_when_evidence_and_not_stalled(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(tmp_path)
+    create_concept(bundle, page_id="Active", kind="article")
+    append_evidence(bundle, "active", [_ev("c1", "d1", "Active is a thing.")])
+    state = json.loads(bundle.state_path.read_text(encoding="utf-8"))
+    run_id = state["run_id"]
+    append_event(bundle, Event(
+        run_id=run_id, type="round_started", actor="editor",
+        data={"round": 1},
+    ))
+    append_event(bundle, Event(
+        run_id=run_id, type="evidence_added", actor="explorer",
+        concept_id="active", data={"n": 1},
+    ))
+    report = compute_maturity(bundle, "active", current_round=1)
+    assert report.growth_stalled is False
+    assert report.band == "growing"
+
+
+def test_link_neighbours_chunk_sets_uses_correct_dst_type(
+    tmp_path: Path,
+) -> None:
+    """Regression: dst_type literal must match wiki.db schema ('wiki_page')."""
+    import sqlite3
+
+    bundle = _bundle(tmp_path)
+    db = bundle.sqlite_path
+    con = sqlite3.connect(str(db))
+    con.executescript(
+        "CREATE TABLE wiki_pages ("
+        " page_id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL,"
+        " title TEXT, kind TEXT, body TEXT, frontmatter_json TEXT,"
+        " created_at TEXT, updated_at TEXT);"
+        "CREATE TABLE wiki_evidence ("
+        " page_id TEXT NOT NULL, marker TEXT NOT NULL,"
+        " chunk_id TEXT, doc_id TEXT, quote TEXT,"
+        " PRIMARY KEY (page_id, marker));"
+        "CREATE TABLE wiki_edges ("
+        " src_id TEXT NOT NULL, kind TEXT NOT NULL,"
+        " dst_type TEXT NOT NULL, dst_id TEXT NOT NULL,"
+        " meta_json TEXT, PRIMARY KEY (src_id, kind, dst_type, dst_id));"
+    )
+    con.execute(
+        "INSERT INTO wiki_pages VALUES ('Memristor','memristor','M','article','','','', '')"
+    )
+    con.execute(
+        "INSERT INTO wiki_pages VALUES "
+        "('Resistive Switching','resistive-switching','R','article','','','', '')"
+    )
+    con.execute(
+        "INSERT INTO wiki_edges VALUES "
+        "('Memristor','links_to','wiki_page','Resistive Switching',NULL)"
+    )
+    con.executemany(
+        "INSERT INTO wiki_evidence VALUES (?,?,?,?,?)",
+        [
+            ("Resistive Switching", "e1", "c1", "d1", "q"),
+            ("Resistive Switching", "e2", "c2", "d1", "q"),
+        ],
+    )
+    con.commit()
+    con.close()
+    neighbours = _link_neighbours_chunk_sets(bundle, "Memristor")
+    assert neighbours == [{"c1", "c2"}], (
+        "Expected one neighbour's chunk set; "
+        "empty result means dst_type filter is broken."
+    )
 
 
 def test_cli_maturity_text_and_json(tmp_path: Path) -> None:

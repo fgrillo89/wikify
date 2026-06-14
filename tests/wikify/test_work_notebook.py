@@ -19,10 +19,12 @@ from wikify.bundle.work.notebook import (
     append_round_history,
     init_notebook,
     list_notebook_slugs,
+    merge_covered_chunks,
     merge_covered_docs,
     notebook_path,
     read_notebook,
     save_notebook,
+    set_new_doc_action_needed,
 )
 from wikify.cli import app
 
@@ -127,6 +129,29 @@ def test_append_round_history_caps_at_max() -> None:
     assert len(history) == 5
     assert history[0].round == 3
     assert history[-1].round == 7
+
+
+def test_merge_covered_chunks_dedupes_preserving_order() -> None:
+    existing = ["c1", "c2"]
+    merged = merge_covered_chunks(existing, ["c2", "c3", "c1", "c4"])
+    assert merged == ["c1", "c2", "c3", "c4"]
+
+
+def test_set_new_doc_action_needed_materialises_skeleton(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    nb = set_new_doc_action_needed(bundle, "no-existing", True)
+    assert nb.front.new_doc_action_needed is True
+    again = read_notebook(bundle, "no-existing")
+    assert again.front.new_doc_action_needed is True
+
+
+def test_set_new_doc_action_needed_flips_existing(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    init_notebook(bundle, slug="alpha", kind="article")
+    set_new_doc_action_needed(bundle, "alpha", True)
+    assert read_notebook(bundle, "alpha").front.new_doc_action_needed is True
+    set_new_doc_action_needed(bundle, "alpha", False)
+    assert read_notebook(bundle, "alpha").front.new_doc_action_needed is False
 
 
 def test_list_notebook_slugs(tmp_path: Path) -> None:
