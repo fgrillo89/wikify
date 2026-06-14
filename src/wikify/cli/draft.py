@@ -3,10 +3,11 @@
 Subcommands::
 
     draft build <concept> [--task create|refine] [--corpus <c>] [--run <b>]
+                          [--model-id <id>] [--tier S|M|L]
     draft show  <concept> [--run <b>] [--full] [--format text|json]
     draft normalize-references <concept> [--run <b>] [--format text|json]
     draft check <concept> [--run <b>] [--format text|json]
-    draft finalize <concept> --run <b> --owner <o> [--format json|compact|auto] [--dry-run]
+    draft finalize <concept> --run <b> [--owner <o>] [--format json|compact|auto] [--dry-run]
 """
 
 from __future__ import annotations
@@ -55,20 +56,24 @@ def _resolve_bundle(run_flag: Path | None) -> Bundle:
         )
 
 
+_DEFAULT_MODEL_ID = "claude-sonnet-4-6"
+_DEFAULT_TIER = "M"
+
+
 @app.command("build")
 def cmd_build(
     concept: str = typer.Argument(...),
     task: str = typer.Option("create", "--task", help="create | refine"),
     corpus_dir: Path = typer.Option(..., "--corpus"),
     model_id: str = typer.Option(
-        ...,
+        _DEFAULT_MODEL_ID,
         "--model-id",
-        help="Writer model identifier (e.g. claude-sonnet-4-6). Required.",
+        help=f"Writer model identifier. Default: {_DEFAULT_MODEL_ID!r}.",
     ),
     tier: str = typer.Option(
-        ...,
+        _DEFAULT_TIER,
         "--tier",
-        help="Writer cost tier — S | M | L. Required.",
+        help=f"Writer cost tier — S | M | L. Default: {_DEFAULT_TIER!r}.",
     ),
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("text", "--format"),
@@ -86,8 +91,8 @@ def cmd_build(
 ) -> None:
     """Compile a WriteRequest for *concept* and write draft.json.
 
-    ``--model-id`` and ``--tier`` are required; strategy lives in
-    skills, not Python defaults.
+    ``--model-id`` defaults to ``claude-sonnet-4-6``; ``--tier`` defaults
+    to ``M``. Both are overridable per-call.
     """
     concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
@@ -339,7 +344,14 @@ def _emit_finalize(envelope: dict, fmt: str) -> None:
 def cmd_finalize(
     concept: str = typer.Argument(...),
     run: Path = typer.Option(..., "--run"),
-    owner: str = typer.Option(..., "--owner"),
+    owner: str | None = typer.Option(
+        None,
+        "--owner",
+        help=(
+            "Claim owner string. Defaults to 'investigate' when omitted. "
+            "Override to match the owner used when the claim was acquired."
+        ),
+    ),
     fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
     dry_run: bool = typer.Option(
         False,
@@ -377,7 +389,7 @@ def cmd_finalize(
 
     # Step 0: ownership gate. If another owner holds a live claim on this
     # slug, do not normalize / check / commit — exit before any mutation.
-    canonical_owner = cli_owner(owner)
+    canonical_owner = cli_owner(owner or "investigate")
     existing_claim = read_claim(bundle, concept)
     if existing_claim and existing_claim.get("owner") != canonical_owner:
         steps.append({

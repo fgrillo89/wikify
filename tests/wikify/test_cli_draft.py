@@ -336,3 +336,52 @@ def test_draft_check_missing_response(tmp_path: Path) -> None:
         app, ["draft", "check", slug, "--run", str(bundle_dir)]
     )
     assert result.exit_code != 0
+
+
+def test_draft_build_uses_defaults_without_model_id_and_tier(tmp_path: Path) -> None:
+    """draft build succeeds when --model-id and --tier are omitted (defaults apply)."""
+    bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "draft", "build", slug,
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_dir),
+            "--format", "json",
+            # no --model-id, no --tier
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["page_id"] == "Atomic Layer Deposition"
+    assert data["evidence_count"] == 1
+    # Confirm the draft.json records the default model/tier.
+    from wikify.api import Bundle
+    from wikify.bundle.draft.artifact import draft_path, read_json
+    bundle = Bundle.open(bundle_dir)
+    draft = read_json(draft_path(bundle, slug))
+    assert draft.get("model_id") == "claude-sonnet-4-6"
+    assert draft.get("tier") == "M"
+
+
+def test_draft_build_explicit_override_beats_defaults(tmp_path: Path) -> None:
+    """Explicit --model-id / --tier override the defaults."""
+    bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "draft", "build", slug,
+            "--run", str(bundle_dir),
+            "--corpus", str(corpus_dir),
+            "--model-id", "claude-haiku-4-5",
+            "--tier", "S",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    from wikify.api import Bundle
+    from wikify.bundle.draft.artifact import draft_path, read_json
+    bundle = Bundle.open(bundle_dir)
+    draft = read_json(draft_path(bundle, slug))
+    assert draft.get("model_id") == "claude-haiku-4-5"
+    assert draft.get("tier") == "S"

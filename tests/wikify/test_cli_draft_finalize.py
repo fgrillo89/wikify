@@ -276,3 +276,30 @@ def test_draft_finalize_wrong_owner_does_not_mutate(tmp_path: Path) -> None:
     assert post_articles == pre_articles
     still_held = read_claim(bundle, slug)
     assert still_held and still_held.get("owner") == "other-owner"
+
+
+def test_draft_finalize_default_owner(tmp_path: Path) -> None:
+    """draft finalize succeeds without --owner; defaults to 'investigate'."""
+    bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)
+    _build_draft(bundle_dir, corpus_dir, slug)
+    bundle = Bundle.open(bundle_dir)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    write_json(response_path(bundle, slug), _good_response(quote))
+    # Acquire the claim with the expected default owner.
+    acquire_claim(bundle, slug, owner="investigate")
+
+    result = runner.invoke(
+        app,
+        [
+            "draft", "finalize", slug,
+            "--run", str(bundle_dir),
+            # no --owner
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    # Claim must be released.
+    assert read_claim(bundle, slug) is None
