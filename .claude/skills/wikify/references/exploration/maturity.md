@@ -28,7 +28,15 @@ Promotion threshold: **T = 0.70** for both article and person rules.
 - `n_chunks >= 8`: at least 8 active evidence records.
 - `n_docs >= 4`: at least 4 distinct doc_ids.
 - `growth_stalled`: no `evidence_added` event for this slug in the
-  last 2 rounds (or bundle has no `round_started` events).
+  last 2 rounds (or bundle has no `round_started` events). Because this
+  is a gate, a fully-evidenced slug scores `0` (band `growing`) on the
+  round it is grown and only crosses into `ready` ~2 rounds later, once
+  evidence has plateaued. The editor's loop must therefore stop
+  touching a saturated slug and let the timer elapse before the WRITE
+  wave can fire (see `wikify-investigate/SKILL.md`, WRITE wave). This
+  also means the per-round `round_started` and per-slug `evidence_added`
+  events MUST carry an integer `round` payload, or `growth_stalled`
+  falls back to `True` and every slug reads as `stalled`.
 
 If any gate fails, `score = 0`, `band` is `new` / `growing` /
 `stalled` depending on `growth_stalled`.

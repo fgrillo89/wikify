@@ -81,7 +81,12 @@ most one Task per slug per round. Walk the precedence list, attaching
 targets to the plan in order, removing them from later bands.
 
 1. **WRITE wave.** Every slug in `ready` band. Up to `wave_size`
-   (from Sizing) per round. Eager — writing is terminal.
+   (from Sizing) per round. Eager — writing is terminal. Note the
+   readiness lag: `growth_stalled` is a gate, so a well-evidenced slug
+   only enters `ready` once NO `evidence_added` event fired for it in
+   the last 2 rounds. The rhythm is therefore grow -> leave untouched
+   ~2 rounds (grow other slugs meanwhile) -> `ready` -> write. Do not
+   keep re-growing a saturated slug or it never becomes writable.
 2. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
    with `growth_stalled == False`. Up to `wave_size`, slug-disjoint
    from WRITE. Per-slug pattern selection:
@@ -95,9 +100,14 @@ targets to the plan in order, removing them from later bands.
    notebooks' chunk sets. Emits `concept_suggestion` only; never
    appends evidence to either endpoint.
 4. **SEED wave.** Fires when `concept_count < target_min` (`target_min`
-   from Sizing and defaults) OR every dossier is `ready`/`stalled`. One
-   **P1** Task per top-K uncovered PageRank doc, where K is
-   `max(target_min - concept_count, wave_size)`.
+   from Sizing and defaults) OR every dossier is `ready`/`stalled`.
+   Seed from the top-K uncovered PageRank docs, where K is
+   `max(target_min - concept_count, wave_size)`. Run SEED as a SINGLE
+   **P1** Task over the doc list (not one task per doc): P1 tasks
+   *create* slugs, and two docs often yield the same concept, so
+   parallel SEED tasks would race on the same slug folder and violate
+   slug-disjointness. The single task dedups concept titles internally
+   and skips any that match an existing slug.
 5. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
 
@@ -111,17 +121,29 @@ For each plan entry, spawn one `Task` (sonnet tier) bound to
 `wikify-investigate-explore` for explore Tasks or `wikify-write-page`
 for the write wave. Pass `pattern`, `target`, `budget_chunks`, `depth`
 verbatim from the plan. Record `{role, model_id, tier, tokens_in,
-tokens_out, stage}` from each return.
+tokens_out, stage}` from each return. Use the harness-measured token
+usage reported at the Task boundary (`subagent_tokens`), not the
+subagent's self-reported `tokens_in/tokens_out` — children cannot
+introspect their own tool-result intake and routinely undershoot it by
+several fold.
 
 Before dispatching the first Task of each wave, emit one
 `pattern_dispatched` event per Task:
 
 ```
-echo '{"pattern": "P3", "target": "memristor", "depth": 0,
-       "budget_chunks": 30}' \
-  | wikify run record-event --type pattern_dispatched \
-      --stage explore --concept-id memristor --run <bundle>
+wikify run record-event --type pattern_dispatched \
+  --stage explore --concept-id memristor --run <bundle> \
+  --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": 30}'
 ```
+
+`record-event` reads the payload from `--data` (JSON object). Each
+round MUST also emit `round_started` (`--data '{"round": N}'`) and, in
+CONSOLIDATE, one `evidence_added` (`--data '{"round": N}'` with
+`--concept-id <slug>`) per slug that gained evidence: `_growth_stalled`
+(and thus the maturity gate) reads `round` off these events, and
+`round_started`/`round_completed`/`evidence_added`/`pattern_dispatched`
+are rejected without an integer `round`. `work add evidence --round N`
+emits the `evidence_added` event for you.
 
 Stages: `explore` for P1-P5 waves, `write` for the write wave.
 
