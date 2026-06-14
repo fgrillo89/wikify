@@ -333,6 +333,77 @@ def test_find_rejects_missing_query(small_corpus: Corpus) -> None:
     assert exc.value.code == "missing_query"
 
 
+def test_find_queryless_pagerank_returns_docs_ordered_by_pr(
+    small_corpus: Corpus, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """query-less --rank pagerank returns kind='docs' ordered by descending pagerank."""
+    _all_rows = [
+        {"doc_id": "paper_0", "title": "Title 0", "citation_count": 0, "pagerank": 0.05},
+        {"doc_id": "paper_1", "title": "Title 1", "citation_count": 0, "pagerank": 0.20},
+    ]
+
+    def _fake_rank_docs(_corpus, *, by, top_k):
+        rows = sorted(
+            _all_rows,
+            key=lambda r: -r[by] if by == "pagerank" else (-r[by], r["doc_id"]),
+        )
+        return rows[:top_k]
+
+    monkeypatch.setattr(queries, "rank_docs", _fake_rank_docs)
+
+    # Default --by chunk — must route to metric-only path without error.
+    result = queries.find(
+        small_corpus, query="", by="chunk", rank="pagerank", top_k=5,
+    )
+    assert result["kind"] == "docs"
+    assert result["scored"] is False
+    pr_list = [r["pagerank"] for r in result["rows"]]
+    assert pr_list == sorted(pr_list, reverse=True), "rows not ordered by pagerank desc"
+    assert len(result["rows"]) == 2
+
+    # Explicit --by paper — same path, top_k=1 returns highest-pr doc.
+    result_paper = queries.find(
+        small_corpus, query="", by="paper", rank="pagerank", top_k=1,
+    )
+    assert result_paper["kind"] == "docs"
+    assert len(result_paper["rows"]) == 1
+    assert result_paper["rows"][0]["pagerank"] == 0.20
+
+
+def test_find_queryless_citation_count_returns_docs_ordered_by_cites(
+    small_corpus: Corpus, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """query-less --rank citation_count returns kind='docs' ordered by descending cites."""
+    _all_rows = [
+        {"doc_id": "paper_0", "title": "Title 0", "citation_count": 42, "pagerank": 0.0},
+        {"doc_id": "paper_1", "title": "Title 1", "citation_count": 7, "pagerank": 0.0},
+    ]
+
+    def _fake_rank_docs(_corpus, *, by, top_k):
+        rows = sorted(_all_rows, key=lambda r: (-r[by], r["doc_id"]))
+        return rows[:top_k]
+
+    monkeypatch.setattr(queries, "rank_docs", _fake_rank_docs)
+
+    result = queries.find(
+        small_corpus, query="", rank="citation_count", top_k=5,
+    )
+    assert result["kind"] == "docs"
+    cites_list = [r["citation_count"] for r in result["rows"]]
+    assert cites_list == sorted(cites_list, reverse=True)
+
+
+def test_find_with_query_and_metric_rank_still_rejects_chunk_by(
+    small_corpus: Corpus,
+) -> None:
+    """When a query is present, --by chunk --rank pagerank must still be rejected."""
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(
+            small_corpus, query="something", by="chunk", rank="pagerank", top_k=5,
+        )
+    assert exc.value.code == "bad_rank_by_combo"
+
+
 def test_find_rejects_zero_top_k(small_corpus: Corpus) -> None:
     with pytest.raises(queries.QueryError) as exc:
         queries.find(

@@ -26,12 +26,15 @@ from pathlib import Path
 import typer
 
 from ..api import Bundle
+from ..bundle.run.events import Event, append_event
+from ..bundle.run.state import load_state
 from ..bundle.work.card import (
     create_concept,
     list_concept_slugs,
     load_card,
     save_card,
 )
+from ..bundle.work.chunk_ids import build_suffix_index, corpus_path_from_bundle, resolve_chunk_id
 from ..bundle.work.claim import (
     ClaimHeldError,
     acquire_claim,
@@ -108,7 +111,9 @@ def cmd_list_default(
         return
     for s in slugs:
         card = load_card(bundle, s)
-        typer.echo(f"{s:<32}  {card.kind:<8}  {card.status:<14}  {card.page_id}")
+        recs = read_evidence(bundle, s)
+        n_active = sum(1 for r in recs if r.status == "active")
+        typer.echo(f"{s:<32}  {card.kind:<8}  {card.status:<14}  {n_active:>4}ev  {card.page_id}")
 
 
 @list_app.command("claims")
@@ -237,24 +242,127 @@ def cmd_add_evidence(
     concept: str = typer.Argument(...),
     records: Path = typer.Option(..., "--records", help="JSONL of EvidenceRecords."),
     run: Path | None = typer.Option(None, "--run"),
+    round_num: int | None = typer.Option(
+        None, "--round",
+        help="Round number to record in the evidence_added event.",
+    ),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
+    """Append evidence records for *concept*, resolving chunk handles to
+    canonical ids and emitting an ``evidence_added`` event.
+
+    If the bundle's recorded corpus path is reachable, every record's
+    ``chunk_id`` is resolved from short handles (``chunk:<hex>``) to the
+    canonical form.  Records whose id cannot be resolved are rejected and
+    reported; pass-through occurs without resolution when no corpus is
+    reachable.
+    """
     concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not records.is_file():
         cli_error(EXIT_VALIDATION, error="records_not_found", path=str(records))
+
+    # Build a suffix index from the bound corpus if reachable.
+    corpus_sqlite = None
+    suffix_index: dict[str, str] = {}
+    canonical_ids: frozenset[str] = frozenset()
+    corpus_p = corpus_path_from_bundle(bundle.root)
+    if corpus_p is not None:
+        from ..api import Corpus  # noqa: PLC0415 — deferred to avoid circular import at module load
+        corpus_sqlite = Corpus(root=corpus_p).sqlite_path
+        canonical_ids, suffix_index = build_suffix_index(corpus_sqlite)
+
+    # A corpus is usable for validation only when it has at least one chunk.
+    # An empty or absent corpus cannot validate anything; treat it as
+    # unreachable so records pass through rather than being rejected en masse.
+    has_corpus = bool(canonical_ids)
+
+    if not has_corpus:
+        typer.echo(
+            "WARNING: corpus unreachable or empty -- chunk_ids stored unresolved; "
+            "handles will zero out coverage on a machine without this corpus.",
+            err=True,
+        )
+
     parsed: list[EvidenceRecord] = []
+    rejected: list[dict] = []
     for line in records.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
-            parsed.append(EvidenceRecord.model_validate_json(line))
+            rec = EvidenceRecord.model_validate_json(line)
         except Exception as exc:
             cli_error(EXIT_VALIDATION, error="bad_record", message=str(exc))
-    n = append_evidence(bundle, concept, parsed)
-    if fmt == "json":
-        typer.echo(json.dumps({"ok": True, "appended": n}))
+
+        if has_corpus:
+            resolved = resolve_chunk_id(
+                rec.chunk_id, suffix_index, canonical_ids,
+                sqlite_path=corpus_sqlite,
+            )
+            if resolved is None:
+                rejected.append({"chunk_id": rec.chunk_id, "reason": "unresolvable"})
+                continue
+            if resolved != rec.chunk_id:
+                # Rebuild with canonical id; preserve all other fields.
+                rec = rec.model_copy(update={"chunk_id": resolved})
+        parsed.append(rec)
+
+    if rejected and not parsed:
+        if fmt == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "all_rejected",
+                        "rejected": rejected,
+                    }
+                )
+            )
+        else:
+            for r in rejected:
+                typer.echo(
+                    f"rejected {r['chunk_id']!r}: {r['reason']}", err=True
+                )
+        raise typer.Exit(code=EXIT_VALIDATION)
+
+    if not parsed:
+        if fmt == "json":
+            typer.echo(json.dumps({"ok": True, "appended": 0}))
+        else:
+            typer.echo(f"appended 0 records to {concept}/evidence.jsonl")
         return
+
+    n = append_evidence(bundle, concept, parsed)
+
+    # Emit evidence_added event.
+    try:
+        state = load_state(bundle)
+        event_data: dict = {"n": n}
+        if round_num is not None:
+            event_data["round"] = round_num
+        append_event(
+            bundle,
+            Event(
+                run_id=state.run_id,
+                type="evidence_added",
+                actor="cli",
+                concept_id=concept,
+                data=event_data,
+            ),
+        )
+    except Exception:
+        # Event emission is best-effort; do not fail the write.
+        pass
+
+    if fmt == "json":
+        result: dict = {"ok": True, "appended": n}
+        if rejected:
+            result["rejected"] = rejected
+        typer.echo(json.dumps(result))
+        return
+    if rejected:
+        for r in rejected:
+            typer.echo(f"rejected {r['chunk_id']!r}: {r['reason']}", err=True)
     typer.echo(f"appended {n} records to {concept}/evidence.jsonl")
 
 

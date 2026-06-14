@@ -422,3 +422,225 @@ def test_run_close_no_warning_when_call_events_exist(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "WARNING" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# record-event: stdin / --data / validation tests
+# ---------------------------------------------------------------------------
+
+
+def _list_events_by_type(bundle: Path, type_: str) -> list[dict]:
+    out = runner.invoke(
+        app,
+        [
+            "run", "list", "events",
+            "--run", str(bundle),
+            "--type", type_,
+            "--tail", "0",
+            "--format", "json",
+        ],
+    )
+    return json.loads(out.output)
+
+
+def test_record_event_stdin_payload(tmp_path: Path) -> None:
+    """When --from-stdin is passed and stdin carries a JSON object, use stdin."""
+    bundle = _init_bundle(tmp_path)
+    payload = json.dumps({"round": 1, "note": "seed"})
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--from-stdin",
+            "--format", "json",
+        ],
+        input=payload,
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    events = _list_events_by_type(bundle, "round_started")
+    assert len(events) == 1
+    assert events[0]["data"]["round"] == 1
+    assert events[0]["data"]["note"] == "seed"
+
+
+def test_record_event_data_flag_takes_precedence_over_stdin(tmp_path: Path) -> None:
+    """When both --data and --from-stdin are supplied, --data wins and a
+    WARNING is written to stderr (CliRunner merges stderr into output)."""
+    bundle = _init_bundle(tmp_path)
+    flag_payload = json.dumps({"round": 2, "source": "flag"})
+    stdin_payload = json.dumps({"round": 99, "source": "stdin"})
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--data", flag_payload,
+            "--from-stdin",
+            "--format", "json",
+        ],
+        input=stdin_payload,
+    )
+    assert result.exit_code == 0, result.output
+    # CliRunner merges stderr into output; extract the JSON line explicitly.
+    assert "WARNING" in result.output
+    assert "stdin was ignored" in result.output
+    json_line = next(
+        line for line in result.output.splitlines() if line.startswith("{")
+    )
+    data = json.loads(json_line)
+    assert data["ok"] is True
+    events = _list_events_by_type(bundle, "round_started")
+    assert len(events) == 1
+    assert events[0]["data"]["round"] == 2
+    assert events[0]["data"]["source"] == "flag"
+
+
+def test_record_event_missing_round_rejected(tmp_path: Path) -> None:
+    """round_started without a 'round' field must exit non-zero."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--data", '{"note": "no round here"}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_non_int_round_rejected(tmp_path: Path) -> None:
+    """round_completed with round as a string must exit non-zero."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_completed",
+            "--data", '{"round": "three"}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_bool_round_rejected(tmp_path: Path) -> None:
+    """round as a bool (bool is int subclass) must be rejected."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--data", '{"round": true}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_pattern_dispatched_requires_round(tmp_path: Path) -> None:
+    """pattern_dispatched without round is rejected."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "pattern_dispatched",
+            "--data", '{"pattern": "P1"}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_type_without_round_requirement_accepted(tmp_path: Path) -> None:
+    """page_committed does not require 'round'; empty payload is fine."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "page_committed",
+            "--data", '{"slug": "some-page"}',
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+
+
+def test_record_event_stdin_non_object_rejected(tmp_path: Path) -> None:
+    """--from-stdin with a JSON array (not object) must exit non-zero."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "page_committed",
+            "--from-stdin",
+        ],
+        input='["not", "an", "object"]',
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_no_stdin_flag_does_not_block(tmp_path: Path) -> None:
+    """Without --from-stdin, record-event must not read stdin and must
+    succeed with an empty payload (for event types that do not require round)."""
+    bundle = _init_bundle(tmp_path)
+    # No --from-stdin, no --data, no input= — must not block or hang.
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "page_committed",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+
+
+def test_record_event_negative_round_rejected(tmp_path: Path) -> None:
+    """A negative round value must be rejected even though it is an int."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--data", '{"round": -1}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_evidence_added_no_round_accepted(tmp_path: Path) -> None:
+    """evidence_added does not require a round field; omitting it is fine."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "evidence_added",
+            "--data", '{"chunk_id": "abc123"}',
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
