@@ -239,6 +239,7 @@ def cmd_show(
                 {
                     "ok": True,
                     "slug": info["slug"],
+                    "title": info.get("title") or info["slug"],
                     "kind": info["kind"],
                     "path": info["path"],
                     "text": body_payload,
@@ -247,6 +248,7 @@ def cmd_show(
         )
         return
     typer.echo(f"slug:  {info['slug']}")
+    typer.echo(f"title: {info.get('title') or info['slug']}")
     typer.echo(f"kind:  {info['kind']}")
     typer.echo(f"path:  {info['path']}")
     typer.echo("---")
@@ -630,9 +632,11 @@ _WIKI_SCHEMA: dict = {
     },
     "formats": ["auto", "quiet", "compact", "json"],
     "handle_resolution": (
-        "Slugs are natural Wikipedia-style titles. Exact match wins; "
-        "case-insensitive unique prefix is also accepted. Relative paths "
-        "like 'wiki/articles/<slug>.md' work too."
+        "Slugs are natural Wikipedia-style titles. Exact filename match "
+        "wins; a case- and separator-insensitive title match is next (so "
+        "'Atomic Layer Deposition' resolves a kebab-case file and vice "
+        "versa); a case-insensitive unique prefix is also accepted. "
+        "Relative paths like 'wiki/articles/<slug>.md' work too."
     ),
 }
 

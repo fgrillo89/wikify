@@ -921,7 +921,7 @@ def build_server() -> FastMCP:
         item = {
             "handle": f"page:{info['slug']}",
             "type": "page",
-            "title": str(info["slug"]),
+            "title": str(info.get("title") or info["slug"]),
             "score": None,
             "rank": None,
             "resource_uri": f"wikify://wiki/pages/{info['slug']}",
