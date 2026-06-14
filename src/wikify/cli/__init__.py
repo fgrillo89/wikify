@@ -11,6 +11,7 @@ import sys
 
 import typer
 
+from . import arxiv as arxiv_cli
 from . import corpus as corpus_cli
 from . import draft as draft_cli
 from . import eval as eval_cli
@@ -64,6 +65,7 @@ _force_utf8_stdio()
 
 app = typer.Typer(add_completion=False, help="wikify CLI")
 app.add_typer(corpus_cli.app, name="corpus")
+app.add_typer(arxiv_cli.app, name="arxiv")
 app.add_typer(run_cli.app, name="run")
 app.add_typer(work_cli.app, name="work")
 app.add_typer(draft_cli.app, name="draft")

@@ -37,6 +37,7 @@ dependencies = [
     "markdown>=3.10.2",
     "xhtml2pdf>=0.2.17",
     "cloudscraper>=1.2.71",
+    "httpx>=0.28",
     "playwright>=1.58.0",
     "docx2pdf>=0.1.8",
     "pywin32>=311",
