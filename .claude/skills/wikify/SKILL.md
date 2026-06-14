@@ -45,6 +45,9 @@ to use, and when to stop.
   as the primary objective; re-entrant on the same bundle.
 - `wikify-query` - answer from wiki with corpus fallback and feedback.
 - `wikify-refine` - refine committed pages from inbox/new evidence.
+- `wikify-arxiv` - acquisition front-end: scout arXiv categories for a
+  topic, harvest metadata, download PDFs, and stage them for
+  `corpus build`.
 
 Only run workflow skills that define executable steps, inputs, and stop
 conditions. Treat incomplete workflow outlines as design references
