@@ -21,14 +21,13 @@ must be a bundle root (``run/state.json`` present).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from pathlib import Path
 
 import typer
 
-from ..api import Bundle
+from ..api import Bundle, Corpus
 from ..bundle.run.events import Event, append_event, iter_events
 from ..bundle.run.lifecycle import close_run, init_run
 from ..bundle.run.lock import LockHeldError, acquire_lock, read_lock, release_lock
@@ -82,12 +81,7 @@ def cmd_init(
             error="bundle_already_initialised",
             message=f"{bundle_dir} already has run/state.json; refusing to re-init",
         )
-    manifest_path = corpus_dir / "manifest.json"
-    corpus_fingerprint: str | None = None
-    if manifest_path.is_file():
-        corpus_fingerprint = hashlib.sha256(
-            manifest_path.read_bytes()
-        ).hexdigest()[:16]
+    corpus_fingerprint = Corpus(root=corpus_dir).manifest_fingerprint()
     # ``init_run`` writes ``run/state.json``; until that happens
     # ``Bundle.open`` would refuse this directory. Construct the Bundle
     # dataclass directly — ``run init`` is the privileged bootstrap path.
@@ -551,15 +545,23 @@ def cmd_set(
     run: Path | None = typer.Option(None, "--run"),
     target_haiku_eq: int | None = typer.Option(None, "--target-haiku-eq"),
     strategy_note: str | None = typer.Option(None, "--strategy-note"),
+    corpus_fingerprint: str | None = typer.Option(None, "--corpus-fingerprint"),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
-    """Update small mutable fields. ``--corpus`` is forbidden — open a new bundle."""
+    """Update small mutable fields. ``--corpus`` is forbidden — open a new bundle.
+
+    ``--corpus-fingerprint`` re-stamps corpus identity after a re-entry has
+    absorbed new documents (the value is the live ``health.fingerprint``),
+    so drift detection does not re-fire on the next round.
+    """
     bundle = _resolve_bundle(run)
     state = load_state(bundle)
     updates: dict = {}
     if target_haiku_eq is not None:
         budget = state.budget.model_copy(update={"target_haiku_eq": target_haiku_eq})
         updates["budget"] = budget
+    if corpus_fingerprint is not None:
+        updates["corpus_fingerprint"] = corpus_fingerprint
     if strategy_note is not None:
         # Append note as a stage_changed event; state.json itself stays slim.
         append_event(

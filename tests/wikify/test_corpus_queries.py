@@ -204,6 +204,8 @@ def test_check_corpus_basic(small_corpus: Corpus) -> None:
     assert summary["has_manifest"] is True
     assert summary["has_vectors"] is False
     assert summary["has_sqlite_store"] is True
+    assert summary["fingerprint"] == small_corpus.manifest_fingerprint()
+    assert len(summary["fingerprint"]) == 16
 
 
 def test_storage_reads_documents_from_sqlite(make_sqlite_corpus) -> None:

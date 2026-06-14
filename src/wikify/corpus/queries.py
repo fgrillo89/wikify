@@ -1180,6 +1180,7 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
         "has_vectors": _has_vectors(corpus),
         "has_manifest": corpus.manifest_path.exists(),
         "has_sqlite_store": corpus.sqlite_path.exists(),
+        "fingerprint": corpus.manifest_fingerprint(),
     }
     if out["has_sqlite_store"]:
         out.update(_sqlite_health(corpus, full=full))
