@@ -336,6 +336,72 @@ def cmd_record_call(
         )
 
 
+_ROUND_REQUIRED_TYPES = frozenset(
+    {"round_started", "round_completed", "evidence_added", "pattern_dispatched"}
+)
+
+
+def _read_event_payload(data_flag: str | None) -> tuple[dict, bool]:
+    """Return ``(payload_dict, stdin_was_ignored)``.
+
+    Resolution order:
+    1. Read stdin when it is not a TTY; treat an empty read as no input.
+    2. If ``data_flag`` is set, parse it and use it (stdin is ignored if
+       it had content — caller should warn).
+    3. Else if stdin had content, parse and return it.
+    4. Else fall back to an empty object.
+
+    ``stdin_was_ignored`` is True only when ``data_flag`` was supplied
+    *and* stdin also had non-empty content, so the caller can warn that
+    piped input was discarded.
+    """
+    # Consume stdin once; treat empty as absent.
+    stdin_content: str = ""
+    if not sys.stdin.isatty():
+        stdin_content = sys.stdin.read().strip()
+
+    if data_flag is not None:
+        stdin_was_ignored = bool(stdin_content)
+        try:
+            payload = json.loads(data_flag)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"--data is not valid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("--data must be a JSON object, not an array or scalar")
+        return payload, stdin_was_ignored
+
+    if stdin_content:
+        try:
+            payload = json.loads(stdin_content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"stdin is not valid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("stdin payload must be a JSON object, not an array or scalar")
+        return payload, False
+
+    return {}, False
+
+
+def _validate_event_payload(type_: str, payload: dict) -> None:
+    """Raise ``ValueError`` when a required field is absent or wrong type.
+
+    Events that carry a round counter must have ``round`` as a non-negative
+    int. A missing or non-int ``round`` is rejected so malformed events
+    cannot corrupt maturity / growth-stall logic downstream.
+    """
+    if type_ not in _ROUND_REQUIRED_TYPES:
+        return
+    if "round" not in payload:
+        raise ValueError(
+            f"event type {type_!r} requires a 'round' int field in the payload"
+        )
+    val = payload["round"]
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise ValueError(
+            f"event type {type_!r}: 'round' must be an int, got {type(val).__name__}"
+        )
+
+
 @app.command("record-event")
 def cmd_record_event(
     type_: str = typer.Option(..., "--type", help="Event type literal."),
@@ -346,7 +412,7 @@ def cmd_record_event(
     chunk_id: str | None = typer.Option(None, "--chunk-id"),
     doc_id: str | None = typer.Option(None, "--doc-id"),
     actor: str = typer.Option("agent", "--actor"),
-    data: str = typer.Option("{}", "--data", help="JSON object payload."),
+    data: str | None = typer.Option(None, "--data", help="JSON object payload."),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Append a non-call event (round_started, round_completed, etc.).
@@ -357,6 +423,15 @@ def cmd_record_event(
 
     The ``--type`` value is validated against ``EventType``; unknown
     types are rejected.
+
+    Payload resolution order: ``--data`` > piped stdin > empty object.
+    When both ``--data`` and piped stdin are supplied, ``--data`` wins
+    and a warning is printed to stderr.
+
+    Events that carry a round counter (``round_started``,
+    ``round_completed``, ``evidence_added``, ``pattern_dispatched``)
+    must include ``round`` as an integer field or the command exits
+    non-zero.
     """
     from typing import get_args
 
@@ -376,11 +451,18 @@ def cmd_record_event(
             allowed=sorted(allowed),
         )
     try:
-        payload = json.loads(data)
-        if not isinstance(payload, dict):
-            raise ValueError("--data must be a JSON object")
-    except (json.JSONDecodeError, ValueError) as exc:
+        payload, stdin_ignored = _read_event_payload(data)
+    except ValueError as exc:
         cli_error(EXIT_VALIDATION, error="bad_data", message=str(exc))
+    if stdin_ignored:
+        typer.echo(
+            "WARNING: --data was supplied; piped stdin was ignored",
+            err=True,
+        )
+    try:
+        _validate_event_payload(type_, payload)
+    except ValueError as exc:
+        cli_error(EXIT_VALIDATION, error="bad_payload", message=str(exc))
     bundle = _resolve_bundle(run)
     state = load_state(bundle)
     event = Event(
