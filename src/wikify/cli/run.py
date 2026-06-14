@@ -337,27 +337,29 @@ def cmd_record_call(
 
 
 _ROUND_REQUIRED_TYPES = frozenset(
-    {"round_started", "round_completed", "evidence_added", "pattern_dispatched"}
+    {"round_started", "round_completed", "pattern_dispatched"}
 )
 
 
-def _read_event_payload(data_flag: str | None) -> tuple[dict, bool]:
+def _read_event_payload(
+    data_flag: str | None, *, from_stdin: bool
+) -> tuple[dict, bool]:
     """Return ``(payload_dict, stdin_was_ignored)``.
 
     Resolution order:
-    1. Read stdin when it is not a TTY; treat an empty read as no input.
-    2. If ``data_flag`` is set, parse it and use it (stdin is ignored if
-       it had content — caller should warn).
-    3. Else if stdin had content, parse and return it.
-    4. Else fall back to an empty object.
+    1. If ``--from-stdin`` is set, read stdin and parse it as the payload.
+       If ``--data`` is also supplied, ``--data`` wins and stdin is ignored
+       (caller should warn).
+    2. If ``data_flag`` is set (and ``--from-stdin`` is not, or was ignored),
+       parse and return it.
+    3. Else fall back to an empty object.
 
-    ``stdin_was_ignored`` is True only when ``data_flag`` was supplied
-    *and* stdin also had non-empty content, so the caller can warn that
-    piped input was discarded.
+    ``stdin_was_ignored`` is True only when both ``--from-stdin`` and
+    ``--data`` are supplied, so the caller can warn that piped input was
+    discarded.
     """
-    # Consume stdin once; treat empty as absent.
     stdin_content: str = ""
-    if not sys.stdin.isatty():
+    if from_stdin:
         stdin_content = sys.stdin.read().strip()
 
     if data_flag is not None:
@@ -385,9 +387,9 @@ def _read_event_payload(data_flag: str | None) -> tuple[dict, bool]:
 def _validate_event_payload(type_: str, payload: dict) -> None:
     """Raise ``ValueError`` when a required field is absent or wrong type.
 
-    Events that carry a round counter must have ``round`` as a non-negative
-    int. A missing or non-int ``round`` is rejected so malformed events
-    cannot corrupt maturity / growth-stall logic downstream.
+    Events in ``_ROUND_REQUIRED_TYPES`` must have ``round`` as a
+    non-negative integer. Booleans (bool is a subclass of int) and negative
+    values are rejected.
     """
     if type_ not in _ROUND_REQUIRED_TYPES:
         return
@@ -399,6 +401,10 @@ def _validate_event_payload(type_: str, payload: dict) -> None:
     if isinstance(val, bool) or not isinstance(val, int):
         raise ValueError(
             f"event type {type_!r}: 'round' must be an int, got {type(val).__name__}"
+        )
+    if val < 0:
+        raise ValueError(
+            f"event type {type_!r}: 'round' must be a non-negative int, got {val}"
         )
 
 
@@ -413,6 +419,7 @@ def cmd_record_event(
     doc_id: str | None = typer.Option(None, "--doc-id"),
     actor: str = typer.Option("agent", "--actor"),
     data: str | None = typer.Option(None, "--data", help="JSON object payload."),
+    from_stdin: bool = typer.Option(False, "--from-stdin", help="Read payload from stdin."),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Append a non-call event (round_started, round_completed, etc.).
@@ -424,14 +431,13 @@ def cmd_record_event(
     The ``--type`` value is validated against ``EventType``; unknown
     types are rejected.
 
-    Payload resolution order: ``--data`` > piped stdin > empty object.
-    When both ``--data`` and piped stdin are supplied, ``--data`` wins
+    Payload resolution order: ``--data`` > ``--from-stdin`` > empty object.
+    When both ``--data`` and ``--from-stdin`` are supplied, ``--data`` wins
     and a warning is printed to stderr.
 
     Events that carry a round counter (``round_started``,
-    ``round_completed``, ``evidence_added``, ``pattern_dispatched``)
-    must include ``round`` as an integer field or the command exits
-    non-zero.
+    ``round_completed``, ``pattern_dispatched``) must include ``round``
+    as a non-negative integer field or the command exits non-zero.
     """
     from typing import get_args
 
@@ -451,7 +457,7 @@ def cmd_record_event(
             allowed=sorted(allowed),
         )
     try:
-        payload, stdin_ignored = _read_event_payload(data)
+        payload, stdin_ignored = _read_event_payload(data, from_stdin=from_stdin)
     except ValueError as exc:
         cli_error(EXIT_VALIDATION, error="bad_data", message=str(exc))
     if stdin_ignored:

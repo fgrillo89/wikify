@@ -38,6 +38,41 @@ import sqlite3
 from pathlib import Path
 
 
+def _build_suffix_index_from_rows(
+    chunk_ids: list[str],
+) -> tuple[frozenset[str], dict[str, str]]:
+    """Build canonical-id set and suffix map from a pre-fetched list of chunk_ids.
+
+    Returns
+    -------
+    canonical_ids
+        All canonical chunk ids as a frozenset.
+    suffix_to_canonical
+        Maps the trailing ``_``-delimited suffix of each canonical id to
+        the full canonical id.  Entries where the suffix is ambiguous
+        (multiple ids share the same suffix) are dropped.
+    """
+    canonical_ids: set[str] = set()
+    suffix_counts: dict[str, int] = {}
+    suffix_map: dict[str, str] = {}
+
+    for cid in chunk_ids:
+        canonical_ids.add(cid)
+        # Extract the last ``_``-delimited segment as the suffix.
+        parts = cid.rsplit("_", 1)
+        if len(parts) == 2:
+            suffix = parts[1]
+            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+            suffix_map[suffix] = cid  # may be overwritten; pruned below
+
+    # Remove ambiguous suffixes.
+    for suffix, count in suffix_counts.items():
+        if count > 1 and suffix in suffix_map:
+            del suffix_map[suffix]
+
+    return frozenset(canonical_ids), suffix_map
+
+
 def build_suffix_index(
     sqlite_path: Path,
 ) -> tuple[frozenset[str], dict[str, str]]:
@@ -66,25 +101,7 @@ def build_suffix_index(
     finally:
         con.close()
 
-    canonical_ids: set[str] = set()
-    suffix_counts: dict[str, int] = {}
-    suffix_map: dict[str, str] = {}
-
-    for (cid,) in rows:
-        canonical_ids.add(cid)
-        # Extract the last ``_``-delimited segment as the suffix.
-        parts = cid.rsplit("_", 1)
-        if len(parts) == 2:
-            suffix = parts[1]
-            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
-            suffix_map[suffix] = cid  # may be overwritten; pruned below
-
-    # Remove ambiguous suffixes.
-    for suffix, count in suffix_counts.items():
-        if count > 1 and suffix in suffix_map:
-            del suffix_map[suffix]
-
-    return frozenset(canonical_ids), suffix_map
+    return _build_suffix_index_from_rows([cid for (cid,) in rows])
 
 
 def resolve_chunk_id(
@@ -145,7 +162,7 @@ def resolve_chunk_id(
                 rows = con.execute(
                     "SELECT chunk_id FROM chunks "
                     "WHERE chunk_id LIKE ? ESCAPE '\\'",
-                    (f"%_{suffix_esc}",),
+                    (f"%\\_{suffix_esc}",),
                 ).fetchall()
             finally:
                 con.close()

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ...api import Bundle, Corpus
-from .chunk_ids import build_suffix_index, resolve_chunk_id
+from .chunk_ids import _build_suffix_index_from_rows, resolve_chunk_id
 from .evidence import read_evidence
 from .notebook import list_notebook_slugs, read_notebook
 
@@ -63,7 +63,7 @@ def _corpus_chunk_index(
     finally:
         con.close()
     chunk_to_doc = {r["chunk_id"]: r["doc_id"] for r in rows}
-    canonical_ids, suffix_index = build_suffix_index(corpus.sqlite_path)
+    canonical_ids, suffix_index = _build_suffix_index_from_rows(list(chunk_to_doc))
     return set(chunk_to_doc), chunk_to_doc, canonical_ids, suffix_index
 
 

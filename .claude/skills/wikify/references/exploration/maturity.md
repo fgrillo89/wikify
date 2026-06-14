@@ -33,10 +33,13 @@ Promotion threshold: **T = 0.70** for both article and person rules.
   round it is grown and only crosses into `ready` ~2 rounds later, once
   evidence has plateaued. The editor's loop must therefore stop
   touching a saturated slug and let the timer elapse before the WRITE
-  wave can fire (see `wikify-investigate/SKILL.md`, WRITE wave). This
-  also means the per-round `round_started` and per-slug `evidence_added`
-  events MUST carry an integer `round` payload, or `growth_stalled`
-  falls back to `True` and every slug reads as `stalled`.
+  wave can fire (see `wikify-investigate/SKILL.md`, WRITE wave). The
+  evidence round is derived from the ORDER of `evidence_added` events
+  relative to `round_started` markers (the `evidence_added` payload's
+  own `round` is not read), so the loop must emit a `round_started`
+  (carrying an integer `round`) at the top of each round; absent any
+  `round_started` event, `growth_stalled` falls back to `True` and every
+  slug reads as `stalled`.
 
 If any gate fails, `score = 0`, `band` is `new` / `growing` /
 `stalled` depending on `growth_stalled`.

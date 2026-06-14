@@ -272,7 +272,17 @@ def cmd_add_evidence(
         corpus_sqlite = Corpus(root=corpus_p).sqlite_path
         canonical_ids, suffix_index = build_suffix_index(corpus_sqlite)
 
-    has_corpus = bool(canonical_ids or (corpus_sqlite and corpus_sqlite.exists()))
+    # A corpus is usable for validation only when it has at least one chunk.
+    # An empty or absent corpus cannot validate anything; treat it as
+    # unreachable so records pass through rather than being rejected en masse.
+    has_corpus = bool(canonical_ids)
+
+    if not has_corpus:
+        typer.echo(
+            "WARNING: corpus unreachable or empty -- chunk_ids stored unresolved; "
+            "handles will zero out coverage on a machine without this corpus.",
+            err=True,
+        )
 
     parsed: list[EvidenceRecord] = []
     rejected: list[dict] = []

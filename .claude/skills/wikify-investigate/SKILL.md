@@ -136,14 +136,18 @@ wikify run record-event --type pattern_dispatched \
   --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": 30}'
 ```
 
-`record-event` reads the payload from `--data` (JSON object). Each
-round MUST also emit `round_started` (`--data '{"round": N}'`) and, in
-CONSOLIDATE, one `evidence_added` (`--data '{"round": N}'` with
-`--concept-id <slug>`) per slug that gained evidence: `_growth_stalled`
-(and thus the maturity gate) reads `round` off these events, and
-`round_started`/`round_completed`/`evidence_added`/`pattern_dispatched`
-are rejected without an integer `round`. `work add evidence --round N`
-emits the `evidence_added` event for you.
+`record-event` reads the payload from `--data` (JSON object); pass
+`--from-stdin` only when you deliberately pipe the payload. Each round
+MUST emit `round_started` (`--data '{"round": N}'`) BEFORE that round's
+explore/write Tasks, and in CONSOLIDATE one `evidence_added`
+(`--concept-id <slug>`) per slug that gained evidence. `_growth_stalled`
+(and thus the maturity gate) derives a slug's last-evidence round from
+the ORDER of its `evidence_added` events relative to `round_started`
+markers, so emission order is what matters — the `evidence_added`
+payload's own `round` is not read and is optional. `round_started`,
+`round_completed`, and `pattern_dispatched` ARE rejected without a
+non-negative integer `round`. `work add evidence --round N` emits the
+`evidence_added` event for you.
 
 Stages: `explore` for P1-P5 waves, `write` for the write wave.
 

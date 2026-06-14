@@ -30,6 +30,7 @@ from .card import (
     save_card,
     slugify,
 )
+from .chunk_ids import build_suffix_index, corpus_path_from_bundle, resolve_chunk_id
 from .claim import expire_stale_claims, list_claims
 from .evidence import EvidenceRecord, append_evidence, dedup_evidence, read_evidence
 from .inbox import list_inbox_files, read_inbox, truncate_inbox
@@ -216,38 +217,86 @@ def _sweep_staging_files(bundle: Bundle) -> int:
     """Remove ``work/evidence_staging/<slug>.jsonl`` files whose records are
     all present in the slug's committed evidence ledger.
 
-    A staging file is deleted only when every ``chunk_id`` it records
-    already appears in ``evidence.jsonl`` for that slug.  Files with
+    Staging files carry short ``chunk:<hex>`` handles; the committed ledger
+    holds canonical ids.  Each staging handle is resolved through
+    :func:`~wikify.bundle.work.chunk_ids.resolve_chunk_id` before the subset
+    check.  If the corpus is unreachable the file is left intact (conservative).
+    A staging file is deleted only when every handle resolves to a canonical id
+    that already appears in ``evidence.jsonl`` for that slug.  Files with
     unmatched records are left intact.  Returns the count of files removed.
     """
+    import json as _json
+
     staging_dir = bundle.work_dir / "evidence_staging"
     if not staging_dir.is_dir():
         return 0
+
+    # Build suffix index once from the corpus (if reachable).
+    corpus_dir = corpus_path_from_bundle(bundle.root)
+    canonical_ids: frozenset[str] = frozenset()
+    suffix_index: dict[str, str] = {}
+    sqlite_path = None
+    if corpus_dir is not None:
+        from ...api import Corpus  # noqa: PLC0415 — deferred to avoid circular import
+        sqlite_path = Corpus(root=corpus_dir).sqlite_path
+        canonical_ids, suffix_index = build_suffix_index(sqlite_path)
+
     removed = 0
     for staging_file in staging_dir.iterdir():
         if not staging_file.is_file() or staging_file.suffix != ".jsonl":
             continue
         slug = staging_file.stem
         # Read chunk_ids from the staging file.
-        staging_ids: set[str] = set()
+        staging_raw: list[str] = []
         for line in staging_file.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
-                import json as _json
                 obj = _json.loads(line)
                 cid = obj.get("chunk_id")
                 if cid:
-                    staging_ids.add(cid)
+                    staging_raw.append(cid)
             except Exception:
                 continue
-        if not staging_ids:
-            # Empty staging file — safe to remove.
+        if not staging_raw:
+            # Empty staging file — safe to remove regardless of corpus.
             staging_file.unlink()
             removed += 1
             continue
+
         committed_ids = {r.chunk_id for r in read_evidence(bundle, slug)}
-        if staging_ids.issubset(committed_ids):
+
+        # Resolve staging handles to canonical ids.
+        # For ids that already look canonical (not a chunk: handle) and the
+        # corpus is unreachable, fall through to a direct string comparison
+        # so the sweep still works for ledgers that were never handle-encoded.
+        # When a chunk: handle is present and the corpus is unreachable we
+        # cannot validate — leave the file intact (conservative).
+        resolved: set[str] = set()
+        blocked = False
+        for raw in staging_raw:
+            if raw.startswith("chunk:"):
+                # Handle form: must resolve through corpus index.
+                if not canonical_ids:
+                    # Corpus unreachable — cannot resolve handle; skip file.
+                    blocked = True
+                    break
+                canon = resolve_chunk_id(
+                    raw, suffix_index, canonical_ids, sqlite_path=sqlite_path
+                )
+                if canon is None:
+                    # Unresolvable handle — treat staging as incomplete.
+                    blocked = True
+                    break
+                resolved.add(canon)
+            else:
+                # Already in canonical (or raw) form; use as-is.
+                resolved.add(raw)
+
+        if blocked or not resolved:
+            continue
+
+        if resolved.issubset(committed_ids):
             staging_file.unlink()
             removed += 1
     return removed

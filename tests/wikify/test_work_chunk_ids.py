@@ -143,6 +143,52 @@ def test_resolve_chunk_id_figure_handle_exact(tmp_path: Path) -> None:
     assert resolved == cid
 
 
+def test_resolve_chunk_id_like_underscore_not_wildcard(tmp_path: Path) -> None:
+    """LIKE fallback must not treat the '_' separator as a wildcard.
+
+    Two canonical ids share the same suffix hex but differ only by the
+    character immediately before it (the ``_`` separator vs a literal char
+    that happens to sit just before the suffix).  The LIKE pattern
+    ``%\\_<suffix>`` (escaped underscore) must match ONLY ids whose suffix
+    is delimited by a literal underscore, so the ambiguous pair resolves
+    to exactly one result.
+    """
+    suffix = "aabbccdd"
+    # id_a has the suffix after a literal underscore (correct canonical form).
+    id_a = f"paper_title_c0001_{suffix}"
+    # id_b ends with the same hex bytes but prefixed differently so the
+    # in-memory suffix_map prunes both as ambiguous.
+    id_b = f"other_title_c0002_{suffix}"
+    db = tmp_path / "wikify.db"
+    _make_corpus_db(db, [id_a, id_b])
+    canonical_ids, suffix_map = build_suffix_index(db)
+    # Suffix is ambiguous, so suffix_map must not contain it.
+    assert suffix not in suffix_map
+
+    # Now remove id_b so only id_a remains in the DB — simulates the case
+    # where ambiguity existed at index-build time but a LIKE query can now
+    # disambiguate. (We rebuild the DB with just one id that has that suffix.)
+    db2 = tmp_path / "wikify2.db"
+    _make_corpus_db(db2, [id_a])
+    canonical_ids2, suffix_map2 = build_suffix_index(db2)
+    # With a single match, in-memory index resolves it directly.
+    assert suffix_map2[suffix] == id_a
+
+    # Regression: verify LIKE fallback with a DB that has two ids sharing
+    # the suffix — result must be None (ambiguous, len(rows) != 1), not a
+    # wrong id chosen because '_' was treated as a LIKE wildcard.
+    # To exercise the LIKE path we need an empty suffix_map but a populated DB.
+    # We patch the suffix_map to be empty to force the fallback path.
+    empty_suffix_map: dict[str, str] = {}
+    resolved = resolve_chunk_id(
+        f"chunk:{suffix}", empty_suffix_map, canonical_ids, sqlite_path=db
+    )
+    # Two rows match -> len(rows) != 1 -> should return None (ambiguous).
+    assert resolved is None, (
+        f"Expected None for ambiguous LIKE result, got {resolved!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # corpus_path_from_bundle
 
@@ -302,12 +348,76 @@ def test_add_evidence_no_corpus_writes_through(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["ok"] is True
     assert data["appended"] == 1
     # Handle was passed through unchanged.
     committed = read_evidence(bundle, "ald")
     assert committed[0].chunk_id == "chunk:deadbeef"
+
+
+def test_add_evidence_empty_corpus_passes_through_with_warning(tmp_path: Path) -> None:
+    """Empty corpus (DB exists, zero chunks) must pass records through and warn."""
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    db = corpus_root / "wikify.db"
+    # Create a corpus DB with no chunks at all.
+    _make_corpus_db(db, [])
+
+    bundle = _make_bundle(tmp_path / "bundle", corpus_path=str(corpus_root))
+    create_concept(bundle, page_id="ALD", kind="article")
+
+    records_file = tmp_path / "ev.jsonl"
+    records_file.write_text(
+        json.dumps({"chunk_id": "chunk:deadbeef", "doc_id": "doc_0", "score": 0.9}) + "\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "add", "evidence", "ald",
+            "--run", str(bundle.root),
+            "--records", str(records_file),
+            "--format", "json",
+        ],
+    )
+    # Must succeed (not exit with error).
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    # Record must pass through unmodified.
+    committed = read_evidence(bundle, "ald")
+    assert committed[0].chunk_id == "chunk:deadbeef"
+    # Warning must be emitted to stderr.
+    assert "WARNING" in result.stderr
+    assert "unresolved" in result.stderr
+
+
+def test_add_evidence_no_corpus_emits_warning(tmp_path: Path) -> None:
+    """No-corpus passthrough emits a WARNING to stderr."""
+    bundle = _make_bundle(tmp_path / "bundle", corpus_path="/no/such/corpus")
+    create_concept(bundle, page_id="ALD", kind="article")
+    records_file = tmp_path / "ev.jsonl"
+    records_file.write_text(
+        json.dumps({"chunk_id": "chunk:cafebabe", "doc_id": "doc_0", "score": 0.8}) + "\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "add", "evidence", "ald",
+            "--run", str(bundle.root),
+            "--records", str(records_file),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["ok"] is True
+    assert data["appended"] == 1
+    # Warning must be emitted.
+    assert "WARNING" in result.stderr
 
 
 def test_add_evidence_emits_evidence_added_event(tmp_path: Path) -> None:

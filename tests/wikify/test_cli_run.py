@@ -444,7 +444,7 @@ def _list_events_by_type(bundle: Path, type_: str) -> list[dict]:
 
 
 def test_record_event_stdin_payload(tmp_path: Path) -> None:
-    """When --data is absent and stdin carries a JSON object, use stdin."""
+    """When --from-stdin is passed and stdin carries a JSON object, use stdin."""
     bundle = _init_bundle(tmp_path)
     payload = json.dumps({"round": 1, "note": "seed"})
     result = runner.invoke(
@@ -453,6 +453,7 @@ def test_record_event_stdin_payload(tmp_path: Path) -> None:
             "run", "record-event",
             "--run", str(bundle),
             "--type", "round_started",
+            "--from-stdin",
             "--format", "json",
         ],
         input=payload,
@@ -467,7 +468,7 @@ def test_record_event_stdin_payload(tmp_path: Path) -> None:
 
 
 def test_record_event_data_flag_takes_precedence_over_stdin(tmp_path: Path) -> None:
-    """When both --data and piped stdin are supplied, --data wins and a
+    """When both --data and --from-stdin are supplied, --data wins and a
     WARNING is written to stderr (CliRunner merges stderr into output)."""
     bundle = _init_bundle(tmp_path)
     flag_payload = json.dumps({"round": 2, "source": "flag"})
@@ -479,6 +480,7 @@ def test_record_event_data_flag_takes_precedence_over_stdin(tmp_path: Path) -> N
             "--run", str(bundle),
             "--type", "round_started",
             "--data", flag_payload,
+            "--from-stdin",
             "--format", "json",
         ],
         input=stdin_payload,
@@ -536,7 +538,7 @@ def test_record_event_bool_round_rejected(tmp_path: Path) -> None:
         [
             "run", "record-event",
             "--run", str(bundle),
-            "--type", "evidence_added",
+            "--type", "round_started",
             "--data", '{"round": true}',
         ],
     )
@@ -577,7 +579,7 @@ def test_record_event_type_without_round_requirement_accepted(tmp_path: Path) ->
 
 
 def test_record_event_stdin_non_object_rejected(tmp_path: Path) -> None:
-    """Piped stdin that parses but is not a JSON object must exit non-zero."""
+    """--from-stdin with a JSON array (not object) must exit non-zero."""
     bundle = _init_bundle(tmp_path)
     result = runner.invoke(
         app,
@@ -585,7 +587,60 @@ def test_record_event_stdin_non_object_rejected(tmp_path: Path) -> None:
             "run", "record-event",
             "--run", str(bundle),
             "--type", "page_committed",
+            "--from-stdin",
         ],
         input='["not", "an", "object"]',
     )
     assert result.exit_code != 0
+
+
+def test_record_event_no_stdin_flag_does_not_block(tmp_path: Path) -> None:
+    """Without --from-stdin, record-event must not read stdin and must
+    succeed with an empty payload (for event types that do not require round)."""
+    bundle = _init_bundle(tmp_path)
+    # No --from-stdin, no --data, no input= — must not block or hang.
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "page_committed",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+
+
+def test_record_event_negative_round_rejected(tmp_path: Path) -> None:
+    """A negative round value must be rejected even though it is an int."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "round_started",
+            "--data", '{"round": -1}',
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_record_event_evidence_added_no_round_accepted(tmp_path: Path) -> None:
+    """evidence_added does not require a round field; omitting it is fine."""
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--run", str(bundle),
+            "--type", "evidence_added",
+            "--data", '{"chunk_id": "abc123"}',
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True

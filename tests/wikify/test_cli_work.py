@@ -146,7 +146,7 @@ def test_work_add_evidence_from_records(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0
-    assert json.loads(result.output)["appended"] == 2
+    assert json.loads(result.stdout)["appended"] == 2
 
 
 def test_work_set_status(tmp_path: Path) -> None:
