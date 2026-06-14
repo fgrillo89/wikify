@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ...api import Bundle, Corpus
+from .chunk_ids import build_suffix_index, resolve_chunk_id
 from .evidence import read_evidence
 from .notebook import list_notebook_slugs, read_notebook
 
@@ -40,24 +42,48 @@ class CoverageReport:
         }
 
 
-def _corpus_chunk_index(corpus: Corpus) -> tuple[set[str], dict[str, str]]:
-    """Return ``(all_chunk_ids, chunk_id_to_doc_id)``.
+def _corpus_chunk_index(
+    corpus: Corpus,
+) -> tuple[set[str], dict[str, str], frozenset[str], dict[str, str]]:
+    """Return ``(all_chunk_ids, chunk_id_to_doc_id, canonical_ids, suffix_index)``.
 
-    Reads directly from ``<corpus>/wikify.db``. Empty sets if the SQLite
-    file is missing.
+    Reads directly from ``<corpus>/wikify.db``. Empty collections if the
+    SQLite file is missing.  ``canonical_ids`` and ``suffix_index`` come
+    from :func:`build_suffix_index` and are used by the normalisation
+    helpers to resolve short handles stored in legacy evidence ledgers.
     """
     if not corpus.sqlite_path.exists():
-        return set(), {}
+        return set(), {}, frozenset(), {}
     con = sqlite3.connect(str(corpus.sqlite_path))
     try:
         con.row_factory = sqlite3.Row
         rows = con.execute("SELECT chunk_id, doc_id FROM chunks").fetchall()
     except sqlite3.OperationalError:
-        return set(), {}
+        return set(), {}, frozenset(), {}
     finally:
         con.close()
     chunk_to_doc = {r["chunk_id"]: r["doc_id"] for r in rows}
-    return set(chunk_to_doc), chunk_to_doc
+    canonical_ids, suffix_index = build_suffix_index(corpus.sqlite_path)
+    return set(chunk_to_doc), chunk_to_doc, canonical_ids, suffix_index
+
+
+def _normalize_chunk_id(
+    raw: str,
+    canonical_ids: frozenset[str],
+    suffix_index: dict[str, str],
+    sqlite_path: Path | None = None,
+) -> str:
+    """Return the canonical id for *raw*, or *raw* itself if unresolvable.
+
+    Accepts already-canonical ids, ``chunk:<hex>`` handles, and figure
+    handles.  Falls back to *raw* so legacy handles that cannot be
+    resolved are still counted (avoided empty coverage due to stale ids).
+    """
+    resolved = resolve_chunk_id(
+        raw, suffix_index, canonical_ids,
+        sqlite_path=sqlite_path,
+    )
+    return resolved if resolved is not None else raw
 
 
 def _committed_chunk_ids(bundle: Bundle) -> set[str]:
@@ -103,13 +129,29 @@ def _in_flight_chunk_ids(bundle: Bundle) -> set[str]:
     return out
 
 
+def _normalize_set(
+    raw_ids: set[str],
+    canonical_ids: frozenset[str],
+    suffix_index: dict[str, str],
+    sqlite_path: Path | None = None,
+) -> set[str]:
+    """Resolve a set of possibly-short chunk ids to canonical ids."""
+    out: set[str] = set()
+    for cid in raw_ids:
+        out.add(_normalize_chunk_id(cid, canonical_ids, suffix_index, sqlite_path))
+    return out
+
+
 def compute_coverage(bundle: Bundle, corpus: Corpus) -> CoverageReport:
     """Compute the bundle's chunk coverage against the corpus."""
-    all_chunks, chunk_to_doc = _corpus_chunk_index(corpus)
+    all_chunks, chunk_to_doc, canonical_ids, suffix_index = _corpus_chunk_index(corpus)
     if not all_chunks:
         return CoverageReport()
-    committed = _committed_chunk_ids(bundle) & all_chunks
-    in_flight = _in_flight_chunk_ids(bundle) & all_chunks
+    sqlite_path = corpus.sqlite_path
+    committed_raw = _committed_chunk_ids(bundle)
+    in_flight_raw = _in_flight_chunk_ids(bundle)
+    committed = _normalize_set(committed_raw, canonical_ids, suffix_index, sqlite_path) & all_chunks
+    in_flight = _normalize_set(in_flight_raw, canonical_ids, suffix_index, sqlite_path) & all_chunks
     covered = committed | in_flight
 
     per_doc: dict[str, dict] = {}
@@ -136,8 +178,15 @@ def residual_chunk_ids(bundle: Bundle, corpus: Corpus) -> set[str]:
 
     P5 (gap-explorer) consumes this directly.
     """
-    all_chunks, _ = _corpus_chunk_index(corpus)
+    all_chunks, _, canonical_ids, suffix_index = _corpus_chunk_index(corpus)
     if not all_chunks:
         return set()
-    covered = (_committed_chunk_ids(bundle) | _in_flight_chunk_ids(bundle)) & all_chunks
+    sqlite_path = corpus.sqlite_path
+    committed = _normalize_set(
+        _committed_chunk_ids(bundle), canonical_ids, suffix_index, sqlite_path
+    )
+    in_flight = _normalize_set(
+        _in_flight_chunk_ids(bundle), canonical_ids, suffix_index, sqlite_path
+    )
+    covered = (committed | in_flight) & all_chunks
     return all_chunks - covered

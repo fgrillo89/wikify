@@ -212,6 +212,47 @@ def regenerate_work_index(bundle: Bundle) -> Path:
     return bundle.work_index_path
 
 
+def _sweep_staging_files(bundle: Bundle) -> int:
+    """Remove ``work/evidence_staging/<slug>.jsonl`` files whose records are
+    all present in the slug's committed evidence ledger.
+
+    A staging file is deleted only when every ``chunk_id`` it records
+    already appears in ``evidence.jsonl`` for that slug.  Files with
+    unmatched records are left intact.  Returns the count of files removed.
+    """
+    staging_dir = bundle.work_dir / "evidence_staging"
+    if not staging_dir.is_dir():
+        return 0
+    removed = 0
+    for staging_file in staging_dir.iterdir():
+        if not staging_file.is_file() or staging_file.suffix != ".jsonl":
+            continue
+        slug = staging_file.stem
+        # Read chunk_ids from the staging file.
+        staging_ids: set[str] = set()
+        for line in staging_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                import json as _json
+                obj = _json.loads(line)
+                cid = obj.get("chunk_id")
+                if cid:
+                    staging_ids.add(cid)
+            except Exception:
+                continue
+        if not staging_ids:
+            # Empty staging file — safe to remove.
+            staging_file.unlink()
+            removed += 1
+            continue
+        committed_ids = {r.chunk_id for r in read_evidence(bundle, slug)}
+        if staging_ids.issubset(committed_ids):
+            staging_file.unlink()
+            removed += 1
+    return removed
+
+
 def tend_bundle(bundle: Bundle, *, keep_inbox: bool = False) -> dict:
     """Run the full tend pass and return a summary dict.
 
@@ -248,6 +289,8 @@ def tend_bundle(bundle: Bundle, *, keep_inbox: bool = False) -> dict:
         card.front["evidence_chunks"] = len(active)
         card.front["evidence_docs"] = len({r.doc_id for r in active})
         save_card(bundle, slug, card)
+
+    summary["staging_files_removed"] = _sweep_staging_files(bundle)
 
     regenerate_work_index(bundle)
     summary["index_path"] = str(bundle.work_index_path)
