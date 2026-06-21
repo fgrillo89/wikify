@@ -42,6 +42,16 @@ def test_parse_leading_number_variants() -> None:
     assert parse_leading_number("no number here") is None
 
 
+def test_parse_leading_number_bare_integers_not_truncated() -> None:
+    """Regression: bare integers >= 1000 must not collapse to their first
+    three digits (the thousands-group regex previously matched "100" out of
+    "1000" and silently rejected clean endurance/retention values)."""
+    assert parse_leading_number("1000") == 1000.0
+    assert parse_leading_number("2000 cycles") == 2000.0
+    assert parse_leading_number("10000") == 10000.0
+    assert parse_leading_number("1000000") == 1000000.0
+
+
 def test_datapoint_claim_id_is_stable_and_idempotent() -> None:
     p1 = DataPoint(
         subject="Al2O3", property="GPC", value_text="1.1 A/cycle",
