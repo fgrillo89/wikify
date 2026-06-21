@@ -167,7 +167,8 @@ def build_site(
     page_views = [
         pv
         for pv in all_page_views
-        if pv.has_prose and not (pv.kind == "person" and not _is_valid_author(pv.title))
+        if (pv.kind == "data" or pv.has_prose)
+        and not (pv.kind == "person" and not _is_valid_author(pv.title))
     ]
     skipped = len(all_page_views) - len(page_views)
     if skipped:
@@ -181,6 +182,10 @@ def build_site(
     )
     people = sorted(
         [pv for pv in page_views if pv.kind == "person"],
+        key=lambda v: v.title.lower(),
+    )
+    data_artifacts = sorted(
+        [pv for pv in page_views if pv.kind == "data"],
         key=lambda v: v.title.lower(),
     )
     page_by_id = {p.id: p for p in loaded.pages}
@@ -200,6 +205,7 @@ def build_site(
         "stats": stats,
         "concepts": concepts,
         "people": people,
+        "data_artifacts": data_artifacts,
         "navigation": navigation,
         "key_articles": key_articles,
     }
@@ -563,7 +569,9 @@ class _PageView:
 
     @classmethod
     def from_page(cls, page: Page) -> Self:
-        sub = "articles" if page.kind == "article" else "people"
+        sub = {"article": "articles", "person": "people", "data": "data"}.get(
+            page.kind, "articles"
+        )
         excerpt = ""
         for line in page.body_clean.splitlines():
             stripped = line.strip()
@@ -864,6 +872,10 @@ def _render_article(
             infobox["Papers"] = str(prov["primary_count"])
         if prov.get("collaborator_count"):
             infobox["Collaborators"] = str(prov["collaborator_count"])
+    elif pv.kind == "data":
+        infobox["Type"] = "Data table"
+        if pv.n_evidence:
+            infobox["Sources"] = str(pv.n_evidence)
 
     template = env.get_template("article.html")
     visible_aliases = [

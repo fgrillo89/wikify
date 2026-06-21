@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from wikify.citations.models import CitationEntry
 
 DocKind = Literal["pdf", "docx", "pptx", "html", "md"]
-PageKind = Literal["article", "person"]
+PageKind = Literal["article", "person", "data"]
 
 
 # --- Corpus side ---------------------------------------------------------

@@ -1,6 +1,6 @@
 ---
 name: wikify-investigate
-description: Researcher-style iterative wiki builder. Editor orchestrator dispatches explorer subagents that walk the corpus via named recursive patterns (P1-P5), gather evidence into notebook dossiers, and write pages when a composite maturity score crosses the gate. Coverage of the corpus chunk set is the primary objective. Re-entrant on the same bundle when new corpus material arrives.
+description: Researcher-style iterative wiki builder. Editor orchestrator dispatches explorer subagents that walk the corpus via named recursive patterns (P1-P5), gather evidence into notebook dossiers, and write pages when a composite maturity score crosses the gate. A DATA wave harvests verifiable numbers/tables into a claim store and consolidates them into evolving kind=data artifact tables. Coverage of the corpus chunk set is the primary objective. Re-entrant on the same bundle when new corpus material arrives.
 allowed-tools: Bash(wikify *) Task mcp__wikify__context_set mcp__wikify__context_show mcp__wikify__corpus_find mcp__wikify__corpus_show mcp__wikify__corpus_sample mcp__wikify__corpus_traverse mcp__wikify__corpus_citation_walk mcp__wikify__corpus_similarity_walk mcp__wikify__corpus_schema mcp__wikify__wiki_find mcp__wikify__wiki_show mcp__wikify__wiki_traverse mcp__wikify__wiki_schema
 ---
 
@@ -64,6 +64,9 @@ Read in this exact order:
   for the per-slug score + band.
 - `wikify work coverage --run <bundle> --corpus <corpus> --format json`
   for `chunk_coverage_ratio`.
+- `wikify data coverage --run <bundle> --format json` for the claim store
+  (`n_points`, `verified_ratio`, subjects/properties). Drives the DATA wave's
+  consolidate trigger.
 - If `derived/eval.json` exists, read `M3.g_evidence.modularity` for the
   bridge rule; otherwise treat modularity as `null` (bridge does not fire
   in round 0).
@@ -110,6 +113,18 @@ targets to the plan in order, removing them from later bands.
    and skips any that match an existing slug.
 5. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
+6. **DATA wave.** Fires every round, low cost. Owned by the data skills,
+   not the P1-P5 explorer. Two parts:
+   - **Harvest.** One `wikify-extract-data` Task (pattern label `P6`,
+     stage `data`). Dedicated pass over the same top uncovered PageRank docs
+     this round's SEED/GAP touch — their tables (`asset_type='table'`) and
+     number-dense chunks, which the P1-P5 explorers deliberately skip — plus
+     a piggyback over any slug grown this round. It stages points and runs
+     `wikify data add` (the verification gate).
+   - **Consolidate.** When `data coverage` shows a ripe theme (>= 4 subjects
+     sharing a property, not yet covered by a committed artifact), dispatch
+     one `wikify-consolidate-data` Task to build + commit a `kind=data`
+     artifact. At most one consolidation Task per round.
 
 **Anti-starvation slack.** If the loop would otherwise stop (`STOP
 CHECK` would fire) AND SEED or GAP would still produce work, dispatch
@@ -149,7 +164,9 @@ payload's own `round` is not read and is optional. `round_started`,
 non-negative integer `round`. `work add evidence --round N` emits the
 `evidence_added` event for you.
 
-Stages: `explore` for P1-P5 waves, `write` for the write wave.
+Stages: `explore` for P1-P5 waves, `write` for the write wave, `data` for
+the DATA wave (harvest + consolidate). DATA-wave Tasks bind to
+`wikify-extract-data` and `wikify-consolidate-data`.
 
 ### 4. CONSOLIDATE
 
@@ -256,6 +273,7 @@ Same close-out as baseline P5 plus chunk-coverage capture:
 
 ```bash
 wikify work tend --run <bundle>
+wikify data rebuild --run <bundle>   # refresh every committed data artifact
 wikify wiki check --run <bundle>
 wikify wiki rebuild --run <bundle>
 wikify wiki navigation-context --run <bundle> \
@@ -283,6 +301,8 @@ roles below are subagents it dispatches; each may add an optional
 | explorer | sonnet M | `wikify-investigate-explore` | `pattern`, `target`, `run`, `corpus`, `budget_chunks`, `depth` | per-target envelope (see explorer skill) |
 | classifier | haiku S | this skill (Re-entry) | `doc_id`, dossier index | `{overlapping_slugs: [...]}` |
 | writer | sonnet M | `wikify-write-page` | `slug`, dossier path, evidence path | response.json path |
+| data-extractor | sonnet M | `wikify-extract-data` | `target` (docs or slug), `run`, `corpus` | `{submitted, stored, rejected}` |
+| data-consolidator | sonnet M | `wikify-consolidate-data` | `run`, theme (properties) | committed artifact id |
 | organizer | sonnet M | `wikify-organize-wiki` | navigation context | navigation.json |
 
 Every Task return must yield `{tokens_in, tokens_out, model_id}` for

@@ -179,6 +179,35 @@ def render_dossier(draft: WriteRequest) -> str:
             )
         out.append("")
 
+    # Verified data points drawn from this page's evidence chunks. Each row
+    # is citable via the marker of the chunk it came from, so the writer can
+    # state specific numbers with grounding.
+    if draft.data_points:
+        marker_by_chunk = {ref.chunk_id: m for m, ref in by_marker.items()}
+        rows = [
+            dp for dp in draft.data_points if marker_by_chunk.get(dp.get("chunk_id"))
+        ]
+        if rows:
+            out.append("## Available data")
+            out.append("")
+            out.append(
+                "_Verified figures extracted from the chunks below. Cite a value "
+                "with the listed marker (e.g. `[^e3]`); do not invent numbers._"
+            )
+            out.append("")
+            out.append("| Subject | Property | Value | Marker |")
+            out.append("|---|---|---|---|")
+            for dp in rows:
+                marker = marker_by_chunk[dp["chunk_id"]]
+                value = str(dp.get("value", "")).replace("|", "/")
+                unit = str(dp.get("unit", "")).strip()
+                if unit and unit.lower() not in value.lower():
+                    value = f"{value} {unit}".strip()
+                subj = str(dp.get("subject", "")).replace("|", "/")
+                prop = str(dp.get("property", "")).replace("|", "/")
+                out.append(f"| {subj} | {prop} | {value} | [^{marker}] |")
+            out.append("")
+
     # Body groups
     out.append("## Evidence")
     out.append("")

@@ -152,6 +152,7 @@ def build_draft(
         author_context=_author_context_for_card(corpus, card)
         if card.kind == "person"
         else None,
+        data_points=_data_points_for_evidence(bundle, {r.chunk_id for r in active}),
     )
 
     payload = request.model_dump(mode="json")
@@ -165,6 +166,36 @@ def build_draft(
     dossier_p.parent.mkdir(parents=True, exist_ok=True)
     dossier_p.write_text(render_dossier(request), encoding="utf-8")
     return request
+
+
+def _data_points_for_evidence(bundle: Bundle, evidence_chunk_ids: set[str]) -> list[dict]:
+    """Verified data points drawn from this page's gathered evidence chunks.
+
+    Surfaces only claims whose ``chunk_id`` is already in the draft's
+    evidence, so the writer can cite each number via that chunk's existing
+    ``[^eN]`` marker without introducing un-vetted evidence. Returns an
+    empty list when no claim store exists yet.
+    """
+    if not bundle.claims_db_path.exists() or not evidence_chunk_ids:
+        return []
+    from ...data.store import DataStore
+
+    store = DataStore.open(bundle.root)
+    try:
+        rows = store.list_points(status="verified")
+    finally:
+        store.close()
+    out: list[dict] = []
+    for r in rows:
+        if r["chunk_id"] in evidence_chunk_ids:
+            out.append({
+                "subject": r["subject"],
+                "property": r["property"],
+                "value": r["value_text"],
+                "unit": r["unit"] or "",
+                "chunk_id": r["chunk_id"],
+            })
+    return out
 
 
 def load_draft(bundle: Bundle, slug: str) -> WriteRequest:

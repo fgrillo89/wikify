@@ -378,7 +378,7 @@ def load_bundle(root: str | Path) -> Bundle:
     """Load all .md files under {root}/concepts and {root}/people."""
     root = Path(root)
     pages: list[Page] = []
-    for sub in ("articles", "people"):
+    for sub in ("articles", "people", "data"):
         d = root / sub
         if not d.exists():
             continue
