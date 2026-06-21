@@ -97,6 +97,16 @@ def cmd_add(
     """Verify staged data points against their source and ingest the survivors."""
     bundle = _resolve_bundle(run)
     cor = _resolve_corpus(bundle, corpus)
+    if cor is None:
+        cli_error(
+            EXIT_VALIDATION,
+            error="no_corpus",
+            message=(
+                "could not resolve a corpus to verify against; every point "
+                "would be rejected. Pass --corpus <path> or fix "
+                "run/state.json corpus_path."
+            ),
+        )
     if not records.is_file():
         cli_error(EXIT_VALIDATION, error="no_records", message=f"not found: {records}")
 

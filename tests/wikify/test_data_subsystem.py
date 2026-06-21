@@ -67,6 +67,26 @@ def test_datapoint_claim_id_is_stable_and_idempotent() -> None:
     assert p1.finalize().claim_id == p1.claim_id
 
 
+def test_claim_id_merges_numeric_equivalents() -> None:
+    """Review m2: '1.1' and '1.10' are the same fact -> one claim id."""
+    a = DataPoint(subject="X", property="GPC", value_text="1.1", unit="A",
+                  doc_id="d", chunk_id="c", grounding_quote="q").finalize()
+    b = DataPoint(subject="X", property="GPC", value_text="1.10", unit="A",
+                  doc_id="d", chunk_id="c", grounding_quote="q").finalize()
+    assert a.claim_id == b.claim_id
+
+
+def test_claim_id_separates_on_uncertainty() -> None:
+    """Review m2: two facts differing only in uncertainty are distinct."""
+    a = DataPoint(subject="X", property="GPC", value_text="1.1", unit="A",
+                  uncertainty="0.1", doc_id="d", chunk_id="c",
+                  grounding_quote="q").finalize()
+    b = DataPoint(subject="X", property="GPC", value_text="1.1", unit="A",
+                  uncertainty="0.2", doc_id="d", chunk_id="c",
+                  grounding_quote="q").finalize()
+    assert a.claim_id != b.claim_id
+
+
 def test_datapoint_from_dict_accepts_value_and_quote_aliases() -> None:
     p = DataPoint.from_dict(
         {"subject": "X", "property": "Y", "value": "3 nm", "doc_id": "d", "quote": "z"}
@@ -89,6 +109,22 @@ def test_quote_in_source_exact_and_whitespace() -> None:
 def test_number_supported_float_normalization() -> None:
     assert number_supported("1.10 A", "GPC was 1.1 A", "GPC was 1.1 A reported")
     assert not number_supported("9.9 A", "GPC was 1.1 A", "GPC was 1.1 A")
+
+
+def test_number_supported_scientific_notation() -> None:
+    """Regression (review M2): a scientific-notation value must verify against
+    a source that prints it the same way, and equal magnitudes in different
+    forms (2.5e-3 vs 0.0025) must match."""
+    assert number_supported(
+        "2.5e-3 cm2", "area of 2.5e-3 cm2", "device area of 2.5e-3 cm2"
+    )
+    assert number_supported("0.0025", "value 2.5e-3", "value 2.5e-3")
+
+
+def test_number_supported_bare_integer_thousands() -> None:
+    """Regression: an endurance of 1000 cycles verifies against '1000' in
+    the source (the integer-truncation bug would have rejected it)."""
+    assert number_supported("1000 cycles", "endurance of 1000 cycles", "1000 cycles")
 
 
 def test_verify_point_verified() -> None:
@@ -214,6 +250,38 @@ def test_consolidate_flags_conflicts(tmp_path: Path) -> None:
     cell = table.rows[0]["cells"]["GPC"]
     assert cell.conflict is True
     assert len(cell.markers) == 2
+
+
+def test_consolidate_does_not_mutate_claim_status(tmp_path: Path) -> None:
+    """Review M1: consolidation is a pure projection — a conflict cell must
+    NOT rewrite the backing claims' stored verification_status."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1"),
+        _verified("Al2O3", "GPC", "0.9", "A/cycle", "d2", "c2", "q2"),
+    ])
+    spec = ArtifactSpec(artifact_id="gpc", title="GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    assert table.n_conflicts == 1
+    # Both backing claims stay 'verified' in the store (no side effect).
+    statuses = {r["verification_status"] for r in store.list_points(property="GPC")}
+    assert statuses == {"verified"}
+
+
+def test_consolidate_honors_spec_subject_order(tmp_path: Path) -> None:
+    """Review m6: when the spec lists subjects, rows follow that order."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q"),
+        _verified("HfO2", "GPC", "1.0", "A/cycle", "d2", "c2", "q"),
+        _verified("TiO2", "GPC", "0.5", "A/cycle", "d3", "c3", "q"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="gpc", title="GPC", properties=["GPC"],
+        subjects=["TiO2", "Al2O3", "HfO2"],
+    )
+    table = consolidate(store, spec)
+    assert [r["subject"] for r in table.rows] == ["TiO2", "Al2O3", "HfO2"]
 
 
 def test_consolidate_respects_min_verification(tmp_path: Path) -> None:
@@ -405,6 +473,28 @@ def test_cli_add_verifies_and_rejects(tmp_path: Path) -> None:
     assert payload["verified"] == 1
     assert payload["rejected"] == 1
     assert payload["stored"] == 1
+
+
+def test_cli_add_errors_when_corpus_unresolvable(tmp_path: Path) -> None:
+    """Review M3: `data add` must fail loudly (not silently reject all) when
+    no corpus can be resolved to verify against."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path=str(tmp_path / "does_not_exist"))
+    records = tmp_path / "staged.jsonl"
+    records.write_text(json.dumps({
+        "subject": "X", "property": "Y", "value": "1", "doc_id": "d",
+        "chunk_id": "c", "grounding_quote": "q",
+    }) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["data", "add", str(records), "--run", str(bundle.root)]
+    )
+    assert result.exit_code != 0
+    assert "no_corpus" in result.output
 
 
 def test_cli_consolidate_commit_then_render(tmp_path: Path) -> None:

@@ -85,6 +85,9 @@ is always re-derived.
 ## Treat artifacts like concepts
 
 A data artifact is a first-class wiki page: it has a title, lives under
-`wiki/data/`, carries references, and shows up in navigation and search.
-Name it the way a reader would search for it ("ALD Growth Per Cycle by
-Material"), not as a slug.
+`wiki/data/`, carries references, and appears in the rendered site — its
+own "Data tables" section on the home page and sidebar, plus the aggregated
+`references.html`. (It is written directly by `data commit`, not through
+`wiki commit`, so it is not indexed in `wiki.db` / MCP `wiki_find`.) Name it
+the way a reader would search for it ("ALD Growth Per Cycle by Material"),
+not as a slug.
