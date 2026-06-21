@@ -816,7 +816,9 @@ def _render_article(
     body_md = _isolate_display_math(body_md)
 
     # Clean up evidence footnote lines: format as bibliographic references.
-    body_md = _clean_evidence_lines(body_md, doc_meta_map=doc_meta_map, doc_index=doc_index)
+    body_md = _clean_evidence_lines(
+        body_md, doc_meta_map=doc_meta_map, doc_index=doc_index, kind=pv.kind
+    )
 
     # Format bibliography section: convert [N] markers to superscript links
     body_md = _format_bibliography_section(body_md)
@@ -1077,6 +1079,14 @@ def _resolve_wikilinks(
 # ingest paths; both forms are accepted so legacy bundles also clean up.
 _CHUNK_HASH_RE = re.compile(r"__c\d{4}_+[0-9a-f]{6,}")
 
+# Parser-only ``(<doc_id>)`` tail on a data-artifact footnote definition: a
+# trailing parenthetical (just before ``> "quote"``) whose contents carry a raw
+# 12-hex doc hash. Stripped from the rendered display so the doc hash never
+# shows to readers, while the on-disk file keeps it for cross-link matching.
+_DATA_FOOTNOTE_DOCID_TAIL_RE = re.compile(
+    r'\s*\([^()]*_[0-9a-f]{12}[^()]*\)(?=\s*>\s*")'
+)
+
 # Extracts [Year Author] prefix from doc_id, e.g. "[2020 Liu]"
 _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
 
@@ -1086,6 +1096,7 @@ def _clean_evidence_lines(
     *,
     doc_meta_map: dict[str, dict] | None = None,
     doc_index: HandleIndex | None = None,
+    kind: str = "article",
 ) -> str:
     """Reformat evidence footnote definitions as Wikipedia CS1 citations.
 
@@ -1109,6 +1120,20 @@ def _clean_evidence_lines(
     Definitions are emitted in the order they first appear in prose so
     the rendered reference list reads 1, 2, 3 top to bottom.
     """
+    # Data pages carry per-cell grounded footnotes that must not be collapsed
+    # or reformatted; each [^dN] definition is a distinct verifiable fact.
+    # The artifact renderer appends a parser-only ``(<doc_id>)`` tail to each
+    # definition so the cross-link matcher can recover the source doc from the
+    # on-disk file; that tail carries the raw doc hash and must not be shown to
+    # readers. Strip it from the rendered display only (the file keeps it).
+    if kind == "data":
+        out_lines: list[str] = []
+        for line in body.split("\n"):
+            if line.startswith("[^") and "]:" in line:
+                line = _DATA_FOOTNOTE_DOCID_TAIL_RE.sub("", line, count=1)
+            out_lines.append(line)
+        return "\n".join(out_lines)
+
     # First pass: classify every line as either a footnote definition or
     # body prose. For each definition, capture ``(doc_id, citation_text)``;
     # the doc_id (normalized through the meta map's DOI when available)
@@ -1513,7 +1538,10 @@ def _figure_alt_text(label: str, caption: str) -> str:
         return label
     caption = " ".join((caption or "").split())  # collapse whitespace
     if caption:
-        return caption[:160].rstrip() + ("..." if len(caption) > 160 else "")
+        if len(caption) > 160:
+            truncated = caption[:160].rsplit(" ", 1)[0].rstrip()
+            return truncated + "..."
+        return caption
     return "Figure"
 
 
@@ -1605,9 +1633,9 @@ def _remap_figure_citation_numbers(html: str, *, page_id: str = "") -> str:
         suffix = m.group(4)   # ']</a></sup>'
         if marker in marker_to_num:
             return prefix + marker_to_num[marker] + suffix
-        # Marker has no body reference — keep raw display, record for warning.
+        # Marker has no body reference — remove the dead sup entirely.
         orphan_markers.append(marker)
-        return m.group(0)
+        return ""
 
     result = _FNREF_FIG_RE.sub(_replace_fig, html)
 

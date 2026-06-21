@@ -327,7 +327,7 @@ def test_render_artifact_markdown_structure(tmp_path: Path) -> None:
     assert "Al2O3" in md
     assert "[^d1]" in md
     assert "## References" in md
-    assert '[^d1]: c1 (doc1) > "GPC was 1.1"' in md
+    assert '[^d1]: doc1 > "GPC was 1.1"' in md
 
 
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:

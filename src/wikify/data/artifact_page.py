@@ -14,10 +14,27 @@ A ``.dataspec.json`` sidecar stores the durable spec + backing claim ids so
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .consolidate import ConsolidatedTable
 from .models import ArtifactSpec
+
+# Strip trailing chunk suffix: __cNNNN_<hex>
+_RE_CHUNK_SUFFIX = re.compile(r"__c\d+_[0-9a-f]+$")
+# Strip trailing doc-hash: _<12 hex chars>
+_RE_DOC_HASH = re.compile(r"_[0-9a-f]{12}$")
+
+
+def _clean_source_label(s: str) -> str:
+    """Remove raw id fragments from a doc_id or chunk_id string.
+
+    Strips a trailing ``__cNNNN_<hex>`` chunk suffix and a trailing
+    ``_<12 hex>`` doc-hash so the human-readable title part is exposed.
+    """
+    s = _RE_CHUNK_SUFFIX.sub("", s)
+    s = _RE_DOC_HASH.sub("", s)
+    return s
 
 
 def _escape_cell(text: str) -> str:
@@ -73,12 +90,28 @@ def render_artifact_markdown(table: ConsolidatedTable) -> str:
     lines.append("## References")
     lines.append("")
     for ev in table.evidence:
-        chunk_id = ev["chunk_id"] or ev["doc_id"]
-        doc_id = ev["doc_id"]
+        raw_doc_id = ev["doc_id"] or ""
+        # Fall back to chunk_id only when doc_id is absent; strip it fully
+        # (chunk suffixes carry no cross-link value — doc_id is what matters).
+        raw_id = raw_doc_id if raw_doc_id else ev.get("chunk_id") or ""
+        label = _clean_source_label(raw_id) if raw_id else ""
         locator = ev.get("locator") or ""
-        head = f"{chunk_id} ({doc_id}, {locator})" if locator else f"{chunk_id} ({doc_id})"
+        # Build the visual label: title[. locator]
+        if label and locator:
+            visual = f"{label}. {locator}"
+        elif label:
+            visual = label
+        else:
+            visual = locator
         quote = ev["quote"].replace("\n", " ").strip()
-        lines.append(f'[^{ev["marker"]}]: {head} > "{quote}"')
+        # When doc_id was stripped, preserve the original doc_id in parentheses
+        # so the page parser can recover the full id for cross-page link matching.
+        if raw_doc_id and raw_doc_id != label:
+            head = f"{visual} ({raw_doc_id})" if visual else raw_doc_id
+        else:
+            head = visual
+        prefix = f"{head} " if head else ""
+        lines.append(f'[^{ev["marker"]}]: {prefix}> "{quote}"')
     lines.append("")
     return "\n".join(lines)
 
