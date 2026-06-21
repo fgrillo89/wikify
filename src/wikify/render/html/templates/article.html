@@ -32,6 +32,18 @@
     {{ content|safe }}
   </div>
 
+  {% if related_data %}
+  <div class="wiki-related-data">
+    <h2>Related data</h2>
+    <p>Quantitative comparisons drawing on the same sources:</p>
+    <ul>
+      {% for link in related_data %}
+      <li><a href="{{ root }}{{ link.url }}">{{ link.title }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if see_also %}
   <div class="wiki-see-also">
     <h2>See also</h2>

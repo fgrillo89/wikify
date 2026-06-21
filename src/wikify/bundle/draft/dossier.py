@@ -179,6 +179,55 @@ def render_dossier(draft: WriteRequest) -> str:
             )
         out.append("")
 
+    # Verified data points drawn from this page's evidence chunks. This is an
+    # internal citation index, NOT content to paste: each fact is citable via
+    # the marker of the chunk it came from. The cross-source comparison table
+    # is a separate, evolving data artifact — link it rather than rebuild it.
+    if draft.data_points:
+        marker_by_chunk = {ref.chunk_id: m for m, ref in by_marker.items()}
+        rows = [
+            dp for dp in draft.data_points if marker_by_chunk.get(dp.get("chunk_id"))
+        ]
+        if rows:
+            out.append("## Available data (citation index — do not paste verbatim)")
+            out.append("")
+            out.append(
+                "_Verified figures from this page's own sources. Use them to make "
+                "and ground GENERAL claims in prose: state a number inline and "
+                "attach the marker from the `Cite as` column to it (e.g. \"a SET "
+                "voltage of 0.9 V[^e3]\"). Do NOT reproduce this as a table and do "
+                "NOT add a `Marker`/`Cite as` column to the article — the marker is "
+                "the citation, not data._"
+            )
+            out.append("")
+            if draft.related_data_artifacts:
+                names = ", ".join(
+                    f'"{a.get("title", "")}"'
+                    for a in draft.related_data_artifacts
+                    if a.get("title")
+                )
+                if names:
+                    out.append(
+                        "_The side-by-side comparison lives in the data "
+                        f"artifact(s) {names}, automatically linked from this page "
+                        "under \"Related data\". Mention it by name in prose where "
+                        "helpful; do NOT emit `[[wikilinks]]` (the validator "
+                        "rejects them) and do NOT rebuild the table here._"
+                    )
+                    out.append("")
+            out.append("| Subject | Property | Value | Cite as |")
+            out.append("|---|---|---|---|")
+            for dp in rows:
+                marker = marker_by_chunk[dp["chunk_id"]]
+                value = str(dp.get("value", "")).replace("|", "/")
+                unit = str(dp.get("unit", "")).strip()
+                if unit and unit.lower() not in value.lower():
+                    value = f"{value} {unit}".strip()
+                subj = str(dp.get("subject", "")).replace("|", "/")
+                prop = str(dp.get("property", "")).replace("|", "/")
+                out.append(f"| {subj} | {prop} | {value} | [^{marker}] |")
+            out.append("")
+
     # Body groups
     out.append("## Evidence")
     out.append("")

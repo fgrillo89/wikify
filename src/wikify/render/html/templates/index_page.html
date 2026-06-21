@@ -96,6 +96,17 @@
   </section>
   {% endif %}
 
+  {% if data_artifacts %}
+  <section class="main-page-section">
+    <h2>Data tables</h2>
+    <ul class="article-list data-list">
+      {% for d in data_artifacts %}
+      <li><a href="{{ root }}{{ d.url }}">{{ d.title }}</a>{% if d.excerpt %} &mdash; {{ d.excerpt }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <section class="main-page-section">
     <h2>About this wiki</h2>
     <p>This site summarizes the source article collection as interlinked encyclopedia pages. The front page highlights topic structure and source scope; detailed run telemetry and evaluation reports remain in the bundle artifacts.</p>

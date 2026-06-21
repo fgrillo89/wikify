@@ -592,6 +592,16 @@ class WriteRequest(BaseModel):
     # When true, the subagent must include a 1-3 sentence `reasoning`
     # field in its response explaining its editorial choices.
     verbalize: bool = False
+    # Verified factual data points drawn from this page's own evidence
+    # chunks, so the writer can cite specific numbers/tables via the
+    # existing ``[^eN]`` marker for that chunk. Each entry:
+    # {subject, property, value, unit, chunk_id}. Empty when the claim
+    # store has no verified points for the gathered chunks.
+    data_points: list[dict] = Field(default_factory=list)
+    # Committed data-artifact pages (cross-source comparison tables) that draw
+    # on this page's sources. The writer should LINK these rather than recreate
+    # a per-page table. Each entry: {title}.
+    related_data_artifacts: list[dict] = Field(default_factory=list)
 
 
 class WriteResponse(BaseModel):

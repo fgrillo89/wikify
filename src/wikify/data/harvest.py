@@ -1,0 +1,162 @@
+"""Corpus-side helpers for the factual-data subsystem.
+
+Two jobs:
+
+1. Provide the source text a data point must verify against — the chunk text
+   plus any table/figure asset captions and table markdown bound to that chunk.
+2. Enumerate candidate sources for the dedicated harvest pass — table assets
+   and number-dense chunks — so an extractor agent knows where the numbers are.
+
+Read-only; opens the corpus SQLite directly.
+"""
+
+from __future__ import annotations
+
+import re
+import sqlite3
+
+from ..api import Corpus
+from ..corpus.chunks import read_chunks_by_id
+
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _connect(corpus: Corpus) -> sqlite3.Connection | None:
+    db = corpus.sqlite_path
+    if not db.exists():
+        return None
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def _near_asset_text(con: sqlite3.Connection, chunk_id: str) -> str:
+    """Captions + markdown content of assets bound to *chunk_id*."""
+    rows = con.execute(
+        "SELECT a.caption, a.content FROM chunk_assets ca "
+        "JOIN assets a ON a.asset_id = ca.asset_id "
+        "WHERE ca.chunk_id = ?",
+        (chunk_id,),
+    ).fetchall()
+    parts: list[str] = []
+    for r in rows:
+        if r["caption"]:
+            parts.append(str(r["caption"]))
+        if r["content"]:
+            parts.append(str(r["content"]))
+    return "\n".join(parts)
+
+
+def source_text_for(
+    corpus: Corpus,
+    *,
+    doc_id: str,
+    chunk_id: str = "",
+    locator: str = "",
+) -> tuple[str, str, str]:
+    """Return ``(chunk_text, asset_text, canonical_doc_id)`` for a data point.
+
+    ``chunk_text`` is the cited chunk's body. ``asset_text`` concatenates the
+    captions + table markdown of assets bound to that chunk (where caption
+    numbers and table cells live). ``canonical_doc_id`` is the resolved
+    chunk's own ``doc_id`` (so claims store the same canonical form as
+    evidence and downstream joins line up); it falls back to the supplied
+    ``doc_id`` when the chunk cannot be resolved. Any field may be empty.
+    """
+    chunk_text = ""
+    canonical_doc_id = doc_id
+    if chunk_id:
+        chunks = read_chunks_by_id(corpus, [chunk_id])
+        if chunks:
+            chunk_text = chunks[0].text
+            if chunks[0].doc_id:
+                canonical_doc_id = chunks[0].doc_id
+    con = _connect(corpus)
+    if con is None:
+        return chunk_text, "", canonical_doc_id
+    try:
+        asset_text = _near_asset_text(con, chunk_id) if chunk_id else ""
+        # Fall back to all of the doc's table assets when the chunk has no
+        # bound assets but the point claims a table/caption source.
+        if not asset_text and locator:
+            rows = con.execute(
+                "SELECT caption, content FROM assets "
+                "WHERE doc_id = ? AND asset_type IN ('table','figure','scheme')",
+                (canonical_doc_id,),
+            ).fetchall()
+            asset_text = "\n".join(
+                str(r["caption"] or "") + "\n" + str(r["content"] or "")
+                for r in rows
+            )
+        return chunk_text, asset_text, canonical_doc_id
+    finally:
+        con.close()
+
+
+def list_table_assets(corpus: Corpus, doc_ids: list[str] | None = None) -> list[dict]:
+    """Table (and scheme) assets, optionally restricted to *doc_ids*."""
+    con = _connect(corpus)
+    if con is None:
+        return []
+    try:
+        sql = (
+            "SELECT asset_id, doc_id, caption, content, page FROM assets "
+            "WHERE asset_type IN ('table','scheme')"
+        )
+        params: list[object] = []
+        if doc_ids:
+            ph = ",".join("?" * len(doc_ids))
+            sql += f" AND doc_id IN ({ph})"
+            params.extend(doc_ids)
+        sql += " ORDER BY doc_id, ord"
+        return [dict(r) for r in con.execute(sql, params)]
+    finally:
+        con.close()
+
+
+def count_numbers(text: str) -> int:
+    return len(_NUM_RE.findall(text or ""))
+
+
+def number_dense_chunks(
+    corpus: Corpus,
+    *,
+    doc_ids: list[str] | None = None,
+    min_numbers: int = 4,
+    limit: int = 50,
+) -> list[dict]:
+    """Chunks rich in numeric tokens — likely to carry extractable facts.
+
+    Excludes boilerplate and reference/acknowledgment sections. Ordered by
+    number density (descending).
+    """
+    con = _connect(corpus)
+    if con is None:
+        return []
+    try:
+        sql = (
+            "SELECT chunk_id, doc_id, text, section_type FROM chunks "
+            "WHERE COALESCE(is_boilerplate, 0) = 0 "
+            "AND COALESCE(section_type,'body') NOT IN "
+            "('references','acknowledgments','appendix')"
+        )
+        params: list[object] = []
+        if doc_ids:
+            ph = ",".join("?" * len(doc_ids))
+            sql += f" AND doc_id IN ({ph})"
+            params.extend(doc_ids)
+        scored: list[dict] = []
+        for r in con.execute(sql, params):
+            n = count_numbers(r["text"])
+            if n >= min_numbers:
+                scored.append({
+                    "chunk_id": r["chunk_id"],
+                    "doc_id": r["doc_id"],
+                    "section_type": r["section_type"],
+                    "n_numbers": n,
+                    "text": r["text"],
+                })
+        scored.sort(key=lambda d: d["n_numbers"], reverse=True)
+        return scored[:limit]
+    finally:
+        con.close()

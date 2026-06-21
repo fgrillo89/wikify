@@ -34,6 +34,7 @@ from wikify.corpus.handles import (
     AmbiguousHandleError,
     HandleIndex,
     build_index,
+    short_id,
     try_resolve,
 )
 from wikify.ingest.metadata import _is_valid_author
@@ -82,6 +83,17 @@ def derive_wiki_name(corpus_root: Path | None) -> str:
 
 def _normalize(s: str) -> str:
     return _NORM_RE.sub("-", s.lower()).strip("-")
+
+
+def _doc_key(doc_id: str) -> str:
+    """Normalize a doc id to its short identity for cross-page matching.
+
+    Strips a ``doc:``/``chunk:`` handle prefix and reduces to the doc
+    short-id, so the handle form (``doc:2c89…``) and the canonical form
+    (``[2023 Kumar] …_2c89…``) of the same document compare equal.
+    """
+    s = doc_id.split(":", 1)[1] if doc_id.startswith(("doc:", "chunk:")) else doc_id
+    return short_id(s)
 
 
 def _plain_excerpt(text: str, limit: int = 200) -> str:
@@ -167,7 +179,8 @@ def build_site(
     page_views = [
         pv
         for pv in all_page_views
-        if pv.has_prose and not (pv.kind == "person" and not _is_valid_author(pv.title))
+        if (pv.kind == "data" or pv.has_prose)
+        and not (pv.kind == "person" and not _is_valid_author(pv.title))
     ]
     skipped = len(all_page_views) - len(page_views)
     if skipped:
@@ -181,6 +194,10 @@ def build_site(
     )
     people = sorted(
         [pv for pv in page_views if pv.kind == "person"],
+        key=lambda v: v.title.lower(),
+    )
+    data_artifacts = sorted(
+        [pv for pv in page_views if pv.kind == "data"],
         key=lambda v: v.title.lower(),
     )
     page_by_id = {p.id: p for p in loaded.pages}
@@ -200,6 +217,7 @@ def build_site(
         "stats": stats,
         "concepts": concepts,
         "people": people,
+        "data_artifacts": data_artifacts,
         "navigation": navigation,
         "key_articles": key_articles,
     }
@@ -563,7 +581,9 @@ class _PageView:
 
     @classmethod
     def from_page(cls, page: Page) -> Self:
-        sub = "articles" if page.kind == "article" else "people"
+        sub = {"article": "articles", "person": "people", "data": "data"}.get(
+            page.kind, "articles"
+        )
         excerpt = ""
         for line in page.body_clean.splitlines():
             stripped = line.strip()
@@ -851,6 +871,22 @@ def _render_article(
                 seen_ids.add(candidate.id)
                 see_also.append({"title": candidate.title, "url": candidate.url})
 
+    # Related data artifacts: surface every data-artifact page that draws on a
+    # source this page also cites, so the cross-source comparison table is one
+    # click away and a data artifact is discoverable like a concept. Computed
+    # from evidence-source overlap (normalized to the doc short-id so handle
+    # and canonical forms unify), so it stays correct as data grows.
+    related_data = []
+    if pv.kind != "data":
+        page_doc_keys = {_doc_key(ev.doc_id) for ev in page.evidence if ev.doc_id}
+        for cand in shared_ctx.get("data_artifacts", []):
+            cand_page = page_by_id.get(cand.id)
+            if not cand_page:
+                continue
+            cand_keys = {_doc_key(ev.doc_id) for ev in cand_page.evidence if ev.doc_id}
+            if page_doc_keys & cand_keys:
+                related_data.append({"title": cand.title, "url": cand.url})
+
     # Build infobox for article pages.
     infobox = {}
     if pv.kind == "article":
@@ -864,6 +900,10 @@ def _render_article(
             infobox["Papers"] = str(prov["primary_count"])
         if prov.get("collaborator_count"):
             infobox["Collaborators"] = str(prov["collaborator_count"])
+    elif pv.kind == "data":
+        infobox["Type"] = "Data table"
+        if pv.n_evidence:
+            infobox["Sources"] = str(pv.n_evidence)
 
     template = env.get_template("article.html")
     visible_aliases = [
@@ -877,6 +917,7 @@ def _render_article(
         toc=toc,
         categories=categories,
         see_also=see_also[:10],  # cap at 10 links
+        related_data=related_data[:6],
         infobox=infobox if infobox else None,
         root=root,
         **shared_ctx,

@@ -163,6 +163,15 @@ class Bundle:
         return self.wiki_dir / "people"
 
     @property
+    def wiki_data_dir(self) -> Path:
+        return self.wiki_dir / "data"
+
+    @property
+    def claims_db_path(self) -> Path:
+        """SQLite claim store path: <bundle_root>/claims.db."""
+        return self.root / "claims.db"
+
+    @property
     def derived_dir(self) -> Path:
         return self.root / "derived"
 
@@ -194,6 +203,7 @@ class Bundle:
             self.wiki_dir,
             self.wiki_articles_dir,
             self.wiki_people_dir,
+            self.wiki_data_dir,
             self.derived_dir,
         ):
             p.mkdir(parents=True, exist_ok=True)

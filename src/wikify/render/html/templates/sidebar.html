@@ -68,3 +68,13 @@
   </ul>
 </div>
 {% endif %}
+{% if data_artifacts %}
+<div class="sidebar-section">
+  <h3>Data tables</h3>
+  <ul>
+    {% for d in data_artifacts[:20] %}
+    <li><a href="{{ root }}{{ d.url }}">{{ d.title }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}

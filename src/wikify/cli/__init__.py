@@ -13,6 +13,7 @@ import typer
 
 from . import arxiv as arxiv_cli
 from . import corpus as corpus_cli
+from . import data as data_cli
 from . import draft as draft_cli
 from . import eval as eval_cli
 from . import mcp as mcp_cli
@@ -68,6 +69,7 @@ app.add_typer(corpus_cli.app, name="corpus")
 app.add_typer(arxiv_cli.app, name="arxiv")
 app.add_typer(run_cli.app, name="run")
 app.add_typer(work_cli.app, name="work")
+app.add_typer(data_cli.app, name="data")
 app.add_typer(draft_cli.app, name="draft")
 app.add_typer(wiki_cli.app, name="wiki")
 app.add_typer(render_cli.app, name="render")
