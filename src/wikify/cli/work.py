@@ -45,6 +45,7 @@ from ..bundle.work.claim import (
 from ..bundle.work.evidence import EvidenceRecord, append_evidence, read_evidence
 from ..bundle.work.inbox import append_inbox, list_inbox_files
 from ..bundle.work.tend import tend_bundle
+from ..corpus.handles import HandleIndex as _HandleIndex
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error, cli_owner
 from ._io import _clean_slug_arg
 
@@ -264,7 +265,7 @@ def cmd_add_evidence(
 
     # Build a suffix index from the bound corpus if reachable.
     corpus_sqlite = None
-    suffix_index: dict[str, str] = {}
+    suffix_index: _HandleIndex = _HandleIndex()
     canonical_ids: frozenset[str] = frozenset()
     corpus_p = corpus_path_from_bundle(bundle.root)
     if corpus_p is not None:

@@ -107,10 +107,13 @@ Before creating or updating `response.json`, perform a writer self-check:
   `source_marker` that appears in `used_markers`; the validator
   rejects empty markers and the renderer appends a citation link to
   the caption pointing at the source footnote;
-- **figure-candidate scan**: if the dossier's Figure candidates table
-  contains a mechanism / process / device-structure / characterization
-  figure that depicts something the prose discusses, include one. If
-  no candidate fits, proceed without a figure; do not invent one;
+- **figure-candidate scan**: when the dossier's Figure candidates
+  table is non-empty, include at least one figure by default. Choose
+  the candidate that best depicts what a section discusses. Place
+  `{{figure:<anchor>}}` inside the paragraph that discusses it; that
+  paragraph MUST reference it in text ("as shown in the figure",
+  "(see figure)") so the figure is not orphaned. Skip only when no
+  candidate is genuinely relevant; do not invent one;
 - person pages have at least two non-appendix `## H2` sections;
 - the page uses enough of the supplied high-quality evidence to be
   comprehensive, not merely valid;
@@ -166,11 +169,12 @@ or `validation.json`. Fix any errors before persisting.
   materials/properties, methods, evidence/results, applications, and
   limitations when those facets are present in the draft.
 - No visible `[[wikilinks]]`.
-- Figures are parsimonious but not skipped by default. When the
-  dossier's Figure candidates table contains a labeled mechanism,
-  process, device-structure, or characterization figure depicting
-  something the prose discusses, include exactly one. Zero only when
-  no candidate aids understanding; two only when the page is
+- Figures are expected when candidates exist. When the dossier's
+  Figure candidates table is non-empty, include at least one that
+  depicts something a section discusses. Place `{{figure:<anchor>}}`
+  inside the paragraph discussing it; that paragraph must reference
+  it in prose ("as shown in the figure", "(see figure)"). Zero figures
+  only when no candidate is relevant. Two only when the page is
   inherently visual. Never invent paths or captions. Person pages
   stay figure-free.
 - No corpus meta-commentary.

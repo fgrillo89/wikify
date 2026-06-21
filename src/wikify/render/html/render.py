@@ -30,6 +30,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from wikify.bundle.wiki.navigation import read_navigation
 from wikify.bundle.wiki.page import Bundle, Page
 from wikify.bundle.wiki.page_naming import url_slug
+from wikify.corpus.handles import (
+    AmbiguousHandleError,
+    HandleIndex,
+    build_index,
+    try_resolve,
+)
 from wikify.ingest.metadata import _is_valid_author
 from wikify.render.html.citation import format_cs1
 
@@ -142,7 +148,7 @@ def build_site(
     # Load doc_id -> bibliographic metadata + source URL from the corpus
     # and stage cited PDFs into ``assets/sources/`` so the rendered
     # reference list can hyperlink straight to the paper.
-    doc_meta_map = _load_doc_meta_map(corpus_root, out_dir)
+    doc_meta_map, doc_index = _load_doc_meta_map(corpus_root, out_dir)
 
     # Load the corpus image index once so _render_article can inject a
     # fallback figure for pages whose body has no embedded figures yet.
@@ -201,6 +207,10 @@ def build_site(
     slug_to_url = {pv.id: pv.url for pv in page_views}
     alias_to_id = {_normalize(name): pv.id for pv in page_views for name in (pv.title, *pv.aliases)}
 
+    # Tracks which fallback figure ids have already been assigned so that
+    # multiple pages sharing a high-rank evidence doc get distinct figures.
+    used_figure_ids: set[str] = set()
+
     for pv in page_views:
         page = page_by_id.get(pv.id)
         if page is None:
@@ -219,7 +229,9 @@ def build_site(
             page_by_id=page_by_id,
             root="../",
             doc_meta_map=doc_meta_map,
+            doc_index=doc_index,
             image_index=image_index,
+            used_figure_ids=used_figure_ids,
         )
         html_path.write_text(html_str, encoding="utf-8")
 
@@ -236,6 +248,7 @@ def build_site(
         pages=[page_by_id[pv.id] for pv in page_views if pv.id in page_by_id],
         page_views={pv.id: pv for pv in page_views},
         doc_meta_map=doc_meta_map,
+        doc_index=doc_index,
     )
     refs_html = env.get_template("references.html").render(
         title="References",
@@ -404,6 +417,7 @@ def _aggregate_references(
     pages: list[Page],
     page_views: dict[str, "_PageView"],
     doc_meta_map: dict[str, dict],
+    doc_index: HandleIndex | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate every cited doc into a CS1-formatted reference list.
 
@@ -412,13 +426,28 @@ def _aggregate_references(
     from first-author surname + year. Docs cited by zero pages are
     omitted; docs missing from ``doc_meta_map`` render as a bare
     ``doc_id`` so nothing silently disappears.
+
+    Evidence carries the short ``doc:<hex>`` handle, while
+    ``doc_meta_map`` is keyed by the full canonical doc_id; resolve each
+    handle through ``doc_index`` so the CS1 metadata is found (otherwise
+    every entry degrades to a raw doc-id code span).
     """
     doc_to_pages: dict[str, set[str]] = {}
     for page in pages:
         for ev in page.evidence:
             if not ev.doc_id:
                 continue
-            doc_to_pages.setdefault(ev.doc_id, set()).add(page.id)
+            raw = ev.doc_id
+            bare = raw[4:] if raw.startswith("doc:") else raw
+            full = raw
+            if doc_index is not None:
+                try:
+                    resolved = try_resolve(bare, doc_index)
+                except AmbiguousHandleError:
+                    resolved = None
+                if resolved is not None:
+                    full = resolved
+            doc_to_pages.setdefault(full, set()).add(page.id)
 
     out: list[dict[str, Any]] = []
     md = markdown.Markdown(extensions=["smarty"])
@@ -576,6 +605,17 @@ _RENDER_DECORATION_MIN_AREA = 40_000
 _RENDER_DECORATION_MAX_ASPECT = 4.0
 
 
+def _body_has_figure(body_md: str) -> bool:
+    """True when the body already carries a figure of any form.
+
+    A figure may be present as a markdown image (``![](...)``) or as an
+    HTML ``<figure>`` block emitted by the selected-figure placeholder
+    pass. Either must suppress the fallback so a page never shows two
+    figures.
+    """
+    return bool(_FIGURE_REF_RE.search(body_md)) or "<figure" in body_md
+
+
 def _inject_fallback_figure(
     body_md: str,
     *,
@@ -583,15 +623,18 @@ def _inject_fallback_figure(
     out_dir: Path,
     image_index: Any,
     page_url_depth: int,
+    used_figure_ids: "set[str] | None" = None,
 ) -> str:
     """Inject the top captioned corpus figure after the first paragraph.
 
     Called only when the page body has no inline figure references and the
     corpus image index is available. Picks the first captioned, non-decoration
-    figure whose doc_id matches one of the page's evidence records. Copies the
-    image into ``assets/figures/`` and emits an HTML ``<figure>`` block.
-    Degrades cleanly (returns ``body_md`` unchanged) when no suitable figure
-    is found or the file cannot be copied.
+    figure whose doc_id matches one of the page's evidence records and whose
+    id has not already been used as a fallback on another page this render run.
+    When a figure is chosen its id is added to ``used_figure_ids`` so
+    subsequent pages skip it. Copies the image into ``assets/figures/`` and
+    emits an HTML ``<figure>`` block. Degrades cleanly (returns ``body_md``
+    unchanged) when no suitable figure is found or the file cannot be copied.
     """
     # Build a set of full doc_ids from evidence (handles short ``doc:<hex>`` forms).
     doc_keys = list(image_index.by_doc.keys())
@@ -607,11 +650,14 @@ def _inject_fallback_figure(
         elif short in suffix_map:
             candidate_docs.append(suffix_map[short])
 
-    # Pick the first captioned, non-decoration figure from those docs.
+    # Pick the first captioned, non-decoration figure from those docs
+    # that has not already been used as a fallback for another page.
     chosen = None
     for doc_id in candidate_docs:
         for img in image_index.for_doc(doc_id):
             if not img.caption or not img.path:
+                continue
+            if used_figure_ids is not None and img.id in used_figure_ids:
                 continue
             w, h = img.width, img.height
             if w is None or h is None:
@@ -643,6 +689,10 @@ def _inject_fallback_figure(
     if chosen is None:
         return body_md
 
+    # Register the chosen figure so other pages in this render run skip it.
+    if used_figure_ids is not None:
+        used_figure_ids.add(chosen.id)
+
     # Copy the file into assets/figures/.
     suffix = src.suffix or ".png"
     dest_name = _safe_asset_name(chosen.id.replace("/", "--")) + suffix
@@ -659,9 +709,10 @@ def _inject_fallback_figure(
     caption = escape(chosen.caption)
     if chosen.label:
         caption = escape(chosen.label) + ": " + caption
+    alt = escape(_figure_alt_text(chosen.label or "", chosen.caption or ""))
     figure_html = (
         f'\n\n<figure class="wiki-figure wiki-figure-fallback">'
-        f'<img src="{url}" alt="{escape(chosen.label or chosen.id)}">'
+        f'<img src="{url}" alt="{alt}">'
         f"<figcaption>{caption}</figcaption>"
         "</figure>\n\n"
     )
@@ -686,7 +737,9 @@ def _render_article(
     page_by_id: dict[str, Page],
     root: str,
     doc_meta_map: dict[str, dict] | None = None,
+    doc_index: HandleIndex | None = None,
     image_index: "Any | None" = None,
+    used_figure_ids: "set[str] | None" = None,
 ) -> str:
     # Reconstruct the full body (frontmatter-stripped) including the
     # ## Evidence block, so the markdown footnotes extension can render
@@ -712,16 +765,28 @@ def _render_article(
         page_url_depth=1,
     )
 
+    # Register this page's writer-embedded figures so a LATER page's
+    # fallback never reuses a figure already shown on this page. Without
+    # this, a page that embeds figure X and a page with no embedded figure
+    # could both display X (embedded-vs-fallback collision).
+    if used_figure_ids is not None and _body_has_figure(body_md):
+        for fig in page.figures or []:
+            if isinstance(fig, dict):
+                fid = str(fig.get("figure_id") or "").strip()
+                if fid:
+                    used_figure_ids.add(fid)
+
     # Fallback: if the body has no embedded figures, inject the top captioned
     # figure from the evidence docs so older committed pages (built before the
     # figure pipeline fix) still render with at least one image.
-    if image_index is not None and not _FIGURE_REF_RE.search(body_md):
+    if image_index is not None and not _body_has_figure(body_md):
         body_md = _inject_fallback_figure(
             body_md,
             page=page,
             out_dir=out_dir,
             image_index=image_index,
             page_url_depth=1,
+            used_figure_ids=used_figure_ids,
         )
 
     # Isolate ``$$...$$`` display math so arithmatex's BlockProcessor
@@ -731,7 +796,7 @@ def _render_article(
     body_md = _isolate_display_math(body_md)
 
     # Clean up evidence footnote lines: format as bibliographic references.
-    body_md = _clean_evidence_lines(body_md, doc_meta_map=doc_meta_map)
+    body_md = _clean_evidence_lines(body_md, doc_meta_map=doc_meta_map, doc_index=doc_index)
 
     # Format bibliography section: convert [N] markers to superscript links
     body_md = _format_bibliography_section(body_md)
@@ -820,8 +885,8 @@ def _render_article(
 
 def _load_doc_meta_map(
     corpus_root: Path | None, out_dir: Path,
-) -> dict[str, dict]:
-    """Return ``{doc_id: meta}`` for every doc the corpus knows about.
+) -> tuple[dict[str, dict], HandleIndex]:
+    """Return ``({doc_id: meta}, HandleIndex)`` for every doc in the corpus.
 
     ``meta`` carries the fields needed for a Wikipedia CS1 citation
     (``authors``, ``year``, ``title``, ``venue``, ``volume``, ``issue``,
@@ -834,14 +899,18 @@ def _load_doc_meta_map(
        ``<out_dir>/assets/sources/`` so the wiki carries the file and
        the link is a stable relative path.
 
-    Returns an empty dict when no corpus is provided or the corpus
+    The ``HandleIndex`` is built over the full doc_id keys so callers
+    can resolve short handles (``doc:<hex>`` or bare ``<hex>``) to a
+    full doc_id without storing aliases in the dict.
+
+    Returns empty collections when no corpus is provided or the corpus
     has no SQLite store.
     """
     if corpus_root is None:
-        return {}
+        return {}, HandleIndex()
     db_path = Path(corpus_root) / "wikify.db"
     if not db_path.is_file():
-        return {}
+        return {}, HandleIndex()
     import sqlite3 as _sqlite
 
     sources_dir = out_dir / "assets" / "sources"
@@ -901,16 +970,8 @@ def _load_doc_meta_map(
             if value:
                 meta[key] = str(value).strip()
         out[doc_id] = meta
-        # Evidence footnotes reference a doc by its short handle
-        # (``doc:<hex>``, the trailing hex of the doc_id) rather than the
-        # full doc_id. Register the meta under those handle forms too so
-        # citation resolution succeeds regardless of which form the
-        # reference carries. ``setdefault`` keeps the full-id mapping
-        # authoritative if a short handle ever collides.
-        handle_hex = doc_id[-12:] if len(doc_id) > 12 else doc_id
-        out.setdefault(f"doc:{handle_hex}", meta)
-        out.setdefault(handle_hex, meta)
-    return out
+    doc_index = build_index(out.keys())
+    return out, doc_index
 
 
 def _safe_json_list(raw) -> list[str]:
@@ -980,7 +1041,10 @@ _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
 
 
 def _clean_evidence_lines(
-    body: str, *, doc_meta_map: dict[str, dict] | None = None,
+    body: str,
+    *,
+    doc_meta_map: dict[str, dict] | None = None,
+    doc_index: HandleIndex | None = None,
 ) -> str:
     """Reformat evidence footnote definitions as Wikipedia CS1 citations.
 
@@ -1017,7 +1081,7 @@ def _clean_evidence_lines(
             marker = line[2:line.index("]:")]
             cleaned = _CHUNK_HASH_RE.sub("", line)
             parsed[marker] = _format_evidence_body(
-                cleaned, doc_meta_map=doc_meta_map,
+                cleaned, doc_meta_map=doc_meta_map, doc_index=doc_index,
             )
             continue
         if in_def_block and not line.strip():
@@ -1151,7 +1215,10 @@ def _isolate_display_math(body: str) -> str:
 
 
 def _format_evidence_body(
-    line: str, *, doc_meta_map: dict[str, dict] | None = None,
+    line: str,
+    *,
+    doc_meta_map: dict[str, dict] | None = None,
+    doc_index: HandleIndex | None = None,
 ) -> tuple[str, str]:
     """Return ``(doc_id, citation_text)`` for one ``[^eN]:`` definition.
 
@@ -1171,21 +1238,29 @@ def _format_evidence_body(
     sep = rest.find(' > "')
     head = rest[:sep].strip() if sep != -1 else rest
 
-    doc_id = _extract_doc_id(head, doc_meta_map=doc_meta_map)
+    doc_id = _extract_doc_id(head, doc_meta_map=doc_meta_map, doc_index=doc_index)
     return doc_id, _format_citation(doc_id, doc_meta_map=doc_meta_map)
 
 
 def _extract_doc_id(
-    head: str, *, doc_meta_map: dict[str, dict] | None = None,
+    head: str,
+    *,
+    doc_meta_map: dict[str, dict] | None = None,
+    doc_index: HandleIndex | None = None,
 ) -> str:
     """Pull the doc_id out of a ``chunk_id (doc_id)`` head string.
 
     The wrapper is extracted via balanced-paren walk so titles
     containing ``(RRAM)`` etc. don't fool the parser. The unwrapped
-    form is preferred only when it resolves in ``doc_meta_map``;
-    otherwise the entire head is treated as the doc_id. This keeps
-    unwrapped legacy lines like ``[^e1]: [2020 Smith] Title (RRAM)``
-    from being mis-parsed as a wrapped reference.
+    form is preferred only when it resolves against the doc index or
+    the doc_meta_map; otherwise the entire head is treated as the
+    doc_id. This keeps unwrapped legacy lines like
+    ``[^e1]: [2020 Smith] Title (RRAM)`` from being mis-parsed as a
+    wrapped reference.
+
+    When a ``doc_index`` is supplied, short handles (``doc:<hex>`` or
+    bare ``<hex>``) are resolved to the full canonical doc_id so the
+    returned value can be used as a key into ``doc_meta_map`` directly.
     """
     if head.endswith(")"):
         depth = 0
@@ -1197,10 +1272,24 @@ def _extract_doc_id(
                 depth -= 1
                 if depth == 0:
                     candidate = head[i + 1 : -1].strip()
-                    # Only accept the unwrap when the inner string
-                    # resolves to a known doc. Otherwise the trailing
-                    # ``(...)`` was part of the title, not a wrapper.
-                    if candidate and (doc_meta_map or {}).get(candidate):
+                    if not candidate:
+                        break
+                    # Resolve candidate: strip optional "doc:" prefix,
+                    # try the index first, then fall back to the map.
+                    bare = candidate[4:] if candidate.startswith("doc:") else candidate
+                    if doc_index is not None:
+                        # An ambiguous short handle is not a render error:
+                        # fall through to the map lookup / treat the head as
+                        # the doc_id rather than crashing the page build.
+                        try:
+                            resolved = try_resolve(bare, doc_index)
+                        except AmbiguousHandleError:
+                            resolved = None
+                        if resolved is not None:
+                            return resolved
+                    # Fallback: direct map lookup (covers exact full ids
+                    # and legacy bundles without an index).
+                    if (doc_meta_map or {}).get(candidate):
                         return candidate
                     break
     return head
@@ -1372,6 +1461,21 @@ def _safe_asset_name(value: str) -> str:
     return clean or "figure"
 
 
+def _figure_alt_text(label: str, caption: str) -> str:
+    """Human-readable alt text for a figure.
+
+    Prefers a short label; else a length-bounded plain-text slice of the
+    caption; else a generic fallback. Never the raw figure id (a doc-hex
+    path is useless to a screen reader)."""
+    label = (label or "").strip()
+    if label:
+        return label
+    caption = " ".join((caption or "").split())  # collapse whitespace
+    if caption:
+        return caption[:160].rstrip() + ("..." if len(caption) > 160 else "")
+    return "Figure"
+
+
 def _replace_selected_figure_placeholders(
     body: str,
     *,
@@ -1419,7 +1523,11 @@ def _replace_selected_figure_placeholders(
                 f'<a href="#fn:{escape(marker)}">[{escape(marker)}]</a>'
                 f"</sup>"
             )
-        alt = escape(str(fig.get("figure_id") or anchor))
+        alt = escape(
+            _figure_alt_text(
+                str(fig.get("label") or ""), str(fig.get("caption") or "")
+            )
+        )
         return (
             f'\n\n<figure class="wiki-figure" id="figure-{escape(anchor)}">'
             f'<img src="{url}" alt="{alt}">'

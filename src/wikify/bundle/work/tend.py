@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...api import Bundle
+from ...corpus.handles import HandleIndex
 from .card import (
     create_concept,
     list_concept_slugs,
@@ -234,7 +235,7 @@ def _sweep_staging_files(bundle: Bundle) -> int:
     # Build suffix index once from the corpus (if reachable).
     corpus_dir = corpus_path_from_bundle(bundle.root)
     canonical_ids: frozenset[str] = frozenset()
-    suffix_index: dict[str, str] = {}
+    suffix_index: HandleIndex = HandleIndex()
     sqlite_path = None
     if corpus_dir is not None:
         from ...api import Corpus  # noqa: PLC0415 — deferred to avoid circular import

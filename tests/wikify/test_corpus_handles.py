@@ -7,10 +7,13 @@ import pytest
 from wikify.corpus.handles import (
     AmbiguousHandleError,
     HandleNotFoundError,
+    build_index,
     format_chunk_handles,
     format_handle,
     resolve,
+    resolve_indexed,
     short_id,
+    try_resolve,
 )
 
 
@@ -132,3 +135,144 @@ def test_format_chunk_handles_no_doc_id_falls_back_to_full() -> None:
     out = format_chunk_handles(rows)
     assert out["aaa__c0__deadbeef"] == "chunk:aaa__c0__deadbeef"
     assert out["bbb__c0__deadbeef"] == "chunk:bbb__c0__deadbeef"
+
+
+# ---------------------------------------------------------------------------
+# HandleIndex / build_index / resolve_indexed / try_resolve
+# ---------------------------------------------------------------------------
+
+
+def test_build_index_exact_match() -> None:
+    cands = ["paper_0", "paper_1", "paper_2"]
+    idx = build_index(cands)
+    assert "paper_0" in idx
+    assert "paper_99" not in idx
+
+
+def test_resolve_indexed_exact_wins() -> None:
+    cands = ["paper_0", "paper_1"]
+    idx = build_index(cands)
+    assert resolve_indexed("paper_0", idx) == "paper_0"
+
+
+def test_resolve_indexed_short_id_tier2() -> None:
+    cands = [
+        "[2011 Yang] Dopant..._5f92b0389ccd",
+        "[2024 Gou] Optimization..._329efcf68938",
+    ]
+    idx = build_index(cands)
+    assert resolve_indexed("5f92b0389ccd", idx) == cands[0]
+    assert resolve_indexed("329efcf68938", idx) == cands[1]
+
+
+def test_resolve_indexed_tier3_underscore_suffix() -> None:
+    cands = ["paper_alpha", "paper_beta"]
+    idx = build_index(cands)
+    assert resolve_indexed("alpha", idx) == "paper_alpha"
+
+
+def test_resolve_indexed_ambiguous_tier2_raises() -> None:
+    # Two ids with same short_id (same hash suffix).
+    cands = ["foo_5f92b0389ccd", "bar_5f92b0389ccd"]
+    idx = build_index(cands)
+    with pytest.raises(AmbiguousHandleError) as exc:
+        resolve_indexed("5f92b0389ccd", idx)
+    assert set(exc.value.matches) == set(cands)
+
+
+def test_resolve_indexed_ambiguous_tier3_raises() -> None:
+    cands = ["foo_alpha", "bar_alpha"]
+    idx = build_index(cands)
+    with pytest.raises(AmbiguousHandleError):
+        resolve_indexed("alpha", idx)
+
+
+def test_resolve_indexed_not_found_raises() -> None:
+    idx = build_index(["paper_0", "paper_1"])
+    with pytest.raises(HandleNotFoundError):
+        resolve_indexed("nope", idx)
+
+
+def test_resolve_accepts_handle_index() -> None:
+    """``resolve`` delegates to ``resolve_indexed`` when given a HandleIndex."""
+    cands = ["[2020 Foo]_abc123456789", "[2021 Bar]_def098765432"]
+    idx = build_index(cands)
+    assert resolve("abc123456789", idx) == cands[0]
+
+
+def test_try_resolve_returns_none_on_miss() -> None:
+    idx = build_index(["paper_0"])
+    assert try_resolve("nope", idx) is None
+
+
+def test_try_resolve_propagates_ambiguous() -> None:
+    idx = build_index(["foo_alpha", "bar_alpha"])
+    with pytest.raises(AmbiguousHandleError):
+        try_resolve("alpha", idx)
+
+
+def test_try_resolve_with_iterable() -> None:
+    result = try_resolve("alpha", ["paper_alpha", "paper_beta"])
+    assert result == "paper_alpha"
+
+
+def test_l1_two_ids_differing_before_shared_suffix() -> None:
+    """L1 regression: two ids ending in the same suffix must raise Ambiguous.
+
+    This is the exact failure mode the shared-resolver consolidation fixes:
+    previously the home-grown suffix dict would silently drop the ambiguous
+    entry and return None; now both the index and resolve_chunk_id raise or
+    return None consistently with correct Ambiguous semantics.
+    """
+    suffix = "aabbccdd"
+    id_a = f"paper_title_c0001_{suffix}"
+    id_b = f"other_title_c0002_{suffix}"
+    idx = build_index([id_a, id_b])
+    # tier-3 ambiguity: both end with "_aabbccdd"
+    with pytest.raises(AmbiguousHandleError) as exc:
+        resolve_indexed(suffix, idx)
+    assert id_a in exc.value.matches
+    assert id_b in exc.value.matches
+
+
+def test_figure_handle_resolution_via_index() -> None:
+    """Figure-chunk compound ids resolve through the index."""
+    fig_id = "[2011 Yang]_5f92b0389ccd/fig_001__caption"
+    idx = build_index([fig_id])
+    # Short form of compound id shortens doc-part only.
+    short = short_id(fig_id)  # "5f92b0389ccd/fig_001__caption"
+    assert resolve_indexed(short, idx) == fig_id
+
+
+@pytest.mark.parametrize(
+    "candidates, short",
+    [
+        # exact match (tier 1)
+        (["paper_0", "paper_1"], "paper_0"),
+        # short_id / hex-suffix match (tier 2)
+        (["a_title_c0001_5f92b0389ccd", "b_c0002_aa11bb22cc33"], "5f92b0389ccd"),
+        # delimited-suffix match (tier 3)
+        (["x_title_zzzzzzzz", "y"], "zzzzzzzz"),
+        # exact id that is ALSO a suffix of another: tier-1 exact wins
+        (["aabbccdd", "other_aabbccdd"], "aabbccdd"),
+        # miss
+        (["paper_0"], "nope"),
+        # tier-2 ambiguity
+        (["a_c0001_dddddddd", "b_c0002_dddddddd"], "dddddddd"),
+    ],
+)
+def test_resolve_equivalence_list_vs_index(candidates, short) -> None:
+    """The consolidation's central claim: ``resolve(s, list)`` and
+    ``resolve(s, build_index(list))`` agree on the resolved id AND on the
+    exception raised, across all tiers and the miss/ambiguous cases."""
+    idx = build_index(candidates)
+
+    def outcome(call):
+        try:
+            return ("ok", call())
+        except (AmbiguousHandleError, HandleNotFoundError) as exc:
+            return ("err", type(exc).__name__)
+
+    assert outcome(lambda: resolve(short, list(candidates))) == outcome(
+        lambda: resolve(short, idx)
+    )
