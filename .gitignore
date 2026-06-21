@@ -9,8 +9,9 @@ wheels/
 # Virtual environments
 .venv/
 
-# Data (local, potentially large)
-data/
+# Data (local, potentially large). Anchored to the repo root so it does not
+# also swallow the source package src/wikify/data/.
+/data/
 *.db
 
 # UV lock
