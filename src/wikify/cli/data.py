@@ -61,9 +61,14 @@ def _resolve_corpus(bundle: Bundle, corpus_flag: Path | None) -> Corpus | None:
     path = corpus_flag
     if path is None:
         try:
-            path = Path(load_state(bundle).corpus_path)
+            raw = load_state(bundle).corpus_path
         except FileNotFoundError:
             return None
+        # An empty corpus_path would make Path("") resolve to "." (cwd) and
+        # Corpus.open succeed against the wrong tree — treat it as unresolved.
+        if not raw or not str(raw).strip():
+            return None
+        path = Path(raw)
     try:
         return Corpus.open(path)
     except FileNotFoundError:
@@ -123,11 +128,10 @@ def cmd_add(
     counts: dict[str, int] = {}
     keep: list[DataPoint] = []
     for p in points:
-        chunk_text, caption = ("", "")
-        if cor is not None:
-            chunk_text, caption = source_text_for(
-                cor, doc_id=p.doc_id, chunk_id=p.chunk_id, locator=p.locator
-            )
+        # cor is guaranteed non-None here (cmd_add errors out otherwise).
+        chunk_text, caption = source_text_for(
+            cor, doc_id=p.doc_id, chunk_id=p.chunk_id, locator=p.locator
+        )
         verify_point(p, chunk_text=chunk_text, caption=caption)
         counts[p.verification_status] = counts.get(p.verification_status, 0) + 1
         if p.verification_status == "rejected" and not keep_rejected:
