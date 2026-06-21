@@ -598,6 +598,10 @@ class WriteRequest(BaseModel):
     # {subject, property, value, unit, chunk_id}. Empty when the claim
     # store has no verified points for the gathered chunks.
     data_points: list[dict] = Field(default_factory=list)
+    # Committed data-artifact pages (cross-source comparison tables) that draw
+    # on this page's sources. The writer should LINK these rather than recreate
+    # a per-page table. Each entry: {title}.
+    related_data_artifacts: list[dict] = Field(default_factory=list)
 
 
 class WriteResponse(BaseModel):

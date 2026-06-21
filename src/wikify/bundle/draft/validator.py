@@ -53,6 +53,20 @@ _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
 _FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
 # Literal \uXXXX escape sequences in prose (six chars: backslash u + 4 hex digits).
 _UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+# A Python/JSON mapping literal leaking into prose, e.g. a writer accidentally
+# pasting a citation-context dict: ``{'e1_cid': '...', 'e1_doc': '...'}``. We
+# match an opening brace immediately followed by a quoted key and a colon.
+_STRAY_MAPPING_RE = re.compile(r"\{\s*['\"][^'\"]+['\"]\s*:\s*['\"]")
+
+
+def _strip_references_section(body: str) -> str:
+    """Return *body* with the trailing ``## References`` block removed.
+
+    Footnote bodies legitimately carry chunk/doc identifiers; prose-integrity
+    checks run over the reader-facing text only.
+    """
+    m = re.search(r"(?im)^##\s+references\s*$", body)
+    return body[: m.start()] if m else body
 
 
 def _utcnow() -> str:
@@ -404,6 +418,28 @@ def _run_checks(
                 )
             else:
                 structural.setdefault("no_unicode_escapes", True)
+
+        # Reject internal machinery leaked into prose: a Python/JSON mapping
+        # literal (e.g. a writer pasting its citation-context scratch dict
+        # ``{'e1_cid': '...'}`` into the body). Prose is for readers; internal
+        # identifiers belong only in the ``## References`` footnote bodies.
+        body_wo_refs = _strip_references_section(response.body_markdown)
+        map_hit = _STRAY_MAPPING_RE.search(body_wo_refs)
+        if map_hit:
+            structural["no_stray_machinery"] = False
+            errors.append(
+                {
+                    "path": "body_markdown",
+                    "code": "stray_internal_machinery",
+                    "message": (
+                        "prose contains a leaked mapping literal "
+                        f"({map_hit.group()[:40]!r}...); remove internal "
+                        "data structures from the article text"
+                    ),
+                }
+            )
+        else:
+            structural.setdefault("no_stray_machinery", True)
 
     # --- Quote grounding ------------------------------------------------
     if draft is not None and response is not None:

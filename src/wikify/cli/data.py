@@ -129,9 +129,12 @@ def cmd_add(
     keep: list[DataPoint] = []
     for p in points:
         # cor is guaranteed non-None here (cmd_add errors out otherwise).
-        chunk_text, caption = source_text_for(
+        chunk_text, caption, canonical_doc_id = source_text_for(
             cor, doc_id=p.doc_id, chunk_id=p.chunk_id, locator=p.locator
         )
+        # Store the canonical doc id from the resolved chunk so claims share
+        # the same id space as evidence (consistent downstream joins).
+        p.doc_id = canonical_doc_id
         verify_point(p, chunk_text=chunk_text, caption=caption)
         counts[p.verification_status] = counts.get(p.verification_status, 0) + 1
         if p.verification_status == "rejected" and not keep_rejected:

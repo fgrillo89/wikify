@@ -271,6 +271,40 @@ def test_validate_literal_unicode_escape_rejected(tmp_path: Path) -> None:
     assert "u2013" in msg
 
 
+def test_validate_stray_mapping_literal_rejected(tmp_path: Path) -> None:
+    """A response with a leaked Python/JSON mapping literal in prose must fail
+    with code ``stray_internal_machinery``. Regression for the writer pasting
+    its citation-context scratch dict into the article body."""
+    bundle, _, slug = _setup(tmp_path)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    response = _good_response(slug, chunk_quote=quote)
+    blob = "accuracy of 90.16{'e1_cid': 'foo', 'e1_doc': 'bar'}fter training"
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Mechanism", f"## Mechanism\n\n{blob}\n",
+    )
+    write_json(response_path(bundle, slug), response)
+
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"] is False
+    codes = [e["code"] for e in verdict["errors"]]
+    assert "stray_internal_machinery" in codes
+    assert verdict["structural_checks"]["no_stray_machinery"] is False
+
+
+def test_validate_references_with_ids_not_flagged_as_machinery(tmp_path: Path) -> None:
+    """The ``## References`` block carries chunk/doc ids; those must not trip
+    the stray-machinery gate (it runs over reader-facing prose only)."""
+    bundle, _, slug = _setup(tmp_path)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    response = _good_response(slug, chunk_quote=quote)
+    write_json(response_path(bundle, slug), response)
+    verdict = validate_response(bundle, slug)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    assert verdict["structural_checks"].get("no_stray_machinery") is True
+
+
 def test_validate_real_unicode_char_ok(tmp_path: Path) -> None:
     """A body using the actual U+2013 character (not an escape) must pass."""
     bundle, _, slug = _setup(tmp_path)

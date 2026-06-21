@@ -138,6 +138,9 @@ def build_draft(
         )
 
     tier_value = tier if isinstance(tier, ModelTier) else ModelTier(tier)
+    data_points, related_data_artifacts = _data_for_evidence(
+        bundle, {r.chunk_id for r in active}
+    )
     request = WriteRequest(
         page_id=card.page_id,
         page_kind=card.kind,
@@ -152,7 +155,8 @@ def build_draft(
         author_context=_author_context_for_card(corpus, card)
         if card.kind == "person"
         else None,
-        data_points=_data_points_for_evidence(bundle, {r.chunk_id for r in active}),
+        data_points=data_points,
+        related_data_artifacts=related_data_artifacts,
     )
 
     payload = request.model_dump(mode="json")
@@ -168,34 +172,41 @@ def build_draft(
     return request
 
 
-def _data_points_for_evidence(bundle: Bundle, evidence_chunk_ids: set[str]) -> list[dict]:
-    """Verified data points drawn from this page's gathered evidence chunks.
+def _data_for_evidence(
+    bundle: Bundle, evidence_chunk_ids: set[str]
+) -> tuple[list[dict], list[dict]]:
+    """Verified data points + related data artifacts for this page's evidence.
 
     Surfaces only claims whose ``chunk_id`` is already in the draft's
     evidence, so the writer can cite each number via that chunk's existing
-    ``[^eN]`` marker without introducing un-vetted evidence. Returns an
-    empty list when no claim store exists yet.
+    ``[^eN]`` marker without introducing un-vetted evidence, plus the
+    committed data-artifact pages built from those same sources so the writer
+    can link the cross-source comparison instead of recreating it. Returns
+    ``([], [])`` when no claim store exists yet.
     """
     if not bundle.claims_db_path.exists() or not evidence_chunk_ids:
-        return []
+        return [], []
     from ...data.store import DataStore
 
     store = DataStore.open(bundle.root)
     try:
         rows = store.list_points(status="verified")
+        artifacts = store.artifacts_for_chunks(list(evidence_chunk_ids))
     finally:
         store.close()
-    out: list[dict] = []
-    for r in rows:
-        if r["chunk_id"] in evidence_chunk_ids:
-            out.append({
-                "subject": r["subject"],
-                "property": r["property"],
-                "value": r["value_text"],
-                "unit": r["unit"] or "",
-                "chunk_id": r["chunk_id"],
-            })
-    return out
+    points = [
+        {
+            "subject": r["subject"],
+            "property": r["property"],
+            "value": r["value_text"],
+            "unit": r["unit"] or "",
+            "chunk_id": r["chunk_id"],
+        }
+        for r in rows
+        if r["chunk_id"] in evidence_chunk_ids
+    ]
+    related = [{"title": a["title"]} for a in artifacts]
+    return points, related
 
 
 def load_draft(bundle: Bundle, slug: str) -> WriteRequest:

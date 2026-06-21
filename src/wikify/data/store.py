@@ -308,6 +308,26 @@ class DataStore:
             "SELECT * FROM data_artifacts ORDER BY updated_at DESC"
         )]
 
+    def artifacts_for_chunks(self, chunk_ids: list[str]) -> list[dict]:
+        """Committed artifacts whose backing claims include any of *chunk_ids*.
+
+        Lets a concept page discover the data artifact(s) that generalize the
+        same sources, so the writer can link them instead of recreating a
+        per-page table.
+        """
+        if not chunk_ids:
+            return []
+        ph = ",".join("?" * len(chunk_ids))
+        rows = self.con.execute(
+            "SELECT DISTINCT a.artifact_id, a.title, a.status FROM data_artifacts a "
+            "JOIN data_artifact_claims ac ON ac.artifact_id = a.artifact_id "
+            "JOIN data_points p ON p.claim_id = ac.claim_id "
+            f"WHERE p.chunk_id IN ({ph}) AND a.status = 'committed' "
+            "ORDER BY a.title",
+            chunk_ids,
+        )
+        return [dict(r) for r in rows]
+
     # --- summary ---------------------------------------------------------
 
     def coverage(self) -> dict:

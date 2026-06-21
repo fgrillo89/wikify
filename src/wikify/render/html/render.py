@@ -34,6 +34,7 @@ from wikify.corpus.handles import (
     AmbiguousHandleError,
     HandleIndex,
     build_index,
+    short_id,
     try_resolve,
 )
 from wikify.ingest.metadata import _is_valid_author
@@ -82,6 +83,17 @@ def derive_wiki_name(corpus_root: Path | None) -> str:
 
 def _normalize(s: str) -> str:
     return _NORM_RE.sub("-", s.lower()).strip("-")
+
+
+def _doc_key(doc_id: str) -> str:
+    """Normalize a doc id to its short identity for cross-page matching.
+
+    Strips a ``doc:``/``chunk:`` handle prefix and reduces to the doc
+    short-id, so the handle form (``doc:2c89…``) and the canonical form
+    (``[2023 Kumar] …_2c89…``) of the same document compare equal.
+    """
+    s = doc_id.split(":", 1)[1] if doc_id.startswith(("doc:", "chunk:")) else doc_id
+    return short_id(s)
 
 
 def _plain_excerpt(text: str, limit: int = 200) -> str:
@@ -859,6 +871,22 @@ def _render_article(
                 seen_ids.add(candidate.id)
                 see_also.append({"title": candidate.title, "url": candidate.url})
 
+    # Related data artifacts: surface every data-artifact page that draws on a
+    # source this page also cites, so the cross-source comparison table is one
+    # click away and a data artifact is discoverable like a concept. Computed
+    # from evidence-source overlap (normalized to the doc short-id so handle
+    # and canonical forms unify), so it stays correct as data grows.
+    related_data = []
+    if pv.kind != "data":
+        page_doc_keys = {_doc_key(ev.doc_id) for ev in page.evidence if ev.doc_id}
+        for cand in shared_ctx.get("data_artifacts", []):
+            cand_page = page_by_id.get(cand.id)
+            if not cand_page:
+                continue
+            cand_keys = {_doc_key(ev.doc_id) for ev in cand_page.evidence if ev.doc_id}
+            if page_doc_keys & cand_keys:
+                related_data.append({"title": cand.title, "url": cand.url})
+
     # Build infobox for article pages.
     infobox = {}
     if pv.kind == "article":
@@ -889,6 +917,7 @@ def _render_article(
         toc=toc,
         categories=categories,
         see_also=see_also[:10],  # cap at 10 links
+        related_data=related_data[:6],
         infobox=infobox if infobox else None,
         root=root,
         **shared_ctx,

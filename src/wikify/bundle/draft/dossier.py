@@ -179,23 +179,38 @@ def render_dossier(draft: WriteRequest) -> str:
             )
         out.append("")
 
-    # Verified data points drawn from this page's evidence chunks. Each row
-    # is citable via the marker of the chunk it came from, so the writer can
-    # state specific numbers with grounding.
+    # Verified data points drawn from this page's evidence chunks. This is an
+    # internal citation index, NOT content to paste: each fact is citable via
+    # the marker of the chunk it came from. The cross-source comparison table
+    # is a separate, evolving data artifact — link it rather than rebuild it.
     if draft.data_points:
         marker_by_chunk = {ref.chunk_id: m for m, ref in by_marker.items()}
         rows = [
             dp for dp in draft.data_points if marker_by_chunk.get(dp.get("chunk_id"))
         ]
         if rows:
-            out.append("## Available data")
+            out.append("## Available data (citation index — do not paste verbatim)")
             out.append("")
             out.append(
-                "_Verified figures extracted from the chunks below. Cite a value "
-                "with the listed marker (e.g. `[^e3]`); do not invent numbers._"
+                "_Verified figures from this page's own sources. Use them to make "
+                "and ground GENERAL claims in prose: state a number inline and "
+                "attach the marker from the `Cite as` column to it (e.g. \"a SET "
+                "voltage of 0.9 V[^e3]\"). Do NOT reproduce this as a table and do "
+                "NOT add a `Marker`/`Cite as` column to the article — the marker is "
+                "the citation, not data. For the side-by-side comparison, link the "
+                "data artifact(s) listed below._"
             )
             out.append("")
-            out.append("| Subject | Property | Value | Marker |")
+            if draft.related_data_artifacts:
+                links = ", ".join(
+                    f"[[{a.get('title', '')}]]"
+                    for a in draft.related_data_artifacts
+                    if a.get("title")
+                )
+                if links:
+                    out.append(f"**Link the cross-source data artifact(s):** {links}")
+                    out.append("")
+            out.append("| Subject | Property | Value | Cite as |")
             out.append("|---|---|---|---|")
             for dp in rows:
                 marker = marker_by_chunk[dp["chunk_id"]]

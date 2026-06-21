@@ -53,21 +53,27 @@ def source_text_for(
     doc_id: str,
     chunk_id: str = "",
     locator: str = "",
-) -> tuple[str, str]:
-    """Return ``(chunk_text, asset_text)`` to verify a data point against.
+) -> tuple[str, str, str]:
+    """Return ``(chunk_text, asset_text, canonical_doc_id)`` for a data point.
 
     ``chunk_text`` is the cited chunk's body. ``asset_text`` concatenates the
     captions + table markdown of assets bound to that chunk (where caption
-    numbers and table cells live). Either may be empty.
+    numbers and table cells live). ``canonical_doc_id`` is the resolved
+    chunk's own ``doc_id`` (so claims store the same canonical form as
+    evidence and downstream joins line up); it falls back to the supplied
+    ``doc_id`` when the chunk cannot be resolved. Any field may be empty.
     """
     chunk_text = ""
+    canonical_doc_id = doc_id
     if chunk_id:
         chunks = read_chunks_by_id(corpus, [chunk_id])
         if chunks:
             chunk_text = chunks[0].text
+            if chunks[0].doc_id:
+                canonical_doc_id = chunks[0].doc_id
     con = _connect(corpus)
     if con is None:
-        return chunk_text, ""
+        return chunk_text, "", canonical_doc_id
     try:
         asset_text = _near_asset_text(con, chunk_id) if chunk_id else ""
         # Fall back to all of the doc's table assets when the chunk has no
@@ -76,13 +82,13 @@ def source_text_for(
             rows = con.execute(
                 "SELECT caption, content FROM assets "
                 "WHERE doc_id = ? AND asset_type IN ('table','figure','scheme')",
-                (doc_id,),
+                (canonical_doc_id,),
             ).fetchall()
             asset_text = "\n".join(
                 str(r["caption"] or "") + "\n" + str(r["content"] or "")
                 for r in rows
             )
-        return chunk_text, asset_text
+        return chunk_text, asset_text, canonical_doc_id
     finally:
         con.close()
 
