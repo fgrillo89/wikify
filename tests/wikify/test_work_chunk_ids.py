@@ -18,6 +18,7 @@ from wikify.bundle.work.chunk_ids import (
 )
 from wikify.bundle.work.evidence import EvidenceRecord, append_evidence, read_evidence
 from wikify.cli import app
+from wikify.corpus.handles import HandleIndex, try_resolve
 
 runner = CliRunner()
 
@@ -59,16 +60,18 @@ def _make_bundle(bundle_dir: Path, corpus_path: str = "data/corpora/test") -> Bu
 def test_build_suffix_index_empty_db(tmp_path: Path) -> None:
     db = tmp_path / "wikify.db"
     _make_corpus_db(db, [])
-    canonical_ids, suffix_map = build_suffix_index(db)
+    canonical_ids, index = build_suffix_index(db)
     assert canonical_ids == frozenset()
-    assert suffix_map == {}
+    assert isinstance(index, HandleIndex)
+    assert len(index._exact) == 0
 
 
 def test_build_suffix_index_missing_db(tmp_path: Path) -> None:
     db = tmp_path / "no_db.sqlite"
-    canonical_ids, suffix_map = build_suffix_index(db)
+    canonical_ids, index = build_suffix_index(db)
     assert canonical_ids == frozenset()
-    assert suffix_map == {}
+    assert isinstance(index, HandleIndex)
+    assert len(index._exact) == 0
 
 
 def test_build_suffix_index_canonical_ids(tmp_path: Path) -> None:
@@ -78,11 +81,12 @@ def test_build_suffix_index_canonical_ids(tmp_path: Path) -> None:
     ]
     db = tmp_path / "wikify.db"
     _make_corpus_db(db, cids)
-    canonical_ids, suffix_map = build_suffix_index(db)
+    canonical_ids, index = build_suffix_index(db)
     assert canonical_ids == frozenset(cids)
-    # Suffix of first id is "d2af4466", second is "e3bc5577".
-    assert suffix_map["d2af4466"] == cids[0]
-    assert suffix_map["e3bc5577"] == cids[1]
+    # Suffix of first id is "d2af4466", second is "e3bc5577";
+    # resolve via HandleIndex.
+    assert try_resolve("d2af4466", index) == cids[0]
+    assert try_resolve("e3bc5577", index) == cids[1]
 
 
 def test_build_suffix_index_ambiguous_suffix_pruned(tmp_path: Path) -> None:
@@ -93,8 +97,10 @@ def test_build_suffix_index_ambiguous_suffix_pruned(tmp_path: Path) -> None:
     ]
     db = tmp_path / "wikify.db"
     _make_corpus_db(db, cids)
-    _, suffix_map = build_suffix_index(db)
-    assert "aabbccdd" not in suffix_map  # ambiguous, must be pruned
+    canonical_ids, index = build_suffix_index(db)
+    # Ambiguous suffix: resolve_chunk_id must return None (not pick wrong id).
+    result = resolve_chunk_id("chunk:aabbccdd", index, canonical_ids)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -143,50 +149,35 @@ def test_resolve_chunk_id_figure_handle_exact(tmp_path: Path) -> None:
     assert resolved == cid
 
 
-def test_resolve_chunk_id_like_underscore_not_wildcard(tmp_path: Path) -> None:
-    """LIKE fallback must not treat the '_' separator as a wildcard.
+def test_resolve_chunk_id_ambiguous_suffix_returns_none(tmp_path: Path) -> None:
+    """Two ids sharing the same trailing suffix must resolve to None (ambiguous).
 
-    Two canonical ids share the same suffix hex but differ only by the
-    character immediately before it (the ``_`` separator vs a literal char
-    that happens to sit just before the suffix).  The LIKE pattern
-    ``%\\_<suffix>`` (escaped underscore) must match ONLY ids whose suffix
-    is delimited by a literal underscore, so the ambiguous pair resolves
-    to exactly one result.
+    This is the L1 regression case: two canonical ids that differ only by the
+    characters before a shared suffix hex must not silently return the wrong id.
+    The ``HandleIndex`` tier-3 logic omits ambiguous suffix entries so
+    ``resolve_chunk_id`` returns ``None`` instead of guessing.
     """
     suffix = "aabbccdd"
-    # id_a has the suffix after a literal underscore (correct canonical form).
+    # Both ids end with _aabbccdd; neither should win.
     id_a = f"paper_title_c0001_{suffix}"
-    # id_b ends with the same hex bytes but prefixed differently so the
-    # in-memory suffix_map prunes both as ambiguous.
     id_b = f"other_title_c0002_{suffix}"
     db = tmp_path / "wikify.db"
     _make_corpus_db(db, [id_a, id_b])
-    canonical_ids, suffix_map = build_suffix_index(db)
-    # Suffix is ambiguous, so suffix_map must not contain it.
-    assert suffix not in suffix_map
+    canonical_ids, index = build_suffix_index(db)
 
-    # Now remove id_b so only id_a remains in the DB — simulates the case
-    # where ambiguity existed at index-build time but a LIKE query can now
-    # disambiguate. (We rebuild the DB with just one id that has that suffix.)
+    # Ambiguous: resolve must return None.
+    resolved = resolve_chunk_id(f"chunk:{suffix}", index, canonical_ids)
+    assert resolved is None, (
+        f"Expected None for ambiguous suffix, got {resolved!r}"
+    )
+
+    # Unambiguous: rebuild with only id_a; suffix resolves uniquely.
     db2 = tmp_path / "wikify2.db"
     _make_corpus_db(db2, [id_a])
-    canonical_ids2, suffix_map2 = build_suffix_index(db2)
-    # With a single match, in-memory index resolves it directly.
-    assert suffix_map2[suffix] == id_a
-
-    # Regression: verify LIKE fallback with a DB that has two ids sharing
-    # the suffix — result must be None (ambiguous, len(rows) != 1), not a
-    # wrong id chosen because '_' was treated as a LIKE wildcard.
-    # To exercise the LIKE path we need an empty suffix_map but a populated DB.
-    # We patch the suffix_map to be empty to force the fallback path.
-    empty_suffix_map: dict[str, str] = {}
-    resolved = resolve_chunk_id(
-        f"chunk:{suffix}", empty_suffix_map, canonical_ids, sqlite_path=db
-    )
-    # Two rows match -> len(rows) != 1 -> should return None (ambiguous).
-    assert resolved is None, (
-        f"Expected None for ambiguous LIKE result, got {resolved!r}"
-    )
+    canonical_ids2, index2 = build_suffix_index(db2)
+    assert try_resolve(suffix, index2) == id_a
+    resolved2 = resolve_chunk_id(f"chunk:{suffix}", index2, canonical_ids2)
+    assert resolved2 == id_a
 
 
 # ---------------------------------------------------------------------------

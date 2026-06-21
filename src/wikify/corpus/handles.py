@@ -9,12 +9,18 @@ The hex suffix is globally unique. This module lets the CLI accept and
 emit the suffix alone (``5f92b0389ccd``) without losing the ability to
 take a full id, while still resolving correctly when no hash suffix is
 present (test fixtures use plain ids like ``paper_0``).
+
+For bulk callers that resolve thousands of ids, use ``build_index`` /
+``resolve_indexed`` / ``try_resolve`` so each lookup is O(1) rather
+than O(N) per call.  ``resolve`` and ``try_resolve`` also accept a
+pre-built ``HandleIndex`` transparently.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 # Hex-suffix pattern at end of an id, preceded by ``_``. Length 8+ is a
 # heuristic that catches real corpus ids without false-positives on
@@ -54,8 +60,102 @@ def short_id(full_id: str) -> str:
     return m.group(1) if m else full_id
 
 
-def resolve(short: str, candidates: Iterable[str]) -> str:
-    """Resolve *short* against *candidates* (full ids).
+# ---------------------------------------------------------------------------
+# Indexed (O(1)) resolver
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HandleIndex:
+    """Pre-built O(1) resolver over a fixed candidate set.
+
+    Build once with ``build_index(candidates)``; reuse for many lookups.
+
+    Internal maps:
+
+    * ``_exact`` — all full ids as a set (tier-1 hit).
+    * ``_by_short`` — ``short_id(full) -> [full, ...]`` (tier-2).
+    * ``_by_suffix`` — ``"_" + suffix -> full`` for unambiguous
+      ``endswith`` matches (tier-3).  Ambiguous entries are omitted.
+    """
+
+    _exact: set[str] = field(default_factory=set)
+    _by_short: dict[str, list[str]] = field(default_factory=dict)
+    _by_suffix: dict[str, str] = field(default_factory=dict)
+
+    def __contains__(self, item: str) -> bool:  # noqa: D105
+        return item in self._exact
+
+
+def build_index(candidates: Iterable[str]) -> HandleIndex:
+    """Build a ``HandleIndex`` from *candidates* (full ids).
+
+    The tier semantics are identical to ``resolve``:
+
+    * Tier 1 — exact match.
+    * Tier 2 — ``short_id(full) == short`` (unique short-hash match).
+    * Tier 3 — ``full.endswith("_" + short)`` for unambiguous suffix.
+
+    Ambiguous tier-2 and tier-3 entries are retained (they still raise
+    ``AmbiguousHandleError`` at lookup time), but tier-3 entries that
+    are ambiguous are simply omitted from ``_by_suffix`` — a
+    ``HandleNotFoundError`` falls through to ``resolve`` callers
+    correctly.
+    """
+    idx = HandleIndex()
+    # tier-3 tracking: suffix_key -> [full, ...]
+    suffix_map: dict[str, list[str]] = {}
+
+    for full in candidates:
+        idx._exact.add(full)
+        s = short_id(full)
+        idx._by_short.setdefault(s, []).append(full)
+        # Tier-3: the leading-underscore suffix key.
+        last_under = full.rfind("_")
+        if last_under != -1:
+            suffix_key = full[last_under:]  # includes the leading "_"
+            suffix_map.setdefault(suffix_key, []).append(full)
+
+    # Populate _by_suffix only for unambiguous entries.
+    for suffix_key, fulls in suffix_map.items():
+        if len(fulls) == 1:
+            idx._by_suffix[suffix_key] = fulls[0]
+
+    return idx
+
+
+def resolve_indexed(short: str, index: HandleIndex) -> str:
+    """Resolve *short* against a pre-built ``HandleIndex``.
+
+    Same tier semantics and same exceptions as ``resolve``.
+    """
+    # Tier 1: exact.
+    if short in index._exact:
+        return short
+
+    # Tier 2: short_id match.
+    by_short = index._by_short.get(short, [])
+    if len(by_short) == 1:
+        return by_short[0]
+    if len(by_short) > 1:
+        raise AmbiguousHandleError(short, by_short)
+
+    # Tier 3: unambiguous leading-underscore suffix.
+    suffix_key = "_" + short
+    if suffix_key in index._by_suffix:
+        return index._by_suffix[suffix_key]
+
+    # Check whether the suffix was present but ambiguous (not in _by_suffix
+    # but more than one candidate ends with this key).
+    ambiguous = [f for f in index._exact if f.endswith(suffix_key)]
+    if len(ambiguous) > 1:
+        raise AmbiguousHandleError(short, ambiguous)
+
+    raise HandleNotFoundError(short)
+
+
+def resolve(short: str, candidates: Iterable[str] | HandleIndex) -> str:
+    """Resolve *short* against *candidates* (full ids) or a ``HandleIndex``.
 
     Resolution rules, in order:
 
@@ -68,7 +168,13 @@ def resolve(short: str, candidates: Iterable[str]) -> str:
 
     Raises ``HandleNotFoundError`` on zero matches and
     ``AmbiguousHandleError`` on multiple matches at the same tier.
+
+    Accepts either an iterable of full ids or a pre-built ``HandleIndex``
+    (the indexed path is O(1) per lookup; the iterable path is O(N)).
     """
+    if isinstance(candidates, HandleIndex):
+        return resolve_indexed(short, candidates)
+
     cands = list(candidates)
 
     # Tier 1: exact.
@@ -92,6 +198,21 @@ def resolve(short: str, candidates: Iterable[str]) -> str:
         raise AmbiguousHandleError(short, underscore)
 
     raise HandleNotFoundError(short)
+
+
+def try_resolve(
+    short: str,
+    candidates: Iterable[str] | HandleIndex,
+) -> str | None:
+    """Like ``resolve`` but returns ``None`` instead of raising on miss.
+
+    Convenient for "resolve or skip" sites.  Still propagates
+    ``AmbiguousHandleError`` so callers can decide whether to warn.
+    """
+    try:
+        return resolve(short, candidates)
+    except HandleNotFoundError:
+        return None
 
 
 def format_handle(kind: str, full_id: str, *, long: bool = False) -> str:
@@ -139,9 +260,13 @@ def format_chunk_handles(rows: Iterable[tuple[str, str]]) -> dict[str, str]:
 
 __all__ = [
     "AmbiguousHandleError",
+    "HandleIndex",
     "HandleNotFoundError",
+    "build_index",
     "format_chunk_handles",
     "format_handle",
     "resolve",
+    "resolve_indexed",
     "short_id",
+    "try_resolve",
 ]

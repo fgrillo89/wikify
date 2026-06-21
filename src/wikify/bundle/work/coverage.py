@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ...api import Bundle, Corpus
+from ...corpus.handles import HandleIndex
 from .chunk_ids import _build_suffix_index_from_rows, resolve_chunk_id
 from .evidence import read_evidence
 from .notebook import list_notebook_slugs, read_notebook
@@ -44,7 +45,7 @@ class CoverageReport:
 
 def _corpus_chunk_index(
     corpus: Corpus,
-) -> tuple[set[str], dict[str, str], frozenset[str], dict[str, str]]:
+) -> tuple[set[str], dict[str, str], frozenset[str], HandleIndex]:
     """Return ``(all_chunk_ids, chunk_id_to_doc_id, canonical_ids, suffix_index)``.
 
     Reads directly from ``<corpus>/wikify.db``. Empty collections if the
@@ -53,13 +54,13 @@ def _corpus_chunk_index(
     helpers to resolve short handles stored in legacy evidence ledgers.
     """
     if not corpus.sqlite_path.exists():
-        return set(), {}, frozenset(), {}
+        return set(), {}, frozenset(), HandleIndex()
     con = sqlite3.connect(str(corpus.sqlite_path))
     try:
         con.row_factory = sqlite3.Row
         rows = con.execute("SELECT chunk_id, doc_id FROM chunks").fetchall()
     except sqlite3.OperationalError:
-        return set(), {}, frozenset(), {}
+        return set(), {}, frozenset(), HandleIndex()
     finally:
         con.close()
     chunk_to_doc = {r["chunk_id"]: r["doc_id"] for r in rows}
@@ -70,7 +71,7 @@ def _corpus_chunk_index(
 def _normalize_chunk_id(
     raw: str,
     canonical_ids: frozenset[str],
-    suffix_index: dict[str, str],
+    suffix_index: HandleIndex,
     sqlite_path: Path | None = None,
 ) -> str:
     """Return the canonical id for *raw*, or *raw* itself if unresolvable.
@@ -132,7 +133,7 @@ def _in_flight_chunk_ids(bundle: Bundle) -> set[str]:
 def _normalize_set(
     raw_ids: set[str],
     canonical_ids: frozenset[str],
-    suffix_index: dict[str, str],
+    suffix_index: HandleIndex,
     sqlite_path: Path | None = None,
 ) -> set[str]:
     """Resolve a set of possibly-short chunk ids to canonical ids."""

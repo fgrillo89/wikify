@@ -16,17 +16,17 @@ Figure-chunk handles use a different form:
 Evidence records written by explorer subagents often carry handles
 instead of canonical ids. This module provides a single resolver that
 maps any id/handle form to the canonical chunk_id, building an
-in-memory suffix index over the corpus ``chunks`` table once per
+in-memory ``HandleIndex`` over the corpus ``chunks`` table once per
 call-site.
 
 Public API
 ----------
 ``build_suffix_index(corpus_sqlite_path)``
-    Returns ``(canonical_ids: frozenset, suffix_to_canonical: dict)``.
+    Returns ``(canonical_ids: frozenset, index: HandleIndex)``.
     Builds the index once; callers cache the return value if they need
     multiple look-ups.
 
-``resolve_chunk_id(raw, suffix_index, canonical_ids)``
+``resolve_chunk_id(raw, suffix_index_or_index, canonical_ids)``
     Map *raw* to the canonical id or ``None`` if unresolvable.
     Accepts already-canonical ids, ``chunk:<hex>`` handles, and
     ``chunk:<dochex>/fig_NNN__caption`` figure handles.
@@ -37,67 +37,54 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ...corpus.handles import (
+    AmbiguousHandleError,
+    HandleIndex,
+    build_index,
+    try_resolve,
+)
+
 
 def _build_suffix_index_from_rows(
     chunk_ids: list[str],
-) -> tuple[frozenset[str], dict[str, str]]:
-    """Build canonical-id set and suffix map from a pre-fetched list of chunk_ids.
+) -> tuple[frozenset[str], HandleIndex]:
+    """Build canonical-id set and ``HandleIndex`` from a pre-fetched list.
 
     Returns
     -------
     canonical_ids
         All canonical chunk ids as a frozenset.
-    suffix_to_canonical
-        Maps the trailing ``_``-delimited suffix of each canonical id to
-        the full canonical id.  Entries where the suffix is ambiguous
-        (multiple ids share the same suffix) are dropped.
+    index
+        A ``HandleIndex`` built over the same set; used by
+        ``resolve_chunk_id`` for O(1) per-lookup resolution.
     """
-    canonical_ids: set[str] = set()
-    suffix_counts: dict[str, int] = {}
-    suffix_map: dict[str, str] = {}
-
-    for cid in chunk_ids:
-        canonical_ids.add(cid)
-        # Extract the last ``_``-delimited segment as the suffix.
-        parts = cid.rsplit("_", 1)
-        if len(parts) == 2:
-            suffix = parts[1]
-            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
-            suffix_map[suffix] = cid  # may be overwritten; pruned below
-
-    # Remove ambiguous suffixes.
-    for suffix, count in suffix_counts.items():
-        if count > 1 and suffix in suffix_map:
-            del suffix_map[suffix]
-
-    return frozenset(canonical_ids), suffix_map
+    idx = build_index(chunk_ids)
+    return frozenset(chunk_ids), idx
 
 
 def build_suffix_index(
     sqlite_path: Path,
-) -> tuple[frozenset[str], dict[str, str]]:
-    """Load all chunk_ids from the corpus SQLite and build a suffix map.
+) -> tuple[frozenset[str], HandleIndex]:
+    """Load all chunk_ids from the corpus SQLite and build a ``HandleIndex``.
 
     Returns
     -------
     canonical_ids
         All canonical chunk ids as a frozenset.
-    suffix_to_canonical
-        Maps the trailing ``_``-delimited suffix of each canonical id to
-        the full canonical id.  For ids of the form
-        ``<prefix>_<suffix_hex>`` the key is ``<suffix_hex>``.  Entries
-        where the suffix would be ambiguous (multiple canonical ids share
-        the same suffix) are dropped — the resolver then falls through to
-        a SQLite LIKE query for those rare cases.
+    index
+        A ``HandleIndex`` built over the same set.  The return type
+        intentionally mirrors the old ``(frozenset, dict)`` shape so
+        existing callers that unpack the pair continue to work; the
+        second element is now a ``HandleIndex`` instead of a plain dict.
     """
     if not sqlite_path.exists():
-        return frozenset(), {}
+        return frozenset(), HandleIndex()
 
     con = sqlite3.connect(str(sqlite_path))
     try:
         rows = con.execute("SELECT chunk_id FROM chunks").fetchall()
     except sqlite3.OperationalError:
-        return frozenset(), {}
+        return frozenset(), HandleIndex()
     finally:
         con.close()
 
@@ -106,7 +93,7 @@ def build_suffix_index(
 
 def resolve_chunk_id(
     raw: str,
-    suffix_index: dict[str, str],
+    suffix_index: dict[str, str] | HandleIndex,
     canonical_ids: frozenset[str],
     *,
     sqlite_path: Path | None = None,
@@ -115,11 +102,13 @@ def resolve_chunk_id(
 
     Resolution order:
     1. Already canonical: present in ``canonical_ids`` -> return as-is.
-    2. ``chunk:<suffix_hex>`` handle: look up in ``suffix_index``.
+    2. ``chunk:<suffix_hex>`` handle: resolve via ``HandleIndex``.
     3. ``chunk:<dochex>/fig_NNN__caption`` figure handle:
-       try it both as-is (exact match) and via suffix index.
-    4. Fallback SQLite LIKE query when ``sqlite_path`` is supplied and
-       the suffix was ambiguous (not in the in-memory index).
+       try exact match then resolve the compound id via ``HandleIndex``.
+
+    The ``sqlite_path`` parameter is accepted for backward compatibility
+    but is no longer used; resolution is entirely in-memory via the
+    ``HandleIndex``.
 
     Returns ``None`` if unresolvable.
     """
@@ -130,6 +119,13 @@ def resolve_chunk_id(
     if raw in canonical_ids:
         return raw
 
+    # Coerce a legacy plain-dict suffix_index to a HandleIndex so this
+    # function works whether callers pass the old dict or the new index.
+    if not isinstance(suffix_index, HandleIndex):
+        index: HandleIndex = build_index(canonical_ids)
+    else:
+        index = suffix_index
+
     # Handle form: chunk:<payload>
     if raw.startswith("chunk:"):
         payload = raw[len("chunk:"):]
@@ -139,36 +135,15 @@ def resolve_chunk_id(
             # Try exact match first (the full payload might be a canonical id).
             if payload in canonical_ids:
                 return payload
-            # Try suffix index on the last _-segment of payload.
-            parts = payload.rsplit("_", 1)
-            if len(parts) == 2 and parts[1] in suffix_index:
-                return suffix_index[parts[1]]
+            # Resolve the compound payload as a short handle.
+            result = try_resolve(payload, index)
+            return result
+
+        # Plain hex suffix: resolve as short handle.
+        try:
+            return try_resolve(payload, index)
+        except AmbiguousHandleError:
             return None
-
-        # Plain hex suffix.
-        if payload in suffix_index:
-            return suffix_index[payload]
-
-        # Ambiguous suffix: fall back to LIKE query if sqlite_path given.
-        if sqlite_path is not None and sqlite_path.exists():
-            suffix_esc = (
-                payload
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
-            con = sqlite3.connect(str(sqlite_path))
-            try:
-                rows = con.execute(
-                    "SELECT chunk_id FROM chunks "
-                    "WHERE chunk_id LIKE ? ESCAPE '\\'",
-                    (f"%\\_{suffix_esc}",),
-                ).fetchall()
-            finally:
-                con.close()
-            if len(rows) == 1:
-                return rows[0][0]
-        return None
 
     # Bare suffix without the "chunk:" prefix? Treat as unknown.
     return None
