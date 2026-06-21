@@ -218,4 +218,12 @@ Tests added: `tests/wikify/test_render_citations.py`, `tests/wikify/test_artifac
 
 ## Adversarial review findings
 
-_(appended after final review)_
+An adversarial reviewer (Opus) attacked the branch diff (`git diff master...HEAD`) and re-inspected every rendered artifact. **Verdict: CLEAN — no critical or major findings.** ruff pass; pytest 1504 passed / 1 skipped.
+
+- Regex `_DATA_FOOTNOTE_DOCID_TAIL_RE` checked adversarially against quotes containing parens (`(metallic phase)`), `(p. 3)` locators, hashless doc_ids, and a 12-hex-in-parens-before-`> "` — no over-match or under-match.
+- `kind="data"` branch is isolated; non-data (article) footnote behavior is byte-identical to before (covered by tests).
+- Orphan figure-sup removal substitutes the whole `<sup>…</sup>` (no dangling markup); only fires for markers with no body footnote-ref.
+- **Cross-link integrity confirmed**: the on-disk `wiki/data/*.md` retains the `(<doc_id>_<12hex>)` parser tail on all 25 footnotes; the hash strip is render-only; `Page._parse_evidence_value` still recovers `doc_id`. End-to-end, the Related-data cross-link correctly fires on the pages that share a source doc with the artifact (**Memristor**, **Resistive switching**); the other four articles do not cite the device-table source papers, so no link is the correct outcome (the reviewer's "all 6" was an overstatement — verified directly: 2 of 6, which is right).
+- Two nits raised, both "no change required" (data pages intentionally skip CS1 formatting; a redundant on-disk parenthetical for hashless ids with no reader impact).
+
+No remediation required after the adversarial pass.
