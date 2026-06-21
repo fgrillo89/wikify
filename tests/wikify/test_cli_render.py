@@ -13,6 +13,24 @@ from wikify.cli import app
 runner = CliRunner()
 
 
+def test_extract_doc_id_does_not_crash_on_ambiguous_handle() -> None:
+    """A footnote whose doc short-handle is ambiguous across two docs must
+    not crash the render: ``_extract_doc_id`` falls through to the head
+    rather than letting ``AmbiguousHandleError`` propagate (regression vs
+    the pre-resolver map-lookup path, which could never raise)."""
+    from wikify.corpus.handles import build_index
+    from wikify.render.html.render import _extract_doc_id
+
+    # Two docs whose ids share the trailing hex -> ambiguous short handle.
+    doc_index = build_index(
+        ["a_title_c0001_deadbeef", "b_title_c0002_deadbeef"]
+    )
+    head = "some_chunk (doc:deadbeef)"
+    # Must return (no exception); falls through to the unresolved head.
+    result = _extract_doc_id(head, doc_meta_map={}, doc_index=doc_index)
+    assert result == head
+
+
 def _commit_one_article(tmp_path: Path):
     bundle, slug = _setup_validated(tmp_path)
     runner.invoke(app, ["wiki", "commit", slug, "--run", str(bundle.root)])

@@ -14,7 +14,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from wikify.render.html.render import _body_has_figure, _inject_fallback_figure
+from wikify.render.html.render import (
+    _body_has_figure,
+    _figure_alt_text,
+    _inject_fallback_figure,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal stubs
@@ -179,6 +183,21 @@ def test_used_figure_ids_updated_after_selection(corpus_dir: Path) -> None:
     used: set[str] = set()
     _call_inject(corpus_dir, "doc_abc", img, used)
     assert "doc_abc/fig_000" in used
+
+
+def test_figure_alt_text_is_human_readable() -> None:
+    """Alt text prefers a label, falls back to a bounded caption, then a
+    generic string -- never the raw figure id (useless to screen readers)."""
+    # Label wins.
+    assert _figure_alt_text("Device schematic", "long caption here") == "Device schematic"
+    # No label -> caption, whitespace collapsed.
+    assert _figure_alt_text("", "Cross-section\n  TEM image") == "Cross-section TEM image"
+    # Long caption is truncated.
+    long = "x" * 300
+    out = _figure_alt_text("", long)
+    assert out.endswith("...") and len(out) <= 163
+    # Nothing -> generic.
+    assert _figure_alt_text("", "") == "Figure"
 
 
 def test_body_has_figure_detects_html_and_markdown() -> None:

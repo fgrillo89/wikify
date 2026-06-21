@@ -242,3 +242,37 @@ def test_figure_handle_resolution_via_index() -> None:
     # Short form of compound id shortens doc-part only.
     short = short_id(fig_id)  # "5f92b0389ccd/fig_001__caption"
     assert resolve_indexed(short, idx) == fig_id
+
+
+@pytest.mark.parametrize(
+    "candidates, short",
+    [
+        # exact match (tier 1)
+        (["paper_0", "paper_1"], "paper_0"),
+        # short_id / hex-suffix match (tier 2)
+        (["a_title_c0001_5f92b0389ccd", "b_c0002_aa11bb22cc33"], "5f92b0389ccd"),
+        # delimited-suffix match (tier 3)
+        (["x_title_zzzzzzzz", "y"], "zzzzzzzz"),
+        # exact id that is ALSO a suffix of another: tier-1 exact wins
+        (["aabbccdd", "other_aabbccdd"], "aabbccdd"),
+        # miss
+        (["paper_0"], "nope"),
+        # tier-2 ambiguity
+        (["a_c0001_dddddddd", "b_c0002_dddddddd"], "dddddddd"),
+    ],
+)
+def test_resolve_equivalence_list_vs_index(candidates, short) -> None:
+    """The consolidation's central claim: ``resolve(s, list)`` and
+    ``resolve(s, build_index(list))`` agree on the resolved id AND on the
+    exception raised, across all tiers and the miss/ambiguous cases."""
+    idx = build_index(candidates)
+
+    def outcome(call):
+        try:
+            return ("ok", call())
+        except (AmbiguousHandleError, HandleNotFoundError) as exc:
+            return ("err", type(exc).__name__)
+
+    assert outcome(lambda: resolve(short, list(candidates))) == outcome(
+        lambda: resolve(short, idx)
+    )

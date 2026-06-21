@@ -30,7 +30,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from wikify.bundle.wiki.navigation import read_navigation
 from wikify.bundle.wiki.page import Bundle, Page
 from wikify.bundle.wiki.page_naming import url_slug
-from wikify.corpus.handles import HandleIndex, build_index, try_resolve
+from wikify.corpus.handles import (
+    AmbiguousHandleError,
+    HandleIndex,
+    build_index,
+    try_resolve,
+)
 from wikify.ingest.metadata import _is_valid_author
 from wikify.render.html.citation import format_cs1
 
@@ -243,6 +248,7 @@ def build_site(
         pages=[page_by_id[pv.id] for pv in page_views if pv.id in page_by_id],
         page_views={pv.id: pv for pv in page_views},
         doc_meta_map=doc_meta_map,
+        doc_index=doc_index,
     )
     refs_html = env.get_template("references.html").render(
         title="References",
@@ -411,6 +417,7 @@ def _aggregate_references(
     pages: list[Page],
     page_views: dict[str, "_PageView"],
     doc_meta_map: dict[str, dict],
+    doc_index: HandleIndex | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate every cited doc into a CS1-formatted reference list.
 
@@ -419,13 +426,28 @@ def _aggregate_references(
     from first-author surname + year. Docs cited by zero pages are
     omitted; docs missing from ``doc_meta_map`` render as a bare
     ``doc_id`` so nothing silently disappears.
+
+    Evidence carries the short ``doc:<hex>`` handle, while
+    ``doc_meta_map`` is keyed by the full canonical doc_id; resolve each
+    handle through ``doc_index`` so the CS1 metadata is found (otherwise
+    every entry degrades to a raw doc-id code span).
     """
     doc_to_pages: dict[str, set[str]] = {}
     for page in pages:
         for ev in page.evidence:
             if not ev.doc_id:
                 continue
-            doc_to_pages.setdefault(ev.doc_id, set()).add(page.id)
+            raw = ev.doc_id
+            bare = raw[4:] if raw.startswith("doc:") else raw
+            full = raw
+            if doc_index is not None:
+                try:
+                    resolved = try_resolve(bare, doc_index)
+                except AmbiguousHandleError:
+                    resolved = None
+                if resolved is not None:
+                    full = resolved
+            doc_to_pages.setdefault(full, set()).add(page.id)
 
     out: list[dict[str, Any]] = []
     md = markdown.Markdown(extensions=["smarty"])
@@ -687,9 +709,10 @@ def _inject_fallback_figure(
     caption = escape(chosen.caption)
     if chosen.label:
         caption = escape(chosen.label) + ": " + caption
+    alt = escape(_figure_alt_text(chosen.label or "", chosen.caption or ""))
     figure_html = (
         f'\n\n<figure class="wiki-figure wiki-figure-fallback">'
-        f'<img src="{url}" alt="{escape(chosen.label or chosen.id)}">'
+        f'<img src="{url}" alt="{alt}">'
         f"<figcaption>{caption}</figcaption>"
         "</figure>\n\n"
     )
@@ -741,6 +764,17 @@ def _render_article(
         corpus_root=corpus_root,
         page_url_depth=1,
     )
+
+    # Register this page's writer-embedded figures so a LATER page's
+    # fallback never reuses a figure already shown on this page. Without
+    # this, a page that embeds figure X and a page with no embedded figure
+    # could both display X (embedded-vs-fallback collision).
+    if used_figure_ids is not None and _body_has_figure(body_md):
+        for fig in page.figures or []:
+            if isinstance(fig, dict):
+                fid = str(fig.get("figure_id") or "").strip()
+                if fid:
+                    used_figure_ids.add(fid)
 
     # Fallback: if the body has no embedded figures, inject the top captioned
     # figure from the evidence docs so older committed pages (built before the
@@ -1244,7 +1278,13 @@ def _extract_doc_id(
                     # try the index first, then fall back to the map.
                     bare = candidate[4:] if candidate.startswith("doc:") else candidate
                     if doc_index is not None:
-                        resolved = try_resolve(bare, doc_index)
+                        # An ambiguous short handle is not a render error:
+                        # fall through to the map lookup / treat the head as
+                        # the doc_id rather than crashing the page build.
+                        try:
+                            resolved = try_resolve(bare, doc_index)
+                        except AmbiguousHandleError:
+                            resolved = None
                         if resolved is not None:
                             return resolved
                     # Fallback: direct map lookup (covers exact full ids
@@ -1421,6 +1461,21 @@ def _safe_asset_name(value: str) -> str:
     return clean or "figure"
 
 
+def _figure_alt_text(label: str, caption: str) -> str:
+    """Human-readable alt text for a figure.
+
+    Prefers a short label; else a length-bounded plain-text slice of the
+    caption; else a generic fallback. Never the raw figure id (a doc-hex
+    path is useless to a screen reader)."""
+    label = (label or "").strip()
+    if label:
+        return label
+    caption = " ".join((caption or "").split())  # collapse whitespace
+    if caption:
+        return caption[:160].rstrip() + ("..." if len(caption) > 160 else "")
+    return "Figure"
+
+
 def _replace_selected_figure_placeholders(
     body: str,
     *,
@@ -1468,7 +1523,11 @@ def _replace_selected_figure_placeholders(
                 f'<a href="#fn:{escape(marker)}">[{escape(marker)}]</a>'
                 f"</sup>"
             )
-        alt = escape(str(fig.get("figure_id") or anchor))
+        alt = escape(
+            _figure_alt_text(
+                str(fig.get("label") or ""), str(fig.get("caption") or "")
+            )
+        )
         return (
             f'\n\n<figure class="wiki-figure" id="figure-{escape(anchor)}">'
             f'<img src="{url}" alt="{alt}">'
