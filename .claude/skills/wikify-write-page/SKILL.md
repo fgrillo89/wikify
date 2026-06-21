@@ -21,9 +21,9 @@ produces `response.json` content that must later pass validation.
   references, and optional adjacent-chunk context inside a
   collapsible `<details>` block. When suitable images are available,
   it also includes a Figure candidates section and an **Available data**
-  citation index of verified numbers from this page's sources — ground
-  GENERAL claims inline (attach the `Cite as` marker to the value), never
-  paste it as a table/column, and link any listed data artifact instead.
+  citation index — ground GENERAL claims inline (attach the `Cite as`
+  marker to the value), never paste it as a table/column; name any data
+  artifact in prose (auto-linked under Related data; no `[[wikilinks]]`).
 - `draft.json` — the canonical structured contract validators read.
   The writer normally does NOT need to read it; `dossier.md` carries
   the same evidence in human-readable form. Open `draft.json` only

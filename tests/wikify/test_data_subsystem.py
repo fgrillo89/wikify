@@ -475,6 +475,62 @@ def test_cli_add_verifies_and_rejects(tmp_path: Path) -> None:
     assert payload["stored"] == 1
 
 
+def test_artifacts_for_chunks_after_commit(tmp_path: Path) -> None:
+    """A committed artifact is discoverable from any chunk backing it — the
+    join that lets a concept page surface its related data artifact."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1"),
+        _verified("HfO2", "GPC", "1.0", "A/cycle", "d2", "c2", "q2"),
+    ])
+    spec = ArtifactSpec(artifact_id="gpc", title="GPC Table", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.upsert_artifact(spec, n_rows=table.n_rows)
+    store.set_artifact_claims(spec.artifact_id, table.claim_ids)
+    # Draft (not committed) -> not surfaced.
+    assert store.artifacts_for_chunks(["c1"]) == []
+    store.set_artifact_status(spec.artifact_id, "committed")
+    hits = store.artifacts_for_chunks(["c1"])
+    assert [h["artifact_id"] for h in hits] == ["gpc"]
+    # A chunk that backs nothing returns no artifact.
+    assert store.artifacts_for_chunks(["nope"]) == []
+
+
+def test_related_data_cross_link_rendered(tmp_path: Path) -> None:
+    """A concept page that shares an evidence source with a data artifact gets
+    an automatic 'Related data' link to it at render time."""
+    from wikify.bundle.wiki.page import load_bundle
+    from wikify.render.html.render import build_site
+
+    wiki = tmp_path / "wiki"
+    (wiki / "articles").mkdir(parents=True)
+    (wiki / "data").mkdir(parents=True)
+    # Article cites doc handle 'doc:abc123def456'; data page cites the canonical
+    # form of the same doc — they must still cross-link (doc-key normalization).
+    (wiki / "articles" / "Atomic Layer Deposition.md").write_text(
+        "---\nid: Atomic Layer Deposition\nkind: article\n"
+        "title: Atomic Layer Deposition\naliases: []\nlinks: []\n---\n\n"
+        "# Atomic Layer Deposition\n\n"
+        + ("ALD is a self-limiting thin-film growth technique. " * 6)
+        + "[^e1]\n\n## References\n\n"
+        '[^e1]: c0 (doc:abc123def456) > "ALD is a thin-film technique"\n',
+        encoding="utf-8",
+    )
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1 A/cycle", "A/cycle",
+                  "paper_2020_abc123def456", "c1", "GPC 1.1"),
+    ])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD Growth Per Cycle", properties=["GPC"])
+    write_artifact_page(wiki / "data", spec, consolidate(store, spec))
+
+    out = tmp_path / "site"
+    build_site(load_bundle(wiki), out, corpus_root=None)
+    article = (out / "articles" / "Atomic_Layer_Deposition.html").read_text(encoding="utf-8")
+    assert "Related data" in article
+    assert "ALD_Growth_Per_Cycle.html" in article
+
+
 def test_cli_add_errors_when_corpus_unresolvable(tmp_path: Path) -> None:
     """Review M3: `data add` must fail loudly (not silently reject all) when
     no corpus can be resolved to verify against."""

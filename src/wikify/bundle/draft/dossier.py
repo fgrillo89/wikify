@@ -197,18 +197,23 @@ def render_dossier(draft: WriteRequest) -> str:
                 "attach the marker from the `Cite as` column to it (e.g. \"a SET "
                 "voltage of 0.9 V[^e3]\"). Do NOT reproduce this as a table and do "
                 "NOT add a `Marker`/`Cite as` column to the article — the marker is "
-                "the citation, not data. For the side-by-side comparison, link the "
-                "data artifact(s) listed below._"
+                "the citation, not data._"
             )
             out.append("")
             if draft.related_data_artifacts:
-                links = ", ".join(
-                    f"[[{a.get('title', '')}]]"
+                names = ", ".join(
+                    f'"{a.get("title", "")}"'
                     for a in draft.related_data_artifacts
                     if a.get("title")
                 )
-                if links:
-                    out.append(f"**Link the cross-source data artifact(s):** {links}")
+                if names:
+                    out.append(
+                        "_The side-by-side comparison lives in the data "
+                        f"artifact(s) {names}, automatically linked from this page "
+                        "under \"Related data\". Mention it by name in prose where "
+                        "helpful; do NOT emit `[[wikilinks]]` (the validator "
+                        "rejects them) and do NOT rebuild the table here._"
+                    )
                     out.append("")
             out.append("| Subject | Property | Value | Cite as |")
             out.append("|---|---|---|---|")
