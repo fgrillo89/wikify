@@ -128,10 +128,14 @@ def cmd_show(
     fmt: str = typer.Option("text", "--format", help="text | json"),
 ) -> None:
     """Print the current run state. ``--full`` includes computed cost."""
+    from ..bundle.run.cost import spent_haiku_eq
+
     bundle = _resolve_bundle(run)
     state = load_state(bundle)
+    spent = spent_haiku_eq(bundle)
     if fmt == "json":
         out: dict = state.model_dump()
+        out["budget"]["spent_haiku_eq"] = spent
         if full:
             from ..bundle.run.cost import cost_summary
             out["cost"] = cost_summary(bundle)
@@ -144,8 +148,7 @@ def cmd_show(
     typer.echo(f"updated:   {state.updated_at}")
     if detail or full:
         typer.echo(
-            f"budget:    {state.budget.spent_haiku_eq}/"
-            f"{state.budget.target_haiku_eq} haiku-eq"
+            f"budget:    {spent}/{state.budget.target_haiku_eq} haiku-eq"
         )
         if state.stages:
             typer.echo("stages:")
@@ -180,7 +183,7 @@ def cmd_sense(
     from collections import Counter
 
     from ..api import Corpus
-    from ..bundle.run.cost import reconcile_spent
+    from ..bundle.run.cost import spent_haiku_eq
     from ..bundle.wiki.derived import list_committed_pages
     from ..bundle.work.card import list_concept_slugs
     from ..bundle.work.coverage import compute_coverage
@@ -189,7 +192,7 @@ def cmd_sense(
 
     bundle = _resolve_bundle(run)
     state = load_state(bundle)
-    spent = reconcile_spent(bundle)
+    spent = spent_haiku_eq(bundle)
     target = state.budget.target_haiku_eq
 
     committed_pages = list_committed_pages(bundle)
@@ -408,8 +411,6 @@ def cmd_record_call(
             data=payload,
         ),
     )
-    from ..bundle.run.cost import reconcile_spent
-    reconcile_spent(bundle)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, **payload}))
     else:
@@ -696,9 +697,6 @@ def cmd_record_calls(
             continue
         appended += 1
 
-    if appended:
-        from ..bundle.run.cost import reconcile_spent
-        reconcile_spent(bundle)
     summary = {
         "ok": True,
         "run": str(bundle.root),

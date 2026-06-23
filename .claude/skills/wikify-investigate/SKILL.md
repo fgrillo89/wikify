@@ -187,13 +187,14 @@ EOF
 
 P5 produces `evidence_suggestion` and `concept_suggestion` inbox
 records; `work tend` consolidates them. P1 may also append concept
-suggestions. `work tend` promotes a `concept_suggestion` to a concept
-folder only once a title is backed by >= 2 distinct supporting chunks
-(a one-off P5 gap proposal is retained in the inbox and accumulates
-across rounds); a deliberate concept added via `work add feedback
-concept` (no `chunk_id`) is promoted immediately. This keeps the roster
-from filling with evidence-less stubs that would keep the SEED wave
-firing on phantom concepts.
+suggestions. `work tend` promotes a `concept_suggestion` carrying
+`"origin": "gap_explorer"` to a concept folder only once its title is
+backed by >= 2 distinct supporting chunks (a one-off gap proposal is
+retained in the inbox and accumulates across rounds, capped); a
+deliberate concept added via `work add feedback concept` (origin not
+`gap_explorer`) is promoted immediately. This keeps the roster from
+filling with evidence-less stubs that would keep the SEED wave firing
+on phantom concepts.
 
 **Adjudicate escalations.** For each Task that returned an `escalate`
 block, the editor decides now (it is top-tier) and encodes the ruling:
@@ -243,8 +244,9 @@ wikify run record-event --type round_completed --stage round \
 
 Stop if ANY:
 
-- `budget_haiku_eq >= target` (on a MAX subscription this is set high
-  enough that rate limits + re-entry govern instead — see Sizing)
+- `spent_haiku_eq >= target_haiku_eq` (both from `run sense`'s `budget`;
+  on a MAX subscription the target is set high enough that rate limits +
+  re-entry govern instead — see Sizing)
 - `rounds >= max_rounds` (a scaled safety ceiling, not a target — see
   Sizing and defaults)
 - `chunk_coverage_ratio >= coverage_target` (default 0.85)

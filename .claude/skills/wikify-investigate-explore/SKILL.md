@@ -289,7 +289,12 @@ P5(budget_chunks=20):
 `emit_evidence_suggestion` / `emit_concept_suggestion` write JSONL
 records to `work/inbox/evidence_suggestions.jsonl` and
 `work/inbox/concept_suggestions.jsonl`. The editor's `work tend`
-consumes them next round.
+consumes them next round. Every P5 `concept_suggestion` MUST carry
+`"origin": "gap_explorer"` and the `chunk_id` it was proposed from;
+`work tend` gates these behind a distinct-chunk support threshold so a
+one-off gap proposal does not create an evidence-less concept stub.
+(Deliberate concepts added via `work add feedback concept` omit that
+origin and promote immediately.)
 
 P5 fires every round. Its small budget keeps the cost low while the
 deterministic residual sampling guarantees that, given enough rounds,

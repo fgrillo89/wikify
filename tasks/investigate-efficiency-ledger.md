@@ -32,3 +32,15 @@ Realized as the leanest structural changes — composing existing functions, rem
 | **Lean judging (cache+tier)** | explorer seeds `seen_chunks` from the on-disk `evidence.jsonl` (durable record of already-judged chunks — no new cache subsystem) and runs per-chunk accept/reject on the **haiku (S) tier**, reserving sonnet for synthesis (explore + investigate skills) | stops cross-round re-judging of the same chunk; moves the highest-volume judging to the cheapest tier | skill-doc (process) |
 
 Design note: the Phase-2 plan's "chunk-evidence cache" and "tier right-sizing" are realized **without** a new cache subsystem — the evidence ledger already on disk IS the per-slug judged-chunk record, so seeding dedup from it is the lean structural equivalent. Dossier diet excluded by request. Budget-aware *sizing* (editor shrinking waves when marginal coverage/$ drops) now has the live `spent`/`remaining` it needs; the sizing policy itself stays in the skill.
+
+## Adversarial review (full PR #96) — leanness pass
+
+An Opus reviewer audited the whole diff with a "structural vs surface / simple vs complex / leaner for future iteration" lens. Verdict: net positive, with two MAJOR leanness regressions caught and fixed, plus minor simplifications:
+
+- **Budget made leaner by deletion** (was the worst offender): the first cut ADDED a `spent_haiku_eq` cache + `reconcile_spent` + 3 write-hooks to keep a field truthful that duplicated `cost.totals.haiku_eq`. Replaced with **deleting the stored field** and deriving spend from the call ledger at the two read sites (`run show`, `run sense`) via a one-line `cost.spent_haiku_eq(bundle)`. Net: removed a field + a function + 3 hooks; the value can no longer go stale.
+- **F17 signal made explicit**: the deliberate-vs-gap discriminator was inferred from `chunk_id` presence (fragile — `work add feedback concept` and P5 emit could both violate it). Now keyed on an explicit `origin: "gap_explorer"` field (skill-mandated for P5), with the `chunk_id` heuristic kept only as a fallback for unmarked records; retained inbox is capped (`_RETAINED_SUGGESTION_CAP`) so it cannot grow unbounded.
+- **F14**: dropped a duplicate `_rank_docs_sqlite` scan (rank once, the per-chunk break bounds the work).
+- **F6**: narrowed `except Exception` to `except LookupError` (the real raise type) so genuine bugs surface.
+- **F19**: kept as-is — the reviewer agreed the validator normalization is acceptable for this PR; the deeper structural fix (canonicalize quote/chunk text into one space at ingest so the validator AND the data-harvest gate share one normalizer) is logged as a future item, not a blocker.
+
+Re-run after fixes: ruff clean; `pytest tests/wikify` **1528 passed, 1 skipped**. No critical/major findings remain.

@@ -76,10 +76,12 @@ def test_canonical_id_needs_no_resolution(tmp_path, monkeypatch):
 
 
 def test_unresolvable_handle_falls_through_empty(tmp_path, monkeypatch):
+    from wikify.corpus.handles import HandleNotFoundError
+
     monkeypatch.setattr(harvest, "read_chunks_by_id", lambda corpus, ids: [])
 
     def fake_resolve(corpus, short):
-        raise ValueError("not found")
+        raise HandleNotFoundError(short)
 
     monkeypatch.setattr("wikify.corpus.queries.resolve_chunk_id", fake_resolve)
 

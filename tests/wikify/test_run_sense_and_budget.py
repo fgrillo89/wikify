@@ -1,8 +1,8 @@
-"""Phase-2 efficiency: ``run sense`` snapshot + budget reconciliation (F11).
+"""Phase-2 efficiency: ``run sense`` snapshot + derived budget spend (F11).
 
 ``run sense`` collapses the editor's five per-round reads into one call.
-Budget reconciliation makes ``spent_haiku_eq`` a faithful cache of the call
-aggregate so the STOP-CHECK budget bound is no longer stuck at 0.
+Spend is DERIVED from the call-event ledger at read time (not stored), so the
+STOP-CHECK budget bound is always faithful and can never drift to a stale 0.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 
 from wikify.api import Bundle
 from wikify.bundle.run.cost import haiku_eq_for
-from wikify.bundle.run.state import load_state
 from wikify.bundle.work.card import create_concept
 from wikify.cli import app
 
@@ -50,11 +49,18 @@ def _make_corpus(tmp_path: Path) -> Path:
 
 # --------------------------------------------------------------- budget (F11)
 
-def test_record_call_reconciles_spent(tmp_path: Path) -> None:
+def _shown_spent(bundle: Path) -> int:
+    res = runner.invoke(app, [
+        "run", "show", "--run", str(bundle), "--full", "--format", "json",
+    ])
+    assert res.exit_code == 0, res.output
+    return json.loads(res.output)["budget"]["spent_haiku_eq"]
+
+
+def test_record_call_reflected_in_derived_spend(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path)
     bundle = _init_bundle(tmp_path, corpus)
-    # Before any call, spend is 0.
-    assert load_state(Bundle.open(bundle)).budget.spent_haiku_eq == 0
+    assert _shown_spent(bundle) == 0  # no calls yet
     res = runner.invoke(app, [
         "run", "record-call", "--run", str(bundle),
         "--role", "writer", "--model-id", "claude-sonnet-4-6", "--tier", "M",
@@ -62,11 +68,11 @@ def test_record_call_reconciles_spent(tmp_path: Path) -> None:
     ])
     assert res.exit_code == 0, res.output
     expected = int(round(haiku_eq_for("M", 1000, 100)))
-    assert load_state(Bundle.open(bundle)).budget.spent_haiku_eq == expected
     assert expected > 0
+    assert _shown_spent(bundle) == expected
 
 
-def test_record_calls_batch_reconciles_spent(tmp_path: Path) -> None:
+def test_record_calls_batch_reflected_in_derived_spend(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path)
     bundle = _init_bundle(tmp_path, corpus)
     lines = "\n".join(json.dumps(r) for r in [
@@ -81,7 +87,7 @@ def test_record_calls_batch_reconciles_spent(tmp_path: Path) -> None:
     )
     assert res.exit_code == 0, res.output
     expected = int(round(haiku_eq_for("M", 2000, 200) + haiku_eq_for("S", 500, 50)))
-    assert load_state(Bundle.open(bundle)).budget.spent_haiku_eq == expected
+    assert _shown_spent(bundle) == expected
 
 
 # --------------------------------------------------------------- run sense

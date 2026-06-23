@@ -138,6 +138,27 @@ def test_tend_accumulated_support_promotes_next_round(tmp_path: Path) -> None:
     assert "reservoir-computing" in list_concept_slugs(bundle)
 
 
+def test_tend_explicit_gap_origin_is_gated(tmp_path: Path) -> None:
+    # An explicit gap_explorer suggestion with one chunk is gated.
+    bundle = _bundle(tmp_path)
+    append_inbox(bundle, "concept_suggestions",
+                 {"title": "Spiking Neural Network",
+                  "origin": "gap_explorer", "chunk_id": "c1"})
+    assert tend_bundle(bundle)["concepts_created"] == 0
+    assert "spiking-neural-network" not in list_concept_slugs(bundle)
+
+
+def test_tend_explicit_manual_origin_promotes_even_with_chunk_id(tmp_path: Path) -> None:
+    # The reviewer's case: a DELIBERATE add that happens to carry a chunk_id
+    # must still promote immediately — the explicit origin beats the heuristic.
+    bundle = _bundle(tmp_path)
+    append_inbox(bundle, "concept_suggestions",
+                 {"title": "Spiking Neural Network",
+                  "origin": "manual", "chunk_id": "c1"})
+    assert tend_bundle(bundle)["concepts_created"] == 1
+    assert "spiking-neural-network" in list_concept_slugs(bundle)
+
+
 def test_tend_concept_suggestion_idempotent(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="ALD")

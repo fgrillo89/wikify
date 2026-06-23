@@ -32,7 +32,9 @@ def _resolve_handle(corpus: Corpus, chunk_id: str) -> str:
 
     try:
         return resolve_chunk_id(corpus, chunk_id)
-    except Exception:
+    except LookupError:
+        # HandleNotFoundError / AmbiguousHandleError both subclass LookupError;
+        # an unresolvable handle falls through to the caller's empty-source path.
         return chunk_id
 
 

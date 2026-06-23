@@ -852,7 +852,8 @@ def rank_chunks_by_doc_metric(
     """
     from .chunks import read_chunks
 
-    ranked_docs = rank_docs(corpus, by=by, top_k=len(_rank_docs_sqlite(corpus)) or top_k)
+    # Rank all docs once; the per-chunk break below bounds the work to top_k.
+    ranked_docs = rank_docs(corpus, by=by, top_k=2_000_000_000)
     out: list[dict] = []
     for d in ranked_docs:
         metric_value = float(d.get(by, 0.0) or 0.0)

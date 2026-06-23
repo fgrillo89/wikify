@@ -129,19 +129,11 @@ def cost_summary(bundle: Bundle) -> dict:
     return aggregate(iter_events(bundle))
 
 
-def reconcile_spent(bundle: Bundle) -> int:
-    """Persist ``budget.spent_haiku_eq`` from the call-event aggregate.
+def spent_haiku_eq(bundle: Bundle) -> int:
+    """Spend so far, derived from the call-event ledger (the source of truth).
 
-    The call events are the single source of truth for spend; ``spent_haiku_eq``
-    is a cache of their total. Reconciling on every recorded call keeps the
-    STOP-CHECK budget bound — which reads the stored field — faithful instead of
-    stuck at its initial value. Returns the reconciled total.
+    Pure read — no stored cache to drift. Both ``run show`` and ``run sense``
+    derive spend through here, and the STOP-CHECK budget bound compares it to
+    the target.
     """
-    from .state import load_state, save_state
-
-    total = int(round(aggregate(iter_events(bundle))["totals"]["haiku_eq"]))
-    state = load_state(bundle)
-    if state.budget.spent_haiku_eq != total:
-        state.budget = state.budget.model_copy(update={"spent_haiku_eq": total})
-        save_state(bundle, state)
-    return total
+    return int(round(aggregate(iter_events(bundle))["totals"]["haiku_eq"]))
