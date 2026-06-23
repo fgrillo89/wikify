@@ -82,8 +82,8 @@ def test_figure_citation_link_target_preserved():
 # ---------------------------------------------------------------------------
 
 
-def test_orphan_marker_keeps_raw_display(capsys):
-    """A figure-only marker keeps [eN] display and emits a warning."""
+def test_orphan_marker_removed(capsys):
+    """A figure-only marker is removed entirely (no dead link) and emits a warning."""
     body_md = (
         "Text with one footnote.[^e3]\n\n"
         "[^e3]: Smith 2020 > 'ALD films.'\n"
@@ -93,9 +93,9 @@ def test_orphan_marker_keeps_raw_display(capsys):
     combined_html = _inject_figure_caption(body_html, "e9")
     result = _remap_figure_citation_numbers(combined_html, page_id="ald-page")
 
-    # Raw marker preserved in display (link still works).
-    assert "[e9]" in result
-    assert 'href="#fn:e9"' in result
+    # Orphan sup removed entirely: no dead link, no raw token visible.
+    assert "[e9]" not in result
+    assert 'href="#fn:e9"' not in result
 
     # Warning emitted to stderr.
     captured = capsys.readouterr()
