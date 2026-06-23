@@ -70,6 +70,19 @@ def read_evidence(bundle: Bundle, slug: str) -> list[EvidenceRecord]:
     return out
 
 
+def seen_chunk_ids(bundle: Bundle, slug: str) -> set[str]:
+    """Canonical chunk_ids already judged for ``slug`` (active records only).
+
+    The evidence ledger is the durable cross-round record of what an
+    explorer already accepted/rejected for this slug, so seeding a
+    judge's ``seen_chunks`` dedup set from it avoids re-judging the same
+    chunk on a later round. Archived records are excluded — a superseded
+    chunk is fair game to re-judge.
+    """
+    return {r.chunk_id for r in read_evidence(bundle, slug)
+            if r.status == "active" and r.chunk_id}
+
+
 def dedup_evidence(bundle: Bundle, slug: str) -> int:
     """Rewrite the ledger so each chunk_id appears once (latest wins).
 

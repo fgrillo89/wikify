@@ -91,4 +91,28 @@ on every run.
 _Appended as each backlog item lands. Each entry: the proxy before/after on the
 new HEAD, the quality guard, and the merged PR._
 
-<!-- iterations appended below -->
+### Iteration 1 — wire the Haiku judge dedup path (`effq-judge-dedup`)
+
+**Backlog item:** "wire the Haiku per-chunk judge path so it is actually
+exercised (not just documented)." Pre-#96 this was *prose only* — the explorer
+skill told the LLM to seed `seen_chunks` by reading `evidence.jsonl`, with no
+code surface, so cross-round dedup depended entirely on prose compliance.
+
+**Change:** `seen_chunk_ids(bundle, slug)` helper (active records only) +
+`wikify work seen-chunks <slug...>` CLI returning the union across the explorer's
+target slugs in one deterministic call; explore skill now calls it instead of
+"read evidence.jsonl."
+
+**Measured (harness proxy `F_judge_dedup`, before = master `2e4017e` src, after = branch):**
+
+| proxy | before | after |
+|---|---:|---:|
+| deterministic dedup surface present | no | **yes** |
+| already-judged chunks returned for a 2-active/1-archived ledger | 0 | **2** |
+| archived chunk excluded (re-judgeable) | n/a | **yes** |
+
+The explorer can now skip every already-judged chunk via one cheap CLI read
+instead of re-judging it each round. **Quality guard:** archived records stay
+re-judgeable; full suite `1531 passed, 1 skipped` (+3 new tests); ruff clean; no
+#96 proxy regressed (C=1, A=0, B1=0, B2=0, E=0 unchanged on the new HEAD).
+PR: #TBD.

@@ -63,12 +63,18 @@ Task (avoids serialisation hazards).
 - Bind context before the first MCP call:
   `mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<run>")`.
 - Initialise `seen_chunks` from BOTH `notebook.provenance.covered_chunks`
-  AND the canonical `chunk_id`s already in the target slug's
-  `evidence.jsonl` on disk (P1 multi-slug: union over all targets). The
-  evidence ledger is the durable record of what was already judged, so
-  seeding from it avoids re-judging the same chunk across rounds — the
-  one cheap, lean dedup that does not need a separate chunk-judgement
-  cache.
+  AND the canonical `chunk_id`s already judged for the target slug(s).
+  Fetch the latter in one deterministic call — pass every target slug:
+  ```bash
+  wikify work seen-chunks <slug> [<slug> ...] --run <bundle>
+  ```
+  It returns `{"seen_chunk_ids": [...], "n_seen": N}`, the union of
+  active evidence chunk_ids across those slugs. The evidence ledger is
+  the durable record of what was already judged, so seeding from it
+  avoids re-judging the same chunk across rounds — the one cheap, lean
+  dedup that does not need a separate chunk-judgement cache. Skip any
+  candidate whose canonical id is in `seen_chunks` before spending a
+  judge on it.
 - Every candidate chunk is judged accept/reject through the existing
   `wikify-gather-evidence-cluster` loop. Per-chunk judging is a bounded
   classification: run the judges on the **haiku (S) tier** and reserve
