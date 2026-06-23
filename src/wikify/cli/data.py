@@ -298,6 +298,7 @@ def cmd_consolidate(
         table = consolidate(store, artifact_spec)
         store.upsert_artifact(artifact_spec, n_rows=table.n_rows)
         store.set_artifact_claims(artifact_spec.artifact_id, table.claim_ids)
+        available = [p["property_norm"] for p in store.properties()] if table.empty_columns else []
         page_path = None
         if commit:
             page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
@@ -312,10 +313,18 @@ def cmd_consolidate(
             "columns": table.columns,
             "claims": len(table.claim_ids),
             "conflicts": table.n_conflicts,
+            "empty_columns": table.empty_columns,
+            "available_properties": available,
             "committed": str(page_path) if page_path else False,
         },
         fmt,
     )
+    if table.empty_columns and fmt != "json":
+        typer.echo(
+            f"warning:  {len(table.empty_columns)} spec propert(ies) matched no "
+            f"stored claims: {table.empty_columns}"
+        )
+        typer.echo(f"available property_norms: {available}")
 
 
 @app.command("commit")
