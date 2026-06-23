@@ -196,4 +196,25 @@ every WriteRequest read site.
 The writer now receives only groundable evidence, so `evidence_count` and the
 dossier reflect usable evidence and no marker is silently discarded. **Quality
 guard:** good records are untouched; full suite `1534 passed, 1 skipped` (+1
-test); ruff clean; no other proxy regressed. PR: #TBD.
+test); ruff clean; no other proxy regressed. PR: #101 (merged).
+
+### Iteration 5 — F22 report empty consolidation columns (`effq-empty-columns`)
+
+**Backlog item:** F22 — `data consolidate` silently ships an empty column when a
+spec property matches zero stored claims (usually a spelling that doesn't match
+any `property_norm`), so the artifact loses data with no signal.
+
+**Change:** `consolidate` now computes `empty_columns` (spec properties that
+produced no non-empty cell anywhere) on the `ConsolidatedTable`; `wikify data
+consolidate` reports them and echoes the store's available `property_norm`s
+(JSON fields + a text warning).
+
+**Measured (harness proxy `J_consolidate_empty_columns`, before = master `5045608`, after = branch):**
+
+| proxy | before | after |
+|---|---|---|
+| consolidate reports empty columns | no (silent) | **yes** |
+| empty_columns for spec `[GPC, On/Off Ratio]` with only GPC data | `[]` | **`["On/Off Ratio"]`** |
+
+**Quality guard:** the matched column still produces its row; full suite `1535
+passed, 1 skipped` (+1 test); ruff clean; no other proxy regressed. PR: #TBD.

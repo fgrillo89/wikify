@@ -295,6 +295,22 @@ def test_consolidate_pivots_subjects_by_property(tmp_path: Path) -> None:
     assert subjects == {"Al2O3", "HfO2"}
 
 
+def test_consolidate_reports_empty_columns(tmp_path: Path) -> None:
+    """F22: a spec property that matches no stored claim is surfaced as an
+    empty column instead of silently shipping a blank column."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="t", title="T", properties=["GPC", "On/Off Ratio"]
+    )
+    table = consolidate(store, spec)
+    # GPC has data; "On/Off Ratio" has none -> reported, not silently blank.
+    assert table.empty_columns == ["On/Off Ratio"]
+    assert table.n_rows == 1
+
+
 def test_consolidate_flags_conflicts(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

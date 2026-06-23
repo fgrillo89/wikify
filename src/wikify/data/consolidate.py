@@ -41,6 +41,7 @@ class ConsolidatedTable:
     evidence: list[dict]  # ordered {marker, claim_id, doc_id, chunk_id, locator, quote}
     claim_ids: list[str]
     n_conflicts: int = 0
+    empty_columns: list[str] = field(default_factory=list)  # spec props with no claims
 
     @property
     def n_rows(self) -> int:
@@ -152,6 +153,15 @@ def consolidate(store: DataStore, spec: ArtifactSpec) -> ConsolidatedTable:
         if any(cell.text for cell in cells.values()):
             rows.append({"subject": subject_display[sn], "cells": cells})
 
+    # A spec property that produced no non-empty cell anywhere is a silent
+    # empty column — usually a spelling that does not match any stored
+    # property_norm. Surface it so the caller can warn instead of shipping a
+    # blank column (F22).
+    nonempty_cols = {
+        col for row in rows for col, cell in row["cells"].items() if cell.text
+    }
+    empty_columns = [col for col in columns if col not in nonempty_cols]
+
     return ConsolidatedTable(
         artifact_id=spec.artifact_id,
         title=spec.title,
@@ -162,4 +172,5 @@ def consolidate(store: DataStore, spec: ArtifactSpec) -> ConsolidatedTable:
         evidence=evidence,
         claim_ids=list(marker_for.keys()),
         n_conflicts=n_conflicts,
+        empty_columns=empty_columns,
     )

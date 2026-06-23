@@ -252,6 +252,27 @@ def probe_empty_body_evidence() -> dict:
             "kept": len(usable), "dropped": dropped}
 
 
+# --- J: consolidate reports empty columns (F22) ----------------------------
+def probe_consolidate_empty_columns() -> dict:
+    from wikify.data.consolidate import consolidate
+    from wikify.data.models import ArtifactSpec, DataPoint
+    from wikify.data.store import DataStore
+    with tempfile.TemporaryDirectory() as td:
+        store = DataStore(Path(td) / "claims.db")
+        p = DataPoint(subject="Al2O3", property="GPC", value_text="1.1",
+                      unit="A/cycle", doc_id="d1", chunk_id="c1",
+                      grounding_quote="q1", verification_status="verified",
+                      quote_verified=True).finalize()
+        store.add_points([p])
+        spec = ArtifactSpec(artifact_id="t", title="T",
+                            properties=["GPC", "On/Off Ratio"])
+        table = consolidate(store, spec)
+        store.close()
+    reports = hasattr(table, "empty_columns")
+    return {"reports_empty_columns": reports,
+            "empty_columns": list(getattr(table, "empty_columns", []))}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -294,6 +315,7 @@ PROBES = {
     "G_grounding_parity": probe_grounding_parity,
     "H_ocr_number_gate": probe_ocr_number_gate,
     "I_empty_body_evidence": probe_empty_body_evidence,
+    "J_consolidate_empty_columns": probe_consolidate_empty_columns,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 
