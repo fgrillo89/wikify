@@ -127,3 +127,21 @@ def aggregate(events: Iterable[Event]) -> dict:
 def cost_summary(bundle: Bundle) -> dict:
     """Read the bundle's events.jsonl and return the cost aggregate."""
     return aggregate(iter_events(bundle))
+
+
+def reconcile_spent(bundle: Bundle) -> int:
+    """Persist ``budget.spent_haiku_eq`` from the call-event aggregate.
+
+    The call events are the single source of truth for spend; ``spent_haiku_eq``
+    is a cache of their total. Reconciling on every recorded call keeps the
+    STOP-CHECK budget bound — which reads the stored field — faithful instead of
+    stuck at its initial value. Returns the reconciled total.
+    """
+    from .state import load_state, save_state
+
+    total = int(round(aggregate(iter_events(bundle))["totals"]["haiku_eq"]))
+    state = load_state(bundle)
+    if state.budget.spent_haiku_eq != total:
+        state.budget = state.budget.model_copy(update={"spent_haiku_eq": total})
+        save_state(bundle, state)
+    return total

@@ -162,6 +162,87 @@ def cmd_show(
         )
 
 
+@app.command("sense")
+def cmd_sense(
+    corpus_dir: Path = typer.Option(..., "--corpus", help="Corpus root."),
+    run: Path | None = typer.Option(None, "--run"),
+    current_round: int = typer.Option(0, "--round"),
+    fmt: str = typer.Option("json", "--format"),
+) -> None:
+    """One-shot editor SENSE snapshot: budget + roster/bands + coverage + data.
+
+    Collapses the five reads the investigate editor makes at the top of every
+    round (``run show``, ``work maturity --all``, ``work coverage``,
+    ``data coverage``, committed-page lookup) into a single call. Each concept
+    carries a ``committed`` flag and committed pages list their slug, so the
+    editor does not re-derive either from separate commands.
+    """
+    from collections import Counter
+
+    from ..api import Corpus
+    from ..bundle.run.cost import reconcile_spent
+    from ..bundle.wiki.derived import list_committed_pages
+    from ..bundle.work.card import list_concept_slugs
+    from ..bundle.work.coverage import compute_coverage
+    from ..bundle.work.maturity import compute_maturity
+    from ..data.store import DataStore
+
+    bundle = _resolve_bundle(run)
+    state = load_state(bundle)
+    spent = reconcile_spent(bundle)
+    target = state.budget.target_haiku_eq
+
+    committed_pages = list_committed_pages(bundle)
+    committed_slugs = {p["slug"] for p in committed_pages}
+    reports = [
+        compute_maturity(bundle, s, current_round=current_round)
+        for s in list_concept_slugs(bundle)
+    ]
+    concepts = []
+    bands: Counter[str] = Counter()
+    for r in reports:
+        band = "committed" if r.slug in committed_slugs else r.band
+        bands[band] += 1
+        concepts.append({
+            "slug": r.slug,
+            "band": band,
+            "score": round(r.score, 3),
+            "gates_passed": r.gates_passed,
+            "committed": r.slug in committed_slugs,
+        })
+
+    cov = compute_coverage(bundle, Corpus.open(corpus_dir)).to_dict()
+    store = DataStore.open(bundle.root)
+    try:
+        data_cov = store.coverage()
+    finally:
+        store.close()
+
+    snapshot = {
+        "ok": True,
+        "round": current_round,
+        "budget": {
+            "target_haiku_eq": target,
+            "spent_haiku_eq": spent,
+            "remaining_haiku_eq": max(0, target - spent) if target else None,
+        },
+        "bands": dict(bands),
+        "concepts": concepts,
+        "coverage": {
+            "chunk_coverage_ratio": cov.get("chunk_coverage_ratio"),
+            "n_covered": cov.get("n_covered"),
+            "n_total": cov.get("n_total"),
+        },
+        "data": {
+            k: data_cov.get(k)
+            for k in ("n_points", "verified_ratio", "n_subjects",
+                      "n_properties", "n_artifacts")
+        },
+        "committed_pages": committed_pages,
+    }
+    typer.echo(json.dumps(snapshot, ensure_ascii=False))
+
+
 events_app = typer.Typer(add_completion=False, help="Event-ledger queries.")
 app.add_typer(events_app, name="list")
 
@@ -327,6 +408,8 @@ def cmd_record_call(
             data=payload,
         ),
     )
+    from ..bundle.run.cost import reconcile_spent
+    reconcile_spent(bundle)
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, **payload}))
     else:
@@ -613,6 +696,9 @@ def cmd_record_calls(
             continue
         appended += 1
 
+    if appended:
+        from ..bundle.run.cost import reconcile_spent
+        reconcile_spent(bundle)
     summary = {
         "ok": True,
         "run": str(bundle.root),

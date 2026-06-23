@@ -62,12 +62,18 @@ Task (avoids serialisation hazards).
 
 - Bind context before the first MCP call:
   `mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<run>")`.
-- Initialise `seen_chunks` from `notebook.provenance.covered_chunks`
-  for the target slug (P1 multi-slug: union over all targets).
-- Every accepted chunk goes through the existing
-  `wikify-gather-evidence-cluster` judgement loop (sonnet supervisor
-  + haiku judges). This skill produces *candidate* chunk sets;
-  cluster vets them.
+- Initialise `seen_chunks` from BOTH `notebook.provenance.covered_chunks`
+  AND the canonical `chunk_id`s already in the target slug's
+  `evidence.jsonl` on disk (P1 multi-slug: union over all targets). The
+  evidence ledger is the durable record of what was already judged, so
+  seeding from it avoids re-judging the same chunk across rounds — the
+  one cheap, lean dedup that does not need a separate chunk-judgement
+  cache.
+- Every candidate chunk is judged accept/reject through the existing
+  `wikify-gather-evidence-cluster` loop. Per-chunk judging is a bounded
+  classification: run the judges on the **haiku (S) tier** and reserve
+  the sonnet (M) tier for the supervisor's synthesis. This skill
+  produces *candidate* chunk sets; cluster vets them.
 - The vetter is invoked at the end, in one batch per target slug:
   ```bash
   wikify work add evidence <slug> --records <path> --run <bundle>

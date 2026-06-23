@@ -56,22 +56,29 @@ into run notes; it gates the re-entry path.
 
 ### 1. SENSE
 
-Read in this exact order:
+One call returns the whole snapshot:
 
-- `wikify run show --full --run <bundle>` for budget + last round.
-- `wikify work list --run <bundle> --format json` for slug roster.
-- `wikify work maturity --all --run <bundle> --format json --round <N>`
-  for the per-slug score + band.
-- `wikify work coverage --run <bundle> --corpus <corpus> --format json`
-  for `chunk_coverage_ratio`.
-- `wikify data coverage --run <bundle> --format json` for the claim store
-  (`n_points`, `verified_ratio`, subjects/properties). Drives the DATA wave's
-  consolidate trigger.
-- If `derived/eval.json` exists, read `M3.g_evidence.modularity` for the
-  bridge rule; otherwise treat modularity as `null` (bridge does not fire
-  in round 0).
+```bash
+wikify run sense --run <bundle> --corpus <corpus> --round <N> --format json
+```
 
-Group slugs by `band`: `ready`, `growing`, `stalled`, `new`, `parked`.
+It carries `budget` (`target`/`spent`/`remaining` haiku-eq — `spent`
+is reconciled from the call ledger, so the STOP-CHECK budget bound is
+live), `bands` counts, `concepts` (per-slug `band`, `score`,
+`gates_passed`, and a `committed` flag so already-written slugs drop out
+of the WRITE wave without a separate `wiki list`), `coverage`
+(`chunk_coverage_ratio`), `data` (`n_points`, `verified_ratio`,
+subjects/properties — drives the DATA consolidate trigger), and
+`committed_pages`. Prefer this single read over the older five-call
+sequence (`run show` + `work list` + `work maturity --all` +
+`work coverage` + `data coverage`).
+
+Then, if `derived/eval.json` exists, read `M3.g_evidence.modularity`
+for the bridge rule; otherwise treat modularity as `null` (bridge does
+not fire in round 0).
+
+The `committed` band joins `ready`, `growing`, `stalled`, `new`,
+`parked`; slugs flagged `committed` are done and never re-dispatched.
 
 If `corpus_fingerprint` differs from the value last written to
 `state.json`, emit `corpus_drift_detected` and force a SEED wave next
