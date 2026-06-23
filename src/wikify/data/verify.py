@@ -17,15 +17,8 @@ so this module has no corpus dependency and is trivially testable.
 
 from __future__ import annotations
 
-import re
-
+from ..grounding import is_grounded, normalize_grounding_text
 from .models import _NUMBER_RE, DataPoint, parse_leading_number
-
-_WS_RE = re.compile(r"\s+")
-
-
-def _norm(s: str) -> str:
-    return _WS_RE.sub(" ", (s or "").strip().lower())
 
 
 def _numbers(s: str) -> set[str]:
@@ -52,12 +45,10 @@ def _numbers(s: str) -> set[str]:
 
 
 def quote_in_source(quote: str, source: str) -> bool:
-    """True if *quote* appears in *source* (exact or whitespace-collapsed)."""
-    if not quote or not source:
-        return False
-    if quote in source:
-        return True
-    return _norm(quote) in _norm(source)
+    """True if *quote* appears in *source*, using the grounding normalizer
+    shared with the draft validator (exact substring, else whitespace /
+    control-char / inline-citation-marker normalized)."""
+    return is_grounded(quote, source)
 
 
 def number_supported(value: str, quote: str, source: str) -> bool:
@@ -69,7 +60,9 @@ def number_supported(value: str, quote: str, source: str) -> bool:
     """
     target = parse_leading_number(value)
     if target is None:
-        return _norm(value) in _norm(quote) if value else False
+        if not value:
+            return False
+        return normalize_grounding_text(value) in normalize_grounding_text(quote)
     target_keys = {repr(target)}
     # Integer-valued floats also written without a decimal point.
     if target == int(target):

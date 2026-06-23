@@ -106,6 +106,27 @@ def test_quote_in_source_exact_and_whitespace() -> None:
     assert not quote_in_source("missing", "other text")
 
 
+def test_data_gate_grounding_matches_validator() -> None:
+    """F19 root fix: the data verifier and the draft validator must ground a
+    dossier-copied quote identically — control chars and inline citation
+    markers tolerated at both gates, fabrication rejected at both."""
+    from wikify.bundle.draft.validator import _quote_is_grounded
+
+    pairs = [
+        ("endurance of 10 6 cycles was measured",
+         "endurance \x01 of 10 6 cycles was measured"),
+        ("Memristors exhibit pinched hysteresis under bias.",
+         "Memristors exhibit pinched hysteresis [1-3] under bias."),
+    ]
+    for quote, source in pairs:
+        assert quote_in_source(quote, source)  # data gate now tolerates noise
+        assert _quote_is_grounded(quote, source) == quote_in_source(quote, source)
+    # Fabrication still rejected by both gates.
+    fab_q, fab_s = "ALD enables 5 nm copper interconnects", "ALD grows oxide films."
+    assert not quote_in_source(fab_q, fab_s)
+    assert not _quote_is_grounded(fab_q, fab_s)
+
+
 def test_number_supported_float_normalization() -> None:
     assert number_supported("1.10 A", "GPC was 1.1 A", "GPC was 1.1 A reported")
     assert not number_supported("9.9 A", "GPC was 1.1 A", "GPC was 1.1 A")
