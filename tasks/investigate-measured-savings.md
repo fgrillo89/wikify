@@ -240,4 +240,39 @@ error placing it in a nav group — the artifact is orphaned from navigation.
 
 The artifact is now a first-class wiki page the organizer/index/graph can
 reference. **Quality guard:** upsert is idempotent; full suite `1536 passed, 1
-skipped` (+1 test); ruff clean; no other proxy regressed. PR: #TBD.
+skipped` (+1 test); ruff clean; no other proxy regressed. PR: #103 (merged).
+
+### Iteration 7 — F26 embed pages at commit for mid-loop semantic routing (`effq-mid-loop-vectors`)
+
+**Backlog item:** F26 — P5's `wiki_find(mode="semantic")` returns nothing
+mid-loop because committed-page vectors are only built by the finalize `wiki
+rebuild`. So P5's routing of residual chunks to existing pages was inert during
+the loop that depends on it.
+
+**Change:** `embed_committed_page(bundle, page)` incrementally embeds a page into
+the same embedding space the full rebuild uses (shared `wiki_page_passage`
+format + `_wiki_space_id`, so an incremental vector is byte-identical to a
+rebuilt one). Called best-effort from `commit_page` after the page is projected;
+the finalize `wiki rebuild` remains the backstop, so a missing embedder can't
+fail a commit. Extracted `wiki_page_passage` so the passage text has one
+definition.
+
+**Measured (harness proxy `L_mid_loop_wiki_vectors`, before = master `4e21705`, after = branch; `WIKIFY_EMBEDDER=hash`):**
+
+| proxy | before | after |
+|---|---|---|
+| incremental embed-at-commit present | no | **yes** |
+| semantic `wiki_find` hits after a commit, before any rebuild | none (0) | **1** |
+
+P5 can now route residual chunks to freshly-committed pages in the same loop.
+**Quality guard:** finalize rebuild unchanged and remains the backstop; full
+suite `1537 passed, 1 skipped` (+1 test, exercising the real commit→semantic
+path under the hash embedder); ruff clean; no other proxy regressed. PR: #TBD.
+
+## Cumulative result
+
+The deterministic harness now carries the six PR-#96 proxies (A–E, plus the C
+SENSE and D ranking) and seven improve-loop proxies (F–L), each with a measured
+before/after and a green quality gate. Every accepted change moved its proxy
+beyond the (zero) noise band with no regression to the prior proxies, and each
+landed as its own merged PR with `ruff` + `pytest tests/wikify` green.

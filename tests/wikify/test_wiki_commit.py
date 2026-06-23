@@ -110,6 +110,25 @@ def test_commit_garbage_collects_attempt(tmp_path: Path) -> None:
     assert not validation_path(bundle, slug).exists()
 
 
+def test_commit_embeds_page_for_mid_loop_semantic_search(tmp_path: Path) -> None:
+    """F26: the page is embedded at commit, so semantic wiki_find works the
+    next round instead of only after the finalize `wiki rebuild`."""
+    from wikify.bundle.wiki.queries import find_semantic
+    from wikify.bundle.wiki.store import open_wiki_store
+
+    bundle, slug = _setup_validated(tmp_path)
+    commit_page(bundle, slug=slug)
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        n_vec = con.execute("SELECT COUNT(*) FROM wiki_embeddings").fetchone()[0]
+    finally:
+        con.close()
+    assert n_vec >= 1, "committed page must be embedded at commit time"
+    # Semantic search finds it with no rebuild having run.
+    hits = find_semantic(bundle, "atomic layer deposition cycle", top_k=5)
+    assert any(h.get("page_id") == "Atomic Layer Deposition" for h in hits)
+
+
 def test_commit_emits_page_committed_event(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     commit_page(bundle, slug=slug)

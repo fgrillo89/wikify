@@ -391,6 +391,12 @@ def build_wiki_graph(
     return WikiKnowledgeGraph(backend=backend, vectors=vectors, embed_fn=embed_fn)
 
 
+def wiki_page_passage(page: WikiPage) -> str:
+    """Passage text embedded for a wiki page. Shared by the full rebuild and
+    the incremental commit-time embedding so the two stay byte-identical."""
+    return f"{page.title}. {page.body_markdown[:2000]}"
+
+
 def build_wiki_vectors(
     pages: list[WikiPage],
     embed_fn: Callable[[Sequence[str]], np.ndarray],
@@ -403,9 +409,8 @@ def build_wiki_vectors(
     for page in pages:
         if not page.body_markdown:
             continue
-        text = f"{page.title}. {page.body_markdown[:2000]}"
         ids.append(page.id)
-        texts.append(text)
+        texts.append(wiki_page_passage(page))
 
     if not texts:
         return VectorStore(ids=[], matrix=np.zeros((0, 1), dtype=np.float32))

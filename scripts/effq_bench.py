@@ -313,6 +313,44 @@ def probe_data_artifact_wiki_registration() -> dict:
             "wiki_row_kind": row["kind"] if row else None}
 
 
+# --- L: mid-loop wiki vectors via embed-at-commit (F26) --------------------
+def probe_mid_loop_wiki_vectors() -> dict:
+    import os
+    os.environ.setdefault("WIKIFY_EMBEDDER", "hash")  # deterministic, no model load
+    try:
+        from wikify.bundle.wiki.derived import embed_committed_page
+    except ImportError:
+        return {"incremental_embed_present": False, "semantic_hits_mid_loop": None}
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.queries import find_semantic
+    from wikify.bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from wikify.models import WikiPage
+    with tempfile.TemporaryDirectory() as td:
+        bdir = Path(td) / "bundle"
+        (bdir / "run").mkdir(parents=True)
+        bundle = Bundle(root=bdir)
+        init_run(bundle, corpus_path="x")
+        page = WikiPage(
+            id="Atomic Layer Deposition", kind="article",
+            title="Atomic Layer Deposition", aliases=[],
+            body_markdown="ALD grows conformal oxide films via self-limiting "
+                          "surface reactions in alternating precursor pulses.",
+            evidence=[])
+        con = open_wiki_store(bundle.sqlite_path)
+        try:
+            upsert_wiki_page(con, page_id=page.id, slug="atomic-layer-deposition",
+                             title=page.title, kind="article",
+                             body=page.body_markdown, frontmatter={},
+                             evidence=[], links=[])
+            con.commit()
+        finally:
+            con.close()
+        embed_committed_page(bundle, page)
+        hits = find_semantic(bundle, "self-limiting conformal oxide growth", top_k=3)
+    return {"incremental_embed_present": True, "semantic_hits_mid_loop": len(hits)}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -357,6 +395,7 @@ PROBES = {
     "I_empty_body_evidence": probe_empty_body_evidence,
     "J_consolidate_empty_columns": probe_consolidate_empty_columns,
     "K_data_artifact_wiki_registration": probe_data_artifact_wiki_registration,
+    "L_mid_loop_wiki_vectors": probe_mid_loop_wiki_vectors,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 

@@ -216,6 +216,16 @@ def commit_page(
 
         gc_attempt(bundle, slug)
         _project_wiki_page(bundle, page=page, slug=slug)
+        # Incrementally embed the page so semantic wiki_find sees it next round
+        # (F26). Best-effort: the finalize `wiki rebuild` remains the backstop,
+        # so a missing/unavailable embedder must not fail an otherwise-valid
+        # commit.
+        try:
+            from .derived import embed_committed_page
+
+            embed_committed_page(bundle, page)
+        except Exception:  # noqa: BLE001 - embedding is an optional accelerant
+            pass
 
         try:
             run_id = load_state(bundle).run_id
