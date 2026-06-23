@@ -267,7 +267,7 @@ definition.
 P5 can now route residual chunks to freshly-committed pages in the same loop.
 **Quality guard:** finalize rebuild unchanged and remains the backstop; full
 suite `1537 passed, 1 skipped` (+1 test, exercising the real commit→semantic
-path under the hash embedder); ruff clean; no other proxy regressed. PR: #TBD.
+path under the hash embedder); ruff clean; no other proxy regressed. PR: #104 (merged).
 
 ## Cumulative result
 
