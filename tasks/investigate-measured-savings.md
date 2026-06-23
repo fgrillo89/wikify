@@ -144,4 +144,28 @@ The data gate now grounds dossier-copied quotes the validator already accepted,
 so OCR/citation-noisy data points are no longer wrongly rejected (fewer
 re-harvest attempts; same class as F6/F19). **Quality guard:** fabrication still
 rejected at both gates; full suite `1532 passed, 1 skipped` (+1 parity test);
-ruff clean; no other proxy regressed. PR: #TBD.
+ruff clean; no other proxy regressed. PR: #99 (merged).
+
+### Iteration 3 — F8 OCR-mangled number gate (`effq-ocr-number-gate`)
+
+**Backlog item:** F8 — the data gate verifies a semantically-wrong number when
+`value_original` is OCR-mangled. `"1 10 5 ohm cm"` (meant 1e5) parses to its
+leading token `1.0`, and `number_supported` passes because `1` is trivially
+present in quote and source. The point is stored **verified-but-wrong**.
+
+**Change:** `verify_point` rejects a single-number value (`scalar` /
+`upper_bound` / `lower_bound`) whose text begins with 2+ space-separated bare
+numbers — the OCR-mangle signature. Unit digits (`cm2`) are not bare numbers
+and a range (`10 to 20`) breaks the run at `to`, so neither is flagged; ranges
+and lists are exempt by value_type.
+
+**Measured (harness proxy `H_ocr_number_gate`, before = master `f147675`, after = branch):**
+
+| proxy | before | after |
+|---|---|---|
+| OCR-mangled scalar verified (should be rejected) | **yes (bug)** | **no** |
+| well-formed scalar still verified | yes | yes |
+
+**Quality guard:** legit scalar still verifies; a two-number range still
+verifies (not flagged); full suite `1533 passed, 1 skipped` (+1 test); ruff
+clean; no other proxy regressed. PR: #TBD.

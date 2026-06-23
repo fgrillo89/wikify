@@ -127,6 +127,42 @@ def test_data_gate_grounding_matches_validator() -> None:
     assert not _quote_is_grounded(fab_q, fab_s)
 
 
+def test_ocr_mangled_scalar_rejected_but_legit_verified() -> None:
+    """F8: an OCR-mangled scalar value ("1 10 5 ohm cm" for 1e5) must be
+    rejected — its leading-number parse (1.0) would otherwise verify against
+    any source containing a "1". A well-formed scalar still verifies, and a
+    range that legitimately carries two numbers is not flagged."""
+    from wikify.data.models import DataPoint
+    from wikify.data.verify import is_ocr_mangled_scalar, verify_point
+
+    assert is_ocr_mangled_scalar("1 10 5 ohm cm")
+    assert not is_ocr_mangled_scalar("1.1 A")
+    assert not is_ocr_mangled_scalar("2.5e-3 cm2")  # unit digit is not a bare number
+    assert not is_ocr_mangled_scalar("10 to 20 nm")  # run breaks at "to"
+
+    mangled = DataPoint(
+        subject="film", property="resistivity",
+        value_text="1 10 5 ohm cm", value_original="1 10 5 ohm cm",
+        doc_id="d", grounding_quote="resistivity of 1 10 5 ohm cm",
+        value_type="scalar").finalize()
+    verify_point(mangled, chunk_text="we measured resistivity of 1 10 5 ohm cm here")
+    assert mangled.verification_status == "rejected"
+
+    legit = DataPoint(
+        subject="film", property="gpc", value_text="1.1", value_original="1.1 A",
+        doc_id="d", grounding_quote="GPC was 1.1 A", value_type="scalar").finalize()
+    verify_point(legit, chunk_text="the GPC was 1.1 A in this process")
+    assert legit.verification_status == "verified"
+
+    # A range with two numbers is exempt (value_type != scalar/bound).
+    rng = DataPoint(
+        subject="film", property="thickness", value_text="10 to 20 nm",
+        value_original="10 to 20 nm", doc_id="d",
+        grounding_quote="thickness 10 to 20 nm", value_type="range").finalize()
+    verify_point(rng, chunk_text="film thickness 10 to 20 nm measured")
+    assert rng.verification_status == "verified"
+
+
 def test_number_supported_float_normalization() -> None:
     assert number_supported("1.10 A", "GPC was 1.1 A", "GPC was 1.1 A reported")
     assert not number_supported("9.9 A", "GPC was 1.1 A", "GPC was 1.1 A")
