@@ -35,9 +35,37 @@ from ...schema import ImageRef, WriteEvidenceRef, WriteRequest
 from ...types import ModelTier
 from ..work.card import load_card
 from ..work.evidence import read_evidence
-from .artifact import dossier_path, draft_path, read_json, write_json
+from .artifact import (
+    dossier_path,
+    draft_path,
+    read_json,
+    strip_draft_envelope,
+    write_json,
+)
 from .author_context import build_author_context
 from .dossier import render_dossier
+
+
+def _drop_empty_body_evidence(active: list, fetched_chunks: dict) -> tuple[list, int]:
+    """Partition active evidence into ``(usable, n_dropped)``.
+
+    A record is usable only when its chunk resolves to non-whitespace text.
+    Empty-body records — an id that resolved to nothing, or figure/table/caption
+    residue with no prose — are dropped here so the writer never receives
+    evidence it cannot ground and then silently discards (F18). The dossier,
+    the draft evidence list, and the reported evidence count then reflect
+    usable evidence only.
+    """
+    usable: list = []
+    dropped = 0
+    for rec in active:
+        chunk = fetched_chunks.get(rec.chunk_id)
+        text = getattr(chunk, "text", "") if chunk is not None else ""
+        if text and text.strip():
+            usable.append(rec)
+        else:
+            dropped += 1
+    return usable, dropped
 
 
 def build_draft(
@@ -103,10 +131,13 @@ def build_draft(
     artifacts_by_chunk = corpus_queries.referenced_artifacts_for_chunks(
         corpus, list(fetched_chunks.values())
     )
-    figures = _figure_candidates_for_evidence(corpus, active, limit=6)
+    # F18: drop evidence whose chunk resolved to an empty body before the writer
+    # ever sees it, so it cannot silently discard markers the dossier advertised.
+    usable, dropped_empty = _drop_empty_body_evidence(active, fetched_chunks)
+    figures = _figure_candidates_for_evidence(corpus, usable, limit=6)
 
     evidence: list[WriteEvidenceRef] = []
-    for rec in active:
+    for rec in usable:
         chunk = fetched_chunks.get(rec.chunk_id)
         chunk_text = getattr(chunk, "text", "") if chunk is not None else ""
         section_type = getattr(chunk, "section_type", "") if chunk is not None else ""
@@ -139,7 +170,7 @@ def build_draft(
 
     tier_value = tier if isinstance(tier, ModelTier) else ModelTier(tier)
     data_points, related_data_artifacts = _data_for_evidence(
-        bundle, {r.chunk_id for r in active}
+        bundle, {r.chunk_id for r in usable}
     )
     request = WriteRequest(
         page_id=card.page_id,
@@ -162,6 +193,7 @@ def build_draft(
     payload = request.model_dump(mode="json")
     payload["schema_version"] = 1
     payload["task"] = task
+    payload["dropped_empty_evidence"] = dropped_empty
     write_json(draft_path(bundle, slug), payload)
     # Regenerate the markdown evidence dossier so iterative strategies
     # (refine / guided / query) that re-run ``draft build`` after
@@ -211,9 +243,7 @@ def _data_for_evidence(
 
 def load_draft(bundle: Bundle, slug: str) -> WriteRequest:
     """Read ``draft.json`` and return the parsed model."""
-    payload = read_json(draft_path(bundle, slug))
-    payload.pop("schema_version", None)
-    payload.pop("task", None)
+    payload = strip_draft_envelope(read_json(draft_path(bundle, slug)))
     return WriteRequest.model_validate(payload)
 
 

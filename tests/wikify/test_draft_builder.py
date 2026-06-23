@@ -224,6 +224,25 @@ def test_build_draft_only_active_evidence(tmp_path: Path) -> None:
     assert request.evidence[0].chunk_id == "paper_0__c0000"
 
 
+def test_build_draft_drops_empty_body_evidence(tmp_path: Path) -> None:
+    """F18: an evidence record whose chunk resolves to an empty body is dropped
+    at build, not silently handed to the writer; the count is recorded."""
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle,
+        slug,
+        [
+            EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0", status="active"),
+            # An id that resolves to nothing -> empty body -> must be dropped.
+            EvidenceRecord(chunk_id="paper_0__c9999", doc_id="paper_0", status="active"),
+        ],
+    )
+    request = build_draft(bundle, slug=slug, corpus=corpus, model_id="claude-sonnet-4-6", tier="M")
+    assert [e.chunk_id for e in request.evidence] == ["paper_0__c0000"]
+    payload = read_json(draft_path(bundle, slug))
+    assert payload["dropped_empty_evidence"] == 1
+
+
 def test_build_draft_unknown_concept(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
