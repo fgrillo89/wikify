@@ -6,6 +6,7 @@ Subcommands::
     work list claims [--run]
     work list inbox [--run]
     work list evidence <concept> [--run]
+    work seen-chunks <concept...> [--run]
     work show <concept> [--run] [--detail|--full]
     work add concept "<title>" [--run] [--kind] [--aliases]
     work add evidence <concept> --records <jsonl-path> [--run]
@@ -42,7 +43,12 @@ from ..bundle.work.claim import (
     read_claim,
     release_claim,
 )
-from ..bundle.work.evidence import EvidenceRecord, append_evidence, read_evidence
+from ..bundle.work.evidence import (
+    EvidenceRecord,
+    append_evidence,
+    read_evidence,
+    seen_chunk_ids,
+)
 from ..bundle.work.inbox import append_inbox, list_inbox_files
 from ..bundle.work.tend import tend_bundle
 from ..corpus.handles import HandleIndex as _HandleIndex
@@ -163,6 +169,33 @@ def cmd_list_evidence(
         return
     for r in records:
         typer.echo(f"{r.chunk_id}  {r.doc_id}  {r.status}  {r.score:.2f}")
+
+
+# -------------------------------------------------------------- seen-chunks
+
+
+@app.command("seen-chunks")
+def cmd_seen_chunks(
+    concepts: list[str] = typer.Argument(...),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("json", "--format"),
+) -> None:
+    """Union of already-judged chunk_ids across ``concepts``.
+
+    One cheap deterministic read an explorer makes before judging, to
+    seed its ``seen_chunks`` dedup set from the durable evidence ledger
+    (active records only) so it never re-judges a chunk across rounds.
+    """
+    bundle = _resolve_bundle(run)
+    seen: set[str] = set()
+    for concept in concepts:
+        seen.update(seen_chunk_ids(bundle, _clean_slug_arg(concept)))
+    ids = sorted(seen)
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, "seen_chunk_ids": ids, "n_seen": len(ids)}))
+        return
+    for cid in ids:
+        typer.echo(cid)
 
 
 # -------------------------------------------------------------- show

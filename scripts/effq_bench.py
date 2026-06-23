@@ -158,6 +158,35 @@ def probe_tend_stubs() -> dict:
             "evidence_less_stubs_created": created}
 
 
+# --- F: deterministic seen-chunks dedup surface (judge path) ---------------
+def probe_judge_dedup() -> dict:
+    # Wiring the Haiku judge path: a cheap deterministic call returns the
+    # already-judged (active) chunk set so the explorer skips re-judging it
+    # across rounds, instead of relying on the LLM to read evidence.jsonl.
+    try:
+        from wikify.bundle.work.evidence import seen_chunk_ids
+    except ImportError:
+        return {"seen_chunks_surface_present": False,
+                "seen_chunks_returned": 0, "archived_excluded": None}
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+    with tempfile.TemporaryDirectory() as td:
+        bdir = Path(td) / "bundle"
+        (bdir / "run").mkdir(parents=True)
+        bundle = Bundle(root=bdir)
+        create_concept(bundle, page_id="ALD", slug="ald")
+        append_evidence(bundle, "ald", [
+            EvidenceRecord(chunk_id="c1", doc_id="d1", status="active"),
+            EvidenceRecord(chunk_id="c2", doc_id="d1", status="active"),
+            EvidenceRecord(chunk_id="c3", doc_id="d1", status="archived"),
+        ])
+        seen = seen_chunk_ids(bundle, "ald")
+    return {"seen_chunks_surface_present": True,
+            "seen_chunks_returned": len(seen),
+            "archived_excluded": "c3" not in seen}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -196,6 +225,7 @@ PROBES = {
     "B1_canonical_id": probe_canonical_id,
     "B2_harvest_resolution": probe_harvest_resolution,
     "E_tend_stubs": probe_tend_stubs,
+    "F_judge_dedup": probe_judge_dedup,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 

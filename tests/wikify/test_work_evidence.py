@@ -11,6 +11,7 @@ from wikify.bundle.work.evidence import (
     append_evidence,
     dedup_evidence,
     read_evidence,
+    seen_chunk_ids,
 )
 
 
@@ -93,3 +94,23 @@ def test_read_empty_when_no_file(tmp_path: Path) -> None:
     bundle, slug = _bundle_with_concept(tmp_path)
     # Concept created but no evidence appended yet.
     assert read_evidence(bundle, slug) == []
+
+
+def test_seen_chunk_ids_active_only(tmp_path: Path) -> None:
+    bundle, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle,
+        slug,
+        [
+            EvidenceRecord(chunk_id="c1", doc_id="d1", status="active"),
+            EvidenceRecord(chunk_id="c2", doc_id="d1", status="active"),
+            EvidenceRecord(chunk_id="c3", doc_id="d1", status="archived"),
+        ],
+    )
+    # Archived chunks are fair game to re-judge -> excluded from the seen set.
+    assert seen_chunk_ids(bundle, slug) == {"c1", "c2"}
+
+
+def test_seen_chunk_ids_empty_when_no_evidence(tmp_path: Path) -> None:
+    bundle, slug = _bundle_with_concept(tmp_path)
+    assert seen_chunk_ids(bundle, slug) == set()

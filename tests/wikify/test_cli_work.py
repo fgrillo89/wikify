@@ -1334,3 +1334,29 @@ def test_from_ids_chunk_handle_short_form_like_wildcards_escaped(
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["stats"]["rejected_not_found"] == 1
+
+
+def test_work_seen_chunks_unions_active_evidence(tmp_path: Path) -> None:
+    from wikify.api import Bundle
+    from wikify.bundle.work.card import create_concept
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    create_concept(bundle, page_id="ALD", slug="ald")
+    create_concept(bundle, page_id="CVD", slug="cvd")
+    append_evidence(bundle, "ald", [
+        EvidenceRecord(chunk_id="c1", doc_id="d1", status="active"),
+        EvidenceRecord(chunk_id="c2", doc_id="d1", status="archived"),
+    ])
+    append_evidence(bundle, "cvd", [
+        EvidenceRecord(chunk_id="c3", doc_id="d2", status="active"),
+    ])
+    result = runner.invoke(
+        app, ["work", "seen-chunks", "ald", "cvd", "--run", str(bundle_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    # Union of active evidence across both slugs; archived excluded.
+    assert sorted(data["seen_chunk_ids"]) == ["c1", "c3"]
+    assert data["n_seen"] == 2
