@@ -34,7 +34,12 @@ from .card import (
 from .chunk_ids import build_suffix_index, corpus_path_from_bundle, resolve_chunk_id
 from .claim import expire_stale_claims, list_claims
 from .evidence import EvidenceRecord, append_evidence, dedup_evidence, read_evidence
-from .inbox import list_inbox_files, read_inbox, truncate_inbox
+from .inbox import (
+    append_inbox_records,
+    list_inbox_files,
+    read_inbox,
+    truncate_inbox,
+)
 
 
 def _consolidate_evidence_suggestions(bundle: Bundle) -> int:
@@ -68,49 +73,105 @@ def _consolidate_evidence_suggestions(bundle: Bundle) -> int:
     return appended
 
 
+# An automated gap suggestion is promoted to a concept folder only once it is
+# backed by at least this many DISTINCT supporting chunks across the inbox. A
+# one-off proposal from a single residual chunk is noise: promoting it would
+# create an evidence-less card that inflates the roster and keeps the SEED wave
+# firing on a phantom concept. Sub-threshold suggestions are retained so support
+# can accumulate across rounds, capped so the inbox cannot grow without bound.
+_CONCEPT_SUGGESTION_SUPPORT = 2
+_RETAINED_SUGGESTION_CAP = 500
+
+
+def _is_gap_suggestion(record: dict) -> bool:
+    """Whether a concept suggestion is an automated P5 gap proposal (gated) vs a
+    deliberate add (promoted immediately).
+
+    The signal is the explicit ``origin`` field: ``gap_explorer`` is gated;
+    ``manual`` / ``deliberate`` / ``editor`` are not. For records that predate
+    the field (no ``origin``), fall back to the heuristic that a gap proposal
+    cites the chunk it came from while a deliberate add does not.
+    """
+    origin = record.get("origin")
+    if origin == "gap_explorer":
+        return True
+    if origin in {"manual", "deliberate", "editor"}:
+        return False
+    return bool(record.get("chunk_id"))
+
+
 def _consolidate_concept_suggestions(bundle: Bundle, keep_inbox: bool = False) -> int:
     """Drain ``concept_suggestions.jsonl`` into new concept folders.
 
     Records have shape ``{"title": <str>, "kind": "article|person",
-    "aliases": [...]}``. Existing concepts (matched by slug) are
-    skipped. Returns the count of concepts created.
+    "aliases": [...], "origin"?: <str>, "chunk_id"?: <str>}``. Deliberate adds
+    promote immediately; automated gap suggestions (see ``_is_gap_suggestion``)
+    promote only when their distinct supporting-chunk count reaches
+    ``_CONCEPT_SUGGESTION_SUPPORT``, otherwise they stay in the inbox so a
+    concept repeatedly proposed across rounds eventually promotes. Existing
+    concepts (matched by slug) are skipped and their suggestions dropped.
+    Returns the count of concepts created.
 
-    With ``keep_inbox=True`` the inbox file is preserved post-drain so
-    the orchestrator can re-inspect or replay the suggestions.
+    With ``keep_inbox=True`` the inbox file is preserved post-drain so the
+    orchestrator can re-inspect or replay the suggestions.
     """
     records = read_inbox(bundle, "concept_suggestions")
     if not records:
         return 0
     existing = set(list_concept_slugs(bundle))
-    created = 0
+
+    # Group records per slug.
+    by_slug: dict[str, list[dict]] = {}
     for r in records:
         title = r.get("title")
         if not title:
             continue
-        s = slugify(title)
+        by_slug.setdefault(slugify(title), []).append(r)
+
+    created = 0
+    retained: list[dict] = []
+    for s, recs in by_slug.items():
         if s in existing:
-            continue
-        kind = r.get("kind", "article")
+            continue  # already a concept; drop these suggestions
+        # A deliberate add among the records promotes the title immediately;
+        # otherwise the gap suggestions need enough distinct supporting chunks.
+        if all(_is_gap_suggestion(r) for r in recs):
+            distinct_chunks = {r["chunk_id"] for r in recs if r.get("chunk_id")}
+            if len(distinct_chunks) < _CONCEPT_SUGGESTION_SUPPORT:
+                retained.extend(recs)  # not enough support yet — keep for next round
+                continue
+        title = recs[0].get("title")
+        kind = recs[0].get("kind", "article")
         if kind not in {"article", "person"}:
             kind = "article"
-        aliases = r.get("aliases") or []
-        if not isinstance(aliases, list):
-            aliases = []
-        seed_doc_handles = r.get("seed_doc_handles") or []
-        if not isinstance(seed_doc_handles, list):
-            seed_doc_handles = []
-        seed_doc_handles = [str(h) for h in seed_doc_handles if isinstance(h, str)]
+        # Union aliases + seed docs across every supporting record.
+        aliases: list[str] = []
+        seed_doc_handles: list[str] = []
+        for r in recs:
+            for a in r.get("aliases") or []:
+                if isinstance(a, str) and a not in aliases:
+                    aliases.append(a)
+            for h in r.get("seed_doc_handles") or []:
+                if isinstance(h, str) and h not in seed_doc_handles:
+                    seed_doc_handles.append(h)
         create_concept(
             bundle,
             page_id=title,
             kind=kind,
-            aliases=list(aliases),
+            aliases=aliases,
             seed_doc_handles=seed_doc_handles or None,
         )
         existing.add(s)
         created += 1
+
     if not keep_inbox:
         truncate_inbox(bundle, "concept_suggestions")
+        if retained:
+            # Bound the carry-over: keep the most recent records so an endless
+            # stream of distinct one-off proposals cannot grow the inbox forever.
+            append_inbox_records(
+                bundle, "concept_suggestions", retained[-_RETAINED_SUGGESTION_CAP:]
+            )
     return created
 
 

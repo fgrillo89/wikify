@@ -62,25 +62,33 @@ Task (avoids serialisation hazards).
 
 - Bind context before the first MCP call:
   `mcp__wikify__context_set(corpus_path="<corpus>", bundle_path="<run>")`.
-- Initialise `seen_chunks` from `notebook.provenance.covered_chunks`
-  for the target slug (P1 multi-slug: union over all targets).
-- Every accepted chunk goes through the existing
-  `wikify-gather-evidence-cluster` judgement loop (sonnet supervisor
-  + haiku judges). This skill produces *candidate* chunk sets;
-  cluster vets them.
+- Initialise `seen_chunks` from BOTH `notebook.provenance.covered_chunks`
+  AND the canonical `chunk_id`s already in the target slug's
+  `evidence.jsonl` on disk (P1 multi-slug: union over all targets). The
+  evidence ledger is the durable record of what was already judged, so
+  seeding from it avoids re-judging the same chunk across rounds — the
+  one cheap, lean dedup that does not need a separate chunk-judgement
+  cache.
+- Every candidate chunk is judged accept/reject through the existing
+  `wikify-gather-evidence-cluster` loop. Per-chunk judging is a bounded
+  classification: run the judges on the **haiku (S) tier** and reserve
+  the sonnet (M) tier for the supervisor's synthesis. This skill
+  produces *candidate* chunk sets; cluster vets them.
 - The vetter is invoked at the end, in one batch per target slug:
   ```bash
   wikify work add evidence <slug> --records <path> --run <bundle>
   ```
   where `<path>` is a JSONL of vetter-accepted EvidenceRecords for
-  this round. Each record's `chunk_id` MUST be the corpus CANONICAL id
-  (the long `id` field returned by `corpus_find` / `corpus_show`, e.g.
-  `<title>_<dochex>__c0007_<hex>`), never the short `chunk:<hex>`
-  handle. `work add evidence` resolves handles back to canonical when
-  the bundle's corpus is reachable and rejects unresolvable ids, but
-  storing the canonical id directly is the contract; handles silently
-  zero out coverage and citation grounding when the corpus is not
-  reachable.
+  this round. Each record's `chunk_id` MUST be the corpus CANONICAL id,
+  read directly from the **`canonical_id`** field on every chunk row
+  returned by `corpus_find` / `corpus_show` / `corpus_traverse` (e.g.
+  `<title>_<dochex>__c0007_<hex>`) — never the short `chunk:<hex>`
+  `handle`. Do not spelunk the corpus SQLite to recover it; the field
+  carries it. `work add evidence` resolves handles back to canonical
+  when the bundle's corpus is reachable and rejects unresolvable ids,
+  but storing the `canonical_id` directly is the contract; handles
+  silently zero out coverage and citation grounding when the corpus is
+  not reachable.
 - `excluded_kinds = ["references", "acknowledgments", "appendix",
   "figure", "table", "caption", "boilerplate"]` is the standard
   structural exclusion.
@@ -281,7 +289,12 @@ P5(budget_chunks=20):
 `emit_evidence_suggestion` / `emit_concept_suggestion` write JSONL
 records to `work/inbox/evidence_suggestions.jsonl` and
 `work/inbox/concept_suggestions.jsonl`. The editor's `work tend`
-consumes them next round.
+consumes them next round. Every P5 `concept_suggestion` MUST carry
+`"origin": "gap_explorer"` and the `chunk_id` it was proposed from;
+`work tend` gates these behind a distinct-chunk support threshold so a
+one-off gap proposal does not create an evidence-less concept stub.
+(Deliberate concepts added via `work add feedback concept` omit that
+origin and promote immediately.)
 
 P5 fires every round. Its small budget keeps the cost low while the
 deterministic residual sampling guarantees that, given enough rounds,

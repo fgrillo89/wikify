@@ -127,3 +127,13 @@ def aggregate(events: Iterable[Event]) -> dict:
 def cost_summary(bundle: Bundle) -> dict:
     """Read the bundle's events.jsonl and return the cost aggregate."""
     return aggregate(iter_events(bundle))
+
+
+def spent_haiku_eq(bundle: Bundle) -> int:
+    """Spend so far, derived from the call-event ledger (the source of truth).
+
+    Pure read — no stored cache to drift. Both ``run show`` and ``run sense``
+    derive spend through here, and the STOP-CHECK budget bound compares it to
+    the target.
+    """
+    return int(round(aggregate(iter_events(bundle))["totals"]["haiku_eq"]))

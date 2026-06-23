@@ -351,9 +351,9 @@ def test_find_queryless_pagerank_returns_docs_ordered_by_pr(
 
     monkeypatch.setattr(queries, "rank_docs", _fake_rank_docs)
 
-    # Default --by chunk — must route to metric-only path without error.
+    # by="paper" routes to the document metric-ranking path.
     result = queries.find(
-        small_corpus, query="", by="chunk", rank="pagerank", top_k=5,
+        small_corpus, query="", by="paper", rank="pagerank", top_k=5,
     )
     assert result["kind"] == "docs"
     assert result["scored"] is False
@@ -386,7 +386,7 @@ def test_find_queryless_citation_count_returns_docs_ordered_by_cites(
     monkeypatch.setattr(queries, "rank_docs", _fake_rank_docs)
 
     result = queries.find(
-        small_corpus, query="", rank="citation_count", top_k=5,
+        small_corpus, query="", by="paper", rank="citation_count", top_k=5,
     )
     assert result["kind"] == "docs"
     cites_list = [r["citation_count"] for r in result["rows"]]

@@ -37,7 +37,7 @@ def test_run_state_defaults() -> None:
     assert state.strategy == ""
     assert state.wiki_path == "wiki"
     assert state.work_path == "work"
-    assert state.budget == Budget(target_haiku_eq=0, spent_haiku_eq=0)
+    assert state.budget == Budget(target_haiku_eq=0)
     assert state.stages == {}
     assert state.created_at and state.updated_at
 
@@ -57,7 +57,7 @@ def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     state = RunState(
         run_id="r-1",
         corpus_path="data/corpora/x",
-        budget=Budget(target_haiku_eq=1000, spent_haiku_eq=42),
+        budget=Budget(target_haiku_eq=1000),
         stages={"extract": "running"},
     )
     save_state(bundle, state)

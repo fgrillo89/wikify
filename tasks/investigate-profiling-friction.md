@@ -227,3 +227,9 @@ An adversarial reviewer (Opus) attacked the branch diff (`git diff master...HEAD
 - Two nits raised, both "no change required" (data pages intentionally skip CS1 formatting; a redundant on-disk parenthetical for hashless ids with no reader impact).
 
 No remediation required after the adversarial pass.
+
+---
+
+## Efficiency follow-up
+
+F19, F2, F6, F14, F17 were fixed in the Phase-1 token-efficiency pass — see `tasks/investigate-efficiency-ledger.md`. Remaining majors (F8 OCR-number gate, F18 empty-body evidence, F22 silent empty columns, F26 mid-loop wiki vectors, F28 data-artifact wiki-DB registration) are still open for a later pass.

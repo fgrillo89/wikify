@@ -32,10 +32,14 @@ def _utcnow() -> str:
 
 
 class Budget(BaseModel):
-    """Haiku-equivalent budget target + running spend."""
+    """Haiku-equivalent budget target.
+
+    Spend is NOT stored here — it is derived from the call-event ledger
+    (the single source of truth) via ``cost.spent_haiku_eq``, so it can never
+    drift from the recorded calls.
+    """
 
     target_haiku_eq: int = 0
-    spent_haiku_eq: int = 0
 
 
 class RunState(BaseModel):

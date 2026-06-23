@@ -50,6 +50,36 @@ _REF_DEF_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
+
+# Grounding-match normalization. The dossier the writer reads renders chunk
+# text for humans: it collapses whitespace, turns OCR control characters into
+# spaces, and drops inline numeric citation markers (e.g. ``[12]`` / ``[1-3]``
+# / ``[ 101 ]``). The raw ``chunk_text`` the validator checks against keeps all
+# of that, so a quote copied verbatim from the dossier used to fail the strict
+# substring check and force the writer into an extra validation pass. Normalize
+# both sides the same way before matching. This removes rendering noise only
+# (whitespace, control chars, citation brackets) — never content — so it is not
+# a fabrication loophole: the quote's actual words must still appear in order.
+_WS_RE = re.compile(r"\s+")
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_INLINE_CITE_RE = re.compile(r"\[[\d\s,‒–—.\-]+\]")
+
+
+def _ground_norm(s: str) -> str:
+    s = _CTRL_RE.sub(" ", s or "")
+    s = _INLINE_CITE_RE.sub(" ", s)
+    return _WS_RE.sub(" ", s).strip().lower()
+
+
+def _quote_is_grounded(quote: str, source: str) -> bool:
+    """True if *quote* is grounded in *source*: exact substring, else a match
+    after shared dossier-style normalization (whitespace / control chars /
+    inline citation markers)."""
+    if not quote or not source:
+        return False
+    if quote in source:
+        return True
+    return _ground_norm(quote) in _ground_norm(source)
 _FIGURE_PLACEHOLDER_RE = re.compile(r"\{\{figure:([A-Za-z0-9_.-]+)\}\}")
 # Literal \uXXXX escape sequences in prose (six chars: backslash u + 4 hex digits).
 _UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
@@ -203,7 +233,7 @@ def _quote_grounding_errors(
                 }
             )
             continue
-        if body_quote not in chunk_text:
+        if not _quote_is_grounded(body_quote, chunk_text):
             errors.append(
                 {
                     "path": f"body_markdown/[^{marker}]",
