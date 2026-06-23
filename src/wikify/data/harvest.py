@@ -21,6 +21,21 @@ from ..corpus.chunks import read_chunks_by_id
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
+def _resolve_handle(corpus: Corpus, chunk_id: str) -> str:
+    """Best-effort resolve a short ``chunk:<hex>`` handle to its canonical id.
+
+    Returns the input unchanged when it cannot be resolved (so callers can
+    fall through to their existing behaviour). Import is local to avoid a
+    module-load cycle through ``corpus.queries``.
+    """
+    from ..corpus.queries import resolve_chunk_id
+
+    try:
+        return resolve_chunk_id(corpus, chunk_id)
+    except Exception:
+        return chunk_id
+
+
 def _connect(corpus: Corpus) -> sqlite3.Connection | None:
     db = corpus.sqlite_path
     if not db.exists():
@@ -67,6 +82,14 @@ def source_text_for(
     canonical_doc_id = doc_id
     if chunk_id:
         chunks = read_chunks_by_id(corpus, [chunk_id])
+        if not chunks:
+            # The id may be a short ``chunk:<hex>`` handle (the form the MCP
+            # corpus tools return). ``read_chunks_by_id`` is an exact match, so
+            # resolve the handle to its canonical id and retry — otherwise the
+            # source text comes back empty and the point is wrongly rejected.
+            resolved = _resolve_handle(corpus, chunk_id)
+            if resolved and resolved != chunk_id:
+                chunks = read_chunks_by_id(corpus, [resolved])
         if chunks:
             chunk_text = chunks[0].text
             if chunks[0].doc_id:

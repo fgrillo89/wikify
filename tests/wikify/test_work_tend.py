@@ -83,19 +83,59 @@ def test_tend_skips_evidence_for_unknown_concept(tmp_path: Path) -> None:
     assert read_inbox(bundle, "evidence_suggestions") == []
 
 
-def test_tend_creates_concept_from_suggestion(tmp_path: Path) -> None:
+def test_tend_creates_concept_from_supported_suggestion(tmp_path: Path) -> None:
+    # Two distinct supporting chunks cross the promotion threshold.
     bundle = _bundle(tmp_path)
     append_inbox(
         bundle,
         "concept_suggestions",
-        {"title": "Atomic Layer Deposition", "kind": "article", "aliases": ["ALD"]},
+        {"title": "Atomic Layer Deposition", "kind": "article",
+         "aliases": ["ALD"], "chunk_id": "c1"},
+    )
+    append_inbox(
+        bundle,
+        "concept_suggestions",
+        {"title": "Atomic Layer Deposition", "kind": "article",
+         "aliases": ["atomic-layer-deposition"], "chunk_id": "c2"},
     )
     summary = tend_bundle(bundle)
     assert summary["concepts_created"] == 1
     slugs = list_concept_slugs(bundle)
     assert "atomic-layer-deposition" in slugs
     card = load_card(bundle, "atomic-layer-deposition")
-    assert card.aliases == ["ALD"]
+    # Aliases are unioned across supporting records.
+    assert "ALD" in card.aliases
+
+
+def test_tend_single_suggestion_not_promoted_but_retained(tmp_path: Path) -> None:
+    # A one-off suggestion (one chunk) must NOT create an evidence-less card;
+    # it stays in the inbox so support can accumulate across rounds.
+    from wikify.bundle.work.inbox import read_inbox
+
+    bundle = _bundle(tmp_path)
+    append_inbox(
+        bundle,
+        "concept_suggestions",
+        {"title": "Reservoir Computing", "chunk_id": "c1"},
+    )
+    summary = tend_bundle(bundle)
+    assert summary["concepts_created"] == 0
+    assert "reservoir-computing" not in list_concept_slugs(bundle)
+    # Retained for next round.
+    assert any(r.get("title") == "Reservoir Computing"
+               for r in read_inbox(bundle, "concept_suggestions"))
+
+
+def test_tend_accumulated_support_promotes_next_round(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    append_inbox(bundle, "concept_suggestions",
+                 {"title": "Reservoir Computing", "chunk_id": "c1"})
+    assert tend_bundle(bundle)["concepts_created"] == 0
+    # A second round adds a distinct supporting chunk -> threshold reached.
+    append_inbox(bundle, "concept_suggestions",
+                 {"title": "Reservoir Computing", "chunk_id": "c2"})
+    assert tend_bundle(bundle)["concepts_created"] == 1
+    assert "reservoir-computing" in list_concept_slugs(bundle)
 
 
 def test_tend_concept_suggestion_idempotent(tmp_path: Path) -> None:

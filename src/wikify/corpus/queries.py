@@ -833,6 +833,36 @@ def rank_docs(
     return rows[:top_k]
 
 
+def rank_chunks_by_doc_metric(
+    corpus: Corpus,
+    *,
+    by: str,
+    top_k: int = 20,
+) -> list[dict]:
+    """Return chunk rows ranked by their document's graph metric.
+
+    Projects a document-level graph metric (``pagerank`` / ``citation_count``)
+    onto chunks: chunks of the highest-ranked document come first, ordered by
+    ``ord`` within each document. This is the chunk-level entry-point the P5
+    gap-explorer needs — ``find(by="chunk", rank="pagerank")`` previously fell
+    through to the document ranking and returned doc rows instead of chunks.
+
+    Each row carries ``id``, ``doc_id`` and the projected ``score`` (the doc's
+    metric value), so the standard chunk-row envelope builder consumes it.
+    """
+    from .chunks import read_chunks
+
+    ranked_docs = rank_docs(corpus, by=by, top_k=len(_rank_docs_sqlite(corpus)) or top_k)
+    out: list[dict] = []
+    for d in ranked_docs:
+        metric_value = float(d.get(by, 0.0) or 0.0)
+        for ch in read_chunks(corpus, d["doc_id"]):
+            out.append({"id": ch.id, "doc_id": ch.doc_id, "score": metric_value})
+            if len(out) >= top_k:
+                return out
+    return out
+
+
 def _rank_docs_sqlite(corpus: Corpus) -> list[dict]:
     """Pull citation_count + pagerank from node_metrics."""
     from .store.metrics import (
@@ -2141,7 +2171,15 @@ def find(
             "scored": False,
         }
 
-    # Pure metric ranking — ignore query, return top docs by graph metric.
+    # Pure metric ranking with no query. ``by="chunk"`` projects the document
+    # metric onto chunks (the P5 coverage driver wants residual *chunks* ranked
+    # by PageRank); ``by="paper"`` returns the document ranking.
+    if rank in _SOURCE_RANKS and not query and by == "chunk":
+        return {
+            "kind": "chunks",
+            "rows": rank_chunks_by_doc_metric(corpus, by=rank, top_k=top_k),
+            "scored": False,
+        }
     if rank in _SOURCE_RANKS and not query and by != "author":
         return {
             "kind": "docs",

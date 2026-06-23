@@ -216,6 +216,7 @@ def chunk_item(chunk: Chunk, *,
     text = chunk.text if full else chunk.text[:_PREVIEW_CHARS]
     item = {
         "handle": format_handle("chunk", chunk.id),
+        "canonical_id": chunk.id,
         "type": "chunk",
         "title": "",
         "score": score,
@@ -260,6 +261,7 @@ def chunk_row_item(row: dict, *, score: float | None = None,
         meta["is_boilerplate"] = bool(row.get("is_boilerplate"))
     item: dict[str, Any] = {
         "handle": format_handle("chunk", chunk_id),
+        "canonical_id": chunk_id,
         "type": "chunk",
         "title": "",
         "score": score if score is not None else row.get("score"),
@@ -379,6 +381,7 @@ def traverse_row_item(row: dict) -> dict:
             meta["ord"] = int(row["ord"])
         return {
             "handle": format_handle("chunk", chunk_id),
+            "canonical_id": chunk_id,
             "type": "chunk",
             "title": "",
             "score": None,

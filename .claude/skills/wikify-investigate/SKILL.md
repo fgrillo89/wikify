@@ -180,7 +180,13 @@ EOF
 
 P5 produces `evidence_suggestion` and `concept_suggestion` inbox
 records; `work tend` consolidates them. P1 may also append concept
-suggestions.
+suggestions. `work tend` promotes a `concept_suggestion` to a concept
+folder only once a title is backed by >= 2 distinct supporting chunks
+(a one-off P5 gap proposal is retained in the inbox and accumulates
+across rounds); a deliberate concept added via `work add feedback
+concept` (no `chunk_id`) is promoted immediately. This keeps the roster
+from filling with evidence-less stubs that would keep the SEED wave
+firing on phantom concepts.
 
 **Adjudicate escalations.** For each Task that returned an `escalate`
 block, the editor decides now (it is top-tier) and encodes the ruling:

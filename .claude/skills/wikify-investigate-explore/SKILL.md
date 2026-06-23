@@ -73,14 +73,16 @@ Task (avoids serialisation hazards).
   wikify work add evidence <slug> --records <path> --run <bundle>
   ```
   where `<path>` is a JSONL of vetter-accepted EvidenceRecords for
-  this round. Each record's `chunk_id` MUST be the corpus CANONICAL id
-  (the long `id` field returned by `corpus_find` / `corpus_show`, e.g.
-  `<title>_<dochex>__c0007_<hex>`), never the short `chunk:<hex>`
-  handle. `work add evidence` resolves handles back to canonical when
-  the bundle's corpus is reachable and rejects unresolvable ids, but
-  storing the canonical id directly is the contract; handles silently
-  zero out coverage and citation grounding when the corpus is not
-  reachable.
+  this round. Each record's `chunk_id` MUST be the corpus CANONICAL id,
+  read directly from the **`canonical_id`** field on every chunk row
+  returned by `corpus_find` / `corpus_show` / `corpus_traverse` (e.g.
+  `<title>_<dochex>__c0007_<hex>`) — never the short `chunk:<hex>`
+  `handle`. Do not spelunk the corpus SQLite to recover it; the field
+  carries it. `work add evidence` resolves handles back to canonical
+  when the bundle's corpus is reachable and rejects unresolvable ids,
+  but storing the `canonical_id` directly is the contract; handles
+  silently zero out coverage and citation grounding when the corpus is
+  not reachable.
 - `excluded_kinds = ["references", "acknowledgments", "appendix",
   "figure", "table", "caption", "boilerplate"]` is the standard
   structural exclusion.
