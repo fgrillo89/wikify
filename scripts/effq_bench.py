@@ -187,6 +187,31 @@ def probe_judge_dedup() -> dict:
             "archived_excluded": "c3" not in seen}
 
 
+# --- G: grounding-decision parity across the two gates ---------------------
+def probe_grounding_parity() -> dict:
+    # F19 root fix: the draft validator and the data-harvest verifier must
+    # ground a quote identically. Before unification the validator stripped
+    # control chars + citation markers while the data gate only collapsed
+    # whitespace, so a dossier-copied quote grounded at one gate and was
+    # rejected at the other.
+    from wikify.bundle.draft.validator import _quote_is_grounded as vground
+    from wikify.data.verify import quote_in_source as dground
+    cases = [
+        ("endurance of 10 6 cycles was measured",
+         "endurance \x01 of 10 6 cycles was measured", True),
+        ("Memristors exhibit pinched hysteresis under bias.",
+         "Memristors exhibit pinched hysteresis [1-3] under bias.", True),
+        ("self-limiting growth", "ALD uses self-limiting growth steps.", True),
+        ("ALD enables 5 nm copper interconnects",
+         "ALD grows conformal oxide films one monolayer per cycle.", False),
+    ]
+    disagreements = sum(1 for q, s, _ in cases if vground(q, s) != dground(q, s))
+    fab_rejected_both = all(not vground(q, s) and not dground(q, s)
+                            for q, s, sh in cases if not sh)
+    return {"gate_disagreements": disagreements,
+            "fabricated_rejected_by_both": fab_rejected_both}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -226,6 +251,7 @@ PROBES = {
     "B2_harvest_resolution": probe_harvest_resolution,
     "E_tend_stubs": probe_tend_stubs,
     "F_judge_dedup": probe_judge_dedup,
+    "G_grounding_parity": probe_grounding_parity,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 

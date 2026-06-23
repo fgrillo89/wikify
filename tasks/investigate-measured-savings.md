@@ -115,4 +115,33 @@ The explorer can now skip every already-judged chunk via one cheap CLI read
 instead of re-judging it each round. **Quality guard:** archived records stay
 re-judgeable; full suite `1531 passed, 1 skipped` (+3 new tests); ruff clean; no
 #96 proxy regressed (C=1, A=0, B1=0, B2=0, E=0 unchanged on the new HEAD).
-PR: #TBD.
+PR: #98 (merged).
+
+### Iteration 2 — F19 root fix: one shared grounding normalizer (`effq-grounding-normalizer`)
+
+**Backlog item:** the F19 root fix — "canonicalize quote+chunk text into one
+space so the validator AND the data-harvest gate share one normalizer." The #96
+F19 patch fixed only the draft validator; the data verifier
+(`data/verify.py:quote_in_source`) still used a whitespace-only normalizer, so a
+dossier-copied grounding quote (control chars / inline citation markers stripped)
+grounded at the validator but was **rejected** at the data gate — the same
+wrongly-rejected-data-point failure F6 attacked from another angle.
+
+**Change:** new `wikify/grounding.py` with `normalize_grounding_text` +
+`is_grounded`; both `bundle/draft/validator.py` and `data/verify.py` delegate to
+it. Removed the duplicate normalizer in each. The data verifier's independent
+`number_supported` numeric gate is unchanged, so leniency in the *text* match
+cannot pass a number that is not in both quote and source.
+
+**Measured (harness proxy `G_grounding_parity`, before = master `ba1b2fb`, after = branch):**
+
+| proxy | before | after |
+|---|---:|---:|
+| grounding-decision disagreements between the two gates (4 noisy pairs) | 2 | **0** |
+| fabricated quote rejected by both gates | yes | yes |
+
+The data gate now grounds dossier-copied quotes the validator already accepted,
+so OCR/citation-noisy data points are no longer wrongly rejected (fewer
+re-harvest attempts; same class as F6/F19). **Quality guard:** fabrication still
+rejected at both gates; full suite `1532 passed, 1 skipped` (+1 parity test);
+ruff clean; no other proxy regressed. PR: #TBD.
