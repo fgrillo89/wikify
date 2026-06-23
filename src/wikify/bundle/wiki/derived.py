@@ -205,3 +205,41 @@ def _wiki_space_id(cfg: dict) -> str:
     backend = str(cfg.get("backend") or "unknown").replace("/", "_").replace(":", "_")
     model = str(cfg.get("model") or "default").replace("/", "_").replace(":", "_")
     return f"{backend}:{model}"
+
+
+def embed_committed_page(bundle: Bundle, page) -> bool:
+    """Incrementally embed one just-committed page into the same wiki
+    embedding space the full rebuild uses, so P5's ``wiki_find(mode="semantic")``
+    sees it next round instead of only after the finalize ``wiki rebuild`` (F26).
+
+    Uses the shared passage format and space id, so an incremental vector is
+    identical to the one a later full rebuild would produce. Idempotent
+    (INSERT OR REPLACE). Returns True if a vector was written.
+    """
+    from ...embedding import current_backend, embed_passages
+    from .graph import wiki_page_passage
+    from .store import (
+        open_wiki_store,
+        upsert_wiki_embedding_space,
+        upsert_wiki_embeddings,
+    )
+
+    if not page.body_markdown:
+        return False
+    cfg = current_backend()
+    space_id = _wiki_space_id(cfg)
+    vec = embed_passages([wiki_page_passage(page)])[0]
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        upsert_wiki_embedding_space(
+            con,
+            space_id,
+            str(cfg["backend"]),
+            cfg.get("model") if isinstance(cfg.get("model"), str) else None,
+            int(vec.shape[0]),
+        )
+        upsert_wiki_embeddings(con, space_id, [(page.id, vec)])
+        con.commit()
+    finally:
+        con.close()
+    return True
