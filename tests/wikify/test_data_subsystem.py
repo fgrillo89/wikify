@@ -403,6 +403,38 @@ def test_render_artifact_markdown_structure(tmp_path: Path) -> None:
     assert '[^d1]: doc1 > "GPC was 1.1"' in md
 
 
+def test_register_artifact_wiki_page_inserts_data_row(tmp_path: Path) -> None:
+    """F28: a committed data artifact gets a kind=data row in the wiki page DB
+    so navigation/index/graph can reference it instead of orphaning it."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.page_naming import page_id_from_title
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import register_artifact_wiki_page
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+    assert page_id == page_id_from_title("ALD GPC")
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        row = con.execute(
+            "SELECT kind, title FROM wiki_pages WHERE page_id = ?", (page_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    assert row is not None, "data artifact must be registered in wiki_pages"
+    assert row["kind"] == "data"
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

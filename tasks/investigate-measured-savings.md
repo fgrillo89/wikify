@@ -217,4 +217,27 @@ consolidate` reports them and echoes the store's available `property_norm`s
 | empty_columns for spec `[GPC, On/Off Ratio]` with only GPC data | `[]` | **`["On/Off Ratio"]`** |
 
 **Quality guard:** the matched column still produces its row; full suite `1535
-passed, 1 skipped` (+1 test); ruff clean; no other proxy regressed. PR: #TBD.
+passed, 1 skipped` (+1 test); ruff clean; no other proxy regressed. PR: #102 (merged).
+
+### Iteration 6 — F28 register data artifacts in the wiki DB (`effq-data-wiki-register`)
+
+**Backlog item:** F28 — `data commit` / `data rebuild` write the artifact page to
+`wiki/data/<title>.md` and the data store, but never insert a `wiki_pages` row,
+so the artifact is invisible to `wiki list` and the organizer hits a FOREIGN KEY
+error placing it in a nav group — the artifact is orphaned from navigation.
+
+**Change:** new `register_artifact_wiki_page(bundle, spec, table)` upserts a
+`kind=data` row (the schema and `PageKind` already allow `data`) via the same
+`upsert_wiki_page` the article commit uses; called from all three commit paths
+(`data consolidate --commit`, `data commit`, `data rebuild`). Idempotent.
+
+**Measured (harness proxy `K_data_artifact_wiki_registration`, before = master `3d7fd4a`, after = branch):**
+
+| proxy | before | after |
+|---|---|---|
+| committed artifact registered in wiki page DB | no | **yes** |
+| `wiki_pages.kind` for the artifact row | none (orphaned) | **`data`** |
+
+The artifact is now a first-class wiki page the organizer/index/graph can
+reference. **Quality guard:** upsert is idempotent; full suite `1536 passed, 1
+skipped` (+1 test); ruff clean; no other proxy regressed. PR: #TBD.

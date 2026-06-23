@@ -146,3 +146,39 @@ def write_artifact_page(
         json.dumps(build_sidecar(spec, table), indent=2), encoding="utf-8"
     )
     return md_path
+
+
+def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedTable) -> str:
+    """Register a committed data artifact as a ``kind=data`` row in the wiki
+    page DB so navigation / index / graph can reference it instead of orphaning
+    it — without this the organizer hits a FOREIGN KEY error placing the page
+    in a nav group (F28). Idempotent (upsert). Returns the page_id.
+    """
+    from ..bundle.wiki.page_naming import page_id_from_title, url_slug
+    from ..bundle.wiki.store import open_wiki_store, upsert_wiki_page
+
+    page_id = page_id_from_title(table.title)
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        upsert_wiki_page(
+            con,
+            page_id=page_id,
+            slug=url_slug(page_id),
+            title=table.title,
+            kind="data",
+            body=render_artifact_markdown(table),
+            frontmatter={"aliases": []},
+            evidence=[
+                {
+                    "marker": e.get("marker", ""),
+                    "chunk_id": e.get("chunk_id", ""),
+                    "doc_id": e.get("doc_id", ""),
+                    "quote": e.get("quote", ""),
+                }
+                for e in table.evidence
+            ],
+            links=[],
+        )
+    finally:
+        con.close()
+    return page_id

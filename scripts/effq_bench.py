@@ -273,6 +273,46 @@ def probe_consolidate_empty_columns() -> dict:
             "empty_columns": list(getattr(table, "empty_columns", []))}
 
 
+# --- K: committed data artifact registered in wiki DB (F28) ----------------
+def probe_data_artifact_wiki_registration() -> dict:
+    try:
+        from wikify.data.artifact_page import register_artifact_wiki_page
+    except ImportError:
+        return {"registration_present": False, "wiki_row_kind": None}
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.page_naming import page_id_from_title
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.consolidate import consolidate
+    from wikify.data.models import ArtifactSpec, DataPoint
+    from wikify.data.store import DataStore
+    with tempfile.TemporaryDirectory() as td:
+        bdir = Path(td) / "bundle"
+        (bdir / "run").mkdir(parents=True)
+        bundle = Bundle(root=bdir)
+        init_run(bundle, corpus_path="x")
+        store = DataStore.open(bundle.root)
+        p = DataPoint(subject="Al2O3", property="GPC", value_text="1.1",
+                      unit="A/cycle", doc_id="d1", chunk_id="c1",
+                      grounding_quote="q1", verification_status="verified",
+                      quote_verified=True).finalize()
+        store.add_points([p])
+        spec = ArtifactSpec(artifact_id="gpc", title="GPC Table", properties=["GPC"])
+        table = consolidate(store, spec)
+        store.close()
+        register_artifact_wiki_page(bundle, spec, table)
+        con = open_wiki_store(bundle.sqlite_path)
+        try:
+            row = con.execute(
+                "SELECT kind FROM wiki_pages WHERE page_id = ?",
+                (page_id_from_title("GPC Table"),),
+            ).fetchone()
+        finally:
+            con.close()
+    return {"registration_present": True,
+            "wiki_row_kind": row["kind"] if row else None}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -316,6 +356,7 @@ PROBES = {
     "H_ocr_number_gate": probe_ocr_number_gate,
     "I_empty_body_evidence": probe_empty_body_evidence,
     "J_consolidate_empty_columns": probe_consolidate_empty_columns,
+    "K_data_artifact_wiki_registration": probe_data_artifact_wiki_registration,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 

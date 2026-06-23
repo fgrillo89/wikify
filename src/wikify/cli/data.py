@@ -30,7 +30,7 @@ import typer
 
 from ..api import Bundle, Corpus
 from ..bundle.run.state import load_state
-from ..data.artifact_page import write_artifact_page
+from ..data.artifact_page import register_artifact_wiki_page, write_artifact_page
 from ..data.consolidate import consolidate
 from ..data.harvest import source_text_for
 from ..data.models import ArtifactSpec, DataPoint
@@ -302,6 +302,7 @@ def cmd_consolidate(
         page_path = None
         if commit:
             page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
+            register_artifact_wiki_page(bundle, artifact_spec, table)
             store.set_artifact_status(artifact_spec.artifact_id, "committed")
     finally:
         store.close()
@@ -345,6 +346,7 @@ def cmd_commit(
         store.set_artifact_claims(artifact_id, table.claim_ids)
         store.upsert_artifact(spec, n_rows=table.n_rows)
         page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+        register_artifact_wiki_page(bundle, spec, table)
         store.set_artifact_status(artifact_id, "committed")
     finally:
         store.close()
@@ -381,6 +383,7 @@ def cmd_rebuild(
             store.set_artifact_claims(spec.artifact_id, table.claim_ids)
             store.upsert_artifact(spec, n_rows=table.n_rows)
             page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+            register_artifact_wiki_page(bundle, spec, table)
             rebuilt.append(
                 {"artifact_id": spec.artifact_id, "rows": table.n_rows, "page": str(page_path)}
             )
