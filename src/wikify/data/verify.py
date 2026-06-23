@@ -20,6 +20,31 @@ from __future__ import annotations
 from ..grounding import is_grounded, normalize_grounding_text
 from .models import _NUMBER_RE, DataPoint, parse_leading_number
 
+# Single-number value types — a scalar/bound must reduce to ONE number, so a
+# leading run of space-separated bare numbers signals OCR mangling.
+_SINGLE_NUMBER_TYPES = frozenset({"scalar", "upper_bound", "lower_bound"})
+
+
+def _leading_numeric_run(value: str) -> int:
+    """How many leading whitespace-separated tokens are bare numbers."""
+    n = 0
+    for tok in (value or "").split():
+        if _NUMBER_RE.fullmatch(tok):
+            n += 1
+        else:
+            break
+    return n
+
+
+def is_ocr_mangled_scalar(value: str) -> bool:
+    """True when a single-number value begins with 2+ space-separated bare
+    numbers (e.g. OCR turning ``1x10^5`` into ``1 10 5``). The leading-number
+    parse is then unreliable — it would silently keep the first token (``1``)
+    and verify against any source containing a ``1`` — so the point cannot be
+    trusted. Unit digits (``cm2``) are not bare numbers and a range like
+    ``10 to 20`` breaks the run at ``to``, so neither is flagged."""
+    return _leading_numeric_run(value) >= 2
+
 
 def _numbers(s: str) -> set[str]:
     """Numeric tokens in *s* as a set of comparison keys.
@@ -82,6 +107,17 @@ def verify_point(point: DataPoint, *, chunk_text: str = "", caption: str = "") -
         # No verbatim numeric span to verify against a plot image.
         point.quote_verified = False
         point.verification_status = "figure_digitized"
+        return point
+
+    # F8: an OCR-mangled single-number value (e.g. "1 10 5 ohm cm" for 1e5)
+    # parses to its first token and would verify against any source containing
+    # that token. Reject rather than store a semantically-wrong-but-verified
+    # number.
+    if point.value_type in _SINGLE_NUMBER_TYPES and is_ocr_mangled_scalar(
+        point.value_original or point.value_text
+    ):
+        point.quote_verified = False
+        point.verification_status = "rejected"
         return point
 
     source = "\n".join(s for s in (chunk_text, caption) if s)

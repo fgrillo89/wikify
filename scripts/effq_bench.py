@@ -212,6 +212,25 @@ def probe_grounding_parity() -> dict:
             "fabricated_rejected_by_both": fab_rejected_both}
 
 
+# --- H: OCR-mangled number gate (F8) ---------------------------------------
+def probe_ocr_number_gate() -> dict:
+    from wikify.data.models import DataPoint
+    from wikify.data.verify import verify_point
+    mangled = DataPoint(
+        subject="film", property="resistivity",
+        value_text="1 10 5 ohm cm", value_original="1 10 5 ohm cm",
+        doc_id="d", grounding_quote="resistivity of 1 10 5 ohm cm",
+        value_type="scalar").finalize()
+    verify_point(mangled, chunk_text="we measured resistivity of 1 10 5 ohm cm here")
+    legit = DataPoint(
+        subject="film", property="gpc", value_text="1.1",
+        value_original="1.1 A", doc_id="d",
+        grounding_quote="GPC was 1.1 A", value_type="scalar").finalize()
+    verify_point(legit, chunk_text="the GPC was 1.1 A in this process")
+    return {"ocr_mangled_scalar_verified": mangled.verification_status == "verified",
+            "legit_scalar_verified": legit.verification_status == "verified"}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -252,6 +271,7 @@ PROBES = {
     "E_tend_stubs": probe_tend_stubs,
     "F_judge_dedup": probe_judge_dedup,
     "G_grounding_parity": probe_grounding_parity,
+    "H_ocr_number_gate": probe_ocr_number_gate,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 
