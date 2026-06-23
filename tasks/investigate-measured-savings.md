@@ -168,4 +168,32 @@ and lists are exempt by value_type.
 
 **Quality guard:** legit scalar still verifies; a two-number range still
 verifies (not flagged); full suite `1533 passed, 1 skipped` (+1 test); ruff
-clean; no other proxy regressed. PR: #TBD.
+clean; no other proxy regressed. PR: #100 (merged).
+
+### Iteration 4 — F18 drop empty-body evidence at draft build (`effq-empty-body-evidence`)
+
+**Backlog item:** F18 — evidence records whose chunk resolves to an empty body
+(unresolved id, or figure/table/caption residue) reach the dossier/draft; the
+writer can't ground them and silently drops the markers, so the page shows fewer
+citations than the dossier advertised and wastes a writer pass.
+
+**Change:** `build_draft` partitions active evidence with a pure
+`_drop_empty_body_evidence` helper and passes only usable (non-empty-body)
+records to the writer, the figures pass, and the data-link pass. The dropped
+count is recorded in `draft.json` (`dropped_empty_evidence`) and surfaced by
+`wikify draft build` (JSON field + a text warning). Centralized the draft
+envelope-key strip into `artifact.strip_draft_envelope` (it had been duplicated
+in validator / references / builder) so the new diagnostic key is stripped at
+every WriteRequest read site.
+
+**Measured (harness proxy `I_empty_body_evidence`, before = master `7e5ac11`, after = branch):**
+
+| proxy | before | after |
+|---|---|---|
+| empty-body filter present at draft build | no | **yes** |
+| of 4 records (2 good, 1 whitespace, 1 unresolved): kept / dropped | n/a | **2 / 2** |
+
+The writer now receives only groundable evidence, so `evidence_count` and the
+dossier reflect usable evidence and no marker is silently discarded. **Quality
+guard:** good records are untouched; full suite `1534 passed, 1 skipped` (+1
+test); ruff clean; no other proxy regressed. PR: #TBD.

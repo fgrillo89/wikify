@@ -6,7 +6,13 @@ import re
 from dataclasses import dataclass
 
 from ...api import Bundle
-from .artifact import draft_path, read_json, response_path, write_json
+from .artifact import (
+    draft_path,
+    read_json,
+    response_path,
+    strip_draft_envelope,
+    write_json,
+)
 from .schema import WriteRequest
 
 _REFERENCES_HEADING_RE = re.compile(r"(?im)^##\s+References\s*$")
@@ -22,10 +28,6 @@ class ReferenceNormalizationResult:
     response_path: str
     markers: list[str]
     reference_count: int
-
-
-def _strip_envelope(data: dict) -> dict:
-    return {k: v for k, v in data.items() if k not in {"schema_version", "task"}}
 
 
 def _split_references(body: str) -> tuple[str, str]:
@@ -87,7 +89,7 @@ def normalize_response_references(bundle: Bundle, slug: str) -> ReferenceNormali
     the response artifact's reference definitions match the existing
     ``[^eN]`` prose markers, where ``N`` maps to ``draft.evidence[N - 1]``.
     """
-    draft_payload = _strip_envelope(read_json(draft_path(bundle, slug)))
+    draft_payload = strip_draft_envelope(read_json(draft_path(bundle, slug)))
     draft = WriteRequest.model_validate(draft_payload)
     response_p = response_path(bundle, slug)
     response = read_json(response_p)

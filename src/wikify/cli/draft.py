@@ -118,6 +118,7 @@ def cmd_build(
     except FileNotFoundError as exc:
         cli_error(EXIT_VALIDATION, error="concept_not_found", message=str(exc))
     p = draft_path(bundle, concept)
+    dropped_empty = read_json(p).get("dropped_empty_evidence", 0)
     if fmt == "json":
         typer.echo(
             json.dumps(
@@ -126,11 +127,14 @@ def cmd_build(
                     "draft_path": str(p),
                     "page_id": request.page_id,
                     "evidence_count": len(request.evidence),
+                    "dropped_empty_evidence": dropped_empty,
                 }
             )
         )
         return
     typer.echo(f"draft:    {p}")
+    if dropped_empty:
+        typer.echo(f"warning:  dropped {dropped_empty} empty-body evidence record(s)")
     typer.echo(f"page_id:  {request.page_id}")
     typer.echo(f"evidence: {len(request.evidence)} chunks")
 

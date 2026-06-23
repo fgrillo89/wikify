@@ -231,6 +231,27 @@ def probe_ocr_number_gate() -> dict:
             "legit_scalar_verified": legit.verification_status == "verified"}
 
 
+# --- I: empty-body evidence dropped at draft build (F18) -------------------
+def probe_empty_body_evidence() -> dict:
+    try:
+        from wikify.bundle.draft.builder import _drop_empty_body_evidence
+    except ImportError:
+        return {"empty_body_filter_present": False, "kept": None, "dropped": None}
+
+    class _Rec:
+        def __init__(self, cid): self.chunk_id = cid
+        doc_id = "d"
+
+    class _Chunk:
+        def __init__(self, text): self.text = text
+    active = [_Rec("c1"), _Rec("c2"), _Rec("c3"), _Rec("c4")]
+    fetched = {"c1": _Chunk("real prose body"), "c2": _Chunk("   "),
+               "c4": _Chunk("more prose")}  # c2 whitespace, c3 unresolved
+    usable, dropped = _drop_empty_body_evidence(active, fetched)
+    return {"empty_body_filter_present": True,
+            "kept": len(usable), "dropped": dropped}
+
+
 # --- D: P5 chunk-vs-doc ranking granularity --------------------------------
 def probe_pagerank_granularity() -> dict:
     from wikify.corpus import queries
@@ -272,6 +293,7 @@ PROBES = {
     "F_judge_dedup": probe_judge_dedup,
     "G_grounding_parity": probe_grounding_parity,
     "H_ocr_number_gate": probe_ocr_number_gate,
+    "I_empty_body_evidence": probe_empty_body_evidence,
     "D_pagerank_granularity": probe_pagerank_granularity,
 }
 

@@ -32,6 +32,7 @@ from .artifact import (
     draft_path,
     read_json,
     response_path,
+    strip_draft_envelope,
     validation_path,
     write_json,
 )
@@ -80,10 +81,7 @@ def _utcnow() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _strip_envelope(data: dict) -> dict:
-    """Drop the ``schema_version``/``task`` scratch envelope keys."""
-    out = {k: v for k, v in data.items() if k not in {"schema_version", "task"}}
-    return out
+_strip_envelope = strip_draft_envelope
 
 
 def _pydantic_errors(exc: ValidationError) -> list[dict]:
