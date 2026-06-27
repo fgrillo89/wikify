@@ -202,47 +202,107 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
     return page_id
 
 
-def register_committed_data_pages(bundle) -> int:
-    """Re-author every committed data artifact's wiki.db row from its
-    ``.dataspec.json`` sidecar + the claim store, so ``wiki rebuild`` can
-    restore data pages that the markdown rebuild deliberately skips (their
-    rendered markdown is lossy for chunk ids). Chunk ids come from the claim
-    store, never the markdown. Idempotent. Returns the count registered.
-    """
+def _spec_from_sidecar(sidecar: Path) -> ArtifactSpec | None:
     import json as _json
+    try:
+        payload = _json.loads(sidecar.read_text(encoding="utf-8"))
+        return ArtifactSpec.from_json(_json.dumps(payload["spec"]))
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def register_committed_data_pages(bundle) -> int:
+    """Restore/refresh data-artifact wiki.db rows so ``wiki rebuild`` recovers
+    data pages the markdown rebuild deliberately skips.
+
+    For each committed ``wiki/data/*.md``:
+    - **Lossless** — when the claim store is present, re-derive the table from
+      its sidecar spec and register with precise chunk ids.
+    - **Preserve** — when no lossless reconstruction is possible but a row
+      already exists, leave it untouched (never clobber a good/precise row with
+      an empty projection).
+    - **Degraded restore** — when no lossless reconstruction is possible and the
+      row is MISSING (e.g. wiki.db AND claims.db both lost), register a row from
+      the page markdown (doc-level evidence) so the page is visible in wiki.db
+      instead of split-brain; a later ``data rebuild`` upgrades it to precise
+      chunk ids.
+
+    Returns the count registered/restored.
+    """
+    from ..bundle.wiki.page import parse_page
+    from ..bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from .consolidate import consolidate
 
     data_dir = bundle.wiki_data_dir
     if not data_dir.is_dir():
         return 0
-    sidecars = sorted(data_dir.glob("*.dataspec.json"))
-    if not sidecars:
-        return 0
-    # Never register from an absent claim store: DataStore.open would create an
-    # empty one, consolidate zero rows, and overwrite good wiki.db pages with
-    # empty projections. With no claims, leave the existing rows untouched.
-    if not bundle.claims_db_path.exists():
+    md_files = sorted(data_dir.glob("*.md"))
+    if not md_files:
         return 0
 
-    from .consolidate import consolidate
-    from .models import ArtifactSpec
-    from .store import DataStore
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        existing = {
+            r[0] for r in con.execute(
+                "SELECT page_id FROM wiki_pages WHERE kind = 'data'"
+            ).fetchall()
+        }
+    finally:
+        con.close()
 
-    store = DataStore.open(bundle.root)
+    store = None
+    if bundle.claims_db_path.exists():
+        from .store import DataStore
+
+        store = DataStore.open(bundle.root)
+
+    degraded: list = []
     n = 0
     try:
-        for sidecar in sidecars:
+        for md in md_files:
+            if store is not None:
+                spec = _spec_from_sidecar(md.with_suffix(".dataspec.json"))
+                if spec is not None:
+                    table = consolidate(store, spec)
+                    if table.claim_ids:
+                        register_artifact_wiki_page(bundle, spec, table)
+                        n += 1
+                        continue
             try:
-                payload = _json.loads(sidecar.read_text(encoding="utf-8"))
-                spec = ArtifactSpec.from_json(_json.dumps(payload["spec"]))
-            except (OSError, ValueError, KeyError):
+                page = parse_page(md)
+            except (OSError, ValueError):
                 continue
-            table = consolidate(store, spec)
-            # An empty reconstruction means the backing claims are gone/stale;
-            # skip rather than clobber the previously-good row with an empty one.
-            if not table.claim_ids:
-                continue
-            register_artifact_wiki_page(bundle, spec, table)
-            n += 1
+            if page.id in existing:
+                continue  # preserve the existing row; do not clobber with empty
+            degraded.append((page, md.stem))
     finally:
-        store.close()
+        if store is not None:
+            store.close()
+
+    if degraded:
+        con = open_wiki_store(bundle.sqlite_path)
+        try:
+            for page, stem in degraded:
+                upsert_wiki_page(
+                    con,
+                    page_id=page.id,
+                    slug=stem,
+                    title=page.title or page.id,
+                    kind="data",
+                    body=page.body_clean or "",
+                    frontmatter={"aliases": []},
+                    evidence=[
+                        {
+                            "marker": ev.marker,
+                            "chunk_id": ev.chunk_id or "",
+                            "doc_id": ev.doc_id or "",
+                            "quote": ev.quote or "",
+                        }
+                        for ev in (page.evidence or [])
+                    ],
+                    links=[],
+                )
+                n += 1
+        finally:
+            con.close()
     return n

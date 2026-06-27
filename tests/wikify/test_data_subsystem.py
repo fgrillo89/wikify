@@ -765,6 +765,78 @@ def test_data_consolidate_commit_respects_run_lock(tmp_path: Path) -> None:
     assert not list(bundle.wiki_data_dir.glob("*.md")) if bundle.wiki_data_dir.is_dir() else True
 
 
+def test_wiki_rebuild_restores_data_page_when_both_dbs_lost(tmp_path: Path) -> None:
+    """Recovery with BOTH wiki.db and claims.db lost: rebuild_graph must still
+    restore a kind=data row from the on-disk page markdown (degraded, doc-level
+    evidence) so the data page is not orphaned/split-brain."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "GPC was 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    # Lose both stores; only the on-disk page + sidecar survive.
+    bundle.sqlite_path.unlink()
+    bundle.claims_db_path.unlink()
+
+    rebuild_graph(bundle)
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT kind FROM wiki_pages WHERE page_id = ?", (page_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    assert row is not None and row["kind"] == "data", "data page must be restored, not orphaned"
+
+
+def test_data_artifact_traverses_to_evidence(tmp_path: Path) -> None:
+    """A first-class data page must traverse to its evidence (the slug-resolution
+    helpers now include wiki/data), so `wiki traverse <data> --to evidence` works."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.queries import traverse_page
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle",
+                                "doc_7", "doc_7__c0003_beef", "GPC was 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    page_id = write_artifact_page(bundle.wiki_data_dir, spec, table).stem
+    register_artifact_wiki_page(bundle, spec, table)
+
+    rows = traverse_page(bundle, slug=page_id, relation="evidence")
+    assert any(r["chunk_id"] == "doc_7__c0003_beef" for r in rows), rows
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([
