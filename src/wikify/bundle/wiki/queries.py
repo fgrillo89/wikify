@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ...api import Bundle
+from .derived import _committed_page_dirs
 from .graph import load_wiki_graph
 
 _FIND_MODES = {"text", "bm25", "semantic", "hybrid"}
@@ -279,11 +280,7 @@ def find_text(bundle: Bundle, needle: str, *, top_k: int = 50) -> list[dict]:
     """Literal substring grep over committed page bodies."""
     out: list[dict] = []
     needle_lower = needle.lower()
-    for kind, sub in (
-        ("article", bundle.wiki_articles_dir),
-        ("person", bundle.wiki_people_dir),
-        ("data", bundle.wiki_data_dir),
-    ):
+    for kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -360,11 +357,7 @@ def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
     exact_matches: list[tuple[str, str]] = []
     norm_matches: list[tuple[str, str]] = []
     prefix_matches: list[tuple[str, str]] = []
-    for kind, sub in (
-        ("article", bundle.wiki_articles_dir),
-        ("person", bundle.wiki_people_dir),
-        ("data", bundle.wiki_data_dir),
-    ):
+    for kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -511,7 +504,7 @@ def _slug_to_page_id(bundle: Bundle, slug: str) -> str | None:
     """
     from .page import parse_page
 
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
+    for _kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         candidate = sub / f"{slug}.md"
@@ -534,7 +527,7 @@ def _page_id_to_slug_map(bundle: Bundle) -> dict[str, str]:
     from .page import parse_page
 
     out: dict[str, str] = {}
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
+    for _kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -555,7 +548,7 @@ def _page_rows_for_ids(bundle: Bundle, page_ids: list[str]) -> list[dict]:
 
     wanted = set(page_ids)
     rows: list[dict] = []
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
+    for _kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for path in sorted(sub.glob("*.md")):
