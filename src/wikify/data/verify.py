@@ -25,25 +25,48 @@ from .models import _NUMBER_RE, DataPoint, parse_leading_number
 _SINGLE_NUMBER_TYPES = frozenset({"scalar", "upper_bound", "lower_bound"})
 
 
-def _leading_numeric_run(value: str) -> int:
-    """How many leading whitespace-separated tokens are bare numbers."""
-    n = 0
+def _leading_numeric_tokens(value: str) -> list[str]:
+    """The leading run of whitespace-separated bare-number tokens."""
+    tokens: list[str] = []
     for tok in (value or "").split():
         if _NUMBER_RE.fullmatch(tok):
-            n += 1
+            tokens.append(tok)
         else:
             break
-    return n
+    return tokens
+
+
+def _is_grouped_thousands(tokens: list[str]) -> bool:
+    """True if *tokens* are a space-separated thousands grouping — a 1-3 digit
+    lead followed by all-3-digit groups (``1 000``, ``10 000``, ``1 234 567``),
+    the final group optionally carrying a decimal (``1 000.5``). This is a
+    legitimate locale form, NOT OCR mangling."""
+    if len(tokens) < 2:
+        return False
+    head = tokens[0].lstrip("+-−")  # drop a sign incl. unicode minus
+    if not (head.isdigit() and 1 <= len(head) <= 3):
+        return False
+    for tok in tokens[1:-1]:
+        if not (tok.isdigit() and len(tok) == 3):
+            return False
+    intpart, _, frac = tokens[-1].partition(".")
+    if not (intpart.isdigit() and len(intpart) == 3):
+        return False
+    return not frac or frac.isdigit()
 
 
 def is_ocr_mangled_scalar(value: str) -> bool:
     """True when a single-number value begins with 2+ space-separated bare
-    numbers (e.g. OCR turning ``1x10^5`` into ``1 10 5``). The leading-number
-    parse is then unreliable — it would silently keep the first token (``1``)
-    and verify against any source containing a ``1`` — so the point cannot be
-    trusted. Unit digits (``cm2``) are not bare numbers and a range like
-    ``10 to 20`` breaks the run at ``to``, so neither is flagged."""
-    return _leading_numeric_run(value) >= 2
+    numbers that are NOT a thousands grouping — e.g. OCR turning ``1x10^5``
+    into ``1 10 5``. The leading-number parse is then unreliable (it keeps the
+    first token ``1`` and verifies against any source containing a ``1``), so
+    the point cannot be trusted. Genuine locale grouping (``1 000``, ``10 000``)
+    is allowed through; unit digits (``cm2``) are not bare numbers and a range
+    like ``10 to 20`` breaks the run at ``to``, so neither is flagged."""
+    tokens = _leading_numeric_tokens(value)
+    if len(tokens) < 2:
+        return False
+    return not _is_grouped_thousands(tokens)
 
 
 def _numbers(s: str) -> set[str]:

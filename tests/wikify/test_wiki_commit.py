@@ -129,6 +129,28 @@ def test_commit_embeds_page_for_mid_loop_semantic_search(tmp_path: Path) -> None
     assert any(h.get("page_id") == "Atomic Layer Deposition" for h in hits)
 
 
+def test_commit_records_embedding_failure_instead_of_swallowing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The commit-time embedding is best-effort, but a failure must be observable
+    (a page_embedding_failed event), not silently swallowed — and must not fail
+    the commit."""
+    import wikify.bundle.wiki.derived as derived
+
+    def boom(_bundle, _page):
+        raise RuntimeError("embedder unavailable")
+
+    monkeypatch.setattr(derived, "embed_committed_page", boom)
+    bundle, slug = _setup_validated(tmp_path)
+    # Commit still succeeds despite the embedder blowing up.
+    result = commit_page(bundle, slug=slug)
+    assert result.page_path.is_file()
+    events = read_events(bundle)
+    failures = [e for e in events if e.type == "page_embedding_failed"]
+    assert len(failures) == 1
+    assert "embedder unavailable" in failures[0].data.get("error", "")
+
+
 def test_commit_emits_page_committed_event(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     commit_page(bundle, slug=slug)

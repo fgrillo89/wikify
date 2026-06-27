@@ -139,6 +139,13 @@ def test_ocr_mangled_scalar_rejected_but_legit_verified() -> None:
     assert not is_ocr_mangled_scalar("1.1 A")
     assert not is_ocr_mangled_scalar("2.5e-3 cm2")  # unit digit is not a bare number
     assert not is_ocr_mangled_scalar("10 to 20 nm")  # run breaks at "to"
+    # Locale thousands grouping is legitimate, not OCR mangling.
+    assert not is_ocr_mangled_scalar("1 000 cycles")
+    assert not is_ocr_mangled_scalar("10 000 s")
+    assert not is_ocr_mangled_scalar("1 234 567 events")
+    assert not is_ocr_mangled_scalar("1 000.5 nm")
+    # ...but a non-3-digit second group is still mangled.
+    assert is_ocr_mangled_scalar("1 00 5 ohm")
 
     mangled = DataPoint(
         subject="film", property="resistivity",
@@ -153,6 +160,14 @@ def test_ocr_mangled_scalar_rejected_but_legit_verified() -> None:
         doc_id="d", grounding_quote="GPC was 1.1 A", value_type="scalar").finalize()
     verify_point(legit, chunk_text="the GPC was 1.1 A in this process")
     assert legit.verification_status == "verified"
+
+    # A spaced-thousands scalar must NOT be dropped as OCR-mangled.
+    grouped = DataPoint(
+        subject="film", property="endurance", value_text="10 000 cycles",
+        value_original="10 000 cycles", doc_id="d",
+        grounding_quote="endurance of 10 000 cycles", value_type="scalar").finalize()
+    verify_point(grouped, chunk_text="measured endurance of 10 000 cycles here")
+    assert grouped.verification_status == "verified"
 
     # A range with two numbers is exempt (value_type != scalar/bound).
     rng = DataPoint(
@@ -433,6 +448,45 @@ def test_register_artifact_wiki_page_inserts_data_row(tmp_path: Path) -> None:
         con.close()
     assert row is not None, "data artifact must be registered in wiki_pages"
     assert row["kind"] == "data"
+
+
+def test_committed_data_artifact_round_trips_find_and_show(tmp_path: Path) -> None:
+    """F28 follow-up: a committed data artifact must round-trip — its DB-backed
+    search hit's path/handle resolves back to the real on-disk page via
+    show_page (slug == on-disk stem, kind=data path-aware)."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.queries import find_text, show_page
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC Comparison", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    # Mirror the commit path: write the on-disk page AND register the DB row.
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    # The data page surfaces in search and its emitted path is the real file.
+    hits = [h for h in find_text(bundle, "GPC") if h["kind"] == "data"]
+    assert hits, "committed data artifact must surface in find_text"
+    assert (bundle.root / hits[0]["path"]).is_file()
+
+    # The emitted slug round-trips through show_page back to the data page.
+    shown = show_page(bundle, handle=hits[0]["slug"])
+    assert shown is not None
+    assert shown["kind"] == "data"
+    assert shown["slug"] == page_id
+    assert (bundle.root / shown["path"]).is_file()
+    assert "ALD GPC Comparison" in shown["text"] or "GPC" in shown["text"]
 
 
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:

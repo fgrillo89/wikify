@@ -227,8 +227,14 @@ def probe_ocr_number_gate() -> dict:
         value_original="1.1 A", doc_id="d",
         grounding_quote="GPC was 1.1 A", value_type="scalar").finalize()
     verify_point(legit, chunk_text="the GPC was 1.1 A in this process")
+    grouped = DataPoint(
+        subject="film", property="endurance", value_text="10 000 cycles",
+        value_original="10 000 cycles", doc_id="d",
+        grounding_quote="endurance of 10 000 cycles", value_type="scalar").finalize()
+    verify_point(grouped, chunk_text="measured endurance of 10 000 cycles here")
     return {"ocr_mangled_scalar_verified": mangled.verification_status == "verified",
-            "legit_scalar_verified": legit.verification_status == "verified"}
+            "legit_scalar_verified": legit.verification_status == "verified",
+            "thousands_grouped_verified": grouped.verification_status == "verified"}
 
 
 # --- I: empty-body evidence dropped at draft build (F18) -------------------
