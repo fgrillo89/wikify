@@ -354,7 +354,13 @@ def register_committed_data_pages(bundle) -> int:
                     table = consolidate(
                         store, spec, restrict_claim_ids=set(committed_claim_ids)
                     )
-                    if table.claim_ids:
+                    # Only register the lossless snapshot if it reproduces the
+                    # FULL committed claim set. If some committed claims were
+                    # since deleted from the store, the table would be a shrunken
+                    # projection that disagrees with the authoritative markdown;
+                    # fall through to preserve the existing row / restore from the
+                    # markdown instead of publishing the shrunk version.
+                    if table.claim_ids and set(table.claim_ids) == set(committed_claim_ids):
                         try:
                             register_artifact_wiki_page(bundle, spec, table)
                             n += 1

@@ -393,8 +393,17 @@ def build_wiki_graph(
 
 def wiki_page_passage(page: WikiPage) -> str:
     """Passage text embedded for a wiki page. Shared by the full rebuild and
-    the incremental commit-time embedding so the two stay byte-identical."""
-    return f"{page.title}. {page.body_markdown[:2000]}"
+    the incremental commit-time embedding so the two stay byte-identical.
+
+    The body is run through ``clean_body`` (idempotent) first: the rebuild
+    path already passes a cleaned body, while the commit path passes the raw
+    response body (still carrying the ``## References`` evidence block). Cleaning
+    here makes both inputs collapse to the same passage, so a freshly-committed
+    page and its later rebuilt vector match.
+    """
+    from .page import clean_body
+
+    return f"{page.title}. {clean_body(page.body_markdown)[:2000]}"
 
 
 def build_wiki_vectors(

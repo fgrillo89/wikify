@@ -1073,6 +1073,61 @@ def test_collision_check_sees_disk_article_without_db_row(tmp_path: Path) -> Non
         check_data_page_id_free(bundle, "ALD GPC", "gpc")
 
 
+def test_rebuild_does_not_publish_shrunken_data_table(tmp_path: Path) -> None:
+    """If some committed claims were deleted from the store, the restricted
+    lossless reconstruction is smaller than the committed snapshot; rebuild must
+    NOT publish that shrunken table — it preserves the committed wiki.db row so
+    wiki.db cannot silently diverge from the authoritative markdown."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "cA", "GPC 1.1"),
+        _verified("HfO2", "GPC", "1.0", "A/cycle", "d2", "cB", "GPC 1.0"),
+    ])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    committed_claim_ids = list(table.claim_ids)
+    assert len(committed_claim_ids) == 2
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+    store.close()
+
+    # One committed claim is deleted from the store after commit.
+    raw = sqlite3.connect(str(bundle.claims_db_path))
+    raw.execute("DELETE FROM data_points WHERE claim_id = ?", (committed_claim_ids[0],))
+    raw.commit()
+    raw.close()
+
+    rebuild_graph(bundle)
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        chunk_ids = {
+            r["chunk_id"] for r in con.execute(
+                "SELECT chunk_id FROM wiki_evidence WHERE page_id = ?", (page_id,)
+            ).fetchall()
+        }
+    finally:
+        con.close()
+    # Both committed evidence rows survive (not shrunk to the single remaining claim).
+    assert {"cA", "cB"} <= chunk_ids, chunk_ids
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

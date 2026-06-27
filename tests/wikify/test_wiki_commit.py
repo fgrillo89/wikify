@@ -194,6 +194,26 @@ def test_semantic_search_prefers_complete_space_over_partial(tmp_path: Path) -> 
     assert vectors.matrix.shape[0] == 3
 
 
+def test_wiki_page_passage_cleans_body_for_consistent_embedding() -> None:
+    """The commit path embeds the raw response body (with ## References) while
+    the rebuild path embeds the cleaned body; wiki_page_passage must clean both
+    to the same passage so a fresh commit's vector matches its rebuilt one."""
+    from wikify.bundle.wiki.graph import wiki_page_passage
+    from wikify.models import WikiPage
+
+    raw = WikiPage(
+        id="X", kind="article", title="X", aliases=[],
+        body_markdown='Intro prose here.\n\n## References\n\n[^e1]: chunk (doc) > "q"\n',
+        evidence=[],
+    )
+    cleaned = WikiPage(
+        id="X", kind="article", title="X", aliases=[],
+        body_markdown="Intro prose here.", evidence=[],
+    )
+    assert wiki_page_passage(raw) == wiki_page_passage(cleaned)
+    assert "References" not in wiki_page_passage(raw)
+
+
 def test_rebuild_vectors_serialized_under_run_lock(tmp_path: Path) -> None:
     """F26 race fix: rebuild_vectors holds the run lock for its delete-and-
     replace of wiki_embeddings, so it cannot interleave with a commit's

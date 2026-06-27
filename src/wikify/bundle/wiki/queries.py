@@ -226,7 +226,14 @@ def _semantic_page_scores(bundle: Bundle, query: str, *, top_k: int) -> list[tup
 
 
 def find_semantic(bundle: Bundle, query: str, *, top_k: int = 50) -> list[dict]:
-    """Semantic search over ``derived/vectors.npz`` page embeddings."""
+    """Semantic search over the committed-page embedding space.
+
+    Scope: the vector space holds prose **concept** pages (articles + people) —
+    the targets of P5 semantic routing. Data-artifact pages are intentionally
+    NOT embedded (they are subject-by-property pivot tables, not prose); they
+    remain first-class in ``find_text`` / ``find_hybrid`` (BM25/FTS), ``show``,
+    ``traverse``, the index and navigation. Search data tables by text/hybrid.
+    """
     return _page_hits_for_scores(
         bundle,
         _semantic_page_scores(bundle, query, top_k=top_k),

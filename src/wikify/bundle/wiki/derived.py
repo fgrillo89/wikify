@@ -84,7 +84,14 @@ def read_index(bundle: Bundle) -> dict:
 
 
 def _load_pages(bundle: Bundle) -> list:
-    """Walk the markdown-authored page kinds and return parsed WikiPages."""
+    """Walk the markdown-authored page kinds and return parsed WikiPages.
+
+    Feeds the embedding vector build, so this deliberately covers only the
+    prose concept pages (articles + people). Data-artifact pages are pivot
+    tables, not prose, and are intentionally excluded from the semantic vector
+    space — they stay first-class via BM25/FTS (`find_text`/`find_hybrid`),
+    show, traverse, index, and navigation. See `queries.find_semantic`.
+    """
     from .page import parse_page
 
     out: list = []
