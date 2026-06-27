@@ -53,6 +53,7 @@ EventType = Literal[
     "pattern_dispatched",
     "corpus_drift_detected",
     "page_embedding_failed",
+    "data_page_collision_skipped",
 ]
 
 

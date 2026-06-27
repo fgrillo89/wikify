@@ -351,19 +351,28 @@ def _store_navigation_export(bundle: Bundle, normalized: dict[str, Any]) -> dict
     ):
         return None
 
-    try:
-        from .derived import rebuild_graph
+    # Serialize the wiki.db rebuild + category writes under the run lock, like
+    # every other wiki.db mutator (commit / data CLI / rebuild_vectors), so a
+    # concurrent data commit cannot interleave with this projection refresh.
+    # If the bundle is locked, skip the DB export gracefully (return None ->
+    # the caller falls back to the file-only navigation, re-runnable later).
+    import os
 
-        rebuild_graph(bundle)
-    except (OSError, ValueError):
+    from ..run.lock import LockHeldError, run_lock
+
+    try:
+        with run_lock(bundle, owner=f"navigation/pid-{os.getpid()}"):
+            from .derived import rebuild_graph
+
+            rebuild_graph(bundle)
+            con = open_store(bundle.sqlite_path)
+            try:
+                apply_categories(con, normalized)
+                exported = export_navigation(con)
+            finally:
+                con.close()
+    except (LockHeldError, OSError, ValueError):
         return None
-
-    con = open_store(bundle.sqlite_path)
-    try:
-        apply_categories(con, normalized)
-        exported = export_navigation(con)
-    finally:
-        con.close()
     if isinstance(exported, dict):
         exported["strategy"] = normalized.get("strategy", exported.get("strategy", ""))
         return validate_navigation(bundle, exported)

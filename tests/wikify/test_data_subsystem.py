@@ -1073,6 +1073,60 @@ def test_collision_check_sees_disk_article_without_db_row(tmp_path: Path) -> Non
         check_data_page_id_free(bundle, "ALD GPC", "gpc")
 
 
+def test_navigation_export_skips_gracefully_under_run_lock(tmp_path: Path) -> None:
+    """navigation's wiki.db rebuild is serialized under the run lock; if the
+    bundle is locked it skips the DB export gracefully (file-only), never
+    crashing or racing."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.run.lock import run_lock
+    from wikify.bundle.wiki.navigation import navigation_path, write_navigation
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    with run_lock(bundle, owner="someone-else"):
+        write_navigation(bundle, {"groups": []})
+    assert navigation_path(bundle).is_file()
+
+
+def test_rebuild_collision_skip_is_observable(tmp_path: Path) -> None:
+    """When a data page is skipped on rebuild because its id collides with a
+    non-data page, a data_page_collision_skipped event is emitted (not silent)."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.events import read_events
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        register_committed_data_pages,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+    con = open_wiki_store(bundle.sqlite_path)
+    upsert_wiki_page(con, page_id=page_id, slug="ald-gpc", title=page_id,
+                     kind="article", body="article", frontmatter={},
+                     evidence=[], links=[])
+    con.commit()
+    con.close()
+
+    register_committed_data_pages(bundle)
+
+    assert any(e.type == "data_page_collision_skipped" for e in read_events(bundle))
+
+
 def test_rebuild_does_not_publish_shrunken_data_table(tmp_path: Path) -> None:
     """If some committed claims were deleted from the store, the restricted
     lossless reconstruction is smaller than the committed snapshot; rebuild must
