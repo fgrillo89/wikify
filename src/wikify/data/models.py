@@ -40,6 +40,23 @@ _WS_RE = re.compile(r"\s+")
 _NUMBER_RE = re.compile(
     r"[-+−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?"
 )
+# A space-separated thousands grouping: 1-3 digit lead then all-3-digit groups
+# (``10 000``, ``1 234 567``), the final group optionally carrying a decimal.
+# Bounded by non-digits so it never straddles two unrelated numbers.
+_SPACED_THOUSANDS_RE = re.compile(
+    r"(?<!\d)([-+−]?\d{1,3}(?:[   ]\d{3})+(?:\.\d+)?)(?!\d)"
+)
+_THOUSANDS_SPACE_RE = re.compile(r"[   ]")
+
+
+def collapse_spaced_thousands(s: str) -> str:
+    """Join space-separated thousands groups into a single token so the number
+    parser reads the correct magnitude: ``10 000 cycles`` -> ``10000 cycles``.
+    Only a 1-3 digit lead followed by 3-digit groups is collapsed; an
+    OCR-mangled run like ``1 10 5`` is left untouched."""
+    return _SPACED_THOUSANDS_RE.sub(
+        lambda m: _THOUSANDS_SPACE_RE.sub("", m.group(1)), s or ""
+    )
 
 
 def normalize_key(text: str) -> str:
@@ -63,7 +80,7 @@ def parse_leading_number(value: str) -> float | None:
     """
     if not value:
         return None
-    m = _NUMBER_RE.search(value)
+    m = _NUMBER_RE.search(collapse_spaced_thousands(value))
     if not m:
         return None
     token = (
