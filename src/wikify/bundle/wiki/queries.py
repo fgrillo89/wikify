@@ -169,9 +169,18 @@ def _load_page_vectors(bundle: Bundle):
 
         con = open_wiki_store(bundle.sqlite_path)
         try:
+            # Pick the most COMPLETE space (most embedded pages), not the newest.
+            # An incremental commit-time embed under a changed backend/model can
+            # create a fresh one-page space; selecting "newest" would let that
+            # partial space hijack semantic search and hide every other page
+            # until a full rebuild. The query is embedded to match whichever
+            # space is selected, so the largest complete space stays consistent.
             space = con.execute(
-                "SELECT space_id, backend, model, dim FROM wiki_embedding_spaces "
-                "ORDER BY created_at DESC LIMIT 1"
+                "SELECT s.space_id, s.backend, s.model, s.dim "
+                "FROM wiki_embedding_spaces s "
+                "LEFT JOIN wiki_embeddings e ON e.space_id = s.space_id "
+                "GROUP BY s.space_id, s.backend, s.model, s.dim "
+                "ORDER BY COUNT(e.page_id) DESC, s.created_at DESC LIMIT 1"
             ).fetchone()
             if space:
                 space_meta = dict(space)

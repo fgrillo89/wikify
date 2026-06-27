@@ -154,6 +154,46 @@ def test_commit_records_embedding_failure_instead_of_swallowing(
     assert "embedder unavailable" in failures[0].data.get("error", "")
 
 
+def test_semantic_search_prefers_complete_space_over_partial(tmp_path: Path) -> None:
+    """A newer one-page embedding space (e.g. from a mid-run model change) must
+    NOT hijack semantic search: _load_page_vectors selects the most complete
+    space (most embedded pages), so the prior pages stay visible."""
+    import numpy as np
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.queries import _load_page_vectors
+    from wikify.bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from wikify.bundle.wiki.vectors import (
+        upsert_wiki_embedding_space,
+        upsert_wiki_embeddings,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        for pid in ("P1", "P2", "P3"):
+            upsert_wiki_page(con, page_id=pid, slug=pid, title=pid, kind="article",
+                             body="body", frontmatter={}, evidence=[], links=[])
+        # Old complete space: 3 pages.
+        upsert_wiki_embedding_space(con, "hash:modelA", "hash", "modelA", 4)
+        upsert_wiki_embeddings(con, "hash:modelA",
+                               [(p, np.ones(4, dtype="float32")) for p in ("P1", "P2", "P3")])
+        # Newer partial space: 1 page (would win under "newest").
+        upsert_wiki_embedding_space(con, "hash:modelB", "hash", "modelB", 4)
+        upsert_wiki_embeddings(con, "hash:modelB", [("P1", np.ones(4, dtype="float32"))])
+        con.commit()
+    finally:
+        con.close()
+
+    vectors, space = _load_page_vectors(bundle)
+    assert space["space_id"] == "hash:modelA"
+    assert vectors.matrix.shape[0] == 3
+
+
 def test_rebuild_vectors_serialized_under_run_lock(tmp_path: Path) -> None:
     """F26 race fix: rebuild_vectors holds the run lock for its delete-and-
     replace of wiki_embeddings, so it cannot interleave with a commit's
