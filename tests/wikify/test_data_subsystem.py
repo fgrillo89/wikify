@@ -972,6 +972,47 @@ def test_data_artifact_cannot_overwrite_existing_page_row(tmp_path: Path) -> Non
     assert row[1] == "article body"
 
 
+def test_cli_consolidate_commit_collision_leaves_no_files(tmp_path: Path) -> None:
+    """A colliding `data consolidate --commit` (id already a non-data page) must
+    exit nonzero AND leave no orphaned wiki/data files on disk."""
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from wikify.cli import app
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    con = open_wiki_store(bundle.sqlite_path)
+    upsert_wiki_page(con, page_id="ALD GPC", slug="ald-gpc", title="ALD GPC",
+                     kind="article", body="article body", frontmatter={},
+                     evidence=[], links=[])
+    con.commit()
+    con.close()
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    store.close()
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        _json.dumps({"artifact_id": "gpc", "title": "ALD GPC", "properties": ["GPC"]}),
+        encoding="utf-8",
+    )
+
+    res = CliRunner().invoke(
+        app, ["data", "consolidate", str(spec_path), "--run", str(bdir), "--commit"]
+    )
+    assert res.exit_code == 1, res.output  # EXIT_VALIDATION (collision)
+    # No orphaned page/sidecar written for the rejected commit.
+    if bundle.wiki_data_dir.is_dir():
+        assert not list(bundle.wiki_data_dir.glob("*.md"))
+        assert not list(bundle.wiki_data_dir.glob("*.dataspec.json"))
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

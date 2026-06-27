@@ -35,6 +35,7 @@ from ..bundle.run.lock import LockHeldError, run_lock
 from ..bundle.run.state import load_state
 from ..data.artifact_page import (
     DataPageCollisionError,
+    check_data_page_id_free,
     register_artifact_wiki_page,
     write_artifact_page,
 )
@@ -327,6 +328,9 @@ def cmd_consolidate(
             )
             page_path = None
             if commit:
+                # Preflight the page-id collision BEFORE writing any files, so a
+                # rejected commit leaves no orphaned wiki/data page on disk.
+                check_data_page_id_free(bundle, artifact_spec.title)
                 page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
                 register_artifact_wiki_page(bundle, artifact_spec, table)
                 store.set_artifact_status(artifact_spec.artifact_id, "committed")
@@ -372,6 +376,7 @@ def cmd_commit(
             table = consolidate(store, spec)
             store.set_artifact_claims(artifact_id, table.claim_ids)
             store.upsert_artifact(spec, n_rows=table.n_rows)
+            check_data_page_id_free(bundle, spec.title)
             page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
             register_artifact_wiki_page(bundle, spec, table)
             store.set_artifact_status(artifact_id, "committed")
@@ -410,6 +415,7 @@ def cmd_rebuild(
                 table = consolidate(store, spec)
                 store.set_artifact_claims(spec.artifact_id, table.claim_ids)
                 store.upsert_artifact(spec, n_rows=table.n_rows)
+                check_data_page_id_free(bundle, spec.title)
                 page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
                 register_artifact_wiki_page(bundle, spec, table)
                 rebuilt.append(
