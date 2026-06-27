@@ -8,9 +8,10 @@ Three projections:
                              ``bundle/wiki/graph.py`` helpers.
 - ``derived/vectors.npz``   per-page embeddings, used for ``wiki find``.
 
-The graph + vectors rebuild reads every committed page (``wiki/articles/``,
-``wiki/people/``, ``wiki/data/``) and reconstructs the graph from the
-``[^eN]`` evidence footnotes in each page body. The
+The graph + vectors rebuild reads every markdown-authored page
+(``wiki/articles/`` + ``wiki/people/``) and reconstructs the graph from the
+``[^eN]`` evidence footnotes in each page body. Data pages are authored from
+the claim store, not re-derived here. The
 ``bundle/wiki/graph.py`` helpers do the heavy lifting; this module
 adapts them to the bundle's ``derived_*`` paths.
 """
@@ -24,13 +25,25 @@ from ...api import Bundle
 
 
 def _committed_page_dirs(bundle: Bundle) -> tuple[tuple[str, Path], ...]:
-    """The (kind, dir) pairs for every committed-page kind. One definition so
-    every projection (index, vectors, graph, query helpers) stays in sync —
-    data artifacts are first-class committed pages, not just query state."""
+    """The (kind, dir) pairs for every committed-page kind — the listing /
+    index surface. Data artifacts are first-class committed pages here."""
     return (
         ("article", bundle.wiki_articles_dir),
         ("person", bundle.wiki_people_dir),
         ("data", bundle.wiki_data_dir),
+    )
+
+
+# The markdown-authored kinds. Data pages are deliberately excluded: their
+# wiki.db row + evidence are authored from the claim store by
+# ``register_artifact_wiki_page`` (lossless chunk ids), whereas their rendered
+# markdown only carries doc-level references — re-deriving a data page from its
+# markdown would overwrite precise ``wiki_evidence.chunk_id`` values with doc
+# ids. So a markdown rebuild (graph + vectors) walks articles + people only.
+def _markdown_page_dirs(bundle: Bundle) -> tuple[tuple[str, Path], ...]:
+    return (
+        ("article", bundle.wiki_articles_dir),
+        ("person", bundle.wiki_people_dir),
     )
 
 
@@ -71,11 +84,11 @@ def read_index(bundle: Bundle) -> dict:
 
 
 def _load_pages(bundle: Bundle) -> list:
-    """Walk every committed-page kind and return parsed WikiPages."""
+    """Walk the markdown-authored page kinds and return parsed WikiPages."""
     from .page import parse_page
 
     out: list = []
-    for _kind, sub in _committed_page_dirs(bundle):
+    for _kind, sub in _markdown_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -109,18 +122,20 @@ def _load_pages(bundle: Bundle) -> list:
 
 
 def rebuild_graph(bundle: Bundle) -> Path:
-    """Refresh `wiki.db` rows from every committed page on disk.
+    """Refresh `wiki.db` rows from the markdown-authored pages on disk.
 
-    Walks every committed-page kind (articles, people, data), parses each
-    markdown file, and upserts the result into `wiki.db`. The wiki graph IS
-    wiki.db; `derived/graph.json` is no longer produced.
+    Walks `wiki/articles/` + `wiki/people/`, parses each markdown file, and
+    upserts the result into `wiki.db`. Data pages are excluded — they are
+    authored from the claim store by `register_artifact_wiki_page`, not
+    re-derived from their lossy rendered markdown. The wiki graph IS wiki.db;
+    `derived/graph.json` is no longer produced.
     """
     from .page import parse_page
     from .store import open_wiki_store, upsert_wiki_page
 
     con = open_wiki_store(bundle.sqlite_path)
     try:
-        for _kind, sub in _committed_page_dirs(bundle):
+        for _kind, sub in _markdown_page_dirs(bundle):
             if not sub.is_dir():
                 continue
             for path in sorted(sub.glob("*.md")):

@@ -536,6 +536,84 @@ def test_committed_data_artifact_in_index_and_committed_pages(tmp_path: Path) ->
     assert any(p["kind"] == "data" for p in read_index(bundle)["pages"])
 
 
+def test_wiki_rebuild_preserves_data_artifact_chunk_provenance(tmp_path: Path) -> None:
+    """A `wiki rebuild` after committing a data artifact must NOT overwrite the
+    precise claim chunk_id (stored by register from the claim store) with the
+    doc id from the lossy rendered markdown."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    # A claim whose chunk_id differs from its doc_id.
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle",
+                                "doc_99", "doc_99__c0007_abcd", "GPC was 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    rebuild_graph(bundle)  # the lossy-markdown rebuild must not touch data rows
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT chunk_id FROM wiki_evidence WHERE page_id = ?", (page_id,)
+        ).fetchall()
+    finally:
+        con.close()
+    chunk_ids = {r["chunk_id"] for r in rows}
+    assert "doc_99__c0007_abcd" in chunk_ids, chunk_ids
+
+
+def test_data_artifact_id_consistent_for_reserved_char_title(tmp_path: Path) -> None:
+    """A data artifact title with a filesystem-reserved char must yield ONE
+    canonical id across frontmatter, filename, and the DB row, and a rebuild
+    must not fail on a unique-slug conflict."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.page import parse_page
+    from wikify.bundle.wiki.page_naming import page_filename, page_id_from_title
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "On/Off Ratio", "1e5", "", "d1", "c1", "ratio 1e5")])
+    spec = ArtifactSpec(artifact_id="r", title="ON/OFF Ratio", properties=["On/Off Ratio"])
+    table = consolidate(store, spec)
+    store.close()
+    canonical = page_id_from_title("ON/OFF Ratio")
+    md_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    assert page_id == canonical
+    assert md_path.name == page_filename(canonical)
+    # Frontmatter id matches the filename/DB id, not the raw slash title.
+    assert parse_page(md_path).id == canonical
+    # A rebuild does not raise (no split file/DB identity, no slug collision).
+    rebuild_graph(bundle)
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

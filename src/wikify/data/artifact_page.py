@@ -54,17 +54,25 @@ def _cell_markdown(col: str, cell) -> str:
 
 def render_artifact_markdown(table: ConsolidatedTable) -> str:
     """Return the full markdown body (frontmatter + table + references)."""
-    page_id = table.title
+    from ..bundle.wiki.page_naming import page_id_from_title
+
+    # One canonical id everywhere: the sanitized page id is the frontmatter
+    # `id`, the filename stem, and the DB page_id/slug. The raw title is kept
+    # only as the display `title`/heading, so a title with filesystem-reserved
+    # characters (e.g. "ON/OFF Ratio") cannot split the file identity from the
+    # registered DB identity.
+    page_id = page_id_from_title(table.title)
+    display_title = table.title
     lines: list[str] = []
     lines.append("---")
     lines.append(f"id: {page_id}")
     lines.append("kind: data")
-    lines.append(f"title: {page_id}")
+    lines.append(f"title: {display_title}")
     lines.append("aliases: []")
     lines.append("links: []")
     lines.append("---")
     lines.append("")
-    lines.append(f"# {page_id}")
+    lines.append(f"# {display_title}")
     lines.append("")
     if table.description:
         lines.append(table.description.strip())
