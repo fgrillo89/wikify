@@ -241,7 +241,9 @@ def build_navigation_context(bundle: Bundle) -> dict[str, Any]:
     pages: list[dict[str, Any]] = []
     for page in sorted(page_bundle.pages, key=lambda p: (p.kind, p.title.lower())):
         evidence_doc_ids = sorted({ev.doc_id for ev in page.evidence if ev.doc_id})
-        subdir = "articles" if page.kind == "article" else "people"
+        subdir = {"article": "articles", "person": "people", "data": "data"}.get(
+            page.kind, "people"
+        )
         pages.append(
             {
                 "id": page.id,
@@ -395,7 +397,7 @@ def navigation_is_fresh(bundle: Bundle) -> bool:
     if not path.is_file():
         return False
     nav_mtime = path.stat().st_mtime
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
         if not sub.is_dir():
             continue
         for page in sub.glob("*.md"):
