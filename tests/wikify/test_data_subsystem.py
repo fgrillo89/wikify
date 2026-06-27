@@ -631,6 +631,71 @@ def test_wiki_rebuild_restores_data_page_from_disk_only(tmp_path: Path) -> None:
     assert "doc_7__c0003_beef" in {r["chunk_id"] for r in ev}
 
 
+def test_rebuild_preserves_data_page_when_claim_store_missing(tmp_path: Path) -> None:
+    """A wiki rebuild with a missing/stale claims.db must NOT overwrite a
+    committed data page with an empty projection — it preserves the row."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle",
+                                "doc_7", "doc_7__c0003_beef", "GPC was 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    # Simulate a lost claim store (recovery from partial corruption).
+    bundle.claims_db_path.unlink()
+
+    rebuild_graph(bundle)  # must not consolidate-zero and clobber the row
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        ev = con.execute(
+            "SELECT chunk_id FROM wiki_evidence WHERE page_id = ?", (page_id,)
+        ).fetchall()
+    finally:
+        con.close()
+    # The original chunk evidence survives (not erased by an empty projection).
+    assert "doc_7__c0003_beef" in {r["chunk_id"] for r in ev}
+
+
+def test_artifact_title_cannot_inject_frontmatter_kind(tmp_path: Path) -> None:
+    """A title containing a newline + 'kind:' must not change the parsed page
+    kind — frontmatter injection is neutralized."""
+    from wikify.bundle.wiki.page import parse_page
+    from wikify.data.artifact_page import write_artifact_page
+
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(
+        artifact_id="x", title="Good\nkind: person", properties=["GPC"]
+    )
+    table = consolidate(store, spec)
+    wiki_data = tmp_path / "wiki" / "data"
+    md_path = write_artifact_page(wiki_data, spec, table)
+    parsed = parse_page(md_path)
+    assert parsed.kind == "data"
+    # No frontmatter LINE overrides kind (the injected newline was collapsed).
+    lines = [ln.strip() for ln in md_path.read_text(encoding="utf-8").splitlines()]
+    assert "kind: person" not in lines
+
+
 def test_data_artifact_id_consistent_for_reserved_char_title(tmp_path: Path) -> None:
     """A data artifact title with a filesystem-reserved char must yield ONE
     canonical id across frontmatter, filename, and the DB row, and a rebuild

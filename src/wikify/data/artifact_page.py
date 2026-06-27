@@ -20,6 +20,13 @@ from pathlib import Path
 from .consolidate import ConsolidatedTable
 from .models import ArtifactSpec
 
+
+def _safe_display_title(title: str) -> str:
+    """One-line display title: newlines/control chars collapsed so a
+    user-controlled artifact title cannot inject YAML frontmatter lines (the
+    ``kind: data`` field must stay non-overridable)."""
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", title or "")).strip()
+
 # Strip trailing chunk suffix: __cNNNN_<hex>
 _RE_CHUNK_SUFFIX = re.compile(r"__c\d+_[0-9a-f]+$")
 # Strip trailing doc-hash: _<12 hex chars>
@@ -62,7 +69,7 @@ def render_artifact_markdown(table: ConsolidatedTable) -> str:
     # characters (e.g. "ON/OFF Ratio") cannot split the file identity from the
     # registered DB identity.
     page_id = page_id_from_title(table.title)
-    display_title = table.title
+    display_title = _safe_display_title(table.title)
     lines: list[str] = []
     lines.append("---")
     lines.append(f"id: {page_id}")
@@ -175,7 +182,7 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
             # write_artifact_page), so the slug MUST be that same stem for a
             # search hit's path/handle to round-trip through wiki show.
             slug=page_id,
-            title=table.title,
+            title=_safe_display_title(table.title),
             kind="data",
             body=render_artifact_markdown(table),
             frontmatter={"aliases": []},
@@ -210,6 +217,11 @@ def register_committed_data_pages(bundle) -> int:
     sidecars = sorted(data_dir.glob("*.dataspec.json"))
     if not sidecars:
         return 0
+    # Never register from an absent claim store: DataStore.open would create an
+    # empty one, consolidate zero rows, and overwrite good wiki.db pages with
+    # empty projections. With no claims, leave the existing rows untouched.
+    if not bundle.claims_db_path.exists():
+        return 0
 
     from .consolidate import consolidate
     from .models import ArtifactSpec
@@ -224,7 +236,12 @@ def register_committed_data_pages(bundle) -> int:
                 spec = ArtifactSpec.from_json(_json.dumps(payload["spec"]))
             except (OSError, ValueError, KeyError):
                 continue
-            register_artifact_wiki_page(bundle, spec, consolidate(store, spec))
+            table = consolidate(store, spec)
+            # An empty reconstruction means the backing claims are gone/stale;
+            # skip rather than clobber the previously-good row with an empty one.
+            if not table.claim_ids:
+                continue
+            register_artifact_wiki_page(bundle, spec, table)
             n += 1
     finally:
         store.close()
