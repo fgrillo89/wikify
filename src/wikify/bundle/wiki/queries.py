@@ -504,7 +504,7 @@ def _slug_to_page_id(bundle: Bundle, slug: str) -> str | None:
     """
     from .page import parse_page
 
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
         if not sub.is_dir():
             continue
         candidate = sub / f"{slug}.md"
@@ -527,7 +527,7 @@ def _page_id_to_slug_map(bundle: Bundle) -> dict[str, str]:
     from .page import parse_page
 
     out: dict[str, str] = {}
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -548,7 +548,7 @@ def _page_rows_for_ids(bundle: Bundle, page_ids: list[str]) -> list[dict]:
 
     wanted = set(page_ids)
     rows: list[dict] = []
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir, bundle.wiki_data_dir):
         if not sub.is_dir():
             continue
         for path in sorted(sub.glob("*.md")):
