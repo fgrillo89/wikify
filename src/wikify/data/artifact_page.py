@@ -180,6 +180,27 @@ class DataPageCollisionError(Exception):
         self.existing_kind = existing_kind
 
 
+def check_data_page_id_free(bundle, title: str) -> None:
+    """Raise :class:`DataPageCollisionError` if *title* maps to a ``page_id``
+    already used by a non-data wiki page. Call this BEFORE writing the artifact
+    markdown/sidecar so a rejected commit leaves nothing orphaned on disk (the
+    commit paths hold the run lock, so the preflight cannot race a concurrent
+    page commit)."""
+    from ..bundle.wiki.page_naming import page_id_from_title
+    from ..bundle.wiki.store import open_wiki_store
+
+    page_id = page_id_from_title(title)
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        row = con.execute(
+            "SELECT kind FROM wiki_pages WHERE page_id = ?", (page_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    if row is not None and row[0] != "data":
+        raise DataPageCollisionError(page_id, row[0])
+
+
 def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedTable) -> str:
     """Register a committed data artifact as a ``kind=data`` row in the wiki
     page DB so navigation / index / graph can reference it instead of orphaning
