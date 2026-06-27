@@ -923,6 +923,55 @@ def test_data_page_navigation_url_and_freshness(tmp_path: Path) -> None:
     assert navigation_is_fresh(bundle) is False
 
 
+def test_data_artifact_cannot_overwrite_existing_page_row(tmp_path: Path) -> None:
+    """A data artifact whose id collides with an existing article/person page
+    must be refused, not silently overwrite that row (wiki_pages is keyed by
+    page_id alone)."""
+    import pytest
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.store import open_wiki_store, upsert_wiki_page
+    from wikify.data.artifact_page import (
+        DataPageCollisionError,
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    # An existing article whose page_id equals a would-be data artifact title.
+    con = open_wiki_store(bundle.sqlite_path)
+    upsert_wiki_page(con, page_id="ALD GPC", slug="ald-gpc", title="ALD GPC",
+                     kind="article", body="article body", frontmatter={},
+                     evidence=[], links=[])
+    con.commit()
+    con.close()
+
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+
+    with pytest.raises(DataPageCollisionError):
+        register_artifact_wiki_page(bundle, spec, table)
+
+    # The article row is intact (kind/body unchanged).
+    con = open_wiki_store(bundle.sqlite_path)
+    try:
+        row = con.execute(
+            "SELECT kind, body FROM wiki_pages WHERE page_id = ?", ("ALD GPC",)
+        ).fetchone()
+    finally:
+        con.close()
+    assert row[0] == "article"
+    assert row[1] == "article body"
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

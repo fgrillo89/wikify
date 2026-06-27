@@ -33,7 +33,11 @@ import typer
 from ..api import Bundle, Corpus
 from ..bundle.run.lock import LockHeldError, run_lock
 from ..bundle.run.state import load_state
-from ..data.artifact_page import register_artifact_wiki_page, write_artifact_page
+from ..data.artifact_page import (
+    DataPageCollisionError,
+    register_artifact_wiki_page,
+    write_artifact_page,
+)
 from ..data.consolidate import consolidate
 from ..data.harvest import source_text_for
 from ..data.models import ArtifactSpec, DataPoint
@@ -53,6 +57,8 @@ def _wiki_mutation_lock(bundle: Bundle, op: str):
             yield
     except LockHeldError as exc:
         cli_error(EXIT_LOCK_HELD, error="lock_held", message=str(exc))
+    except DataPageCollisionError as exc:
+        cli_error(EXIT_VALIDATION, error="page_id_collision", message=str(exc))
 
 app = typer.Typer(add_completion=False, help="Factual-data claim store + data artifacts.")
 

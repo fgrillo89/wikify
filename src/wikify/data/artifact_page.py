@@ -163,11 +163,32 @@ def write_artifact_page(
     return md_path
 
 
+class DataPageCollisionError(Exception):
+    """A data artifact's page id collides with an existing non-data wiki page.
+
+    ``wiki_pages`` is keyed by ``page_id`` alone, so registering a data page
+    whose id equals an article/person page would overwrite that row in place.
+    Registration refuses instead of corrupting the existing page.
+    """
+
+    def __init__(self, page_id: str, existing_kind: str) -> None:
+        super().__init__(
+            f"data artifact id {page_id!r} collides with an existing "
+            f"{existing_kind} page"
+        )
+        self.page_id = page_id
+        self.existing_kind = existing_kind
+
+
 def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedTable) -> str:
     """Register a committed data artifact as a ``kind=data`` row in the wiki
     page DB so navigation / index / graph can reference it instead of orphaning
     it — without this the organizer hits a FOREIGN KEY error placing the page
     in a nav group (F28). Idempotent (upsert). Returns the page_id.
+
+    Raises :class:`DataPageCollisionError` if the page id already names a
+    non-data page (so a data title cannot overwrite an article/person row,
+    which the ``page_id``-only primary key would otherwise allow).
     """
     from ..bundle.wiki.page_naming import page_id_from_title
     from ..bundle.wiki.store import open_wiki_store, upsert_wiki_page
@@ -175,6 +196,11 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
     page_id = page_id_from_title(table.title)
     con = open_wiki_store(bundle.sqlite_path)
     try:
+        existing = con.execute(
+            "SELECT kind FROM wiki_pages WHERE page_id = ?", (page_id,)
+        ).fetchone()
+        if existing is not None and existing[0] != "data":
+            raise DataPageCollisionError(page_id, existing[0])
         upsert_wiki_page(
             con,
             page_id=page_id,
@@ -273,8 +299,11 @@ def register_committed_data_pages(bundle) -> int:
                         store, spec, restrict_claim_ids=set(committed_claim_ids)
                     )
                     if table.claim_ids:
-                        register_artifact_wiki_page(bundle, spec, table)
-                        n += 1
+                        try:
+                            register_artifact_wiki_page(bundle, spec, table)
+                            n += 1
+                        except DataPageCollisionError:
+                            pass  # never clobber a non-data page on rebuild
                         continue
             try:
                 page = parse_page(md)
@@ -291,6 +320,11 @@ def register_committed_data_pages(bundle) -> int:
         con = open_wiki_store(bundle.sqlite_path)
         try:
             for page, stem in degraded:
+                row = con.execute(
+                    "SELECT kind FROM wiki_pages WHERE page_id = ?", (page.id,)
+                ).fetchone()
+                if row is not None and row[0] != "data":
+                    continue  # never clobber a non-data page on degraded restore
                 upsert_wiki_page(
                     con,
                     page_id=page.id,
