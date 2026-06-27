@@ -731,6 +731,40 @@ def test_data_artifact_id_consistent_for_reserved_char_title(tmp_path: Path) -> 
     rebuild_graph(bundle)
 
 
+def test_data_consolidate_commit_respects_run_lock(tmp_path: Path) -> None:
+    """`data consolidate --commit` must not mutate wiki state while the bundle
+    run lock is held by another owner — it exits EXIT_LOCK_HELD (2)."""
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.run.lock import run_lock
+    from wikify.cli import app
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    store.close()
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        _json.dumps({"artifact_id": "gpc", "title": "ALD GPC", "properties": ["GPC"]}),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    with run_lock(bundle, owner="someone-else"):
+        res = runner.invoke(
+            app, ["data", "consolidate", str(spec_path), "--run", str(bdir), "--commit"]
+        )
+    assert res.exit_code == 2, res.output
+    # No page was written while the lock was held.
+    assert not list(bundle.wiki_data_dir.glob("*.md")) if bundle.wiki_data_dir.is_dir() else True
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

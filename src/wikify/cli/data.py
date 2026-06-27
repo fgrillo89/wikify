@@ -23,12 +23,15 @@ and reported.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
 
 from ..api import Bundle, Corpus
+from ..bundle.run.lock import LockHeldError, run_lock
 from ..bundle.run.state import load_state
 from ..data.artifact_page import register_artifact_wiki_page, write_artifact_page
 from ..data.consolidate import consolidate
@@ -36,7 +39,20 @@ from ..data.harvest import source_text_for
 from ..data.models import ArtifactSpec, DataPoint
 from ..data.store import DataStore
 from ..data.verify import verify_point
-from ._helpers import EXIT_VALIDATION, cli_error
+from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
+
+
+@contextmanager
+def _wiki_mutation_lock(bundle: Bundle, op: str):
+    """Serialize a data-artifact wiki mutation (page write + DB registration)
+    with `wiki rebuild` / page commits / navigation under the bundle run lock,
+    so the wiki.db write and the on-disk page cannot interleave or be left
+    half-applied. A held lock exits with EXIT_LOCK_HELD."""
+    try:
+        with run_lock(bundle, owner=f"data-{op}/pid-{os.getpid()}"):
+            yield
+    except LockHeldError as exc:
+        cli_error(EXIT_LOCK_HELD, error="lock_held", message=str(exc))
 
 app = typer.Typer(add_completion=False, help="Factual-data claim store + data artifacts.")
 
@@ -293,19 +309,23 @@ def cmd_consolidate(
     """
     bundle = _resolve_bundle(run)
     artifact_spec = _load_spec(spec)
-    store = DataStore.open(bundle.root)
-    try:
-        table = consolidate(store, artifact_spec)
-        store.upsert_artifact(artifact_spec, n_rows=table.n_rows)
-        store.set_artifact_claims(artifact_spec.artifact_id, table.claim_ids)
-        available = [p["property_norm"] for p in store.properties()] if table.empty_columns else []
-        page_path = None
-        if commit:
-            page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
-            register_artifact_wiki_page(bundle, artifact_spec, table)
-            store.set_artifact_status(artifact_spec.artifact_id, "committed")
-    finally:
-        store.close()
+    with _wiki_mutation_lock(bundle, "consolidate"):
+        store = DataStore.open(bundle.root)
+        try:
+            table = consolidate(store, artifact_spec)
+            store.upsert_artifact(artifact_spec, n_rows=table.n_rows)
+            store.set_artifact_claims(artifact_spec.artifact_id, table.claim_ids)
+            available = (
+                [p["property_norm"] for p in store.properties()]
+                if table.empty_columns else []
+            )
+            page_path = None
+            if commit:
+                page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
+                register_artifact_wiki_page(bundle, artifact_spec, table)
+                store.set_artifact_status(artifact_spec.artifact_id, "committed")
+        finally:
+            store.close()
     _emit(
         {
             "ok": True,
@@ -336,20 +356,21 @@ def cmd_commit(
 ) -> None:
     """Write a stored artifact's page + sidecar under ``wiki/data/``."""
     bundle = _resolve_bundle(run)
-    store = DataStore.open(bundle.root)
-    try:
-        rec = store.get_artifact(artifact_id)
-        if rec is None:
-            cli_error(EXIT_VALIDATION, error="not_found", message=artifact_id)
-        spec = ArtifactSpec.from_json(rec["spec_json"])
-        table = consolidate(store, spec)
-        store.set_artifact_claims(artifact_id, table.claim_ids)
-        store.upsert_artifact(spec, n_rows=table.n_rows)
-        page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
-        register_artifact_wiki_page(bundle, spec, table)
-        store.set_artifact_status(artifact_id, "committed")
-    finally:
-        store.close()
+    with _wiki_mutation_lock(bundle, "commit"):
+        store = DataStore.open(bundle.root)
+        try:
+            rec = store.get_artifact(artifact_id)
+            if rec is None:
+                cli_error(EXIT_VALIDATION, error="not_found", message=artifact_id)
+            spec = ArtifactSpec.from_json(rec["spec_json"])
+            table = consolidate(store, spec)
+            store.set_artifact_claims(artifact_id, table.claim_ids)
+            store.upsert_artifact(spec, n_rows=table.n_rows)
+            page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+            register_artifact_wiki_page(bundle, spec, table)
+            store.set_artifact_status(artifact_id, "committed")
+        finally:
+            store.close()
     _emit(
         {"ok": True, "artifact_id": artifact_id, "page": str(page_path), "rows": table.n_rows},
         fmt,
@@ -368,27 +389,29 @@ def cmd_rebuild(
     claim store (the evolving-artifact property).
     """
     bundle = _resolve_bundle(run)
-    store = DataStore.open(bundle.root)
     rebuilt = []
-    try:
-        if artifact_id:
-            recs = [store.get_artifact(artifact_id)]
-            if recs[0] is None:
-                cli_error(EXIT_VALIDATION, error="not_found", message=artifact_id)
-        else:
-            recs = [r for r in store.list_artifacts() if r["status"] == "committed"]
-        for rec in recs:
-            spec = ArtifactSpec.from_json(rec["spec_json"])
-            table = consolidate(store, spec)
-            store.set_artifact_claims(spec.artifact_id, table.claim_ids)
-            store.upsert_artifact(spec, n_rows=table.n_rows)
-            page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
-            register_artifact_wiki_page(bundle, spec, table)
-            rebuilt.append(
-                {"artifact_id": spec.artifact_id, "rows": table.n_rows, "page": str(page_path)}
-            )
-    finally:
-        store.close()
+    with _wiki_mutation_lock(bundle, "rebuild"):
+        store = DataStore.open(bundle.root)
+        try:
+            if artifact_id:
+                recs = [store.get_artifact(artifact_id)]
+                if recs[0] is None:
+                    cli_error(EXIT_VALIDATION, error="not_found", message=artifact_id)
+            else:
+                recs = [r for r in store.list_artifacts() if r["status"] == "committed"]
+            for rec in recs:
+                spec = ArtifactSpec.from_json(rec["spec_json"])
+                table = consolidate(store, spec)
+                store.set_artifact_claims(spec.artifact_id, table.claim_ids)
+                store.upsert_artifact(spec, n_rows=table.n_rows)
+                page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+                register_artifact_wiki_page(bundle, spec, table)
+                rebuilt.append(
+                    {"artifact_id": spec.artifact_id, "rows": table.n_rows,
+                     "page": str(page_path)}
+                )
+        finally:
+            store.close()
     _emit({"ok": True, "rebuilt": rebuilt}, fmt)
 
 
