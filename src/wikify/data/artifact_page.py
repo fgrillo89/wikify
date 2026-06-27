@@ -202,11 +202,12 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
     return page_id
 
 
-def _spec_from_sidecar(sidecar: Path) -> ArtifactSpec | None:
+def _sidecar_spec_and_claims(sidecar: Path) -> tuple[ArtifactSpec, list[str]] | None:
     import json as _json
     try:
         payload = _json.loads(sidecar.read_text(encoding="utf-8"))
-        return ArtifactSpec.from_json(_json.dumps(payload["spec"]))
+        spec = ArtifactSpec.from_json(_json.dumps(payload["spec"]))
+        return spec, list(payload.get("claim_ids") or [])
     except (OSError, ValueError, KeyError):
         return None
 
@@ -215,9 +216,13 @@ def register_committed_data_pages(bundle) -> int:
     """Restore/refresh data-artifact wiki.db rows so ``wiki rebuild`` recovers
     data pages the markdown rebuild deliberately skips.
 
-    For each committed ``wiki/data/*.md``:
-    - **Lossless** — when the claim store is present, re-derive the table from
-      its sidecar spec and register with precise chunk ids.
+    This is a projection of COMMITTED disk state: the lossless path reproduces
+    the table from the sidecar's recorded ``claim_ids`` (the committed
+    snapshot), never the full live store, so a rebuild cannot publish claims
+    added after commit but before a ``data rebuild`` (which updates the .md +
+    DB together). Per committed ``wiki/data/*.md``:
+    - **Lossless** — when the claim store is present, re-derive the committed
+      table from the sidecar spec + claim ids and register with precise chunk ids.
     - **Preserve** — when no lossless reconstruction is possible but a row
       already exists, leave it untouched (never clobber a good/precise row with
       an empty projection).
@@ -261,9 +266,12 @@ def register_committed_data_pages(bundle) -> int:
     try:
         for md in md_files:
             if store is not None:
-                spec = _spec_from_sidecar(md.with_suffix(".dataspec.json"))
-                if spec is not None:
-                    table = consolidate(store, spec)
+                sc = _sidecar_spec_and_claims(md.with_suffix(".dataspec.json"))
+                if sc is not None and sc[1]:
+                    spec, committed_claim_ids = sc
+                    table = consolidate(
+                        store, spec, restrict_claim_ids=set(committed_claim_ids)
+                    )
                     if table.claim_ids:
                         register_artifact_wiki_page(bundle, spec, table)
                         n += 1

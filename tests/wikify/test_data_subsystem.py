@@ -837,6 +837,92 @@ def test_data_artifact_traverses_to_evidence(tmp_path: Path) -> None:
     assert any(r["chunk_id"] == "doc_7__c0003_beef" for r in rows), rows
 
 
+def test_wiki_rebuild_data_row_does_not_advance_past_committed(tmp_path: Path) -> None:
+    """wiki rebuild is a projection of COMMITTED disk state: a claim added after
+    the artifact was committed (but before `data rebuild`) must NOT appear in
+    the wiki.db row, or DB search/traverse would expose rows absent from the
+    committed markdown page."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "chunkA", "GPC 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+    # A new matching claim lands AFTER commit (not yet in the committed page).
+    store.add_points([_verified("HfO2", "GPC", "1.0", "A/cycle", "d2", "chunkB", "GPC 1.0")])
+    store.close()
+
+    rebuild_graph(bundle)
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        chunk_ids = {
+            r["chunk_id"] for r in con.execute(
+                "SELECT chunk_id FROM wiki_evidence WHERE page_id = ?", (page_id,)
+            ).fetchall()
+        }
+    finally:
+        con.close()
+    assert "chunkA" in chunk_ids
+    assert "chunkB" not in chunk_ids  # uncommitted claim must not leak into wiki.db
+
+
+def test_data_page_navigation_url_and_freshness(tmp_path: Path) -> None:
+    """A committed data page is first-class in navigation: it gets a data/...html
+    URL, and modifying its markdown makes navigation stale."""
+    import os
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.navigation import (
+        build_navigation_context,
+        navigation_is_fresh,
+        navigation_path,
+        write_navigation,
+    )
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    md_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
+    register_artifact_wiki_page(bundle, spec, table)
+
+    data_pages = [p for p in build_navigation_context(bundle)["pages"] if p["kind"] == "data"]
+    assert data_pages, "data page must appear in navigation context"
+    assert data_pages[0]["url"].startswith("data/"), data_pages[0]["url"]
+
+    write_navigation(bundle, {"groups": []})
+    nav_mtime = navigation_path(bundle).stat().st_mtime
+    os.utime(md_path, (nav_mtime + 10, nav_mtime + 10))
+    assert navigation_is_fresh(bundle) is False
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([

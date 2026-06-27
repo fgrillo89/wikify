@@ -70,8 +70,19 @@ def _canonical_value_key(claim: dict) -> str:
     return f"{normalize_key(claim.get('value_text') or '')}|{unit}"
 
 
-def consolidate(store: DataStore, spec: ArtifactSpec) -> ConsolidatedTable:
-    """Build the table described by *spec* from the current claim store."""
+def consolidate(
+    store: DataStore,
+    spec: ArtifactSpec,
+    *,
+    restrict_claim_ids: set[str] | None = None,
+) -> ConsolidatedTable:
+    """Build the table described by *spec* from the claim store.
+
+    ``restrict_claim_ids`` limits the table to a fixed set of claims — used to
+    reproduce a *committed* artifact snapshot (the sidecar's recorded claim
+    ids) so a projection never advances past the committed page. ``None``
+    consolidates from the full current store (the evolving-artifact path).
+    """
     allowed = _TIERS["verified"] if spec.min_verification == "verified" else _TIERS["any"]
     prop_keys = [normalize_key(p) for p in spec.properties]
     # Display names: prefer the spec's spelling.
@@ -104,6 +115,8 @@ def consolidate(store: DataStore, spec: ArtifactSpec) -> ConsolidatedTable:
     for pk, prop in zip(prop_keys, spec.properties):
         for claim in store.list_points(property=prop):
             if claim["verification_status"] not in allowed:
+                continue
+            if restrict_claim_ids is not None and claim["claim_id"] not in restrict_claim_ids:
                 continue
             sn = claim["subject_norm"]
             if subject_filter is not None and sn not in subject_filter:
