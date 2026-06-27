@@ -180,16 +180,51 @@ class DataPageCollisionError(Exception):
         self.existing_kind = existing_kind
 
 
-def check_data_page_id_free(bundle, title: str) -> None:
-    """Raise :class:`DataPageCollisionError` if *title* maps to a ``page_id``
-    already used by a non-data wiki page. Call this BEFORE writing the artifact
-    markdown/sidecar so a rejected commit leaves nothing orphaned on disk (the
-    commit paths hold the run lock, so the preflight cannot race a concurrent
-    page commit)."""
+def check_data_page_id_free(bundle, title: str, artifact_id: str) -> None:
+    """Raise :class:`DataPageCollisionError` if committing the data artifact
+    *artifact_id* / *title* would collide on its ``page_id``. Call this BEFORE
+    writing the artifact markdown/sidecar so a rejected commit leaves nothing
+    orphaned on disk (the commit paths hold the run lock, so the preflight
+    cannot race a concurrent page commit).
+
+    Checks, in order:
+    1. **On-disk article/person pages** (authoritative; ``wiki.db`` is only a
+       rebuildable projection that may be stale/missing) — a data id must not
+       equal a committed article/person frontmatter id or filename stem.
+    2. **A different data artifact** must not already own this page_id (two
+       titles mapping to the same id would overwrite each other's files/row).
+    3. **wiki.db** — a non-data row with this page_id (a secondary net).
+    """
+    import json as _json
+
+    from ..bundle.wiki.page import parse_page
     from ..bundle.wiki.page_naming import page_id_from_title
     from ..bundle.wiki.store import open_wiki_store
 
     page_id = page_id_from_title(title)
+
+    for kind, sub in (("article", bundle.wiki_articles_dir),
+                      ("person", bundle.wiki_people_dir)):
+        if not sub.is_dir():
+            continue
+        for p in sorted(sub.glob("*.md")):
+            if p.stem == page_id:
+                raise DataPageCollisionError(page_id, kind)
+            try:
+                if parse_page(p).id == page_id:
+                    raise DataPageCollisionError(page_id, kind)
+            except (OSError, ValueError):
+                continue
+
+    sidecar = bundle.wiki_data_dir / f"{page_id}.dataspec.json"
+    if sidecar.is_file():
+        try:
+            owner = _json.loads(sidecar.read_text(encoding="utf-8")).get("artifact_id")
+        except (OSError, ValueError):
+            owner = None
+        if owner is not None and owner != artifact_id:
+            raise DataPageCollisionError(page_id, "data")
+
     con = open_wiki_store(bundle.sqlite_path)
     try:
         row = con.execute(
