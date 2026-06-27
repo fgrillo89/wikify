@@ -216,30 +216,6 @@ def commit_page(
 
         gc_attempt(bundle, slug)
         _project_wiki_page(bundle, page=page, slug=slug)
-        # Incrementally embed the page so semantic wiki_find sees it next round
-        # (F26). Best-effort: the finalize `wiki rebuild` remains the backstop,
-        # so a missing/unavailable embedder must not fail an otherwise-valid
-        # commit — but the failure is recorded, not silently swallowed, so a
-        # misconfigured embedder is distinguishable from poor search quality.
-        try:
-            from .derived import embed_committed_page
-
-            embed_committed_page(bundle, page)
-        except Exception as exc:  # noqa: BLE001 - embedding is an optional accelerant
-            try:
-                run_id = load_state(bundle).run_id
-            except FileNotFoundError:
-                run_id = ""
-            append_event(
-                bundle,
-                Event(
-                    run_id=run_id,
-                    type="page_embedding_failed",
-                    actor=actor,
-                    page_id=page_id,
-                    data={"error": f"{type(exc).__name__}: {exc}", "slug": slug},
-                ),
-            )
 
         try:
             run_id = load_state(bundle).run_id
@@ -261,12 +237,44 @@ def commit_page(
             ),
         )
 
+    # Incrementally embed the page so semantic wiki_find sees it next round
+    # (F26). Done AFTER the lock is released and AFTER `page_committed` is
+    # recorded, so a slow/hanging embedder cannot extend the locked critical
+    # path past its TTL or leave a committed page with no commit event. The
+    # finalize `wiki rebuild` remains the backstop; a failure is recorded as
+    # `page_embedding_failed`, never silently swallowed.
+    _embed_committed_page_best_effort(bundle, page=page, slug=slug, actor=actor)
+
     if ensure_projections:
         rebuild_projections(bundle)
 
     return CommitResult(
         page_path=page_path, page_id=page_id, kind=page_kind, slug=slug
     )
+
+
+def _embed_committed_page_best_effort(
+    bundle: Bundle, *, page: WikiPage, slug: str, actor: str
+) -> None:
+    try:
+        from .derived import embed_committed_page
+
+        embed_committed_page(bundle, page)
+    except Exception as exc:  # noqa: BLE001 - embedding is an optional accelerant
+        try:
+            run_id = load_state(bundle).run_id
+        except FileNotFoundError:
+            run_id = ""
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id,
+                type="page_embedding_failed",
+                actor=actor,
+                page_id=page.id,
+                data={"error": f"{type(exc).__name__}: {exc}", "slug": slug},
+            ),
+        )
 
 
 def _project_wiki_page(bundle: Bundle, *, page: WikiPage, slug: str) -> None:

@@ -161,13 +161,27 @@ def test_ocr_mangled_scalar_rejected_but_legit_verified() -> None:
     verify_point(legit, chunk_text="the GPC was 1.1 A in this process")
     assert legit.verification_status == "verified"
 
-    # A spaced-thousands scalar must NOT be dropped as OCR-mangled.
+    # A spaced-thousands scalar must NOT be dropped as OCR-mangled, AND must
+    # carry the correct magnitude (10000, not the leading token 10) so
+    # consolidation dedup/conflict logic compares it correctly.
     grouped = DataPoint(
         subject="film", property="endurance", value_text="10 000 cycles",
         value_original="10 000 cycles", doc_id="d",
         grounding_quote="endurance of 10 000 cycles", value_type="scalar").finalize()
+    assert grouped.value_num == 10000.0
     verify_point(grouped, chunk_text="measured endurance of 10 000 cycles here")
     assert grouped.verification_status == "verified"
+
+
+def test_parse_leading_number_handles_spaced_thousands() -> None:
+    from wikify.data.models import parse_leading_number
+
+    assert parse_leading_number("10 000 cycles") == 10000.0
+    assert parse_leading_number("1 234 567 events") == 1234567.0
+    assert parse_leading_number("1 000.5 nm") == 1000.5
+    assert parse_leading_number("1.1 A") == 1.1  # ordinary value unchanged
+    # OCR-mangled run is NOT a thousands grouping -> not collapsed.
+    assert parse_leading_number("1 10 5 ohm") == 1.0
 
     # A range with two numbers is exempt (value_type != scalar/bound).
     rng = DataPoint(

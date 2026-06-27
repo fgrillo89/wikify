@@ -18,7 +18,12 @@ so this module has no corpus dependency and is trivially testable.
 from __future__ import annotations
 
 from ..grounding import is_grounded, normalize_grounding_text
-from .models import _NUMBER_RE, DataPoint, parse_leading_number
+from .models import (
+    _NUMBER_RE,
+    DataPoint,
+    collapse_spaced_thousands,
+    parse_leading_number,
+)
 
 # Single-number value types — a scalar/bound must reduce to ONE number, so a
 # leading run of space-separated bare numbers signals OCR mangling.
@@ -78,7 +83,9 @@ def _numbers(s: str) -> set[str]:
     target parsed the same way.
     """
     out: set[str] = set()
-    for m in _NUMBER_RE.finditer(s or ""):
+    # Collapse space-grouped thousands first so "10 000" reads as 10000, the
+    # same magnitude parse_leading_number derives for the target value.
+    for m in _NUMBER_RE.finditer(collapse_spaced_thousands(s or "")):
         tok = m.group(0)
         cleaned = tok.replace("−", "-").replace(",", "").replace(" ", "")
         out.add(cleaned)

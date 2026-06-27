@@ -146,6 +146,9 @@ def test_commit_records_embedding_failure_instead_of_swallowing(
     result = commit_page(bundle, slug=slug)
     assert result.page_path.is_file()
     events = read_events(bundle)
+    # page_committed is recorded (inside the lock) regardless of the later,
+    # post-lock embedding outcome.
+    assert any(e.type == "page_committed" for e in events)
     failures = [e for e in events if e.type == "page_embedding_failed"]
     assert len(failures) == 1
     assert "embedder unavailable" in failures[0].data.get("error", "")
