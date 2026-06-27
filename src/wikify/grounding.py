@@ -21,11 +21,16 @@ import re
 
 _WS_RE = re.compile(r"\s+")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_INLINE_CITE_RE = re.compile(r"\[[\d\s,‒–—.\-]+\]")
+# A renderer-inserted citation marker only: bracketed INTEGERS — a single index,
+# a range, or a comma-separated list (``[12]`` / ``[1-3]`` / ``[ 1, 2 ]``).
+# Deliberately excludes decimals and scientific notation so scientific/data
+# bracket content like ``[0.45]`` or ``[2.5e-3]`` is preserved — stripping it
+# would let a non-verbatim quote ground against the source.
+_INLINE_CITE_RE = re.compile(r"\[\s*\d+(?:\s*[,‒–—-]\s*\d+)*\s*\]")
 
 
 def normalize_grounding_text(s: str) -> str:
-    """Collapse whitespace, strip control chars + inline citation markers, lower."""
+    """Collapse whitespace, strip control chars + integer citation markers, lower."""
     s = _CTRL_RE.sub(" ", s or "")
     s = _INLINE_CITE_RE.sub(" ", s)
     return _WS_RE.sub(" ", s).strip().lower()

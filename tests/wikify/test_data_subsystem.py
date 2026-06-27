@@ -579,6 +579,58 @@ def test_wiki_rebuild_preserves_data_artifact_chunk_provenance(tmp_path: Path) -
     assert "doc_99__c0007_abcd" in chunk_ids, chunk_ids
 
 
+def test_wiki_rebuild_restores_data_page_from_disk_only(tmp_path: Path) -> None:
+    """Recovery: with the data page's .md + sidecar on disk but no wiki_pages
+    row (deleted/corrupt wiki.db), `wiki rebuild` must restore a kind=data row
+    with the precise claim chunk evidence (reconstructed from the claim store,
+    not the lossy markdown)."""
+    import sqlite3
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import rebuild_graph
+    from wikify.bundle.wiki.store import open_wiki_store
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle",
+                                "doc_7", "doc_7__c0003_beef", "GPC was 1.1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    page_id = register_artifact_wiki_page(bundle, spec, table)
+
+    # Simulate a lost wiki.db row (recovery scenario).
+    con = open_wiki_store(bundle.sqlite_path)
+    con.execute("DELETE FROM wiki_pages WHERE page_id = ?", (page_id,))
+    con.commit()
+    con.close()
+
+    rebuild_graph(bundle)
+
+    con = open_wiki_store(bundle.sqlite_path)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT kind FROM wiki_pages WHERE page_id = ?", (page_id,)
+        ).fetchone()
+        ev = con.execute(
+            "SELECT chunk_id FROM wiki_evidence WHERE page_id = ?", (page_id,)
+        ).fetchall()
+    finally:
+        con.close()
+    assert row is not None and row["kind"] == "data"
+    assert "doc_7__c0003_beef" in {r["chunk_id"] for r in ev}
+
+
 def test_data_artifact_id_consistent_for_reserved_char_title(tmp_path: Path) -> None:
     """A data artifact title with a filesystem-reserved char must yield ONE
     canonical id across frontmatter, filename, and the DB row, and a rebuild

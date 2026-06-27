@@ -163,6 +163,12 @@ def rebuild_graph(bundle: Bundle) -> Path:
                 )
     finally:
         con.close()
+    # Data pages are authored from the claim store (lossless chunk ids), not
+    # re-derived from their lossy markdown — restore/refresh their rows here so
+    # `wiki rebuild` recovers data pages even when wiki.db was deleted/stale.
+    from ...data.artifact_page import register_committed_data_pages
+
+    register_committed_data_pages(bundle)
     return bundle.sqlite_path
 
 
