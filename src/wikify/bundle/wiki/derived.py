@@ -8,8 +8,8 @@ Three projections:
                              ``bundle/wiki/graph.py`` helpers.
 - ``derived/vectors.npz``   per-page embeddings, used for ``wiki find``.
 
-The graph + vectors rebuild reads every ``wiki/articles/*.md`` and
-``wiki/people/*.md`` and reconstructs the graph from the
+The graph + vectors rebuild reads every committed page (``wiki/articles/``,
+``wiki/people/``, ``wiki/data/``) and reconstructs the graph from the
 ``[^eN]`` evidence footnotes in each page body. The
 ``bundle/wiki/graph.py`` helpers do the heavy lifting; this module
 adapts them to the bundle's ``derived_*`` paths.
@@ -23,10 +23,21 @@ from pathlib import Path
 from ...api import Bundle
 
 
+def _committed_page_dirs(bundle: Bundle) -> tuple[tuple[str, Path], ...]:
+    """The (kind, dir) pairs for every committed-page kind. One definition so
+    every projection (index, vectors, graph, query helpers) stays in sync —
+    data artifacts are first-class committed pages, not just query state."""
+    return (
+        ("article", bundle.wiki_articles_dir),
+        ("person", bundle.wiki_people_dir),
+        ("data", bundle.wiki_data_dir),
+    )
+
+
 def list_committed_pages(bundle: Bundle) -> list[dict]:
-    """Walk wiki/articles/ + wiki/people/ and return per-page metadata."""
+    """Walk every committed-page kind and return per-page metadata."""
     out: list[dict] = []
-    for kind, sub in (("article", bundle.wiki_articles_dir), ("person", bundle.wiki_people_dir)):
+    for kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -60,11 +71,11 @@ def read_index(bundle: Bundle) -> dict:
 
 
 def _load_pages(bundle: Bundle) -> list:
-    """Walk wiki/articles/ + wiki/people/ and return parsed WikiPages."""
+    """Walk every committed-page kind and return parsed WikiPages."""
     from .page import parse_page
 
     out: list = []
-    for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+    for _kind, sub in _committed_page_dirs(bundle):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -100,16 +111,16 @@ def _load_pages(bundle: Bundle) -> list:
 def rebuild_graph(bundle: Bundle) -> Path:
     """Refresh `wiki.db` rows from every committed page on disk.
 
-    Walks `wiki/articles/` + `wiki/people/`, parses each markdown file,
-    and upserts the result into `wiki.db`. The wiki graph IS wiki.db;
-    `derived/graph.json` is no longer produced.
+    Walks every committed-page kind (articles, people, data), parses each
+    markdown file, and upserts the result into `wiki.db`. The wiki graph IS
+    wiki.db; `derived/graph.json` is no longer produced.
     """
     from .page import parse_page
     from .store import open_wiki_store, upsert_wiki_page
 
     con = open_wiki_store(bundle.sqlite_path)
     try:
-        for sub in (bundle.wiki_articles_dir, bundle.wiki_people_dir):
+        for _kind, sub in _committed_page_dirs(bundle):
             if not sub.is_dir():
                 continue
             for path in sorted(sub.glob("*.md")):
@@ -145,7 +156,21 @@ def rebuild_vectors(bundle: Bundle) -> Path:
 
     ``wiki.db`` is the canonical query store. ``derived/vectors.npz`` is
     still written as a compatibility projection for older readers.
+
+    Held under the bundle run lock so the delete-and-replace of
+    ``wiki_embeddings`` cannot race a concurrent commit's incremental embed
+    (which also locks) and silently drop the just-committed page's vector.
     """
+    import os
+
+    from ..run.lock import run_lock
+
+    bundle.derived_dir.mkdir(parents=True, exist_ok=True)
+    with run_lock(bundle, owner=f"rebuild-vectors/pid-{os.getpid()}", ttl_seconds=600):
+        return _rebuild_vectors_locked(bundle)
+
+
+def _rebuild_vectors_locked(bundle: Bundle) -> Path:
     from ...corpus.vectors import save_vectors
     from ...embedding import current_backend, embed_passages
     from .graph import build_wiki_vectors
@@ -155,7 +180,6 @@ def rebuild_vectors(bundle: Bundle) -> Path:
         upsert_wiki_embeddings,
     )
 
-    bundle.derived_dir.mkdir(parents=True, exist_ok=True)
     rebuild_graph(bundle)
     pages = _load_pages(bundle)
     cfg = current_backend()

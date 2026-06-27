@@ -503,6 +503,39 @@ def test_committed_data_artifact_round_trips_find_and_show(tmp_path: Path) -> No
     assert "ALD GPC Comparison" in shown["text"] or "GPC" in shown["text"]
 
 
+def test_committed_data_artifact_in_index_and_committed_pages(tmp_path: Path) -> None:
+    """F28 follow-up: a committed data artifact must appear in the canonical
+    committed-page projections (list_committed_pages + derived/index.json),
+    not only in the ad hoc query helpers — no split-brain."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.wiki.derived import (
+        list_committed_pages,
+        read_index,
+        rebuild_index,
+    )
+    from wikify.data.artifact_page import (
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec = ArtifactSpec(artifact_id="gpc", title="ALD GPC Comparison", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec, table)
+    register_artifact_wiki_page(bundle, spec, table)
+
+    assert any(p["kind"] == "data" for p in list_committed_pages(bundle))
+    rebuild_index(bundle)
+    assert any(p["kind"] == "data" for p in read_index(bundle)["pages"])
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([
