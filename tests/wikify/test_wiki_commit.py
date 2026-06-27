@@ -154,6 +154,27 @@ def test_commit_records_embedding_failure_instead_of_swallowing(
     assert "embedder unavailable" in failures[0].data.get("error", "")
 
 
+def test_rebuild_vectors_serialized_under_run_lock(tmp_path: Path) -> None:
+    """F26 race fix: rebuild_vectors holds the run lock for its delete-and-
+    replace of wiki_embeddings, so it cannot interleave with a commit's
+    incremental embed (which also locks). Proven by it refusing to run while
+    the lock is held."""
+    import pytest
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.bundle.run.lock import LockHeldError, run_lock
+    from wikify.bundle.wiki.derived import rebuild_vectors
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    with run_lock(bundle, owner="someone-else"):
+        with pytest.raises(LockHeldError):
+            rebuild_vectors(bundle)
+
+
 def test_commit_emits_page_committed_event(tmp_path: Path) -> None:
     bundle, slug = _setup_validated(tmp_path)
     commit_page(bundle, slug=slug)

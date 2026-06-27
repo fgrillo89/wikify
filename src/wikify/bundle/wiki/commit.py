@@ -243,7 +243,10 @@ def commit_page(
     # path past its TTL or leave a committed page with no commit event. The
     # finalize `wiki rebuild` remains the backstop; a failure is recorded as
     # `page_embedding_failed`, never silently swallowed.
-    _embed_committed_page_best_effort(bundle, page=page, slug=slug, actor=actor)
+    _embed_committed_page_best_effort(
+        bundle, page=page, slug=slug, actor=actor,
+        owner=lock_owner, ttl_seconds=lock_ttl_seconds,
+    )
 
     if ensure_projections:
         rebuild_projections(bundle)
@@ -254,12 +257,17 @@ def commit_page(
 
 
 def _embed_committed_page_best_effort(
-    bundle: Bundle, *, page: WikiPage, slug: str, actor: str
+    bundle: Bundle, *, page: WikiPage, slug: str, actor: str,
+    owner: str, ttl_seconds: int,
 ) -> None:
     try:
         from .derived import embed_committed_page
 
-        embed_committed_page(bundle, page)
+        # Re-acquire the run lock so the embedding's wiki.db write serialises
+        # with a concurrent `wiki rebuild` (which also locks); a held lock
+        # raises LockHeldError and is recorded below rather than racing.
+        with run_lock(bundle, owner=owner, ttl_seconds=ttl_seconds):
+            embed_committed_page(bundle, page)
     except Exception as exc:  # noqa: BLE001 - embedding is an optional accelerant
         try:
             run_id = load_state(bundle).run_id
