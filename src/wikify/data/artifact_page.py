@@ -294,6 +294,26 @@ def _sidecar_spec_and_claims(sidecar: Path) -> tuple[ArtifactSpec, list[str]] | 
         return None
 
 
+def _record_collision_skip(bundle, exc: "DataPageCollisionError") -> None:
+    """Best-effort event so a data page skipped on rebuild (its id collides with
+    a non-data page) is observable instead of silently split between disk and DB.
+    Telemetry must never break a rebuild, so any failure here is swallowed."""
+    try:
+        from ..bundle.run.events import Event, append_event
+        from ..bundle.run.state import load_state
+
+        try:
+            run_id = load_state(bundle).run_id
+        except FileNotFoundError:
+            run_id = ""
+        append_event(bundle, Event(
+            run_id=run_id, type="data_page_collision_skipped", actor="rebuild",
+            page_id=exc.page_id,
+            data={"page_id": exc.page_id, "existing_kind": exc.existing_kind}))
+    except Exception:  # noqa: BLE001 - observability must not break the rebuild
+        pass
+
+
 def register_committed_data_pages(bundle) -> int:
     """Restore/refresh data-artifact wiki.db rows so ``wiki rebuild`` recovers
     data pages the markdown rebuild deliberately skips.
@@ -364,8 +384,10 @@ def register_committed_data_pages(bundle) -> int:
                         try:
                             register_artifact_wiki_page(bundle, spec, table)
                             n += 1
-                        except DataPageCollisionError:
-                            pass  # never clobber a non-data page on rebuild
+                        except DataPageCollisionError as exc:
+                            # Never clobber a non-data page, but make the skipped
+                            # (split-brain) data page observable rather than silent.
+                            _record_collision_skip(bundle, exc)
                         continue
             try:
                 page = parse_page(md)
