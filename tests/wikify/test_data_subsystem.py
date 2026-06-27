@@ -1013,6 +1013,66 @@ def test_cli_consolidate_commit_collision_leaves_no_files(tmp_path: Path) -> Non
         assert not list(bundle.wiki_data_dir.glob("*.dataspec.json"))
 
 
+def test_duplicate_data_titles_different_artifacts_collide(tmp_path: Path) -> None:
+    """Two data artifacts with the same title (different artifact_id) map to the
+    same page_id; committing the second must be refused so it cannot overwrite
+    the first artifact's page/row, while re-committing the SAME artifact is OK."""
+    import pytest
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.data.artifact_page import (
+        DataPageCollisionError,
+        check_data_page_id_free,
+        register_artifact_wiki_page,
+        write_artifact_page,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    spec_a = ArtifactSpec(artifact_id="A", title="ALD GPC", properties=["GPC"])
+    table = consolidate(store, spec_a)
+    store.close()
+    write_artifact_page(bundle.wiki_data_dir, spec_a, table)
+    register_artifact_wiki_page(bundle, spec_a, table)
+
+    with pytest.raises(DataPageCollisionError):
+        check_data_page_id_free(bundle, "ALD GPC", "B")  # different artifact, same title
+    check_data_page_id_free(bundle, "ALD GPC", "A")  # same artifact -> allowed
+
+
+def test_collision_check_sees_disk_article_without_db_row(tmp_path: Path) -> None:
+    """On-disk article/person markdown is authoritative: a data commit must be
+    refused when an article with the same id exists on disk even if wiki.db has
+    no row for it (deleted/stale projection)."""
+    import pytest
+
+    from wikify.api import Bundle
+    from wikify.bundle.run.lifecycle import init_run
+    from wikify.data.artifact_page import (
+        DataPageCollisionError,
+        check_data_page_id_free,
+    )
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    bundle.wiki_articles_dir.mkdir(parents=True, exist_ok=True)
+    (bundle.wiki_articles_dir / "ald-gpc.md").write_text(
+        "---\nid: ALD GPC\nkind: article\ntitle: ALD GPC\naliases: []\nlinks: []\n---\n"
+        "# ALD GPC\n\nbody\n",
+        encoding="utf-8",
+    )
+    # wiki.db has no such row; the authoritative on-disk article must still block.
+    with pytest.raises(DataPageCollisionError):
+        check_data_page_id_free(bundle, "ALD GPC", "gpc")
+
+
 def test_write_artifact_page_emits_md_and_sidecar(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     store.add_points([
