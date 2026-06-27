@@ -35,6 +35,24 @@ def test_case_insensitive_after_norm():
     assert _quote_is_grounded(quote, raw)
 
 
+def test_integer_citation_stripped_but_decimal_bracket_preserved():
+    # An integer citation marker is renderer noise -> tolerated.
+    assert _quote_is_grounded(
+        "activation energy eV was reported",
+        "activation energy [12] eV was reported",
+    )
+    # A bracketed DATA value is content, not a citation -> a quote that omits
+    # it must NOT ground (the verbatim-citation invariant must hold).
+    assert not _quote_is_grounded(
+        "activation energy eV was reported",
+        "activation energy [0.45] eV was reported",
+    )
+    assert not _quote_is_grounded(
+        "rate was reached",
+        "rate was [2.5e-3] reached",
+    )
+
+
 def test_fabricated_quote_still_rejected():
     raw = "ALD grows conformal oxide films one monolayer per cycle."
     # Words that never appear in the source must not ground.

@@ -193,3 +193,39 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
     finally:
         con.close()
     return page_id
+
+
+def register_committed_data_pages(bundle) -> int:
+    """Re-author every committed data artifact's wiki.db row from its
+    ``.dataspec.json`` sidecar + the claim store, so ``wiki rebuild`` can
+    restore data pages that the markdown rebuild deliberately skips (their
+    rendered markdown is lossy for chunk ids). Chunk ids come from the claim
+    store, never the markdown. Idempotent. Returns the count registered.
+    """
+    import json as _json
+
+    data_dir = bundle.wiki_data_dir
+    if not data_dir.is_dir():
+        return 0
+    sidecars = sorted(data_dir.glob("*.dataspec.json"))
+    if not sidecars:
+        return 0
+
+    from .consolidate import consolidate
+    from .models import ArtifactSpec
+    from .store import DataStore
+
+    store = DataStore.open(bundle.root)
+    n = 0
+    try:
+        for sidecar in sidecars:
+            try:
+                payload = _json.loads(sidecar.read_text(encoding="utf-8"))
+                spec = ArtifactSpec.from_json(_json.dumps(payload["spec"]))
+            except (OSError, ValueError, KeyError):
+                continue
+            register_artifact_wiki_page(bundle, spec, consolidate(store, spec))
+            n += 1
+    finally:
+        store.close()
+    return n
