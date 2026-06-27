@@ -154,7 +154,7 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
     it — without this the organizer hits a FOREIGN KEY error placing the page
     in a nav group (F28). Idempotent (upsert). Returns the page_id.
     """
-    from ..bundle.wiki.page_naming import page_id_from_title, url_slug
+    from ..bundle.wiki.page_naming import page_id_from_title
     from ..bundle.wiki.store import open_wiki_store, upsert_wiki_page
 
     page_id = page_id_from_title(table.title)
@@ -163,7 +163,10 @@ def register_artifact_wiki_page(bundle, spec: ArtifactSpec, table: ConsolidatedT
         upsert_wiki_page(
             con,
             page_id=page_id,
-            slug=url_slug(page_id),
+            # The on-disk page is ``wiki/data/<page_id>.md`` (see
+            # write_artifact_page), so the slug MUST be that same stem for a
+            # search hit's path/handle to round-trip through wiki show.
+            slug=page_id,
             title=table.title,
             kind="data",
             body=render_artifact_markdown(table),

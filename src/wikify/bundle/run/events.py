@@ -52,6 +52,7 @@ EventType = Literal[
     "dossier_parked",
     "pattern_dispatched",
     "corpus_drift_detected",
+    "page_embedding_failed",
 ]
 
 

@@ -21,9 +21,16 @@ from .graph import load_wiki_graph
 _FIND_MODES = {"text", "bm25", "semantic", "hybrid"}
 
 
+def _kind_dir(bundle: Bundle, kind: str) -> Path:
+    if kind == "article":
+        return bundle.wiki_articles_dir
+    if kind == "data":
+        return bundle.wiki_data_dir
+    return bundle.wiki_people_dir
+
+
 def page_path(bundle: Bundle, *, slug: str, kind: str) -> Path:
-    sub = bundle.wiki_articles_dir if kind == "article" else bundle.wiki_people_dir
-    return sub / f"{slug}.md"
+    return _kind_dir(bundle, kind) / f"{slug}.md"
 
 
 def list_articles(bundle: Bundle) -> list[str]:
@@ -256,7 +263,11 @@ def find_text(bundle: Bundle, needle: str, *, top_k: int = 50) -> list[dict]:
     """Literal substring grep over committed page bodies."""
     out: list[dict] = []
     needle_lower = needle.lower()
-    for kind, sub in (("article", bundle.wiki_articles_dir), ("person", bundle.wiki_people_dir)):
+    for kind, sub in (
+        ("article", bundle.wiki_articles_dir),
+        ("person", bundle.wiki_people_dir),
+        ("data", bundle.wiki_data_dir),
+    ):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -310,7 +321,7 @@ def _normalize_handle(text: str) -> str:
 def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
     """Resolve a handle to ``(slug, kind)`` against committed pages.
 
-    Tier 1: exact filename-stem match in articles/ then people/.
+    Tier 1: exact filename-stem match in articles/, then people/, then data/.
     Tier 2: case- and separator-insensitive exact match (so the natural
     title ``"Atomic Layer Deposition"`` resolves a kebab-case
     ``atomic-layer-deposition.md`` file and vice versa).
@@ -333,7 +344,11 @@ def resolve_slug(bundle: Bundle, short: str) -> tuple[str, str] | None:
     exact_matches: list[tuple[str, str]] = []
     norm_matches: list[tuple[str, str]] = []
     prefix_matches: list[tuple[str, str]] = []
-    for kind, sub in (("article", bundle.wiki_articles_dir), ("person", bundle.wiki_people_dir)):
+    for kind, sub in (
+        ("article", bundle.wiki_articles_dir),
+        ("person", bundle.wiki_people_dir),
+        ("data", bundle.wiki_data_dir),
+    ):
         if not sub.is_dir():
             continue
         for p in sorted(sub.glob("*.md")):
@@ -692,7 +707,13 @@ def show_page(bundle: Bundle, *, handle: str) -> dict | None:
     candidate = bundle.root / handle
     if candidate.is_file():
         text = candidate.read_text(encoding="utf-8")
-        kind = "article" if "wiki/articles" in handle.replace("\\", "/") else "person"
+        handle_posix = handle.replace("\\", "/")
+        if "wiki/articles" in handle_posix:
+            kind = "article"
+        elif "wiki/data" in handle_posix:
+            kind = "data"
+        else:
+            kind = "person"
         return {
             "path": str(candidate.relative_to(bundle.root)).replace("\\", "/"),
             "kind": kind,

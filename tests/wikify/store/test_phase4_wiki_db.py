@@ -119,6 +119,7 @@ def test_find_text_still_works_on_markdown_path(tmp_path):
             self.wiki_dir = bundle_root / "wiki"
             self.wiki_articles_dir = bundle_root / "wiki" / "articles"
             self.wiki_people_dir = bundle_root / "wiki" / "people"
+            self.wiki_data_dir = bundle_root / "wiki" / "data"
             self.sqlite_path = bundle_root / "wiki.db"
 
     out = find_text(_B(), "atomic layer", top_k=5)
