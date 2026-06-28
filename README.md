@@ -1,6 +1,8 @@
 # Wikify
 
-Turn a folder of documents into a navigable, evidence-grounded wiki.
+**Turn a folder of documents into a navigable, evidence-grounded wiki —
+researched and written by an AI agent, with every claim traceable to a
+real quote in your sources.**
 
 [![CI](https://github.com/fgrillo89/wikify/actions/workflows/ci.yml/badge.svg)](https://github.com/fgrillo89/wikify/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/fgrillo89/wikify/branch/master/graph/badge.svg)](https://codecov.io/gh/fgrillo89/wikify)
@@ -8,19 +10,70 @@ Turn a folder of documents into a navigable, evidence-grounded wiki.
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-Wikify takes a pile of source files (PDF, DOCX, PPTX, HTML, Markdown) and
-produces a browsable encyclopedia: articles, short biographies, and data
-tables, rendered to a self-contained static HTML site. An AI agent reads
-the corpus the way a researcher would — starting from the most important
-papers, following ideas across documents, and writing a page only once a
-topic is well understood. Two properties set it apart from chat-over-docs:
+Point Wikify at a pile of PDFs (or DOCX / PPTX / HTML / Markdown). It
+parses them into a searchable **corpus**, then an agent reads that corpus
+the way a researcher would and writes a browsable encyclopedia —
+articles, short biographies, and data tables — as a self-contained
+static HTML site.
 
-- **Grounding.** No page is written from model memory. Every claim carries
-  a citation pointing to a verbatim quote that exists in the corpus; a
-  fabricated quote fails an automatic check and the page is rejected.
-- **Coverage.** Wikify works through the whole corpus, building pages until
-  the set of topics is saturated, so the wiki reflects what the documents
-  collectively say rather than answering one question and stopping.
+```mermaid
+flowchart LR
+    docs["Your documents<br/>PDF · DOCX · PPTX · HTML"] --> corpus[("Corpus<br/>chunked · embedded · graphed")]
+    corpus --> loop{{"Wikify agent loop"}}
+    loop --> wiki["Evidence-grounded wiki<br/>articles · bios · data tables"]
+    wiki --> site["Static HTML site"]
+```
+
+## Why Wikify
+
+- **Grounded, not generated.** Every factual sentence traces to a
+  verbatim quote that really exists in your sources. A fabricated quote
+  fails an automatic check and the page is rejected — no hallucinated
+  citations.
+- **Agentic and multi-tier.** A top-tier *editor* model plans and decides
+  what to write; cheap *explorer* subagents do the bulk reading. You pay
+  premium rates for judgment, not for page-turning.
+- **Reads across documents, not one at a time.** It chases a thread
+  through the corpus using vector similarity, the citation graph,
+  multi-hop traversal, and topic clusters — like a researcher following
+  references, not one-shot RAG.
+- **Whole-corpus coverage.** It keeps working until topics saturate, so
+  the wiki reflects what the documents collectively say, instead of
+  answering one question and stopping.
+- **Context-managed at scale.** Explorers summarize as they read; the
+  editor reasons over scores and summaries, never raw dumps — so it
+  holds up on large corpora.
+
+## How wikification works
+
+The agent works in rounds, like a research editor running a newsroom. It
+never reads every document itself. Each round it sizes up the state,
+dispatches cheap explorer subagents to gather **evidence** (verbatim
+quotes) for the topics that need it, scores how ready each topic is, and
+writes a page only once that topic crosses a maturity bar. Coverage gaps
+feed the next round, so the wiki fills in until it saturates.
+
+```mermaid
+flowchart TB
+    editor["Editor — top-tier model<br/>plans each round, decides what to write"]
+    editor -->|dispatches cheap subagents| explorers["Explorers read the corpus"]
+    explorers --> retrieval{{"Multi-modal retrieval"}}
+    retrieval --> v["vector similarity"]
+    retrieval --> g["citation + graph hops"]
+    retrieval --> t["topic clustering"]
+    explorers -->|verbatim quotes| dossier[("Evidence dossier")]
+    dossier --> gate{"mature enough?<br/>coverage · sources · facets"}
+    gate -->|not yet| editor
+    gate -->|ready| write["Write page<br/>every claim cited, or rejected"]
+    write --> committed[("Committed wiki")]
+    committed -.->|coverage gaps feed back| editor
+```
+
+Two output layers come out of a run: the **wiki page graph** (articles
+and biographies, linked together and queryable) and a separate
+**data-artifact layer** of `kind=data` tables that harvest verifiable
+numbers across the corpus and re-derive from a stored spec. See
+[docs/overview.md](docs/overview.md) for the full loop.
 
 ## Quickstart
 
@@ -36,22 +89,6 @@ uv run wikify --help
 First-run note: the default Docling parser downloads the Granite formula
 model (~258 MB) plus layout/table models on the first parse. Pass
 `--parser lite` for a model-free, CI-friendly path.
-
-## Skills
-
-Wikify is driven by four first-class skills (run them from Claude Code);
-each wraps a deterministic `wikify` CLI and MCP surface.
-
-- **`arxiv`** — harvest arXiv papers for a topic and stage them for a build:
-  scout categories, harvest metadata, download PDFs.
-- **`ingest`** — parse a directory of documents into a queryable corpus;
-  owns parser-backend choice and post-build health checks.
-- **`wikify`** — the researcher-style agent loop. An editor dispatches
-  explorer subagents that walk the corpus, gather evidence into dossiers,
-  and write pages once a maturity score crosses the gate; a DATA wave
-  harvests verifiable numbers into `kind=data` tables.
-- **`query`** — answer a question from the committed wiki, falling back to
-  corpus search when the wiki is insufficient, and recording feedback.
 
 ## Worked example
 
@@ -69,8 +106,25 @@ uv run wikify render --bundle bundles/ald
 #    -> bundles/ald/derived/site/index.html
 ```
 
-The flow is `ingest -> wikify -> render`: a read-only **corpus**, the agent
-loop that fills a **bundle** with grounded pages, then a static **site**.
+The flow is `ingest -> wikify -> render`: a read-only **corpus**, the
+agent loop that fills a **bundle** with grounded pages, then a static
+**site**.
+
+## Skills
+
+Wikify is driven by four first-class skills (run them from Claude Code);
+each wraps a deterministic `wikify` CLI and MCP surface.
+
+- **`arxiv`** — harvest arXiv papers for a topic and stage them for a
+  build: scout categories, harvest metadata, download PDFs.
+- **`ingest`** — parse a directory of documents into a queryable corpus;
+  owns parser-backend choice and post-build health checks.
+- **`wikify`** — the researcher-style agent loop. An editor dispatches
+  explorer subagents that walk the corpus, gather evidence into dossiers,
+  and write pages once a maturity score crosses the gate; a DATA wave
+  harvests verifiable numbers into `kind=data` tables.
+- **`query`** — answer a question from the committed wiki, falling back to
+  corpus search when the wiki is insufficient, and recording feedback.
 
 ## Use as an MCP server
 
