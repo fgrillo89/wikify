@@ -4,7 +4,7 @@ Wiki filenames have used two conventions over time: current bundles keep
 the title's spaces (``Atomic Layer Deposition.md``) while older bundles
 used kebab-case (``atomic-layer-deposition.md``). A handle must resolve
 the page regardless of which convention produced the file, so an agent
-(and the wikify-search-wiki skill examples) can refer to a concept by its
+(and the search-wiki skill examples) can refer to a concept by its
 natural title.
 """
 

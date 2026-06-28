@@ -34,7 +34,7 @@ never calls a model SDK directly.
 Three concrete consequences:
 
 - **Skills own strategy.** Loop shape, model tier, budget allocation,
-  and stopping criteria all live in `.claude/skills/wikify*/SKILL.md`.
+  and stopping criteria all live in `.claude/skills/**/SKILL.md`.
   Python has no strategy controller class.
 - **Files are the agent–backend interface.** Every CLI tool reads
   inputs from named files (corpus chunks, evidence ledgers, drafts)
@@ -183,20 +183,23 @@ src/wikify/
 
 ## Skill pack
 
-Skills live in `.claude/skills/`. The shared reference skill
-(`.claude/skills/wikify/`) carries project-wide knowledge in
-`references/` (bundle state, CLI grammar, writing schemas, citation
-format, field guides, exploration patterns, maturity scoring, and
-workflow contracts). Core capability skills expose reusable surfaces
-without owning strategy: `wikify-search-corpus`, `wikify-search-wiki`,
-`wikify-write-page`, `wikify-organize-wiki`, and `wikify-bundle`. The
-`wikify-gather-evidence-cluster` skill is the canonical evidence loop
-(sonnet supervisor + haiku judges) and handles clusters of any size.
-The `wikify-investigate-explore` skill is the recursive exploration
-pattern library (P1-P5) invoked by the investigate editor. Workflow
-skills (`wikify-baseline`, `wikify-investigate`, `wikify-query`,
-`wikify-refine`) dispatch those capabilities with their own loop
-shape, budget, parallelism, retry policy, and stop conditions.
+Skills live in `.claude/skills/`. Four first-class entry points sit at
+the top level — `wikify` (the primary builder), `query`, `arxiv`, and
+`ingest` — and everything else nests as a bundled subskill under
+`.claude/skills/wikify/subskills/`. The shared reference subskill
+(`.claude/skills/wikify/subskills/reference/`) carries project-wide
+knowledge in `references/` (bundle state, CLI grammar, writing schemas,
+citation format, field guides, exploration patterns, maturity scoring,
+and workflow contracts). Core capability subskills expose reusable
+surfaces without owning strategy: `search-corpus`, `search-wiki`,
+`write-page`, `organize-wiki`, and `bundle`. The `gather-evidence`
+subskill is the canonical evidence loop (sonnet supervisor + haiku
+judges) and handles clusters of any size. The `explore` subskill is the
+recursive exploration pattern library (P1-P5) invoked by the `wikify`
+editor. The simpler conventional-RAG builder (`build-simple`) and the
+page-refinement workflow (`refine`) are also subskills, dispatching
+those capabilities with their own loop shape, budget, parallelism,
+retry policy, and stop conditions.
 
 ## Design invariants
 

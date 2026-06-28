@@ -147,7 +147,7 @@ def test_extract_authors_keeps_single_real_author_before_affiliation():
     md = (
         "## Impact of Pulse Width on Analog Switching Response\n\n"
         "Aarti Dahiya Department of Electronics Engineering Indian Institute "
-        "of Technology 24DR0241@iitism.ac.in\n\n"
+        "of Technology author1@example.edu\n\n"
         "## Abstract\n\n"
     )
     assert extract_authors_from_markdown(md, fn_author="Dahiya") == ["Aarti Dahiya"]
@@ -155,8 +155,8 @@ def test_extract_authors_keeps_single_real_author_before_affiliation():
 
 def test_extract_authors_prefers_full_author_line_over_correspondence():
     md = (
-        "*CORRESPONDENCE Sanjay Kumar, sanjaysihag91@gmail.com\n\n"
-        "Rahul Ramesh, rahulk129@gmail.com\n\n"
+        "*CORRESPONDENCE Sanjay Kumar, sanjay.kumar@example.com\n\n"
+        "Rahul Ramesh, rahul.ramesh@example.com\n\n"
         "Ramesh R, Stathopoulos S, Kumar S and Prodromakis T (2026) Article title.\n\n"
         "Rahul Ramesh 1 *, Spyros Stathopoulos 1 , Sanjay Kumar 1,2 *, "
         "Hannah Levene 1 and Themis Prodromakis 1 *"

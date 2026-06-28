@@ -1,60 +1,35 @@
-## Current Focus
+# Wikify
 
-`wikify` is the active track for strategy science. The core question is strategy quality vs token cost vs wall-clock time, comparing:
+Wikify turns a folder of source documents (PDF / DOCX / PPTX / HTML /
+Markdown) into an evidence-grounded wiki: encyclopedic pages where every
+claim resolves to a verbatim quote in its source. An agent runtime drives
+the workflow by reading skill markdown, calling deterministic `wikify`
+CLI / MCP tools, and dispatching model-calling subagents; Python never
+calls a model SDK directly. The corpus is authoritative evidence;
+committed wiki pages are the human-facing output.
 
-- `scripted` mode: scripted exploration and budget allocation
-- `guided` mode: model-driven exploration and budget allocation
+## References
 
-All comparisons must run under the same pipeline contract and telemetry.
+- `docs/README.md` — documentation tree, rooted at `docs/overview.md`
+  (concepts + the agent loop) and branching to architecture, the on-disk
+  bundle contract, rendering, and metrics.
+- Entry-point skills under `.claude/skills/` encode workflow strategy
+  (loop shape, stopping criteria, budget, model tier):
+  - `wikify` — the iterative editor/explorer wiki builder.
+  - `query` — answer from the committed wiki, falling back to corpus search.
+  - `arxiv` — acquire arXiv papers and stage them for a build.
+  - `ingest` — parse local documents into a corpus (owns parser-backend
+    choice: docling default, marker, lite).
+- `.claude/skills/wikify/subskills/reference/` — agent-facing reference:
+  schemas, CLI grammar, citation format, write constraints, and
+  exploration patterns. A new strategy is a new workflow skill, not new
+  Python.
 
-## Workflow Orchestration
+## Python Tooling
 
-**1. Plan Mode Default**
-- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-- If something goes sideways, STOP and re-plan immediately - don't keep pushing
-- Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
-
-**2. Subagent Strategy**
-- Use subagents liberally to keep main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- For complex problems, throw more compute at it via subagents
-- One tack per subagent for focused execution
-
-**3. Self-Improvement Loop**
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
-- Write rules for yourself that prevent the same mistake
-- Ruthlessly iterate on these lessons until mistake rate drops
-- Review lessons at session start for relevant project
-
-**4. Verification Before Done**
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
-
-**5. Demand Elegance (Balanced)**
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes - don't over-engineer
-- Challenge your own work before presenting it
-
-**6. Autonomous Bug Fixing**
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests - then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
-
-## Task Management
-
-1. **Plan First**: For multi-step changes, keep a visible checklist in
-   the conversation or in a task-specific plan file under `tasks/`
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Record durable results in the relevant task
-   file only when the workstream needs a persistent record
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+- Package manager: `uv`. Always use `uv add`, not `uv pip install`.
+- Lint: `uv run ruff check src/wikify tests/wikify`
+- Tests: `uv run pytest tests/wikify -q`
 
 ## Communication Style
 
@@ -84,7 +59,7 @@ When editing existing code:
 - Do not refactor things that are not broken.
 - Match existing style, even if you would do it differently.
 - If you notice pre-existing, unrelated dead code, mention it. Do not delete it.
-- Every changed line should trace directly to the user's request.
+- Every changed line should trace directly to the request.
 
 ## Blast Radius Discipline
 
@@ -96,35 +71,9 @@ Before shipping ANY non-trivial change:
 4. **Sweep path-dependent leftovers.** After renames or refactors, grep active code, tests, prompts, docs, and skills for old names, transitional `v1`/`v2`/`legacy` wording, and stale schema fields. Do not claim cleanup until the scan is clean or every remaining hit is explicitly justified.
 5. **Name the blast radius in the commit body.** "Touches X, Y, Z; no other callers."
 
-## Python Tooling
-
-- Package manager: `uv`. Always use `uv add`, not `uv pip install`.
-- Lint: `uv run ruff check src/wikify tests/wikify`
-- Tests: `uv run pytest tests/wikify -q`
-
-## Corrections And Lessons Learned
-
-After ANY correction, add an entry here AND to `tasks/lessons.md`.
-
-Format: `- **Topic**: What went wrong → what to do instead.`
+## Conventions
 
 - **Data libraries**: Use polars over pandas.
 - **Commit messages**: Never include absolute or personal PC paths.
-- **Unicode on Windows**: Avoid non-ASCII in console output; use ASCII.
-- **wikify page names**: Use natural Wikipedia-style titles ("Atomic Layer Deposition", not "concept-atomic-layer-deposition"). The `kind` field distinguishes page types; the `id` IS the title.
-- **wikify writer**: Pages must be full Wikipedia-style encyclopedic articles, not stubs. Sections are guidance, not strict requirements. No visible `[[wikilinks]]` in prose.
-- **wikify person pages**: Person pages are written by the model like article pages. Author metadata is assembled at ingest/distill time and attached as `author_context`. The "appears in this corpus" phrasing is banned. Must be robust to missing `author_context`.
-- **wikify CLI file exploration**: For skill workflows, make the CLI the canonical wrapper around `ls`/`rg`/`cat` behavior so bundle reads are constrained, rendered, and logged. Keep raw shell file tools for debugging, not normal workflow guidance.
-- **No meta-references in code or docstrings**: Never write "per `tasks/foo.md`", "Phase 1 ships X", "see `tasks/mcp_plan.md`", "in this phase", "in later phases", or any pointer to plan/todo/temp docs inside source comments, docstrings, or shipped skill docs. Plans rot fast and the reference is dead the moment the plan moves. Describe what the code IS and DOES, not what session/plan motivated it. Historical framing belongs in commit messages and the labelled history docs (`tasks/lessons.md`, `tasks/skill-centric-redesign-plan.md`); everything else must read as if the plan never existed. Pre-existing internal "phase 1/phase 2" labels that describe an algorithm's stages (e.g. `bibtex.py`, `resolver.py`) are fine — those describe code, not project planning.
-
-## Parser backend (Docling default)
-
-The default parser backend is **Docling** for every supported format
-(PDF / DOCX / PPTX / HTML). First-run cost includes a one-time
-download of the Granite-Docling-258M formula model (~258 MB) plus
-the layout / table models. After the cache is warm the median
-PDF parses in ~10 s on an Ampere GPU. Pass
-`--parser marker` to fall back to Marker if equation extraction is
-not needed and you want the absolute-fastest PDF path. Pass
-`--parser lite` for CI / low-resource environments
-(pymupdf4llm + python-docx + python-pptx + trafilatura, no models).
+- **Console output on Windows**: Avoid non-ASCII; use ASCII.
+- **No meta-references in shipped code or docstrings.** Never write "per `plan.md`", "Phase 1 ships X", "in this phase", "see the MCP plan", or any pointer to plan / todo / temp docs inside source comments, docstrings, or skill docs. Describe what the code IS and DOES. Internal "phase 1/phase 2" labels that describe an algorithm's stages are fine — they describe code, not project planning.

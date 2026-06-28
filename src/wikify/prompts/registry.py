@@ -1,8 +1,7 @@
 """Immutable prompt registry for role templates.
 
 All ``*.yaml`` files in this directory are loaded once at import time
-into a frozen dict keyed by ``Prompt.name``. Bindings still receive
-only the prompt id via ``ContextEnvelope``; the registry exists so the
+into a frozen dict keyed by ``Prompt.name``; the registry exists so the
 Python side can look up the canonical template text from one place.
 
 This module also exposes the **layered writer prompt** loaders:

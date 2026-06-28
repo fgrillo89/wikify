@@ -202,28 +202,6 @@ def test_sync_removes_absent(sources_dir, corpus_dir):
         store.close()
 
 
-# --- Distill preload excludes deleted ---
-
-def test_distill_preload_excludes_deleted(sources_dir, corpus_dir):
-    from wikify.bundle.draft.preload import preload_corpus
-
-    _write_md(sources_dir / "alpha.md", "Alpha", "Alpha body.")
-    _write_md(sources_dir / "beta.md", "Beta", "Beta body.")
-    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1)
-
-    (sources_dir / "beta.md").unlink()
-    paths = ingest_corpus(sources_dir, corpus_dir, max_workers=1, mode="sync")
-
-    loaded = preload_corpus(paths)
-    doc_ids = {d.id for d in loaded.docs}
-    chunk_doc_ids = {c.doc_id for c in loaded.chunks}
-
-    for did in doc_ids:
-        assert "beta" not in did.lower(), f"Deleted doc visible: {did}"
-    for cdid in chunk_doc_ids:
-        assert "beta" not in cdid.lower(), f"Deleted chunk visible: {cdid}"
-
-
 # --- Parse failure preserves old artifacts (Finding #1) ---
 
 def test_parse_failure_preserves_old_artifacts(sources_dir, corpus_dir):

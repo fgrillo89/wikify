@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/fgrillo89/wikify/discussions
+    about: Ask a question or discuss an idea before filing an issue.
+  - name: Security vulnerability
+    url: https://github.com/fgrillo89/wikify/security/advisories/new
+    about: Report a security issue privately. Do not open a public issue.

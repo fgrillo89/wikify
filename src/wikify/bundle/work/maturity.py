@@ -6,8 +6,8 @@ the wiki.db link neighbourhood — no model calls, no embeddings, no I/O
 beyond those three sources.
 
 Score formula and gates are described in detail in
-``.claude/skills/wikify/references/exploration/maturity.md``. The
-``wikify-investigate`` editor reads this and promotes when
+``.claude/skills/wikify/subskills/reference/references/exploration/maturity.md``.
+The ``wikify`` editor reads this and promotes when
 ``band == "ready"``.
 """
 

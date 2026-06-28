@@ -7,59 +7,50 @@ authors = [
     { name = "Fabio Grillo", email = "fabio.grillo89@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
 dependencies = [
-    # PDF / document parsing
+    # Document parsing
     "pymupdf>=1.24",
     "pymupdf4llm>=0.0.10",
     "python-docx>=1.1",
     "python-pptx>=0.6.23",
-    # Data layer
-    "sqlmodel>=0.0.22",
-    # numerical / graph computation
-    "scipy>=1.13", # used by networkx.pagerank inside ingest/pipeline.py
-    # LLM interface
-    "litellm>=1.40",
-    "tiktoken>=0.7",
-    "diskcache>=5.6",
-    # Reference management
-    "pyzotero>=1.5",
-    "bibtexparser>=1.4",
-    # Visualization
-    "matplotlib>=3.9",
-    "plotly>=5.22",
-    # Templating and export
-    "jinja2>=3.1",
-    # CLI and config
-    "typer>=0.12",
-    "pydantic-settings>=2.3",
-    "rich>=13.7",
-    "mcp>=1.26.0",
-    "markdown>=3.10.2",
-    "xhtml2pdf>=0.2.17",
-    "cloudscraper>=1.2.71",
-    "httpx>=0.28",
-    "playwright>=1.58.0",
-    "docx2pdf>=0.1.8",
-    "pywin32>=311",
     "trafilatura>=2.0.0",
-    "python-frontmatter>=1.1.0",
-    "networkx>=3.6.1",
-    "fastapi>=0.135.3",
-    "uvicorn>=0.42.0",
-    "pymdown-extensions>=10.21.2",
-    "pyyaml>=6.0.3",
+    "docling>=2.86.0",
+    "marker-pdf>=1.6",
+    # Embeddings / ML stack
     "fastembed>=0.7.3",
+    "onnxruntime>=1.21",
     "torch>=2.6.0",
     "torchvision>=0.21.0",
-    "docling>=2.86.0",
+    "transformers>=4.48,<4.52",
     "opencv-python-headless>=4.10,<4.12",
-    "onnxruntime-directml>=1.24.4",
     "hf-xet>=1.4.2",
-    "aiosqlite>=0.22.1",
+    # Numerical / graph
+    "scipy>=1.13",  # pulled in by networkx.pagerank inside ingest/pipeline.py
+    "networkx>=3.6.1",
+    # Reference resolution
+    "bibtexparser>=1.4",
+    "httpx>=0.28",
     "aiolimiter>=1.2.1",
     "rapidfuzz>=3.14.5",
-    "marker-pdf>=1.6",
-    "transformers>=4.48,<4.52",
+    # Data layer
+    "aiosqlite>=0.22.1",
+    # Templating and rendering
+    "jinja2>=3.1",
+    "markdown>=3.10.2",
+    "pymdown-extensions>=10.21.2",
+    # CLI / config / protocol
+    "typer>=0.12",
+    "pyyaml>=6.0.3",
+    "mcp>=1.26.0",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +79,6 @@ select = ["E", "F", "I", "N", "W"]
 [tool.ruff.lint.per-file-ignores]
 # metrics.py uses math-style uppercase variables (W, M, L, Q) intentionally.
 "src/wikify/eval/metrics.py" = ["N803", "N806"]
-"src/wikify/eval/audit.py" = ["N806"]
 # KG tests use NetworkX `G` convention and long fixture strings.
 "tests/wikify/citestore/test_graph.py" = ["E501", "N806"]
 # Wiki-graph tests have long fixture body_markdown strings.
@@ -103,6 +93,19 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 
+[tool.coverage.run]
+branch = true
+source = ["wikify"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
 [tool.uv]
 index-url = "https://pypi.org/simple"
 
@@ -111,12 +114,14 @@ name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
+# CUDA wheels exist only for Linux + Windows; macOS falls back to the
+# default PyPI index (CPU / MPS build) because the marker excludes darwin.
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu124" },
+    { index = "pytorch-cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
-    { index = "pytorch-cu124" },
+    { index = "pytorch-cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [dependency-groups]

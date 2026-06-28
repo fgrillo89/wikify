@@ -1304,7 +1304,7 @@ def cmd_maturity(
 
     Without ``--all`` and no slug arguments, scores every concept slug
     on disk. The score formula and gates are documented in
-    ``.claude/skills/wikify/references/exploration/maturity.md``.
+    ``.claude/skills/wikify/subskills/reference/references/exploration/maturity.md``.
     """
     from ..bundle.work.maturity import compute_maturity
 

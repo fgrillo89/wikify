@@ -20,6 +20,7 @@ This note records the file contract for skill-driven wikification.
     index.md
     articles/
     people/
+    data/
 
   work/
     index.md
@@ -31,10 +32,12 @@ This note records the file contract for skill-driven wikification.
     concepts/
       <slug>/
         work.md
+        notebook.md
         evidence.jsonl
         draft.json
         response.json
         validation.json
+        .claim
 
   run/
     state.json
@@ -45,7 +48,7 @@ This note records the file contract for skill-driven wikification.
     index.json
     navigation.json
     vectors.npz
-    vectors.ids.json
+  claims.db
   wiki.db
 ```
 
@@ -60,14 +63,25 @@ Each candidate or committed page has one concept folder:
 ```text
 work/concepts/<slug>/
   work.md
+  notebook.md
   evidence.jsonl
   draft.json
   response.json
   validation.json
+  .claim
 ```
 
-`work.md` is the current concept control card and compact dossier. It replaces
-separate manifest, dossier, decisions, and open-question files.
+`work.md` is the current concept control card. It carries the small mutable
+frontmatter header and a compact body, and it replaces separate manifest,
+decisions, and open-question files.
+
+`notebook.md` is the separate researcher notebook and provenance file. Its
+frontmatter holds the maturity snapshot, the docs/chunks the notebook has
+absorbed, the exploration log, and the round history; its body is the freeform
+working dossier the explorer/editor maintains.
+
+`.claim` is the per-concept lock file. A worker that wants to mutate a concept
+folder must hold its claim; inbox suggestions can still be appended without one.
 
 ```markdown
 ---
@@ -234,9 +248,11 @@ run/
 ```
 
 `state.json` is the only mutable run-control file. It should stay small:
-identity, strategy, corpus/wiki/work paths, budget target/spent, coarse stage
+identity, strategy, corpus/wiki/work paths, budget target, coarse stage
 status, and run status. Concept memory belongs in `work/concepts/*/work.md`,
-not in run state.
+not in run state. Spend is never stored in state; it is derived on demand from
+`events.jsonl` (sum over `type == "call"`), so it can never drift from the
+recorded calls.
 
 ```json
 {
@@ -249,8 +265,7 @@ not in run state.
   "wiki_path": "wiki",
   "work_path": "work",
   "budget": {
-    "target_haiku_eq": 500000,
-    "spent_haiku_eq": 12345
+    "target_haiku_eq": 500000
   },
   "stages": {
     "extract": "done",
@@ -324,7 +339,8 @@ Optional top-level indexing fields make grep/filtering cheap:
 - `doc_id`
 - `stage`
 
-Allowed initial event vocabulary:
+Allowed event vocabulary (the literal `EventType` union; appending an unknown
+type raises a validation error):
 
 - `stage_changed`
 - `cli_invoked`
@@ -344,6 +360,15 @@ Allowed initial event vocabulary:
 - `page_refined`
 - `budget_exceeded`
 - `run_closed`
+- `round_started`
+- `round_completed`
+- `dossier_promoted`
+- `dossier_stalled`
+- `dossier_parked`
+- `pattern_dispatched`
+- `corpus_drift_detected`
+- `page_embedding_failed`
+- `data_page_collision_skipped`
 
 Examples:
 
@@ -686,7 +711,7 @@ Responsibilities:
 
 - `derived/index.json`
 - `derived/navigation.json`
-- `derived/vectors.npz` (+ `derived/vectors.ids.json`)
+- `derived/vectors.npz` (page ids are stored inside the npz, not a sidecar)
 - `wiki.db` (the committed-wiki query + graph store)
 
 Responsibilities:
@@ -921,11 +946,16 @@ corpus
 work
 draft
 wiki
+data
 ```
 
 `corpus` covers both corpus creation (`build` / `refresh`) and read-only corpus
 exploration (`list` / `find` / `show` / `check`). During an active wiki run,
 corpus exploration is read-only.
+
+`data` owns the data-wave numeric claim store (`claims.db`) and its evolving
+`kind=data` artifact tables: `add` / `list` / `show` / `query` / `coverage` /
+`consolidate` / `commit` / `rebuild` / `list-artifacts`.
 
 Everything else is a sub-kind, positional handle, or option:
 
@@ -1323,6 +1353,7 @@ Mapping:
 run/state.json                         Control record
 run/events.jsonl                       Ledger
 work/concepts/<slug>/work.md           ControlCard
+work/concepts/<slug>/notebook.md       ControlCard, researcher notebook
 work/concepts/<slug>/evidence.jsonl    Ledger
 work/inbox/*.jsonl                     Ledger
 work/concepts/<slug>/draft.json        Record, per-attempt
@@ -1332,6 +1363,7 @@ wiki/index.md                          Projection, agent-facing
 derived/index.json                     Projection, machine-facing
 derived/navigation.json                Projection, render-facing
 derived/vectors.npz                    Projection, search-facing
+claims.db                              Query store, data-wave claims
 wiki.db                                Query store + wiki graph
 ```
 

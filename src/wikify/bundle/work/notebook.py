@@ -6,7 +6,7 @@ snapshot, provenance (which docs and chunks the notebook has absorbed),
 the exploration log, and the round history. The body is freeform prose
 the explorer/editor edits as a working summary.
 
-The ``wikify-investigate`` workflow writes here; the writer reads it
+The ``wikify`` workflow writes here; the writer reads it
 alongside ``evidence.jsonl`` when producing the final article.
 """
 

@@ -77,14 +77,31 @@ def bind_explicit(corpus_path: str | Path | None,
         bind(bundle_path=bundle_path)
 
 
-def bind_from_env() -> None:
-    """Bind from ``WIKIFY_CORPUS`` / ``WIKIFY_BUNDLE`` if set.
+def _autodetect_corpus() -> Path | None:
+    """Walk up from the cwd looking for a corpus root (``manifest.json`` +
+    ``wikify.db``). Mirrors the CLI corpus resolution so launching the
+    server from inside a corpus directory binds it with zero config."""
+    cur = Path.cwd().resolve()
+    for cand in (cur, *cur.parents):
+        if (cand / "manifest.json").is_file() and (cand / "wikify.db").is_file():
+            return cand
+    return None
 
-    Missing env vars leave the binding empty; the first tool call that
-    needs a corpus will surface ``no_corpus_bound``.
+
+def bind_from_env() -> None:
+    """Bind from ``WIKIFY_CORPUS`` / ``WIKIFY_BUNDLE``, else autodetect.
+
+    Resolution order for the corpus: ``WIKIFY_CORPUS`` env, then a cwd
+    walk-up. A ``WIKIFY_BUNDLE`` env always binds the recorded corpus.
+    If nothing resolves, the first tool call that needs a corpus surfaces
+    ``no_corpus_bound``.
     """
     corpus_env = os.environ.get("WIKIFY_CORPUS")
     bundle_env = os.environ.get("WIKIFY_BUNDLE")
+    if corpus_env is None and bundle_env is None:
+        detected = _autodetect_corpus()
+        if detected is not None:
+            corpus_env = str(detected)
     bind(corpus_path=corpus_env, bundle_path=bundle_env)
 
 

@@ -1,0 +1,42 @@
+{
+  "name": "wikify",
+  "displayName": "Wikify",
+  "version": "0.1.0",
+  "description": "Turn a folder of documents into a navigable, evidence-grounded wiki, with corpus and wiki MCP search tools.",
+  "author": {
+    "name": "Fabio Grillo"
+  },
+  "homepage": "https://github.com/fgrillo89/wikify",
+  "repository": "https://github.com/fgrillo89/wikify",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "wiki",
+    "corpus",
+    "rag",
+    "arxiv"
+  ],
+  "skills": "./.claude/skills/",
+  "mcpServers": {
+    "wikify": {
+      "command": "uv",
+      "args": [
+        "run",
+        "wikify",
+        "mcp",
+        "serve"
+      ],
+      "env": {
+        "WIKIFY_CORPUS": "${user_config.corpus}"
+      }
+    }
+  },
+  "userConfig": {
+    "corpus": {
+      "type": "directory",
+      "title": "Corpus directory",
+      "description": "Path to a built Wikify corpus (data/corpora/<name>).",
+      "required": true
+    }
+  }
+}

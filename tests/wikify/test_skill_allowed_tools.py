@@ -2,14 +2,14 @@
 
 Every Bash command in a skill's fenced ```bash blocks must be invokable
 under the skill's `allowed-tools` frontmatter. Catches the Codex finding
-where wikify-gather-evidence used `cat <<EOF | wikify ...` but only
+where gather-evidence used `cat <<EOF | wikify ...` but only
 declared `Bash(wikify *)` — the `cat` entry-point falls outside the
 allowlist and the workflow's commit step would be blocked under
 canonical Claude Code permissions.
 
 Also validates that every MCP tool referenced in skill prose (e.g.
 ``mcp__wikify__corpus_show(...)``) appears in ``allowed-tools``.
-Catches the Codex finding where wikify-search-wiki documented a
+Catches the Codex finding where search-wiki documented a
 ``corpus_show`` evidence bridge but the allowlist permitted only
 wiki MCP tools.
 """
@@ -268,14 +268,15 @@ def _violations_for_skill(skill_path: Path) -> list[str]:
     return violations
 
 
-# Discover skill files under the repo's .claude/skills/ tree. Restricted
-# to the wikify-* skills since those are the ones this branch owns; other
-# skills (codex:*, update-config, etc.) are out of scope for this test.
+# Discover skill files under the repo's .claude/skills/ tree. The tree is
+# the wikify plugin: four entry points (arxiv, ingest, query, wikify) plus
+# the subskills nested under wikify/subskills/. Recurse so every nested
+# SKILL.md is linted, not just the top-level entry points.
 def _wikify_skill_paths() -> list[Path]:
     skills_root = Path(__file__).resolve().parents[2] / ".claude" / "skills"
     if not skills_root.is_dir():
         return []
-    return sorted(skills_root.glob("wikify*/SKILL.md"))
+    return sorted(skills_root.rglob("SKILL.md"))
 
 
 @pytest.mark.parametrize("skill_path", _wikify_skill_paths(), ids=lambda p: p.parent.name)
@@ -330,7 +331,7 @@ def test_skill_layout_helper_catches_mcp_reference_not_in_allowlist(
 ) -> None:
     """A skill body that calls an MCP tool not listed in allowed-tools
     must produce a violation. Catches the Codex finding where
-    wikify-search-wiki documented ``corpus_show`` but only allowed
+    search-wiki documented ``corpus_show`` but only allowed
     wiki MCP tools."""
     skill = tmp_path / "SKILL.md"
     skill.write_text(
@@ -395,7 +396,7 @@ def test_skill_layout_helper_catches_corpus_show_full_without_include_text(
 ) -> None:
     """A ``corpus_show(mode=\"full\")`` recipe without ``include_text=True``
     is a footgun — the body text is never loaded. Catches the Codex
-    finding where wikify-search-corpus documented `corpus_show(mode=
+    finding where search-corpus documented `corpus_show(mode=
     "full")` alone."""
     skill = tmp_path / "SKILL.md"
     skill.write_text(

@@ -30,8 +30,8 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     # on. pymupdf4llm >=1.27 routes to ``_layout_to_markdown`` by default and
     # its ``header``/``footer`` flags tell the layout model to classify and
     # drop the repeated running boilerplate (page numbers, journal header,
-    # copyright footer) at the page level — much more reliable than the
-    # downstream line/paragraph regex scrubbing we previously leaned on.
+    # copyright footer) at the page level, which is more reliable than
+    # downstream line/paragraph regex scrubbing.
     # ``ignore_code`` also suppresses mono-font runs that are almost always
     # stray equation/symbol noise in papers.
     md_text: str = ""

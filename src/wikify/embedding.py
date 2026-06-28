@@ -197,8 +197,8 @@ def _load_fe(model: str | None) -> None:
     provider is logged, and on GPU-requested sessions we run a tiny
     health-check inference to detect silent CPU fallback before committing
     to a multi-hour embed — DirectML can silently route ops to CPU when
-    VRAM is exhausted, which previously presented as a 4-12 h hang that
-    sometimes ended with ``DXGI_ERROR_DEVICE_HUNG``. A 1-token warmup
+    VRAM is exhausted, which manifests as a multi-hour hang that
+    sometimes ends with ``DXGI_ERROR_DEVICE_HUNG``. A 1-token warmup
     that takes > ``_HEALTH_CHECK_SLOW_S`` is treated as evidence of the
     fallback and raises ``RuntimeError`` with a clear remediation hint.
     """

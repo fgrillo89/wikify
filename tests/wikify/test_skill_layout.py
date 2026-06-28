@@ -11,13 +11,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_ROOT = REPO_ROOT / ".claude" / "skills"
-WIKIFY_REFERENCES = SKILLS_ROOT / "wikify" / "references"
+WIKIFY_REFERENCES = SKILLS_ROOT / "wikify" / "subskills" / "reference" / "references"
 
 CORE_SKILLS = (
-    "wikify-search-corpus",
-    "wikify-search-wiki",
-    "wikify-write-page",
-    "wikify-bundle",
+    "wikify/subskills/search-corpus",
+    "wikify/subskills/search-wiki",
+    "wikify/subskills/write-page",
+    "wikify/subskills/bundle",
 )
 
 # Forbidden substrings in any SKILL.md body. Each entry is a literal that
@@ -71,8 +71,8 @@ def test_old_singular_reference_dir_is_gone() -> None:
 
 def test_old_workflows_dir_is_gone() -> None:
     assert not (SKILLS_ROOT / "wikify" / "workflows").exists(), (
-        "old workflows/ directory must be removed; baseline lives under "
-        "wikify-baseline/SKILL.md"
+        "old workflows/ directory must be removed; the simple builder lives "
+        "under wikify/subskills/build-simple/SKILL.md"
     )
 
 
@@ -131,12 +131,12 @@ def test_no_retired_command_strings_in_any_skill() -> None:
 
 def test_core_skills_stay_small() -> None:
     """Core capability skills should remain concise and strategy-free."""
-    for name in CORE_SKILLS:
-        skill_md = SKILLS_ROOT / name / "SKILL.md"
-        assert skill_md.is_file(), f"core skill {name} missing"
+    for rel in CORE_SKILLS:
+        skill_md = SKILLS_ROOT / rel / "SKILL.md"
+        assert skill_md.is_file(), f"core skill {rel} missing"
         n_lines = len(skill_md.read_text(encoding="utf-8").splitlines())
         assert n_lines <= 200, (
-            f"core skill {name}/SKILL.md is {n_lines} lines (> 200 ceiling)"
+            f"core skill {rel}/SKILL.md is {n_lines} lines (> 200 ceiling)"
         )
 
 
@@ -161,33 +161,36 @@ def test_old_cli_noun_skills_are_not_discoverable() -> None:
 
 def test_baseline_workflow_stays_reasonable() -> None:
     """Baseline workflow may be larger than atomics but stays under ~250."""
-    skill_md = SKILLS_ROOT / "wikify-baseline" / "SKILL.md"
-    assert skill_md.is_file(), "wikify-baseline/SKILL.md missing"
+    skill_md = SKILLS_ROOT / "wikify" / "subskills" / "build-simple" / "SKILL.md"
+    assert skill_md.is_file(), "wikify/subskills/build-simple/SKILL.md missing"
     n_lines = len(skill_md.read_text(encoding="utf-8").splitlines())
     assert n_lines <= 250, (
-        f"wikify-baseline/SKILL.md is {n_lines} lines (> 250 ceiling)"
+        f"wikify/subskills/build-simple/SKILL.md is {n_lines} lines (> 250 ceiling)"
     )
 
 
 def test_umbrella_lists_only_existing_workflows() -> None:
-    """Every workflow named in the umbrella SKILL.md must have a matching dir.
+    """Every subskill path listed in the umbrella SKILL.md must resolve.
 
-    The umbrella's "When to use which workflow" section enumerates the
-    available workflow skills. If it lists `wikify-foo`, then
-    `.claude/skills/wikify-foo/SKILL.md` must exist — otherwise an agent
-    will follow a dangling pointer.
+    The umbrella (`wikify/SKILL.md`) enumerates the build-internal
+    subskills it dispatches via `subskills/<name>/...` relative-path
+    bullets. If it lists a path with no file behind it, an agent will
+    follow a dangling pointer.
     """
     umbrella = SKILLS_ROOT / "wikify" / "SKILL.md"
     assert umbrella.is_file(), "umbrella wikify/SKILL.md missing"
     text = umbrella.read_text(encoding="utf-8")
-    # Match the leading bullet form: `- \`wikify-<name>\`` at line start.
-    bullet_re = re.compile(r"(?m)^-\s+`(wikify-[a-z][a-z0-9-]*)`")
+    # Match the leading bullet form: `- \`subskills/<path>.md\`` at line start.
+    bullet_re = re.compile(r"(?m)^-\s+`(subskills/[^`]+\.md)`")
     referenced = set(bullet_re.findall(text))
+    assert referenced, "umbrella SKILL.md lists no subskill paths"
     missing = sorted(
-        name for name in referenced if not (SKILLS_ROOT / name / "SKILL.md").is_file()
+        target
+        for target in referenced
+        if not (umbrella.parent / target).resolve().is_file()
     )
     assert not missing, (
-        "umbrella SKILL.md references workflows that have no skill dir: "
+        "umbrella SKILL.md references subskill paths that do not resolve: "
         + ", ".join(missing)
     )
 
@@ -195,9 +198,10 @@ def test_umbrella_lists_only_existing_workflows() -> None:
 def test_every_reference_link_resolves() -> None:
     """Every `[link](references/foo.md)` in a SKILL.md must resolve.
 
-    Skill subdirs reach the shared references via `../wikify/references/`.
-    The umbrella skill reaches them via `references/`. Anything else is a
-    typo or stale link.
+    Subskills reach the shared references via
+    `../reference/references/`; the umbrella reaches them via
+    `subskills/reference/references/`. Anything else is a typo or stale
+    link.
     """
     link_re = re.compile(r"\]\((?P<target>[^)\s]+\.md)\)")
     skill_dirs = _iter_skill_dirs()

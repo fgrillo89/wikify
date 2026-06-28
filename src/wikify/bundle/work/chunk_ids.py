@@ -5,7 +5,7 @@ The corpus stores every chunk under a canonical long-form id:
 e.g.
     ``[2015 Matveyev] TiNHfO2_3ce604c2ba54__c0007_d2adf466``
 
-The MCP / CLI layer historically surfaced a short *handle* form:
+The MCP / CLI layer also accepts a short *handle* form:
     ``chunk:<suffix_hex>``
 e.g.
     ``chunk:d2adf466``
