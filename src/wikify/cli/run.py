@@ -235,6 +235,9 @@ def cmd_sense(
             "chunk_coverage_ratio": cov.get("chunk_coverage_ratio"),
             "n_covered": cov.get("n_covered"),
             "n_total": cov.get("n_total"),
+            "addressable_coverage_ratio": cov.get("addressable_coverage_ratio"),
+            "n_addressable_covered": cov.get("n_addressable_covered"),
+            "n_addressable": cov.get("n_addressable"),
         },
         "data": {
             k: data_cov.get(k)

@@ -1381,6 +1381,10 @@ def cmd_coverage(
         f"  committed: {report.n_covered_committed}  "
         f"in-flight: {report.n_covered_in_flight}"
     )
+    typer.echo(
+        f"  addressable: {report.n_addressable_covered}/{report.n_addressable} "
+        f"({report.addressable_coverage_ratio:.3f})"
+    )
 
 
 # -------------------------------------------------------------- notebook-init

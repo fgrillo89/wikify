@@ -2,7 +2,8 @@
 
 F36 -- _figure_alt_text truncates at a word boundary (not mid-word).
 F31 -- _remap_figure_citation_numbers removes orphan figure-citation sups.
-F34 -- _clean_evidence_lines skips reformatting for kind='data' pages.
+F34 -- _clean_evidence_lines renders kind='data' footnotes as hyperlinked
+       CS1 citations (consistent with articles) while keeping per-cell quotes.
 """
 
 import re
@@ -123,7 +124,7 @@ def test_non_orphan_marker_renumbered():
 
 
 # ---------------------------------------------------------------------------
-# F34 -- _clean_evidence_lines skips reformat for kind='data'
+# F34 -- _clean_evidence_lines renders kind='data' footnotes as CS1 citations
 # ---------------------------------------------------------------------------
 
 # Shared doc_id for all three markers to trigger collapse on non-data pages.
@@ -155,10 +156,46 @@ def test_data_kind_preserves_quotes():
     assert "HfO2 thickness = 7 nm" in result
 
 
-def test_data_kind_body_unchanged():
-    """kind='data' returns body byte-for-byte unchanged."""
+def test_data_kind_keeps_label_and_quote_no_metadata():
+    """Without corpus metadata, kind='data' keeps each footnote's label and
+    quote, never collapses distinct definitions, and drops the raw separator."""
     result = _clean_evidence_lines(_DATA_BODY, kind="data")
-    assert result == _DATA_BODY
+    def_lines = [ln for ln in result.split("\n") if ln.startswith("[^") and "]:" in ln]
+    assert len(def_lines) == 3  # no collapse despite the shared doc_id
+    assert "[2023 Lee]" in result  # label kept
+    assert "TiO2 thickness = 5 nm" in result  # quote kept
+    assert " > " not in result  # raw ' > "quote"' separator reformatted away
+
+
+def test_data_kind_renders_cs1_hyperlink_with_metadata():
+    """With corpus metadata, kind='data' footnotes render the hyperlinked CS1
+    citation (consistent with article references) and keep the per-cell quote."""
+    from wikify.corpus.handles import build_index
+
+    full_id = "[2016 Mundle] ZnO ALD Memristor_508acd3b628c"
+    doc_meta_map = {
+        full_id: {
+            "url": "https://doi.org/10.1021/acs.langmuir.6b01014",
+            "authors": ["Mundle, R."],
+            "year": 2016,
+            "title": "ZnO Transparent Resistive Switching Devices",
+            "venue": "Langmuir",
+            "doi": "10.1021/acs.langmuir.6b01014",
+        }
+    }
+    doc_index = build_index(doc_meta_map.keys())
+    body = (
+        "Cell.[^d1]\n\n"
+        f"[^d1]: [2016 Mundle] ZnO ALD Memristor. Abstract ({full_id}) "
+        '> "approximately 157%"\n'
+    )
+    result = _clean_evidence_lines(
+        body, kind="data", doc_meta_map=doc_meta_map, doc_index=doc_index
+    )
+    assert "https://doi.org/10.1021/acs.langmuir.6b01014" in result  # hyperlink
+    assert "Mundle" in result  # CS1 author
+    assert "approximately 157%" in result  # per-cell quote kept
+    assert "_508acd3b628c" not in result  # raw doc hash hidden
 
 
 def test_article_kind_collapses_same_paper():
