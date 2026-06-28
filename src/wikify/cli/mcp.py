@@ -51,8 +51,8 @@ def cmd_serve(
         {
           "mcpServers": {
             "wikify": {
-              "command": "wikify",
-              "args": ["mcp", "serve"],
+              "command": "uv",
+              "args": ["run", "wikify", "mcp", "serve"],
               "env": {
                 "WIKIFY_CORPUS": "data/corpora/<my-corpus>",
                 "WIKIFY_BUNDLE": "data/wikis/<my-bundle>"

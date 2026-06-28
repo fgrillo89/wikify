@@ -23,10 +23,15 @@ def test_mcp_subapp_registered() -> None:
 
 
 def test_mcp_serve_help_lists_bind_flags() -> None:
-    result = runner.invoke(app, ["mcp", "serve", "--help"])
-    assert result.exit_code == 0
-    assert "--corpus" in result.output
-    assert "--bundle" in result.output
+    # Introspect the registered command instead of scraping rendered help:
+    # rich reflows/truncates option columns at narrow terminal widths, so a
+    # substring check on the boxed help is brittle across widths and versions.
+    from typer.main import get_command
+
+    serve = get_command(app).commands["mcp"].commands["serve"]
+    opts = {opt for param in serve.params for opt in param.opts}
+    assert "--corpus" in opts
+    assert "--bundle" in opts
 
 
 def test_mcp_status_registered() -> None:
