@@ -5,6 +5,7 @@ export const meta = {
   phases: [
     { title: 'Research', detail: 'confirm OSS + Claude-plugin + skill-authoring best practices' },
     { title: 'Audit', detail: 'parallel read-only inventories: skills, dead code, meta, secrets, commits, tests, docs' },
+    { title: 'Known findings', detail: 'triage the prior-session addressable issues: fix vs document vs defer' },
     { title: 'Reorg design', detail: 'design skill rename + folder reorg; codex-vetted before execution' },
     { title: 'Reorg execute', detail: 'git mv (lossless), add ingest skill, fix all cross-references' },
     { title: 'Skill rewrite', detail: 'prescriptive, de-meta, progressive disclosure; codex per skill' },
@@ -39,10 +40,39 @@ export const meta = {
 // Note on quoting: prompts use single-quoted strings concatenated with the
 // OUT/REPO constants, so inline tool names can be written plainly without
 // breaking the string.
+//
+// RESTARTABILITY (robust to hitting rate/usage limits):
+//  - This run is large. Every agent() call is journaled by the Workflow
+//    runtime, so after a kill/limit you RESUME with the same script and the
+//    run id: Workflow({ scriptPath: '.claude/workflows/wikify-public-readiness.js',
+//    resumeFromRunId: '<runId from the first launch>' }). The longest unchanged
+//    prefix of agent() calls returns cached results instantly; only the
+//    interrupted call and everything after it re-run.
+//  - Belt-and-suspenders for when the runId is lost: every file-producing
+//    agent is told to be IDEMPOTENT — if its target output already exists and
+//    is complete, verify and return instead of redoing the work — so a cold
+//    re-run skips finished steps. Outputs are durable files on disk, and the
+//    reorg uses git mv guarded by existence checks, so re-entry never double-
+//    applies a move or clobbers prior work.
 // ---------------------------------------------------------------------------
 
-const OUT = 'tasks/public-readiness'   // all inventories/proposals land here
+// Transient owner-review artifacts (inventories, proposals, REPORT). Lives
+// OUTSIDE tasks/ (which this run removes) and is gitignored by the Packaging
+// phase, so cleanup meta never ships in the public repo.
+const OUT = '.public-readiness'
 const REPO = 'C:/dev/scholarforge'
+const IDEMPOTENT = ' Be idempotent: if your target output already exists and is complete, verify it and return without redoing the work (so a resumed run skips finished steps).'
+
+// Addressable issues surfaced during the prior e2e session, to be triaged and
+// either fixed or documented in this pass (do not silently drop them):
+const KNOWN_FINDINGS = [
+  'build-evidence does NOT emit an evidence_added event (no --round flag); the editor must emit it per grown slug or the maturity growth_stalled timer never advances. Decide: add --round to build-evidence so it self-emits, or document the editor responsibility prominently in the wikify skill.',
+  'draft finalize consumes draft.json (commit + release); a second call returns draft_not_found. Decide: make finalize idempotent / clearer error, or document call-once.',
+  'data add requires the FULL canonical chunk_id (not bare hex, not the chunk: handle), else it silently rejects. Decide: resolve handles/hex in data add, or document the gotcha in the extract-data skill.',
+  'data artifacts (kind=data) are a separate store from the wiki page graph: they render and appear in nav but wiki show/traverse/find return page_not_found; the round-trip is the data CLI. Decide: register data pages in wiki.db, or document the data layer clearly (docs + query skill triage).',
+  'chunk_coverage_ratio ~0.90 is structurally impossible (~half of chunks are references/captions/figures); the loop is governed by completeness, with addressable_coverage_ratio the meaningful signal. Ensure docs explain this and the coverage section reflects it.',
+  'When build-evidence (deterministic gather) is used instead of the gather-evidence-cluster haiku-judge fleet, the per-chunk haiku tier is not exercised and all telemetry lands on tier M. Document the two gather paths and when each applies.',
+]
 
 const FINDINGS = {
   type: 'object', additionalProperties: false,
@@ -167,6 +197,20 @@ const audits = await parallel(
 log('Audit complete: ' + audits.filter(Boolean).length + '/' + AUDITS.length + ' inventories written to ' + OUT + '/.')
 
 // ===========================================================================
+phase('Known findings')
+// Triage the addressable issues carried over from the prior e2e session so
+// none are dropped; downstream Docs / Skill-rewrite / Packaging phases consume
+// the resulting plan.
+const findingsPlan = await agent(
+  'Triage these addressable issues from the prior session. For EACH, decide fix-in-code | ' +
+  'document-in-(docs|skill) | defer-as-issue, give the concrete action and the exact file(s) it touches, and ' +
+  'flag any that are quick safe code fixes worth doing now. Issues:\n- ' + KNOWN_FINDINGS.join('\n- ') +
+  '\nWrite the decisions to ' + OUT + '/known-findings.md so the Docs, Skill-rewrite, and Packaging phases can ' +
+  'action them.' + IDEMPOTENT,
+  { label: 'triage:findings', phase: 'Known findings', schema: DONE, effort: 'high' },
+)
+
+// ===========================================================================
 phase('Reorg design')
 // CRITICAL loop: design then codex-vet before any file moves.
 let reorgPlan = await agent(
@@ -203,7 +247,9 @@ const reorgExec = await agent(
   'Then update EVERY cross-reference the plan lists: relative paths inside SKILL.md files, skill-name mentions in ' +
   'code/docs/tests/CLAUDE.md. After moving, run the skill cross-reference integrity check (grep for now-broken ' +
   'relative links) and: uv run pytest tests/wikify/test_skill_allowed_tools.py -q. Report every moved path and ' +
-  'every reference updated. Do NOT delete files.',
+  'every reference updated. Do NOT delete files. For restartability: before each git mv, check whether the ' +
+  'destination already exists (move already applied on a prior run) and skip it; treat already-updated references ' +
+  'as done. The reorg must be safe to re-run.',
   { label: 'exec:reorg', phase: 'Reorg execute', schema: DONE, effort: 'high' },
 )
 const reorgExecVerdict = await review(
@@ -228,7 +274,9 @@ const rewritten = await pipeline(
     'skill was developed, no session/prompt acknowledgements, no "recently"/"in this phase"/plan references. ' +
     'Apply progressive disclosure: keep SKILL.md focused (aim < 500 lines), push deep detail into reference ' +
     'files. Preserve EVERY real instruction and contract — de-verbosing must not drop behavior. Match the repo ' +
-    'style guide.',
+    'style guide. Also action any items in ' + OUT + '/known-findings.md assigned to this skill (e.g. document ' +
+    'the build-evidence evidence_added responsibility, the data add canonical-id requirement, the two gather ' +
+    'paths, or the data-layer separation).' + IDEMPOTENT,
     { label: 'rewrite:' + name, phase: 'Skill rewrite', schema: DONE },
   ),
   (done, name) => agent(
@@ -250,7 +298,9 @@ const overview = await agent(
   'for the main "wikify" path (the investigate logic: SENSE, DECIDE, DISPATCH, CONSOLIDATE, REASSESS, CURATE, ' +
   'EMIT, STOP, seeding, coverage, dedup, person pages). Simple language, define every wikify term on first use, ' +
   'no meta-commentary, no unexplained jargon. Hierarchical: this is the top of the tree; component docs hang off ' +
-  'it. Return the section outline the component docs must fill.',
+  'it. Fold in the relevant decisions from ' + OUT + '/known-findings.md (especially: coverage is governed by ' +
+  'completeness with addressable_coverage_ratio as the meaningful signal, and the data-artifact layer is ' +
+  'separate from the wiki page graph). Return the section outline the component docs must fill.' + IDEMPOTENT,
   { label: 'docs:overview', phase: 'Docs', schema: DONE, effort: 'high' },
 )
 const COMPONENT_DOCS = [
@@ -292,6 +342,17 @@ await review(
 
 // ===========================================================================
 phase('Sanitize')
+// The tasks/ planning docs are fully addressed and obsolete in the final
+// state — remove them (owner-approved by request). git rm keeps history, so
+// this is recoverable, not a true data loss.
+const tasksRemoval = await agent(
+  'Remove the obsolete tasks/ planning folder: git rm -r tasks/ (history retains it; do NOT touch other paths). ' +
+  'Then sweep the repo for now-dangling references to tasks/ and fix them: CLAUDE.md (drop the "Capture Lessons" / ' +
+  'tasks/lessons.md scaffolding and any tasks/ pointer) and any skill or doc that links into tasks/ (e.g. the ' +
+  'gather-evidence-cluster skill). Verify nothing still references tasks/ after. If tasks/ is already gone ' +
+  '(resumed run), just confirm no references remain.',
+  { label: 'sanitize:remove-tasks', phase: 'Sanitize', schema: DONE },
+)
 // Safe edits execute; git-history rewrite is proposal-only.
 const sanitize = await agent(
   'Using ' + OUT + '/audit-meta.md and ' + OUT + '/audit-secrets.md, EXECUTE the safe sanitizations in the ' +
@@ -332,8 +393,8 @@ const packaging = await agent(
   '.claude-plugin/marketplace.json; a LICENSE (recommend one in a header comment if unsure); CONTRIBUTING.md, ' +
   'SECURITY.md, CODE_OF_CONDUCT.md; .github/ISSUE_TEMPLATE + a PR template; a GitHub Actions CI workflow ' +
   '(.github/workflows/ci.yml) running ruff + uv run pytest with coverage uploaded to codecov; a pyproject ' +
-  'coverage config. Audit .gitignore so data/, secrets, and caches are excluded. Wire the README badges to the ' +
-  'new CI/coverage. Report every file added.',
+  'coverage config. Audit .gitignore so data/, secrets, caches, and the transient ' + OUT + '/ review dir are ' +
+  'excluded. Wire the README badges to the new CI/coverage. Report every file added.' + IDEMPOTENT,
   { label: 'pkg:plugin-ci', phase: 'Packaging', schema: DONE, effort: 'high' },
 )
 await review(
@@ -348,7 +409,9 @@ const finalReview = await agent(
   'only 4 first-class skills; (2) prescriptive de-meta skills; (3) dead-code proposal; (4) hierarchical docs + ' +
   'CLAUDE.md + AGENTS.md decision + README; (5) no meta-commentary anywhere; (6) no personal info in the working ' +
   'tree; (7) commit-history sanitization proposal; (8) badges; (9) test cleanup; (10) plugin packaging; ' +
-  '(11) gaps. Run: uv run ruff check, and uv run pytest tests/wikify -q. List anything unmet or regressed.',
+  '(11) gaps; (12) the known-findings in ' + OUT + '/known-findings.md were each fixed or documented (not dropped) ' +
+  'and tasks/ is removed with no dangling references. Run: uv run ruff check, and uv run pytest tests/wikify -q. ' +
+  'List anything unmet or regressed.',
   { agentType: 'codex:codex-rescue', label: 'codex:final', phase: 'Final review', schema: VERDICT, effort: 'high' },
 )
 const completeness = await agent(
@@ -368,6 +431,8 @@ return {
   skill_rewrite_fails: rewriteFails.map(r => r.name),
   final_approved: finalReview ? finalReview.approved : null,
   report: OUT + '/REPORT.md',
+  known_findings: OUT + '/known-findings.md',
+  tasks_folder: 'removed (git rm; recoverable from history)',
   owner_approval_needed: [
     OUT + '/inventory-deadcode.md (deletions)',
     OUT + '/history-rewrite-proposal.md (git history)',
