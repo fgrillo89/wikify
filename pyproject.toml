@@ -34,7 +34,7 @@ dependencies = [
     "opencv-python-headless>=4.10,<4.12",
     "hf-xet>=1.4.2",
     # Numerical / graph
-    "scipy>=1.13",  # pulled in by networkx.pagerank inside ingest/pipeline.py
+    "scipy>=1.18.0",  # pulled in by networkx.pagerank inside ingest/pipeline.py
     "networkx>=3.6.1",
     # Reference resolution
     "bibtexparser>=1.4",
