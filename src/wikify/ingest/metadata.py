@@ -526,9 +526,9 @@ def parse_authors(raw: str) -> list[str]:
 
 
 # Canonical name-particle / name-suffix vocabularies. Kept here so the
-# rules in bibtex.py (_clean_author_name, _author_has_prose_residue) and
-# scripts/scan_bib_quality.py all share the same membership — adding a
-# new particle (e.g. "zu", "vor") only has to happen in one place.
+# rules in bibtex.py (_clean_author_name, _author_has_prose_residue)
+# share the same membership — adding a new particle (e.g. "zu", "vor")
+# only has to happen in one place.
 NAME_PARTICLES = frozenset({
     "van", "von", "der", "de", "da", "di", "la", "le", "du",
     "del", "den", "dos", "el", "al", "bin", "ibn",
