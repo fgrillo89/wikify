@@ -22,19 +22,19 @@ dependencies = [
     "pymupdf4llm>=0.0.10",
     "python-docx>=1.1",
     "python-pptx>=0.6.23",
-    "trafilatura>=2.0.0",
-    "docling>=2.86.0",
+    "trafilatura>=2.1.0",
+    "docling>=2.107.0",
     "marker-pdf>=1.6",
     # Embeddings / ML stack
     "fastembed>=0.7.3",
-    "onnxruntime>=1.21",
+    "onnxruntime>=1.27.0",
     "torch>=2.6.0",
     "torchvision>=0.21.0",
     "transformers>=4.48,<4.52",
-    "opencv-python-headless>=4.10,<4.12",
-    "hf-xet>=1.4.2",
+    "opencv-python-headless>=4.13.0.92,<4.14",
+    "hf-xet>=1.5.1",
     # Numerical / graph
-    "scipy>=1.13",  # pulled in by networkx.pagerank inside ingest/pipeline.py
+    "scipy>=1.18.0",  # pulled in by networkx.pagerank inside ingest/pipeline.py
     "networkx>=3.6.1",
     # Reference resolution
     "bibtexparser>=1.4",
@@ -50,11 +50,11 @@ dependencies = [
     # CLI / config / protocol
     "typer>=0.12",
     "pyyaml>=6.0.3",
-    "mcp>=1.26.0",
+    "mcp>=1.28.1",
 ]
 
 [project.optional-dependencies]
-gdrive = ["google-api-python-client>=2.198.0", "google-auth-oauthlib>=1.2"]
+gdrive = ["google-api-python-client>=2.198.0", "google-auth-oauthlib>=1.4.0"]
 
 [project.scripts]
 wikify = "wikify.cli:main"
