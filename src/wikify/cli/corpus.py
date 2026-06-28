@@ -423,6 +423,16 @@ def cmd_check(
         if "sqlite_n_edges" in summary:
             typer.echo(f"  edges:     {summary['sqlite_n_edges']}")
     typer.echo(f"manifest:    {summary['has_manifest']}")
+    es = summary.get("embed_stack")
+    if es is not None:
+        if es.get("ok"):
+            prov = ",".join(es.get("providers") or []) or "?"
+            extra = ""
+            if "embed_ok" in es:
+                extra = f", embed={'ok' if es['embed_ok'] else 'FAILED'}"
+            typer.echo(f"embed_stack: ok ({prov}{extra})")
+        else:
+            typer.echo(f"embed_stack: FAILED ({es.get('error')})")
     if summary.get("field"):
         typer.echo(f"field:       {summary['field']}")
     if "ord_refs_coverage_pct" in summary:

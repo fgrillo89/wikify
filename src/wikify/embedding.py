@@ -181,7 +181,11 @@ def _onnx_providers() -> list[str] | None:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if "DmlExecutionProvider" in available:
             return ["DmlExecutionProvider", "CPUExecutionProvider"]
-    except ImportError:
+    except (ImportError, AttributeError):
+        # A partially-installed onnxruntime imports as an empty namespace
+        # package whose ``get_available_providers`` is missing, raising
+        # AttributeError rather than ImportError. Degrade to the default
+        # provider instead of crashing every query-embedding path.
         pass
     return None
 
@@ -532,3 +536,39 @@ def current_backend() -> dict[str, str | int | None]:
         "model": model,
         "max_tokens": cfg.max_tokens,
     }
+
+
+def probe_embed_stack(*, deep: bool = False) -> dict:
+    """Health-probe the runtime query-embedding stack.
+
+    Cheap mode (default): verify onnxruntime imports and exposes its
+    provider API. A partially-installed onnxruntime imports as an empty
+    namespace package with no ``get_available_providers``, so this catches
+    the common silent corruption that leaves stored vectors intact (so
+    ``corpus check`` reports ``vectors: True``) while every query embedding
+    crashes. ``deep=True`` additionally runs a one-string end-to-end embed.
+    """
+    out: dict = {"ok": False, "providers": None, "error": None}
+    backend = os.environ.get("WIKIFY_EMBEDDER", "fastembed").lower()
+    if backend == "hash":
+        out.update(ok=True, providers=["hash"])
+        return out
+    try:
+        import onnxruntime as ort
+
+        out["providers"] = list(ort.get_available_providers())
+        out["ok"] = True
+    except Exception as exc:  # noqa: BLE001 - report any import/attr failure
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+    if deep:
+        try:
+            vec = embed_queries(["wikify health check"])
+            shape = getattr(vec, "shape", None)
+            out["embed_ok"] = bool(shape and shape[0] >= 1 and shape[1] >= 1)
+            out["dim"] = int(shape[1]) if shape else None
+        except Exception as exc:  # noqa: BLE001
+            out["ok"] = False
+            out["embed_ok"] = False
+            out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
