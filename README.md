@@ -10,11 +10,15 @@ real quote in your sources.**
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-Point Wikify at a pile of PDFs (or DOCX / PPTX / HTML / Markdown). It
-parses them into a searchable **corpus**, then an agent reads that corpus
-the way a researcher would and writes a browsable encyclopedia —
-articles, short biographies, and data tables — as a self-contained
-static HTML site.
+Point Wikify at a pile of research papers (PDF, or DOCX / PPTX / HTML /
+Markdown). It parses them into a searchable **corpus** — including each
+paper's reference list, resolved to DOIs and linked to the works it cites
+inside your collection — then an agent reads that corpus the way a
+researcher would and writes a browsable encyclopedia — articles, short
+biographies, and data tables — as a self-contained static HTML site.
+
+Wikify is built for scientific literature: it understands that papers
+cite papers, and it uses that structure to retrieve.
 
 ```mermaid
 flowchart LR
@@ -30,6 +34,9 @@ flowchart LR
   verbatim quote that really exists in your sources. A fabricated quote
   fails an automatic check and the page is rejected — no hallucinated
   citations.
+- **Built for research papers.** Reference lists are parsed and resolved
+  (DOI / BibTeX), and each chunk is linked to the corpus papers it cites,
+  so the agent can follow the citation graph — not just vector similarity.
 - **Agentic and multi-tier.** A top-tier *editor* model plans and decides
   what to write; cheap *explorer* subagents do the bulk reading. You pay
   premium rates for judgment, not for page-turning.
@@ -74,6 +81,62 @@ and biographies, linked together and queryable) and a separate
 **data-artifact layer** of `kind=data` tables that harvest verifiable
 numbers across the corpus and re-derive from a stored spec. See
 [docs/overview.md](docs/overview.md) for the full loop.
+
+## Beyond classic RAG
+
+Classic RAG embeds your chunks, retrieves the top-_k_ most similar to a
+query, and stuffs them into a prompt. That discards everything that makes
+a research library navigable: who cites whom, which papers are central,
+and how a claim connects back to its sources.
+
+Wikify treats the corpus as a **graph of research papers**, not a bag of
+chunks. At ingest it parses each paper's reference list, resolves the
+citations, and links every chunk to the corpus papers it cites. On top of
+that graph the agent gets both state-of-the-art retrieval **and**
+structural traversal:
+
+```mermaid
+flowchart LR
+    q(["query"]) -. hybrid search .-> c1["chunk"]
+    c1 -- cites --> p["cited paper<br/>(in corpus)"]
+    p -- its chunks --> c2["chunk"]
+    c1 -- similar --> c3["neighbour chunk"]
+    rank["PageRank ·<br/>citation count"] -. ranks .-> p
+```
+
+- **Hybrid search, not just cosine top-_k_.** Dense vector similarity,
+  sparse **BM25** (great for acronyms and exact terms), and literal
+  substring, fused with reciprocal-rank fusion.
+- **Citation hops.** From any chunk, follow the papers it cites that are
+  *in your corpus*, then read their chunks — chasing a reference the way
+  you would.
+- **Chunk-to-chunk similarity walks.** Hop across dense neighbours to
+  expand a topic boundary.
+- **Graph-metric ranking.** Rank papers (or authors) by **PageRank** or
+  **citation count** to start from the most central work, or find the
+  most-cited paper that discusses a topic.
+
+The result combines the recall of hybrid RAG with the precision of
+following a real citation graph — so the agent reads a corpus the way a
+researcher reads a field, not as isolated passages.
+
+## The corpus through MCP
+
+The agent reaches the corpus over an MCP server, which exposes that whole
+surface as composable tools — usable from Claude Code or any MCP client:
+
+| Tool | What it does |
+|------|--------------|
+| `corpus_find` | semantic / BM25 / hybrid / RRF-fused search over chunks; rank papers or authors by `pagerank` or `citation_count` |
+| `corpus_traverse` | graph traversal — a chunk's in-corpus citations, an author's papers, neighbours by edge kind |
+| `corpus_citation_walk` | multi-hop walk over the citation graph |
+| `corpus_similarity_walk` | dense chunk-to-chunk neighbour hops |
+| `corpus_show` / `corpus_sample` / `corpus_schema` / `corpus_image` | read chunks, sample diverse entry points, inspect the schema, fetch figures |
+
+These compose into a literature review in a few calls: rank the most-cited
+paper on a topic, open its chunks, hop to what it cites in the corpus,
+then similarity-walk outward. See [Use as an MCP server](#use-as-an-mcp-server)
+to wire it up.
 
 ## Quickstart
 
