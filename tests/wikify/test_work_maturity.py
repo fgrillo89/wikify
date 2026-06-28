@@ -209,6 +209,25 @@ def test_person_uses_separate_rule(tmp_path: Path) -> None:
     assert report.components["has_collaboration_evidence"] > 0
 
 
+def test_person_contribution_gate_counts_present_tense(tmp_path: Path) -> None:
+    # First-person / present-tense method statements must count as
+    # contributions alongside past-tense forms (the gate regex matches
+    # inflections, not just exact past-tense verbs).
+    bundle = _bundle(tmp_path)
+    create_concept(
+        bundle, page_id="Jane Doe", kind="person",
+        aliases=["author:doe_j"],
+    )
+    append_evidence(bundle, "jane-doe", [
+        _ev("c1", "d1", "Here we demonstrate a flexible memristor."),
+        _ev("c2", "d2", "We propose a new device architecture."),
+        _ev("c3", "d3", "The method introduces a self-limiting growth step."),
+    ])
+    report = compute_maturity(bundle, "jane-doe")
+    assert report.gates["n_quoted_contribution_chunks_ge_3"] is True
+    assert report.gates_passed is True
+
+
 def test_person_fails_without_author_metadata(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="Anon", kind="person")  # no author: alias

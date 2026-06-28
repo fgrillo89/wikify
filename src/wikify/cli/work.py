@@ -671,9 +671,13 @@ def cmd_build_evidence(
 ) -> None:
     """Gather evidence for *concept* using seed_doc_handles + corpus find.
 
-    The extractor's ``seed_doc_handles`` (persisted on the work card)
-    serve as a high-precision prior: up to ``per_doc_cap`` body chunks
-    are pulled from each seed doc first. The remainder is filled by
+    Seed docs serve as a high-precision prior: up to ``per_doc_cap`` body
+    chunks are pulled from each seed doc first. Seeds are the union of the
+    work card's ``seed_doc_handles`` (the data-extractor's prior), the
+    notebook's ``provenance.seed_docs`` (set by ``notebook-init
+    --seed-docs``), and — for ``kind=person`` cards carrying an
+    ``author:<key>`` alias with no other seeds — that author's own papers.
+    The remainder is filled by
     ``corpus find --rank all`` with structural exclusions, until the
     active count reaches ``--target`` or no more candidates pass the
     filters. Every chunk is rejected if its ``is_boilerplate`` flag is
@@ -714,7 +718,37 @@ def cmd_build_evidence(
     if not card.front:
         cli_error(EXIT_VALIDATION, error="concept_not_found", concept=concept)
     title = card.page_id
-    seed_handles = card.front.get("seed_doc_handles") or []
+    seed_handles = list(card.front.get("seed_doc_handles") or [])
+    # Seeds set via `notebook-init --seed-docs` persist on the notebook
+    # provenance, not the work card (the card field is the data-extractor's
+    # prior). Union both so the documented add-concept -> notebook-init
+    # -> build-evidence flow actually seeds the gather.
+    from ..bundle.work.notebook import read_notebook
+
+    nb = read_notebook(bundle, concept)
+    for h in nb.front.provenance.seed_docs:
+        if h not in seed_handles:
+            seed_handles.append(h)
+    # A person page is grounded in the author's OWN papers. When the card is
+    # a person carrying an `author:<key>` alias and has no explicit seeds,
+    # seed from that author's sources so the gather lifts quoted-contribution
+    # chunks from their work rather than generic name mentions corpus-wide.
+    if card.front.get("kind") == "person" and not seed_handles:
+        from ..corpus.queries import traverse as _traverse
+
+        for alias in card.front.get("aliases") or []:
+            if not (isinstance(alias, str) and alias.lower().startswith("author:")):
+                continue
+            try:
+                # The dispatcher resolves the author prefix to its graph key
+                # before traversing to that author's papers.
+                rows = _traverse(corpus, handle=alias, to="sources")["rows"]
+            except Exception:  # noqa: BLE001 - author may be absent from graph
+                continue
+            for d in rows:
+                did = d.get("id") or d.get("doc_id") or d.get("handle")
+                if isinstance(did, str) and did not in seed_handles:
+                    seed_handles.append(did)
 
     db_path = corpus.sqlite_path
     con = sqlite3.connect(str(db_path))

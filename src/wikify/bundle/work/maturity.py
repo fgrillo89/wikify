@@ -53,9 +53,14 @@ _VARIANT_RE = re.compile(
     r"subtype|categor\w+|species of|flavour|approach|method)\b",
     re.IGNORECASE,
 )
+# Contribution verbs, matched across common inflections (present /
+# third-person / past / participle / gerund) so first-person method
+# statements like "we demonstrate" / "we propose" count alongside the
+# past-tense "demonstrated" / "proposed".
 _PERSON_CONTRIBUTION_RE = re.compile(
-    r"\b(?:proposed|introduced|developed|invented|discovered|"
-    r"demonstrated|reported|formulated|showed|established)\b",
+    r"\b(?:propos|introduc|develop|invent|discover|demonstrat|"
+    r"report|formulat|show|establish)"
+    r"(?:e|es|ed|s|n|ing)?\b",
     re.IGNORECASE,
 )
 _PERSON_TEMPORAL_RE = re.compile(r"\b(?:19|20)\d{2}\b")

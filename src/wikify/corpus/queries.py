@@ -1223,6 +1223,12 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     except Exception as exc:
         out["field"] = None
         out["field_error"] = str(exc)
+    try:
+        from ..embedding import probe_embed_stack
+
+        out["embed_stack"] = probe_embed_stack(deep=full)
+    except Exception as exc:  # noqa: BLE001
+        out["embed_stack"] = {"ok": False, "error": str(exc)}
     if full and out["has_sqlite_store"]:
         try:
             out.update(_ord_refs_coverage(corpus, docs))

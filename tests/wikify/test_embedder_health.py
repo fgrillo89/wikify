@@ -124,6 +124,36 @@ def test_health_check_opt_out_env_var(monkeypatch):
     assert embedding._fe_model is fake
 
 
+def test_probe_embed_stack_reports_broken_onnxruntime(monkeypatch):
+    """A partially-installed onnxruntime imports as an empty namespace
+    package with no ``get_available_providers``; the probe must report
+    ``ok=False`` with the error instead of raising, and ``_onnx_providers``
+    must degrade to ``None`` rather than crashing the query path."""
+    import sys
+    import types
+
+    from wikify import embedding
+
+    broken = types.ModuleType("onnxruntime")  # no get_available_providers
+    monkeypatch.setitem(sys.modules, "onnxruntime", broken)
+    monkeypatch.delenv("WIKIFY_EMBEDDER", raising=False)
+
+    result = embedding.probe_embed_stack()
+    assert result["ok"] is False
+    assert "get_available_providers" in (result["error"] or "")
+    assert embedding._onnx_providers() is None  # no AttributeError
+
+
+def test_probe_embed_stack_hash_backend_ok(monkeypatch):
+    """The hash backend needs no onnxruntime, so the probe reports ok."""
+    from wikify import embedding
+
+    monkeypatch.setenv("WIKIFY_EMBEDDER", "hash")
+    result = embedding.probe_embed_stack()
+    assert result["ok"] is True
+    assert result["providers"] == ["hash"]
+
+
 def teardown_module(module):
     """Reset the module-level cache so other tests don't see the mocks."""
     _reset_embedder_module()

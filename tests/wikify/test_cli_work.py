@@ -566,6 +566,35 @@ def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     assert stats["rejected_boilerplate"] == 0
 
 
+def test_build_evidence_seeds_from_notebook_seed_docs(tmp_path: Path) -> None:
+    """Seeds set via ``notebook-init --seed-docs`` persist on the notebook
+    provenance, not the work card. build-evidence must union them so the
+    documented add-concept -> notebook-init -> build-evidence flow seeds
+    the gather (previously the seed phase only read the card and saw none)."""
+    bundle, corpus_root, _ = _build_evidence_bundle(tmp_path)
+    init = runner.invoke(
+        app,
+        [
+            "work", "notebook-init", "atomic-layer-deposition",
+            "--seed-docs", '["doc:paper_x"]',
+            "--run", str(bundle),
+        ],
+    )
+    assert init.exit_code == 0, init.output
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--target", "3", "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["stats"]["seed_records"] > 0
+
+
 def test_build_evidence_from_ids_rejects_boilerplate(tmp_path: Path) -> None:
     bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
     result = runner.invoke(
