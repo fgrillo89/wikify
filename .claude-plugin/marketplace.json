@@ -1,0 +1,24 @@
+{
+  "name": "wikify-tools",
+  "description": "Marketplace for Wikify: build a navigable, evidence-grounded wiki from a research corpus.",
+  "owner": {
+    "name": "Fabio Grillo",
+    "url": "https://github.com/fgrillo89"
+  },
+  "plugins": [
+    {
+      "name": "wikify",
+      "source": "./",
+      "description": "Turn a folder of documents into a navigable, evidence-grounded wiki, with corpus and wiki MCP search tools.",
+      "version": "0.1.0",
+      "category": "research",
+      "keywords": [
+        "research",
+        "wiki",
+        "corpus",
+        "rag",
+        "arxiv"
+      ]
+    }
+  ]
+}

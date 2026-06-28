@@ -148,6 +148,77 @@ def test_compute_coverage_per_doc_breakdown(tmp_path: Path) -> None:
     assert report.per_doc["d2"]["ratio"] == 1.0
 
 
+def _make_corpus_typed(
+    corpus_dir: Path, chunks: list[tuple[str, str, str, int]]
+) -> Corpus:
+    """Corpus builder with explicit ``(chunk_id, doc_id, section_type, is_boilerplate)``."""
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    db = corpus_dir / "wikify.db"
+    con = sqlite3.connect(str(db))
+    con.execute(
+        "CREATE TABLE chunks ("
+        "chunk_id TEXT PRIMARY KEY, doc_id TEXT, ord INTEGER, "
+        "text TEXT, section_type TEXT, is_boilerplate INTEGER"
+        ")"
+    )
+    for i, (cid, did, stype, boiler) in enumerate(chunks):
+        con.execute(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)",
+            (cid, did, i, f"body for {cid}", stype, boiler),
+        )
+    con.commit()
+    con.close()
+    return Corpus(root=corpus_dir)
+
+
+def test_compute_coverage_addressable_excludes_structural(tmp_path: Path) -> None:
+    """Addressable denominator drops captions/references/boilerplate; raw keeps them."""
+    corpus = _make_corpus_typed(
+        tmp_path / "corpus",
+        [
+            ("c1", "d1", "body", 0),        # addressable
+            ("c2", "d1", "caption", 0),     # excluded (structural)
+            ("c3", "d2", "references", 0),  # excluded (structural)
+            ("c4", "d2", "body", 1),        # excluded (is_boilerplate)
+        ],
+    )
+    bundle = _make_bundle(tmp_path / "bundle")
+    init_notebook(bundle, slug="alpha", kind="article")
+    nb = read_notebook(bundle, "alpha")
+    nb.front.provenance.covered_chunks = ["c1", "c2"]  # one body, one caption
+    save_notebook(bundle, "alpha", nb)
+    report = compute_coverage(bundle, corpus)
+    assert report.n_total == 4
+    assert report.n_covered == 2
+    assert report.chunk_coverage_ratio == 0.5
+    # Only c1 is addressable; covering it is full addressable coverage.
+    assert report.n_addressable == 1
+    assert report.n_addressable_covered == 1
+    assert report.addressable_coverage_ratio == 1.0
+
+
+def test_compute_coverage_addressable_falls_back_without_columns(tmp_path: Path) -> None:
+    """A corpus lacking section_type/is_boilerplate treats every chunk as addressable."""
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(corpus_dir / "wikify.db"))
+    con.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY, doc_id TEXT)")
+    con.executemany(
+        "INSERT INTO chunks VALUES (?, ?)", [("c1", "d1"), ("c2", "d1")]
+    )
+    con.commit()
+    con.close()
+    corpus = Corpus(root=corpus_dir)
+    bundle = _make_bundle(tmp_path / "bundle")
+    init_notebook(bundle, slug="alpha", kind="article")
+    nb = read_notebook(bundle, "alpha")
+    nb.front.provenance.covered_chunks = ["c1"]
+    save_notebook(bundle, "alpha", nb)
+    report = compute_coverage(bundle, corpus)
+    assert report.n_addressable == 2
+    assert report.addressable_coverage_ratio == 0.5
+
+
 def test_cli_coverage_json_output(tmp_path: Path) -> None:
     corpus = _make_corpus(
         tmp_path / "corpus", [("c1", "d1"), ("c2", "d1")]

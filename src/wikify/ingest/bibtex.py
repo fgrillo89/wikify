@@ -453,9 +453,8 @@ def _clean_bib_title(title: str) -> str:
     title = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", title, flags=re.I | re.S)
     # Strip remaining HTML tags
     title = re.sub(r"<[^>]+>", "", title)
-    # Strip any trailing citation fragment anchored on a 4-digit year. One
-    # structural rule in place of the several per-publisher regexes that
-    # used to live here.
+    # Strip any trailing citation fragment anchored on a 4-digit year.
+    # One structural rule replaces per-publisher regexes.
     title = _strip_year_anchored_tail(title)
     # Strip a trailing abbreviated journal name: `. <Word> <Word>?` where
     # each word is ≤12 chars title-cased (common abbrevs: "Neural Comput",

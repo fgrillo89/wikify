@@ -346,3 +346,26 @@ def test_cli_maturity_text_and_json(tmp_path: Path) -> None:
     assert payload["ok"] is True
     assert payload["threshold"] == 0.70
     assert len(payload["items"]) == 1
+
+
+def test_terminal_status_drops_concept_from_roster(tmp_path: Path) -> None:
+    """A card with a terminal status (merged/parked/dropped) reports that
+    status as its band so the WRITE/GROW waves skip it, regardless of how
+    much evidence it carries."""
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+
+    b = _bundle(tmp_path)
+    slug, _ = create_concept(b, page_id="Memristance", kind="article")
+    # Give it enough evidence that it would otherwise be ready/growing.
+    append_evidence(
+        b, slug,
+        [_ev(f"c{i}", f"d{i % 5}", "memristance is a property") for i in range(10)],
+    )
+    for status in ("merged", "parked", "dropped"):
+        card = load_card(b, slug)
+        card.front["status"] = status
+        save_card(b, slug, card)
+        report = compute_maturity(b, slug, current_round=3)
+        assert report.band == status
+        assert report.gates_passed is False
+        assert report.score == 0.0

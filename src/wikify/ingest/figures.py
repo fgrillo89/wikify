@@ -160,10 +160,8 @@ def _build_records(
         # rules, headers/logos) that pymupdf reports as image objects
         # but have no semantic anchor. Without a caption there's no way
         # for the chunk linker to associate them with body text and the
-        # extract handler can't reason about them. The 47 pN_imgM
-        # binaries we used to keep added 29% noise to mvp20 with zero
-        # downstream value. The previous behavior is restored by
-        # passing ``keep_uncaptioned=True`` for diagnostic ingests.
+        # extract handler can't reason about them. Pass
+        # ``keep_uncaptioned=True`` to retain them for diagnostic ingests.
         if cap is None:
             continue
         if cap in avail:
@@ -188,21 +186,16 @@ def _scanned_page_raw(
 ) -> list[dict]:
     """Scanned-page fallback: render the whole page as a PNG.
 
-    When a page is scanned (no extractable image objects) but our
-    caption matcher found one or more figure captions on it, we render
-    the full page raster and use it as the visual backing for the FIRST
-    matched caption only. Previously this loop emitted a separate
-    binary for every caption on the page — but the binary was always
-    the same page rendering, which produced byte-identical duplicates
-    on disk (Chua page 11 had Fig. 7 and Fig. 8 both backed by the same
-    page-bytes blob). The dedup hash discriminated by ``cap.label`` so
-    the in-memory ``seen`` set didn't catch them.
-
-    Now we hash the raw ``page_bytes`` once and emit a single record
-    bound to the first caption. Subsequent captions on the same scanned
-    page surface as ``Document.figure_refs`` (extracted from the body
-    text) — the figure linker will still pick them up via inline
-    ``Fig. N`` references.
+    When a page is scanned (no extractable image objects) but the
+    caption matcher found one or more figure captions on it, render the
+    full page raster once and use it as the visual backing for the FIRST
+    matched caption only. The raw ``page_bytes`` are hashed once and a
+    single record is emitted bound to that first caption, so multiple
+    captions on the same page cannot produce byte-identical duplicate
+    binaries on disk. Subsequent captions on the same scanned page
+    surface as ``Document.figure_refs`` (extracted from the body text) —
+    the figure linker still picks them up via inline ``Fig. N``
+    references.
     """
     figure_captions = [c for c in page_captions if c.media_type != "table"]
     if not figure_captions:

@@ -1,7 +1,7 @@
 """Before/after chunk comparison between two corpora.
 
 Loads both SQLite stores plus the equations index from disk, prints a
-table of the metrics from `tasks/chunk_hygiene_plan.md`'s baseline:
+table of the chunk-hygiene baseline metrics:
 chunk size distribution, nano-chunk fraction, section_path noise,
 single-`["body"]` docs, equations index size, boilerplate flag count.
 

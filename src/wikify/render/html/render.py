@@ -1079,16 +1079,71 @@ def _resolve_wikilinks(
 # ingest paths; both forms are accepted so legacy bundles also clean up.
 _CHUNK_HASH_RE = re.compile(r"__c\d{4}_+[0-9a-f]{6,}")
 
-# Parser-only ``(<doc_id>)`` tail on a data-artifact footnote definition: a
-# trailing parenthetical (just before ``> "quote"``) whose contents carry a raw
-# 12-hex doc hash. Stripped from the rendered display so the doc hash never
-# shows to readers, while the on-disk file keeps it for cross-link matching.
-_DATA_FOOTNOTE_DOCID_TAIL_RE = re.compile(
-    r'\s*\([^()]*_[0-9a-f]{12}[^()]*\)(?=\s*>\s*")'
-)
-
 # Extracts [Year Author] prefix from doc_id, e.g. "[2020 Liu]"
 _DOC_YEAR_RE = re.compile(r"\[(\d{4})\s+([^\]]+)\]")
+
+
+def _split_trailing_paren(head: str) -> tuple[str, str]:
+    """Split ``"label (inner)"`` into ``("label", "inner")`` on the last
+    balanced parenthetical; return ``(head, "")`` when there is none."""
+    if not head.endswith(")"):
+        return head, ""
+    depth = 0
+    for i in range(len(head) - 1, -1, -1):
+        if head[i] == ")":
+            depth += 1
+        elif head[i] == "(":
+            depth -= 1
+            if depth == 0:
+                return head[:i].strip(), head[i + 1 : -1].strip()
+    return head, ""
+
+
+def _format_data_footnote(
+    line: str,
+    *,
+    doc_meta_map: dict[str, dict] | None = None,
+    doc_index: HandleIndex | None = None,
+) -> str:
+    """Reformat one data-artifact ``[^dN]:`` footnote.
+
+    Input shape: ``[^dN]: <label> (<doc_id>) > "quote"`` (the artifact
+    renderer appends the source doc_id as a trailing parenthetical for
+    cross-link matching). When corpus metadata is available the label and
+    raw id are replaced by the hyperlinked CS1 citation (the same machinery
+    article references use); otherwise the human-readable label is kept and
+    the raw-id parenthetical dropped, so the doc hash never reaches readers.
+    The per-cell ``"quote"`` -- the grounded value -- is always preserved.
+    Each ``[^dN]`` stays a distinct definition (no collapse), so two cells
+    citing the same paper keep their own quotes.
+    """
+    marker_end = line.index("]:") + 2
+    marker = line[2 : line.index("]:")]
+    rest = line[marker_end:].strip()
+    sep = rest.find(' > "')
+    head = rest[:sep].strip() if sep != -1 else rest
+    quote = ""
+    if sep != -1:
+        tail = rest[sep + 4 :]
+        quote = tail[:-1] if tail.endswith('"') else tail
+    label, raw_doc = _split_trailing_paren(head)
+    doc_id = raw_doc
+    bare = raw_doc[4:] if raw_doc.startswith("doc:") else raw_doc
+    if doc_index is not None and bare:
+        try:
+            resolved = try_resolve(bare, doc_index)
+        except AmbiguousHandleError:
+            resolved = None
+        if resolved is not None:
+            doc_id = resolved
+    meta = (doc_meta_map or {}).get(doc_id)
+    if meta and (meta.get("authors") or meta.get("title") or meta.get("year")):
+        citation = format_cs1(meta, url=meta.get("url", "")).rstrip()
+    else:
+        citation = (label or head).strip()
+    if quote:
+        return f'[^{marker}]: {citation} "{quote}"'
+    return f"[^{marker}]: {citation}"
 
 
 def _clean_evidence_lines(
@@ -1120,17 +1175,20 @@ def _clean_evidence_lines(
     Definitions are emitted in the order they first appear in prose so
     the rendered reference list reads 1, 2, 3 top to bottom.
     """
-    # Data pages carry per-cell grounded footnotes that must not be collapsed
-    # or reformatted; each [^dN] definition is a distinct verifiable fact.
-    # The artifact renderer appends a parser-only ``(<doc_id>)`` tail to each
-    # definition so the cross-link matcher can recover the source doc from the
-    # on-disk file; that tail carries the raw doc hash and must not be shown to
-    # readers. Strip it from the rendered display only (the file keeps it).
+    # Data pages carry per-cell grounded footnotes that must NOT be collapsed
+    # or reordered -- each [^dN] is a distinct verifiable fact, and two cells
+    # citing the same paper keep separate definitions with their own quotes.
+    # But the citation itself is reformatted with the same CS1 + hyperlink
+    # machinery as article references, so data references render consistently
+    # with the rest of the wiki. The per-cell quote is kept (it is the grounded
+    # value, not the article path's discarded chunk-preview).
     if kind == "data":
         out_lines: list[str] = []
         for line in body.split("\n"):
             if line.startswith("[^") and "]:" in line:
-                line = _DATA_FOOTNOTE_DOCID_TAIL_RE.sub("", line, count=1)
+                line = _format_data_footnote(
+                    line, doc_meta_map=doc_meta_map, doc_index=doc_index
+                )
             out_lines.append(line)
         return "\n".join(out_lines)
 

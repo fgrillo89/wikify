@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "wikify": {
+      "command": "uv",
+      "args": ["run", "wikify", "mcp", "serve"],
+      "env": {
+        "WIKIFY_CORPUS": "data/corpora/<your-corpus>"
+      }
+    }
+  }
+}

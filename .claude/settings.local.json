@@ -30,7 +30,8 @@
       "mcp__wikify__corpus_sample",
       "mcp__wikify__corpus_find",
       "mcp__wikify__corpus_show",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Workflow(wikify-public-readiness)"
     ]
   },
   "enableAllProjectMcpServers": true,

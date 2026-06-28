@@ -1304,7 +1304,7 @@ def cmd_maturity(
 
     Without ``--all`` and no slug arguments, scores every concept slug
     on disk. The score formula and gates are documented in
-    ``.claude/skills/wikify/references/exploration/maturity.md``.
+    ``.claude/skills/wikify/subskills/reference/references/exploration/maturity.md``.
     """
     from ..bundle.work.maturity import compute_maturity
 
@@ -1380,6 +1380,10 @@ def cmd_coverage(
     typer.echo(
         f"  committed: {report.n_covered_committed}  "
         f"in-flight: {report.n_covered_in_flight}"
+    )
+    typer.echo(
+        f"  addressable: {report.n_addressable_covered}/{report.n_addressable} "
+        f"({report.addressable_coverage_ratio:.3f})"
     )
 
 

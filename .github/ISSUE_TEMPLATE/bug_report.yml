@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a defect in Wikify
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please do not paste API keys or other
+        secrets into any field below; scrub them from logs and output.
+  - type: input
+    id: version
+    attributes:
+      label: Wikify version
+      description: Output of `uv run wikify --version` (or the commit SHA).
+      placeholder: "0.1.0 / git SHA"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "3.12.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: parser
+    attributes:
+      label: Parser backend
+      description: Which parser backend was in use, if relevant.
+      options:
+        - docling (default)
+        - marker
+        - lite
+        - not applicable
+    validations:
+      required: false
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / driver
+      description: GPU model and driver version, if the issue involves parsing or models.
+      placeholder: "RTX 3070 Laptop, driver 5xx.xx"
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) and the minimal corpus needed to reproduce.
+      placeholder: |
+        1. uv run wikify corpus build ./papers --out data/corpora/x
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full error and traceback (secrets removed).
+    validations:
+      required: true

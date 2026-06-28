@@ -19,9 +19,9 @@ adjacent chunks that share heading context. Net effect: longer chunks
 when the source supports it, no nano-fragments, headings preserved.
 
 Char spans are recovered by ``markdown.find(chunk.text)`` for the rare
-caller that still needs offsets; equation binding has already migrated
-to text-match (see ``bind_equations_to_chunks(use_text_match=True)``)
-so the offset is best-effort, not load-bearing.
+caller that still needs offsets; equation binding uses text-match
+(see ``bind_equations_to_chunks(use_text_match=True)``) so the offset
+is best-effort, not load-bearing.
 """
 
 from __future__ import annotations
@@ -189,8 +189,8 @@ def chunk_with_hybrid(
         # ``markdown.find(text)`` misses on long chunks. Prefix match on
         # the first 80 chars lands within the right region whenever the
         # chunk's leading sentence survives the normalisation, which is
-        # the common case. Equation/citation binding has migrated to
-        # text-match so the offset is best-effort, not load-bearing.
+        # the common case. Equation/citation binding uses text-match so
+        # the offset is best-effort, not load-bearing.
         head = text[:80]
         offset = markdown.find(head) if head else -1
         if offset < 0:

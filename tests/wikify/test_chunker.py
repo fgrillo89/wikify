@@ -94,12 +94,12 @@ def test_clean_strips_affiliation_footer() -> None:
         "## Abstract\n\nThe abstract describes memristor behavior.\n\n"
         "Micro- and Nanoelectronic Systems, Institute of Micro and "
         "Nanotechnologies MacroNano, Technische Universitat Ilmenau, "
-        "Ilmenau, Germany. email: benjamin.spetzler@tu-ilmenau.de\n\n"
+        "Ilmenau, Germany. email: author.one@example.edu\n\n"
         "## Introduction\n\nBody text continues.\n"
     )
     out = clean_markdown_text(md)
     assert "Institute of Micro" not in out
-    assert "benjamin.spetzler@tu-ilmenau.de" not in out
+    assert "author.one@example.edu" not in out
     assert "abstract describes memristor behavior" in out
     assert "Body text continues" in out
 

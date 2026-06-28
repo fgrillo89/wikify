@@ -6,8 +6,8 @@ the wiki.db link neighbourhood — no model calls, no embeddings, no I/O
 beyond those three sources.
 
 Score formula and gates are described in detail in
-``.claude/skills/wikify/references/exploration/maturity.md``. The
-``wikify-investigate`` editor reads this and promotes when
+``.claude/skills/wikify/subskills/reference/references/exploration/maturity.md``.
+The ``wikify`` editor reads this and promotes when
 ``band == "ready"``.
 """
 
@@ -290,6 +290,9 @@ def _person_components(
 
 # --- public entry point ---------------------------------------------
 
+# Card statuses that remove a concept from the dispatchable roster.
+_TERMINAL_STATUSES = frozenset({"merged", "parked", "dropped"})
+
 
 def compute_maturity(
     bundle: Bundle,
@@ -306,6 +309,20 @@ def compute_maturity(
     """
     card = load_card(bundle, slug)
     kind = card.kind or "article"
+
+    # Terminal card statuses take a concept out of the dispatchable roster:
+    # ``merged`` (folded into a canonical slug by the orchestrator's dedup
+    # step), ``parked`` (curator set-aside), or ``dropped``. These never
+    # enter ``ready``/``growing``, so the WRITE/GROW waves skip them and they
+    # do not hold the "no ready slug unwritten" stop condition open.
+    if card.status in _TERMINAL_STATUSES:
+        return MaturityReport(
+            slug=slug,
+            kind=kind,
+            band=card.status,
+            last_computed_round=current_round,
+        )
+
     records = [r for r in read_evidence(bundle, slug) if r.status == "active"]
 
     if kind == "person":

@@ -10,22 +10,22 @@ Usage::
     # marker pass
     uv run python scripts/probe_marker_vs_docling.py \
         --source data/papers/ald_references --n 3 \
-        --mode marker --out tasks/probe_marker.json
+        --mode marker --out build/probe_marker.json
 
     # docling default pass (stage batch sizes=4)
     uv run python scripts/probe_marker_vs_docling.py \
         --source data/papers/ald_references --n 3 \
-        --mode docling-default --out tasks/probe_docling_default.json
+        --mode docling-default --out build/probe_docling_default.json
 
     # docling tuned pass (layout/OCR batch sizes=64)
     uv run python scripts/probe_marker_vs_docling.py \
         --source data/papers/ald_references --n 3 \
-        --mode docling-tuned --out tasks/probe_docling_tuned.json
+        --mode docling-tuned --out build/probe_docling_tuned.json
 
     # merge
     uv run python scripts/probe_marker_vs_docling.py --merge \
-        tasks/probe_marker.json tasks/probe_docling_default.json \
-        tasks/probe_docling_tuned.json
+        build/probe_marker.json build/probe_docling_default.json \
+        build/probe_docling_tuned.json
 """
 
 from __future__ import annotations

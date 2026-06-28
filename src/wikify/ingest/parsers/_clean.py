@@ -211,8 +211,8 @@ _LICENSE_PARAGRAPH_PATTERNS = (
 # dominated by an institution marker plus an email. Real author
 # affiliations on the first page look like:
 #
-#   "… Institute of Micro and Nanotechnologies …, Technische Universität
-#    Ilmenau, Ilmenau, Germany. email: …@tu-ilmenau.de"
+#   "… Institute of Micro and Nanotechnologies …, Some Technical
+#    University, City, Country. email: …@example.edu"
 #
 # or a dagger/asterisk-marked footnote line:
 #

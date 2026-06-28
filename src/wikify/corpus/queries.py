@@ -844,8 +844,8 @@ def rank_chunks_by_doc_metric(
     Projects a document-level graph metric (``pagerank`` / ``citation_count``)
     onto chunks: chunks of the highest-ranked document come first, ordered by
     ``ord`` within each document. This is the chunk-level entry-point the P5
-    gap-explorer needs — ``find(by="chunk", rank="pagerank")`` previously fell
-    through to the document ranking and returned doc rows instead of chunks.
+    gap-explorer needs: ``find(by="chunk", rank="pagerank")`` projects the
+    document metric onto chunks and returns chunk rows.
 
     Each row carries ``id``, ``doc_id`` and the projected ``score`` (the doc's
     metric value), so the standard chunk-row envelope builder consumes it.

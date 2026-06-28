@@ -1,8 +1,5 @@
 """Configuration constants for wikify. Pure values, no imports."""
 
-# -- token estimation --------------------------------------------------------
-CHARS_PER_TOKEN = 4  # rule-of-thumb for English prose (~10% accurate)
-
 # -- cost meter --------------------------------------------------------------
 ABORT_RATIO = 1.05  # hard-abort at this multiple of budget target
 

@@ -9,11 +9,3 @@ class ModelTier(str, Enum):
     SMALL = "S"
     MEDIUM = "M"
     LARGE = "L"
-
-
-class Role(str, Enum):
-    EXTRACTOR = "extractor"
-    COMPACTOR = "compactor"
-    EDITOR = "editor"
-    WRITER = "writer"
-    ORCHESTRATOR = "orchestrator"
