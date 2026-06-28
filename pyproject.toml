@@ -46,7 +46,7 @@ dependencies = [
     # Templating and rendering
     "jinja2>=3.1",
     "markdown>=3.10.2",
-    "pymdown-extensions>=10.21.2",
+    "pymdown-extensions>=11.0",
     # CLI / config / protocol
     "typer>=0.12",
     "pyyaml>=6.0.3",
