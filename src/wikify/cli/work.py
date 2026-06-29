@@ -635,13 +635,29 @@ _FROM_IDS_EXCLUDED_KINDS = frozenset({
 
 
 def _resolve_doc_id(corpus, short_or_full: str) -> str | None:
-    """Map ``doc:<short>`` / ``<short>`` / full id to the full doc_id."""
-    from ..corpus.queries import get_doc
+    """Map ``doc:<short>`` / ``<short>`` / full id to the full doc_id.
 
+    Seed handles are a best-effort prior drawn from the work card, the
+    notebook's ``provenance.seed_docs`` (user-supplied via
+    ``notebook-init --seed-docs``), and author-derived sources. A
+    non-string element or an ambiguous handle resolves to ``None`` and is
+    skipped rather than crashing the gather.
+    """
+    from ..corpus.queries import (
+        AmbiguousHandleError,
+        HandleNotFoundError,
+        get_doc,
+    )
+
+    if not isinstance(short_or_full, str):
+        return None
     handle = short_or_full
     if handle.startswith("doc:"):
         handle = handle[4:]
-    doc = get_doc(corpus, handle)
+    try:
+        doc = get_doc(corpus, handle)
+    except (HandleNotFoundError, AmbiguousHandleError):
+        return None
     return doc.id if doc is not None else None
 
 
