@@ -62,6 +62,26 @@ def test_in_doc_semantic_scopes_via_post_filter(corpus):
     assert all(h["doc_id"] == target_doc for h in scoped)
 
 
+def test_in_doc_text_scopes_to_one_doc(corpus):
+    """Literal-substring (--text) search must honour --in-doc.
+
+    Two docs both contain "atomic layer deposition"; scoping the text
+    grep to one doc must only return that doc's chunks (previously the
+    text branch ignored in_doc and returned corpus-wide hits)."""
+    all_hits = queries.find(
+        corpus, query="atomic layer deposition", text=True, top_k=5,
+    )["rows"]
+    docs = {h["doc_id"] for h in all_hits}
+    assert len(docs) >= 2  # the needle appears in more than one doc
+    target_doc = all_hits[0]["doc_id"]
+    scoped = queries.find(
+        corpus, query="atomic layer deposition", text=True, top_k=5,
+        in_doc=target_doc,
+    )["rows"]
+    assert scoped
+    assert all(h["doc_id"] == target_doc for h in scoped)
+
+
 def test_in_doc_all_modes_keeps_via_tags(corpus):
     all_hits = queries.find(
         corpus, query="atomic layer deposition", by="chunk", rank="bm25", top_k=3,
