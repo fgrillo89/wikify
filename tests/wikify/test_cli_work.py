@@ -553,6 +553,42 @@ def test_resolve_doc_id_skips_malformed_handle() -> None:
     assert _resolve_doc_id(None, {"doc": "x"}) is None
 
 
+def test_build_evidence_person_unknown_author_is_graceful(tmp_path: Path) -> None:
+    """A person card whose `author:` alias is not in the corpus graph must
+    not crash build-evidence: the author-seed traversal is skipped (the
+    narrowed except catches what resolve_author_key raises for an absent
+    author) and the gather proceeds from the notebook seed. Exercises the
+    person author-seed branch end to end."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.card import create_concept
+
+    bundle, corpus_root, _ = _build_evidence_bundle(tmp_path)
+    create_concept(
+        BundleApi.open(bundle), page_id="Nobody Author", kind="person",
+        aliases=["author:nobody_x"],
+    )
+    runner.invoke(
+        app,
+        [
+            "work", "notebook-init", "nobody-author", "--kind", "person",
+            "--seed-docs", '["doc:paper_x"]', "--run", str(bundle),
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "nobody-author",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--target", "3", "--format", "json",
+        ],
+    )
+    assert result.exception is None, result.output
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["stats"]["seed_records"] > 0  # gathered from the notebook seed
+
+
 def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
     result = runner.invoke(
