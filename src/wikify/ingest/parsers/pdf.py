@@ -13,6 +13,13 @@ from ._clean import clean_markdown_text
 from ._sections import section_spans, toc_spans
 from .registry import ParseResult
 
+_LITE_BACKEND_MISSING = (
+    "The 'lite' PDF backend requires the optional 'lite' extra "
+    "(pymupdf / pymupdf4llm, AGPL-3.0), which is not in the default "
+    "install. Install it with: uv add 'wikify[lite]' "
+    "(or pip install 'wikify[lite]'), or use the default 'docling' parser."
+)
+
 
 def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     """Parse a PDF into markdown + images + sections + metadata.
@@ -24,7 +31,10 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
     (pass 2). The default preserves the single-pass behaviour for
     direct ``parse_file`` callers and the ``reassemble_metadata`` script.
     """
-    import fitz  # pymupdf
+    try:
+        import fitz  # pymupdf
+    except ImportError as exc:
+        raise ImportError(_LITE_BACKEND_MISSING) from exc
 
     # Use the layout engine with running-header + running-footer suppression
     # on. pymupdf4llm >=1.27 routes to ``_layout_to_markdown`` by default and
@@ -97,7 +107,10 @@ def parse(path: Path, *, skip_metadata: bool = False) -> ParseResult:
 
 
 def _to_markdown(path: Path, *, use_ocr: bool) -> str:
-    import pymupdf4llm
+    try:
+        import pymupdf4llm
+    except ImportError as exc:
+        raise ImportError(_LITE_BACKEND_MISSING) from exc
 
     kwargs = {}
     if use_ocr:

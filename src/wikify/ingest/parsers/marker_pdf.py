@@ -107,8 +107,16 @@ def _get_converter():
     _patch_hf_symlinks()
     _disable_torch_compile_on_windows()
 
-    from marker.converters.pdf import PdfConverter
-    from marker.models import create_model_dict
+    try:
+        from marker.converters.pdf import PdfConverter
+        from marker.models import create_model_dict
+    except ImportError as exc:
+        raise ImportError(
+            "The 'marker' PDF backend requires the optional 'marker' extra "
+            "(marker-pdf, GPL-3.0-or-later), which is not in the default "
+            "install. Install it with: uv add 'wikify[marker]' "
+            "(or pip install 'wikify[marker]'), or use the default 'docling' parser."
+        ) from exc
 
     artifact_dict = create_model_dict()
     _CONVERTER = PdfConverter(

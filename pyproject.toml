@@ -17,14 +17,12 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    # Document parsing
-    "pymupdf>=1.24",
-    "pymupdf4llm>=1.27.2.3",
+    # Document parsing (docling is the default, permissively-licensed
+    # backend; the copyleft PDF backends live in optional extras below).
     "python-docx>=1.1",
     "python-pptx>=0.6.23",
     "trafilatura>=2.1.0",
     "docling>=2.107.0",
-    "marker-pdf>=1.6",
     # Embeddings / ML stack
     "fastembed>=0.7.3",
     "onnxruntime>=1.27.0",
@@ -55,6 +53,11 @@ dependencies = [
 
 [project.optional-dependencies]
 gdrive = ["google-api-python-client>=2.198.0", "google-auth-oauthlib>=1.4.0"]
+# Optional PDF parser backends, kept out of the default install because
+# they are copyleft and would otherwise impose their terms on a commercial
+# or hosted distribution. The default docling backend does not need them.
+lite = ["pymupdf>=1.24", "pymupdf4llm>=1.27.2.3"]  # AGPL-3.0 (or Artifex commercial)
+marker = ["marker-pdf>=1.6"]  # GPL-3.0-or-later
 
 [project.scripts]
 wikify = "wikify.cli:main"
