@@ -3,6 +3,13 @@
 Thanks for your interest in improving Wikify. This guide covers the dev
 setup, the checks a change must pass, and the conventions we follow.
 
+## Licensing of contributions
+
+By submitting a contribution (for example, a pull request), you agree that
+your contribution is licensed under the project's license
+([Business Source License 1.1](LICENSE)), on the same terms as the rest of the
+Licensed Work. No separate contributor license agreement is required.
+
 ## Development setup
 
 Wikify is a [uv](https://docs.astral.sh/uv/) project targeting Python
