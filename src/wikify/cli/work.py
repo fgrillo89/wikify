@@ -735,6 +735,7 @@ def cmd_build_evidence(
     # their work rather than generic name mentions corpus-wide.
     if card.front.get("kind") == "person":
         from ..corpus.queries import (
+            AmbiguousHandleError,
             HandleNotFoundError,
             QueryError,
         )
@@ -747,9 +748,10 @@ def cmd_build_evidence(
                 # The dispatcher resolves the author prefix to its graph key
                 # before traversing to that author's papers.
                 rows = _traverse(corpus, handle=alias, to="sources")["rows"]
-            except (HandleNotFoundError, QueryError):
-                # Author absent from the graph or unresolvable prefix: skip
-                # this alias. Unexpected errors propagate (not masked).
+            except (HandleNotFoundError, AmbiguousHandleError, QueryError):
+                # Author absent / unresolvable / ambiguous (a bare last-name
+                # alias matching several authors): skip this alias. Unexpected
+                # errors propagate (not masked).
                 continue
             for d in rows:
                 did = d.get("id") or d.get("doc_id") or d.get("handle")
