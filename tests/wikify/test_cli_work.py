@@ -542,6 +542,17 @@ def _build_evidence_bundle(tmp_path: Path):
     }
 
 
+def test_resolve_doc_id_skips_malformed_handle() -> None:
+    """A non-string seed handle (e.g. a hand-edited notebook seed_doc)
+    resolves to None instead of raising AttributeError, so the seed phase
+    skips it rather than crashing the gather."""
+    from wikify.cli.work import _resolve_doc_id
+
+    assert _resolve_doc_id(None, 123) is None
+    assert _resolve_doc_id(None, None) is None
+    assert _resolve_doc_id(None, {"doc": "x"}) is None
+
+
 def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
     result = runner.invoke(

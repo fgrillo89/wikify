@@ -988,17 +988,18 @@ def _search_chunks_all_modes(
             ]
 
         def _text() -> list[dict]:
+            pattern = f"%{_like_escape(query.lower())}%"
             if in_doc is not None:
                 rows = store.con.execute(
                     "SELECT chunk_id, doc_id FROM chunks WHERE doc_id = ? "
-                    "AND LOWER(text) LIKE ? ORDER BY chunk_id LIMIT ?",
-                    (in_doc, f"%{query.lower()}%", pool),
+                    "AND LOWER(text) LIKE ? ESCAPE '\\' ORDER BY chunk_id LIMIT ?",
+                    (in_doc, pattern, pool),
                 ).fetchall()
             else:
                 rows = store.con.execute(
                     "SELECT chunk_id, doc_id FROM chunks WHERE LOWER(text) LIKE ? "
-                    "ORDER BY chunk_id LIMIT ?",
-                    (f"%{query.lower()}%", pool),
+                    "ESCAPE '\\' ORDER BY chunk_id LIMIT ?",
+                    (pattern, pool),
                 ).fetchall()
             return [{"id": r["chunk_id"], "doc_id": r["doc_id"]} for r in rows]
 
@@ -1081,9 +1082,20 @@ def _safe_mode(mode: str, fn) -> list[dict]:
         return []
 
 
+def _like_escape(needle: str) -> str:
+    """Escape SQLite ``LIKE`` wildcards so *needle* matches literally.
+
+    Without this, a needle containing ``%`` or ``_`` would behave as a
+    wildcard, diverging from the Python-substring (JSONL) path. Pair with
+    ``ESCAPE '\\'`` in the SQL. Backslash is escaped first.
+    """
+    return needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def search_text(
     corpus: Corpus, needle: str, *,
     top_k: int = 50,
+    in_doc: str | None = None,
     exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
     """Literal substring grep over chunk text.
@@ -1091,6 +1103,8 @@ def search_text(
     Uses SQLite `LIKE` against `wikify.db` when available (sub-ms for
     typical corpus sizes); falls back to scanning the on-disk JSONL
     only for hand-built fixtures with no SQLite store.
+
+    When *in_doc* is set, the grep is scoped to that single document.
 
     ``exclude_kinds`` drops chunks whose ``section_type`` is in the
     list before returning -- the SQLite path filters in SQL, the
@@ -1109,9 +1123,12 @@ def search_text(
             sql = (
                 "SELECT chunk_id, doc_id, substr(text, 1, 160) AS preview, "
                 "section_type, is_boilerplate "
-                "FROM chunks WHERE LOWER(text) LIKE ? "
+                "FROM chunks WHERE LOWER(text) LIKE ? ESCAPE '\\' "
             )
-            params: list = [f"%{needle.lower()}%"]
+            params: list = [f"%{_like_escape(needle.lower())}%"]
+            if in_doc is not None:
+                sql += "AND doc_id = ? "
+                params.append(in_doc)
             if excluded:
                 placeholders = ",".join("?" * len(excluded))
                 sql += f"AND LOWER(section_type) NOT IN ({placeholders}) "
@@ -1133,6 +1150,8 @@ def search_text(
     out: list[dict] = []
     for c in all_chunks(corpus):
         if needle_lower not in c.text.lower():
+            continue
+        if in_doc is not None and c.doc_id != in_doc:
             continue
         if excluded and (c.section_type or "").lower() in excluded:
             continue
@@ -1226,7 +1245,10 @@ def check_corpus(corpus: Corpus, *, full: bool = False) -> dict:
     try:
         from ..embedding import probe_embed_stack
 
-        out["embed_stack"] = probe_embed_stack(deep=full)
+        # Cheap provider probe only: never load the embedding model from a
+        # read-only health check (a deep embed round-trip is a side effect
+        # that belongs to an explicit caller, not `corpus check --full`).
+        out["embed_stack"] = probe_embed_stack()
     except Exception as exc:  # noqa: BLE001
         out["embed_stack"] = {"ok": False, "error": str(exc)}
     if full and out["has_sqlite_store"]:
@@ -2228,7 +2250,8 @@ def find(
         return {
             "kind": "chunks",
             "rows": search_text(
-                corpus, query, top_k=top_k, exclude_kinds=exclude_kinds,
+                corpus, query, top_k=top_k, in_doc=in_doc,
+                exclude_kinds=exclude_kinds,
             ),
             "scored": False,
         }
