@@ -236,4 +236,8 @@ and test with `uv run pytest tests/wikify -q`. See
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[Business Source License 1.1](LICENSE) (BUSL-1.1). The source is available and
+free for non-production use and for production use other than offering Wikify
+to third parties as a hosted or managed service (see the Additional Use Grant
+in [LICENSE](LICENSE)). Each version converts to the Apache License 2.0 four
+years after its release. For a commercial license, contact the maintainer.
