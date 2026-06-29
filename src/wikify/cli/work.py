@@ -676,8 +676,8 @@ def cmd_build_evidence(
     work card's ``seed_doc_handles`` (the data-extractor's prior), the
     notebook's ``provenance.seed_docs`` (set by ``notebook-init
     --seed-docs``), and — for ``kind=person`` cards carrying an
-    ``author:<key>`` alias with no other seeds — that author's own papers.
-    The remainder is filled by
+    ``author:<key>`` alias — that author's own papers. The remainder is
+    filled by
     ``corpus find --rank all`` with structural exclusions, until the
     active count reaches ``--target`` or no more candidates pass the
     filters. Every chunk is rejected if its ``is_boilerplate`` flag is
@@ -729,11 +729,15 @@ def cmd_build_evidence(
     for h in nb.front.provenance.seed_docs:
         if h not in seed_handles:
             seed_handles.append(h)
-    # A person page is grounded in the author's OWN papers. When the card is
-    # a person carrying an `author:<key>` alias and has no explicit seeds,
-    # seed from that author's sources so the gather lifts quoted-contribution
-    # chunks from their work rather than generic name mentions corpus-wide.
-    if card.front.get("kind") == "person" and not seed_handles:
+    # A person page is grounded in the author's OWN papers. For a person
+    # card carrying an `author:<key>` alias, union that author's sources
+    # into the seeds so the gather lifts quoted-contribution chunks from
+    # their work rather than generic name mentions corpus-wide.
+    if card.front.get("kind") == "person":
+        from ..corpus.queries import (
+            HandleNotFoundError,
+            QueryError,
+        )
         from ..corpus.queries import traverse as _traverse
 
         for alias in card.front.get("aliases") or []:
@@ -743,7 +747,9 @@ def cmd_build_evidence(
                 # The dispatcher resolves the author prefix to its graph key
                 # before traversing to that author's papers.
                 rows = _traverse(corpus, handle=alias, to="sources")["rows"]
-            except Exception:  # noqa: BLE001 - author may be absent from graph
+            except (HandleNotFoundError, QueryError):
+                # Author absent from the graph or unresolvable prefix: skip
+                # this alias. Unexpected errors propagate (not masked).
                 continue
             for d in rows:
                 did = d.get("id") or d.get("doc_id") or d.get("handle")

@@ -82,6 +82,21 @@ def test_in_doc_text_scopes_to_one_doc(corpus):
     assert all(h["doc_id"] == target_doc for h in scoped)
 
 
+def test_text_search_treats_like_wildcards_literally(corpus):
+    """`--text` is a literal substring grep: SQLite LIKE wildcards in the
+    needle must not act as patterns. The corpus contains 'self-limiting';
+    a needle 'self_limiting' (underscore) must NOT match it (an unescaped
+    `_` would match the hyphen as a single-char wildcard)."""
+    hyphen_hits = queries.find(
+        corpus, query="self-limiting", text=True, top_k=5,
+    )["rows"]
+    assert hyphen_hits  # literal hyphen form is present in the corpus
+    underscore_hits = queries.find(
+        corpus, query="self_limiting", text=True, top_k=5,
+    )["rows"]
+    assert underscore_hits == []  # `_` must be literal, not a wildcard
+
+
 def test_in_doc_all_modes_keeps_via_tags(corpus):
     all_hits = queries.find(
         corpus, query="atomic layer deposition", by="chunk", rank="bm25", top_k=3,

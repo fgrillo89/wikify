@@ -228,6 +228,23 @@ def test_person_contribution_gate_counts_present_tense(tmp_path: Path) -> None:
     assert report.gates_passed is True
 
 
+def test_person_contribution_gate_rejects_non_contribution_text(tmp_path: Path) -> None:
+    # Biographical / scene-setting sentences with no contribution verb must
+    # NOT satisfy the gate -- the broadened regex still discriminates.
+    bundle = _bundle(tmp_path)
+    create_concept(
+        bundle, page_id="Jane Roe", kind="person", aliases=["author:roe_j"],
+    )
+    append_evidence(bundle, "jane-roe", [
+        _ev("c1", "d1", "She was born in Madrid in 1980 and studied physics."),
+        _ev("c2", "d2", "Her group is based at a national laboratory."),
+        _ev("c3", "d3", "The conference was held in Berlin that year."),
+    ])
+    report = compute_maturity(bundle, "jane-roe")
+    assert report.gates["n_quoted_contribution_chunks_ge_3"] is False
+    assert report.gates_passed is False
+
+
 def test_person_fails_without_author_metadata(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     create_concept(bundle, page_id="Anon", kind="person")  # no author: alias
