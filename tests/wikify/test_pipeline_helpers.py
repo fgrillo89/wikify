@@ -80,14 +80,15 @@ def test_log_failure_creates_corpus_root(tmp_path: Path) -> None:
 
 
 def _make_corpus_with_db(
-    tmp_path: Path, *, n_chunks: int, n_embeddings: int,
+    tmp_path: Path, *, n_chunks: int, n_embeddings: int, space: str = "s1",
+    spaces: tuple[tuple[str, str], ...] = (("s1", "2026-01-01"),),
 ) -> Corpus:
     """Corpus with one markdown file and a chunks/embeddings DB.
 
     First ``n_embeddings`` of the ``n_chunks`` chunks get a ``node_type=
-    'chunk'`` vector row; the rest are unembedded. Mirrors the real
-    embeddings schema (space_id, node_type, node_id) so the health check's
-    anti-join query exercises the same shape it does in production.
+    'chunk'`` vector row in ``space``; the rest are unembedded. ``spaces``
+    lists ``(space_id, created_at)`` rows so the health check's
+    latest-space subquery exercises the same selection the reader uses.
     """
     import sqlite3
 
@@ -97,15 +98,23 @@ def _make_corpus_with_db(
     con = sqlite3.connect(corpus.sqlite_path)
     con.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
     con.execute(
+        "CREATE TABLE embedding_spaces (space_id TEXT PRIMARY KEY, "
+        "created_at TEXT)"
+    )
+    con.execute(
         "CREATE TABLE embeddings (space_id TEXT, node_type TEXT, "
         "node_id TEXT, vector BLOB, PRIMARY KEY (space_id, node_type, node_id))"
     )
     con.executemany("INSERT INTO chunks (chunk_id) VALUES (?)",
                     [(f"c{i}",) for i in range(n_chunks)])
     con.executemany(
+        "INSERT INTO embedding_spaces (space_id, created_at) VALUES (?, ?)",
+        list(spaces),
+    )
+    con.executemany(
         "INSERT INTO embeddings (space_id, node_type, node_id, vector) "
-        "VALUES ('s', 'chunk', ?, x'00')",
-        [(f"c{i}",) for i in range(n_embeddings)],
+        "VALUES (?, 'chunk', ?, x'00')",
+        [(space, f"c{i}") for i in range(n_embeddings)],
     )
     con.commit()
     con.close()
@@ -146,6 +155,33 @@ def test_derived_missing_false_when_embeddings_present(tmp_path: Path) -> None:
     corpus = _make_corpus_with_db(tmp_path, n_chunks=5, n_embeddings=5)
     assert pipeline._has_chunks_without_embeddings(corpus) is False
     assert pipeline._derived_artifacts_missing(corpus) is False
+
+
+def test_derived_missing_true_when_only_retired_space_embedded(
+    tmp_path: Path,
+) -> None:
+    """Vectors exist only in an old space; the active (latest) space is empty.
+
+    The reader loads only the latest space, so those chunks are not actually
+    queryable -- the check must still flag refresh.
+    """
+    corpus = _make_corpus_with_db(
+        tmp_path, n_chunks=5, n_embeddings=5, space="old",
+        spaces=(("old", "2026-01-01"), ("new", "2026-02-01")),
+    )
+    assert pipeline._has_chunks_without_embeddings(corpus) is True
+    assert pipeline._derived_artifacts_missing(corpus) is True
+
+
+def test_derived_missing_false_when_latest_space_embedded(
+    tmp_path: Path,
+) -> None:
+    """Chunks embedded in the latest space are healthy despite an older space."""
+    corpus = _make_corpus_with_db(
+        tmp_path, n_chunks=5, n_embeddings=5, space="new",
+        spaces=(("old", "2026-01-01"), ("new", "2026-02-01")),
+    )
+    assert pipeline._has_chunks_without_embeddings(corpus) is False
 
 
 # --- embedding GPU provider selection --------------------------------------

@@ -549,13 +549,17 @@ def _derived_artifacts_missing(paths: Corpus) -> bool:
 
 
 def _has_chunks_without_embeddings(paths: Corpus) -> bool:
-    """True if any chunk lacks a vector (refresh never finished embedding).
+    """True if any chunk lacks a vector in the active embedding space.
 
-    Counts chunks with no ``node_type='chunk'`` row in ``embeddings`` rather
-    than ``embeddings == 0``: an incremental build that adds chunks and then
-    crashes before refresh leaves old vectors in place (count > 0) alongside
-    new, unembedded chunks. A plain non-zero count would mask that and strand
-    the new chunks unqueryable on every re-run.
+    Counts chunks with no ``node_type='chunk'`` row in the *latest* space
+    rather than ``embeddings == 0``: an incremental build that adds chunks
+    and then crashes before refresh leaves old vectors in place (count > 0)
+    alongside new, unembedded chunks. The space is scoped to the same
+    ``ORDER BY created_at DESC LIMIT 1`` row the reader loads
+    (``corpus.chunks._vector_store_from_sqlite``); a chunk embedded only in a
+    retired space is not actually queryable, so it must still count as
+    missing. With no embedding space at all the subquery is empty and every
+    chunk counts as missing -> refresh.
     """
     import sqlite3
 
@@ -564,7 +568,9 @@ def _has_chunks_without_embeddings(paths: Corpus) -> bool:
         try:
             row = con.execute(
                 "SELECT COUNT(*) FROM chunks WHERE chunk_id NOT IN "
-                "(SELECT node_id FROM embeddings WHERE node_type = 'chunk')"
+                "(SELECT node_id FROM embeddings WHERE node_type = 'chunk' "
+                " AND space_id = (SELECT space_id FROM embedding_spaces "
+                "                 ORDER BY created_at DESC LIMIT 1))"
             ).fetchone()
         finally:
             con.close()
