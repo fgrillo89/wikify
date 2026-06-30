@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,58 @@ def test_onnx_providers_cpu_when_no_device(
         lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
     assert embedding._onnx_providers() is None
+
+
+def test_preload_cuda_dlls_returns_bool() -> None:
+    """Best-effort preload returns a bool and never raises (CPU or GPU)."""
+    from wikify import embedding
+
+    assert isinstance(embedding._preload_cuda_dlls(), bool)
+
+
+# --- parse timeout: kill wedged worker -------------------------------------
+
+
+def _hang_worker(*_args: object, **_kwargs: object) -> None:
+    """Module-level (picklable) worker that outlives a short parse_timeout."""
+    import time
+    time.sleep(5)
+
+
+def test_terminate_pool_workers_no_raise() -> None:
+    """_terminate_pool_workers tolerates an empty / live pool."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    pool = ProcessPoolExecutor(max_workers=1)
+    try:
+        pipeline._terminate_pool_workers(pool)  # no workers spawned yet
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="relies on fork-inherited monkeypatch (posix only)",
+)
+def test_parse_timeout_kills_wedged_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file exceeding parse_timeout is killed and counted as failed."""
+    monkeypatch.setattr(pipeline, "_parse_and_persist_worker", _hang_worker)
+    corpus = Corpus(root=tmp_path / "c")
+    corpus.root.mkdir(parents=True, exist_ok=True)
+    srcs = []
+    for name in ("a.pdf", "b.pdf"):
+        p = tmp_path / name
+        p.write_text("x", encoding="utf-8")
+        srcs.append(p)
+    # "default" is a GPU backend -> subprocess-batched path (batch_size>0).
+    receipts, failed = pipeline._stream_parse_and_persist(
+        srcs, corpus, max_workers=1, parser_backend="default",
+        parse_timeout=0.5,
+    )
+    assert failed == 2
+    assert receipts == []
 
 
 def test_release_gpu_memory_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
