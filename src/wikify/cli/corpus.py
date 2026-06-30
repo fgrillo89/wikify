@@ -244,6 +244,17 @@ def cmd_build(
             "to recover via _recover_completed."
         ),
     ),
+    parse_timeout: float = typer.Option(
+        1800.0,
+        "--parse-timeout",
+        help=(
+            "Per-file parse wall-clock cap in seconds for the GPU "
+            "subprocess-batched backend (default 1800). A file that exceeds "
+            "it (e.g. a giant scanned textbook wedged in OCR) is killed and "
+            "treated as a parse failure -- recoverable under --allow-partial. "
+            "Set 0 to disable."
+        ),
+    ),
 ) -> None:
     """Parse, chunk, embed, and graph an input directory.
 
@@ -264,6 +275,7 @@ def cmd_build(
             refresh=not no_refresh,
             resolve_bibliography_doi=openalex,
             allow_partial=allow_partial,
+            parse_timeout=parse_timeout if parse_timeout > 0 else None,
         )
     except CorpusLockHeldError as exc:
         cli_error(

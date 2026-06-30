@@ -19,10 +19,25 @@ wikify corpus build <source> --out data/corpora/<name> \
   [--parser default|lite|marker|docling] \
   [--workers N] \
   [--openalex/--no-openalex] \
-  [--allow-partial]
+  [--allow-partial] \
+  [--parse-timeout SECONDS]
 ```
 
 `<source>` is a directory of documents (PDF / DOCX / PPTX / HTML).
+
+When invoking through `uv run` for a long build, use
+`uv run --no-sync wikify corpus build ...`. Plain `uv run` re-syncs the
+venv on every call; if a `wikify.exe` from a prior run is still alive it
+holds the console script and the sync aborts with `os error 32` before the
+build starts. `--no-sync` skips that mutation. If a build was killed, a
+stale `wikify.exe`/python worker may also be holding the GPU or the
+`.ingest.lock` -- the lock is now reclaimed automatically when its owning
+pid is dead, but kill orphaned workers before relaunching.
+
+`--parse-timeout` (default 1800s) caps each file on the GPU
+subprocess-batched backend; a wedged parse (a giant scanned book stuck in
+OCR) is killed and counted as a parse failure, recoverable under
+`--allow-partial`.
 
 ## Parser-backend choice
 

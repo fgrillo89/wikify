@@ -23,8 +23,12 @@ dependencies = [
     "trafilatura>=2.1.0",
     "docling>=2.107.0",
     # Embeddings / ML stack
-    "fastembed>=0.7.3",
-    "onnxruntime>=1.27.0",
+    # GPU variants: fastembed-gpu pulls onnxruntime-gpu, which exposes the
+    # CUDAExecutionProvider. cuDNN is supplied at runtime from torch's
+    # bundled libs (see embedding._preload_cuda_dlls); CPU fallback is
+    # automatic when no CUDA device is visible.
+    "fastembed-gpu>=0.7.3",
+    "onnxruntime-gpu>=1.27.0",
     "torch>=2.6.0",
     "torchvision>=0.21.0",
     "transformers>=4.48,<4.52",
@@ -40,6 +44,8 @@ dependencies = [
     "rapidfuzz>=3.14.5",
     # Data layer
     "aiosqlite>=0.22.1",
+    # Process liveness for stale-lock reclaim (corpus + bundle run locks)
+    "psutil>=7.0",
     # Templating and rendering
     "jinja2>=3.1",
     "markdown>=3.10.2",
@@ -53,6 +59,10 @@ dependencies = [
 [project.optional-dependencies]
 gdrive = ["google-api-python-client>=2.198.0", "google-auth-oauthlib>=1.4.0"]
 lite = ["pymupdf>=1.24", "pymupdf4llm>=1.27.2.3"]
+# NOTE: marker pulls surya-ocr -> onnxruntime (CPU), which cannot coexist
+# with the default onnxruntime-gpu (both own the `onnxruntime` module).
+# Installing this extra disables GPU embedding. Use marker in a separate
+# CPU-only environment, or set WIKIFY_EMBEDDER=hash / WIKIFY_EMBED_FORCE_CPU=1.
 marker = ["marker-pdf>=1.6"]
 
 [project.scripts]

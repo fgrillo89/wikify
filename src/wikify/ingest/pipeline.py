@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -530,15 +531,37 @@ def _derived_artifacts_missing(paths: Corpus) -> bool:
 
     Catches the case where ingest completed but refresh crashed or was
     skipped -- re-running ``ingest`` should detect this and run refresh.
-    Today the only persistent store is ``wikify.db``; once a corpus
-    has any markdown but no DB, refresh has not run.
+    Two signals: no ``wikify.db`` at all, or a DB whose chunks were
+    persisted but never embedded. Parse persists chunks per file, while
+    embeddings commit only at the very end of refresh; a run killed
+    mid-refresh leaves a DB that *exists* with chunks but zero embeddings.
+    Keying solely off ``sqlite_path.exists()`` would call that corpus
+    healthy and strand it at zero vectors on every unchanged re-run.
     """
     if not paths.markdown_dir.exists():
         return False
     has_md = any(paths.markdown_dir.glob("*.md"))
     if not has_md:
         return False
-    return not paths.sqlite_path.exists()
+    if not paths.sqlite_path.exists():
+        return True
+    return _has_chunks_without_embeddings(paths)
+
+
+def _has_chunks_without_embeddings(paths: Corpus) -> bool:
+    """True if the store holds chunks but no embeddings (refresh unfinished)."""
+    import sqlite3
+
+    try:
+        con = sqlite3.connect(paths.sqlite_path)
+        try:
+            n_chunks = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            n_emb = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return n_chunks > 0 and n_emb == 0
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +698,21 @@ def _log_failure(paths: Corpus, src: Path, exc: BaseException) -> None:
         fh.write(line)
 
 
+def _terminate_pool_workers(pool: ProcessPoolExecutor) -> None:
+    """Forcibly kill a pool's worker subprocesses.
+
+    ``ProcessPoolExecutor.shutdown`` waits for the running task to finish,
+    which is exactly what we cannot do for a wedged parse. Reaching into
+    ``_processes`` to kill the workers is the only portable way to reclaim
+    a hung GPU subprocess and its VRAM.
+    """
+    for proc in list(getattr(pool, "_processes", {}).values()):
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+
 def _stream_parse_and_persist(
     sources: list[Path],
     paths: Corpus,
@@ -682,6 +720,7 @@ def _stream_parse_and_persist(
     parser_backend: str = "default",
     skip_metadata: bool = False,
     on_batch_persist: Callable[[list[FileReceipt]], None] | None = None,
+    parse_timeout: float | None = None,
 ) -> tuple[list[FileReceipt], int]:
     """Parse, persist each source. Returns ``(receipts, failed_count)``.
 
@@ -773,20 +812,32 @@ def _stream_parse_and_persist(
         )
         for batch_idx, batch_start in enumerate(range(0, total, batch_size)):
             chunk = sources[batch_start:batch_start + batch_size]
-            with ProcessPoolExecutor(max_workers=1) as pool:
-                futures = {
-                    pool.submit(
+            # One worker, files run serially. Submit one at a time so
+            # ``parse_timeout`` bounds each file: a wedged parse (a giant
+            # scanned textbook hitting OCR with no upstream cap) would
+            # otherwise monopolize the worker forever. On timeout we kill
+            # the worker, mark the file failed, and start a fresh worker
+            # for the rest of the batch.
+            pool = ProcessPoolExecutor(max_workers=1)
+            try:
+                for src in chunk:
+                    fut = pool.submit(
                         _parse_and_persist_worker, str(src), corpus_root_str,
                         parser_backend, skip_metadata,
-                    ): src
-                    for src in chunk
-                }
-                for fut in as_completed(futures):
-                    src = futures[fut]
+                    )
                     try:
-                        _on_success(src, fut.result())
+                        _on_success(src, fut.result(timeout=parse_timeout))
+                    except FutureTimeout:
+                        _on_failure(src, TimeoutError(
+                            f"parse exceeded {parse_timeout:.0f}s timeout",
+                        ))
+                        _terminate_pool_workers(pool)
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        pool = ProcessPoolExecutor(max_workers=1)
                     except Exception as exc:  # noqa: BLE001
                         _on_failure(src, exc)
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
             # Pool shutdown here: worker subprocess exits, returning
             # all CUDA allocations + heap to the OS. Commit this
             # batch's receipts to SQLite BEFORE the next batch starts
@@ -1499,6 +1550,7 @@ def ingest_corpus(
     cite_resolution: str = "crossref",
     dedup_same_stem: bool = True,
     allow_partial: bool = False,
+    parse_timeout: float | None = None,
 ) -> Corpus:
     """Ingest a directory of sources into a corpus bundle.
 
@@ -1557,6 +1609,7 @@ def ingest_corpus(
             cite_resolution=cite_resolution,
             dedup_same_stem=dedup_same_stem,
             allow_partial=allow_partial,
+            parse_timeout=parse_timeout,
         )
     finally:
         release_lock(paths, owner=lock_owner)
@@ -1576,6 +1629,7 @@ def _ingest_corpus_locked(
     cite_resolution: str,
     dedup_same_stem: bool,
     allow_partial: bool,
+    parse_timeout: float | None = None,
 ) -> Corpus:
     """Body of ``ingest_corpus`` that runs while holding the build lock.
 
@@ -1633,6 +1687,7 @@ def _ingest_corpus_locked(
                 parser_backend=parser_backend,
                 timings=timings,
                 recovered_receipts=recovered,
+                parse_timeout=parse_timeout,
             )
             receipts.extend(new_receipts)
             # Recovered receipts also flow into the manifest update below;

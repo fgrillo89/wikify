@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -47,7 +48,7 @@ def _parse_iso(s: str) -> datetime | None:
         return None
 
 
-def _is_stale(record: dict) -> bool:
+def _ttl_expired(record: dict) -> bool:
     expires_s = record.get("expires_at")
     if expires_s:
         expires = _parse_iso(expires_s)
@@ -62,6 +63,29 @@ def _is_stale(record: dict) -> bool:
     if acquired is None:
         return False
     return datetime.now(UTC) > acquired + timedelta(seconds=int(ttl))
+
+
+def _owner_pid_dead(record: dict) -> bool:
+    """True if the lock names a pid on THIS host that is no longer alive.
+
+    A killed run leaves its lock behind with the configured TTL; without
+    this, the next run is blocked until the TTL elapses on a process that no
+    longer exists. Only judged when the recorded ``host`` matches ours.
+    Missing host/pid (older lock format) is 'cannot tell' -> not dead.
+    """
+    pid = record.get("pid")
+    if not pid or record.get("host") != socket.gethostname():
+        return False
+    try:
+        import psutil
+
+        return not psutil.pid_exists(int(pid))
+    except Exception:  # noqa: BLE001 - if we can't tell, do not reclaim
+        return False
+
+
+def _is_stale(record: dict) -> bool:
+    return _ttl_expired(record) or _owner_pid_dead(record)
 
 
 def read_lock(bundle: Bundle) -> dict | None:
@@ -80,6 +104,7 @@ def _build_record(owner: str, ttl_seconds: int) -> dict:
     return {
         "owner": owner,
         "pid": os.getpid(),
+        "host": socket.gethostname(),
         "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ttl_seconds": ttl_seconds,
