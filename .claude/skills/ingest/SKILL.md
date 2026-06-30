@@ -1,6 +1,6 @@
 ---
 name: ingest
-description: Parse a directory of documents (PDF / DOCX / PPTX / HTML) into a queryable Wikify corpus. Use when the user has local files to turn into a corpus, or to finish an arxiv harvest. Wraps `wikify corpus build` and owns parser-backend choice (docling default, marker, lite), the --out convention, partial-failure policy, and post-build health checks.
+description: Parse a directory of documents (PDF / DOCX / PPTX / HTML) into a queryable Wikify corpus. Use when the user has local files to turn into a corpus, or to finish an arxiv harvest. Wraps `wikify corpus build` and owns parser-backend choice (docling default, lite), the --out convention, partial-failure policy, and post-build health checks.
 allowed-tools: Bash(wikify corpus *)
 ---
 
@@ -16,13 +16,44 @@ before handing it to a build workflow.
 ```sh
 wikify corpus build <source> --out data/corpora/<name> \
   [--mode additive|sync] \
-  [--parser default|lite|marker|docling] \
+  [--parser default|lite|docling] \
   [--workers N] \
   [--openalex/--no-openalex] \
-  [--allow-partial]
+  [--allow-partial] \
+  [--parse-timeout SECONDS]
 ```
 
 `<source>` is a directory of documents (PDF / DOCX / PPTX / HTML).
+
+When invoking through `uv run` for a long build, use
+`uv run --no-sync wikify corpus build ...`. Plain `uv run` re-syncs the
+venv on every call; if a `wikify.exe` from a prior run is still alive it
+holds the console script and the sync aborts with `os error 32` before the
+build starts. `--no-sync` skips that mutation. If a build was killed, a
+stale `wikify.exe`/python worker may also be holding the GPU or the
+`.ingest.lock` -- the lock is now reclaimed automatically when its owning
+pid is dead, but kill orphaned workers before relaunching.
+
+`--parse-timeout` (default 1800s) caps each file on the GPU
+subprocess-batched backend; a wedged parse (a giant scanned book stuck in
+OCR) is killed and counted as a parse failure, recoverable under
+`--allow-partial`.
+
+## GPU embeddings (opt-in)
+
+The default `onnxruntime` is the CPU build, so the embedding stage runs on
+CPU (~5/s). The GPU variant cannot be a default dependency -- the
+`onnxruntime-gpu` Linux wheel hard-links the CUDA runtime at import and
+breaks CPU/CI hosts. On a CUDA box, enable GPU embeddings after `uv sync`
+by reinstalling the GPU variants in place:
+`uv pip install --reinstall onnxruntime-gpu fastembed-gpu`.
+
+They replace the `onnxruntime` / `fastembed` modules in place;
+`embedding._onnx_providers` then selects the CUDAExecutionProvider
+automatically (cuDNN is preloaded from torch's bundled libs). Needs a CUDA
+runtime matching the `onnxruntime-gpu` major version on the system path.
+Embedding throughput rises ~50-100x (jina-v2-small ~5/s CPU -> ~300-560/s
+CUDA). A later `uv sync` reverts to CPU; re-run the reinstall.
 
 ## Parser-backend choice
 
@@ -31,8 +62,6 @@ wikify corpus build <source> --out data/corpora/<name> \
   layout / table models; after the cache is warm the median PDF parses
   in ~10 s on an Ampere GPU. Pick this when equation/table fidelity
   matters.
-- `marker`: the fastest PDF path. Use it when equation extraction is
-  not needed and wall-clock matters more than formula fidelity.
 - `lite`: CI / low-resource backend (pymupdf4llm + python-docx +
   python-pptx + trafilatura, no models). Use it where the model
   downloads are unaffordable.

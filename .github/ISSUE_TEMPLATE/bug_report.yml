@@ -40,7 +40,6 @@ body:
       description: Which parser backend was in use, if relevant.
       options:
         - docling (default)
-        - marker
         - lite
         - not applicable
     validations:

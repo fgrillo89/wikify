@@ -28,7 +28,7 @@ topic graph. The full set of flags:
 
 ```
 wikify corpus build <source-dir> --out <corpus-dir>
-    [--parser default|lite|marker|docling]
+    [--parser default|lite|docling]
     [--mode additive|sync]
     [--workers N]
     [--no-refresh]
@@ -68,14 +68,13 @@ Two kinds of duplicate are filtered out automatically:
 
 Parsing is the step that turns a binary file (a PDF, a Word document)
 into clean Markdown text plus extracted images, equations, and section
-structure. Wikify supports four **parser backends**, chosen with
+structure. Wikify supports three **parser backends**, chosen with
 `--parser`:
 
 | Backend | PDF / DOCX / PPTX / HTML parser | When to use |
 | --- | --- | --- |
 | `default` | Docling | The default. Best quality. |
 | `docling` | Docling (everywhere) | Same as default; one parser for all formats. |
-| `marker` | Marker for PDFs | Fast PDF path when you do not need equations. |
 | `lite` | pymupdf4llm + python-docx + python-pptx + trafilatura | CI, tests, low-resource machines. No models. |
 
 `.md`, `.markdown`, and `.txt` files always go through a built-in
@@ -97,20 +96,9 @@ along with the layout and table models; after the model cache is warm a
 typical PDF parses in roughly ten seconds on a GPU. GPU acceleration is
 used automatically when CUDA is available.
 
-Docling is the default because, on real papers, its wall-clock time is
-within about 13% of Marker while its structural formula extraction
-produces materially cleaner equation LaTeX.
-
-### Marker (PDF fallback)
-
-[Marker](https://github.com/datalab-to/marker) is a surya-based PDF
-pipeline: layout detection, OCR, equation extraction, and table
-recognition, GPU-accelerated when available. It emits equations as
-`$...$` and `$$...$$` LaTeX and keeps inline citation markers as
-superscripts. Pass `--parser marker` for the absolute-fastest PDF path
-when you do not need Docling's higher-quality equation extraction. Marker
-only overrides the PDF parser; DOCX, PPTX, and HTML still use the
-built-in readers.
+Docling is the default because, on real papers, its structural formula
+extraction produces materially cleaner equation LaTeX than lightweight
+text extractors at competitive wall-clock time.
 
 ### Lite (no models)
 
@@ -124,7 +112,7 @@ images. Library callers (tests and scripts) get `lite` by default; the
 get the best parsers.
 
 The selected backend is validated before any file is parsed, so a missing
-dependency (for example, Marker not installed) fails fast with a clear
+dependency (for example, Docling not installed) fails fast with a clear
 message instead of failing once per file midway through a long run.
 
 ## Chunking
