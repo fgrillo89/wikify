@@ -575,7 +575,11 @@ def _has_chunks_without_embeddings(paths: Corpus) -> bool:
         finally:
             con.close()
     except sqlite3.Error:
-        return False
+        # A query error here means the embeddings/embedding_spaces tables are
+        # missing or unreadable -- the same state the vector-store reader
+        # would choke on. Fail safe to "needs refresh" so a re-run rebuilds
+        # them rather than advertising a half-written DB as healthy.
+        return True
     return bool(row and row[0] > 0)
 
 

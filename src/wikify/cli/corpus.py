@@ -333,7 +333,7 @@ def cmd_rechunk(
 ) -> None:
     """Re-chunk an existing corpus from saved markdown.
 
-    Skips parsing entirely (no Marker, no Docling, no OCR). Reads
+    Skips parsing entirely (no Docling, no OCR). Reads
     each doc's persisted markdown and image sidecars, runs the
     universal HybridChunker, re-extracts equations / citations /
     figure refs, and rewrites the chunk-derived disk artefacts plus

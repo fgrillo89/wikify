@@ -142,6 +142,28 @@ def test_derived_missing_true_when_chunks_but_no_embeddings(
     assert pipeline._derived_artifacts_missing(corpus) is True
 
 
+def test_derived_missing_true_when_embeddings_tables_absent(
+    tmp_path: Path,
+) -> None:
+    """A DB with chunks but no embeddings/embedding_spaces tables fails safe.
+
+    The query errors (same state the vector reader would choke on); the
+    healer must say 'needs refresh' rather than declare the corpus healthy.
+    """
+    import sqlite3
+
+    corpus = Corpus(root=tmp_path / "c")
+    corpus.markdown_dir.mkdir(parents=True, exist_ok=True)
+    (corpus.markdown_dir / "doc.md").write_text("# doc", encoding="utf-8")
+    con = sqlite3.connect(corpus.sqlite_path)
+    con.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
+    con.execute("INSERT INTO chunks (chunk_id) VALUES ('c0')")
+    con.commit()
+    con.close()
+    assert pipeline._has_chunks_without_embeddings(corpus) is True
+    assert pipeline._derived_artifacts_missing(corpus) is True
+
+
 def test_derived_missing_true_when_some_chunks_unembedded(
     tmp_path: Path,
 ) -> None:

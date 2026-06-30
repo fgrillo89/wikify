@@ -182,7 +182,11 @@ def _preload_cuda_dlls() -> bool:
         import torch
 
         torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
-        if os.path.isdir(torch_lib):
+        # os.add_dll_directory exists only on Windows; on Linux the loader
+        # uses the directory passed to preload_dlls (and RPATH/LD_LIBRARY_PATH).
+        # Calling it unconditionally would raise AttributeError on Linux and
+        # wrongly disable CUDA there.
+        if os.path.isdir(torch_lib) and hasattr(os, "add_dll_directory"):
             os.add_dll_directory(torch_lib)
         ort.preload_dlls(cuda=False, cudnn=True, directory=torch_lib)
         return True

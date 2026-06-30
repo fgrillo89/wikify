@@ -1,7 +1,7 @@
 """Ingest DAG: four-phase per-source pipeline + step functions.
 
 Today's serial ``_parse_worker`` loop does four things back-to-back for
-every source: open the PDF, hit CrossRef / doi.org, run Marker/Docling,
+every source: open the PDF, hit CrossRef / doi.org, run Docling,
 fuse metadata.  Two of those (DOI resolution and content parsing) are
 on independent resources — one is network-bound, the other GPU-bound —
 so running them sequentially wastes wall-clock time.

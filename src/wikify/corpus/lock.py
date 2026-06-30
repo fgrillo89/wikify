@@ -176,6 +176,13 @@ def acquire_lock(
     Race-safe via ``O_EXCL`` for fresh acquisition and ``os.replace``
     + post-write owner verification for stale-lock reclaim. ``force=True``
     overrides a live lock without raising.
+
+    The stale-reclaim path carries a narrow check->replace->readback window
+    in which two processes simultaneously reclaiming the *same* stale lock
+    could both verify their own write; this is an accepted trade-off of the
+    OS-lock-free design (closing it needs ``fcntl``/``msvcrt``). The
+    dead-pid staleness check (``_owner_pid_dead``) reaches this path sooner
+    after a crash, but a corpus build is normally run one-at-a-time.
     """
     corpus.root.mkdir(parents=True, exist_ok=True)
     path = _lock_path(corpus)

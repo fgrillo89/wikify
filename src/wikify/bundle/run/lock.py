@@ -178,6 +178,11 @@ def acquire_lock(
     ``os.replace`` and verifies the resulting on-disk owner; the
     loser raises ``LockHeldError``. ``force=True`` overrides a live
     lock and returns the displaced record.
+
+    The stale-reclaim verify carries a narrow check->replace->readback
+    window (accepted trade-off of the OS-lock-free design); the dead-pid
+    staleness check reaches it sooner after a crash, but runs are normally
+    one-at-a-time.
     """
     bundle.run_dir.mkdir(parents=True, exist_ok=True)
     record = _build_record(owner, ttl_seconds)
