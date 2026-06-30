@@ -220,7 +220,7 @@ def cmd_build(
     parser: str = typer.Option(
         "default",
         "--parser",
-        help="Parser backend: default|lite|marker|docling.",
+        help="Parser backend: default|lite|docling.",
     ),
     workers: int = typer.Option(0, "--workers"),
     no_refresh: bool = typer.Option(False, "--no-refresh"),

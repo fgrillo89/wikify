@@ -14,7 +14,6 @@ def test_worker_batch_size_default_for_gpu_backends() -> None:
     """GPU backends restart workers every 20 papers by default."""
     assert pipeline._worker_batch_size("default") == 20
     assert pipeline._worker_batch_size("docling") == 20
-    assert pipeline._worker_batch_size("marker") == 20
 
 
 def test_worker_batch_size_zero_for_cpu_backends() -> None:
@@ -74,6 +73,111 @@ def test_log_failure_creates_corpus_root(tmp_path: Path) -> None:
     assert not corpus.root.exists()
     pipeline._log_failure(corpus, Path("a.pdf"), RuntimeError("x"))
     assert (corpus.root / "failed_files.log").exists()
+
+
+# --- refresh self-heal (derived-artifacts health check) --------------------
+
+
+def _make_corpus_with_db(
+    tmp_path: Path, *, n_chunks: int, n_embeddings: int,
+) -> Corpus:
+    """Corpus with one markdown file and a minimal chunks/embeddings DB."""
+    import sqlite3
+
+    corpus = Corpus(root=tmp_path / "c")
+    corpus.markdown_dir.mkdir(parents=True, exist_ok=True)
+    (corpus.markdown_dir / "doc.md").write_text("# doc", encoding="utf-8")
+    con = sqlite3.connect(corpus.sqlite_path)
+    con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY)")
+    con.execute("CREATE TABLE embeddings (id INTEGER PRIMARY KEY)")
+    con.executemany("INSERT INTO chunks (id) VALUES (?)",
+                    [(i,) for i in range(n_chunks)])
+    con.executemany("INSERT INTO embeddings (id) VALUES (?)",
+                    [(i,) for i in range(n_embeddings)])
+    con.commit()
+    con.close()
+    return corpus
+
+
+def test_derived_missing_false_when_no_markdown(tmp_path: Path) -> None:
+    corpus = Corpus(root=tmp_path / "c")
+    assert pipeline._derived_artifacts_missing(corpus) is False
+
+
+def test_derived_missing_true_when_markdown_but_no_db(tmp_path: Path) -> None:
+    corpus = Corpus(root=tmp_path / "c")
+    corpus.markdown_dir.mkdir(parents=True, exist_ok=True)
+    (corpus.markdown_dir / "doc.md").write_text("# doc", encoding="utf-8")
+    assert pipeline._derived_artifacts_missing(corpus) is True
+
+
+def test_derived_missing_true_when_chunks_but_no_embeddings(
+    tmp_path: Path,
+) -> None:
+    """Refresh killed mid-way: DB exists, chunks persisted, zero vectors."""
+    corpus = _make_corpus_with_db(tmp_path, n_chunks=5, n_embeddings=0)
+    assert pipeline._has_chunks_without_embeddings(corpus) is True
+    assert pipeline._derived_artifacts_missing(corpus) is True
+
+
+def test_derived_missing_false_when_embeddings_present(tmp_path: Path) -> None:
+    corpus = _make_corpus_with_db(tmp_path, n_chunks=5, n_embeddings=5)
+    assert pipeline._has_chunks_without_embeddings(corpus) is False
+    assert pipeline._derived_artifacts_missing(corpus) is False
+
+
+# --- embedding GPU provider selection --------------------------------------
+
+
+def test_cuda_device_visible_returns_bool() -> None:
+    """Probe returns a bool and never raises, regardless of torch state."""
+    from wikify import embedding
+
+    assert isinstance(embedding._cuda_device_visible(), bool)
+
+
+def test_onnx_providers_force_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wikify import embedding
+
+    monkeypatch.setenv("WIKIFY_EMBED_FORCE_CPU", "1")
+    assert embedding._onnx_providers() == ["CPUExecutionProvider"]
+
+
+def test_onnx_providers_requests_cuda_when_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CUDA in available providers + a visible device -> CUDA requested."""
+    from wikify import embedding
+
+    monkeypatch.delenv("WIKIFY_EMBED_FORCE_CPU", raising=False)
+    monkeypatch.setattr(embedding, "_cuda_device_visible", lambda: True)
+    monkeypatch.setattr(embedding, "_preload_cuda_dlls", lambda: True)
+
+    import onnxruntime as ort
+    monkeypatch.setattr(
+        ort, "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    assert embedding._onnx_providers() == [
+        "CUDAExecutionProvider", "CPUExecutionProvider",
+    ]
+
+
+def test_onnx_providers_cpu_when_no_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CUDA compiled in but no visible device -> fall through to CPU/None."""
+    from wikify import embedding
+
+    monkeypatch.delenv("WIKIFY_EMBED_FORCE_CPU", raising=False)
+    monkeypatch.setattr(embedding, "_cuda_device_visible", lambda: False)
+
+    import onnxruntime as ort
+    monkeypatch.setattr(
+        ort, "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    assert embedding._onnx_providers() is None
 
 
 def test_release_gpu_memory_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:

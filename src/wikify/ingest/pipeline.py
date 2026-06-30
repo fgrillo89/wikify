@@ -122,8 +122,8 @@ class FileReceipt:
 # ---------------------------------------------------------------------------
 
 # Preference order when multiple formats of the same paper live in the
-# same source directory. PDF wins because layout-aware parsers (Marker,
-# Docling) produce cleaner markdown than ad-hoc .docx/.pptx conversions
+# same source directory. PDF wins because layout-aware parsers (Docling)
+# produce cleaner markdown than ad-hoc .docx/.pptx conversions
 # — see the Chua 1971 regression where a .docx companion to a .pdf
 # produced fragmented images and sparse chunks. Lower-ranked formats
 # are skipped at source-enumeration time so we don't waste parse cycles
@@ -373,7 +373,7 @@ def _chunks_from_docling(doc_id: str, docling_chunks: list[dict]) -> list[Chunk]
     Applies ``_split_oversize`` after converting each docling chunk so the
     chunker's hard cap (``max_chunk_chars()`` derived from the active
     embedder's ``max_tokens``) is enforced uniformly — ``chunk_document``
-    already respects it for Marker/default parsers, and this path was
+    already respects it for the default/docling parsers, and this path was
     skipping the same safety net. HybridChunker's own ``max_tokens=2000``
     is a merge-peer hint, not a hard cap — it routinely emits chunks that
     overshoot (observed 8 k chars on dense Word-sourced papers), which
@@ -436,7 +436,7 @@ def _merge_equation_sources(
     Dedupe key is the equation id (sha1 of normalised latex), so a
     formula picked up by both sources counts once. Docling records
     take precedence on collision because their LaTeX is decoded by
-    Granite-Docling rather than emitted by Marker's heuristics.
+    Granite-Docling rather than heuristic text extraction.
     """
     by_id: dict[str, dict] = {}
     for rec in docling:
@@ -1567,7 +1567,7 @@ def ingest_corpus(
     ``parser_backend`` defaults to ``"lite"`` (pymupdf4llm + python-docx
     + python-pptx + trafilatura — no GPU models, fast to start) because
     most library callers are tests or scripts that should not pay for
-    Marker/Docling model downloads on first use. The CLI entry point
+    Docling model downloads on first use. The CLI entry point
     (``wikify ingest``) explicitly passes ``"default"`` so interactive
     users get the best-quality parsers. See ``ParserBackend`` for the
     full list.
@@ -1697,7 +1697,7 @@ def _ingest_corpus_locked(
 
     # 2a. Abort BEFORE manifest update + refresh if any file failed to
     # parse. Quality-over-completeness default: a partial corpus
-    # advertised as queryable would mask Docling/marker failures and
+    # advertised as queryable would mask Docling parse failures and
     # let downstream wiki writes silently miss papers. The persisted
     # markdown + SQLite rows from successful papers stay on disk so
     # _recover_completed picks them up next run; only the failed

@@ -3,8 +3,8 @@
 Parser selection is a single ``ParserBackend`` enum. Each member
 returns its own override table; ``DEFAULT`` adds no overrides, so
 every suffix goes to the built-in ``_PARSER_TABLE``. Other members
-replace the parser for specific suffixes (e.g. ``MARKER`` replaces
-``.pdf``).
+replace the parser for specific suffixes (e.g. ``DOCLING`` replaces
+``.pdf`` and the other formats).
 
 To add a new backend:
 
@@ -108,11 +108,6 @@ def _lazy_html():
     return p
 
 
-def _lazy_marker():
-    from . import marker_pdf as p
-    return p
-
-
 def _lazy_docling():
     from . import docling as p
     return p
@@ -157,14 +152,13 @@ class ParserBackend(str, Enum):
     on par with single-parser alternatives), built-in markdown reader
     for ``.md`` / ``.markdown`` / ``.txt``. LITE is the lightweight
     escape hatch (pymupdf4llm + python-docx + python-pptx +
-    trafilatura) for CI, tests, and low-resource environments. MARKER
-    and DOCLING are single-parser overrides for users who want one
-    parser everywhere.
+    trafilatura) for CI, tests, and low-resource environments. DOCLING
+    is a single-parser override (Docling everywhere) for users who want
+    one parser across all formats.
     """
 
     DEFAULT = "default"
     LITE = "lite"
-    MARKER = "marker"
     DOCLING = "docling"
 
     @property
@@ -172,7 +166,6 @@ class ParserBackend(str, Enum):
         """GPU-bound backends must not be parallelised across worker processes."""
         return self in {
             ParserBackend.DEFAULT,
-            ParserBackend.MARKER,
             ParserBackend.DOCLING,
         }
 
@@ -196,9 +189,6 @@ _OVERRIDES: dict[ParserBackend, dict[str, tuple[DocKind, Callable]]] = {
         "pptx": ("pptx", _lazy_docling),
         "html": ("html", _lazy_docling),
         "htm":  ("html", _lazy_docling),
-    },
-    ParserBackend.MARKER: {
-        "pdf":  ("pdf",  _lazy_marker),
     },
     ParserBackend.DOCLING: {
         "pdf":  ("pdf",  _lazy_docling),
@@ -275,7 +265,7 @@ def validate_backend(backend: str | ParserBackend) -> None:
     Call this before ingest starts so the user gets a clear error
     before any files are parsed. Invokes each lazy loader in the
     backend's override table to force the parser-module import, so
-    a missing dependency (e.g. ``marker-pdf`` not installed) surfaces
+    a missing dependency (e.g. Docling not installed) surfaces
     here rather than per-file during ingest.
     """
     key = backend.value if isinstance(backend, ParserBackend) else backend
@@ -302,7 +292,7 @@ def parse_file(
     uninstalled backends raise ``ValueError``. The default is ``LITE``
     so library callers (tests, scripts) get fast lightweight parsers
     and don't pay for GPU-model initialisation unless they explicitly
-    ask for ``DEFAULT`` (or ``MARKER`` / ``DOCLING``). The CLI opts
+    ask for ``DEFAULT`` (or ``DOCLING``). The CLI opts
     into ``DEFAULT`` for end-user ingest.
 
     ``skip_metadata`` is forwarded to PDF parsers that support it;

@@ -119,3 +119,62 @@ def test_force_overrides_live_lock(tmp_path: Path) -> None:
     rec = read_lock(c)
     assert rec is not None
     assert rec["owner"] == "b"
+
+
+# --- dead-PID stale-lock reclaim -------------------------------------------
+
+import socket  # noqa: E402
+
+from wikify.corpus.lock import _owner_pid_dead  # noqa: E402
+
+_HOST = socket.gethostname()
+_FAR_FUTURE = "2999-01-01T00:00:00Z"
+
+
+def _write_lock(c: Corpus, **fields: object) -> None:
+    c.root.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "owner": "old", "acquired_at": _FAR_FUTURE,
+        "expires_at": _FAR_FUTURE, "ttl_seconds": 86400, "root": str(c.root),
+    }
+    rec.update(fields)
+    (c.root / ".ingest.lock").write_text(json.dumps(rec), encoding="utf-8")
+
+
+def test_acquire_writes_host(tmp_path: Path) -> None:
+    c = _corpus(tmp_path)
+    acquire_lock(c, owner="t")
+    assert read_lock(c)["host"] == _HOST
+
+
+def test_dead_pid_same_host_is_stale() -> None:
+    assert _owner_pid_dead({"pid": 999999, "host": _HOST}) is True
+
+
+def test_live_pid_same_host_not_stale() -> None:
+    assert _owner_pid_dead({"pid": os.getpid(), "host": _HOST}) is False
+
+
+def test_dead_pid_other_host_not_judged() -> None:
+    # A pid from another machine says nothing about our process table.
+    assert _owner_pid_dead({"pid": 999999, "host": "some-other-host"}) is False
+
+
+def test_missing_host_or_pid_not_judged() -> None:
+    assert _owner_pid_dead({"pid": 999999}) is False
+    assert _owner_pid_dead({"host": _HOST}) is False
+
+
+def test_dead_pid_lock_reclaimed_despite_valid_ttl(tmp_path: Path) -> None:
+    """A dead owner's lock is reclaimed even though its TTL has not expired."""
+    c = _corpus(tmp_path)
+    _write_lock(c, pid=999999, host=_HOST)
+    acquire_lock(c, owner="new")
+    assert read_lock(c)["owner"] == "new"
+
+
+def test_live_pid_lock_held_despite_request(tmp_path: Path) -> None:
+    c = _corpus(tmp_path)
+    _write_lock(c, pid=os.getpid(), host=_HOST)
+    with pytest.raises(CorpusLockHeldError):
+        acquire_lock(c, owner="intruder")
