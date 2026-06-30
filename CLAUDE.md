@@ -19,7 +19,7 @@ committed wiki pages are the human-facing output.
   - `query` — answer from the committed wiki, falling back to corpus search.
   - `arxiv` — acquire arXiv papers and stage them for a build.
   - `ingest` — parse local documents into a corpus (owns parser-backend
-    choice: docling default, marker, lite).
+    choice: docling default, lite).
 - `.claude/skills/wikify/subskills/reference/` — agent-facing reference:
   schemas, CLI grammar, citation format, write constraints, and
   exploration patterns. A new strategy is a new workflow skill, not new

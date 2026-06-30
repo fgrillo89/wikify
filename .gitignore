@@ -120,3 +120,5 @@ tmp_writes/
 # it. Match instead on the distinctive ``.claudeprojectsC--dev-scholarforge``
 # substring the harness embeds inside the leaked filenames.
 /C*.claudeprojectsC--dev-scholarforge*
+
+.coverage

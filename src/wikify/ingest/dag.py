@@ -15,7 +15,7 @@ Two wave shapes are supported:
   event loop — step[0] is a network-bound async coroutine (invoked
   directly) and step[1] is a GPU/CPU-bound sync function (dispatched to
   ``loop.run_in_executor``).  Used by the ingest DAG's ``resolve+parse``
-  wave so DOI batch resolution (HTTP) and Marker/Docling content parsing
+  wave so DOI batch resolution (HTTP) and Docling content parsing
   (process pool) overlap on the wall clock instead of serialising.
 
 Each step is a ``Callable[[dict], None]`` (or ``Awaitable[None]`` for

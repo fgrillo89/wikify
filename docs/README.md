@@ -30,7 +30,7 @@ expands one part of it.
 
 - **ingestion.md** *(to write)* — how a PDF/DOCX/PPTX/HTML/Markdown file
   becomes corpus chunks, embeddings, and a graph; parser backends
-  (docling default, marker, lite); references and author resolution.
+  (docling default, lite); references and author resolution.
 - **corpus.md** *(to write)* — the corpus store and its read surfaces:
   semantic search, full-text search, and graph traversal.
 

@@ -164,12 +164,47 @@ def _hash_embed(texts: Sequence[str], dim: int = HASH_DIM) -> np.ndarray:
     return out / safe[:, None]
 
 
+def _preload_cuda_dlls() -> bool:
+    """Make onnxruntime-gpu's CUDA provider loadable from torch's bundled libs.
+
+    onnxruntime-gpu ships against a CUDA major version but not the runtime
+    DLLs themselves; the CUDA toolkit supplies ``cudart``/``cublas`` (found
+    on PATH) while cuDNN ``cudnn64_9.dll`` is frequently absent system-wide,
+    which makes the CUDA EP silently fall back to CPU. Torch (a hard
+    dependency, already CUDA-enabled for the docling parse) bundles a
+    matching cuDNN 9 under its ``lib`` dir, so we preload cuDNN from there
+    and leave the CUDA runtime to the system install. Best-effort: any
+    failure leaves the default search path in place and the caller degrades
+    to CPU. Returns True iff the preload ran without error.
+    """
+    try:
+        import onnxruntime as ort
+        import torch
+
+        torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+        # os.add_dll_directory exists only on Windows; on Linux the loader
+        # uses the directory passed to preload_dlls (and RPATH/LD_LIBRARY_PATH).
+        # Calling it unconditionally would raise AttributeError on Linux and
+        # wrongly disable CUDA there.
+        if os.path.isdir(torch_lib) and hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(torch_lib)
+        ort.preload_dlls(cuda=False, cudnn=True, directory=torch_lib)
+        return True
+    except Exception:  # noqa: BLE001 - best-effort; CPU fallback is fine
+        return False
+
+
 def _onnx_providers() -> list[str] | None:
     """Return GPU-accelerated ONNX providers if available, else None (default).
 
     ``WIKIFY_EMBED_FORCE_CPU=1`` forces CPU, a safety valve for long-context
     embedders on GPUs that OOM on 8k sequences (DirectML on 8 GB cards
     cannot run jina-v2-small / nomic at full context).
+
+    CUDA is requested only when a CUDA device is actually visible
+    (``torch.cuda.is_available()``) so machines with onnxruntime-gpu but no
+    usable runtime degrade to CPU instead of tripping the silent-fallback
+    health check. cuDNN is preloaded from torch's bundled libs first.
     """
     if os.environ.get("WIKIFY_EMBED_FORCE_CPU", "") == "1":
         return ["CPUExecutionProvider"]
@@ -177,7 +212,15 @@ def _onnx_providers() -> list[str] | None:
         import onnxruntime as ort
 
         available = ort.get_available_providers()
-        if "CUDAExecutionProvider" in available:
+        if (
+            "CUDAExecutionProvider" in available
+            and _cuda_device_visible()
+            and _preload_cuda_dlls()
+        ):
+            # Only request CUDA once its runtime DLLs (cuDNN) actually
+            # loaded. If the preload failed there's no point requesting an
+            # EP that will silently drop to CPU and then trip the
+            # silent-fallback health check -- fall through to CPU cleanly.
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if "DmlExecutionProvider" in available:
             return ["DmlExecutionProvider", "CPUExecutionProvider"]
@@ -188,6 +231,16 @@ def _onnx_providers() -> list[str] | None:
         # provider instead of crashing every query-embedding path.
         pass
     return None
+
+
+def _cuda_device_visible() -> bool:
+    """True if torch sees a usable CUDA device. Best-effort, never raises."""
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _load_fe(model: str | None) -> None:

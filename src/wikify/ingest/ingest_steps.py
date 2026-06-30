@@ -1,7 +1,7 @@
 """Ingest DAG: four-phase per-source pipeline + step functions.
 
 Today's serial ``_parse_worker`` loop does four things back-to-back for
-every source: open the PDF, hit CrossRef / doi.org, run Marker/Docling,
+every source: open the PDF, hit CrossRef / doi.org, run Docling,
 fuse metadata.  Two of those (DOI resolution and content parsing) are
 on independent resources — one is network-bound, the other GPU-bound —
 so running them sequentially wastes wall-clock time.
@@ -274,6 +274,7 @@ def _ingest_content_parse(ctx: dict) -> None:
         parser_backend,
         skip_metadata=True,
         on_batch_persist=_persist_to_sqlite,
+        parse_timeout=ctx.get("parse_timeout"),
     )
     ctx["parse_failed_count"] = failed_count
     ctx["receipts"] = receipts
@@ -420,6 +421,7 @@ def run_ingest_dag(
     parser_backend: str,
     timings: dict[str, float],
     recovered_receipts: list | None = None,
+    parse_timeout: float | None = None,
 ) -> tuple[list, int]:
     """Build the shared ctx, run ``INGEST_DAG``, return ``(receipts,
     parse_failed_count)``.
@@ -443,6 +445,7 @@ def run_ingest_dag(
         parser_backend=parser_backend,
         max_workers=max_workers,
         recovered_receipts=list(recovered_receipts or []),
+        parse_timeout=parse_timeout,
     )
     run_dag(INGEST_DAG, ctx, timings=timings)
     return ctx.get("receipts") or [], int(ctx.get("parse_failed_count", 0))
