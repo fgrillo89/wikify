@@ -58,6 +58,16 @@ def _ttl_expired(record: dict) -> bool:
     return datetime.now(UTC) > acquired + timedelta(seconds=int(ttl))
 
 
+def _proc_started_at() -> float | None:
+    """This process's creation time (epoch seconds), or None if unknowable."""
+    try:
+        import psutil
+
+        return psutil.Process(os.getpid()).create_time()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _owner_pid_dead(record: dict) -> bool:
     """True if the lock names a pid on THIS host that is no longer alive.
 
@@ -67,6 +77,11 @@ def _owner_pid_dead(record: dict) -> bool:
     another machine says nothing about our process table. Missing host/pid
     (older lock format) is 'cannot tell' -> not dead, so we never reclaim a
     lock we are unsure about.
+
+    PID reuse: a recycled pid belongs to a different process with a different
+    start time. When the lock carries ``started_at`` we treat the owner as
+    dead unless the live pid's creation time still matches, so a reused pid
+    does not masquerade as the original owner.
     """
     pid = record.get("pid")
     if not pid or record.get("host") != socket.gethostname():
@@ -74,7 +89,18 @@ def _owner_pid_dead(record: dict) -> bool:
     try:
         import psutil
 
-        return not psutil.pid_exists(int(pid))
+        try:
+            proc = psutil.Process(int(pid))
+        except psutil.NoSuchProcess:
+            return True  # owner gone
+        started = record.get("started_at")
+        if started is not None:
+            try:
+                if abs(proc.create_time() - float(started)) > 1.0:
+                    return True  # pid reused by a different process
+            except (psutil.Error, ValueError, TypeError):
+                return False  # cannot verify identity -> do not reclaim
+        return False  # same live process (or pre-started_at lock format)
     except Exception:  # noqa: BLE001 - if we can't tell, do not reclaim
         return False
 
@@ -105,6 +131,7 @@ def _build_record(owner: str, ttl_seconds: int, root: Path) -> dict:
         "owner": owner,
         "pid": os.getpid(),
         "host": socket.gethostname(),
+        "started_at": _proc_started_at(),
         "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ttl_seconds": ttl_seconds,

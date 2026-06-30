@@ -1,6 +1,6 @@
 ---
 name: ingest
-description: Parse a directory of documents (PDF / DOCX / PPTX / HTML) into a queryable Wikify corpus. Use when the user has local files to turn into a corpus, or to finish an arxiv harvest. Wraps `wikify corpus build` and owns parser-backend choice (docling default, marker, lite), the --out convention, partial-failure policy, and post-build health checks.
+description: Parse a directory of documents (PDF / DOCX / PPTX / HTML) into a queryable Wikify corpus. Use when the user has local files to turn into a corpus, or to finish an arxiv harvest. Wraps `wikify corpus build` and owns parser-backend choice (docling default, lite), the --out convention, partial-failure policy, and post-build health checks.
 allowed-tools: Bash(wikify corpus *)
 ---
 

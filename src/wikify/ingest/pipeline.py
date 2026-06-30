@@ -549,19 +549,28 @@ def _derived_artifacts_missing(paths: Corpus) -> bool:
 
 
 def _has_chunks_without_embeddings(paths: Corpus) -> bool:
-    """True if the store holds chunks but no embeddings (refresh unfinished)."""
+    """True if any chunk lacks a vector (refresh never finished embedding).
+
+    Counts chunks with no ``node_type='chunk'`` row in ``embeddings`` rather
+    than ``embeddings == 0``: an incremental build that adds chunks and then
+    crashes before refresh leaves old vectors in place (count > 0) alongside
+    new, unembedded chunks. A plain non-zero count would mask that and strand
+    the new chunks unqueryable on every re-run.
+    """
     import sqlite3
 
     try:
         con = sqlite3.connect(paths.sqlite_path)
         try:
-            n_chunks = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-            n_emb = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+            row = con.execute(
+                "SELECT COUNT(*) FROM chunks WHERE chunk_id NOT IN "
+                "(SELECT node_id FROM embeddings WHERE node_type = 'chunk')"
+            ).fetchone()
         finally:
             con.close()
     except sqlite3.Error:
         return False
-    return n_chunks > 0 and n_emb == 0
+    return bool(row and row[0] > 0)
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +811,7 @@ def _stream_parse_and_persist(
         if new:
             on_batch_persist(new)
 
-    if workers == 1 and batch_size > 0 and total > 1:
+    if workers == 1 and batch_size > 0 and total >= 1:
         n_batches = (total + batch_size - 1) // batch_size
         print(
             f"[ingest] subprocess-batched: {total} files in "

@@ -125,7 +125,7 @@ def test_force_overrides_live_lock(tmp_path: Path) -> None:
 
 import socket  # noqa: E402
 
-from wikify.corpus.lock import _owner_pid_dead  # noqa: E402
+from wikify.corpus.lock import _owner_pid_dead, _proc_started_at  # noqa: E402
 
 _HOST = socket.gethostname()
 _FAR_FUTURE = "2999-01-01T00:00:00Z"
@@ -175,6 +175,28 @@ def test_dead_pid_lock_reclaimed_despite_valid_ttl(tmp_path: Path) -> None:
 
 def test_live_pid_lock_held_despite_request(tmp_path: Path) -> None:
     c = _corpus(tmp_path)
-    _write_lock(c, pid=os.getpid(), host=_HOST)
+    _write_lock(c, pid=os.getpid(), host=_HOST, started_at=_proc_started_at())
     with pytest.raises(CorpusLockHeldError):
         acquire_lock(c, owner="intruder")
+
+
+def test_acquire_writes_started_at(tmp_path: Path) -> None:
+    c = _corpus(tmp_path)
+    acquire_lock(c, owner="t")
+    # psutil is a hard dep, so start time is always recorded here.
+    assert isinstance(read_lock(c)["started_at"], (int, float))
+
+
+def test_reused_pid_is_not_the_original_owner() -> None:
+    """A live pid whose start time differs from the record is a recycled pid."""
+    # Same pid (ours, alive) but a start time from far in the past ->
+    # the recorded owner is gone, the pid was reused.
+    rec = {"pid": os.getpid(), "host": _HOST, "started_at": 1.0}
+    assert _owner_pid_dead(rec) is True
+
+
+def test_matching_pid_and_start_time_is_live() -> None:
+    rec = {
+        "pid": os.getpid(), "host": _HOST, "started_at": _proc_started_at(),
+    }
+    assert _owner_pid_dead(rec) is False

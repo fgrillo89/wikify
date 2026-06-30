@@ -208,8 +208,15 @@ def _onnx_providers() -> list[str] | None:
         import onnxruntime as ort
 
         available = ort.get_available_providers()
-        if "CUDAExecutionProvider" in available and _cuda_device_visible():
-            _preload_cuda_dlls()
+        if (
+            "CUDAExecutionProvider" in available
+            and _cuda_device_visible()
+            and _preload_cuda_dlls()
+        ):
+            # Only request CUDA once its runtime DLLs (cuDNN) actually
+            # loaded. If the preload failed there's no point requesting an
+            # EP that will silently drop to CPU and then trip the
+            # silent-fallback health check -- fall through to CPU cleanly.
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if "DmlExecutionProvider" in available:
             return ["DmlExecutionProvider", "CPUExecutionProvider"]
