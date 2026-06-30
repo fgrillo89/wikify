@@ -1,7 +1,7 @@
 """Re-chunk an existing corpus from saved markdown -- no parser, no models.
 
 When the chunker changes (e.g. hygiene improvements, HybridChunker
-swap, parameter tweaks), there is no need to re-run Marker / Docling
+swap, parameter tweaks), there is no need to re-run Docling
 on the source PDFs. The pipeline already persists each doc's
 canonical markdown to ``markdown/<doc_id>.md``, plus image sidecars
 under ``images/<slug>/``. This module walks that disk state and
@@ -13,7 +13,7 @@ via ``refresh_corpus`` -- every downstream SQLite-store derivative
 Cost on the typical corpus is dominated by chunking + embedding:
 chunking is ~3-4 s/doc warm, embedding is incremental at
 ~1-2 s/doc, so a 200-doc corpus rechunks in roughly 15 minutes
-versus the multi-hour cost of a full Marker re-ingest.
+versus the multi-hour cost of a full Docling re-ingest.
 
 Wave A of the refresh DAG (citation enrichment via OpenAlex) is
 skipped when ``resolve_bibliography_doi=False`` because nothing about

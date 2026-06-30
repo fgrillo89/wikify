@@ -757,7 +757,7 @@ Corpus build/read commands (every flag below is on the actual CLI; consult
 `--help` per subcommand for the authoritative set):
 
 ```text
-wikify corpus build    <source> --out <corpus> [--mode additive|sync] [--parser default|lite|marker|docling]
+wikify corpus build    <source> --out <corpus> [--mode additive|sync] [--parser default|lite|docling]
 wikify corpus refresh  <corpus> [--no-openalex]
 wikify corpus schema   [--format text|json]
 wikify corpus check    [<corpus>] [--full] [--format text|json]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -40,7 +41,7 @@ def _parse_iso(s: str) -> datetime | None:
         return None
 
 
-def _is_stale(record: dict) -> bool:
+def _ttl_expired(record: dict) -> bool:
     expires_s = record.get("expires_at")
     if expires_s:
         expires = _parse_iso(expires_s)
@@ -55,6 +56,57 @@ def _is_stale(record: dict) -> bool:
     if acquired is None:
         return False
     return datetime.now(UTC) > acquired + timedelta(seconds=int(ttl))
+
+
+def _proc_started_at() -> float | None:
+    """This process's creation time (epoch seconds), or None if unknowable."""
+    try:
+        import psutil
+
+        return psutil.Process(os.getpid()).create_time()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _owner_pid_dead(record: dict) -> bool:
+    """True if the lock names a pid on THIS host that is no longer alive.
+
+    A killed ``corpus build`` leaves its lock behind with a 24h TTL; without
+    this, the next run is blocked for a day on a process that no longer
+    exists. Only judged when the recorded ``host`` matches ours -- a pid from
+    another machine says nothing about our process table. Missing host/pid
+    (older lock format) is 'cannot tell' -> not dead, so we never reclaim a
+    lock we are unsure about.
+
+    PID reuse: a recycled pid belongs to a different process with a different
+    start time. When the lock carries ``started_at`` we treat the owner as
+    dead unless the live pid's creation time still matches, so a reused pid
+    does not masquerade as the original owner.
+    """
+    pid = record.get("pid")
+    if not pid or record.get("host") != socket.gethostname():
+        return False
+    try:
+        import psutil
+
+        try:
+            proc = psutil.Process(int(pid))
+        except psutil.NoSuchProcess:
+            return True  # owner gone
+        started = record.get("started_at")
+        if started is not None:
+            try:
+                if abs(proc.create_time() - float(started)) > 1.0:
+                    return True  # pid reused by a different process
+            except (psutil.Error, ValueError, TypeError):
+                return False  # cannot verify identity -> do not reclaim
+        return False  # same live process (or pre-started_at lock format)
+    except Exception:  # noqa: BLE001 - if we can't tell, do not reclaim
+        return False
+
+
+def _is_stale(record: dict) -> bool:
+    return _ttl_expired(record) or _owner_pid_dead(record)
 
 
 def _lock_path(corpus: Corpus) -> Path:
@@ -78,6 +130,8 @@ def _build_record(owner: str, ttl_seconds: int, root: Path) -> dict:
     return {
         "owner": owner,
         "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "started_at": _proc_started_at(),
         "acquired_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ttl_seconds": ttl_seconds,
@@ -122,6 +176,13 @@ def acquire_lock(
     Race-safe via ``O_EXCL`` for fresh acquisition and ``os.replace``
     + post-write owner verification for stale-lock reclaim. ``force=True``
     overrides a live lock without raising.
+
+    The stale-reclaim path carries a narrow check->replace->readback window
+    in which two processes simultaneously reclaiming the *same* stale lock
+    could both verify their own write; this is an accepted trade-off of the
+    OS-lock-free design (closing it needs ``fcntl``/``msvcrt``). The
+    dead-pid staleness check (``_owner_pid_dead``) reaches this path sooner
+    after a crash, but a corpus build is normally run one-at-a-time.
     """
     corpus.root.mkdir(parents=True, exist_ok=True)
     path = _lock_path(corpus)
