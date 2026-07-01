@@ -27,7 +27,7 @@ from pathlib import Path
 import typer
 
 from ..api import Bundle
-from ..bundle.run.events import Event, append_event
+from ..bundle.run.events import Event, append_event, read_events
 from ..bundle.run.state import load_state
 from ..bundle.work.card import (
     create_concept,
@@ -1400,6 +1400,120 @@ def cmd_maturity(
             f"score={r.score:.2f}  gates={'ok' if r.gates_passed else 'fail'}  "
             f"n_chunks={r.n_chunks} n_docs={r.n_docs} "
             f"kinds={','.join(r.kinds_present) or '-'}"
+        )
+
+
+# -------------------------------------------------------------- refine-candidates
+
+
+@app.command("refine-candidates")
+def cmd_refine_candidates(
+    run: Path | None = typer.Option(None, "--run"),
+    growth: float = typer.Option(
+        1.5, "--growth",
+        help="Minimum evidence_now / evidence_at_commit ratio to flag.",
+    ),
+    min_new_chunks: int = typer.Option(
+        6, "--min-new-chunks",
+        help="Minimum evidence_now - evidence_at_commit delta to flag.",
+    ),
+    fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
+) -> None:
+    """List committed pages whose live evidence outgrew their write-time snapshot.
+
+    For every card with ``status == committed`` the write-time evidence
+    baseline (``evidence_total`` on the slug's latest ``page_committed``
+    event, falling back to ``evidence_count`` for older events) is
+    compared against the slug's live active-evidence count, recounted
+    from the ledger on disk (the same value ``work show`` reports). A
+    slug is a candidate when the ratio reaches ``--growth`` or the delta
+    reaches ``--min-new-chunks``; committing a fresh page resets the
+    baseline so a refreshed page won't re-trigger until it grows again.
+    Deterministic and token-light (no chunk text).
+    """
+    import sys
+
+    if fmt not in {"json", "compact", "auto"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_format",
+            message=f"unknown --format {fmt!r}; expected json | compact | auto",
+        )
+    if fmt == "auto":
+        fmt = "compact" if sys.stdout.isatty() else "json"
+
+    bundle = _resolve_bundle(run)
+
+    # Latest write-time evidence baseline per slug, keyed off the ordered
+    # event ledger (later lines supersede earlier ones). Prefer
+    # ``evidence_total`` (the evidence set the page was written from,
+    # comparable to the live active-evidence count); fall back to
+    # ``evidence_count`` (writer-used markers) only for older events that
+    # predate ``evidence_total``.
+    baseline: dict[str, int] = {}
+    for ev in read_events(bundle):
+        if ev.type != "page_committed":
+            continue
+        slug = ev.data.get("slug")
+        count = ev.data.get("evidence_total", ev.data.get("evidence_count"))
+        if isinstance(slug, str) and isinstance(count, int):
+            baseline[slug] = count
+
+    items: list[dict] = []
+    n_committed = 0
+    for s in list_concept_slugs(bundle):
+        card = load_card(bundle, s)
+        if card.status != "committed":
+            continue
+        n_committed += 1
+        e0 = baseline.get(s)
+        if not e0 or e0 <= 0:
+            # No commit event (or zero baseline) -> nothing to compare.
+            continue
+        # Live recount from the ledger on disk so STOP-CHECK/finalize is
+        # robust regardless of when ``work tend`` last refreshed the card
+        # (same mechanism ``work show`` uses).
+        e1 = sum(1 for r in read_evidence(bundle, s) if r.status == "active")
+        ratio = e1 / e0
+        delta = e1 - e0
+        by_ratio = ratio >= growth
+        by_delta = delta >= min_new_chunks
+        if not (by_ratio or by_delta):
+            continue
+        if by_ratio and by_delta:
+            reason = "both"
+        elif by_ratio:
+            reason = "ratio"
+        else:
+            reason = "delta"
+        items.append(
+            {
+                "slug": s,
+                "evidence_at_commit": e0,
+                "evidence_now": e1,
+                "ratio": round(ratio, 3),
+                "delta": delta,
+                "n_docs_now": int(card.front.get("evidence_docs", 0) or 0),
+                "reason": reason,
+            }
+        )
+
+    items.sort(key=lambda it: it["ratio"], reverse=True)
+    payload = {
+        "ok": True,
+        "kind": "refine_candidates",
+        "items": items,
+        "thresholds": {"growth": growth, "min_new_chunks": min_new_chunks},
+        "n_committed": n_committed,
+        "n_candidates": len(items),
+    }
+    if fmt == "json":
+        typer.echo(json.dumps(payload))
+        return
+    for it in items:
+        typer.echo(
+            f"{it['slug']:<32}  {it['evidence_at_commit']:>4} -> {it['evidence_now']:<4}  "
+            f"ratio={it['ratio']:.2f}  delta={it['delta']:>3}  {it['reason']}"
         )
 
 

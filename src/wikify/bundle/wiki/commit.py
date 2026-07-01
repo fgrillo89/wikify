@@ -207,6 +207,17 @@ def commit_page(
             if fig_sidecar.exists():
                 fig_sidecar.unlink()
 
+        # Refine baseline = the evidence the DRAFT was built from, i.e. what
+        # the writer actually had available at build time, read back off
+        # draft.json (already validated present above). NOT a fresh live-ledger
+        # read: chunks appended between ``draft build`` and here would inflate
+        # the baseline with evidence the committed page never saw, so the page
+        # would never re-trigger when it should. A page whose writer cited only
+        # a subset of its gathered chunks still converges, because the baseline
+        # counts the whole gathered set. ``work refine-candidates`` compares
+        # this against the live active-evidence count.
+        evidence_total = len(read_json(draft_p).get("evidence") or [])
+
         card = load_card(bundle, slug)
         card.front["status"] = "committed"
         card.front["wiki_path"] = str(
@@ -233,6 +244,7 @@ def commit_page(
                     "slug": slug,
                     "kind": page_kind,
                     "evidence_count": len(evidence),
+                    "evidence_total": evidence_total,
                 },
             ),
         )

@@ -102,19 +102,27 @@ targets to the plan in order, removing them from later bands.
    the last 2 rounds. The rhythm is therefore grow -> leave untouched
    ~2 rounds (grow other slugs meanwhile) -> `ready` -> write. Do not
    keep re-growing a saturated slug or it never becomes writable.
-2. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
+2. **REFINE wave.** Fires when `wikify work refine-candidates` returns
+   candidates (committed pages whose live evidence outgrew their
+   write-time snapshot). Dispatch at most `min(2, wave_size)` refine
+   Tasks per round (bound to the `refine` subskill), one per top
+   candidate by ratio; slug-disjoint from all other waves by
+   construction (refine targets committed slugs, which WRITE/GROW never
+   touch). A refined page's fresh `page_committed` event resets its own
+   baseline, so it won't re-trigger until it grows again.
+3. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
    with `growth_stalled == False`. Up to `wave_size`, slug-disjoint
    from WRITE. Per-slug pattern selection:
    - notebook has citation anchors in its evidence -> **P2** (citation-walk)
    - notebook has stable aliases (3+) -> **P4** (exact-term sweep) then
      **P3** (semantic-boundary), batched in one Task
    - otherwise -> **P3** alone
-3. **BRIDGE wave.** Fires only if `M3.modularity > 0.45` AND a
+4. **BRIDGE wave.** Fires only if `M3.modularity > 0.45` AND a
    sub-median link-weight edge exists in `wiki.db`. One Task on the
    weakest such edge, running P3 over the *union* of the two endpoint
    notebooks' chunk sets. Emits `concept_suggestion` only; never
    appends evidence to either endpoint.
-4. **SEED wave.** Fires when `concept_count < target_min` (`target_min`
+5. **SEED wave.** Fires when `concept_count < target_min` (`target_min`
    from Sizing and defaults) OR every dossier is `ready`/`stalled`.
    Seed from the top-K uncovered PageRank docs, where K is
    `max(target_min - concept_count, wave_size)`. Run SEED as a SINGLE
@@ -123,7 +131,7 @@ targets to the plan in order, removing them from later bands.
    parallel SEED tasks would race on the same slug folder and violate
    slug-disjointness. The single task dedups concept titles internally
    and skips any that match an existing slug.
-5. **PERSON wave.** Fires once `concept_count >= target_min/2` (so the
+6. **PERSON wave.** Fires once `concept_count >= target_min/2` (so the
    topical roster exists first) and only until `person_count >=
    expected_people` (a small VIP quota — see Sizing). Seed from the top
    authors by the strongest populated `rank_metrics.author` metric
@@ -138,9 +146,9 @@ targets to the plan in order, removing them from later bands.
    `ready` and silently drop out — this is the regulariser that keeps
    people pages few and VIP-only. Run as a SINGLE Task over the author
    list (same slug-race reasoning as SEED).
-6. **GAP wave.** Fires every round, low cost. One **P5** Task on the
+7. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
-7. **DATA wave.** Fires every round, low cost. Owned by the data skills,
+8. **DATA wave.** Fires every round, low cost. Owned by the data skills,
    not the P1-P5 explorer. Two parts:
    - **Harvest.** One `extract-data` Task (pattern label `P6`,
      stage `data`). Dedicated pass over the same top uncovered PageRank docs
@@ -290,6 +298,9 @@ Stop when ALL completeness signals hold:
 - **Roster saturated.** No new `concept_suggestion` for 2 rounds (P5
   emits only `evidence_suggestion`s), or `concept_count` flat for 2 rounds.
 - **Write queue drained.** No `ready` slug is unwritten.
+- **Refine queue drained.** `work refine-candidates` returns empty
+  (committed pages whose evidence outgrew their write-time snapshot have
+  been refreshed).
 - **Coverage plateau.** `delta_coverage_per_round < 0.01` for 2 rounds
   AND no dossier crossed the promotion threshold in those rounds.
 
@@ -330,7 +341,16 @@ When invoked on a bundle that already has `round_completed` events:
 
 ## Finalize (after STOP)
 
-Same close-out as baseline P5 plus chunk-coverage capture:
+Same close-out as baseline P5 plus chunk-coverage capture.
+
+First, **drain the refine queue** so no committed page ships with evidence
+that outgrew its write-time snapshot. Run `wikify work refine-candidates
+--run <bundle> --format json`; for each candidate run the full `refine`
+workflow (`wikify work claim <slug> --owner refine` -> `wikify draft build
+<slug> --task refine` -> writer subagent -> `wikify draft finalize <slug>
+--owner refine`), whose fresh `page_committed` resets that slug's baseline.
+Repeat `refine-candidates` and drain again until it returns empty. Only then
+run the rebuild/render close-out:
 
 ```bash
 wikify work tend --run <bundle>
@@ -362,6 +382,7 @@ roles below are subagents it dispatches; each may add an optional
 | explorer | sonnet M | `explore` | `pattern`, `target`, `run`, `corpus`, `budget_chunks`, `depth` | per-target envelope (see explorer skill) |
 | classifier | haiku S | this skill (Re-entry) | `doc_id`, dossier index | `{overlapping_slugs: [...]}` |
 | writer | sonnet M | `write-page` | `slug`, dossier path, evidence path | response.json path |
+| refiner | sonnet M | `refine` | `slug`, dossier path, committed page | response.json path / committed |
 | data-extractor | sonnet M | `extract-data` | `target` (docs or slug), `run`, `corpus` | `{submitted, stored, rejected}` |
 | data-consolidator | sonnet M | `consolidate-data` | `run`, theme (properties) | committed artifact id |
 | organizer | sonnet M | `organize-wiki` | navigation context | navigation.json |
