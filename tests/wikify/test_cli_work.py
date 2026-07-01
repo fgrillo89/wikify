@@ -1412,6 +1412,93 @@ def test_from_ids_chunk_handle_short_form_like_wildcards_escaped(
     assert data["stats"]["rejected_not_found"] == 1
 
 
+def test_work_refine_candidates_flags_grown_pages(tmp_path: Path) -> None:
+    """The refine baseline is ``evidence_total`` (evidence the draft was
+    written from), compared against a LIVE recount of active evidence
+    records on disk -- not the cached ``evidence_chunks`` frontmatter.
+
+    - ``grown``: committed with evidence_total=8, 17 active records live
+      (8 -> 17, ratio > 1.5) is a candidate.
+    - ``flat``: committed with evidence_total=10, 11 live (below both
+      thresholds) is not.
+    - ``person``: the PERSON false-positive -- evidence_total=14 chunks
+      gathered but only evidence_count=6 markers used; 14 active records
+      live. Comparing 14 -> 14 (ratio 1.0) it must NOT flag, so a
+      perfectly-refined page converges instead of looping forever.
+    - ``legacy``: an older event carrying only evidence_count (no
+      evidence_total) falls back to evidence_count as the baseline
+      (6 -> 17, ratio > 1.5) -> candidate."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.events import Event, append_event
+    from wikify.bundle.run.state import load_state
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    run_id = load_state(bundle).run_id
+
+    def _commit(
+        slug: str, page_id: str, now: int, data: dict, kind: str = "article"
+    ) -> None:
+        create_concept(bundle, page_id=page_id, slug=slug, kind=kind)
+        # Seed ``now`` active evidence records on disk; refine-candidates
+        # recounts these live rather than trusting cached frontmatter.
+        append_evidence(
+            bundle, slug,
+            [EvidenceRecord(chunk_id=f"{slug}_c{i}", doc_id=f"{slug}_d{i}")
+             for i in range(now)],
+        )
+        card = load_card(bundle, slug)
+        card.front["status"] = "committed"
+        card.front["evidence_chunks"] = now
+        card.front["evidence_docs"] = now
+        save_card(bundle, slug, card)
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id,
+                type="page_committed",
+                actor="test",
+                page_id=page_id,
+                data={"slug": slug, "kind": kind, **data},
+            ),
+        )
+
+    # ratio 2.125 -> candidate (baseline from evidence_total)
+    _commit("grown", "Grown Page", now=17,
+            data={"evidence_count": 6, "evidence_total": 8})
+    # ratio 1.1, delta 1 -> no
+    _commit("flat", "Flat Page", now=11,
+            data={"evidence_count": 9, "evidence_total": 10})
+    # person false-positive: 14 gathered / 6 used, live still 14 -> ratio 1.0
+    _commit("person", "Person Page", now=14, kind="person",
+            data={"evidence_count": 6, "evidence_total": 14})
+    # legacy event: only evidence_count -> baseline falls back to 6
+    _commit("legacy", "Legacy Page", now=17,
+            data={"evidence_count": 6})
+
+    result = runner.invoke(
+        app,
+        ["work", "refine-candidates", "--run", str(bundle_dir), "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["kind"] == "refine_candidates"
+    assert data["n_committed"] == 4
+    assert data["n_candidates"] == 2
+    assert sorted(it["slug"] for it in data["items"]) == ["grown", "legacy"]
+    by_slug = {it["slug"]: it for it in data["items"]}
+    assert by_slug["grown"]["evidence_at_commit"] == 8
+    assert by_slug["grown"]["evidence_now"] == 17
+    assert by_slug["grown"]["ratio"] == 2.125
+    assert by_slug["grown"]["delta"] == 9
+    assert by_slug["grown"]["reason"] == "both"  # ratio>=1.5 and delta>=6
+    # Legacy falls back to evidence_count baseline of 6.
+    assert by_slug["legacy"]["evidence_at_commit"] == 6
+    assert by_slug["legacy"]["evidence_now"] == 17
+
+
 def test_work_seen_chunks_unions_active_evidence(tmp_path: Path) -> None:
     from wikify.api import Bundle
     from wikify.bundle.work.card import create_concept
