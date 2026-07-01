@@ -290,6 +290,12 @@ def test_navigation_context_apply_and_render_grouped_front_page(tmp_path: Path) 
     html = (out / "index.html").read_text(encoding="utf-8")
     assert "Browse by topic" in html
     assert "Thin films" in html
+    # Cluster-card overview links to the in-page detailed section anchor.
+    assert 'class="cluster-card" href="#group-thin-films"' in html
+    assert 'id="group-thin-films"' in html
+    assert "1 page</span>" in html  # singular page count on the card
+    # Sidebar renders the navigation as a collapsible <details> tree.
+    assert "<details" in html
     # When corpus_doc_count is available the template renders "corpus sources cited";
     # otherwise it falls back to "source articles used". Accept either.
     assert "corpus sources cited" in html or "source articles used" in html

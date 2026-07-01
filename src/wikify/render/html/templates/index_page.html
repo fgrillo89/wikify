@@ -42,15 +42,23 @@
     {% endif %}
   </div>
 
-  {% if navigation and navigation.groups %}
+  {% if navigation and navigation.article_groups %}
   <section class="main-page-section">
     <h2>Browse by topic</h2>
-    <div class="portal-grid">
-      {% for group in navigation.groups %}
-      {{ nav_group(group) }}
+    <div class="cluster-grid">
+      {% for group in navigation.article_groups %}
+      <a class="cluster-card" href="#group-{{ group.id }}">
+        <span class="cluster-card-title">{{ group.title }}</span>
+        {% if group.description %}<span class="cluster-card-desc">{{ group.description }}</span>{% endif %}
+        <span class="cluster-card-count">{{ group.page_count }} page{% if group.page_count != 1 %}s{% endif %}</span>
+      </a>
       {% endfor %}
     </div>
   </section>
+
+  {% for group in navigation.article_groups %}
+  {{ nav_group(group) }}
+  {% endfor %}
   {% endif %}
 
   {% if key_articles %}
@@ -86,7 +94,7 @@
   {% endif %}
 
   {% if people %}
-  <section class="main-page-section">
+  <section class="main-page-section"{% if navigation and navigation.people_group_id %} id="group-{{ navigation.people_group_id }}"{% endif %}>
     <h2>People</h2>
     <ul class="article-list people-list">
       {% for p in people[:20] %}
@@ -97,7 +105,7 @@
   {% endif %}
 
   {% if data_artifacts %}
-  <section class="main-page-section">
+  <section class="main-page-section"{% if navigation and navigation.data_group_id %} id="group-{{ navigation.data_group_id }}"{% endif %}>
     <h2>Data tables</h2>
     <ul class="article-list data-list">
       {% for d in data_artifacts %}

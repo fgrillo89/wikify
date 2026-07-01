@@ -1,7 +1,7 @@
-{% macro sidebar_group(group, root) %}
+{% macro sidebar_group(group, root, is_open=false) %}
 {%- set MAX_SIDEBAR_PAGES = 12 -%}
 <li class="sidebar-group">
-  <details>
+  <details{% if is_open %} open{% endif %}>
     <summary>
       <span class="sidebar-disclosure" aria-hidden="true"></span>
       <a href="{{ root }}index.html#group-{{ group.id }}" class="sidebar-group-title">{{ group.title }}</a>
@@ -35,7 +35,7 @@
   <h3>Topics</h3>
   <ul class="sidebar-topics">
     {% for group in navigation.groups %}
-    {{ sidebar_group(group, root) }}
+    {{ sidebar_group(group, root, loop.first) }}
     {% endfor %}
   </ul>
 </div>
@@ -58,7 +58,7 @@
   </ul>
 </div>
 {% endif %}
-{% if people %}
+{% if people and not navigation %}
 <div class="sidebar-section">
   <h3>People</h3>
   <ul>
@@ -68,7 +68,7 @@
   </ul>
 </div>
 {% endif %}
-{% if data_artifacts %}
+{% if data_artifacts and not navigation %}
 <div class="sidebar-section">
   <h3>Data tables</h3>
   <ul>
