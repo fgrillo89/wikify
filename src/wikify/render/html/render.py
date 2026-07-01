@@ -414,12 +414,19 @@ def _build_navigation_view(
             for child in group.get("children", [])
             if isinstance(child, dict)
         ]
+        # A group's kind is the dominant kind of its pages (person / data /
+        # article), so the index can separate article clusters from the
+        # People and Data groups without hard-coding group ids.
+        kinds = [pv.kind for pv in pages]
+        dominant = max(set(kinds), key=kinds.count) if kinds else "article"
         return {
             "id": group.get("id", ""),
             "title": group.get("title", ""),
             "description": group.get("description", ""),
             "pages": pages,
             "children": children,
+            "kind": dominant,
+            "page_count": len(pages),
         }
 
     groups = [
@@ -427,7 +434,15 @@ def _build_navigation_view(
         for group in navigation.get("groups", [])
         if isinstance(group, dict)
     ]
-    return {"groups": groups}
+    article_groups = [g for g in groups if g["kind"] not in ("person", "data")]
+    people_group = next((g for g in groups if g["kind"] == "person"), None)
+    data_group = next((g for g in groups if g["kind"] == "data"), None)
+    return {
+        "groups": groups,
+        "article_groups": article_groups,
+        "people_group_id": people_group["id"] if people_group else None,
+        "data_group_id": data_group["id"] if data_group else None,
+    }
 
 
 def _aggregate_references(
