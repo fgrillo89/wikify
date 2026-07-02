@@ -12,6 +12,7 @@ from wikify.api import Bundle, Corpus
 from wikify.cli import app
 from wikify.data.artifact_page import render_artifact_markdown, write_artifact_page
 from wikify.data.consolidate import consolidate
+from wikify.data.harvest import number_dense_chunks, sweep_property_candidates
 from wikify.data.models import (
     ArtifactSpec,
     DataPoint,
@@ -20,6 +21,7 @@ from wikify.data.models import (
 )
 from wikify.data.store import DataStore
 from wikify.data.verify import number_supported, quote_in_source, verify_point
+from wikify.models import Chunk, Document
 
 runner = CliRunner()
 
@@ -1556,3 +1558,166 @@ def test_cli_rebuild_reflects_new_claims(tmp_path: Path) -> None:
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output)
     assert payload["rebuilt"][0]["rows"] == 2  # now reflects both subjects
+
+
+# --------------------------------------------------------------------------
+# property-targeted whole-corpus data harvest (harvest-property)
+# --------------------------------------------------------------------------
+
+
+def _doc_with_chunk(doc_id: str, text: str) -> tuple[Document, list[Chunk]]:
+    doc = Document(
+        id=doc_id, source_path=f"/p/{doc_id}.pdf", kind="pdf", title=doc_id,
+        metadata={}, markdown_path=f"markdown/{doc_id}.md",
+        image_dir=f"images/{doc_id}/",
+    )
+    ch = Chunk(
+        id=f"{doc_id}__c0000", doc_id=doc_id, ord=0, text=text,
+        char_span=(0, len(text)), section_path=["Body"], section_type="body",
+    )
+    return doc, [ch]
+
+
+# N docs mention the property across the WHOLE corpus (phrase, alias, or unit);
+# one control doc mentions none. A doc-slice scan would only see its slice.
+_SWEEP_DOCS = [
+    ("d1", "The Al2O3 growth per cycle was 1.1 A/cycle at 200 C over 100 cycles."),
+    ("d2", "HfO2 growth per cycle reached 1.0 A/cycle at 250 C for 50 cycles."),
+    ("d3", "A GPC of 0.9 A/cycle was recorded for TiO2 across 300 cycles at 150 C."),
+    ("d4", "ZnO deposition gave 2.0 A/cycle at 180 C over 400 cycles here."),
+    ("d5", "This review discusses precursor chemistry and reactor design in 2020."),
+]
+
+
+def _sweep_corpus(make_sqlite_corpus) -> Corpus:
+    return make_sqlite_corpus([_doc_with_chunk(d, t) for d, t in _SWEEP_DOCS])
+
+
+def test_harvest_property_enumerates_whole_corpus(make_sqlite_corpus) -> None:
+    """Every doc mentioning the property (phrase, alias, or unit) is a
+    candidate -- NOT just a doc-list slice. d1-d4 mention it, d5 does not."""
+    corpus = _sweep_corpus(make_sqlite_corpus)
+    sweep = sweep_property_candidates(
+        corpus, phrasings=["growth per cycle", "GPC"], units=["A/cycle"]
+    )
+    mentioning = set(sweep["docs_mentioning"])
+    assert mentioning == {"d1", "d2", "d3", "d4"}  # d4 via unit; d5 excluded
+    cand_docs = {c["doc_id"] for c in sweep["candidates"]}
+    assert cand_docs == {"d1", "d2", "d3", "d4"}
+    assert sweep["candidate_chunks"] == 4
+    assert sweep["truncated"] is False
+    # The alias 'GPC' is what tags d3 -- the whole-corpus sweep found it.
+    d3 = next(c for c in sweep["candidates"] if c["doc_id"] == "d3")
+    assert d3["matched_phrasing"] == "gpc"
+
+    # Contrast with the old doc-list-scoped path: scanning one doc's slice
+    # sees only that doc, missing the property mentions in d2-d4.
+    slice_docs = {c["doc_id"] for c in number_dense_chunks(corpus, doc_ids=["d1"])}
+    assert slice_docs == {"d1"}
+    assert len(mentioning) > len(slice_docs)
+
+
+def test_harvest_property_include_text_returns_chunk_body(make_sqlite_corpus) -> None:
+    corpus = _sweep_corpus(make_sqlite_corpus)
+    sweep = sweep_property_candidates(
+        corpus, phrasings=["growth per cycle"], units=["A/cycle"],
+        include_text=True,
+    )
+    assert all("text" in c for c in sweep["candidates"])
+    d1 = next(c for c in sweep["candidates"] if c["doc_id"] == "d1")
+    assert "growth per cycle" in d1["text"]
+
+
+def test_harvest_property_truncation_flag(make_sqlite_corpus) -> None:
+    """Over the cap: candidate list truncates but docs_mentioning stays full,
+    so the recall denominator is unaffected by the cap."""
+    corpus = _sweep_corpus(make_sqlite_corpus)
+    sweep = sweep_property_candidates(
+        corpus, phrasings=["growth per cycle", "GPC"], units=["A/cycle"],
+        max_chunks=2,
+    )
+    assert sweep["truncated"] is True
+    assert sweep["candidate_chunks"] == 2
+    assert sweep["matched_chunks"] == 4
+    assert len(sweep["docs_mentioning"]) == 4  # full set despite the cap
+
+
+def test_cli_harvest_property_json_shape_and_recall(
+    make_sqlite_corpus, tmp_path: Path
+) -> None:
+    """CLI --format json: recall report keys/values + candidate rows, with
+    data_recall = docs_in_table / docs_mentioning_property."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    corpus = _sweep_corpus(make_sqlite_corpus)
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path=str(corpus.root))
+    store = DataStore.open(bundle.root)
+    # Two of the four mentioning docs already have a verified claim in the
+    # table -> docs_in_table = 2, docs_mentioning = 4 -> recall 0.5.
+    store.add_points([
+        _verified("Al2O3", "growth per cycle", "1.1", "A/cycle", "d1", "d1__c0000", "q1"),
+        _verified("HfO2", "growth per cycle", "1.0", "A/cycle", "d2", "d2__c0000", "q2"),
+    ])
+    store.close()
+
+    res = runner.invoke(app, [
+        "data", "harvest-property",
+        "--property", "growth per cycle",
+        "--alias", "GPC", "--alias", "per-cycle growth",
+        "--unit", "A/cycle",
+        "--corpus", str(corpus.root), "--run", str(bdir),
+        "--format", "json",
+    ])
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert payload["ok"] is True
+    report = payload["report"]
+    assert set(report) == {
+        "property", "docs_mentioning_property", "candidate_chunks",
+        "docs_in_table", "data_recall", "truncated",
+    }
+    assert report["property"] == "growth per cycle"
+    assert report["docs_mentioning_property"] == 4
+    assert report["docs_in_table"] == 2
+    assert report["data_recall"] == 0.5
+    assert report["truncated"] is False
+    assert "warning" not in payload  # 3 distinct phrasings supplied
+    assert payload["docs_extracted"] == 2
+    assert payload["candidates"], "worklist must be non-empty"
+    for c in payload["candidates"]:
+        assert set(c) >= {"doc_id", "chunk_id", "matched_phrasing", "source_kind"}
+
+    # The sweep bookkeeping was persisted to the claim store.
+    store = DataStore.open(bundle.root)
+    try:
+        rec = store.get_property_sweep(normalize_key("growth per cycle"))
+    finally:
+        store.close()
+    assert rec is not None
+    assert rec["docs_mentioning"] == 4 and rec["docs_in_table"] == 2
+    assert rec["candidate_chunks"] == 4 and rec["last_sweep"]
+
+
+def test_cli_harvest_property_warns_below_alias_min(
+    make_sqlite_corpus, tmp_path: Path
+) -> None:
+    """Fewer than PROPERTY_ALIAS_MIN distinct phrasings surfaces a warning."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    corpus = _sweep_corpus(make_sqlite_corpus)
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path=str(corpus.root))
+
+    res = runner.invoke(app, [
+        "data", "harvest-property", "--property", "growth per cycle",
+        "--unit", "A/cycle", "--corpus", str(corpus.root), "--run", str(bdir),
+        "--format", "json",
+    ])
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert "warning" in payload  # only 1 phrasing (the canonical name)

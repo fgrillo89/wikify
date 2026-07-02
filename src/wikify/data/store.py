@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS data_artifact_claims (
   PRIMARY KEY (artifact_id, claim_id)
 );
 CREATE INDEX IF NOT EXISTS data_artifact_claims_claim ON data_artifact_claims(claim_id);
+
+CREATE TABLE IF NOT EXISTS property_sweeps (
+  property_norm TEXT PRIMARY KEY,
+  property TEXT,
+  docs_mentioning INTEGER DEFAULT 0,
+  docs_extracted INTEGER DEFAULT 0,
+  docs_in_table INTEGER DEFAULT 0,
+  candidate_chunks INTEGER DEFAULT 0,
+  truncated INTEGER DEFAULT 0,
+  last_sweep TEXT
+);
 """
 
 _POINT_COLS = [
@@ -256,6 +267,59 @@ class DataStore:
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM property_registry ORDER BY n_points DESC"
         )]
+
+    # --- property sweeps -------------------------------------------------
+
+    def property_doc_stats(self, property_norm: str) -> dict:
+        """Distinct source docs for a property, split by table-eligibility.
+
+        ``docs_in_table`` = docs with a quote-verified claim (the rows a
+        consolidated table can carry). ``docs_extracted`` = docs with any
+        non-rejected claim (extraction attempted, verified or not).
+        """
+        in_table = self.con.execute(
+            "SELECT COUNT(DISTINCT doc_id) FROM data_points "
+            "WHERE property_norm = ? AND verification_status = 'verified'",
+            (property_norm,),
+        ).fetchone()[0]
+        extracted = self.con.execute(
+            "SELECT COUNT(DISTINCT doc_id) FROM data_points "
+            "WHERE property_norm = ? AND verification_status != 'rejected'",
+            (property_norm,),
+        ).fetchone()[0]
+        return {"docs_in_table": in_table, "docs_extracted": extracted}
+
+    def record_property_sweep(
+        self,
+        *,
+        property: str,
+        property_norm: str,
+        docs_mentioning: int,
+        docs_extracted: int,
+        docs_in_table: int,
+        candidate_chunks: int,
+        truncated: bool,
+    ) -> None:
+        """Persist the latest whole-corpus sweep bookkeeping for a property."""
+        with transaction(self.con):
+            self.con.execute(
+                "INSERT OR REPLACE INTO property_sweeps"
+                "(property_norm, property, docs_mentioning, docs_extracted, "
+                "docs_in_table, candidate_chunks, truncated, last_sweep) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    property_norm, property, docs_mentioning, docs_extracted,
+                    docs_in_table, candidate_chunks, 1 if truncated else 0,
+                    _utcnow(),
+                ),
+            )
+
+    def get_property_sweep(self, property_norm: str) -> dict | None:
+        r = self.con.execute(
+            "SELECT * FROM property_sweeps WHERE property_norm = ?",
+            (property_norm,),
+        ).fetchone()
+        return dict(r) if r else None
 
     # --- artifacts -------------------------------------------------------
 
