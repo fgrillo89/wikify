@@ -58,7 +58,7 @@ If any gate fails, `score = 0`, `band` is `new` / `growing` /
 
 ```
 score = 0.25 * min(n_chunks / 12, 1.0)
-      + 0.15 * min(n_docs / 6, 1.0)
+      + 0.15 * min(n_docs / 8, 1.0)
       + 0.30 * (kinds_present / kinds_required)
       + 0.20 * (1 - chunk_jaccard_with_link_neighbours_max)
       + 0.10 * diversity_bonus
@@ -67,7 +67,8 @@ score = 0.25 * min(n_chunks / 12, 1.0)
 Components:
 
 - **n_chunks**: saturates at 12.
-- **n_docs**: saturates at 6.
+- **n_docs**: saturates at 8, rewarding pages that draw on more
+  distinct source documents (broader evidence base).
 - **kinds_present / kinds_required**: how many stencil kinds are
   detected in the evidence quotes (see Stencils below).
 - **chunk_jaccard_with_link_neighbours_max**: max over wiki.db

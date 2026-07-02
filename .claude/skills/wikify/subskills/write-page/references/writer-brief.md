@@ -200,13 +200,16 @@ diff; the commit gate promotes whole pages.
 
 ## Figures
 
-- When the dossier's Figure candidates table is non-empty, include at
-  least one by default. Choose the candidate that best depicts what a
-  section discusses. Place `{{figure:<anchor>}}` INSIDE the paragraph
-  discussing it, and that paragraph MUST reference it in text ("as shown
-  in the figure", "(see figure)") so it is not orphaned.
-- Zero figures only when no candidate is genuinely relevant. Two only
-  when the page is inherently visual. Never invent paths or captions.
+- An ARTICLE page SHOULD include figures where the dossier's Figure
+  candidates table supports them, up to `max_article_figures = 4`, at
+  most ONE figure per distinct source document, and each figure tied to
+  a distinct cited source/section (its `source_marker` in
+  `used_markers`). Choose the candidates that best depict what a section
+  discusses. Place `{{figure:<anchor>}}` INSIDE the paragraph discussing
+  it, and that paragraph MUST reference it in text ("as shown in the
+  figure", "(see figure)") so it is not orphaned.
+- Zero figures only when no candidate is genuinely relevant; never
+  invent paths or captions. Person pages stay figure-free.
 - A selected figure is represented twice: as a `{{figure:<anchor>}}`
   placeholder in `body_markdown`, and as a `figures[]` entry with ALL
   five fields set: `figure_id`, `path` (both verbatim from the draft

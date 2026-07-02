@@ -140,13 +140,16 @@ Before creating or updating `response.json`, perform a writer self-check:
   `source_marker` that appears in `used_markers`; the validator
   rejects empty markers and the renderer appends a citation link to
   the caption pointing at the source footnote;
-- **figure-candidate scan**: when the dossier's Figure candidates
-  table is non-empty, include at least one figure by default. Choose
-  the candidate that best depicts what a section discusses. Place
-  `{{figure:<anchor>}}` inside the paragraph that discusses it; that
-  paragraph MUST reference it in text ("as shown in the figure",
-  "(see figure)") so the figure is not orphaned. Skip only when no
-  candidate is genuinely relevant; do not invent one;
+- **figure-candidate scan**: an ARTICLE page SHOULD include figures
+  where the dossier's Figure candidates table supports them, up to
+  `max_article_figures = 4`, at most ONE figure per distinct source
+  document, and each figure tied to a distinct cited source/section
+  (its `source_marker` in `used_markers`). Choose the candidates that
+  best depict what a section discusses. Place `{{figure:<anchor>}}`
+  inside the paragraph that discusses it; that paragraph MUST reference
+  it in text ("as shown in the figure", "(see figure)") so the figure
+  is not orphaned. Skip when no candidate is genuinely relevant; do not
+  invent one. Person pages stay figure-free;
 - person pages have at least two non-appendix `## H2` sections;
 - the page uses enough of the supplied high-quality evidence to be
   comprehensive, not merely valid;
@@ -195,14 +198,16 @@ or `validation.json`. Fix any errors before persisting.
   materials/properties, methods, evidence/results, applications, and
   limitations when those facets are present in the draft.
 - No visible `[[wikilinks]]`.
-- Figures are expected when candidates exist. When the dossier's
-  Figure candidates table is non-empty, include at least one that
-  depicts something a section discusses. Place `{{figure:<anchor>}}`
-  inside the paragraph discussing it; that paragraph must reference
-  it in prose ("as shown in the figure", "(see figure)"). Zero figures
-  only when no candidate is relevant. Two only when the page is
-  inherently visual. Never invent paths or captions. Person pages
-  stay figure-free.
+- Figures are expected when candidates exist. An ARTICLE page SHOULD
+  include figures where the dossier's Figure candidates table supports
+  them, up to `max_article_figures = 4`, at most ONE figure per distinct
+  source document, and each figure tied to a distinct cited
+  source/section (its `source_marker` in `used_markers`). Place
+  `{{figure:<anchor>}}` inside the paragraph discussing it; that
+  paragraph must reference it in prose ("as shown in the figure",
+  "(see figure)"). Zero figures only when no candidate is genuinely
+  relevant. Never invent paths or captions. Person pages stay
+  figure-free.
 - No corpus meta-commentary.
 - No page commit. Validation and commit are `bundle` operations. The
   commit step (`draft finalize`) is a one-shot: it consumes the draft,

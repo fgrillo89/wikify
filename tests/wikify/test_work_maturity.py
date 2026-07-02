@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wikify.api import Bundle
@@ -104,6 +105,26 @@ def test_article_passes_gates_with_rich_evidence(tmp_path: Path) -> None:
     assert "definition" in report.kinds_present
     assert "mechanism" in report.kinds_present
     assert "application" in report.kinds_present
+
+
+def test_n_docs_component_saturates_at_eight(tmp_path: Path) -> None:
+    # 6 distinct docs: below saturation -> 0.15 * 6/8.
+    bundle = _bundle(tmp_path)
+    create_concept(bundle, page_id="ALD", kind="article")
+    six = [_ev(f"c{i}", f"d{i}", "ALD is a method.") for i in range(6)]
+    append_evidence(bundle, "ald", six)
+    report = compute_maturity(bundle, "ald")
+    assert report.components["n_docs"] == pytest.approx(0.15 * 6 / 8)
+
+    # 8 distinct docs: at saturation -> full 0.15.
+    b2 = tmp_path / "b2"
+    b2.mkdir()
+    bundle2 = _bundle(b2)
+    create_concept(bundle2, page_id="ALD", kind="article")
+    eight = [_ev(f"c{i}", f"d{i}", "ALD is a method.") for i in range(8)]
+    append_evidence(bundle2, "ald", eight)
+    report2 = compute_maturity(bundle2, "ald")
+    assert report2.components["n_docs"] == pytest.approx(0.15)
 
 
 def test_stencil_override_changes_required_kinds(tmp_path: Path) -> None:

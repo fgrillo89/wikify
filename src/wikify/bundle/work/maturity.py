@@ -400,7 +400,7 @@ def compute_maturity(
 
     components = {
         "n_chunks": 0.25 * min(n_chunks / 12.0, 1.0),
-        "n_docs": 0.15 * min(n_docs / 6.0, 1.0),
+        "n_docs": 0.15 * min(n_docs / 8.0, 1.0),
         "kinds_coverage": 0.30 * kinds_required_present,
         "redundancy_inverse": 0.20 * (1.0 - jaccard_max),
         "diversity_bonus": 0.10 * _diversity_bonus(records),
