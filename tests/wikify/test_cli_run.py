@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wikify.cli import app
@@ -746,13 +748,13 @@ def test_run_stats_plot_keeps_series(tmp_path: Path) -> None:
     assert lines[0] == "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts"
     assert lines[1].split(",")[0] == "0"
     assert lines[2].split(",")[0] == "1"
-    # Trailing status line carries the plot path.
+    # Trailing status line carries the plot path + renderer.
     status = json.loads(lines[-1])
     assert status["plot"] == str(out)
     assert status["n_rounds"] == 2
-    svg = out.read_text(encoding="utf-8")
-    assert "<svg" in svg
-    assert "<polyline" in svg
+    assert status["renderer"] in {"matplotlib", "svg"}
+    # A non-empty chart file is written regardless of renderer.
+    assert out.stat().st_size > 0
 
 
 def test_run_stats_plot_json_keeps_series(tmp_path: Path) -> None:
@@ -769,8 +771,66 @@ def test_run_stats_plot_json_keeps_series(tmp_path: Path) -> None:
     lines = result.output.strip().splitlines()
     series = json.loads(lines[0])
     assert [r["round"] for r in series] == [0]
-    assert json.loads(lines[-1])["plot"] == str(out)
-    assert out.read_text(encoding="utf-8").startswith("<svg")
+    status = json.loads(lines[-1])
+    assert status["plot"] == str(out)
+    assert status["renderer"] in {"matplotlib", "svg"}
+    assert out.stat().st_size > 0
+
+
+def test_run_stats_plot_svg_fallback(monkeypatch, tmp_path: Path) -> None:
+    """matplotlib absent -> the hand-rolled SVG writer renders the chart."""
+    monkeypatch.setitem(sys.modules, "matplotlib", None)
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    status = json.loads(result.output.strip().splitlines()[-1])
+    assert status["renderer"] == "svg"
+    svg = out.read_text(encoding="utf-8")
+    assert "<svg" in svg
+    assert "<polyline" in svg
+
+
+def test_run_stats_plot_matplotlib_png(tmp_path: Path) -> None:
+    """matplotlib present -> a non-empty PNG is written, renderer reported."""
+    pytest.importorskip("matplotlib")
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+    out = tmp_path / "chart.png"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    status = json.loads(result.output.strip().splitlines()[-1])
+    assert status["renderer"] == "matplotlib"
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_run_stats_plot_sparse_series_ok(monkeypatch, tmp_path: Path) -> None:
+    """None-valued metrics per round do not crash either renderer."""
+    bundle = _init_bundle(tmp_path)
+    # round_completed events with no coverage/budget -> sparse series.
+    runner.invoke(
+        app,
+        [
+            "run", "record-event", "--run", str(bundle),
+            "--type", "round_completed",
+            "--data", '{"round": 0, "n_committed_pages": 1}',
+        ],
+    )
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.stat().st_size > 0
 
 
 def test_run_stats_invalid_format_errors(tmp_path: Path) -> None:

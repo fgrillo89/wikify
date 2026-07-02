@@ -520,20 +520,112 @@ def _write_stats_svg(records: list[dict], out_path: Path) -> None:
     out_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
 
 
+def _stats_series(records: list[dict], key: str) -> list[tuple[float, float]]:
+    """(round, value) pairs where ``value`` is a present, finite number."""
+    return [
+        (float(r["round"]), float(r[key]))
+        for r in records
+        if isinstance(r.get("round"), (int, float))
+        and isinstance(r.get(key), (int, float))
+    ]
+
+
+def _write_stats_matplotlib(records: list[dict], out_path: Path, plt) -> None:
+    """Two-panel figure: committed pages + addressable coverage vs round
+    (twin axes, top) and committed pages vs budget (bottom). None points are
+    dropped per series; an empty series is simply omitted."""
+    pages = _stats_series(records, "n_committed_pages")
+    cov = _stats_series(records, "addressable_coverage_ratio")
+    budget = [
+        (float(r["budget_spent_haiku_eq"]), float(r["n_committed_pages"]))
+        for r in records
+        if isinstance(r.get("budget_spent_haiku_eq"), (int, float))
+        and isinstance(r.get("n_committed_pages"), (int, float))
+    ]
+
+    fig, (ax_r, ax_b) = plt.subplots(2, 1, figsize=(7, 7))
+    fig.suptitle("wikify build metrics")
+    any_data = False
+
+    if pages:
+        xs, ys = zip(*pages)
+        ax_r.plot(xs, ys, "o-", color="#d62728", label="committed pages")
+        any_data = True
+    ax_r.set_xlabel("round")
+    ax_r.set_ylabel("committed pages")
+    ax_r.grid(True, alpha=0.3)
+
+    ax_cov = ax_r.twinx()
+    if cov:
+        xs, ys = zip(*cov)
+        ax_cov.plot(
+            xs, [v * 100.0 for v in ys], "s--", color="#1f77b4",
+            label="addressable coverage (%)",
+        )
+        any_data = True
+    ax_cov.set_ylabel("addressable coverage (%)")
+    ax_cov.set_ylim(0, 100)
+
+    handles = ax_r.get_legend_handles_labels()
+    twin = ax_cov.get_legend_handles_labels()
+    lines = handles[0] + twin[0]
+    if lines:
+        ax_r.legend(lines, handles[1] + twin[1], loc="upper left", fontsize=8)
+
+    if budget:
+        xs, ys = zip(*sorted(budget))
+        ax_b.plot(xs, ys, "o-", color="#2ca02c", label="pages vs budget")
+        ax_b.legend(loc="upper left", fontsize=8)
+        any_data = True
+    ax_b.set_xlabel("budget spent (haiku-eq)")
+    ax_b.set_ylabel("committed pages")
+    ax_b.grid(True, alpha=0.3)
+
+    if not any_data:
+        ax_r.text(
+            0.5, 0.5, "no data", ha="center", va="center",
+            transform=ax_r.transAxes,
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+def _write_stats_plot(records: list[dict], out_path: Path) -> str:
+    """Render the per-round metric chart to ``out_path``. Uses matplotlib when
+    importable -- honoring the .png/.svg/.pdf extension via savefig -- and falls
+    back to the hand-rolled SVG writer otherwise. Returns the renderer name."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        _write_stats_svg(records, out_path)
+        return "svg"
+    _write_stats_matplotlib(records, out_path, plt)
+    return "matplotlib"
+
+
 @app.command("stats")
 def cmd_stats(
     run: Path | None = typer.Option(None, "--run"),
     fmt: str = typer.Option("json", "--format", help="json | csv"),
-    plot: Path | None = typer.Option(None, "--plot", help="Write an SVG chart."),
+    plot: Path | None = typer.Option(
+        None, "--plot", help="Write a chart (png/svg/pdf; matplotlib else SVG)."
+    ),
 ) -> None:
     """Retrieve the per-round metric time series from ``derived/stats.jsonl``.
 
     Default / ``--format json`` prints the deduped, round-sorted list of
     records. ``--format csv`` emits a header row (round, pages, chunk_cov,
     addr_cov, budget, M1, M3, n_artifacts) plus one row per round.
-    ``--plot <out.svg>`` writes a dependency-free line chart in addition to
-    the series: the series is still emitted in the requested format and a
-    trailing JSON status line reports the plot path. Falls back to
+    ``--plot <out>`` writes a chart in addition to the series (matplotlib when
+    importable, honoring the .png/.svg/.pdf extension; a hand-rolled SVG
+    otherwise): the series is still emitted in the requested format and a
+    trailing JSON status line reports the plot path and renderer. Falls back to
     reconstructing the series from ``round_completed`` events when
     ``stats.jsonl`` is absent or empty.
     """
@@ -560,9 +652,16 @@ def cmd_stats(
         typer.echo(json.dumps(records))
 
     if plot is not None:
-        _write_stats_svg(records, plot)
+        renderer = _write_stats_plot(records, plot)
         typer.echo(
-            json.dumps({"ok": True, "plot": str(plot), "n_rounds": len(records)})
+            json.dumps(
+                {
+                    "ok": True,
+                    "plot": str(plot),
+                    "n_rounds": len(records),
+                    "renderer": renderer,
+                }
+            )
         )
 
 
