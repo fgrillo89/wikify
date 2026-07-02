@@ -589,6 +589,127 @@ def test_build_evidence_person_unknown_author_is_graceful(tmp_path: Path) -> Non
     assert data["stats"]["seed_records"] > 0  # gathered from the notebook seed
 
 
+def _person_evidence_bundle(tmp_path: Path):
+    """Bundle + corpus with one authored doc carrying an affiliation line.
+
+    The doc has ``A. Mackus`` as author (so the author graph resolves the
+    ``author:a_mackus`` alias -> this doc), a substantive intro chunk
+    (the contribution material), a boilerplate affiliation line naming
+    Mackus (identity-context material), and a boilerplate byline naming a
+    different person (must NOT be lifted).
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus_root)],
+    )
+
+    doc = Document(
+        id="mackus_paper", source_path="src/mackus_paper.md", kind="md",
+        title="Area-Selective ALD", metadata={"authors": ["A. Mackus"]},
+        markdown_path="markdown/mackus_paper.md",
+        image_dir="images/mackus_paper/", n_chunks=3, n_tokens=200,
+    )
+    intro = (
+        "Area-selective atomic layer deposition enables bottom-up nanofabrication "
+        "by confining film growth to predefined regions of the substrate through "
+        "self-limiting surface chemistry."
+    )
+    affiliation = (
+        "A. Mackus, Department of Applied Physics, "
+        "Eindhoven University of Technology"
+    )
+    other_byline = (
+        "J. Smith, Department of Chemistry, Some Other University of Elsewhere"
+    )
+    chunks = [
+        Chunk(
+            id="mackus_paper__c0000", doc_id="mackus_paper", ord=0,
+            text=intro, char_span=(0, len(intro)), section_path=["Intro"],
+            section_type="introduction",
+        ),
+        Chunk(
+            id="mackus_paper__c0001", doc_id="mackus_paper", ord=1,
+            text=affiliation, char_span=(0, len(affiliation)),
+            section_path=["Boiler"], section_type="boilerplate",
+            is_boilerplate=True,
+        ),
+        Chunk(
+            id="mackus_paper__c0002", doc_id="mackus_paper", ord=2,
+            text=other_byline, char_span=(0, len(other_byline)),
+            section_path=["Boiler"], section_type="boilerplate",
+            is_boilerplate=True,
+        ),
+    ]
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {doc.id: chunks})
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    create_concept(
+        BundleApi.open(bundle), page_id="A. Mackus", kind="person",
+        aliases=["author:a_mackus"],
+    )
+    runner.invoke(
+        app,
+        [
+            "work", "notebook-init", "a-mackus", "--kind", "person",
+            "--run", str(bundle),
+        ],
+    )
+    return bundle, corpus_root
+
+
+def test_build_evidence_person_gathers_identity_context(tmp_path: Path) -> None:
+    """The person path lifts a boilerplate affiliation line naming the target
+    author as an ``identity_context`` record, while a byline naming a
+    different person is excluded and the contribution gather is unchanged."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import read_evidence
+
+    bundle, corpus_root = _person_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "a-mackus",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--target", "1", "--format", "json",
+        ],
+    )
+    assert result.exception is None, result.output
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    stats = data["stats"]
+    # Contribution gather unchanged: the intro seed chunk is still lifted.
+    assert stats["seed_records"] >= 1
+    # Exactly one identity chunk: the Mackus affiliation line, not the
+    # J. Smith byline (which carries a signal but does not name the author).
+    assert stats["identity_context_records"] == 1
+
+    recs = read_evidence(BundleApi.open(bundle), "a-mackus")
+    identity = [r for r in recs if r.note == "identity_context"]
+    assert len(identity) == 1
+    assert identity[0].chunk_id == "mackus_paper__c0001"
+    assert "Department of Applied Physics" in identity[0].quote
+    # The other-person byline was never committed.
+    assert not any(r.chunk_id == "mackus_paper__c0002" for r in recs)
+
+
 def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
     result = runner.invoke(

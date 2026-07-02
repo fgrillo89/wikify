@@ -619,6 +619,62 @@ def _matches_never_cite(text: str) -> bool:
     )
 
 
+# Affiliation / role / career signal used by the person identity-context
+# gather. A chunk from the target author's own doc carrying any of these
+# AND naming the author is grounded biographical material the writer can
+# cite, even though the general boilerplate filter would normally drop it.
+_IDENTITY_SIGNAL_RE = re.compile(
+    r"(Department\s+of|Universit|Institut|Laborator|Corporation|"
+    r"School\s+of|Faculty\s+of|Centre\s+for|Center\s+for|"
+    r"Professor|Ph\.?\s?D|received\s+(?:his|her|the)|"
+    r"joined|is\s+currently|appointed|research\s+group|"
+    r"graduated|born\s+in)",
+    re.IGNORECASE,
+)
+
+
+def _has_identity_signal(text: str) -> bool:
+    return bool(_IDENTITY_SIGNAL_RE.search(text or ""))
+
+
+def _person_name_variants(card) -> set[str]:
+    """Lowercased strings that specifically name the target author.
+
+    Union of the card ``page_id``, each ``author:``/plain alias, and the
+    last-name token of each (tokens < 3 chars, e.g. initials, are dropped
+    so a bare ``A.`` cannot match unrelated text). Used to gate the
+    identity-context gather so only chunks naming the target author are
+    lifted past the boilerplate filter.
+    """
+    variants: set[str] = set()
+
+    def _add(name: str) -> None:
+        name = (name or "").strip()
+        if not name:
+            return
+        variants.add(name.lower())
+        toks = [t for t in re.split(r"\s+", name) if len(t) >= 3]
+        if toks:
+            variants.add(toks[-1].lower())
+
+    pid = getattr(card, "page_id", "")
+    if isinstance(pid, str):
+        _add(pid)
+    for alias in card.front.get("aliases") or []:
+        if not isinstance(alias, str):
+            continue
+        a = alias.strip()
+        if a.lower().startswith("author:"):
+            _add(a.split(":", 1)[1].replace("_", " "))
+        else:
+            _add(a)
+    return {v for v in variants if v}
+
+
+def _chunk_names_author(text_lower: str, variants: set[str]) -> bool:
+    return any(v in text_lower for v in variants)
+
+
 # Section kinds the vetter excludes structurally via corpus-find
 # --exclude-kind flags. The --from-ids commit path must enforce the
 # same blacklist so a manually-supplied references / caption / etc.
@@ -749,7 +805,11 @@ def cmd_build_evidence(
     # card carrying an `author:<key>` alias, union that author's sources
     # into the seeds so the gather lifts quoted-contribution chunks from
     # their work rather than generic name mentions corpus-wide.
-    if card.front.get("kind") == "person":
+    person_kind = card.front.get("kind") == "person"
+    # The target author's own source docs, captured during author-seed
+    # resolution and reused by the identity-context gather below.
+    author_own_doc_ids: set[str] = set()
+    if person_kind:
         from ..corpus.queries import (
             AmbiguousHandleError,
             HandleNotFoundError,
@@ -771,8 +831,10 @@ def cmd_build_evidence(
                 continue
             for d in rows:
                 did = d.get("id") or d.get("doc_id") or d.get("handle")
-                if isinstance(did, str) and did not in seed_handles:
-                    seed_handles.append(did)
+                if isinstance(did, str):
+                    author_own_doc_ids.add(did)
+                    if did not in seed_handles:
+                        seed_handles.append(did)
 
     db_path = corpus.sqlite_path
     con = sqlite3.connect(str(db_path))
@@ -1103,6 +1165,7 @@ def cmd_build_evidence(
         "rejected_short": 0,
         "rejected_doc_cap": 0,
         "passes": 0,
+        "identity_context_records": 0,
     }
 
     def try_chunk(row, *, score: float, source: str) -> bool:
@@ -1164,6 +1227,60 @@ def cmd_build_evidence(
             try_chunk(row, score=float(it.get("score", 0.0)), source="find")
         stats["passes"] += 1
 
+    # Phase 3 (person only): identity-context gather. Pull chunks from the
+    # target author's OWN docs that BOTH name the author AND carry an
+    # affiliation / role / career signal. These are normally boilerplate-
+    # excluded; the person path allows them when they specifically name the
+    # target author, so the dossier carries grounded role/affiliation
+    # material the writer can cite. Capped and per-doc-limited; the article
+    # path is untouched.
+    if person_kind and author_own_doc_ids:
+        identity_context_cap = 4
+        identity_min_chars = 40
+        variants = _person_name_variants(card)
+        if variants:
+            seen_ids = {r["chunk_id"] for r in records}
+            n_identity = 0
+            for doc_id in sorted(author_own_doc_ids):
+                if n_identity >= identity_context_cap:
+                    break
+                rows = con.execute(
+                    "SELECT chunk_id, doc_id, text FROM chunks "
+                    "WHERE doc_id=? ORDER BY ord",
+                    (doc_id,),
+                ).fetchall()
+                per_doc = 0
+                for row in rows:
+                    if n_identity >= identity_context_cap:
+                        break
+                    if per_doc >= per_doc_cap:
+                        break
+                    cid = row["chunk_id"]
+                    if cid in seen_ids:
+                        continue
+                    text = (row["text"] or "").strip()
+                    if len(text) < identity_min_chars:
+                        continue
+                    if not _chunk_names_author(text.lower(), variants):
+                        continue
+                    if not _has_identity_signal(text):
+                        continue
+                    records.append(
+                        {
+                            "chunk_id": cid,
+                            "doc_id": row["doc_id"],
+                            "quote": text[:400],
+                            "score": 1.0,
+                            "status": "active",
+                            "note": "identity_context",
+                        }
+                    )
+                    seen_ids.add(cid)
+                    doc_counts[row["doc_id"]] = doc_counts.get(row["doc_id"], 0) + 1
+                    stats["identity_context_records"] += 1
+                    n_identity += 1
+                    per_doc += 1
+
     con.close()
 
     if not records:
@@ -1192,6 +1309,7 @@ def cmd_build_evidence(
     typer.echo(
         f"{concept}: appended {n} records across {distinct_docs} docs  "
         f"(seed={stats['seed_records']} find={stats['find_records']} "
+        f"identity={stats['identity_context_records']} "
         f"rejected=bp{stats['rejected_boilerplate']}/"
         f"nc{stats['rejected_never_cite']}/short{stats['rejected_short']}/"
         f"cap{stats['rejected_doc_cap']})"
