@@ -153,6 +153,16 @@ P2_recurse(chunk, depth):
 Citation graph branches fast; keep `depth = 1` unless the editor
 explicitly raises. Send `candidate_chunks` through the vetter.
 
+**Citation-diversify (maturing slug).** ALWAYS walk BOTH directions with
+`corpus_citation_walk` — outgoing `references` (older/seminal work the
+page's sources cite) AND incoming `cited-by` docs (newer work citing
+them); never one direction only. Bucket the resulting candidates by
+their source doc's publication year (from doc metadata) into
+seminal/older (<= p25), middle, and recent (>= p75), and keep candidates
+from every bucket so the accepted evidence spans eras rather than
+clustering on the highest-PageRank few. Budget and depth defaults are
+unchanged.
+
 **Stop reasons**: `budget_chunks_reached`, `depth_zero`,
 `no_new_neighbours`, `ok`.
 

@@ -70,9 +70,13 @@ top electrode and the oxygen-getting bottom electrode.[^e4]
 {{figure:stack-schematic}}
 ```
 
-Do not select decorative, duplicate, or weakly related images. Most
-pages should use zero or one figure; use two only when the subject is
-visually or structurally clearer with both.
+Do not select decorative, duplicate, or weakly related images. An
+ARTICLE page SHOULD include figures where the draft's figure candidates
+support them, up to `max_article_figures = 4`, at most ONE figure per
+distinct source document, and each figure tied to a distinct cited
+source/section (its `source_marker` in `used_markers`). Skip when no
+candidate is genuinely relevant; never invent one. Person pages stay
+figure-free.
 
 Before writing `response.json`, self-check the JSON against this field
 set. Do not include stale fields such as `links`, or workflow-only

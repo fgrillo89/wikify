@@ -215,6 +215,16 @@ Send `candidate_chunks` through the `gather-evidence` vetter. Citation
 graph explodes fast — keep `depth = 1` unless the editor explicitly
 raises.
 
+**Citation-diversify (maturing slug).** P2 ALWAYS walks BOTH
+directions with `corpus_citation_walk` — outgoing `references`
+(older/seminal work the page's sources cite) AND incoming `cited-by`
+docs (newer work citing them) — never one direction only. Then bucket
+the resulting candidates by their source doc's publication year (from
+doc metadata) into seminal/older (<= p25), middle, and recent (>= p75),
+and keep candidates from every bucket so the accepted evidence spans
+eras rather than clustering on the highest-PageRank few. Budget and
+depth defaults are unchanged.
+
 **Stop reasons**: `budget_chunks_reached`, `depth_zero`,
 `no_new_neighbours`, `ok`.
 
