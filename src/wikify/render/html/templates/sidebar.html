@@ -4,7 +4,7 @@
   <details{% if is_open %} open{% endif %}>
     <summary>
       <span class="sidebar-disclosure" aria-hidden="true"></span>
-      <a href="{{ root }}index.html#group-{{ group.id }}" class="sidebar-group-title">{{ group.title }}</a>
+      <span class="sidebar-group-title">{{ group.title }}</span>
     </summary>
     {% if group.pages or group.children %}
     <ul class="sidebar-group-pages">

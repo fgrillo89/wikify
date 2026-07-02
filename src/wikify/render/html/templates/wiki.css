@@ -253,10 +253,6 @@ a.wiki-redlink:visited {
   min-width: 0;
 }
 
-.sidebar-group-title:hover {
-  text-decoration: underline;
-}
-
 .sidebar-topics .sidebar-group-pages {
   list-style: none;
   margin: 2px 0 8px 9px;

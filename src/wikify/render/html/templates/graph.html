@@ -17,14 +17,15 @@
   const root = {{ root|tojson|safe }};
   const container = document.getElementById("topics-graph");
   const width = container.clientWidth || 800;
-  const height = 640;
+  const height = Math.max(680, (window.innerHeight || 900) - 200);
   const svg = d3.select(container).append("svg")
     .attr("viewBox", [0, 0, width, height])
     .attr("width", "100%")
     .attr("height", height);
 
   const g = svg.append("g");
-  svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
+  const zoom = d3.zoom().scaleExtent([0.15, 4]).on("zoom", e => g.attr("transform", e.transform));
+  svg.call(zoom);
 
   // Node degree drives radius so well-connected articles stand out.
   const degree = {};
@@ -59,23 +60,37 @@
   node.append("title").text(d => `${d.label} (${degree[d.id] || 0} links)`);
 
   const sim = d3.forceSimulation(data.nodes)
-    .force("link", d3.forceLink(data.links).id(d => d.id).distance(110).strength(d => 0.3 + (d.weight - 1) * 0.2))
-    .force("charge", d3.forceManyBody().strength(-450))
+    .force("link", d3.forceLink(data.links).id(d => d.id).distance(130).strength(d => 0.3 + (d.weight - 1) * 0.2))
+    .force("charge", d3.forceManyBody().strength(-620))
     .force("center", d3.forceCenter(width/2, height/2))
-    .force("x", d3.forceX(width/2).strength(0.04))
-    .force("y", d3.forceY(height/2).strength(0.04))
-    .force("collide", d3.forceCollide(d => radius(d) + 28));
+    .force("x", d3.forceX(width/2).strength(0.03))
+    .force("y", d3.forceY(height/2).strength(0.03))
+    .force("collide", d3.forceCollide(d => radius(d) + 34));
 
-  const PAD = 18;
   sim.on("tick", () => {
-    data.nodes.forEach(d => {
-      d.x = Math.max(PAD, Math.min(width - PAD, d.x));
-      d.y = Math.max(PAD, Math.min(height - PAD, d.y));
-    });
     link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
         .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
     node.attr("transform", d => `translate(${d.x},${d.y})`);
   });
+
+  // Frame the whole graph on load: fit the node bounding box into the
+  // viewport with padding, so the default zoom is not cramped or off-center.
+  function fitToView() {
+    const xs = data.nodes.map(d => d.x), ys = data.nodes.map(d => d.y);
+    if (!xs.length || xs.some(v => v == null)) return;
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const bw = (maxX - minX) || 1, bh = (maxY - minY) || 1;
+    const pad = 90;
+    const scale = Math.max(0.15, Math.min((width - pad) / bw, (height - pad) / bh, 1.5));
+    const tx = width / 2 - scale * (minX + maxX) / 2;
+    const ty = height / 2 - scale * (minY + maxY) / 2;
+    svg.transition().duration(600).call(
+      zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale)
+    );
+  }
+  sim.on("end", fitToView);
+  setTimeout(fitToView, 1600);
 
   // d3-drag preventDefaults the mousedown, which blocks the synthesized
   // click event. Track whether a real drag happened; if not, treat the
