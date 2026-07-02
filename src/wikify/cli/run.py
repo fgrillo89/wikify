@@ -8,6 +8,8 @@ Subcommands::
     run lock   --run <b> [--owner <id>]
     run unlock --run <b>
     run close  [--run <b>] [--status completed|failed|abandoned]
+    run metrics --run <b> --round N [--corpus <c>]
+    run stats  --run <b> [--format json|csv] [--plot <out.svg>]
     run record-call [--run <b>] --role <r> --model-id <m> --tier S|M|L
                     --tokens-in N --tokens-out N [--stage <s>]
     run record-calls --run <b> --from-stdin [--fail-fast] [--format json|compact]
@@ -247,6 +249,321 @@ def cmd_sense(
         "committed_pages": committed_pages,
     }
     typer.echo(json.dumps(snapshot, ensure_ascii=False))
+
+
+def _eval_m1_m3(
+    bundle: Bundle, corpus_dir: Path | None
+) -> tuple[float | None, float | None]:
+    """M1 (coverage residual) and M3 (G_evidence modularity) by reusing
+    ``wikify.eval.metrics``.
+
+    M3 is corpus-free (evidence doc-overlap graph on the committed pages).
+    M1 needs the corpus's embedded chunk vectors; it is ``None`` when no
+    corpus is given or the corpus vectors are missing/unusable. Neither
+    metric is reimplemented here -- both are the ``eval`` functions.
+    """
+    from ..bundle.wiki.page import load_bundle as load_page_bundle
+    from ..eval.metrics import spectral_gap_modularity
+
+    page_bundle = load_page_bundle(bundle.wiki_dir)
+    try:
+        m3: float | None = float(spectral_gap_modularity(page_bundle)["modularity"])
+    except Exception:
+        m3 = None
+
+    m1: float | None = None
+    if corpus_dir is not None and corpus_dir.is_dir():
+        from ..corpus.chunks import read_vector_store
+        from ..corpus.vectors_meta import read_meta
+        from ..embedding import embedder_for
+        from ..eval.metrics import EmbedderMismatch, coverage_residual
+
+        try:
+            corpus = Corpus(root=corpus_dir)
+            meta = read_meta(corpus.sqlite_path) if corpus.sqlite_path.exists() else None
+            vectors = read_vector_store(corpus) if meta is not None else None
+            if meta is not None and vectors is not None and vectors.matrix.shape[0] > 0:
+                embed = embedder_for(meta.backend, meta.model)
+                m1 = float(
+                    coverage_residual(
+                        page_bundle, vectors.matrix, embed=embed, corpus=corpus
+                    )
+                )
+        except (FileNotFoundError, EmbedderMismatch):
+            # Corpus vectors absent / an embedder that can't match them ->
+            # M1 is simply unavailable. A genuine computation error is a real
+            # bug and must not be masked, so only these narrow cases -> null.
+            m1 = None
+    return m1, m3
+
+
+@app.command("metrics")
+def cmd_metrics(
+    round_num: int = typer.Option(..., "--round"),
+    run: Path | None = typer.Option(None, "--run"),
+    corpus_dir: Path | None = typer.Option(None, "--corpus"),
+) -> None:
+    """Compute the full metric snapshot for ``--round N`` and append it to
+    ``<bundle>/derived/stats.jsonl`` (one JSON line per call).
+
+    The snapshot bundles the cheap counts (committed pages / articles /
+    people, maturity band histogram, chunk + addressable coverage, data
+    points + artifacts, budget spent) with M1 (coverage residual) and M3
+    (G_evidence modularity) reused from ``wikify.eval.metrics``. Coverage
+    and M1 need ``--corpus``; without it those fields are ``null`` rather
+    than fabricated. Recording the same round twice appends a second line;
+    ``run stats`` keeps the latest per round.
+    """
+    from collections import Counter
+
+    from ..bundle.run.cost import spent_haiku_eq
+    from ..bundle.wiki.derived import list_committed_pages
+    from ..bundle.work.card import list_concept_slugs
+    from ..bundle.work.maturity import compute_maturity
+    from ..data.store import DataStore
+
+    bundle = _resolve_bundle(run)
+
+    committed = list_committed_pages(bundle)
+    committed_slugs = {p["slug"] for p in committed}
+    n_articles = sum(1 for p in committed if p["kind"] == "article")
+    n_people = sum(1 for p in committed if p["kind"] == "person")
+
+    bands: Counter[str] = Counter()
+    for s in list_concept_slugs(bundle):
+        report = compute_maturity(bundle, s, current_round=round_num)
+        band = "committed" if s in committed_slugs else report.band
+        bands[band] += 1
+
+    chunk_cov: float | None = None
+    addr_cov: float | None = None
+    if corpus_dir is not None:
+        from ..bundle.work.coverage import compute_coverage
+
+        cov = compute_coverage(bundle, Corpus(root=corpus_dir)).to_dict()
+        chunk_cov = cov.get("chunk_coverage_ratio")
+        addr_cov = cov.get("addressable_coverage_ratio")
+
+    # Guard on the claim-store file: opening a DataStore schema-initializes
+    # ``claims.db`` on disk, so a metrics call must not conjure one where the
+    # DATA wave never ran. Absent store -> zero data counts.
+    if bundle.claims_db_path.exists():
+        store = DataStore.open(bundle.root)
+        try:
+            data_cov = store.coverage()
+        finally:
+            store.close()
+    else:
+        data_cov = {}
+
+    m1, m3 = _eval_m1_m3(bundle, corpus_dir)
+
+    record = {
+        "round": round_num,
+        "n_committed_pages": n_articles + n_people,
+        "n_articles": n_articles,
+        "n_people": n_people,
+        "band_counts": dict(bands),
+        "chunk_coverage_ratio": chunk_cov,
+        "addressable_coverage_ratio": addr_cov,
+        "n_data_points": data_cov.get("n_points", 0),
+        "n_data_artifacts": data_cov.get("n_artifacts", 0),
+        "budget_spent_haiku_eq": spent_haiku_eq(bundle),
+        "M1": m1,
+        "M3": m3,
+    }
+    stats_path = bundle.derived_dir / "stats.jsonl"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    with stats_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+    typer.echo(json.dumps(record))
+
+
+_STATS_CSV_FIELDS = (
+    ("round", "round"),
+    ("pages", "n_committed_pages"),
+    ("chunk_cov", "chunk_coverage_ratio"),
+    ("addr_cov", "addressable_coverage_ratio"),
+    ("budget", "budget_spent_haiku_eq"),
+    ("M1", "M1"),
+    ("M3", "M3"),
+    ("n_artifacts", "n_data_artifacts"),
+)
+
+
+def _load_stats_series(bundle: Bundle) -> list[dict]:
+    """Read ``derived/stats.jsonl`` (falling back to ``round_completed``
+    events), dedupe to the latest record per round, and sort by round."""
+    stats_path = bundle.derived_dir / "stats.jsonl"
+    records: list[dict] = []
+    if stats_path.is_file():
+        for line in stats_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and isinstance(rec.get("round"), int):
+                records.append(rec)
+    if not records:
+        records = _reconstruct_stats_from_events(bundle)
+    latest: dict[int, dict] = {}
+    for rec in records:
+        latest[rec["round"]] = rec  # later lines win
+    return [latest[k] for k in sorted(latest)]
+
+
+def _reconstruct_stats_from_events(bundle: Bundle) -> list[dict]:
+    """Minimal per-round series rebuilt from ``round_completed`` events:
+    the round counter, any budget field, and any metric fields present."""
+    out: list[dict] = []
+    metric_keys = (
+        "n_committed_pages", "chunk_coverage_ratio",
+        "addressable_coverage_ratio", "n_data_artifacts", "M1", "M3",
+    )
+    for ev in iter_events(bundle):
+        if ev.type != "round_completed":
+            continue
+        data = ev.data or {}
+        rnd = data.get("round")
+        if not isinstance(rnd, int):
+            continue
+        rec: dict = {"round": rnd}
+        for key in ("budget_spent_haiku_eq", "budget_used", "budget"):
+            if key in data:
+                rec["budget_spent_haiku_eq"] = data[key]
+                break
+        for key in metric_keys:
+            if key in data:
+                rec[key] = data[key]
+        out.append(rec)
+    return out
+
+
+def _svg_polyline(
+    series: list[tuple[int, float]],
+    *,
+    x0: int, y0: int, pw: int, ph: int,
+    xmin: int, xmax: int, ymin: float, ymax: float,
+    color: str,
+) -> str:
+    """One panel polyline (+ endpoint dots) mapping (round, value) into the
+    box at (x0, y0) of size (pw, ph). Empty string when no points."""
+    if not series:
+        return ""
+    xspan = (xmax - xmin) or 1
+    yspan = (ymax - ymin) or 1.0
+    pts = []
+    for rnd, val in series:
+        px = x0 + (rnd - xmin) / xspan * pw
+        py = y0 + ph - (val - ymin) / yspan * ph
+        pts.append((px, py))
+    poly = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+    dots = "".join(
+        f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.5" fill="{color}"/>'
+        for px, py in pts
+    )
+    return (
+        f'<polyline fill="none" stroke="{color}" stroke-width="2" '
+        f'points="{poly}"/>{dots}'
+    )
+
+
+def _write_stats_svg(records: list[dict], out_path: Path) -> None:
+    """Hand-rolled dependency-free SVG: two stacked panels vs round --
+    addressable coverage (top) and cumulative committed pages (bottom)."""
+    def series(key: str) -> list[tuple[int, float]]:
+        return [
+            (r["round"], float(r[key]))
+            for r in records
+            if isinstance(r.get(key), (int, float))
+        ]
+
+    cov = series("addressable_coverage_ratio")
+    pages = series("n_committed_pages")
+    rounds = [r["round"] for r in records] or [0]
+    xmin, xmax = min(rounds), max(rounds)
+
+    w, h = 480, 340
+    x0, pw = 60, w - 90
+    p1y, p2y, ph = 40, 200, 100
+    pages_max = max((v for _, v in pages), default=1.0) or 1.0
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+        f'viewBox="0 0 {w} {h}" font-family="monospace" font-size="11">',
+        f'<rect width="{w}" height="{h}" fill="white"/>',
+        f'<text x="{x0}" y="24">addressable_coverage_ratio vs round</text>',
+        f'<rect x="{x0}" y="{p1y}" width="{pw}" height="{ph}" '
+        f'fill="none" stroke="#ccc"/>',
+        f'<text x="{x0 - 34}" y="{p1y + 6}">1.0</text>',
+        f'<text x="{x0 - 34}" y="{p1y + ph}">0.0</text>',
+        _svg_polyline(
+            cov, x0=x0, y0=p1y, pw=pw, ph=ph,
+            xmin=xmin, xmax=xmax, ymin=0.0, ymax=1.0, color="#1f77b4",
+        ),
+        f'<text x="{x0}" y="{p2y - 12}">committed_pages vs round</text>',
+        f'<rect x="{x0}" y="{p2y}" width="{pw}" height="{ph}" '
+        f'fill="none" stroke="#ccc"/>',
+        f'<text x="{x0 - 34}" y="{p2y + 6}">{pages_max:.0f}</text>',
+        f'<text x="{x0 - 34}" y="{p2y + ph}">0</text>',
+        _svg_polyline(
+            pages, x0=x0, y0=p2y, pw=pw, ph=ph,
+            xmin=xmin, xmax=xmax, ymin=0.0, ymax=pages_max, color="#d62728",
+        ),
+        f'<text x="{x0}" y="{p2y + ph + 24}">round {xmin} .. {xmax}</text>',
+        "</svg>",
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
+@app.command("stats")
+def cmd_stats(
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("json", "--format", help="json | csv"),
+    plot: Path | None = typer.Option(None, "--plot", help="Write an SVG chart."),
+) -> None:
+    """Retrieve the per-round metric time series from ``derived/stats.jsonl``.
+
+    Default / ``--format json`` prints the deduped, round-sorted list of
+    records. ``--format csv`` emits a header row (round, pages, chunk_cov,
+    addr_cov, budget, M1, M3, n_artifacts) plus one row per round.
+    ``--plot <out.svg>`` writes a dependency-free line chart in addition to
+    the series: the series is still emitted in the requested format and a
+    trailing JSON status line reports the plot path. Falls back to
+    reconstructing the series from ``round_completed`` events when
+    ``stats.jsonl`` is absent or empty.
+    """
+    if fmt not in {"json", "csv"}:
+        cli_error(
+            EXIT_VALIDATION,
+            error="bad_format",
+            message=f"unknown --format {fmt!r}; expected json | csv",
+        )
+
+    bundle = _resolve_bundle(run)
+    records = _load_stats_series(bundle)
+
+    if fmt == "csv":
+        lines = [",".join(name for name, _ in _STATS_CSV_FIELDS)]
+        for rec in records:
+            cells = []
+            for _, key in _STATS_CSV_FIELDS:
+                val = rec.get(key)
+                cells.append("" if val is None else str(val))
+            lines.append(",".join(cells))
+        typer.echo("\n".join(lines))
+    else:
+        typer.echo(json.dumps(records))
+
+    if plot is not None:
+        _write_stats_svg(records, plot)
+        typer.echo(
+            json.dumps({"ok": True, "plot": str(plot), "n_rounds": len(records)})
+        )
 
 
 events_app = typer.Typer(add_completion=False, help="Event-ledger queries.")

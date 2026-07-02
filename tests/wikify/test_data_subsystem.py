@@ -1489,6 +1489,44 @@ def test_dossier_surfaces_data_points_from_evidence(tmp_path: Path) -> None:
     assert "[^e1]" in dossier
 
 
+def test_related_data_is_doc_level_not_chunk_level(tmp_path: Path) -> None:
+    """`related` artifacts match on source DOCUMENT, not chunk. The DATA wave
+    harvests the number-dense chunk the article explorer skips, so an artifact
+    and the page it generalizes share a doc but not a chunk. A page whose
+    evidence is a DIFFERENT chunk of that doc still surfaces the artifact,
+    while `points` stay chunk-level."""
+    from wikify.bundle.draft.builder import _data_for_evidence
+
+    corpus = _numeric_corpus(tmp_path / "corpus")
+    bundle = _init_bundle(tmp_path, corpus)
+    store = DataStore.open(bundle.root)
+    # The verified number lives on doc_a's number-dense chunk c0000.
+    store.add_points([
+        _verified("Al2O3", "Growth per cycle", "1.1 A/cycle", "A/cycle",
+                  "doc_a", "doc_a__c0000", "growth per cycle of 1.1 A/cycle"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="gpc", title="GPC Table", properties=["Growth per cycle"]
+    )
+    table = consolidate(store, spec)
+    store.upsert_artifact(spec, n_rows=table.n_rows)
+    store.set_artifact_claims(spec.artifact_id, table.claim_ids)
+    store.set_artifact_status(spec.artifact_id, "committed")
+    store.close()
+
+    # The page's evidence is a DIFFERENT chunk of the SAME document.
+    points, related = _data_for_evidence(bundle, {"doc_a__c0009"}, {"doc_a"})
+    # Doc-level: the artifact surfaces even though the chunk sets are disjoint
+    # (a chunk-level join would have returned []).
+    assert [a["title"] for a in related] == ["GPC Table"]
+    # Chunk-level: the number's chunk is absent from evidence -> no point.
+    assert points == []
+
+    # Positive control: same chunk -> the point IS citable (chunk-level).
+    points_hit, _ = _data_for_evidence(bundle, {"doc_a__c0000"}, {"doc_a"})
+    assert [p["value"] for p in points_hit] == ["1.1 A/cycle"]
+
+
 def test_cli_rebuild_reflects_new_claims(tmp_path: Path) -> None:
     corpus = _numeric_corpus(tmp_path / "corpus")
     bundle = _init_bundle(tmp_path, corpus)

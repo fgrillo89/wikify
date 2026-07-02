@@ -103,13 +103,16 @@ targets to the plan in order, removing them from later bands.
    ~2 rounds (grow other slugs meanwhile) -> `ready` -> write. Do not
    keep re-growing a saturated slug or it never becomes writable.
 2. **REFINE wave.** Fires when `wikify work refine-candidates` returns
-   candidates (committed pages whose live evidence outgrew their
-   write-time snapshot). Dispatch at most `min(2, wave_size)` refine
+   candidates. That command now surfaces two signals: a committed page
+   whose live evidence outgrew its write-time snapshot, and a committed
+   page a newly-relevant committed data artifact postdates (reason
+   `new_data`). Dispatch at most `min(2, wave_size)` refine
    Tasks per round (bound to the `refine` subskill), one per top
    candidate by ratio; slug-disjoint from all other waves by
    construction (refine targets committed slugs, which WRITE/GROW never
-   touch). A refined page's fresh `page_committed` event resets its own
-   baseline, so it won't re-trigger until it grows again.
+   touch). A refined page converges: its fresh `page_committed` event
+   resets its own baseline and records the artifact, so it won't
+   re-trigger until it grows again.
 3. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
    with `growth_stalled == False`. Up to `wave_size`, slug-disjoint
    from WRITE. Per-slug pattern selection:
@@ -156,10 +159,16 @@ targets to the plan in order, removing them from later bands.
      number-dense chunks, which the P1-P5 explorers deliberately skip — plus
      a piggyback over any slug grown this round. It stages points and runs
      `wikify data add` (the verification gate).
-   - **Consolidate.** When `data coverage` shows a ripe theme (>= 4 subjects
-     sharing a property, not yet covered by a committed artifact), dispatch
-     one `consolidate-data` Task to build + commit a `kind=data`
-     artifact. At most one consolidation Task per round.
+   - **Consolidate.** Each round run `wikify data coverage` and enumerate
+     ALL uncovered ripe themes (>= 4 subjects sharing a property with no
+     committed artifact). Dispatch a `consolidate-data` Task for each,
+     highest-subject-count first, capped at 2 per round; keep dispatching
+     across rounds until no uncovered ripe theme remains. Consolidation is
+     not optional — do not skip the DATA-consolidate step while a ripe theme
+     is uncovered. After a `consolidate-data` Task commits a new `kind=data`
+     artifact, the committed pages it covers become `refine-candidates`
+     (reason `new_data`) so the REFINE wave re-drafts them to cite the new
+     table under "Related data".
 
 **Anti-starvation slack.** If the loop would otherwise stop (`STOP
 CHECK` would fire) AND SEED or GAP would still produce work, dispatch
@@ -291,6 +300,19 @@ wikify run record-event --type round_completed --stage round \
            "dispatched_patterns": ["P3", "P5"], "budget_used": ...}'
 ```
 
+Every round MUST also record the full metric snapshot:
+
+```bash
+wikify run metrics --run <bundle> --round N --corpus <corpus>
+```
+
+It computes band_counts, chunk + addressable coverage, data counts,
+committed pages, budget, and M1/M3, and appends one line to
+`derived/stats.jsonl`. Run it every round so metrics are always computed
+and reported, not only at finalize. `wikify run stats [--plot out.svg]`
+retrieves and plots the coverage-and-pages-over-budget/iterations series
+from that file.
+
 ### 8. STOP CHECK
 
 Stop when ALL completeness signals hold:
@@ -365,7 +387,10 @@ wikify run close --status completed --run <bundle>
 wikify eval --bundle <bundle> --corpus <corpus>
 wikify work coverage --run <bundle> --corpus <corpus> --format json \
   > <bundle>/derived/coverage.json
+wikify run stats --run <bundle> --plot <bundle>/derived/metrics.svg
 ```
+
+`run stats --plot` produces the metrics chart from `derived/stats.jsonl`.
 
 Then run the Inspection Loop and write the Final Report.
 

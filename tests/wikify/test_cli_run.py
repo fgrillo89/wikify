@@ -8,6 +8,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from wikify.cli import app
+from wikify.cli._helpers import EXIT_VALIDATION
 
 runner = CliRunner()
 
@@ -644,3 +645,157 @@ def test_record_event_evidence_added_no_round_accepted(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["ok"] is True
+
+
+# -------------------------------------------------------------- run metrics / stats
+
+
+def _commit_article(bundle: Path, slug: str, title: str) -> None:
+    """Write a minimal committed article page so list_committed_pages sees it."""
+    art_dir = bundle / "wiki" / "articles"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / f"{slug}.md").write_text(
+        f"---\nid: {title}\nkind: article\ntitle: {title}\n---\n\n# {title}\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def test_run_metrics_appends_stats_line(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    result = runner.invoke(
+        app, ["run", "metrics", "--run", str(bundle), "--round", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    rec = json.loads(result.output)
+    expected_keys = {
+        "round", "n_committed_pages", "n_articles", "n_people", "band_counts",
+        "chunk_coverage_ratio", "addressable_coverage_ratio", "n_data_points",
+        "n_data_artifacts", "budget_spent_haiku_eq", "M1", "M3",
+    }
+    assert expected_keys <= set(rec)
+    assert rec["round"] == 0
+    assert rec["n_committed_pages"] == 1
+    assert rec["n_articles"] == 1
+    # No corpus supplied -> coverage + M1 are null, not fabricated.
+    assert rec["chunk_coverage_ratio"] is None
+    assert rec["M1"] is None
+    # M3 is corpus-free (single page -> modularity 0.0).
+    assert rec["M3"] == 0.0
+    # No DATA wave ran -> zero data counts, and claims.db is NOT conjured
+    # onto disk by the metrics call (opening a DataStore would create it).
+    assert rec["n_data_points"] == 0
+    assert rec["n_data_artifacts"] == 0
+    assert not (bundle / "claims.db").exists()
+
+    # A second round appends a second line.
+    runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", "1"])
+    lines = [
+        ln for ln in (bundle / "derived" / "stats.jsonl")
+        .read_text(encoding="utf-8").splitlines() if ln.strip()
+    ]
+    assert len(lines) == 2
+    assert [json.loads(ln)["round"] for ln in lines] == [0, 1]
+
+
+def test_run_stats_json_and_csv(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+
+    js = runner.invoke(app, ["run", "stats", "--run", str(bundle), "--format", "json"])
+    assert js.exit_code == 0, js.output
+    series = json.loads(js.output)
+    assert isinstance(series, list)
+    assert [r["round"] for r in series] == [0, 1]
+
+    csv = runner.invoke(app, ["run", "stats", "--run", str(bundle), "--format", "csv"])
+    assert csv.exit_code == 0, csv.output
+    rows = csv.output.strip().splitlines()
+    assert rows[0] == "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts"
+    assert len(rows) == 3  # header + 2 rounds
+    assert rows[1].split(",")[0] == "0"
+
+
+def test_run_stats_dedupes_latest_per_round(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    # Record round 0 twice; readers keep one record (latest wins).
+    runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", "0"])
+    runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", "0"])
+    js = runner.invoke(app, ["run", "stats", "--run", str(bundle), "--format", "json"])
+    series = json.loads(js.output)
+    assert [r["round"] for r in series] == [0]
+
+
+def test_run_stats_plot_keeps_series(tmp_path: Path) -> None:
+    """``--plot`` writes the svg AND still emits the series (csv rows here);
+    the plot path is reported on a trailing JSON status line, not swallowed."""
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app,
+        ["run", "stats", "--run", str(bundle), "--format", "csv", "--plot", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    # Series (header + 2 rounds) still present.
+    assert lines[0] == "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts"
+    assert lines[1].split(",")[0] == "0"
+    assert lines[2].split(",")[0] == "1"
+    # Trailing status line carries the plot path.
+    status = json.loads(lines[-1])
+    assert status["plot"] == str(out)
+    assert status["n_rounds"] == 2
+    svg = out.read_text(encoding="utf-8")
+    assert "<svg" in svg
+    assert "<polyline" in svg
+
+
+def test_run_stats_plot_json_keeps_series(tmp_path: Path) -> None:
+    """``--plot`` with the default json format emits the record list on the
+    first line and the plot status on the second."""
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", "0"])
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    series = json.loads(lines[0])
+    assert [r["round"] for r in series] == [0]
+    assert json.loads(lines[-1])["plot"] == str(out)
+    assert out.read_text(encoding="utf-8").startswith("<svg")
+
+
+def test_run_stats_invalid_format_errors(tmp_path: Path) -> None:
+    bundle = _init_bundle(tmp_path)
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--format", "xml"]
+    )
+    assert result.exit_code == EXIT_VALIDATION
+    assert "bad_format" in result.output
+
+
+def test_run_stats_reconstructs_from_round_completed(tmp_path: Path) -> None:
+    """No stats.jsonl -> the series is rebuilt from round_completed events."""
+    bundle = _init_bundle(tmp_path)
+    runner.invoke(
+        app,
+        [
+            "run", "record-event", "--run", str(bundle),
+            "--type", "round_completed",
+            "--data", '{"round": 2, "budget_used": 50, "n_committed_pages": 3}',
+        ],
+    )
+    js = runner.invoke(app, ["run", "stats", "--run", str(bundle), "--format", "json"])
+    series = json.loads(js.output)
+    assert len(series) == 1
+    assert series[0]["round"] == 2
+    assert series[0]["budget_spent_haiku_eq"] == 50
+    assert series[0]["n_committed_pages"] == 3
