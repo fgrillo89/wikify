@@ -1,6 +1,7 @@
 """Tests for distill/write/author_context.py."""
 
 from wikify.bundle.draft.author_context import (
+    Affiliation,
     AuthorContext,
     _author_key,
     build_author_context,
@@ -193,3 +194,61 @@ def test_returned_type_is_authcontext():
     ctx = build_author_context(docs)
     alice = ctx[_author_key("Alice Adams")]
     assert isinstance(alice, AuthorContext)
+
+
+# --- affiliations ----------------------------------------------------------
+
+
+def _doc_with_affiliations(doc_id, authors, affiliations):
+    return Document(
+        id=doc_id,
+        source_path=f"/tmp/{doc_id}.pdf",
+        kind="pdf",
+        title=f"Paper {doc_id}",
+        metadata={"authors": authors, "year": 2020, "affiliations": affiliations},
+        markdown_path="",
+        image_dir="",
+    )
+
+
+def test_affiliation_populated_with_provenance():
+    """A grounded affiliation (keyed by display name) is attached with the
+    source doc_id as provenance."""
+    docs = [
+        _doc_with_affiliations(
+            "d1",
+            ["Alice Adams"],
+            {"Alice Adams": "Department of Physics, Example University"},
+        )
+    ]
+    ctx = build_author_context(docs)
+    alice = ctx[_author_key("Alice Adams")]
+    assert len(alice.affiliations) == 1
+    aff = alice.affiliations[0]
+    assert isinstance(aff, Affiliation)
+    assert aff.name == "Department of Physics, Example University"
+    assert aff.doc_id == "d1"  # provenance
+
+
+def test_affiliation_grounded_by_author_key():
+    """Affiliation metadata keyed by the author key (not display name) is
+    still resolved."""
+    docs = [
+        _doc_with_affiliations(
+            "d1",
+            ["Alice Adams"],
+            {_author_key("Alice Adams"): ["Institute of Materials"]},
+        )
+    ]
+    ctx = build_author_context(docs)
+    alice = ctx[_author_key("Alice Adams")]
+    assert [a.name for a in alice.affiliations] == ["Institute of Materials"]
+    assert alice.affiliations[0].doc_id == "d1"
+
+
+def test_affiliation_empty_when_ungrounded():
+    """No affiliation metadata -> affiliations stays [] (never fabricated)."""
+    docs = [_doc("d1", "Paper One", ["Alice Adams"], 2020)]
+    ctx = build_author_context(docs)
+    alice = ctx[_author_key("Alice Adams")]
+    assert alice.affiliations == []
