@@ -33,6 +33,27 @@ If a property name is fragmented (e.g. "GPC" vs "growth per cycle"), that is
 a routing problem in the claim store. Consolidate the dominant spelling and
 escalate the alias merge to the editor rather than inventing a mapping here.
 
+## Recall gate — do not commit a sparse table
+
+Before committing a table for a property, pull its whole-corpus recall report:
+
+```bash
+wikify data harvest-property --property "growth per cycle" \
+  --alias GPC --unit "A/cycle" --corpus <corpus> --run <bundle> --format json
+```
+
+`report.data_recall = docs_in_table / docs_mentioning_property`. The table is
+too thin whenever many papers report the property but few reach the table:
+
+- **Block/warn** when `docs_mentioning_property >= 10` AND `data_recall < 0.75`.
+  Do not commit — loop back to `extract-data` in property-targeted mode to
+  harvest the missing docs, then re-check.
+- Aim to consolidate at `data_recall >= 0.90` (or when the sweep is exhausted
+  and no longer `truncated`).
+
+This is what keeps a comparison table representative instead of shipping the
+handful of rows that happened to fall in the rounds' doc slices.
+
 ## The view spec
 
 ```json

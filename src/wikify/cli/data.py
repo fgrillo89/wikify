@@ -40,8 +40,8 @@ from ..data.artifact_page import (
     write_artifact_page,
 )
 from ..data.consolidate import consolidate
-from ..data.harvest import source_text_for
-from ..data.models import ArtifactSpec, DataPoint
+from ..data.harvest import source_text_for, sweep_property_candidates
+from ..data.models import ArtifactSpec, DataPoint, normalize_key
 from ..data.store import DataStore
 from ..data.verify import verify_point
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error
@@ -62,6 +62,10 @@ def _wiki_mutation_lock(bundle: Bundle, op: str):
         cli_error(EXIT_VALIDATION, error="page_id_collision", message=str(exc))
 
 app = typer.Typer(add_completion=False, help="Factual-data claim store + data artifacts.")
+
+# Recommended minimum alias phrasings (incl. the canonical name) for a
+# whole-corpus property sweep; fewer risks missing paraphrased mentions.
+PROPERTY_ALIAS_MIN = 3
 
 
 def _resolve_bundle(bundle_flag: Path | None) -> Bundle:
@@ -287,6 +291,88 @@ def cmd_coverage(
         typer.echo(json.dumps({"ok": True, **cov}, ensure_ascii=False))
         return
     typer.echo(_human(cov))
+
+
+@app.command("harvest-property")
+def cmd_harvest_property(
+    property: str = typer.Option(..., "--property", help="Canonical property name."),
+    alias: list[str] = typer.Option([], "--alias", help="Alias phrasing (repeatable)."),
+    unit: list[str] = typer.Option([], "--unit", help="Unit token (repeatable)."),
+    run: Path | None = typer.Option(None, "--run", help="Bundle directory."),
+    corpus: Path | None = typer.Option(None, "--corpus"),
+    max_chunks: int = typer.Option(500, "--max-chunks", help="Candidate-chunk cap."),
+    include_text: bool = typer.Option(
+        False, "--include-text", help="Also emit each candidate's chunk text."
+    ),
+    fmt: str = typer.Option("json", "--format"),
+) -> None:
+    """Enumerate every corpus chunk mentioning a property and report recall.
+
+    Runs a whole-corpus sweep for the canonical name plus its aliases/units,
+    surfaces the candidate worklist, and computes ``data_recall`` (docs already
+    represented in the table over docs mentioning the property). It does NOT
+    add points -- the extract-data agent verifies + ingests each candidate via
+    ``data add``; this only shows what still needs harvesting.
+    """
+    bundle = _resolve_bundle(run)
+    cor = _resolve_corpus(bundle, corpus)
+    if cor is None:
+        cli_error(
+            EXIT_VALIDATION,
+            error="no_corpus",
+            message=(
+                "could not resolve a corpus to sweep. Pass --corpus <path> or "
+                "fix run/state.json corpus_path."
+            ),
+        )
+    phrasings = [property, *(alias or [])]
+    sweep = sweep_property_candidates(
+        cor, phrasings=phrasings, units=list(unit or []),
+        max_chunks=max_chunks, include_text=include_text,
+    )
+    pnorm = normalize_key(property)
+    store = DataStore.open(bundle.root)
+    try:
+        stats = store.property_doc_stats(pnorm)
+        store.record_property_sweep(
+            property=property,
+            property_norm=pnorm,
+            docs_mentioning=len(sweep["docs_mentioning"]),
+            docs_extracted=stats["docs_extracted"],
+            docs_in_table=stats["docs_in_table"],
+            candidate_chunks=sweep["candidate_chunks"],
+            truncated=sweep["truncated"],
+        )
+    finally:
+        store.close()
+    docs_mentioning = len(sweep["docs_mentioning"])
+    report = {
+        "property": property,
+        "docs_mentioning_property": docs_mentioning,
+        "candidate_chunks": sweep["candidate_chunks"],
+        "docs_in_table": stats["docs_in_table"],
+        "data_recall": round(stats["docs_in_table"] / max(docs_mentioning, 1), 4),
+        "truncated": sweep["truncated"],
+    }
+    n_phrasings = len({normalize_key(p) for p in phrasings if p.strip()})
+    payload = {
+        "ok": True,
+        "report": report,
+        "docs_extracted": stats["docs_extracted"],
+        "matched_chunks": sweep["matched_chunks"],
+        "candidates": sweep["candidates"],
+    }
+    if n_phrasings < PROPERTY_ALIAS_MIN:
+        payload["warning"] = (
+            f"only {n_phrasings} phrasing(s) supplied; >= {PROPERTY_ALIAS_MIN} "
+            "recommended so paraphrased mentions are not missed"
+        )
+    if fmt == "json":
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+        return
+    typer.echo(_human(report))
+    if "warning" in payload:
+        typer.echo(f"warning: {payload['warning']}")
 
 
 def _load_spec(spec_path: Path | None) -> ArtifactSpec:
