@@ -571,6 +571,47 @@ a.wiki-redlink:visited {
   color: #54595d;
 }
 
+.cluster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.cluster-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid #c8ccd1;
+  background: #f8f9fa;
+  padding: 10px 14px;
+  border-radius: 2px;
+  text-decoration: none;
+}
+
+.cluster-card:hover {
+  background: #eaf3ff;
+  border-color: #a2a9b1;
+}
+
+.cluster-card-title {
+  font-weight: bold;
+  color: #0645ad;
+  font-size: 1.05em;
+}
+
+.cluster-card-desc {
+  font-size: 0.88em;
+  color: #54595d;
+  line-height: 1.4;
+}
+
+.cluster-card-count {
+  font-size: 0.8em;
+  color: #72777d;
+  font-family: sans-serif;
+}
+
 .portal-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
