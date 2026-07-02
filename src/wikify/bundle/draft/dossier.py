@@ -183,14 +183,22 @@ def render_dossier(draft: WriteRequest) -> str:
     # internal citation index, NOT content to paste: each fact is citable via
     # the marker of the chunk it came from. The cross-source comparison table
     # is a separate, evolving data artifact — link it rather than rebuild it.
+    rows: list = []
     if draft.data_points:
         marker_by_chunk = {ref.chunk_id: m for m, ref in by_marker.items()}
         rows = [
             dp for dp in draft.data_points if marker_by_chunk.get(dp.get("chunk_id"))
         ]
+    # Render the section when EITHER citable points exist OR a related data
+    # artifact does: the two are surfaced independently. Points are matched at
+    # chunk level (only numbers already in this page's evidence are citable),
+    # while related artifacts are matched at document level, so a page can link
+    # a comparison table built from its source papers even when the table's own
+    # number-dense chunks are not part of the page's prose evidence.
+    if rows or draft.related_data_artifacts:
+        out.append("## Available data (citation index — do not paste verbatim)")
+        out.append("")
         if rows:
-            out.append("## Available data (citation index — do not paste verbatim)")
-            out.append("")
             out.append(
                 "_Verified figures from this page's own sources. Use them to make "
                 "and ground GENERAL claims in prose: state a number inline and "
@@ -200,21 +208,6 @@ def render_dossier(draft: WriteRequest) -> str:
                 "the citation, not data._"
             )
             out.append("")
-            if draft.related_data_artifacts:
-                names = ", ".join(
-                    f'"{a.get("title", "")}"'
-                    for a in draft.related_data_artifacts
-                    if a.get("title")
-                )
-                if names:
-                    out.append(
-                        "_The side-by-side comparison lives in the data "
-                        f"artifact(s) {names}, automatically linked from this page "
-                        "under \"Related data\". Mention it by name in prose where "
-                        "helpful; do NOT emit `[[wikilinks]]` (the validator "
-                        "rejects them) and do NOT rebuild the table here._"
-                    )
-                    out.append("")
             out.append("| Subject | Property | Value | Cite as |")
             out.append("|---|---|---|---|")
             for dp in rows:
@@ -227,6 +220,21 @@ def render_dossier(draft: WriteRequest) -> str:
                 prop = str(dp.get("property", "")).replace("|", "/")
                 out.append(f"| {subj} | {prop} | {value} | [^{marker}] |")
             out.append("")
+        if draft.related_data_artifacts:
+            names = ", ".join(
+                f'"{a.get("title", "")}"'
+                for a in draft.related_data_artifacts
+                if a.get("title")
+            )
+            if names:
+                out.append(
+                    "_The side-by-side comparison lives in the data "
+                    f"artifact(s) {names}, automatically linked from this page "
+                    "under \"Related data\". Mention it by name in prose where "
+                    "helpful; do NOT emit `[[wikilinks]]` (the validator "
+                    "rejects them) and do NOT rebuild the table here._"
+                )
+                out.append("")
 
     # Body groups
     out.append("## Evidence")

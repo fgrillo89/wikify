@@ -1523,3 +1523,102 @@ def test_work_seen_chunks_unions_active_evidence(tmp_path: Path) -> None:
     # Union of active evidence across both slugs; archived excluded.
     assert sorted(data["seen_chunk_ids"]) == ["c1", "c3"]
     assert data["n_seen"] == 2
+
+
+def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
+    """Relevance is DOC-level, not chunk-level. A committed page flags with
+    reason ``new_data`` when a relevant data artifact -- sharing a source
+    DOCUMENT (but NOT a chunk) with its active evidence -- is committed after
+    it. This is the disjoint-chunk case the chunk-level join missed: the DATA
+    wave harvests the number chunks the article explorer skipped. It converges
+    once the page re-commits with the artifact in its ``data_artifacts_seen``
+    snapshot; ``--no-data`` disables the signal; an artifact from a different
+    document never flags."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.events import Event, append_event
+    from wikify.bundle.run.state import load_state
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+    from wikify.data.consolidate import consolidate
+    from wikify.data.models import ArtifactSpec, DataPoint
+    from wikify.data.store import DataStore
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    run_id = load_state(bundle).run_id
+
+    def _page_committed(seen: list[str]) -> None:
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id, type="page_committed", actor="test", page_id="ALD",
+                data={
+                    "slug": "ald", "kind": "article",
+                    "evidence_count": 2, "evidence_total": 2,
+                    "data_artifacts_seen": seen,
+                },
+            ),
+        )
+
+    # Committed page whose active evidence cites the PROSE chunks cB1 + cB2 of
+    # doc d1 -- deliberately NOT the number-dense chunk cA the DATA wave harvests.
+    create_concept(bundle, page_id="ALD", slug="ald")
+    append_evidence(bundle, "ald", [
+        EvidenceRecord(chunk_id="cB1", doc_id="d1", status="active"),
+        EvidenceRecord(chunk_id="cB2", doc_id="d1", status="active"),
+    ])
+    card = load_card(bundle, "ald")
+    card.front["status"] = "committed"
+    save_card(bundle, "ald", card)
+    _page_committed(seen=[])
+
+    def _point(subject: str, chunk: str, doc: str, prop: str) -> DataPoint:
+        return DataPoint(
+            subject=subject, property=prop, value_text="1.1", unit="A/cycle",
+            doc_id=doc, chunk_id=chunk, grounding_quote="q",
+            verification_status="verified", quote_verified=True,
+        ).finalize()
+
+    # Artifact backed by chunk cA of doc d1: shares the DOCUMENT with the page
+    # but NOT a chunk. Committed AFTER the page -> must flag ``new_data``.
+    store = DataStore.open(bundle.root)
+    store.add_points([_point("Al2O3", "cA", "d1", "GPC")])
+    spec = ArtifactSpec(artifact_id="gpc", title="GPC", properties=["GPC"])
+    table = consolidate(store, spec)
+    store.upsert_artifact(spec, n_rows=table.n_rows)
+    store.set_artifact_claims("gpc", table.claim_ids)
+    store.set_artifact_status("gpc", "committed")
+    store.close()
+
+    def _refine(*extra: str) -> dict:
+        res = runner.invoke(
+            app,
+            ["work", "refine-candidates", "--run", str(bundle_dir),
+             "--format", "json", *extra],
+        )
+        assert res.exit_code == 0, res.output
+        return json.loads(res.output)
+
+    data = _refine()
+    by_slug = {it["slug"]: it for it in data["items"]}
+    assert "ald" in by_slug  # chunk-level join would MISS this (disjoint chunks)
+    assert "new_data" in by_slug["ald"]["reason"]
+    assert by_slug["ald"]["new_data_artifacts"] == ["gpc"]
+
+    # --no-data suppresses the signal (no evidence growth here).
+    assert _refine("--no-data")["n_candidates"] == 0
+
+    # Convergence: re-commit recording the now-seen artifact -> not flagged.
+    _page_committed(seen=["gpc"])
+    assert _refine()["n_candidates"] == 0
+
+    # An artifact from a DIFFERENT document (d2) is irrelevant -> never flags.
+    store = DataStore.open(bundle.root)
+    store.add_points([_point("HfO2", "zC", "d2", "THK")])
+    spec2 = ArtifactSpec(artifact_id="other", title="Other", properties=["THK"])
+    table2 = consolidate(store, spec2)
+    store.upsert_artifact(spec2, n_rows=table2.n_rows)
+    store.set_artifact_claims("other", table2.claim_ids)
+    store.set_artifact_status("other", "committed")
+    store.close()
+    assert _refine()["n_candidates"] == 0

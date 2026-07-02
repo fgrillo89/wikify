@@ -40,6 +40,7 @@ from ..run.events import Event, append_event
 from ..run.lock import run_lock
 from ..run.state import load_state
 from ..work.card import load_card, save_card
+from ..work.evidence import read_evidence
 
 _REF_DEF_RE_TEMPLATE = (
     r'\[\^e(\d+)\]:\s*(?P<rest>.*)'
@@ -123,6 +124,41 @@ def _infer_links(bundle: Bundle, *, page: WikiPage) -> list[str]:
         if score > 0 and (direct or doc_overlap > 0):
             scored.append((score, other.id))
     return [page_id for _, page_id in sorted(scored, reverse=True)[:5]]
+
+
+def relevant_committed_artifacts(bundle: Bundle, doc_ids) -> list[str]:
+    """Committed data-artifact ids whose backing claims share a source
+    DOCUMENT with ``doc_ids`` (a page's active-evidence doc set).
+
+    Relevance is DOC-level, not chunk-level. The DATA wave deliberately
+    harvests the number-dense chunks the P1-P5 article explorers skip, so a
+    data artifact and the article it generalizes are grounded in disjoint
+    chunk sets by construction -- a chunk intersection is always empty.
+    Matching on the source document (the artifact's backing claims resolved
+    to their ``doc_id``) instead lets an artifact flag its article.
+    Deterministic (sorted); empty when the bundle has no claim store yet.
+    Both ``commit_page`` (write-time snapshot) and ``work refine-candidates``
+    (live check) call this with the page's active-evidence doc ids, so a
+    refreshed page converges.
+    """
+    ids = list(dict.fromkeys(d for d in (doc_ids or []) if d))
+    if not ids or not bundle.claims_db_path.exists():
+        return []
+    from ...data.store import DataStore
+
+    store = DataStore.open(bundle.root)
+    try:
+        placeholders = ",".join("?" * len(ids))
+        rows = store.con.execute(
+            "SELECT DISTINCT a.artifact_id FROM data_artifacts a "
+            "JOIN data_artifact_claims ac ON ac.artifact_id = a.artifact_id "
+            "JOIN data_points p ON p.claim_id = ac.claim_id "
+            f"WHERE p.doc_id IN ({placeholders}) AND a.status = 'committed'",
+            ids,
+        )
+        return sorted({r["artifact_id"] for r in rows})
+    finally:
+        store.close()
 
 
 def commit_page(
@@ -218,6 +254,16 @@ def commit_page(
         # this against the live active-evidence count.
         evidence_total = len(read_json(draft_p).get("evidence") or [])
 
+        # Data-artifact relevance snapshot: the committed data artifacts that
+        # share a source document with this page's live active evidence. Read
+        # from the same active-evidence ledger ``work refine-candidates``
+        # checks against, so a re-commit records the now-current set and the
+        # page stops flagging as a ``new_data`` refine candidate.
+        active_doc_ids = [
+            r.doc_id for r in read_evidence(bundle, slug) if r.status == "active"
+        ]
+        data_artifacts_seen = relevant_committed_artifacts(bundle, active_doc_ids)
+
         card = load_card(bundle, slug)
         card.front["status"] = "committed"
         card.front["wiki_path"] = str(
@@ -245,6 +291,7 @@ def commit_page(
                     "kind": page_kind,
                     "evidence_count": len(evidence),
                     "evidence_total": evidence_total,
+                    "data_artifacts_seen": data_artifacts_seen,
                 },
             ),
         )

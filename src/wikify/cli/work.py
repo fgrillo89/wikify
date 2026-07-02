@@ -1417,6 +1417,10 @@ def cmd_refine_candidates(
         6, "--min-new-chunks",
         help="Minimum evidence_now - evidence_at_commit delta to flag.",
     ),
+    no_data: bool = typer.Option(
+        False, "--no-data",
+        help="Disable the data-artifact signal (only evidence growth flags).",
+    ),
     fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
 ) -> None:
     """List committed pages whose live evidence outgrew their write-time snapshot.
@@ -1429,9 +1433,19 @@ def cmd_refine_candidates(
     slug is a candidate when the ratio reaches ``--growth`` or the delta
     reaches ``--min-new-chunks``; committing a fresh page resets the
     baseline so a refreshed page won't re-trigger until it grows again.
-    Deterministic and token-light (no chunk text).
+
+    A page also flags with reason ``new_data`` when a committed data
+    artifact relevant to it (sharing a source document with its active
+    evidence) is not in the ``data_artifacts_seen`` snapshot recorded on
+    its latest ``page_committed`` event -- i.e. a relevant artifact was
+    committed after the page, so a re-draft can add a "Related data" link.
+    Re-committing records the now-current artifacts and the page converges.
+    Pass ``--no-data`` to disable this signal. Deterministic and
+    token-light (no chunk text).
     """
     import sys
+
+    from ..bundle.wiki.commit import relevant_committed_artifacts
 
     if fmt not in {"json", "compact", "auto"}:
         cli_error(
@@ -1451,6 +1465,7 @@ def cmd_refine_candidates(
     # ``evidence_count`` (writer-used markers) only for older events that
     # predate ``evidence_total``.
     baseline: dict[str, int] = {}
+    seen_artifacts: dict[str, list[str]] = {}
     for ev in read_events(bundle):
         if ev.type != "page_committed":
             continue
@@ -1458,6 +1473,9 @@ def cmd_refine_candidates(
         count = ev.data.get("evidence_total", ev.data.get("evidence_count"))
         if isinstance(slug, str) and isinstance(count, int):
             baseline[slug] = count
+        seen = ev.data.get("data_artifacts_seen")
+        if isinstance(slug, str) and isinstance(seen, list):
+            seen_artifacts[slug] = [a for a in seen if isinstance(a, str)]
 
     items: list[dict] = []
     n_committed = 0
@@ -1466,37 +1484,57 @@ def cmd_refine_candidates(
         if card.status != "committed":
             continue
         n_committed += 1
-        e0 = baseline.get(s)
-        if not e0 or e0 <= 0:
-            # No commit event (or zero baseline) -> nothing to compare.
-            continue
         # Live recount from the ledger on disk so STOP-CHECK/finalize is
         # robust regardless of when ``work tend`` last refreshed the card
         # (same mechanism ``work show`` uses).
-        e1 = sum(1 for r in read_evidence(bundle, s) if r.status == "active")
-        ratio = e1 / e0
-        delta = e1 - e0
-        by_ratio = ratio >= growth
-        by_delta = delta >= min_new_chunks
-        if not (by_ratio or by_delta):
+        active = [r for r in read_evidence(bundle, s) if r.status == "active"]
+        e1 = len(active)
+
+        # Evidence-growth signal (requires a positive write-time baseline).
+        e0 = baseline.get(s)
+        by_ratio = by_delta = False
+        ratio = 0.0
+        delta = 0
+        if e0 and e0 > 0:
+            ratio = e1 / e0
+            delta = e1 - e0
+            by_ratio = ratio >= growth
+            by_delta = delta >= min_new_chunks
+
+        # Data-artifact signal: committed artifacts relevant now that were
+        # not in the snapshot recorded at the page's latest commit.
+        new_artifacts: list[str] = []
+        if not no_data:
+            current = relevant_committed_artifacts(
+                bundle, [r.doc_id for r in active]
+            )
+            seen = set(seen_artifacts.get(s, []))
+            new_artifacts = [a for a in current if a not in seen]
+
+        if not (by_ratio or by_delta or new_artifacts):
             continue
+
+        tokens: list[str] = []
         if by_ratio and by_delta:
-            reason = "both"
+            tokens.append("both")
         elif by_ratio:
-            reason = "ratio"
-        else:
-            reason = "delta"
-        items.append(
-            {
-                "slug": s,
-                "evidence_at_commit": e0,
-                "evidence_now": e1,
-                "ratio": round(ratio, 3),
-                "delta": delta,
-                "n_docs_now": int(card.front.get("evidence_docs", 0) or 0),
-                "reason": reason,
-            }
-        )
+            tokens.append("ratio")
+        elif by_delta:
+            tokens.append("delta")
+        if new_artifacts:
+            tokens.append("new_data")
+        item = {
+            "slug": s,
+            "evidence_at_commit": e0 if (e0 and e0 > 0) else 0,
+            "evidence_now": e1,
+            "ratio": round(ratio, 3),
+            "delta": delta,
+            "n_docs_now": int(card.front.get("evidence_docs", 0) or 0),
+            "reason": "+".join(tokens),
+        }
+        if new_artifacts:
+            item["new_data_artifacts"] = new_artifacts
+        items.append(item)
 
     items.sort(key=lambda it: it["ratio"], reverse=True)
     payload = {

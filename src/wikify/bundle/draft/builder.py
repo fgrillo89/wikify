@@ -170,7 +170,7 @@ def build_draft(
 
     tier_value = tier if isinstance(tier, ModelTier) else ModelTier(tier)
     data_points, related_data_artifacts = _data_for_evidence(
-        bundle, {r.chunk_id for r in usable}
+        bundle, {r.chunk_id for r in usable}, {r.doc_id for r in usable}
     )
     request = WriteRequest(
         page_id=card.page_id,
@@ -205,25 +205,34 @@ def build_draft(
 
 
 def _data_for_evidence(
-    bundle: Bundle, evidence_chunk_ids: set[str]
+    bundle: Bundle, evidence_chunk_ids: set[str], evidence_doc_ids: set[str]
 ) -> tuple[list[dict], list[dict]]:
     """Verified data points + related data artifacts for this page's evidence.
 
-    Surfaces only claims whose ``chunk_id`` is already in the draft's
-    evidence, so the writer can cite each number via that chunk's existing
-    ``[^eN]`` marker without introducing un-vetted evidence, plus the
-    committed data-artifact pages built from those same sources so the writer
-    can link the cross-source comparison instead of recreating it. Returns
-    ``([], [])`` when no claim store exists yet.
+    ``points`` are CHUNK-level: only claims whose ``chunk_id`` is already in
+    the draft's evidence, so the writer can cite each number via that chunk's
+    existing ``[^eN]`` marker without introducing un-vetted evidence.
+
+    ``related`` is DOC-level: committed data artifacts whose backing claims
+    share a source DOCUMENT with this page. The DATA wave harvests the
+    number-dense chunks the article explorers skip, so an artifact and the
+    page it generalizes share source documents but not chunks -- a chunk
+    intersection is empty by construction. This mirrors
+    ``relevant_committed_artifacts`` (commit-time snapshot), so a page's
+    linked artifacts and its committed ``data_artifacts_seen`` agree.
+
+    Returns ``([], [])`` when no claim store exists yet.
     """
-    if not bundle.claims_db_path.exists() or not evidence_chunk_ids:
+    if not bundle.claims_db_path.exists() or (
+        not evidence_chunk_ids and not evidence_doc_ids
+    ):
         return [], []
     from ...data.store import DataStore
 
     store = DataStore.open(bundle.root)
     try:
         rows = store.list_points(status="verified")
-        artifacts = store.artifacts_for_chunks(list(evidence_chunk_ids))
+        artifacts = store.artifacts_for_docs(list(evidence_doc_ids))
     finally:
         store.close()
     points = [

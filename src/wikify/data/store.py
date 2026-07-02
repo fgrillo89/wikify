@@ -328,6 +328,28 @@ class DataStore:
         )
         return [dict(r) for r in rows]
 
+    def artifacts_for_docs(self, doc_ids: list[str]) -> list[dict]:
+        """Committed artifacts whose backing claims include any of *doc_ids*.
+
+        DOC-level counterpart to :meth:`artifacts_for_chunks`. The DATA wave
+        harvests the number-dense chunks the article explorers skip, so a data
+        artifact and the page it generalizes share source DOCUMENTS but not
+        chunks -- a chunk intersection is empty by construction. Matching on
+        the source document lets an artifact surface on its topical page.
+        """
+        if not doc_ids:
+            return []
+        ph = ",".join("?" * len(doc_ids))
+        rows = self.con.execute(
+            "SELECT DISTINCT a.artifact_id, a.title, a.status FROM data_artifacts a "
+            "JOIN data_artifact_claims ac ON ac.artifact_id = a.artifact_id "
+            "JOIN data_points p ON p.claim_id = ac.claim_id "
+            f"WHERE p.doc_id IN ({ph}) AND a.status = 'committed' "
+            "ORDER BY a.title",
+            doc_ids,
+        )
+        return [dict(r) for r in rows]
+
     # --- summary ---------------------------------------------------------
 
     def coverage(self) -> dict:
