@@ -297,6 +297,47 @@ def _eval_m1_m3(
     return m1, m3
 
 
+def _eval_graph_structure(bundle: Bundle) -> dict[str, float]:
+    """Structural metrics of the evidence-overlap graph over committed pages.
+
+    Nodes are committed pages (the same ``bundle.pages`` set M3's
+    ``G_evidence`` is built on); an edge joins two pages that share at least
+    one evidence ``doc_id``. Returns ``graph_edges``, ``graph_density``
+    (2E/(N(N-1))), ``graph_avg_degree`` (2E/N) and ``graph_largest_cc_frac``
+    (largest connected component size / N). A bundle with 0/1 committed
+    pages yields zeros, matching the M1/M3 ``n<2`` guard.
+    """
+    import networkx as nx
+
+    from ..bundle.wiki.page import load_bundle as load_page_bundle
+
+    pages = load_page_bundle(bundle.wiki_dir).pages
+    n = len(pages)
+    if n < 2:
+        return {
+            "graph_edges": 0,
+            "graph_density": 0.0,
+            "graph_avg_degree": 0.0,
+            "graph_largest_cc_frac": 0.0,
+        }
+    docs = {p.id: {ev.doc_id for ev in p.evidence if ev.doc_id} for p in pages}
+    ids = list(docs)
+    graph = nx.Graph()
+    graph.add_nodes_from(ids)
+    for a in range(n):
+        for b in range(a + 1, n):
+            if docs[ids[a]] & docs[ids[b]]:
+                graph.add_edge(ids[a], ids[b])
+    edges = graph.number_of_edges()
+    largest_cc = max((len(c) for c in nx.connected_components(graph)), default=0)
+    return {
+        "graph_edges": edges,
+        "graph_density": 2 * edges / (n * (n - 1)),
+        "graph_avg_degree": 2 * edges / n,
+        "graph_largest_cc_frac": largest_cc / n,
+    }
+
+
 @app.command("metrics")
 def cmd_metrics(
     round_num: int = typer.Option(..., "--round"),
@@ -308,8 +349,10 @@ def cmd_metrics(
 
     The snapshot bundles the cheap counts (committed pages / articles /
     people, maturity band histogram, chunk + addressable coverage, data
-    points + artifacts, budget spent) with M1 (coverage residual) and M3
-    (G_evidence modularity) reused from ``wikify.eval.metrics``. Coverage
+    points + artifacts, budget spent) with M1 (coverage residual), M3
+    (G_evidence modularity) reused from ``wikify.eval.metrics``, and the
+    evidence-overlap graph structure (edges, density, average degree,
+    largest connected-component fraction). Coverage
     and M1 need ``--corpus``; without it those fields are ``null`` rather
     than fabricated. Recording the same round twice appends a second line;
     ``run stats`` keeps the latest per round.
@@ -357,6 +400,7 @@ def cmd_metrics(
         data_cov = {}
 
     m1, m3 = _eval_m1_m3(bundle, corpus_dir)
+    graph = _eval_graph_structure(bundle)
 
     record = {
         "round": round_num,
@@ -371,6 +415,10 @@ def cmd_metrics(
         "budget_spent_haiku_eq": spent_haiku_eq(bundle),
         "M1": m1,
         "M3": m3,
+        "graph_edges": graph["graph_edges"],
+        "graph_density": graph["graph_density"],
+        "graph_avg_degree": graph["graph_avg_degree"],
+        "graph_largest_cc_frac": graph["graph_largest_cc_frac"],
     }
     stats_path = bundle.derived_dir / "stats.jsonl"
     stats_path.parent.mkdir(parents=True, exist_ok=True)
@@ -388,6 +436,10 @@ _STATS_CSV_FIELDS = (
     ("M1", "M1"),
     ("M3", "M3"),
     ("n_artifacts", "n_data_artifacts"),
+    ("graph_edges", "graph_edges"),
+    ("graph_density", "graph_density"),
+    ("graph_avg_degree", "graph_avg_degree"),
+    ("graph_largest_cc_frac", "graph_largest_cc_frac"),
 )
 
 
@@ -621,7 +673,8 @@ def cmd_stats(
 
     Default / ``--format json`` prints the deduped, round-sorted list of
     records. ``--format csv`` emits a header row (round, pages, chunk_cov,
-    addr_cov, budget, M1, M3, n_artifacts) plus one row per round.
+    addr_cov, budget, M1, M3, n_artifacts, graph_edges, graph_density,
+    graph_avg_degree, graph_largest_cc_frac) plus one row per round.
     ``--plot <out>`` writes a chart in addition to the series (matplotlib when
     importable, honoring the .png/.svg/.pdf extension; a hand-rolled SVG
     otherwise): the series is still emitted in the requested format and a
