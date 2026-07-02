@@ -324,6 +324,30 @@ def test_consolidate_pivots_subjects_by_property(tmp_path: Path) -> None:
     assert subjects == {"Al2O3", "HfO2"}
 
 
+def test_consolidate_dedups_identical_citations(tmp_path: Path) -> None:
+    """Two distinct claims that cite the IDENTICAL source (doc + chunk +
+    locator + quote) share ONE [^dN] marker, so a cell and the References list
+    never repeat an identical citation -- while every backing claim is still
+    recorded in claim_ids."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "same quote"),
+        _verified("Al2O3", "Thickness", "10", "nm", "d1", "c1", "same quote"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="t", title="T", properties=["GPC", "Thickness"]
+    )
+    table = consolidate(store, spec)
+    # One row (Al2O3), both cells cite the same source -> a single evidence entry
+    assert table.n_rows == 1
+    assert len(table.evidence) == 1
+    cells = table.rows[0]["cells"]
+    assert cells["GPC"].markers == ["d1"]
+    assert cells["Thickness"].markers == ["d1"]
+    # Both backing claims are still recorded for the lossless-rebuild snapshot.
+    assert len(table.claim_ids) == 2
+
+
 def test_consolidate_reports_empty_columns(tmp_path: Path) -> None:
     """F22: a spec property that matches no stored claim is surfaced as an
     empty column instead of silently shipping a blank column."""

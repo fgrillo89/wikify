@@ -90,24 +90,36 @@ def consolidate(
 
     subject_filter = {normalize_key(s) for s in spec.subjects} if spec.subjects else None
 
-    # marker assignment is stable across a single build, in first-seen order.
-    marker_for: dict[str, str] = {}
+    # Marker assignment is stable across a single build, in first-seen order.
+    # A marker identifies a CITATION (source doc/chunk + locator + grounding
+    # quote), not a claim: two claims that cite the identical source with the
+    # identical quote share one [^dN] marker, so a table cell and the
+    # References list never repeat an identical citation. ``claim_ids`` still
+    # records every backing claim (order preserved) for the sidecar snapshot.
+    marker_for: dict[tuple[str, str, str, str], str] = {}
+    claim_ids_seen: dict[str, None] = {}
     evidence: list[dict] = []
 
     def marker(claim: dict) -> str:
-        cid = claim["claim_id"]
-        if cid not in marker_for:
+        claim_ids_seen.setdefault(claim["claim_id"], None)
+        key = (
+            claim.get("doc_id", "") or "",
+            claim.get("chunk_id", "") or "",
+            claim.get("locator", "") or "",
+            (claim.get("grounding_quote", "") or "").strip(),
+        )
+        if key not in marker_for:
             m = f"d{len(marker_for) + 1}"
-            marker_for[cid] = m
+            marker_for[key] = m
             evidence.append({
                 "marker": m,
-                "claim_id": cid,
+                "claim_id": claim["claim_id"],
                 "doc_id": claim.get("doc_id", ""),
                 "chunk_id": claim.get("chunk_id", ""),
                 "locator": claim.get("locator", ""),
                 "quote": claim.get("grounding_quote", ""),
             })
-        return marker_for[cid]
+        return marker_for[key]
 
     # Gather eligible claims per (subject_norm, property_norm).
     grouped: dict[str, dict[str, list[dict]]] = {}
@@ -147,8 +159,9 @@ def consolidate(
             distinct = {_canonical_value_key(c): c for c in claims}
             if len(distinct) == 1:
                 claim = next(iter(distinct.values()))
-                # merge markers from all claims that agree
-                markers = [marker(c) for c in claims]
+                # Merge markers from all claims that agree; claims sharing an
+                # identical citation collapse to one marker (preserve order).
+                markers = list(dict.fromkeys(marker(c) for c in claims))
                 cells[col] = Cell(text=_cell_value(claim), markers=markers)
             else:
                 # conflict: show each distinct value with its marker
@@ -183,7 +196,7 @@ def consolidate(
         property_keys=prop_keys,
         rows=rows,
         evidence=evidence,
-        claim_ids=list(marker_for.keys()),
+        claim_ids=list(claim_ids_seen.keys()),
         n_conflicts=n_conflicts,
         empty_columns=empty_columns,
     )
