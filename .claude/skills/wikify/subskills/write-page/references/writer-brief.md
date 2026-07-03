@@ -121,6 +121,13 @@ Body (Wikipedia structure = lead + H2 sections):
 - Cover the facets present in the draft: definitions, mechanisms,
   materials/properties, methods, evidence/results, applications,
   limitations.
+- Draw across the dossier's DIVERSITY, not one angle: span the available
+  `section_types` (methods vs results vs discussion), cover the distinct
+  sub-topics the evidence spans rather than restating one from many
+  sources, and where the dossier reports CONFLICTING findings on a point,
+  present them side by side (attribute each) instead of silently picking
+  one. Doc count and era spread are necessary but not sufficient for a
+  rich page.
 - `## References` is always the final section, one definition per cited
   marker.
 

@@ -211,6 +211,11 @@ Per slug, ask:
   target under-covered sources and eras — pull in both older/seminal work
   and recent work — so a page consults old AND new papers, not just the
   highest-PageRank few.
+- Does the concept have a CONTESTED point (the accepted evidence reports
+  competing values or claims) with only ONE side represented, or a
+  sub-topic the concept clearly spans that has no accepted chunk yet?
+  Queue a query for the alternative/contradictory finding or the missing
+  sub-topic, so a page can present the full range rather than one angle.
 
 Aggregate fresh queries across slugs; dedup; cap to 2-4 new queries per
 round. Loop back to Step 3 (issue queries → fan out judges → route
