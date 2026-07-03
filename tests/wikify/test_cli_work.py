@@ -1932,3 +1932,52 @@ def test_concept_recall_max_doc_share_blocks(tmp_path: Path) -> None:
     assert recall["empty_buckets"] == []
     assert recall["max_doc_share"] > 0.35
     assert recall["recall_ok"] is False
+
+
+def test_concept_recall_default_bm25_loads_no_embedder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The default ranking is BM25: concept-recall must not load an embedder.
+
+    ``embedder_for`` is patched to raise; the default run still succeeds and
+    ranks candidates, proving the semantic (embedding) path is never taken.
+    """
+    import wikify.embedding as embedding_mod
+
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("embedder must not be loaded on the BM25 path")
+
+    monkeypatch.setattr(embedding_mod, "embedder_for", _boom)
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["candidate_docs"]) == 5
+
+
+def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> None:
+    """``--rank semantic`` routes the relevance search through the semantic
+    mode; the default routes through bm25."""
+    import wikify.corpus.queries as queries_mod
+
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    seen_modes: list[str] = []
+
+    def _capture(corpus, query, *, top_k, rank, exclude_kinds):
+        seen_modes.append(rank)
+        return [{"doc_id": "doc_2015", "score": 0.9}]
+
+    # The command imports search_chunks locally from the queries module.
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture)
+
+    for args, expected in ((["--rank", "semantic"], "semantic"), ([], "bm25")):
+        seen_modes.clear()
+        result = runner.invoke(
+            app,
+            [
+                "work", "concept-recall", "photonics",
+                "--run", str(bundle), "--corpus", str(corpus_root),
+                "--format", "json", *args,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert seen_modes and all(m == expected for m in seen_modes), seen_modes

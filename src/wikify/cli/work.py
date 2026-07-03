@@ -1772,21 +1772,29 @@ def cmd_concept_recall(
         12, "--top-docs",
         help="Number of most-relevant corpus docs to treat as candidates.",
     ),
+    rank: str = typer.Option(
+        "bm25", "--rank",
+        help=(
+            "Relevance ranking: bm25 (default, cheap sqlite metadata, no "
+            "embedder) | semantic (loads an embedder + embeds the query; "
+            "requires corpus chunk vectors)."
+        ),
+    ),
     fmt: str = typer.Option("text", "--format"),
 ) -> None:
     """Recall signal: does *concept*'s evidence represent the corpus's
     most-relevant sources?
 
     Ranks the top ``--top-docs`` corpus documents by relevance to the
-    concept title + aliases (semantic when the corpus carries chunk
-    embeddings, else BM25), compares that candidate set against the
+    concept title + aliases, compares that candidate set against the
     distinct documents already in the slug's evidence ledger, and reports
     which candidates are missing, whether every publication-era bucket is
     represented, the section-type diversity of the committed evidence, and
     the share of evidence records concentrated in a single document.
 
-    Deterministic and cheap: relevance ranking + document metadata +
-    section-type lookup by chunk_id; no full chunk text is read.
+    Cheap by default: BM25 over sqlite metadata (no embedder load) plus
+    document metadata + section-type lookup by chunk_id; no full chunk text
+    is read. Pass ``--rank semantic`` to rank by chunk embeddings instead.
     """
     import math
     import sqlite3
@@ -1794,9 +1802,11 @@ def cmd_concept_recall(
 
     from ..api import Corpus
     from ..corpus.chunks import list_documents
-    from ..corpus.queries import QueryError, _has_vectors, search_chunks
+    from ..corpus.queries import QueryError, search_chunks
     from ..corpus.store.routing import sqlite_available
 
+    if rank not in {"bm25", "semantic"}:
+        cli_error(EXIT_VALIDATION, error="bad_rank", rank=rank)
     concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
     if not corpus_dir.is_dir():
@@ -1825,7 +1835,7 @@ def cmd_concept_recall(
     # semantic cosine, a larger value is a better match.
     candidate_docs: list[dict] = []
     if sqlite_available(corpus.root) and queries:
-        mode = "semantic" if _has_vectors(corpus) else "bm25"
+        mode = rank
         best: dict[str, float] = {}
         for q in queries:
             try:
