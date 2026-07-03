@@ -292,6 +292,20 @@ def _record_recall_cleared(bundle_dir: Path, slug: str, data: dict) -> None:
     assert result.exit_code == 0, result.output
 
 
+def _record_evidence_added(bundle_dir: Path, slug: str) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--type", "evidence_added",
+            "--concept-id", slug,
+            "--run", str(bundle_dir),
+            "--data", json.dumps({"n": 1}),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def _finalize_with_recall(
     bundle_dir: Path, slug: str, owner: str
 ) -> "object":
@@ -348,6 +362,46 @@ def test_finalize_require_recall_refuses_article_without_event(
 def test_finalize_require_recall_article_recall_ok_event(tmp_path: Path) -> None:
     """A page_recall_cleared {recall_ok: true} event clears the gate."""
     bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    gate = next(s for s in envelope["steps"] if s["step"] == "recall-gate")
+    assert gate["ok"] is True
+    bundle = Bundle.open(bundle_dir)
+    assert (bundle.root / "wiki" / "articles" / f"{slug}.md").exists()
+
+
+def test_finalize_require_recall_stale_after_new_evidence(tmp_path: Path) -> None:
+    """A clearance recorded BEFORE new evidence_added is STALE: the evidence
+    changed after the gate cleared, so --require-recall refuses the commit."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    # Clearance recorded first, then fresh evidence lands for the slug.
+    _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
+    _record_evidence_added(bundle_dir, slug)
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code != 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is False
+    gate = envelope["steps"][-1]
+    assert gate["step"] == "recall-gate"
+    assert gate["ok"] is False
+    assert gate["error"] == "recall_not_cleared"
+    assert "commit" not in [s["step"] for s in envelope["steps"]]
+    bundle = Bundle.open(bundle_dir)
+    article_dir = bundle.root / "wiki" / "articles"
+    assert not article_dir.exists() or not any(article_dir.iterdir())
+
+
+def test_finalize_require_recall_fresh_after_evidence(tmp_path: Path) -> None:
+    """A clearance recorded AFTER the latest evidence_added is FRESH: the gate
+    clears and the page commits."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    # Evidence lands first, then the gate is cleared against it.
+    _record_evidence_added(bundle_dir, slug)
     _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
 
     result = _finalize_with_recall(bundle_dir, slug, owner)

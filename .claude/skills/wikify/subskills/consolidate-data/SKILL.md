@@ -45,9 +45,15 @@ wikify data harvest-property --property "growth per cycle" \
 `report.data_recall = docs_in_table / docs_mentioning_property`. The table is
 too thin whenever many papers report the property but few reach the table:
 
-- **Block/warn** when `docs_mentioning_property >= 10` AND `data_recall < 0.75`.
-  Do not commit — loop back to `extract-data` in property-targeted mode to
-  harvest the missing docs, then re-check.
+- Committing with `--require-recall` (below) **enforces** this gate in the CLI:
+  it refuses the commit when `docs_mentioning_property >= 10` AND
+  `data_recall < 0.75`, and also when a spec property has no `harvest-property`
+  sweep on record. When you hit a block, loop back to `extract-data` in
+  property-targeted mode to harvest the missing docs, then re-check. Bypass a
+  single commit with `--skip-recall` only when you have justified the sparse
+  table (the bypass is logged).
+- Without `--require-recall` the gate is advisory: the CLI does not read the
+  sweep, so honor the same threshold yourself before committing.
 - Aim to consolidate at `data_recall >= 0.90` (or when the sweep is exhausted
   and no longer `truncated`).
 
@@ -78,10 +84,11 @@ handful of rows that happened to fall in the rounds' doc slices.
 
 ## Build and commit
 
-Build, persist the spec, and write the wiki page + sidecar in one step:
+Build, persist the spec, and write the wiki page + sidecar in one step. Pass
+`--require-recall` so the data-recall gate is enforced at commit time:
 
 ```bash
-wikify data consolidate spec.json --run <bundle> --commit --format json
+wikify data consolidate spec.json --run <bundle> --commit --require-recall --format json
 ```
 
 The spec may also be piped on stdin instead of a path. This writes
@@ -98,7 +105,8 @@ reported value with its own citation plus a conflict note. Do not silently
 pick a winner.
 
 Without `--commit`, the artifact is stored as a draft; `wikify data commit
-<artifact_id> --run <bundle>` writes its page later.
+<artifact_id> --run <bundle> --require-recall` writes its page later under the
+same gate.
 
 ## Keep it evolving
 

@@ -120,9 +120,12 @@ targets to the plan in order, removing them from later bands.
    `{"exhausted": true}`). Only write once `recall.recall_ok` OR the sweep
    is `pool_exhausted` — the article analogue of the DATA-wave recall gate.
    Finalize this loop's article commits with `wikify draft finalize <slug>
-   --require-recall`, which refuses to commit an article that has no
-   `page_recall_cleared` record (recall_ok or exhausted), so the gate is
-   enforced at commit, not just by editor discipline.
+   --require-recall` — it refuses to commit an article without a FRESH
+   `page_recall_cleared` record (recall_ok or exhausted, and no evidence
+   added to the slug since the clearance). This enforces the gate for the
+   wikify loop, which ALWAYS passes the flag; a bare `draft finalize`
+   without it is intentionally not gated (ad-hoc / test callers). Record
+   the clearance AFTER the last GROW for the slug so it is not stale.
    This is what makes a committed page represent the corpus's most diverse,
    relevant evidence rather than whatever few docs seeded it; the writer
    validator's `evidence_underuse` warning is the complementary check that
@@ -204,10 +207,12 @@ targets to the plan in order, removing them from later bands.
      highest-subject-count first, capped at 2 per round; keep dispatching
      across rounds until no uncovered ripe theme remains. Consolidation is
      not optional — do not skip the DATA-consolidate step while a ripe theme
-     is uncovered. Before committing a property table, check its recall
-     (the `property_sweeps` record / a `harvest-property` re-run): block a
-     sparse table when `docs_mentioning_property >= 10` AND
-     `data_recall < 0.75`, and loop back to extract until `>= 0.90`. After
+     is uncovered. Commit property tables with `--require-recall` (the
+     `consolidate-data` Task passes it): the CLI then reads the
+     `property_sweeps` record and REFUSES a sparse table when
+     `docs_mentioning_property >= 10` AND `data_recall < 0.75` (or no sweep
+     exists), so the editor must loop back to `harvest-property` + extract
+     until `>= 0.90` before it can commit. After
      a `consolidate-data` Task commits a new `kind=data`
      artifact, the committed pages it covers become `refine-candidates`
      (reason `new_data`) so the REFINE wave re-drafts them to cite the new

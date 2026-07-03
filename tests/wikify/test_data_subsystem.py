@@ -1015,6 +1015,131 @@ def test_cli_consolidate_commit_collision_leaves_no_files(tmp_path: Path) -> Non
         assert not list(bundle.wiki_data_dir.glob("*.dataspec.json"))
 
 
+# --------------------------------------------------------------------------
+# data-recall commit gate (--require-recall)
+# --------------------------------------------------------------------------
+
+
+def _recall_gate_bundle(
+    tmp_path: Path, *, docs_mentioning: int | None, docs_in_table: int
+) -> tuple[Path, Path]:
+    """Bundle with one verified GPC point + a spec, optionally seeded with a
+    property_sweeps row so the recall gate has (or lacks) a sweep to read."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    bdir = tmp_path / "bundle"
+    (bdir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bdir)
+    init_run(bundle, corpus_path="x")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    if docs_mentioning is not None:
+        store.record_property_sweep(
+            property="GPC",
+            property_norm=normalize_key("GPC"),
+            docs_mentioning=docs_mentioning,
+            docs_extracted=docs_in_table,
+            docs_in_table=docs_in_table,
+            candidate_chunks=docs_mentioning,
+            truncated=False,
+        )
+    store.close()
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps({"artifact_id": "gpc", "title": "ALD GPC", "properties": ["GPC"]}),
+        encoding="utf-8",
+    )
+    return bdir, spec_path
+
+
+def test_consolidate_require_recall_blocks_low_recall(tmp_path: Path) -> None:
+    """12 docs mention the property but recall is 0.5: --require-recall refuses
+    the commit and writes no page."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=12, docs_in_table=6)
+    res = runner.invoke(
+        app,
+        ["data", "consolidate", str(spec_path), "--run", str(bdir),
+         "--commit", "--require-recall"],
+    )
+    assert res.exit_code == 1, res.output
+    payload = json.loads(res.stdout or res.output)
+    assert payload["error"] == "data_recall_too_low"
+    assert payload["property"] == "GPC"
+    bundle = Bundle(root=bdir)
+    assert not bundle.wiki_data_dir.is_dir() or not list(
+        bundle.wiki_data_dir.glob("*.md")
+    )
+
+
+def test_consolidate_require_recall_allows_high_recall(tmp_path: Path) -> None:
+    """Recall 0.9 (>= 0.75) clears the gate and the page commits."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=10, docs_in_table=9)
+    res = runner.invoke(
+        app,
+        ["data", "consolidate", str(spec_path), "--run", str(bdir),
+         "--commit", "--require-recall", "--format", "json"],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.stdout)
+    assert payload["ok"] is True
+    assert payload["committed"]
+    assert list(Bundle(root=bdir).wiki_data_dir.glob("*.md"))
+
+
+def test_consolidate_require_recall_blocks_no_sweep(tmp_path: Path) -> None:
+    """No harvest-property sweep on record blocks --require-recall commit."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=None, docs_in_table=0)
+    res = runner.invoke(
+        app,
+        ["data", "consolidate", str(spec_path), "--run", str(bdir),
+         "--commit", "--require-recall"],
+    )
+    assert res.exit_code == 1, res.output
+    payload = json.loads(res.stdout or res.output)
+    assert payload["error"] == "data_recall_no_sweep"
+
+
+def test_consolidate_without_require_recall_commits_low_recall(tmp_path: Path) -> None:
+    """Backward compat: without the flag a low-recall table commits regardless."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=12, docs_in_table=6)
+    res = runner.invoke(
+        app,
+        ["data", "consolidate", str(spec_path), "--run", str(bdir),
+         "--commit", "--format", "json"],
+    )
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.stdout)["committed"]
+    assert list(Bundle(root=bdir).wiki_data_dir.glob("*.md"))
+
+
+def test_consolidate_require_recall_skip_bypass_commits(tmp_path: Path) -> None:
+    """--skip-recall bypasses the gate even when recall is too low."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=12, docs_in_table=6)
+    res = runner.invoke(
+        app,
+        ["data", "consolidate", str(spec_path), "--run", str(bdir),
+         "--commit", "--require-recall", "--skip-recall", "--format", "json"],
+    )
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.stdout)["committed"]
+
+
+def test_data_commit_require_recall_blocks_low_recall(tmp_path: Path) -> None:
+    """The `data commit <artifact_id>` path is gated too: a stored draft with a
+    low-recall sweep is refused under --require-recall."""
+    bdir, spec_path = _recall_gate_bundle(tmp_path, docs_mentioning=12, docs_in_table=6)
+    # Stage the artifact as a draft (no --commit).
+    draft = runner.invoke(
+        app, ["data", "consolidate", str(spec_path), "--run", str(bdir), "--format", "json"]
+    )
+    assert draft.exit_code == 0, draft.output
+    res = runner.invoke(
+        app, ["data", "commit", "gpc", "--run", str(bdir), "--require-recall"]
+    )
+    assert res.exit_code == 1, res.output
+    assert json.loads(res.stdout or res.output)["error"] == "data_recall_too_low"
+
+
 def test_duplicate_data_titles_different_artifacts_collide(tmp_path: Path) -> None:
     """Two data artifacts with the same title (different artifact_id) map to the
     same page_id; committing the second must be refused so it cannot overwrite

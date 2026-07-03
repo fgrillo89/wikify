@@ -332,19 +332,32 @@ def _resolve_finalize_format(fmt: str) -> str:
 
 
 def _recall_cleared(bundle: Bundle, slug: str) -> bool:
-    """True when a ``page_recall_cleared`` event cleared *slug*'s evidence gate.
+    """True when a FRESH ``page_recall_cleared`` event cleared *slug*'s gate.
 
     Scans the run ledger for an event of type ``page_recall_cleared`` whose
     ``concept_id`` is *slug* and whose ``data`` marks the page either
     recall-satisfied (``recall_ok == true``) or mined out
     (``exhausted == true``).
+
+    The clearance is FRESH only if it is the latest such event AND it is
+    newer (later in ledger order) than the latest ``evidence_added`` event
+    for the slug. If any ``evidence_added`` postdates the clearance, evidence
+    changed after the gate was cleared, so the clearance is STALE and this
+    returns ``False``. Uses ledger ORDER (the same signal ``_growth_stalled``
+    keys off), so no hashing is needed.
     """
-    for ev in read_events(bundle):
-        if ev.type != "page_recall_cleared" or ev.concept_id != slug:
+    last_cleared = -1
+    last_evidence = -1
+    for idx, ev in enumerate(read_events(bundle)):
+        if ev.concept_id != slug:
             continue
-        if ev.data.get("recall_ok") is True or ev.data.get("exhausted") is True:
-            return True
-    return False
+        if ev.type == "evidence_added":
+            last_evidence = idx
+        elif ev.type == "page_recall_cleared" and (
+            ev.data.get("recall_ok") is True or ev.data.get("exhausted") is True
+        ):
+            last_cleared = idx
+    return last_cleared > last_evidence
 
 
 def _emit_finalize(envelope: dict, fmt: str) -> None:
