@@ -352,8 +352,12 @@ per slug. Non-negotiable:
   -> judges -> route accepts) up to `max_query_rounds`. Stop when ANY: all
   slugs hit `quota_per_slug`, `max_query_rounds` exhausted, or the latest
   round added zero accepts to any slug.
-- Person slugs: accept only chunks quoting ACTUAL contributions by that
-  author; bylines alone do not count.
+- Person slugs gather TWO classes: `contribution` (chunks quoting the
+  author's ACTUAL work; bylines alone do not count) AND `identity_context`
+  (chunks that NAME the target author and carry affiliation/role/career
+  signal -- normally boilerplate-excluded, accepted here because they name
+  the author; tag `note="identity_context"`, cap ~4). `build-evidence`'s
+  person Phase-3 gathers identity_context automatically.
 - **Gather-evidence judge-routed commit (this section's path).** Commit
   per slug only when `>= 6` accepts (minimum-viable bar) via
   `wikify work build-evidence` with a JSON ARRAY of
