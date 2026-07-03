@@ -106,6 +106,19 @@ targets to the plan in order, removing them from later bands.
    the last 2 rounds. The rhythm is therefore grow -> leave untouched
    ~2 rounds (grow other slugs meanwhile) -> `ready` -> write. Do not
    keep re-growing a saturated slug or it never becomes writable.
+   **Evidence-recall gate (before writing).** Before dispatching a WRITE
+   for a ready slug, run `wikify work concept-recall <slug> --corpus
+   <corpus> --run <bundle> --format json`. If `recall_ok` is false AND the
+   slug is not `evidence_exhausted` (gather-evidence marks a genuinely
+   mined-out slug), DEFER the write and dispatch a targeted GROW that pulls
+   the `missing_docs` (the corpus's most-relevant papers this page skips),
+   fills any `empty_buckets` (a missing era), and reduces `max_doc_share`
+   (over-concentration on one doc). Only write once `recall_ok` OR the
+   sweep is exhausted — the article analogue of the DATA-wave recall gate.
+   This is what makes a committed page represent the corpus's most diverse,
+   relevant evidence rather than whatever few docs seeded it; the writer
+   validator's `evidence_underuse` warning is the complementary check that
+   the writer then actually cites that breadth.
 2. **REFINE wave.** Fires when `wikify work refine-candidates` returns
    candidates. That command now surfaces two signals: a committed page
    whose live evidence outgrew its write-time snapshot, and a committed
