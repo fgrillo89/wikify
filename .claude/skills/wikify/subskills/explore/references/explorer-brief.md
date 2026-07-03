@@ -354,9 +354,10 @@ per slug. Non-negotiable:
   -> judges -> route accepts) while a round still surfaces a NEW DISTINCT
   DOC or section-type facet. Stop when ANY: all slugs hit `quota_per_slug`;
   two consecutive rounds add no new distinct doc AND no new facet (plateau
-  -> mark slug `evidence_exhausted`, which the WRITE recall gate treats as
-  permission to write despite missing docs); or `max_query_rounds` reached
-  (mark `round_cap_hit` so the editor re-dispatches, not assumes done).
+  -> `stop_reason: "pool_exhausted"`, which the WRITE recall gate treats
+  as permission to write despite missing docs); or `max_query_rounds`
+  reached (`stop_reason: "max_rounds"` so the editor re-dispatches, not
+  assumes done).
 - Person slugs gather TWO classes: `contribution` (chunks quoting the
   author's ACTUAL work; bylines alone do not count) AND `identity_context`
   (chunks that NAME the target author and carry affiliation/role/career

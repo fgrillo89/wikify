@@ -108,8 +108,9 @@ Before creating/updating `response.json`, run the full writer self-check
 from the brief (`references/writer-brief.md`): correct `WriteResponse`
 fields (per `writer-response.md`) and `page_kind` (`article`/`person`); no
 stale fields; every prose `[^eN]` resolves to exactly one verbatim
-`## References` definition; figures follow the figure rule (up to
-`max_article_figures = 4`, at most ONE per distinct source document, each
+`## References` definition; figures follow the figure rule (aim ~4 as a
+SOFT target, not a cap -- typical 1-10, add more distinct figures when
+genuinely valuable; at most ONE per distinct source document, each
 with a `source_marker` in `used_markers`, placed inside and referenced by
 the paragraph that discusses it; skip when no candidate fits; person pages
 figure-free); person pages have >= 2 non-appendix `## H2` sections; the
@@ -158,9 +159,11 @@ or `validation.json`. Fix any errors before persisting.
 - No visible `[[wikilinks]]`.
 - Figures are expected when candidates exist. An ARTICLE page SHOULD
   include figures where the dossier's Figure candidates table supports
-  them, up to `max_article_figures = 4`, at most ONE figure per distinct
-  source document, and each figure tied to a distinct cited
-  source/section (its `source_marker` in `used_markers`). Place
+  them, aiming ~4 as a SOFT target (not a cap; typical range 1-10, add
+  more distinct figures when the dossier genuinely has more valuable
+  ones), at most ONE figure per distinct source document, and each figure
+  tied to a distinct cited source/section (its `source_marker` in
+  `used_markers`). Place
   `{{figure:<anchor>}}` inside the paragraph discussing it; that
   paragraph must reference it in prose ("as shown in the figure",
   "(see figure)"). Zero figures only when no candidate is genuinely

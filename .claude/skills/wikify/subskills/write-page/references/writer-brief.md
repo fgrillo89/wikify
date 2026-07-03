@@ -208,10 +208,11 @@ diff; the commit gate promotes whole pages.
 ## Figures
 
 - An ARTICLE page SHOULD include figures where the dossier's Figure
-  candidates table supports them, up to `max_article_figures = 4`, at
-  most ONE figure per distinct source document, and each figure tied to
-  a distinct cited source/section (its `source_marker` in
-  `used_markers`). Choose the candidates that best depict what a section
+  candidates table supports them, aiming ~4 as a SOFT target (not a cap;
+  typical range 1-10, add more distinct figures when the dossier genuinely
+  has more valuable ones), at most ONE figure per distinct source
+  document, and each figure tied to a distinct cited source/section (its
+  `source_marker` in `used_markers`). Choose the candidates that best depict what a section
   discusses. Place `{{figure:<anchor>}}` INSIDE the paragraph discussing
   it, and that paragraph MUST reference it in text ("as shown in the
   figure", "(see figure)") so it is not orphaned.

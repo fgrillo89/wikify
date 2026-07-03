@@ -108,13 +108,21 @@ targets to the plan in order, removing them from later bands.
    keep re-growing a saturated slug or it never becomes writable.
    **Evidence-recall gate (before writing).** Before dispatching a WRITE
    for a ready slug, run `wikify work concept-recall <slug> --corpus
-   <corpus> --run <bundle> --format json`. If `recall_ok` is false AND the
-   slug is not `evidence_exhausted` (gather-evidence marks a genuinely
-   mined-out slug), DEFER the write and dispatch a targeted GROW that pulls
-   the `missing_docs` (the corpus's most-relevant papers this page skips),
-   fills any `empty_buckets` (a missing era), and reduces `max_doc_share`
-   (over-concentration on one doc). Only write once `recall_ok` OR the
-   sweep is exhausted — the article analogue of the DATA-wave recall gate.
+   <corpus> --run <bundle> --format json` and read its `recall` block. If
+   `recall.recall_ok` is false AND the gather did not report
+   `stop_reason: "pool_exhausted"` (a genuinely mined-out slug), DEFER the write and
+   dispatch a targeted GROW that pulls `recall.missing_docs` (the corpus's
+   most-relevant papers this page skips), fills any `recall.empty_buckets`
+   (a missing era), and reduces `recall.max_doc_share` (over-concentration
+   on one doc). Then record the clearance so commit can enforce it:
+   `wikify run record-event --type page_recall_cleared --stage write
+   --concept-id <slug> --run <bundle> --data '{"recall_ok": true}'` (or
+   `{"exhausted": true}`). Only write once `recall.recall_ok` OR the sweep
+   is `pool_exhausted` — the article analogue of the DATA-wave recall gate.
+   Finalize this loop's article commits with `wikify draft finalize <slug>
+   --require-recall`, which refuses to commit an article that has no
+   `page_recall_cleared` record (recall_ok or exhausted), so the gate is
+   enforced at commit, not just by editor discipline.
    This is what makes a committed page represent the corpus's most diverse,
    relevant evidence rather than whatever few docs seeded it; the writer
    validator's `evidence_underuse` warning is the complementary check that
@@ -215,7 +223,12 @@ For each plan entry, spawn one `Task` (sonnet tier) bound to
 `explore` for explore Tasks or `write-page`
 for the write wave. Pass `pattern`, `target`, `budget_chunks`, `depth`
 verbatim from the plan. Record `{role, model_id, tier, tokens_in,
-tokens_out, stage}` from each return.
+tokens_out, stage}` from each return. `budget_chunks` is NOT a flat 30:
+compute it from Sizing (`clamp(round(20 + 6 * log10(D)), 20, 60)`) and
+multiply by ~1.5 for a central concept (top decile PageRank/degree)
+before passing it, so a larger corpus and a hub concept get a deeper
+sweep (the pattern-defaults in `explore` are the floor, the editor scales
+up).
 
 **Brief-first, cache-aligned dispatch.** Each subagent's FIRST read is
 its stable role brief -- `subskills/write-page/references/writer-brief.md`
