@@ -72,7 +72,8 @@ top electrode and the oxygen-getting bottom electrode.[^e4]
 
 Do not select decorative, duplicate, or weakly related images. An
 ARTICLE page SHOULD include figures where the draft's figure candidates
-support them, up to `max_article_figures = 4`, at most ONE figure per
+support them, aiming ~4 as a SOFT target (not a cap; typical range 1-10,
+add more distinct figures when genuinely valuable), at most ONE figure per
 distinct source document, and each figure tied to a distinct cited
 source/section (its `source_marker` in `used_markers`). Skip when no
 candidate is genuinely relevant; never invent one. Person pages stay

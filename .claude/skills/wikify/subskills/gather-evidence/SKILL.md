@@ -225,11 +225,12 @@ round budget elapsed. Stop when ANY:
 
 - All slugs hit `quota_per_slug`, OR
 - Two consecutive rounds add no new distinct doc AND no new section-type
-  facet to any slug — a genuine plateau; mark the slug
-  `evidence_exhausted` (the WRITE recall gate treats exhausted as
-  permission to write despite missing docs), OR
-- The safety ceiling `max_query_rounds` is reached — mark `round_cap_hit`
-  so the editor re-dispatches next round rather than assuming completeness.
+  facet to any slug — a genuine plateau; return `stop_reason:
+  "pool_exhausted"` (the WRITE recall gate treats this as permission to
+  write despite missing docs), OR
+- The safety ceiling `max_query_rounds` is reached — return `stop_reason:
+  "max_rounds"` so the editor re-dispatches next round rather than
+  assuming completeness.
 
 ## Step 7: commit per slug
 
