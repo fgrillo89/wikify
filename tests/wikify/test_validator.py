@@ -16,7 +16,10 @@ from wikify.bundle.draft.artifact import (
 )
 from wikify.bundle.draft.builder import build_draft
 from wikify.bundle.draft.references import normalize_response_references
-from wikify.bundle.draft.validator import validate_response
+from wikify.bundle.draft.validator import (
+    validate_response,
+    validate_response_data,
+)
 from wikify.bundle.work.card import create_concept
 from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
 
@@ -82,6 +85,94 @@ def _good_response(slug: str, *, chunk_quote: str) -> dict:
         "tokens_in": 1000,
         "tokens_out": 200,
     }
+
+
+def _coverage_case(n_docs: int, cited: list[int]) -> tuple[dict, dict]:
+    """Build a valid draft + response pair for the evidence-coverage check.
+
+    The draft carries ``n_docs`` evidence records, each from a distinct
+    document. The response cites the 0-based evidence indices in ``cited``
+    (and only those), with grounded quotes so no correctness error fires and
+    the evidence-coverage warning can be asserted in isolation.
+    """
+    evidence = [
+        {
+            "chunk_id": f"paper_{i}__c0000",
+            "doc_id": f"paper_{i}",
+            "quote": "",
+            "chunk_text": (
+                f"Fact number {i} about atomic layer deposition growth chemistry."
+            ),
+        }
+        for i in range(n_docs)
+    ]
+    draft = {
+        "page_id": "Atomic Layer Deposition",
+        "page_kind": "article",
+        "title": "Atomic Layer Deposition",
+        "aliases": ["ALD"],
+        "skeleton": "",
+        "prompt_template": "",
+        "model_id": "claude-sonnet-4-6",
+        "tier": "M",
+        "evidence": evidence,
+    }
+    markers = "".join(f" [^e{i + 1}]" for i in cited)
+    ref_defs = "\n".join(
+        f'[^e{i + 1}]: paper_{i}__c0000 (paper_{i}) > '
+        f'"Fact number {i} about atomic layer deposition"'
+        for i in cited
+    )
+    filler = (
+        "Atomic layer deposition grows conformal thin films via sequential "
+        "self-limiting surface reactions between alternating precursor pulses. "
+    ) * 4
+    body = (
+        f"## Overview\n\n{filler}{markers}\n\n"
+        f"## Mechanism\n\n{filler}{markers}\n\n"
+        f"## Applications\n\n{filler}{markers}\n\n"
+        f"## References\n\n{ref_defs}\n"
+    )
+    response = {
+        "schema_version": 1,
+        "page_id": "Atomic Layer Deposition",
+        "page_kind": "article",
+        "body_markdown": body,
+        "used_markers": [f"e{i + 1}" for i in cited],
+        "tokens_in": 1000,
+        "tokens_out": 200,
+    }
+    return draft, response
+
+
+def test_coverage_underuse_warns(tmp_path: Path) -> None:
+    """6 available docs but only 2 cited -> evidence_underuse warning."""
+    draft, response = _coverage_case(6, cited=[0, 1])
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)  # warning, not error
+    codes = [w["code"] for w in verdict["warnings"]]
+    assert "evidence_underuse" in codes
+    assert verdict["structural_checks"]["evidence_coverage"] is False
+
+
+def test_coverage_enough_docs_no_warning(tmp_path: Path) -> None:
+    """Citing ceil(0.5*available) docs clears the check -> no warning."""
+    draft, response = _coverage_case(6, cited=[0, 1, 2])
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    codes = [w["code"] for w in verdict["warnings"]]
+    assert "evidence_underuse" not in codes
+    assert verdict["structural_checks"]["evidence_coverage"] is True
+
+
+def test_coverage_below_floor_no_warning(tmp_path: Path) -> None:
+    """A narrow page (available_docs < 5) is exempt even if it cites one doc."""
+    draft, response = _coverage_case(4, cited=[0])
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    codes = [w["code"] for w in verdict["warnings"]]
+    assert "evidence_underuse" not in codes
+    assert verdict["structural_checks"]["evidence_coverage"] is True
 
 
 def test_validate_ok_when_grounded(tmp_path: Path) -> None:
