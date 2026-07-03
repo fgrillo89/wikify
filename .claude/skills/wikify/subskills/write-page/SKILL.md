@@ -12,33 +12,19 @@ produces `response.json` content that must later pass validation.
 
 ## Role brief (read this first)
 
-The FIRST thing a writer Task reads is its role brief:
-`references/writer-brief.md`. It is a lossless distillation of every
-writer-facing rule, schema field, and self-check in the files listed
-under Required Style Layers plus the citation / constraint / schema
-references. Read the brief and write from it; open a named source file
-only when the brief is ambiguous or you hit an out-of-brief case. The
-brief text is stable across writer Tasks, so the editor dispatches
-same-role writer Tasks in one burst to keep the shared brief prefix
-inside the prompt-cache TTL.
-
-**Batched multi-slug writer Task.** One writer Task may process MULTIPLE
-ready slugs sequentially, amortising the per-agent fixed overhead
-(brief read + tool warmup). Each slug is processed INDEPENDENTLY: the
-Task writes each slug's own `response.json` and runs `wikify draft check
-<slug> --run <bundle> --dry-run` per slug. A failure on one slug is recorded in that
-slug's result object and does NOT abort the other slugs; partial success
-is normal.
-
-Safety rule: the batch must be slug-disjoint from every other concurrent
-Task (no two Tasks touch the same slug; the one-writer-per-slug ledger
-claim holds at the SLUG level, not the Task level). This does not change
-the SEED / PERSON single-Task-per-round race rule, which is unrelated.
-
-**Return.** A single-slug Task returns one result object; a batched Task
-returns an ARRAY of them, one per slug:
-`{slug, response_json_path, dry_run_ok, escalate?}`. The editor iterates
-the array in CONSOLIDATE (per-slug telemetry and escalation handling).
+The FIRST thing a writer Task reads is its role brief,
+`references/writer-brief.md` — a lossless distillation of every
+writer-facing rule, schema field, and self-check in the Required Style
+Layers plus the citation / constraint / schema references. Write from the
+brief; open a named source only when the brief is ambiguous. The brief is
+stable across writer Tasks, so the editor dispatches same-role writer
+Tasks in one burst to keep the shared brief prefix inside the prompt-cache
+TTL. A writer Task MAY batch multiple ready slugs (each processed
+independently — own `response.json` + `wikify draft check <slug> --run
+<bundle> --dry-run`; per-slug failure does not abort others; batch stays
+slug-disjoint from other Tasks; returns an array of
+`{slug, response_json_path, dry_run_ok, escalate?}`). Full batched
+contract in the brief; it does not change the SEED/PERSON single-Task race rule.
 
 ## Inputs
 
@@ -65,20 +51,12 @@ the array in CONSOLIDATE (per-slug telemetry and escalation handling).
 
 ## Required Style Layers
 
-The role brief already distills these layers; read a source below only to
-resolve a brief ambiguity or an out-of-brief case. When you do, always
-consult:
-
-1. `references/style-guide.md`
-2. `../reference/references/writing/field-guides/generic.md`
-3. The detected field guide when the workflow or corpus state identifies
-   one with confidence.
-4. The page-kind template: `article-style.md`, `person-style.md`, or
-   `refinement-style.md`.
-5. `references/writer-response.md`
-
-Do not browse all field guides. Use `generic.md` by default and load at
-most one additional matching field guide when the field is clear.
+The role brief distills these; read a source below only to resolve a brief
+ambiguity or an out-of-brief case: `references/style-guide.md`;
+`../reference/references/writing/field-guides/generic.md` plus at most ONE
+detected field guide (never browse all); the page-kind template
+(`article-style.md` / `person-style.md` / `refinement-style.md`); and
+`references/writer-response.md`.
 
 ## Evidence-grounding contract
 
@@ -126,39 +104,19 @@ Write strict JSON matching `WriteResponse`. The usual target path is:
 work/concepts/<slug>/response.json
 ```
 
-Before creating or updating `response.json`, perform a writer self-check:
-
-- field names match `references/writer-response.md`;
-- `page_kind` is present and is `article` or `person`;
-- no stale fields such as `links` are present;
-- every prose `[^eN]` marker has exactly one `## References`
-  definition;
-- every reference quote is copied verbatim from supplied evidence;
-- every `{{figure:<anchor>}}` placeholder has a matching `figures[]`
-  entry selected from the draft figure candidates;
-- every `figures[]` entry sets all five fields, including a non-empty
-  `source_marker` that appears in `used_markers`; the validator
-  rejects empty markers and the renderer appends a citation link to
-  the caption pointing at the source footnote;
-- **figure-candidate scan**: an ARTICLE page SHOULD include figures
-  where the dossier's Figure candidates table supports them, up to
-  `max_article_figures = 4`, at most ONE figure per distinct source
-  document, and each figure tied to a distinct cited source/section
-  (its `source_marker` in `used_markers`). Choose the candidates that
-  best depict what a section discusses. Place `{{figure:<anchor>}}`
-  inside the paragraph that discusses it; that paragraph MUST reference
-  it in text ("as shown in the figure", "(see figure)") so the figure
-  is not orphaned. Skip when no candidate is genuinely relevant; do not
-  invent one. Person pages stay figure-free;
-- person pages have at least two non-appendix `## H2` sections;
-- the page uses enough of the supplied high-quality evidence to be
-  comprehensive, not merely valid;
-- math regions use double-backslash JSON escapes (`\\Delta`, `\\text`,
-  `\\,`) so the JSON parses and the markdown ends up with one backslash;
-- **evidence-grounding spot-check**: re-apply the Evidence-grounding
-  contract above to every section -- each substantive factual sentence
-  ends with an `[^eN]` marker, nothing contradicts the dossier, and no
-  specific entity, value, or year is smuggled in from memory.
+Before creating/updating `response.json`, run the full writer self-check
+from the brief (`references/writer-brief.md`): correct `WriteResponse`
+fields (per `writer-response.md`) and `page_kind` (`article`/`person`); no
+stale fields; every prose `[^eN]` resolves to exactly one verbatim
+`## References` definition; figures follow the figure rule (up to
+`max_article_figures = 4`, at most ONE per distinct source document, each
+with a `source_marker` in `used_markers`, placed inside and referenced by
+the paragraph that discusses it; skip when no candidate fits; person pages
+figure-free); person pages have >= 2 non-appendix `## H2` sections; the
+page uses enough high-quality evidence to be comprehensive; math uses
+double-backslash JSON escapes; and every substantive factual sentence ends
+with an `[^eN]` marker grounded in the dossier (nothing contradicting it,
+nothing smuggled from memory).
 
 For a deterministic structural pre-check, pipe the candidate JSON into
 `wikify draft check --dry-run`:
