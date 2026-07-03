@@ -139,20 +139,24 @@ targets to the plan in order, removing them from later bands.
    slug-disjointness. The single task dedups concept titles internally
    and skips any that match an existing slug.
 6. **PERSON wave.** Fires once `concept_count >= target_min/2` (so the
-   topical roster exists first) and only until `person_count >=
-   expected_people` (a small VIP quota — see Sizing). Seed from the top
-   authors by the strongest populated `rank_metrics.author` metric
-   (`h_index`, else `citation_count`, else `n_papers`), gated to genuine
-   VIPs: take only authors above the corpus median on that metric, cap
-   at `expected_people`. For each, one concept:
+   topical roster exists first). `expected_people` is a SOFT target, not
+   a hard cap (see Sizing): keep seeding while good candidates remain,
+   reviewing up to `person_quota_multiplier` (2.0) times `expected_people`.
+   Seed from TWO sources: (a) the top authors by the strongest populated
+   `rank_metrics.author` metric (`h_index`, else `citation_count`, else
+   `n_papers`) above the corpus median; and (b) the **authorship of
+   already-cited article source documents** and their close (co-author
+   distance `<= 1`) collaborators — the researchers the wiki actually
+   leans on, even when below the VIP metric. For each, one concept:
    `wikify work add concept "<Display Name>" --kind person --aliases
    '["author:<key>"]'`, `notebook-init`, then `build-evidence` (the
-   person path gathers quoted-contribution chunks). The person maturity
-   gate is strict by design (>= 3 quoted-contribution chunks from >= 2
-   docs + `author:` alias), so thinly-covered authors never reach
-   `ready` and silently drop out — this is the regulariser that keeps
-   people pages few and VIP-only. Run as a SINGLE Task over the author
-   list (same slug-race reasoning as SEED).
+   person path gathers BOTH quoted-contribution and `identity_context`
+   chunks — affiliation/role/career — so the page can lead with who the
+   person is). The strict person maturity gate (>= 3 quoted-contribution
+   chunks from >= 2 docs + `author:` alias) still decides commits, so
+   thinly-covered authors drop out — it is the quality regulariser, not a
+   headcount cap. Run as a SINGLE Task over the author list (same
+   slug-race reasoning as SEED).
 7. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
 8. **DATA wave.** Fires every round, low cost. Owned by the data skills,
@@ -162,14 +166,28 @@ targets to the plan in order, removing them from later bands.
      this round's SEED/GAP touch — their tables (`asset_type='table'`) and
      number-dense chunks, which the P1-P5 explorers deliberately skip — plus
      a piggyback over any slug grown this round. It stages points and runs
-     `wikify data add` (the verification gate).
+     `wikify data add` (the verification gate). When a property becomes a
+     consolidation theme (a table is about to be built for it, e.g.
+     growth-per-cycle), FIRST run a property-targeted exhaustive harvest:
+     `wikify data harvest-property --property <p> --alias ... --unit ...
+     --corpus <corpus> --run <bundle>` sweeps the WHOLE corpus (not just
+     this round's docs) for every chunk carrying a value for that property,
+     and the `extract-data` Task extracts + verifies every candidate via
+     `data add`. Aim for `data_recall >= 0.90`; re-sweep across rounds
+     while `truncated` or recall stays low. This is what makes a table like
+     GPC comprehensive (nearly every ALD paper reports one) instead of
+     sparse.
    - **Consolidate.** Each round run `wikify data coverage` and enumerate
      ALL uncovered ripe themes (>= 4 subjects sharing a property with no
      committed artifact). Dispatch a `consolidate-data` Task for each,
      highest-subject-count first, capped at 2 per round; keep dispatching
      across rounds until no uncovered ripe theme remains. Consolidation is
      not optional — do not skip the DATA-consolidate step while a ripe theme
-     is uncovered. After a `consolidate-data` Task commits a new `kind=data`
+     is uncovered. Before committing a property table, check its recall
+     (the `property_sweeps` record / a `harvest-property` re-run): block a
+     sparse table when `docs_mentioning_property >= 10` AND
+     `data_recall < 0.75`, and loop back to extract until `>= 0.90`. After
+     a `consolidate-data` Task commits a new `kind=data`
      artifact, the committed pages it covers become `refine-candidates`
      (reason `new_data`) so the REFINE wave re-drafts them to cite the new
      table under "Related data".
