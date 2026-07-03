@@ -270,8 +270,11 @@ Before dispatching the first Task of each wave, emit one
 ```
 wikify run record-event --type pattern_dispatched \
   --stage explore --concept-id memristor --run <bundle> \
-  --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": 30}'
+  --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": <scaled>}'
 ```
+
+`<scaled>` is the Sizing value `clamp(round(20 + 6 * log10(D)), 20, 60)`
+(x1.5 for a central concept), NOT a flat 30 -- compute it before emitting.
 
 `record-event` reads the payload from `--data` (JSON object); pass
 `--from-stdin` only when you deliberately pipe the payload. Each round
