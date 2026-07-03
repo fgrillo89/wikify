@@ -249,6 +249,33 @@ def test_person_contribution_gate_counts_present_tense(tmp_path: Path) -> None:
     assert report.gates_passed is True
 
 
+def test_person_gate_ignores_identity_context_docs(tmp_path: Path) -> None:
+    # identity_context records (affiliation/career) enrich the dossier so a
+    # page can lead with WHO, but they must NOT satisfy the person
+    # doc-diversity gate: 3 contributions from one doc plus one
+    # identity_context chunk from a second doc is NOT >= 2 contribution docs,
+    # so the page stays not-ready.
+    bundle = _bundle(tmp_path)
+    create_concept(
+        bundle, page_id="Solo Author", kind="person",
+        aliases=["author:solo_a"],
+    )
+    append_evidence(bundle, "solo-author", [
+        _ev("c1", "d1", "Solo demonstrated a self-limiting ALD process."),
+        _ev("c2", "d1", "Solo proposed the reaction mechanism."),
+        _ev("c3", "d1", "Solo developed the room-temperature variant."),
+        EvidenceRecord(
+            chunk_id="c4", doc_id="d2", status="active",
+            note="identity_context",
+            quote="Solo, Department of Applied Physics, University of Helsinki.",
+        ),
+    ])
+    report = compute_maturity(bundle, "solo-author")
+    assert report.gates["n_quoted_contribution_chunks_ge_3"] is True
+    assert report.gates["n_distinct_docs_ge_2"] is False
+    assert report.gates_passed is False
+
+
 def test_person_contribution_gate_rejects_non_contribution_text(tmp_path: Path) -> None:
     # Biographical / scene-setting sentences with no contribution verb must
     # NOT satisfy the gate -- the broadened regex still discriminates.

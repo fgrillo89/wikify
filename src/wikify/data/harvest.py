@@ -204,9 +204,13 @@ def sweep_property_candidates(
                 "COALESCE(a.content,'')), ?) > 0",
                 (needle,),
             ):
-                docs.add(r["doc_id"])
+                # Only count an asset-bearing doc as "mentioning" when the
+                # asset is bound to a chunk the extractor can actually reach
+                # and cite; an unbound asset would inflate the recall
+                # denominator with a doc that yields no candidate.
                 cid = r["chunk_id"]
                 if cid:
+                    docs.add(r["doc_id"])
                     hits.setdefault(cid, (r["doc_id"], needle, "asset"))
         ordered = sorted(hits.items(), key=lambda kv: (kv[1][0], kv[0]))
         matched = len(ordered)

@@ -153,15 +153,15 @@ P2_recurse(chunk, depth):
 Citation graph branches fast; keep `depth = 1` unless the editor
 explicitly raises. Send `candidate_chunks` through the vetter.
 
-**Citation-diversify (maturing slug).** ALWAYS walk BOTH directions with
-`corpus_citation_walk` — outgoing `references` (older/seminal work the
-page's sources cite) AND incoming `cited-by` docs (newer work citing
-them); never one direction only. Bucket the resulting candidates by
-their source doc's publication year (from doc metadata) into
-seminal/older (<= p25), middle, and recent (>= p75), and keep candidates
-from every bucket so the accepted evidence spans eras rather than
-clustering on the highest-PageRank few. Budget and depth defaults are
-unchanged.
+**Citation-diversify (maturing slug).** ALWAYS walk BOTH doc-level
+citation relations with `corpus_traverse` — `to="references"`
+(older/seminal work the page's sources cite) AND `to="cited-by"` (newer
+work citing them); never one direction only. (`corpus_citation_walk` is
+outgoing-only.) Bucket the resulting candidates by their source doc's
+publication year (from doc metadata) into seminal/older (<= p25), middle,
+and recent (>= p75), and keep candidates from every non-empty bucket so
+the accepted evidence spans eras rather than clustering on the
+highest-PageRank few. Budget and depth defaults are unchanged.
 
 **Stop reasons**: `budget_chunks_reached`, `depth_zero`,
 `no_new_neighbours`, `ok`.
@@ -347,7 +347,9 @@ per slug. Non-negotiable:
 - **Gap-driven follow-up rounds.** After routing accepts, per slug queue
   targeted follow-up queries when there is a gap: `def_for: [<slug>]`
   empty (no definition evidence yet), low section diversity (< 3 distinct
-  `section_type`s), or `distinct_docs < 5`. Aggregate fresh queries across
+  `section_type`s), `distinct_docs < 8`, one doc dominating the records,
+  or all accepted docs clustered in one publication-year band (pull
+  older/seminal AND recent work). Aggregate fresh queries across
   slugs, dedup, cap to 2-4 new queries per round, and loop (issue queries
   -> judges -> route accepts) up to `max_query_rounds`. Stop when ANY: all
   slugs hit `quota_per_slug`, `max_query_rounds` exhausted, or the latest

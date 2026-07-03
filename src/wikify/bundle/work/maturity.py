@@ -260,10 +260,16 @@ def _max_chunk_jaccard(mine: set[str], neighbours: list[set[str]]) -> float:
 def _person_components(
     bundle: Bundle, slug: str, records: list[EvidenceRecord]
 ) -> tuple[float, dict[str, float], dict[str, bool], list[str]]:
+    # identity_context records (affiliation/role/career) enrich the dossier
+    # so a page can lead with who the person is, but they must NOT advance the
+    # maturity gate, which is quoted-contribution diversity by design.
+    contribution_records = [
+        r for r in records if (r.note or "") != "identity_context"
+    ]
     n_contribution = sum(
-        1 for r in records if _PERSON_CONTRIBUTION_RE.search(r.quote or "")
+        1 for r in contribution_records if _PERSON_CONTRIBUTION_RE.search(r.quote or "")
     )
-    n_docs = len({r.doc_id for r in records})
+    n_docs = len({r.doc_id for r in contribution_records})
     card = load_card(bundle, slug)
     author_alias = any(
         str(a).lower().startswith("author:") for a in card.aliases
