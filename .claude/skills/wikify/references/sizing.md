@@ -81,8 +81,16 @@ as backstops.
 
 ## Fixed per-Task knobs
 
-- Explorer budget per Task: `budget_chunks = 30`, `depth = 2` (P1),
-  `depth = 1` (P2). `curate_every = 2`.
+- Explorer budget per Task: `budget_chunks = clamp(round(20 + 6 *
+  log10(D)), 20, 60)` (was a flat 30) so a larger corpus sweeps more per
+  Task and does not cap a page's richness at a fixed ceiling; `depth = 2`
+  (P1), `depth = 1` (P2). `curate_every = 2`.
+- **Scale up for central concepts.** For a slug in the top decile of
+  PageRank / node degree (a hub concept the wiki leans on), multiply its
+  `budget_chunks`, explorer `top_k`, and the `build-evidence`
+  `per_doc_cap` by ~1.5 — a central concept deserves a deeper, richer
+  sweep than a peripheral one. The WRITE recall gate then confirms the
+  extra breadth actually landed; peripheral concepts keep the base knobs.
   `addressable_coverage_target = 0.33`, `coverage_target = 0.25` (raw).
 - Editor tier: **L (top-tier, e.g. Opus)**. Explorer M. Writer M.
   Classifier S. Claim owner `investigate`, TTL 1800 s.
