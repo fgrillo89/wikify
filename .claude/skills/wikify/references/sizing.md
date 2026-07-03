@@ -10,7 +10,8 @@ target_min           = clamp(round(42 * log10(D) - 27), 10, 200)        # SEED c
 concurrent_explorers = clamp(wave_size, 2, 8)                           # throttled by live rate limits
 max_rounds           = clamp(round(Kc / (wave_size * 25)) + 12, 12, 250) # coverage-bound safety ceiling
 expected_pages       = clamp(round(38 * log10(D) - 37), 5, 250)        # article roster the build commits, ~log(D)
-expected_people      = clamp(round(4 * log10(D) - 3), 0, 30)           # VIP person pages, median-author gated; few by design
+expected_people      = clamp(round(4 * log10(D) - 3), 0, 30)           # SOFT person-page target (may be exceeded, see below); median-author gated
+person_quota_multiplier = 2.0                                          # review up to 2x expected_people candidates; maturity gate still decides commits
 budget_est_haiku_eq  = 600_000 * (expected_pages + expected_people)    # ~0.6M haiku-eq/committed page; editor is inline, off the call ledger
 ```
 
@@ -41,8 +42,15 @@ concepts saturate far below paper count; concepts past it emerge from
 P5 coverage, not seeding. `expected_pages` is a separate ~log(D) fit for
 the article roster the build actually commits, calibrated to observed
 runs and independent of the `target_min` SEED floor. `expected_people`
-is a small VIP quota on top (median-author gated, then filtered hard by
-the strict person maturity gate, so committed people are usually fewer).
+is a **soft target**, not a hard cap: it may be exceeded for
+source-critical authors (on `>= 2` committed article evidence documents,
+or one high-centrality source). Review up to `person_quota_multiplier`
+(2.0) times `expected_people` candidates; the strict person maturity gate
+still decides which commit, so it stays the quality regulariser. People
+are seeded not only from top-metric VIPs but also from the **authorship
+of already-cited article source documents** and their close (co-author
+distance `<= 1`) collaborators, so the researchers a wiki actually leans
+on get pages.
 `budget_est` is driven by total committed pages, not chunks: writers are
 ~75% of spend at ~0.6M haiku-eq per page (writer + amortized
 explore/data); person pages cost about the same per page. It excludes
