@@ -1743,3 +1743,192 @@ def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
     store.set_artifact_status("other", "committed")
     store.close()
     assert _refine()["n_candidates"] == 0
+
+
+# -------------------------------------------------------- concept-recall
+
+
+def _recall_bundle(tmp_path: Path):
+    """Bundle + corpus with 5 photonics docs across a year spread.
+
+    Returns ``(bundle_path, corpus_path, docs)`` where ``docs`` maps
+    ``doc_id -> (chunk_id, year)``. Each doc has a single content chunk
+    whose text matches the query term ``photonics`` under BM25, with a
+    distinct section_type so the diversity signal is exercised. Years
+    2010/2012/2015/2018/2021 bucket as early={2010,2012},
+    middle={2015}, recent={2018,2021} under the p25/p75 split.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus_root)],
+    )
+
+    spec = [
+        (2010, "introduction"),
+        (2012, "body"),
+        (2015, "methods"),
+        (2018, "results"),
+        (2021, "discussion"),
+    ]
+    body = (
+        "Silicon photonics enables integrated optical circuits for "
+        "high-bandwidth data transmission and on-chip light manipulation "
+        "in modern communication devices."
+    )
+    docs: list[Document] = []
+    chunk_map: dict[str, list[Chunk]] = {}
+    out: dict[str, tuple[str, int]] = {}
+    for year, sect in spec:
+        did = f"doc_{year}"
+        cid = f"{did}__c0000"
+        docs.append(
+            Document(
+                id=did, source_path=f"src/{did}.md", kind="md",
+                title=f"Photonics {year}", metadata={"year": year},
+                markdown_path=f"markdown/{did}.md", image_dir=f"images/{did}/",
+                n_chunks=1, n_tokens=40,
+            )
+        )
+        chunk_map[did] = [
+            Chunk(
+                id=cid, doc_id=did, ord=0, text=body,
+                char_span=(0, len(body)), section_path=["S"],
+                section_type=sect,
+            )
+        ]
+        out[did] = (cid, year)
+
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, docs, chunk_map)
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    create_concept(BundleApi.open(bundle), page_id="Photonics", kind="article")
+    return bundle, corpus_root, out
+
+
+def _run_recall(bundle: Path, corpus_root: Path) -> dict:
+    result = runner.invoke(
+        app,
+        [
+            "work", "concept-recall", "photonics",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)
+
+
+def test_concept_recall_json_shape(tmp_path: Path) -> None:
+    """The envelope carries every documented recall field with the right
+    shape."""
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    data = _run_recall(bundle, corpus_root)
+    assert data["ok"] is True
+    assert data["slug"] == "photonics"
+    recall = data["recall"]
+    for key in (
+        "candidate_docs", "represented_docs", "missing_docs", "year_buckets",
+        "empty_buckets", "section_types_represented", "max_doc_share",
+        "min_represented", "recall_ok",
+    ):
+        assert key in recall, key
+    # All 5 photonics docs surface as candidates.
+    assert len(recall["candidate_docs"]) == 5
+    for c in recall["candidate_docs"]:
+        assert set(c) == {"doc_id", "year", "score"}
+    assert set(recall["year_buckets"]) == {"early", "middle", "recent"}
+    for b in recall["year_buckets"].values():
+        assert set(b) == {"total", "represented"}
+    # early={2010,2012}, middle={2015}, recent={2018,2021}
+    assert recall["year_buckets"]["early"]["total"] == 2
+    assert recall["year_buckets"]["middle"]["total"] == 1
+    assert recall["year_buckets"]["recent"]["total"] == 2
+
+
+def test_concept_recall_missing_then_covered(tmp_path: Path) -> None:
+    """Evidence from one doc leaves the rest missing and recall_ok false;
+    adding the missing docs (balanced records, all buckets covered) flips
+    recall_ok true."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # Only the 2010 doc is represented.
+    cid_2010, _ = docs["doc_2010"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2010, doc_id="doc_2010", status="active")],
+    )
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert recall["min_represented"] == 3  # min(8, ceil(0.6*5))
+    assert len(recall["represented_docs"]) == 1
+    assert recall["recall_ok"] is False
+    missing_ids = {c["doc_id"] for c in recall["missing_docs"]}
+    assert missing_ids == {"doc_2012", "doc_2015", "doc_2018", "doc_2021"}
+
+    # Add one balanced record from each remaining doc.
+    for did in ("doc_2012", "doc_2015", "doc_2018", "doc_2021"):
+        cid, _ = docs[did]
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["represented_docs"]) == 5
+    assert recall["missing_docs"] == []
+    assert recall["empty_buckets"] == []
+    assert recall["max_doc_share"] == 0.2  # 1/5 records per doc
+    assert recall["recall_ok"] is True
+    # Represented chunks span multiple section types (diversity signal).
+    assert len(recall["section_types_represented"]) >= 3
+
+
+def test_concept_recall_max_doc_share_blocks(tmp_path: Path) -> None:
+    """Every bucket is represented and enough docs are covered, but the
+    records concentrate in one doc (share > 0.35) so recall_ok is false."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # 2010 (early), 2015 (middle), 2021 (recent) cover all buckets, but the
+    # 2010 doc holds 10 of the 12 records.
+    cid_2010, _ = docs["doc_2010"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2010, doc_id="doc_2010", status="active")
+         for _ in range(10)],
+    )
+    for did in ("doc_2015", "doc_2021"):
+        cid, _ = docs[did]
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["represented_docs"]) == 3
+    assert recall["represented_docs"] == ["doc_2010", "doc_2015", "doc_2021"]
+    assert recall["empty_buckets"] == []
+    assert recall["max_doc_share"] > 0.35
+    assert recall["recall_ok"] is False
