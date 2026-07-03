@@ -214,11 +214,17 @@ Per slug, ask:
 
 Aggregate fresh queries across slugs; dedup; cap to 2-4 new queries per
 round. Loop back to Step 3 (issue queries → fan out judges → route
-accepts). Stop when ANY:
+accepts). Keep looping while a round still surfaces a NEW DISTINCT DOC or
+a new `section_type` facet for a slug — do not stop merely because a fixed
+round budget elapsed. Stop when ANY:
 
 - All slugs hit `quota_per_slug`, OR
-- `max_query_rounds` exhausted, OR
-- Latest round added zero accepts to any slug.
+- Two consecutive rounds add no new distinct doc AND no new section-type
+  facet to any slug — a genuine plateau; mark the slug
+  `evidence_exhausted` (the WRITE recall gate treats exhausted as
+  permission to write despite missing docs), OR
+- The safety ceiling `max_query_rounds` is reached — mark `round_cap_hit`
+  so the editor re-dispatches next round rather than assuming completeness.
 
 ## Step 7: commit per slug
 

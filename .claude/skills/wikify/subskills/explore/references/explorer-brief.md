@@ -351,9 +351,12 @@ per slug. Non-negotiable:
   or all accepted docs clustered in one publication-year band (pull
   older/seminal AND recent work). Aggregate fresh queries across
   slugs, dedup, cap to 2-4 new queries per round, and loop (issue queries
-  -> judges -> route accepts) up to `max_query_rounds`. Stop when ANY: all
-  slugs hit `quota_per_slug`, `max_query_rounds` exhausted, or the latest
-  round added zero accepts to any slug.
+  -> judges -> route accepts) while a round still surfaces a NEW DISTINCT
+  DOC or section-type facet. Stop when ANY: all slugs hit `quota_per_slug`;
+  two consecutive rounds add no new distinct doc AND no new facet (plateau
+  -> mark slug `evidence_exhausted`, which the WRITE recall gate treats as
+  permission to write despite missing docs); or `max_query_rounds` reached
+  (mark `round_cap_hit` so the editor re-dispatches, not assumes done).
 - Person slugs gather TWO classes: `contribution` (chunks quoting the
   author's ACTUAL work; bylines alone do not count) AND `identity_context`
   (chunks that NAME the target author and carry affiliation/role/career
