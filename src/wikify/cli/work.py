@@ -1715,6 +1715,237 @@ def cmd_coverage(
     )
 
 
+# -------------------------------------------------------------- concept-recall
+
+
+# Section kinds excluded from the relevance search so a page's candidate
+# set is drawn from content chunks, not bibliography / captions / matter.
+_RECALL_EXCLUDE_KINDS = [
+    "references",
+    "acknowledgments",
+    "appendix",
+    "figure",
+    "table",
+    "caption",
+    "boilerplate",
+]
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """Linear-interpolated percentile (numpy 'linear' method).
+
+    ``values`` need not be sorted. ``q`` is in [0, 1]. Empty input is a
+    programming error (callers guard for it); a single value returns that
+    value.
+    """
+    s = sorted(values)
+    if len(s) == 1:
+        return float(s[0])
+    idx = q * (len(s) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(s) - 1)
+    frac = idx - lo
+    return s[lo] * (1 - frac) + s[hi] * frac
+
+
+def _coerce_year(value) -> int | None:
+    """Best-effort parse of a document ``metadata['year']`` into an int.
+
+    Accepts an int, a 4-digit-leading string (``"2015"``, ``"2015-03"``),
+    or None; anything unparseable returns None so the doc is simply not
+    placed in a year bucket rather than crashing the recall computation.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value)[:4])
+    except (ValueError, TypeError):
+        return None
+
+
+@app.command("concept-recall")
+def cmd_concept_recall(
+    concept: str = typer.Argument(...),
+    corpus_dir: Path = typer.Option(..., "--corpus"),
+    run: Path | None = typer.Option(None, "--run"),
+    top_docs: int = typer.Option(
+        12, "--top-docs",
+        help="Number of most-relevant corpus docs to treat as candidates.",
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Recall signal: does *concept*'s evidence represent the corpus's
+    most-relevant sources?
+
+    Ranks the top ``--top-docs`` corpus documents by relevance to the
+    concept title + aliases (semantic when the corpus carries chunk
+    embeddings, else BM25), compares that candidate set against the
+    distinct documents already in the slug's evidence ledger, and reports
+    which candidates are missing, whether every publication-era bucket is
+    represented, the section-type diversity of the committed evidence, and
+    the share of evidence records concentrated in a single document.
+
+    Deterministic and cheap: relevance ranking + document metadata +
+    section-type lookup by chunk_id; no full chunk text is read.
+    """
+    import math
+    import sqlite3
+    from collections import Counter
+
+    from ..api import Corpus
+    from ..corpus.chunks import list_documents
+    from ..corpus.queries import QueryError, _has_vectors, search_chunks
+    from ..corpus.store.routing import sqlite_available
+
+    concept = _clean_slug_arg(concept)
+    bundle = _resolve_bundle(run)
+    if not corpus_dir.is_dir():
+        cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
+    corpus = Corpus(root=corpus_dir)
+    card = load_card(bundle, concept)
+    if not card.front:
+        cli_error(EXIT_VALIDATION, error="concept_not_found", slug=concept)
+
+    # Query terms: the page title plus each alias (author: prefixes are
+    # stripped to a plain name so the relevance search reads cleanly).
+    queries: list[str] = []
+    title = card.page_id if isinstance(card.page_id, str) else ""
+    if title.strip():
+        queries.append(title)
+    for alias in card.front.get("aliases") or []:
+        if not isinstance(alias, str) or not alias.strip():
+            continue
+        if alias.lower().startswith("author:"):
+            queries.append(alias.split(":", 1)[1].replace("_", " "))
+        else:
+            queries.append(alias)
+
+    # Candidate docs: best relevance per doc across all query terms,
+    # ranked most-relevant first. BM25 scores are negated so that, like
+    # semantic cosine, a larger value is a better match.
+    candidate_docs: list[dict] = []
+    if sqlite_available(corpus.root) and queries:
+        mode = "semantic" if _has_vectors(corpus) else "bm25"
+        best: dict[str, float] = {}
+        for q in queries:
+            try:
+                hits = search_chunks(
+                    corpus, q,
+                    top_k=max(top_docs * 5, 50),
+                    rank=mode,
+                    exclude_kinds=_RECALL_EXCLUDE_KINDS,
+                )
+            except QueryError:
+                hits = []
+            for h in hits:
+                did = h.get("doc_id")
+                if not did:
+                    continue
+                raw = float(h.get("score", 0.0))
+                rel = raw if mode == "semantic" else -raw
+                if did not in best or rel > best[did]:
+                    best[did] = rel
+        ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))[:top_docs]
+        docs_by_id = {d.id: d for d in list_documents(corpus)}
+        for did, rel in ranked:
+            doc = docs_by_id.get(did)
+            year = _coerce_year((doc.metadata if doc else {}).get("year"))
+            candidate_docs.append(
+                {"doc_id": did, "year": year, "score": round(rel, 6)}
+            )
+
+    # Represented side: distinct docs + per-doc record share + section
+    # diversity, all from the slug's active evidence ledger.
+    active = [r for r in read_evidence(bundle, concept) if r.status == "active"]
+    represented_docs = sorted({r.doc_id for r in active})
+    represented_set = set(represented_docs)
+    doc_record_counts = Counter(r.doc_id for r in active)
+    total_records = len(active)
+    max_doc_share = (
+        max(doc_record_counts.values()) / total_records if total_records else 0.0
+    )
+
+    section_types_represented: list[str] = []
+    represented_chunk_ids = [r.chunk_id for r in active if r.chunk_id]
+    if corpus.sqlite_path.exists() and represented_chunk_ids:
+        con = sqlite3.connect(str(corpus.sqlite_path))
+        try:
+            placeholders = ",".join("?" * len(represented_chunk_ids))
+            rows = con.execute(
+                f"SELECT DISTINCT section_type FROM chunks "
+                f"WHERE chunk_id IN ({placeholders})",
+                represented_chunk_ids,
+            ).fetchall()
+            section_types_represented = sorted(
+                {(r[0] or "body") for r in rows}
+            )
+        finally:
+            con.close()
+
+    # Missing candidates, most-relevant first (candidate_docs is presorted).
+    missing_docs = [
+        c for c in candidate_docs if c["doc_id"] not in represented_set
+    ]
+
+    # Publication-era buckets over candidate years: early(<=p25) /
+    # recent(>=p75) / middle. Docs lacking a parseable year are skipped.
+    years = [c["year"] for c in candidate_docs if c["year"] is not None]
+    counts = {b: [0, 0] for b in ("early", "middle", "recent")}  # [total, repr]
+    if years:
+        p25 = _percentile(years, 0.25)
+        p75 = _percentile(years, 0.75)
+        for c in candidate_docs:
+            y = c["year"]
+            if y is None:
+                continue
+            if y <= p25:
+                b = "early"
+            elif y >= p75:
+                b = "recent"
+            else:
+                b = "middle"
+            counts[b][0] += 1
+            if c["doc_id"] in represented_set:
+                counts[b][1] += 1
+    year_buckets = {
+        b: {"total": t, "represented": r} for b, (t, r) in counts.items()
+    }
+    empty_buckets = [
+        b for b, v in year_buckets.items()
+        if v["total"] > 0 and v["represented"] == 0
+    ]
+
+    min_represented = min(8, math.ceil(0.6 * len(candidate_docs)))
+    recall_ok = (
+        len(represented_docs) >= min_represented
+        and not empty_buckets
+        and max_doc_share <= 0.35
+    )
+
+    recall = {
+        "candidate_docs": candidate_docs,
+        "represented_docs": represented_docs,
+        "missing_docs": missing_docs,
+        "year_buckets": year_buckets,
+        "empty_buckets": empty_buckets,
+        "section_types_represented": section_types_represented,
+        "max_doc_share": round(max_doc_share, 4),
+        "min_represented": min_represented,
+        "recall_ok": recall_ok,
+    }
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, "slug": concept, "recall": recall}))
+        return
+    typer.echo(
+        f"{concept}: recall_ok={recall_ok}  "
+        f"represented={len(represented_docs)}/{len(candidate_docs)} "
+        f"(min {min_represented})  missing={len(missing_docs)}  "
+        f"max_doc_share={max_doc_share:.2f}  "
+        f"empty_buckets={','.join(empty_buckets) or '-'}  "
+        f"section_types={','.join(section_types_represented) or '-'}"
+    )
+
+
 # -------------------------------------------------------------- notebook-init
 
 
