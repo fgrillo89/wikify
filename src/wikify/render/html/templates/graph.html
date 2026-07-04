@@ -2,90 +2,301 @@
 {% block content %}
 <article class="wiki-article graph-page">
   <h1>Article graph</h1>
-  <p>Force-directed view of wikilinks between articles. Each edge represents a crosslink chosen by the writer; thicker edges are mutual links. Drag a node to reposition, scroll to zoom, click a node to navigate.</p>
-  <div class="graph-legend">
-    <span class="legend-item"><span class="legend-dot legend-article"></span>Article</span>
-    <span class="legend-item"><span class="legend-dot legend-person"></span>Person</span>
-    <span class="legend-item legend-meta">{{ graph_data.nodes|length }} nodes, {{ graph_data.links|length }} edges</span>
+  <p>Force-directed view of wikilinks between articles, coloured by topical cluster. Each edge is a crosslink chosen by the writer; thicker edges are mutual links. Drag a node to reposition, scroll or use the controls to zoom, hover to focus a node and its neighbours, and click a node to open it.</p>
+  <div id="graph-shell" class="graph-shell">
+    <div id="topics-graph" class="topics-graph"></div>
+    <div class="graph-overlay graph-search-box">
+      <input id="graph-search" type="text" placeholder="Search nodes..." autocomplete="off" spellcheck="false">
+    </div>
+    <div class="graph-overlay graph-zoom" role="group" aria-label="Zoom controls">
+      <button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+      <button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+      <button type="button" id="zoom-fit" title="Fit to view" aria-label="Fit to view">&#9634;</button>
+    </div>
+    <div class="graph-overlay graph-legend-panel" id="graph-legend" aria-label="Legend"></div>
   </div>
-  <div id="topics-graph" class="topics-graph"></div>
 </article>
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script>
 (function() {
   const data = {{ graph_data|tojson|safe }};
   const root = {{ root|tojson|safe }};
+  const shell = document.getElementById("graph-shell");
   const container = document.getElementById("topics-graph");
-  const width = container.clientWidth || 800;
-  const height = 640;
+  let width = container.clientWidth || 800;
+  let height = Math.max(680, (window.innerHeight || 900) - 220);
+  shell.style.height = height + "px";
+
   const svg = d3.select(container).append("svg")
     .attr("viewBox", [0, 0, width, height])
     .attr("width", "100%")
     .attr("height", height);
 
-  const g = svg.append("g");
-  svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
+  // --- SVG defs: soft drop shadow for nodes ------------------------------
+  const defs = svg.append("defs");
+  const shadow = defs.append("filter")
+    .attr("id", "node-shadow").attr("x", "-40%").attr("y", "-40%")
+    .attr("width", "180%").attr("height", "180%");
+  shadow.append("feDropShadow")
+    .attr("dx", 0).attr("dy", 1).attr("stdDeviation", 1.4)
+    .attr("flood-color", "#1b1f24").attr("flood-opacity", 0.28);
 
-  // Node degree drives radius so well-connected articles stand out.
+  const g = svg.append("g");
+  const zoom = d3.zoom().scaleExtent([0.12, 5]).on("zoom", onZoom);
+  svg.call(zoom);
+
+  // --- Degree, neighbour index -------------------------------------------
   const degree = {};
   data.nodes.forEach(n => degree[n.id] = 0);
-  data.links.forEach(l => { degree[l.source]++; degree[l.target]++; });
+  const neighbours = {};                       // id -> Set(neighbour ids)
+  data.nodes.forEach(n => neighbours[n.id] = new Set());
+  data.links.forEach(l => {
+    degree[l.source]++; degree[l.target]++;
+    neighbours[l.source].add(l.target);
+    neighbours[l.target].add(l.source);
+  });
 
-  const link = g.append("g")
-    .attr("stroke", "#7a8088").attr("stroke-opacity", 0.55)
-    .selectAll("line").data(data.links).join("line")
-    .attr("stroke-width", d => 0.8 + (d.weight || 1) * 0.8);
+  // --- Topical groups: colour + counts -----------------------------------
+  // Key each node by its topical cluster; fall back to the type title so
+  // ungrouped nodes still get a stable bucket.
+  const groupKey = n => n.group || n.group_title || "Other";
+  data.nodes.forEach(n => n._gk = groupKey(n));
 
-  const colors = { article: "#0645ad", person: "#7c3aed" };
+  const groupMeta = new Map();                  // key -> {key, title, count}
+  data.nodes.forEach(n => {
+    if (!groupMeta.has(n._gk)) {
+      groupMeta.set(n._gk, {key: n._gk, title: n.group_title || n._gk, count: 0});
+    }
+    groupMeta.get(n._gk).count++;
+  });
+  const groupList = [...groupMeta.values()].sort((a, b) => b.count - a.count);
+  // Colourblind-friendly categorical palette; cycles if there are more
+  // groups than swatches (10 + 12 = 22 before repeating).
+  const palette = d3.schemeTableau10.concat(d3.schemeSet3);
+  groupList.forEach((grp, i) => grp.color = palette[i % palette.length]);
+  const colorOf = new Map(groupList.map(grp => [grp.key, grp.color]));
+
+  // --- Shape by node type -------------------------------------------------
+  const symbolFor = d =>
+    d.type === "person" ? d3.symbolDiamond :
+    d.type === "data"   ? d3.symbolTriangle :
+                          d3.symbolCircle;
   const radius = d => 5 + Math.min(degree[d.id] || 0, 8);
+  const areaFor = d => {
+    const r = radius(d) * 1.25;                 // area for d3.symbol()
+    return Math.PI * r * r;
+  };
 
+  // --- Label level-of-detail ---------------------------------------------
+  // Base LOD shows the ~15 highest-degree nodes; zooming in relaxes the
+  // degree threshold so more labels appear the closer you look.
+  const degSorted = data.nodes.map(n => degree[n.id]).sort((a, b) => b - a);
+  const baseDeg = degSorted.length ? degSorted[Math.min(14, degSorted.length - 1)] : 0;
+  let currentK = 1;
+  function degThreshold() {
+    return Math.max(0, baseDeg - Math.floor((currentK - 0.6) * 5));
+  }
+
+  // --- Interaction state --------------------------------------------------
+  let hoverId = null;                           // hovered node id or null
+  let searchIds = null;                         // Set of matched ids or null
+  const hiddenGroups = new Set();               // group keys toggled off
+  let focus = null;                             // hovered node + neighbours
+
+  // --- Links --------------------------------------------------------------
+  const link = g.append("g")
+    .attr("stroke", "#7a8088")
+    .selectAll("line").data(data.links).join("line")
+    .attr("stroke-width", d => 0.8 + (d.weight || 1) * 0.9)
+    .attr("stroke-opacity", 0.5);
+
+  // --- Nodes --------------------------------------------------------------
   const node = g.append("g").selectAll("g").data(data.nodes).join("g")
     .attr("class", d => "graph-node graph-node-" + d.type)
     .style("cursor", d => d.url ? "pointer" : "grab")
-    .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd));
+    .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
+    .on("mouseenter", enterNode)
+    .on("mouseleave", leaveNode);
 
-  node.append("circle")
-    .attr("r", radius)
-    .attr("fill", d => colors[d.type] || "#999")
-    .attr("stroke", "#fff").attr("stroke-width", 1.5);
+  node.append("path")
+    .attr("d", d => d3.symbol().type(symbolFor(d)).size(areaFor(d))())
+    .attr("fill", d => colorOf.get(d._gk) || "#999")
+    .attr("stroke", "#fff").attr("stroke-width", 1.4)
+    .attr("filter", "url(#node-shadow)");
 
-  node.append("text")
-    .attr("dx", d => radius(d) + 4).attr("dy", 4)
-    .style("font", "12px sans-serif")
-    .style("fill", "#202122")
-    .style("user-select", "none")
-    .text(d => d.label);
+  const label = node.append("text")
+    .attr("class", "graph-label")
+    .attr("dx", d => radius(d) + 5).attr("dy", 4)
+    .text(d => d.label)
+    .style("opacity", 0);
 
-  node.append("title").text(d => `${d.label} (${degree[d.id] || 0} links)`);
+  node.append("title").text(d => `${d.label} - ${d.group_title} (${degree[d.id] || 0} links)`);
 
+  // --- Simulation ---------------------------------------------------------
   const sim = d3.forceSimulation(data.nodes)
-    .force("link", d3.forceLink(data.links).id(d => d.id).distance(110).strength(d => 0.3 + (d.weight - 1) * 0.2))
-    .force("charge", d3.forceManyBody().strength(-450))
-    .force("center", d3.forceCenter(width/2, height/2))
-    .force("x", d3.forceX(width/2).strength(0.04))
-    .force("y", d3.forceY(height/2).strength(0.04))
-    .force("collide", d3.forceCollide(d => radius(d) + 28));
+    .force("link", d3.forceLink(data.links).id(d => d.id).distance(130).strength(d => 0.3 + ((d.weight || 1) - 1) * 0.2))
+    .force("charge", d3.forceManyBody().strength(-620))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("x", d3.forceX(width / 2).strength(0.03))
+    .force("y", d3.forceY(height / 2).strength(0.03))
+    .force("collide", d3.forceCollide(d => radius(d) + 34));
 
-  const PAD = 18;
   sim.on("tick", () => {
-    data.nodes.forEach(d => {
-      d.x = Math.max(PAD, Math.min(width - PAD, d.x));
-      d.y = Math.max(PAD, Math.min(height - PAD, d.y));
-    });
     link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
         .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
     node.attr("transform", d => `translate(${d.x},${d.y})`);
   });
 
-  // d3-drag preventDefaults the mousedown, which blocks the synthesized
-  // click event. Track whether a real drag happened; if not, treat the
-  // gesture as a click and navigate.
+  // --- Styling: single source of truth for opacity/labels ----------------
+  function nodeActive(d) {
+    if (hiddenGroups.has(d._gk)) return false;
+    if (focus && !focus.has(d.id)) return false;
+    if (searchIds && !searchIds.has(d.id)) return false;
+    return true;
+  }
+  function edgeActive(l) {
+    if (hiddenGroups.has(l.source._gk) || hiddenGroups.has(l.target._gk)) return false;
+    if (hoverId != null) return l.source.id === hoverId || l.target.id === hoverId;
+    if (searchIds) return searchIds.has(l.source.id) && searchIds.has(l.target.id);
+    return true;
+  }
+  function labelVisible(d) {
+    if (hiddenGroups.has(d._gk)) return false;
+    if (focus) return focus.has(d.id);
+    if (searchIds) return searchIds.has(d.id);
+    return (degree[d.id] || 0) >= degThreshold();
+  }
+
+  function refresh(dur) {
+    const t = dur ? d3.transition().duration(dur) : null;
+    (t ? node.transition(t) : node).style("opacity", d => nodeActive(d) ? 1 : 0.12);
+    (t ? link.transition(t) : link).attr("stroke-opacity", l => edgeActive(l) ? 0.55 : 0.04);
+    updateLabels(dur);
+  }
+  function updateLabels(dur) {
+    const t = dur ? d3.transition().duration(dur) : null;
+    (t ? label.transition(t) : label).style("opacity", d => labelVisible(d) ? 1 : 0);
+  }
+
+  // Throttle label recompute during continuous zoom to one per frame.
+  let labelQueued = false;
+  function scheduleLabels() {
+    if (labelQueued) return;
+    labelQueued = true;
+    requestAnimationFrame(() => { labelQueued = false; updateLabels(0); });
+  }
+  function onZoom(e) {
+    g.attr("transform", e.transform);
+    currentK = e.transform.k;
+    scheduleLabels();
+  }
+
+  // --- Hover focus + context ---------------------------------------------
+  function enterNode(e, d) {
+    hoverId = d.id;
+    focus = new Set([d.id, ...neighbours[d.id]]);
+    d3.select(this).raise();
+    refresh(140);
+  }
+  function leaveNode() {
+    hoverId = null; focus = null;
+    refresh(260);
+  }
+
+  // --- Search -------------------------------------------------------------
+  const searchInput = document.getElementById("graph-search");
+  searchInput.addEventListener("input", () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) { searchIds = null; refresh(160); return; }
+    searchIds = new Set(
+      data.nodes.filter(n => n.label.toLowerCase().includes(q)).map(n => n.id)
+    );
+    refresh(160);
+  });
+  searchInput.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) return;
+    const hit = data.nodes.find(n => n.label.toLowerCase().includes(q));
+    if (hit && hit.x != null) centerOn(hit, 1.4);
+  });
+
+  // --- Zoom controls ------------------------------------------------------
+  document.getElementById("zoom-in").addEventListener("click", () => svg.transition().duration(250).call(zoom.scaleBy, 1.4));
+  document.getElementById("zoom-out").addEventListener("click", () => svg.transition().duration(250).call(zoom.scaleBy, 1 / 1.4));
+  document.getElementById("zoom-fit").addEventListener("click", () => fitToView());
+
+  function centerOn(d, k) {
+    const t = d3.zoomIdentity.translate(width / 2, height / 2).scale(k).translate(-d.x, -d.y);
+    svg.transition().duration(500).call(zoom.transform, t);
+  }
+
+  // Frame the whole graph: fit the node bounding box with padding.
+  function fitToView() {
+    const xs = data.nodes.map(d => d.x), ys = data.nodes.map(d => d.y);
+    if (!xs.length || xs.some(v => v == null)) return;
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const bw = (maxX - minX) || 1, bh = (maxY - minY) || 1;
+    const pad = 90;
+    const scale = Math.max(0.12, Math.min((width - pad) / bw, (height - pad) / bh, 1.5));
+    const tx = width / 2 - scale * (minX + maxX) / 2;
+    const ty = height / 2 - scale * (minY + maxY) / 2;
+    svg.transition().duration(600).call(
+      zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale)
+    );
+  }
+  sim.on("end", () => { fitToView(); });
+  setTimeout(() => { fitToView(); updateLabels(300); }, 1600);
+
+  // --- Interactive legend -------------------------------------------------
+  const legend = d3.select("#graph-legend");
+  legend.append("div").attr("class", "legend-title").text("Clusters");
+  const groupsBox = legend.append("div").attr("class", "legend-groups");
+  const rows = groupsBox.selectAll("button").data(groupList).join("button")
+    .attr("class", "legend-group")
+    .attr("type", "button")
+    .on("click", (e, grp) => {
+      if (hiddenGroups.has(grp.key)) hiddenGroups.delete(grp.key);
+      else hiddenGroups.add(grp.key);
+      d3.select(e.currentTarget).classed("is-off", hiddenGroups.has(grp.key));
+      refresh(180);
+    });
+  rows.append("span").attr("class", "legend-swatch").style("background", grp => grp.color);
+  rows.append("span").attr("class", "legend-name").text(grp => grp.title);
+  rows.append("span").attr("class", "legend-count").text(grp => grp.count);
+
+  const shapes = legend.append("div").attr("class", "legend-shapes");
+  [["article", "Article", d3.symbolCircle],
+   ["person", "Person", d3.symbolDiamond],
+   ["data", "Data table", d3.symbolTriangle]].forEach(([, name, sym]) => {
+    const row = shapes.append("div").attr("class", "legend-shape");
+    row.append("svg").attr("width", 18).attr("height", 18)
+      .append("path")
+      .attr("transform", "translate(9,9)")
+      .attr("d", d3.symbol().type(sym).size(70)())
+      .attr("fill", "#8a9099").attr("stroke", "#fff").attr("stroke-width", 1);
+    row.append("span").text(name);
+  });
+
+  // --- Responsive width ---------------------------------------------------
+  window.addEventListener("resize", () => {
+    const w = container.clientWidth || width;
+    if (Math.abs(w - width) < 2) return;
+    width = w;
+    svg.attr("viewBox", [0, 0, width, height]);
+    sim.force("center", d3.forceCenter(width / 2, height / 2));
+    sim.force("x", d3.forceX(width / 2).strength(0.03));
+    sim.alpha(0.2).restart();
+  });
+
+  // --- Drag: distinguish click (navigate) from real drag -----------------
   function dragStart(e, d) {
     if (!e.active) sim.alphaTarget(0.3).restart();
     d.fx = d.x; d.fy = d.y;
     d.__moved = false;
   }
-  function dragged(e, d)   { d.__moved = true; d.fx = e.x; d.fy = e.y; }
+  function dragged(e, d) { d.__moved = true; d.fx = e.x; d.fy = e.y; }
   function dragEnd(e, d) {
     if (!e.active) sim.alphaTarget(0);
     d.fx = null; d.fy = null;

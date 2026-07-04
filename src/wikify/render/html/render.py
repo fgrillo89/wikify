@@ -207,8 +207,9 @@ def build_site(
         people=people,
         corpus_root=corpus_root,
     )
+    raw_navigation = read_navigation(loaded.root.parent)
     navigation = _build_navigation_view(
-        read_navigation(loaded.root.parent),
+        raw_navigation,
         page_views={pv.id: pv for pv in page_views},
     )
     key_articles = _key_articles(concepts, page_by_id=page_by_id)
@@ -281,6 +282,7 @@ def build_site(
         graph_data = _build_article_graph_data(
             page_views={pv.id: pv for pv in page_views},
             page_by_id=page_by_id,
+            page_group=_page_group_map(raw_navigation),
         )
         graph_html = env.get_template("graph.html").render(
             title="Article graph",
@@ -531,20 +533,51 @@ def _reference_sort_key(meta: dict, doc_id: str) -> tuple[str, str]:
     return (title.lower() or doc_id.lower(), "")
 
 
+def _page_group_map(
+    navigation: dict[str, Any] | None,
+) -> dict[str, tuple[str, str]]:
+    """Map each page_id to its TOP-LEVEL nav group ``(id, title)`` so the graph
+    can colour nodes by topical cluster. Pages under a group's nested children
+    inherit that top-level group."""
+    out: dict[str, tuple[str, str]] = {}
+    if not navigation or not isinstance(navigation.get("groups"), list):
+        return out
+
+    def walk(group: dict[str, Any], top: tuple[str, str]) -> None:
+        for pid in group.get("page_ids", []) or []:
+            out.setdefault(pid, top)
+        for child in group.get("children", []) or []:
+            if isinstance(child, dict):
+                walk(child, top)
+
+    for group in navigation["groups"]:
+        if isinstance(group, dict):
+            walk(group, (group.get("id", ""), group.get("title", "")))
+    return out
+
+
 def _build_article_graph_data(
     *,
     page_views: dict[str, "_PageView"],
     page_by_id: dict[str, Page],
+    page_group: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Build a D3 force-directed graph of article-article wikilinks.
 
-    Nodes: every page (article + person). Edges: undirected pairs derived
-    from each page's ``links`` field, deduplicated and weighted by the
-    directional link count (1 = one-way crosslink, 2 = mutual).
-    Self-links and links to pages not in the rendered set are dropped.
+    Nodes: every page (article + person), tagged with its topical nav group
+    (``group`` / ``group_title``) so the view can colour by cluster. Edges:
+    undirected pairs derived from each page's ``links`` field, deduplicated
+    and weighted by the directional link count (1 = one-way crosslink,
+    2 = mutual). Self-links and links to pages not in the rendered set are
+    dropped.
     """
+    page_group = page_group or {}
     nodes = [
-        {"id": pv.id, "label": pv.title, "type": pv.kind, "url": pv.url}
+        {
+            "id": pv.id, "label": pv.title, "type": pv.kind, "url": pv.url,
+            "group": page_group.get(pv.id, ("", ""))[0],
+            "group_title": page_group.get(pv.id, ("", ""))[1] or pv.kind.title(),
+        }
         for pv in page_views.values()
     ]
     valid = set(page_views)
