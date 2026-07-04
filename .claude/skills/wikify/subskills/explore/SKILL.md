@@ -185,46 +185,55 @@ wikify work notebook-init <slug> --seed-docs '["doc:X"]' \
 
 **Target**: ONE existing slug (with notebook on disk).
 
-**Default**: `depth = 1`, `budget_chunks = 20`.
+**Default**: `depth = 2`, `budget_chunks = 20` (scaled up for hub concepts).
 
 ```
-P2(slug, depth=1, budget_chunks=20):
-  notebook = read notebook(slug)
-  seen_chunks = set(notebook.provenance.covered_chunks)
-  for chunk_id in notebook.provenance.covered_chunks:
-    # Outgoing references (papers this chunk cites).
-    refs = corpus_traverse(chunk_id, to="references", top_k=5)
-    # Incoming citations (later papers citing this chunk's doc).
-    cites = corpus_traverse(chunk_id, to="cited-by", top_k=5)
-    for h in refs | cites:
-      if h.id in seen_chunks: continue
-      seen_chunks.add(h.id)
-      candidate_chunks.add(h)
-      if depth > 0: P2_recurse(h, depth - 1)
+P2(slug, depth=2, budget_chunks=20):
+  q = concept_name(slug)                        # + strongest alias
+  seen_chunks = set(notebook(slug).provenance.covered_chunks)
 
-P2_recurse(chunk, depth):
-  if depth == 0 or budget exhausted: return
-  for h in corpus_traverse(chunk, to="references", top_k=3) \
-         | corpus_traverse(chunk, to="cited-by", top_k=3):
-    if h.id in seen_chunks: continue
-    seen_chunks.add(h.id)
-    candidate_chunks.add(h)
+  # OUTGOING, marker-precise, concept-grounded, multi-hop.
+  # corpus_citation_walk follows each chunk's OWN citation markers
+  # (chunk_citations -> the papers THAT chunk cites), re-finds each cited
+  # paper's best chunk FOR q, and recurses -- deduped across hops and scoped
+  # to q, so it stays bounded (no bibliography-wide fan-out, no cycles).
+  walk = corpus_citation_walk(query=q, depth=depth, top_k=5, rank="all")
+  for row in walk.items:                  # chunk rows across all hops (deduped)
+    if row.id not in seen_chunks: seen_chunks.add(row.id); candidate_chunks.add(row)
+
+  # INCOMING recency (citation_walk is outgoing-only): newer papers citing
+  # the concept's own covered chunks. One bounded hop.
+  for chunk_id in notebook(slug).provenance.covered_chunks:
+    for h in corpus_traverse(chunk_id, to="cited-by", top_k=3):
+      if h.id not in seen_chunks: seen_chunks.add(h.id); candidate_chunks.add(h)
 ```
 
-Send `candidate_chunks` through the `gather-evidence` vetter. Citation
-graph explodes fast — keep `depth = 1` unless the editor explicitly
-raises.
+Send `candidate_chunks` through the `gather-evidence` vetter; the vetter
+judges at most `budget_chunks`, so the walk's fan-out never inflates the
+expensive (model-judged) step. The `seen_chunks` set plus
+`corpus_citation_walk`'s internal cross-hop dedup make cycles impossible.
+Using `corpus_citation_walk` (marker-precise, query-scoped) instead of the
+old whole-bibliography `corpus_traverse(to="references")` walk is both more
+relevant AND cheaper -- it never fans out over a paper's full reference list.
 
-**Citation-diversify (maturing slug).** P2 ALWAYS walks BOTH doc-level
-citation relations with `corpus_traverse` — `to="references"`
-(older/seminal work the page's sources cite) AND `to="cited-by"` (newer
-work citing them) — never one direction only. (`corpus_citation_walk`
-follows outgoing chunk citations only, so it does not give the incoming
-direction.) Then bucket the resulting candidates by their source doc's
-publication year (from doc metadata) into seminal/older (<= p25), middle,
-and recent (>= p75), and keep candidates from every non-empty bucket so
-the accepted evidence spans eras rather than clustering on the
-highest-PageRank few. Budget and depth defaults are unchanged.
+**Depth for hub concepts.** Default `depth = 2`. For a HUB concept only
+(top decile PageRank / node degree, editor-flagged) raise to `depth = 3`
+so reference-of-reference chains reach the foundational + extending
+literature; concept-grounding, `top_k`, and dedup keep it bounded. Do NOT
+deepen peripheral concepts.
+
+**Co-citation hop (hub concepts, bounded, optional).** After the walk, for
+a HUB concept only, run ONE co-citation hop: take the walk's top cited
+papers and pull OTHER papers that cite them
+(`corpus_traverse(chunk, to="cited-by", top_k=3)`) -- these co-citing
+"research-thread siblings" surface papers that share the concept's citation
+context but not its keywords. `top_k=3`, hub-only, ONE hop; skip for
+peripheral concepts to hold cost.
+
+**Era spread.** Year-bucket the union by source-doc publication year into
+seminal/older (<= p25), middle, and recent (>= p75) and keep candidates
+from every non-empty bucket, so evidence spans eras rather than clustering
+on the highest-PageRank few.
 
 **Stop reasons**: `budget_chunks_reached`, `depth_zero`,
 `no_new_neighbours`, `ok`.
