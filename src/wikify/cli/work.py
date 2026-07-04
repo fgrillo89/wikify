@@ -1795,8 +1795,9 @@ def _citation_proximity(
     repr_set = set(represented_docs)
     cand_ph = ",".join("?" * len(candidate_ids))
     repr_ph = ",".join("?" * len(represented_docs))
-    con = sqlite3.connect(str(corpus.sqlite_path))
+    con = None
     try:
+        con = sqlite3.connect(str(corpus.sqlite_path))
         rows = con.execute(
             "SELECT src_id, dst_id FROM graph_edges WHERE kind='references' AND ("
             f"(src_id IN ({cand_ph}) AND dst_id IN ({repr_ph})) OR "
@@ -1806,7 +1807,8 @@ def _citation_proximity(
     except sqlite3.Error:
         return prox
     finally:
-        con.close()
+        if con is not None:
+            con.close()
     # Distinct evidence-doc neighbours per candidate (either edge direction).
     neighbours: dict[str, set[str]] = {cid: set() for cid in candidate_ids}
     for src, dst in rows:
