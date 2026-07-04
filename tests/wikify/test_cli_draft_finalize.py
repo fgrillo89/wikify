@@ -278,6 +278,222 @@ def test_draft_finalize_wrong_owner_does_not_mutate(tmp_path: Path) -> None:
     assert still_held and still_held.get("owner") == "other-owner"
 
 
+def _record_recall_cleared(bundle_dir: Path, slug: str, data: dict) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--type", "page_recall_cleared",
+            "--concept-id", slug,
+            "--run", str(bundle_dir),
+            "--data", json.dumps(data),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def _record_evidence_added(bundle_dir: Path, slug: str) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "run", "record-event",
+            "--type", "evidence_added",
+            "--concept-id", slug,
+            "--run", str(bundle_dir),
+            "--data", json.dumps({"n": 1}),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def _finalize_with_recall(
+    bundle_dir: Path, slug: str, owner: str
+) -> "object":
+    return runner.invoke(
+        app,
+        [
+            "draft", "finalize", slug,
+            "--run", str(bundle_dir),
+            "--owner", owner,
+            "--require-recall",
+            "--format", "json",
+        ],
+    )
+
+
+def _prepare_article_response(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    """Bundle + concept with a valid article response staged, claim held."""
+    bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)
+    _build_draft(bundle_dir, corpus_dir, slug)
+    bundle = Bundle.open(bundle_dir)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    write_json(response_path(bundle, slug), _good_response(quote))
+    owner = "test-finalize-owner"
+    acquire_claim(bundle, slug, owner=owner)
+    return bundle_dir, corpus_dir, slug, owner
+
+
+def test_finalize_require_recall_refuses_article_without_event(
+    tmp_path: Path,
+) -> None:
+    """--require-recall on an article with no page_recall_cleared event
+    refuses: non-zero, recall-gate step fails, page is not committed."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code != 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is False
+    gate = envelope["steps"][-1]
+    assert gate["step"] == "recall-gate"
+    assert gate["ok"] is False
+    assert gate["error"] == "recall_not_cleared"
+    # commit did not run.
+    assert "commit" not in [s["step"] for s in envelope["steps"]]
+    # No wiki page was written.
+    bundle = Bundle.open(bundle_dir)
+    article_dir = bundle.root / "wiki" / "articles"
+    assert not article_dir.exists() or not any(article_dir.iterdir())
+    # Artifacts remain (not garbage-collected).
+    assert response_path(bundle, slug).exists()
+
+
+def test_finalize_require_recall_article_recall_ok_event(tmp_path: Path) -> None:
+    """A page_recall_cleared {recall_ok: true} event clears the gate."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    gate = next(s for s in envelope["steps"] if s["step"] == "recall-gate")
+    assert gate["ok"] is True
+    bundle = Bundle.open(bundle_dir)
+    assert (bundle.root / "wiki" / "articles" / f"{slug}.md").exists()
+
+
+def test_finalize_require_recall_stale_after_new_evidence(tmp_path: Path) -> None:
+    """A clearance recorded BEFORE new evidence_added is STALE: the evidence
+    changed after the gate cleared, so --require-recall refuses the commit."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    # Clearance recorded first, then fresh evidence lands for the slug.
+    _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
+    _record_evidence_added(bundle_dir, slug)
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code != 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is False
+    gate = envelope["steps"][-1]
+    assert gate["step"] == "recall-gate"
+    assert gate["ok"] is False
+    assert gate["error"] == "recall_not_cleared"
+    assert "commit" not in [s["step"] for s in envelope["steps"]]
+    bundle = Bundle.open(bundle_dir)
+    article_dir = bundle.root / "wiki" / "articles"
+    assert not article_dir.exists() or not any(article_dir.iterdir())
+
+
+def test_finalize_require_recall_fresh_after_evidence(tmp_path: Path) -> None:
+    """A clearance recorded AFTER the latest evidence_added is FRESH: the gate
+    clears and the page commits."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    # Evidence lands first, then the gate is cleared against it.
+    _record_evidence_added(bundle_dir, slug)
+    _record_recall_cleared(bundle_dir, slug, {"recall_ok": True})
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    gate = next(s for s in envelope["steps"] if s["step"] == "recall-gate")
+    assert gate["ok"] is True
+    bundle = Bundle.open(bundle_dir)
+    assert (bundle.root / "wiki" / "articles" / f"{slug}.md").exists()
+
+
+def test_finalize_require_recall_article_exhausted_event(tmp_path: Path) -> None:
+    """A page_recall_cleared {exhausted: true} event also clears the gate."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+    _record_recall_cleared(bundle_dir, slug, {"exhausted": True})
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    bundle = Bundle.open(bundle_dir)
+    assert (bundle.root / "wiki" / "articles" / f"{slug}.md").exists()
+
+
+def test_finalize_without_require_recall_commits_without_event(
+    tmp_path: Path,
+) -> None:
+    """Backward compat: default finalize (no flag) commits an article even
+    with no page_recall_cleared event."""
+    bundle_dir, _corpus_dir, slug, owner = _prepare_article_response(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "draft", "finalize", slug,
+            "--run", str(bundle_dir),
+            "--owner", owner,
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    assert "recall-gate" not in [s["step"] for s in envelope["steps"]]
+    bundle = Bundle.open(bundle_dir)
+    assert (bundle.root / "wiki" / "articles" / f"{slug}.md").exists()
+
+
+def test_finalize_require_recall_person_exempt(tmp_path: Path) -> None:
+    """A person page is exempt: --require-recall with no event still commits."""
+    bundle_dir = tmp_path / "bundle"
+    corpus_dir = tmp_path / "corpus"
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle_dir), "--corpus", str(corpus_dir)],
+    )
+    runner.invoke(
+        app,
+        [
+            "work", "add", "concept",
+            "Aleksandra Nowak",
+            "--run", str(bundle_dir),
+            "--kind", "person",
+        ],
+    )
+    slug = "aleksandra-nowak"
+    bundle = Bundle.open(bundle_dir)
+    append_evidence(
+        bundle, slug,
+        [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")],
+    )
+    _make_corpus(corpus_dir)
+    _build_draft(bundle_dir, corpus_dir, slug)
+    chunk_text = read_json(draft_path(bundle, slug))["evidence"][0]["chunk_text"]
+    quote = chunk_text[:30].strip()
+    response = _good_response(quote)
+    response["page_id"] = "Aleksandra Nowak"
+    response["page_kind"] = "person"
+    write_json(response_path(bundle, slug), response)
+    owner = "test-finalize-owner"
+    acquire_claim(bundle, slug, owner=owner)
+
+    result = _finalize_with_recall(bundle_dir, slug, owner)
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    assert envelope["ok"] is True
+    # The gate step never ran (person is exempt).
+    assert "recall-gate" not in [s["step"] for s in envelope["steps"]]
+    assert (bundle.root / "wiki" / "people" / f"{slug}.md").exists()
+
+
 def test_draft_finalize_default_owner(tmp_path: Path) -> None:
     """draft finalize succeeds without --owner; defaults to 'investigate'."""
     bundle_dir, corpus_dir, slug = _setup_bundle_with_concept(tmp_path)

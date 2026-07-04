@@ -619,6 +619,62 @@ def _matches_never_cite(text: str) -> bool:
     )
 
 
+# Affiliation / role / career signal used by the person identity-context
+# gather. A chunk from the target author's own doc carrying any of these
+# AND naming the author is grounded biographical material the writer can
+# cite, even though the general boilerplate filter would normally drop it.
+_IDENTITY_SIGNAL_RE = re.compile(
+    r"(Department\s+of|Universit|Institut|Laborator|Corporation|"
+    r"School\s+of|Faculty\s+of|Centre\s+for|Center\s+for|"
+    r"Professor|Ph\.?\s?D|received\s+(?:his|her|the)|"
+    r"joined|is\s+currently|appointed|research\s+group|"
+    r"graduated|born\s+in)",
+    re.IGNORECASE,
+)
+
+
+def _has_identity_signal(text: str) -> bool:
+    return bool(_IDENTITY_SIGNAL_RE.search(text or ""))
+
+
+def _person_name_variants(card) -> set[str]:
+    """Lowercased strings that specifically name the target author.
+
+    Union of the card ``page_id``, each ``author:``/plain alias, and the
+    last-name token of each (tokens < 3 chars, e.g. initials, are dropped
+    so a bare ``A.`` cannot match unrelated text). Used to gate the
+    identity-context gather so only chunks naming the target author are
+    lifted past the boilerplate filter.
+    """
+    variants: set[str] = set()
+
+    def _add(name: str) -> None:
+        name = (name or "").strip()
+        if not name:
+            return
+        variants.add(name.lower())
+        toks = [t for t in re.split(r"\s+", name) if len(t) >= 3]
+        if toks:
+            variants.add(toks[-1].lower())
+
+    pid = getattr(card, "page_id", "")
+    if isinstance(pid, str):
+        _add(pid)
+    for alias in card.front.get("aliases") or []:
+        if not isinstance(alias, str):
+            continue
+        a = alias.strip()
+        if a.lower().startswith("author:"):
+            _add(a.split(":", 1)[1].replace("_", " "))
+        else:
+            _add(a)
+    return {v for v in variants if v}
+
+
+def _chunk_names_author(text_lower: str, variants: set[str]) -> bool:
+    return any(v in text_lower for v in variants)
+
+
 # Section kinds the vetter excludes structurally via corpus-find
 # --exclude-kind flags. The --from-ids commit path must enforce the
 # same blacklist so a manually-supplied references / caption / etc.
@@ -749,7 +805,11 @@ def cmd_build_evidence(
     # card carrying an `author:<key>` alias, union that author's sources
     # into the seeds so the gather lifts quoted-contribution chunks from
     # their work rather than generic name mentions corpus-wide.
-    if card.front.get("kind") == "person":
+    person_kind = card.front.get("kind") == "person"
+    # The target author's own source docs, captured during author-seed
+    # resolution and reused by the identity-context gather below.
+    author_own_doc_ids: set[str] = set()
+    if person_kind:
         from ..corpus.queries import (
             AmbiguousHandleError,
             HandleNotFoundError,
@@ -771,8 +831,10 @@ def cmd_build_evidence(
                 continue
             for d in rows:
                 did = d.get("id") or d.get("doc_id") or d.get("handle")
-                if isinstance(did, str) and did not in seed_handles:
-                    seed_handles.append(did)
+                if isinstance(did, str):
+                    author_own_doc_ids.add(did)
+                    if did not in seed_handles:
+                        seed_handles.append(did)
 
     db_path = corpus.sqlite_path
     con = sqlite3.connect(str(db_path))
@@ -1103,6 +1165,7 @@ def cmd_build_evidence(
         "rejected_short": 0,
         "rejected_doc_cap": 0,
         "passes": 0,
+        "identity_context_records": 0,
     }
 
     def try_chunk(row, *, score: float, source: str) -> bool:
@@ -1164,6 +1227,60 @@ def cmd_build_evidence(
             try_chunk(row, score=float(it.get("score", 0.0)), source="find")
         stats["passes"] += 1
 
+    # Phase 3 (person only): identity-context gather. Pull chunks from the
+    # target author's OWN docs that BOTH name the author AND carry an
+    # affiliation / role / career signal. These are normally boilerplate-
+    # excluded; the person path allows them when they specifically name the
+    # target author, so the dossier carries grounded role/affiliation
+    # material the writer can cite. Capped and per-doc-limited; the article
+    # path is untouched.
+    if person_kind and author_own_doc_ids:
+        identity_context_cap = 4
+        identity_min_chars = 40
+        variants = _person_name_variants(card)
+        if variants:
+            seen_ids = {r["chunk_id"] for r in records}
+            n_identity = 0
+            for doc_id in sorted(author_own_doc_ids):
+                if n_identity >= identity_context_cap:
+                    break
+                rows = con.execute(
+                    "SELECT chunk_id, doc_id, text FROM chunks "
+                    "WHERE doc_id=? ORDER BY ord",
+                    (doc_id,),
+                ).fetchall()
+                per_doc = 0
+                for row in rows:
+                    if n_identity >= identity_context_cap:
+                        break
+                    if per_doc >= per_doc_cap:
+                        break
+                    cid = row["chunk_id"]
+                    if cid in seen_ids:
+                        continue
+                    text = (row["text"] or "").strip()
+                    if len(text) < identity_min_chars:
+                        continue
+                    if not _chunk_names_author(text.lower(), variants):
+                        continue
+                    if not _has_identity_signal(text):
+                        continue
+                    records.append(
+                        {
+                            "chunk_id": cid,
+                            "doc_id": row["doc_id"],
+                            "quote": text[:400],
+                            "score": 1.0,
+                            "status": "active",
+                            "note": "identity_context",
+                        }
+                    )
+                    seen_ids.add(cid)
+                    doc_counts[row["doc_id"]] = doc_counts.get(row["doc_id"], 0) + 1
+                    stats["identity_context_records"] += 1
+                    n_identity += 1
+                    per_doc += 1
+
     con.close()
 
     if not records:
@@ -1192,6 +1309,7 @@ def cmd_build_evidence(
     typer.echo(
         f"{concept}: appended {n} records across {distinct_docs} docs  "
         f"(seed={stats['seed_records']} find={stats['find_records']} "
+        f"identity={stats['identity_context_records']} "
         f"rejected=bp{stats['rejected_boilerplate']}/"
         f"nc{stats['rejected_never_cite']}/short{stats['rejected_short']}/"
         f"cap{stats['rejected_doc_cap']})"
@@ -1594,6 +1712,322 @@ def cmd_coverage(
     typer.echo(
         f"  addressable: {report.n_addressable_covered}/{report.n_addressable} "
         f"({report.addressable_coverage_ratio:.3f})"
+    )
+
+
+# -------------------------------------------------------------- concept-recall
+
+
+# Section kinds excluded from the relevance search so a page's candidate
+# set is drawn from content chunks, not bibliography / captions / matter.
+_RECALL_EXCLUDE_KINDS = [
+    "references",
+    "acknowledgments",
+    "appendix",
+    "figure",
+    "table",
+    "caption",
+    "boilerplate",
+]
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """Linear-interpolated percentile (numpy 'linear' method).
+
+    ``values`` need not be sorted. ``q`` is in [0, 1]. Empty input is a
+    programming error (callers guard for it); a single value returns that
+    value.
+    """
+    s = sorted(values)
+    if len(s) == 1:
+        return float(s[0])
+    idx = q * (len(s) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(s) - 1)
+    frac = idx - lo
+    return s[lo] * (1 - frac) + s[hi] * frac
+
+
+def _coerce_year(value) -> int | None:
+    """Best-effort parse of a document ``metadata['year']`` into an int.
+
+    Accepts an int, a 4-digit-leading string (``"2015"``, ``"2015-03"``),
+    or None; anything unparseable returns None so the doc is simply not
+    placed in a year bucket rather than crashing the recall computation.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value)[:4])
+    except (ValueError, TypeError):
+        return None
+
+
+# Blend weight for the citation-proximity boost. Proximity is normalised to
+# [0, 1], so a candidate can gain at most this much over its relevance score.
+# Kept small so relevance stays dominant and proximity only breaks near-ties.
+_PROXIMITY_WEIGHT = 0.15
+
+
+def _citation_proximity(
+    corpus, candidate_ids: list[str], represented_docs: list[str],
+) -> dict[str, float]:
+    """Per-candidate citation centrality within the concept's own evidence.
+
+    For each candidate doc, count how many of the concept's current
+    evidence docs it shares a citation edge with -- either it cites, or is
+    cited by, that evidence doc -- normalised as ``min(count, 3) / 3``.
+
+    Cost-neutral: one targeted read of the ``graph_edges`` ``references``
+    rows restricted to the candidate x evidence document pairs (both
+    directions), so the whole in-memory knowledge graph is never built.
+    Returns 0.0 for every candidate when there is no evidence, the
+    citation table is unavailable, or a doc has no such edge.
+    """
+    import sqlite3
+
+    prox = {cid: 0.0 for cid in candidate_ids}
+    if not candidate_ids or not represented_docs:
+        return prox
+    if not corpus.sqlite_path.exists():
+        return prox
+    cand_set = set(candidate_ids)
+    repr_set = set(represented_docs)
+    cand_ph = ",".join("?" * len(candidate_ids))
+    repr_ph = ",".join("?" * len(represented_docs))
+    con = None
+    try:
+        con = sqlite3.connect(str(corpus.sqlite_path))
+        rows = con.execute(
+            "SELECT src_id, dst_id FROM graph_edges WHERE kind='references' AND ("
+            f"(src_id IN ({cand_ph}) AND dst_id IN ({repr_ph})) OR "
+            f"(src_id IN ({repr_ph}) AND dst_id IN ({cand_ph})))",
+            candidate_ids + represented_docs + represented_docs + candidate_ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return prox
+    finally:
+        if con is not None:
+            con.close()
+    # Distinct evidence-doc neighbours per candidate (either edge direction).
+    neighbours: dict[str, set[str]] = {cid: set() for cid in candidate_ids}
+    for src, dst in rows:
+        if src in cand_set and dst in repr_set:
+            neighbours[src].add(dst)
+        if dst in cand_set and src in repr_set:
+            neighbours[dst].add(src)
+    for cid, reps in neighbours.items():
+        prox[cid] = min(len(reps), 3) / 3.0
+    return prox
+
+
+@app.command("concept-recall")
+def cmd_concept_recall(
+    concept: str = typer.Argument(...),
+    corpus_dir: Path = typer.Option(..., "--corpus"),
+    run: Path | None = typer.Option(None, "--run"),
+    top_docs: int = typer.Option(
+        12, "--top-docs",
+        help="Number of most-relevant corpus docs to treat as candidates.",
+    ),
+    rank: str = typer.Option(
+        "bm25", "--rank",
+        help=(
+            "Relevance ranking: bm25 (default, cheap sqlite metadata, no "
+            "embedder) | semantic (loads an embedder + embeds the query; "
+            "requires corpus chunk vectors)."
+        ),
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Recall signal: does *concept*'s evidence represent the corpus's
+    most-relevant sources?
+
+    Ranks the top ``--top-docs`` corpus documents by relevance to the
+    concept title + aliases, compares that candidate set against the
+    distinct documents already in the slug's evidence ledger, and reports
+    which candidates are missing, whether every publication-era bucket is
+    represented, the section-type diversity of the committed evidence, and
+    the share of evidence records concentrated in a single document.
+
+    Cheap by default: BM25 over sqlite metadata (no embedder load) plus
+    document metadata + section-type lookup by chunk_id; no full chunk text
+    is read. Pass ``--rank semantic`` to rank by chunk embeddings instead.
+    """
+    import math
+    import sqlite3
+    from collections import Counter
+
+    from ..api import Corpus
+    from ..corpus.chunks import list_documents
+    from ..corpus.queries import QueryError, search_chunks
+    from ..corpus.store.routing import sqlite_available
+
+    if rank not in {"bm25", "semantic"}:
+        cli_error(EXIT_VALIDATION, error="bad_rank", rank=rank)
+    concept = _clean_slug_arg(concept)
+    bundle = _resolve_bundle(run)
+    if not corpus_dir.is_dir():
+        cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
+    corpus = Corpus(root=corpus_dir)
+    card = load_card(bundle, concept)
+    if not card.front:
+        cli_error(EXIT_VALIDATION, error="concept_not_found", slug=concept)
+
+    # Query terms: the page title plus each alias (author: prefixes are
+    # stripped to a plain name so the relevance search reads cleanly).
+    queries: list[str] = []
+    title = card.page_id if isinstance(card.page_id, str) else ""
+    if title.strip():
+        queries.append(title)
+    for alias in card.front.get("aliases") or []:
+        if not isinstance(alias, str) or not alias.strip():
+            continue
+        if alias.lower().startswith("author:"):
+            queries.append(alias.split(":", 1)[1].replace("_", " "))
+        else:
+            queries.append(alias)
+
+    # Candidate docs: best relevance per doc across all query terms,
+    # ranked most-relevant first. BM25 scores are negated so that, like
+    # semantic cosine, a larger value is a better match.
+    candidate_docs: list[dict] = []
+    if sqlite_available(corpus.root) and queries:
+        mode = rank
+        best: dict[str, float] = {}
+        for q in queries:
+            try:
+                hits = search_chunks(
+                    corpus, q,
+                    top_k=max(top_docs * 5, 50),
+                    rank=mode,
+                    exclude_kinds=_RECALL_EXCLUDE_KINDS,
+                )
+            except QueryError:
+                hits = []
+            for h in hits:
+                did = h.get("doc_id")
+                if not did:
+                    continue
+                raw = float(h.get("score", 0.0))
+                rel = raw if mode == "semantic" else -raw
+                if did not in best or rel > best[did]:
+                    best[did] = rel
+        ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))[:top_docs]
+        docs_by_id = {d.id: d for d in list_documents(corpus)}
+        for did, rel in ranked:
+            doc = docs_by_id.get(did)
+            year = _coerce_year((doc.metadata if doc else {}).get("year"))
+            candidate_docs.append(
+                {"doc_id": did, "year": year, "score": round(rel, 6)}
+            )
+
+    # Represented side: distinct docs + per-doc record share + section
+    # diversity, all from the slug's active evidence ledger.
+    active = [r for r in read_evidence(bundle, concept) if r.status == "active"]
+    represented_docs = sorted({r.doc_id for r in active})
+    represented_set = set(represented_docs)
+
+    # Re-rank candidates by relevance blended with citation proximity: a
+    # candidate that cites, or is cited by, the concept's current evidence
+    # docs is more clearly part of this concept's literature than one that
+    # merely matches keywords. Proximity only lifts docs that already have
+    # positive relevance, so a zero-relevance doc never jumps the list.
+    proximity = _citation_proximity(
+        corpus, [c["doc_id"] for c in candidate_docs], represented_docs
+    )
+    for c in candidate_docs:
+        c["citation_proximity"] = round(proximity.get(c["doc_id"], 0.0), 4)
+
+    def _combined(c: dict) -> float:
+        boost = _PROXIMITY_WEIGHT * c["citation_proximity"] if c["score"] > 0 else 0.0
+        return c["score"] + boost
+
+    candidate_docs.sort(key=lambda c: (-_combined(c), -c["score"], c["doc_id"]))
+    doc_record_counts = Counter(r.doc_id for r in active)
+    total_records = len(active)
+    max_doc_share = (
+        max(doc_record_counts.values()) / total_records if total_records else 0.0
+    )
+
+    section_types_represented: list[str] = []
+    represented_chunk_ids = [r.chunk_id for r in active if r.chunk_id]
+    if corpus.sqlite_path.exists() and represented_chunk_ids:
+        con = sqlite3.connect(str(corpus.sqlite_path))
+        try:
+            placeholders = ",".join("?" * len(represented_chunk_ids))
+            rows = con.execute(
+                f"SELECT DISTINCT section_type FROM chunks "
+                f"WHERE chunk_id IN ({placeholders})",
+                represented_chunk_ids,
+            ).fetchall()
+            section_types_represented = sorted(
+                {(r[0] or "body") for r in rows}
+            )
+        finally:
+            con.close()
+
+    # Missing candidates, most-relevant first (candidate_docs is presorted).
+    missing_docs = [
+        c for c in candidate_docs if c["doc_id"] not in represented_set
+    ]
+
+    # Publication-era buckets over candidate years: early(<=p25) /
+    # recent(>=p75) / middle. Docs lacking a parseable year are skipped.
+    years = [c["year"] for c in candidate_docs if c["year"] is not None]
+    counts = {b: [0, 0] for b in ("early", "middle", "recent")}  # [total, repr]
+    if years:
+        p25 = _percentile(years, 0.25)
+        p75 = _percentile(years, 0.75)
+        for c in candidate_docs:
+            y = c["year"]
+            if y is None:
+                continue
+            if y <= p25:
+                b = "early"
+            elif y >= p75:
+                b = "recent"
+            else:
+                b = "middle"
+            counts[b][0] += 1
+            if c["doc_id"] in represented_set:
+                counts[b][1] += 1
+    year_buckets = {
+        b: {"total": t, "represented": r} for b, (t, r) in counts.items()
+    }
+    empty_buckets = [
+        b for b, v in year_buckets.items()
+        if v["total"] > 0 and v["represented"] == 0
+    ]
+
+    min_represented = min(8, math.ceil(0.6 * len(candidate_docs)))
+    recall_ok = (
+        len(represented_docs) >= min_represented
+        and not empty_buckets
+        and max_doc_share <= 0.35
+    )
+
+    recall = {
+        "candidate_docs": candidate_docs,
+        "represented_docs": represented_docs,
+        "missing_docs": missing_docs,
+        "year_buckets": year_buckets,
+        "empty_buckets": empty_buckets,
+        "section_types_represented": section_types_represented,
+        "max_doc_share": round(max_doc_share, 4),
+        "min_represented": min_represented,
+        "recall_ok": recall_ok,
+    }
+    if fmt == "json":
+        typer.echo(json.dumps({"ok": True, "slug": concept, "recall": recall}))
+        return
+    typer.echo(
+        f"{concept}: recall_ok={recall_ok}  "
+        f"represented={len(represented_docs)}/{len(candidate_docs)} "
+        f"(min {min_represented})  missing={len(missing_docs)}  "
+        f"max_doc_share={max_doc_share:.2f}  "
+        f"empty_buckets={','.join(empty_buckets) or '-'}  "
+        f"section_types={','.join(section_types_represented) or '-'}"
     )
 
 

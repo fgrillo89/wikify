@@ -10,7 +10,8 @@ target_min           = clamp(round(42 * log10(D) - 27), 10, 200)        # SEED c
 concurrent_explorers = clamp(wave_size, 2, 8)                           # throttled by live rate limits
 max_rounds           = clamp(round(Kc / (wave_size * 25)) + 12, 12, 250) # coverage-bound safety ceiling
 expected_pages       = clamp(round(38 * log10(D) - 37), 5, 250)        # article roster the build commits, ~log(D)
-expected_people      = clamp(round(4 * log10(D) - 3), 0, 30)           # VIP person pages, median-author gated; few by design
+expected_people      = clamp(round(4 * log10(D) - 3), 0, 30)           # SOFT person-page target (may be exceeded, see below); median-author gated
+person_quota_multiplier = 2.0                                          # review up to 2x expected_people candidates; maturity gate still decides commits
 budget_est_haiku_eq  = 600_000 * (expected_pages + expected_people)    # ~0.6M haiku-eq/committed page; editor is inline, off the call ledger
 ```
 
@@ -41,8 +42,15 @@ concepts saturate far below paper count; concepts past it emerge from
 P5 coverage, not seeding. `expected_pages` is a separate ~log(D) fit for
 the article roster the build actually commits, calibrated to observed
 runs and independent of the `target_min` SEED floor. `expected_people`
-is a small VIP quota on top (median-author gated, then filtered hard by
-the strict person maturity gate, so committed people are usually fewer).
+is a **soft target**, not a hard cap: it may be exceeded for
+source-critical authors (on `>= 2` committed article evidence documents,
+or one high-centrality source). Review up to `person_quota_multiplier`
+(2.0) times `expected_people` candidates; the strict person maturity gate
+still decides which commit, so it stays the quality regulariser. People
+are seeded not only from top-metric VIPs but also from the **authorship
+of already-cited article source documents** and their close (co-author
+distance `<= 1`) collaborators, so the researchers a wiki actually leans
+on get pages.
 `budget_est` is driven by total committed pages, not chunks: writers are
 ~75% of spend at ~0.6M haiku-eq per page (writer + amortized
 explore/data); person pages cost about the same per page. It excludes
@@ -73,8 +81,16 @@ as backstops.
 
 ## Fixed per-Task knobs
 
-- Explorer budget per Task: `budget_chunks = 30`, `depth = 2` (P1),
-  `depth = 1` (P2). `curate_every = 2`.
+- Explorer budget per Task: `budget_chunks = clamp(round(20 + 6 *
+  log10(D)), 20, 60)` (was a flat 30) so a larger corpus sweeps more per
+  Task and does not cap a page's richness at a fixed ceiling; `depth = 2`
+  (P1), `depth = 1` (P2). `curate_every = 2`.
+- **Scale up for central concepts.** For a slug in the top decile of
+  PageRank / node degree (a hub concept the wiki leans on), multiply its
+  `budget_chunks`, explorer `top_k`, and the `build-evidence`
+  `per_doc_cap` by ~1.5 — a central concept deserves a deeper, richer
+  sweep than a peripheral one. The WRITE recall gate then confirms the
+  extra breadth actually landed; peripheral concepts keep the base knobs.
   `addressable_coverage_target = 0.33`, `coverage_target = 0.25` (raw).
 - Editor tier: **L (top-tier, e.g. Opus)**. Explorer M. Writer M.
   Classifier S. Claim owner `investigate`, TTL 1800 s.

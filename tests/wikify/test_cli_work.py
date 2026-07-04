@@ -589,6 +589,127 @@ def test_build_evidence_person_unknown_author_is_graceful(tmp_path: Path) -> Non
     assert data["stats"]["seed_records"] > 0  # gathered from the notebook seed
 
 
+def _person_evidence_bundle(tmp_path: Path):
+    """Bundle + corpus with one authored doc carrying an affiliation line.
+
+    The doc has ``A. Mackus`` as author (so the author graph resolves the
+    ``author:a_mackus`` alias -> this doc), a substantive intro chunk
+    (the contribution material), a boilerplate affiliation line naming
+    Mackus (identity-context material), and a boilerplate byline naming a
+    different person (must NOT be lifted).
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus_root)],
+    )
+
+    doc = Document(
+        id="mackus_paper", source_path="src/mackus_paper.md", kind="md",
+        title="Area-Selective ALD", metadata={"authors": ["A. Mackus"]},
+        markdown_path="markdown/mackus_paper.md",
+        image_dir="images/mackus_paper/", n_chunks=3, n_tokens=200,
+    )
+    intro = (
+        "Area-selective atomic layer deposition enables bottom-up nanofabrication "
+        "by confining film growth to predefined regions of the substrate through "
+        "self-limiting surface chemistry."
+    )
+    affiliation = (
+        "A. Mackus, Department of Applied Physics, "
+        "Eindhoven University of Technology"
+    )
+    other_byline = (
+        "J. Smith, Department of Chemistry, Some Other University of Elsewhere"
+    )
+    chunks = [
+        Chunk(
+            id="mackus_paper__c0000", doc_id="mackus_paper", ord=0,
+            text=intro, char_span=(0, len(intro)), section_path=["Intro"],
+            section_type="introduction",
+        ),
+        Chunk(
+            id="mackus_paper__c0001", doc_id="mackus_paper", ord=1,
+            text=affiliation, char_span=(0, len(affiliation)),
+            section_path=["Boiler"], section_type="boilerplate",
+            is_boilerplate=True,
+        ),
+        Chunk(
+            id="mackus_paper__c0002", doc_id="mackus_paper", ord=2,
+            text=other_byline, char_span=(0, len(other_byline)),
+            section_path=["Boiler"], section_type="boilerplate",
+            is_boilerplate=True,
+        ),
+    ]
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, [doc], {doc.id: chunks})
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    create_concept(
+        BundleApi.open(bundle), page_id="A. Mackus", kind="person",
+        aliases=["author:a_mackus"],
+    )
+    runner.invoke(
+        app,
+        [
+            "work", "notebook-init", "a-mackus", "--kind", "person",
+            "--run", str(bundle),
+        ],
+    )
+    return bundle, corpus_root
+
+
+def test_build_evidence_person_gathers_identity_context(tmp_path: Path) -> None:
+    """The person path lifts a boilerplate affiliation line naming the target
+    author as an ``identity_context`` record, while a byline naming a
+    different person is excluded and the contribution gather is unchanged."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import read_evidence
+
+    bundle, corpus_root = _person_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "a-mackus",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--target", "1", "--format", "json",
+        ],
+    )
+    assert result.exception is None, result.output
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    stats = data["stats"]
+    # Contribution gather unchanged: the intro seed chunk is still lifted.
+    assert stats["seed_records"] >= 1
+    # Exactly one identity chunk: the Mackus affiliation line, not the
+    # J. Smith byline (which carries a signal but does not name the author).
+    assert stats["identity_context_records"] == 1
+
+    recs = read_evidence(BundleApi.open(bundle), "a-mackus")
+    identity = [r for r in recs if r.note == "identity_context"]
+    assert len(identity) == 1
+    assert identity[0].chunk_id == "mackus_paper__c0001"
+    assert "Department of Applied Physics" in identity[0].quote
+    # The other-person byline was never committed.
+    assert not any(r.chunk_id == "mackus_paper__c0002" for r in recs)
+
+
 def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
     result = runner.invoke(
@@ -1622,3 +1743,336 @@ def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
     store.set_artifact_status("other", "committed")
     store.close()
     assert _refine()["n_candidates"] == 0
+
+
+# -------------------------------------------------------- concept-recall
+
+
+def _recall_bundle(tmp_path: Path):
+    """Bundle + corpus with 5 photonics docs across a year spread.
+
+    Returns ``(bundle_path, corpus_path, docs)`` where ``docs`` maps
+    ``doc_id -> (chunk_id, year)``. Each doc has a single content chunk
+    whose text matches the query term ``photonics`` under BM25, with a
+    distinct section_type so the diversity signal is exercised. Years
+    2010/2012/2015/2018/2021 bucket as early={2010,2012},
+    middle={2015}, recent={2018,2021} under the p25/p75 split.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.card import create_concept
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle = tmp_path / "bundle"
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    runner.invoke(
+        app,
+        ["run", "init", "--bundle", str(bundle), "--corpus", str(corpus_root)],
+    )
+
+    spec = [
+        (2010, "introduction"),
+        (2012, "body"),
+        (2015, "methods"),
+        (2018, "results"),
+        (2021, "discussion"),
+    ]
+    body = (
+        "Silicon photonics enables integrated optical circuits for "
+        "high-bandwidth data transmission and on-chip light manipulation "
+        "in modern communication devices."
+    )
+    docs: list[Document] = []
+    chunk_map: dict[str, list[Chunk]] = {}
+    out: dict[str, tuple[str, int]] = {}
+    for year, sect in spec:
+        did = f"doc_{year}"
+        cid = f"{did}__c0000"
+        docs.append(
+            Document(
+                id=did, source_path=f"src/{did}.md", kind="md",
+                title=f"Photonics {year}", metadata={"year": year},
+                markdown_path=f"markdown/{did}.md", image_dir=f"images/{did}/",
+                n_chunks=1, n_tokens=40,
+            )
+        )
+        chunk_map[did] = [
+            Chunk(
+                id=cid, doc_id=did, ord=0, text=body,
+                char_span=(0, len(body)), section_path=["S"],
+                section_type=sect,
+            )
+        ]
+        out[did] = (cid, year)
+
+    corpus = Corpus(root=corpus_root)
+    corpus.ensure()
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(store, docs, chunk_map)
+        store.fts_rebuild()
+    finally:
+        store.close()
+
+    create_concept(BundleApi.open(bundle), page_id="Photonics", kind="article")
+    return bundle, corpus_root, out
+
+
+def _run_recall(bundle: Path, corpus_root: Path) -> dict:
+    result = runner.invoke(
+        app,
+        [
+            "work", "concept-recall", "photonics",
+            "--run", str(bundle), "--corpus", str(corpus_root),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)
+
+
+def test_concept_recall_json_shape(tmp_path: Path) -> None:
+    """The envelope carries every documented recall field with the right
+    shape."""
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    data = _run_recall(bundle, corpus_root)
+    assert data["ok"] is True
+    assert data["slug"] == "photonics"
+    recall = data["recall"]
+    for key in (
+        "candidate_docs", "represented_docs", "missing_docs", "year_buckets",
+        "empty_buckets", "section_types_represented", "max_doc_share",
+        "min_represented", "recall_ok",
+    ):
+        assert key in recall, key
+    # All 5 photonics docs surface as candidates.
+    assert len(recall["candidate_docs"]) == 5
+    for c in recall["candidate_docs"]:
+        assert set(c) == {"doc_id", "year", "score", "citation_proximity"}
+        # No evidence and no citation edges -> proximity is a no-op.
+        assert c["citation_proximity"] == 0.0
+    assert set(recall["year_buckets"]) == {"early", "middle", "recent"}
+    for b in recall["year_buckets"].values():
+        assert set(b) == {"total", "represented"}
+    # early={2010,2012}, middle={2015}, recent={2018,2021}
+    assert recall["year_buckets"]["early"]["total"] == 2
+    assert recall["year_buckets"]["middle"]["total"] == 1
+    assert recall["year_buckets"]["recent"]["total"] == 2
+
+
+def test_concept_recall_missing_then_covered(tmp_path: Path) -> None:
+    """Evidence from one doc leaves the rest missing and recall_ok false;
+    adding the missing docs (balanced records, all buckets covered) flips
+    recall_ok true."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # Only the 2010 doc is represented.
+    cid_2010, _ = docs["doc_2010"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2010, doc_id="doc_2010", status="active")],
+    )
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert recall["min_represented"] == 3  # min(8, ceil(0.6*5))
+    assert len(recall["represented_docs"]) == 1
+    assert recall["recall_ok"] is False
+    missing_ids = {c["doc_id"] for c in recall["missing_docs"]}
+    assert missing_ids == {"doc_2012", "doc_2015", "doc_2018", "doc_2021"}
+
+    # Add one balanced record from each remaining doc.
+    for did in ("doc_2012", "doc_2015", "doc_2018", "doc_2021"):
+        cid, _ = docs[did]
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["represented_docs"]) == 5
+    assert recall["missing_docs"] == []
+    assert recall["empty_buckets"] == []
+    assert recall["max_doc_share"] == 0.2  # 1/5 records per doc
+    assert recall["recall_ok"] is True
+    # Represented chunks span multiple section types (diversity signal).
+    assert len(recall["section_types_represented"]) >= 3
+
+
+def test_concept_recall_max_doc_share_blocks(tmp_path: Path) -> None:
+    """Every bucket is represented and enough docs are covered, but the
+    records concentrate in one doc (share > 0.35) so recall_ok is false."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # 2010 (early), 2015 (middle), 2021 (recent) cover all buckets, but the
+    # 2010 doc holds 10 of the 12 records.
+    cid_2010, _ = docs["doc_2010"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2010, doc_id="doc_2010", status="active")
+         for _ in range(10)],
+    )
+    for did in ("doc_2015", "doc_2021"):
+        cid, _ = docs[did]
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["represented_docs"]) == 3
+    assert recall["represented_docs"] == ["doc_2010", "doc_2015", "doc_2021"]
+    assert recall["empty_buckets"] == []
+    assert recall["max_doc_share"] > 0.35
+    assert recall["recall_ok"] is False
+
+
+def test_concept_recall_default_bm25_loads_no_embedder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The default ranking is BM25: concept-recall must not load an embedder.
+
+    ``embedder_for`` is patched to raise; the default run still succeeds and
+    ranks candidates, proving the semantic (embedding) path is never taken.
+    """
+    import wikify.embedding as embedding_mod
+
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("embedder must not be loaded on the BM25 path")
+
+    monkeypatch.setattr(embedding_mod, "embedder_for", _boom)
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert len(recall["candidate_docs"]) == 5
+
+
+def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> None:
+    """``--rank semantic`` routes the relevance search through the semantic
+    mode; the default routes through bm25."""
+    import wikify.corpus.queries as queries_mod
+
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    seen_modes: list[str] = []
+
+    def _capture(corpus, query, *, top_k, rank, exclude_kinds):
+        seen_modes.append(rank)
+        return [{"doc_id": "doc_2015", "score": 0.9}]
+
+    # The command imports search_chunks locally from the queries module.
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture)
+
+    for args, expected in ((["--rank", "semantic"], "semantic"), ([], "bm25")):
+        seen_modes.clear()
+        result = runner.invoke(
+            app,
+            [
+                "work", "concept-recall", "photonics",
+                "--run", str(bundle), "--corpus", str(corpus_root),
+                "--format", "json", *args,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert seen_modes and all(m == expected for m in seen_modes), seen_modes
+
+
+def _add_reference_edges(corpus_root: Path, citing: str, cited: list[str]) -> None:
+    """Add doc->doc ``references`` edges (``citing`` cites each of ``cited``)."""
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.graph import Edge, GraphStore
+
+    store = Store((corpus_root / "wikify.db"))
+    try:
+        with transaction(store.con):
+            GraphStore(store.con).upsert_edges(
+                [Edge("source", citing, "references", "source", c) for c in cited]
+            )
+    finally:
+        store.close()
+
+
+def test_concept_recall_citation_proximity_reranks(tmp_path: Path) -> None:
+    """Candidates sharing a citation edge with the concept's evidence float
+    above equally-relevant candidates that do not.
+
+    All five fixture docs carry identical chunk text, so BM25 relevance ties
+    across them; ordering is then decided by citation proximity. The evidence
+    doc (2015) cites doc_2010 and doc_2018 but not doc_2012 / doc_2021, so the
+    two cited docs rank first with proximity 1/3 and the rest score 0.0.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # Evidence: the 2015 doc, which cites 2010 (X) and 2018 (Y) but not
+    # 2012 / 2021 (Z candidates).
+    cid_2015, _ = docs["doc_2015"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2015, doc_id="doc_2015", status="active")],
+    )
+    _add_reference_edges(corpus_root, "doc_2015", ["doc_2010", "doc_2018"])
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    prox = {c["doc_id"]: c["citation_proximity"] for c in recall["candidate_docs"]}
+    assert prox["doc_2010"] == pytest.approx(1 / 3, abs=1e-4)
+    assert prox["doc_2018"] == pytest.approx(1 / 3, abs=1e-4)
+    assert prox["doc_2012"] == 0.0
+    assert prox["doc_2021"] == 0.0
+
+    order = [c["doc_id"] for c in recall["candidate_docs"]]
+    # Both cited docs outrank the equally-relevant, non-adjacent Z docs.
+    for cited in ("doc_2010", "doc_2018"):
+        assert order.index(cited) < order.index("doc_2012")
+        assert order.index(cited) < order.index("doc_2021")
+
+
+def test_concept_recall_proximity_no_evidence_falls_back(tmp_path: Path) -> None:
+    """With citation edges present but no evidence docs, proximity is 0 and
+    ordering falls back to pure relevance (no crash)."""
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    _add_reference_edges(corpus_root, "doc_2015", ["doc_2010", "doc_2018"])
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert recall["represented_docs"] == []
+    assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])
+    # Equal relevance + zero proximity -> deterministic doc_id order.
+    order = [c["doc_id"] for c in recall["candidate_docs"]]
+    assert order == sorted(order)
+
+
+def test_concept_recall_proximity_no_graph_edges_table(tmp_path: Path) -> None:
+    """A corpus whose ``graph_edges`` table is absent yields proximity 0 for
+    every candidate without crashing (targeted read swallows the error)."""
+    import sqlite3
+
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+    cid_2015, _ = docs["doc_2015"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2015, doc_id="doc_2015", status="active")],
+    )
+    con = sqlite3.connect(str(corpus_root / "wikify.db"))
+    try:
+        con.execute("DROP TABLE graph_edges")
+        con.commit()
+    finally:
+        con.close()
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])

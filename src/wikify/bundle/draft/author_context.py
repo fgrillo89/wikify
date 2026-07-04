@@ -37,6 +37,19 @@ class Publication:
 
 
 @dataclass
+class Affiliation:
+    """A grounded affiliation for the person, traceable to a source doc.
+
+    ``doc_id`` is the provenance handle: the corpus document whose author
+    metadata supplied the affiliation string. Never fabricated --- an
+    Affiliation exists only when a source grounds it.
+    """
+
+    name: str
+    doc_id: str = ""
+
+
+@dataclass
 class CitedWork:
     """A work cited by a corpus document, attributed to the person."""
 
@@ -59,7 +72,34 @@ class AuthorContext:
     cited_works: list[CitedWork] = field(default_factory=list)
     collaborators: list[str] = field(default_factory=list)
     year_range: tuple[int, int] | None = None
-    affiliations: list[str] = field(default_factory=list)
+    affiliations: list[Affiliation] = field(default_factory=list)
+
+
+def _affiliations_for(aff_meta: object, name: str, key: str) -> list[str]:
+    """Grounded affiliation strings for one author from a doc's metadata.
+
+    ``aff_meta`` is ``doc.metadata.get("affiliations")``: a mapping of
+    author display name (or author key) to an affiliation string or list
+    of strings. Returns ``[]`` when nothing is grounded for this author ---
+    no fabrication.
+    """
+    if not isinstance(aff_meta, dict):
+        return []
+    val = aff_meta.get(name)
+    if val is None:
+        val = aff_meta.get(key)
+    if val is None:
+        for k, v in aff_meta.items():
+            if _author_key(str(k)) == key:
+                val = v
+                break
+    if val is None:
+        return []
+    if isinstance(val, str):
+        return [val] if val.strip() else []
+    if isinstance(val, (list, tuple)):
+        return [str(x) for x in val if str(x).strip()]
+    return []
 
 
 def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
@@ -79,6 +119,8 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
                 year = int(year)
             except ValueError:
                 year = None
+
+        aff_meta = meta.get("affiliations")
 
         primary_authors = meta.get("authors") or []
         if isinstance(primary_authors, str):
@@ -101,11 +143,14 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
                     "primary": [],
                     "cited": [],
                     "collaborators": set(),
+                    "affiliations": [],
                 },
             )
             entry["primary"].append(
                 Publication(doc_id=doc.id, title=doc.title or doc.id, year=year)
             )
+            for aff in _affiliations_for(aff_meta, name, key):
+                entry["affiliations"].append(Affiliation(name=aff, doc_id=doc.id))
             for other in normed_primary:
                 if _author_key(other) != key:
                     entry["collaborators"].add(other)
@@ -137,6 +182,7 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
                         "primary": [],
                         "cited": [],
                         "collaborators": set(),
+                        "affiliations": [],
                     },
                 )
                 entry["cited"].append(
@@ -158,13 +204,22 @@ def build_author_context(docs: list[Document]) -> dict[str, AuthorContext]:
         if all_years:
             year_range = (min(all_years), max(all_years))
 
+        seen_aff: set[tuple[str, str]] = set()
+        affiliations: list[Affiliation] = []
+        for aff in info.get("affiliations", []):
+            sig = (aff.name, aff.doc_id)
+            if sig in seen_aff:
+                continue
+            seen_aff.add(sig)
+            affiliations.append(aff)
+
         result[key] = AuthorContext(
             display_name=info.get("display", ""),
             primary_publications=primary,
             cited_works=cited,
             collaborators=collaborators,
             year_range=year_range,
-            affiliations=[],
+            affiliations=affiliations,
         )
 
     return result

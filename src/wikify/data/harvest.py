@@ -139,6 +139,126 @@ def list_table_assets(corpus: Corpus, doc_ids: list[str] | None = None) -> list[
         con.close()
 
 
+def _needle_set(*groups: list[str]) -> list[str]:
+    """Deduped, lowercased match needles from alias/unit groups.
+
+    Each alias is expanded to its separator variants: internal whitespace is
+    collapsed and spaces and hyphens are treated as interchangeable, so a
+    caller that supplies ``"growth per cycle"`` also matches
+    ``"growth-per-cycle"`` (and vice versa) without enumerating every
+    spelling. The needle set is deduped, so a chunk that matches several
+    aliases is still counted once by the sweep. (The acronym and the expanded
+    form -- ``"gpc"`` vs ``"growth per cycle"`` -- are genuinely different
+    strings; supply BOTH as aliases.)
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        for raw in group or []:
+            base = re.sub(r"\s+", " ", (raw or "").strip().lower())
+            if not base:
+                continue
+            spaced = re.sub(r"\s+", " ", base.replace("-", " ")).strip()
+            hyphened = spaced.replace(" ", "-")
+            for n in (base, spaced, hyphened):
+                if n and n not in seen:
+                    seen.add(n)
+                    out.append(n)
+    return out
+
+
+def sweep_property_candidates(
+    corpus: Corpus,
+    *,
+    phrasings: list[str],
+    units: list[str],
+    max_chunks: int = 500,
+    include_text: bool = False,
+) -> dict:
+    """Whole-corpus enumeration of chunks that mention a single property.
+
+    Scans EVERY document (never a doc-list slice): a chunk is a candidate when
+    its own text, or the caption/markdown of a ``table``/``scheme``/``figure``
+    asset bound to it, contains any alias *phrasing* or *unit*. Matching is a
+    cheap ``instr`` substring test that returns handles only unless
+    *include_text* is set, so the extractor pays the read cost only for the
+    candidates it verifies.
+
+    Returns ``{candidates, docs_mentioning, candidate_chunks, matched_chunks,
+    truncated}``. ``candidates`` is a deterministic, ``max_chunks``-capped list
+    of ``{doc_id, chunk_id, matched_phrasing, source_kind[, text]}`` rows.
+    ``docs_mentioning`` is the FULL distinct-doc set (independent of the cap) so
+    the recall denominator stays exact even when the candidate list truncates.
+    """
+    needles = _needle_set(phrasings, units)
+    empty = {
+        "candidates": [], "docs_mentioning": [], "candidate_chunks": 0,
+        "matched_chunks": 0, "truncated": False,
+    }
+    con = _connect(corpus)
+    if con is None or not needles:
+        return empty
+    try:
+        # chunk_id -> (doc_id, matched_phrasing, source_kind); first hit wins.
+        hits: dict[str, tuple[str, str, str]] = {}
+        docs: set[str] = set()
+        for needle in needles:
+            for r in con.execute(
+                "SELECT chunk_id, doc_id FROM chunks "
+                "WHERE COALESCE(is_boilerplate, 0) = 0 "
+                "AND instr(lower(text), ?) > 0",
+                (needle,),
+            ):
+                docs.add(r["doc_id"])
+                hits.setdefault(r["chunk_id"], (r["doc_id"], needle, "text"))
+            for r in con.execute(
+                "SELECT a.doc_id AS doc_id, ca.chunk_id AS chunk_id FROM assets a "
+                "LEFT JOIN chunk_assets ca ON ca.asset_id = a.asset_id "
+                "WHERE a.asset_type IN ('table','scheme','figure') "
+                "AND instr(lower(COALESCE(a.caption,'') || ' ' || "
+                "COALESCE(a.content,'')), ?) > 0",
+                (needle,),
+            ):
+                # Only count an asset-bearing doc as "mentioning" when the
+                # asset is bound to a chunk the extractor can actually reach
+                # and cite; an unbound asset would inflate the recall
+                # denominator with a doc that yields no candidate.
+                cid = r["chunk_id"]
+                if cid:
+                    docs.add(r["doc_id"])
+                    hits.setdefault(cid, (r["doc_id"], needle, "asset"))
+        ordered = sorted(hits.items(), key=lambda kv: (kv[1][0], kv[0]))
+        matched = len(ordered)
+        truncated = matched > max_chunks
+        ordered = ordered[:max_chunks]
+        text_map: dict[str, str] = {}
+        if include_text and ordered:
+            ids = [cid for cid, _ in ordered]
+            ph = ",".join("?" * len(ids))
+            for r in con.execute(
+                f"SELECT chunk_id, text FROM chunks WHERE chunk_id IN ({ph})", ids
+            ):
+                text_map[r["chunk_id"]] = r["text"]
+        candidates: list[dict] = []
+        for cid, (doc_id, needle, kind) in ordered:
+            row = {
+                "doc_id": doc_id, "chunk_id": cid,
+                "matched_phrasing": needle, "source_kind": kind,
+            }
+            if include_text:
+                row["text"] = text_map.get(cid, "")
+            candidates.append(row)
+        return {
+            "candidates": candidates,
+            "docs_mentioning": sorted(docs),
+            "candidate_chunks": len(candidates),
+            "matched_chunks": matched,
+            "truncated": truncated,
+        }
+    finally:
+        con.close()
+
+
 def count_numbers(text: str) -> int:
     return len(_NUM_RE.findall(text or ""))
 
