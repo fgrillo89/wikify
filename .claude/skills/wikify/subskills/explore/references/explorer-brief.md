@@ -149,10 +149,12 @@ P2(slug, depth=2, budget_chunks=20):
 Send `candidate_chunks` to the vetter; it judges at most `budget_chunks`,
 so fan-out never inflates the model-judged step. `corpus_citation_walk`
 (marker-precise, query-scoped) replaces the old whole-bibliography
-`to="references"` walk -- more relevant AND cheaper.
+`to="references"` walk -- more relevant and bounded (follows only the
+papers a chunk cites, deduped). It re-searches per cited doc, so it is not
+automatically cheaper; `depth=2`/`top_k=5`/`budget_chunks` hold the cost.
 
-**Hub concepts only** (top-decile PageRank/degree, editor-flagged): raise
-`depth = 3` to reach foundational + extending literature, and run ONE
+**Hub concepts only** (high `n_links` in `wiki rank` / high article-graph
+degree -- signals the editor already has): raise `depth = 3` to reach foundational + extending literature, and run ONE
 bounded co-citation hop -- the walk's top cited papers' OTHER citers via
 `corpus_traverse(chunk, to="cited-by", top_k=3)` (research-thread
 siblings). Both are hub-only + capped; skip for peripheral concepts.
