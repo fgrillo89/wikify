@@ -262,6 +262,21 @@ those rows, never hand-edited. Because data points carry the same
 `chunk_id` / `doc_id` references as wiki evidence, a data table traces
 back to the corpus the same way a page does.
 
+A `property_sweeps` table records the bookkeeping behind the
+property-targeted data-recall gate. Each row (keyed on `property_norm`,
+with the display `property`) captures the most recent whole-corpus
+`harvest-property` sweep for one property: `docs_mentioning` (corpus
+documents that mention it), `docs_extracted` and `docs_in_table` (how
+many of those already have an extracted point / a point in a committed
+table), `candidate_chunks` (size of the sweep worklist), `truncated`
+(whether the `--max-chunks` cap clipped that worklist), and `last_sweep`
+(timestamp). Data recall itself — `docs_in_table / docs_mentioning` — is
+computed from these on read rather than stored. The `--require-recall`
+commit gates on `data consolidate` / `data commit` refuse to publish a
+table for a property with no sweep on record, forcing a harvest pass so
+a property reported across the corpus reaches near-complete coverage
+before its table is committed.
+
 This split is deliberate, and it matches the two-layer model in the
 overview: looking a data table up through the wiki query surface
 correctly returns "not found," and the right move is to fall back to the

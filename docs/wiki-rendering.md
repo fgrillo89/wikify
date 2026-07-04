@@ -195,8 +195,11 @@ Every page shows the same left sidebar, built from four sections:
 - **Topics** — a collapsible tree of topic groups. This comes from an
   optional **navigation file** (`derived/navigation.json`) that an
   organizer step writes: it groups pages into a named, nested hierarchy.
-  When that file is absent, the Topics section is omitted and the sidebar
-  falls back to a flat list of articles instead.
+  Each group is a disclosure toggle and lists up to twelve pages; when it
+  holds more, the extra pages collapse behind a "+N more" link to that
+  group's full list on the main page. When the navigation file is absent,
+  the Topics section is omitted and the sidebar falls back to a flat list
+  of articles instead.
 - **Statistics** — counts of articles, people, and sources.
 - **People** and **Data tables** — short lists of those page kinds.
 
@@ -207,8 +210,12 @@ many sources the wiki was compiled from and over what year range, a grid
 of headline statistics (article count, people count, sources cited,
 approximate words processed, figures included), and then:
 
-- **Browse by topic** — the same topic groups as the sidebar, expanded
-  into a portal grid, when a navigation file exists.
+- **Browse by topic** — when a navigation file exists, a grid of
+  **cluster cards**, one per top-level topic group, each showing the
+  group's title, its description, and how many pages it holds. This is the
+  primary way to browse a large wiki: a card jumps to that group's full
+  page list further down the page, where the same groups are expanded into
+  a portal grid.
 - **Key articles** — the eight best-connected articles (ranked by how
   many links and how much evidence they carry), each with a short
   excerpt.
@@ -217,11 +224,33 @@ approximate words processed, figures included), and then:
 ### The article graph
 
 `graph.html` is an interactive, force-directed map of the wiki. Each page
-is a dot; each link between two pages is an edge. Edges are weighted —
+is a node; each link between two pages is an edge. Edges are weighted —
 a one-way link is thin, a mutual link (both pages link to each other) is
-thicker. Articles and people are colored differently, better-connected
-dots are larger, and you can drag dots, zoom, and click one to jump to
-its page. The graph is drawn with the D3 library.
+thicker — and better-connected nodes are larger.
+
+Nodes carry two visual codes at once. Their **color** is their topical
+cluster: pages are tinted by the top-level topic group they belong to (from
+the same navigation file the sidebar uses), so one glance shows how the
+clusters sit relative to each other. Their **shape** is their page kind —
+articles are circles, people are diamonds, data tables are triangles.
+
+The graph is built for exploring a large map without getting lost:
+
+- **Hover focus and context.** Hovering a node highlights it and its direct
+  neighbours along with the edges between them, and dims everything else, so
+  you can trace one page's connections out of a dense cloud.
+- **Search box.** Type in the search box to keep only the matching nodes lit;
+  pressing Enter recenters the view on the first match.
+- **Zoom controls.** Buttons zoom in, zoom out, and fit the whole graph back
+  into view, alongside the usual scroll-to-zoom.
+- **Labels that scale with zoom.** Only the most-connected nodes are labelled
+  when you are zoomed out; more labels appear as you zoom in, and any node you
+  hover or match in search is always labelled.
+- **Interactive legend.** A legend lists the clusters with their colors and
+  sizes, and the page-kind shapes; click a cluster to toggle it off and on.
+
+You can still drag a node to reposition it and click one to jump to its page.
+The graph is drawn with the D3 library.
 
 ## References page
 

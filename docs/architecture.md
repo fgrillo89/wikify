@@ -45,17 +45,31 @@ Three concrete consequences:
   subagent boundaries. `<bundle>/run/events.jsonl` is the
   append-only event ledger.
 
+Dispatch reads lossless **role briefs** first — the editor hands each
+subagent a `writer-brief` or `explorer-brief` at the head of its prompt
+(cache-aligned, so the stable brief is the shared prefix). Article and
+data-table commits can be gated on an **evidence-recall** check:
+`work concept-recall` scores whether a concept's evidence represents the
+corpus's most-relevant sources, `data harvest-property` sweeps the whole
+corpus for a property so a table reaches ~100% per-property recall, and
+`draft finalize --require-recall` / `data consolidate|commit
+--require-recall` refuse a commit that has not cleared the gate.
+`run metrics` snapshots per-round build metrics to `derived/stats.jsonl`
+and `run stats [--plot]` reads them back (deep-loop mechanics live in the
+investigate skill).
+
 ## CLI And MCP Surface
 
-Seven workflow nouns plus the MCP server control noun. All under
+Eight workflow nouns plus the MCP server control noun. All under
 `uv run`.
 
 | Noun | One-liner |
 |---|---|
 | `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks; open a warm REPL. |
-| `wikify run` | Initialise, lock, set, list events, show, and close a run. |
-| `wikify work` | Manage in-flight build state: concepts, evidence, inbox, claims, tend. |
-| `wikify draft` | Build, show, and check the per-attempt draft/response/validation triple. |
+| `wikify run` | Initialise, lock, set, list events, show, sense (one-shot round snapshot), record per-round metrics, plot stats, and close a run. |
+| `wikify work` | Manage in-flight build state: concepts, evidence, inbox, claims, per-concept evidence recall, tend. |
+| `wikify data` | Harvest verifiable numbers into the claim store; sweep whole-corpus property recall; consolidate and commit data-artifact tables (recall-gatable). |
+| `wikify draft` | Build, show, check, and finalize (recall-gatable) the per-attempt draft/response/validation triple. |
 | `wikify wiki` | List/find/show committed pages; open a warm REPL; build projections; commit a validated concept. |
 | `wikify render` | Render a bundle to a static HTML site. |
 | `wikify eval` | Compute M1/M3/M5/M6 (and related) metrics over a bundle. |
@@ -95,14 +109,17 @@ acquisition with TTL) or by per-concept `.claim` files.
 |-- wiki/
 |   |-- articles/<slug>.md                  canonical article pages
 |   |-- people/<slug>.md                    canonical biography pages
+|   |-- data/<slug>.md                      committed kind=data artifact tables
 |   `-- index.md
 |-- wiki.db                                 committed page query store
+|-- claims.db                               data-point claim store (incl. property_sweeps)
 `-- derived/
     |-- index.json                          page list projection
     |-- navigation.json                     render navigation export
     |-- navigation_context.json             page metadata for organizer agent
     |-- vectors.npz                         compatibility page-vector projection
     |-- eval.json                           wikify eval output
+    |-- stats.jsonl                         per-round build-metric projection (`run metrics`)
     `-- site/                               wikify render html site output
 ```
 
@@ -139,7 +156,12 @@ Allowed event types: `stage_changed`, `cli_invoked`,
 `evidence_added`, `inbox_suggestion_created`, `inbox_consolidated`,
 `query_started`, `wiki_page_read`, `query_feedback_created`,
 `draft_created`, `call`, `validation_completed`, `page_committed`,
-`page_refined`, `budget_exceeded`, `run_closed`.
+`page_refined`, `budget_exceeded`, `run_closed`, `round_started`,
+`round_completed`, `dossier_promoted`, `dossier_stalled`,
+`dossier_parked`, `pattern_dispatched`, `corpus_drift_detected`,
+`page_embedding_failed`, `data_page_collision_skipped`,
+`page_recall_cleared`. The complete, authoritative set is
+`VALID_EVENT_TYPES` in `bundle/run/events.py`.
 
 Cost is computed on demand by
 `src/wikify/bundle/run/cost.py::cost_summary(bundle)` filtering
@@ -175,7 +197,7 @@ src/wikify/
 |   |-- __main__.py                 python -m wikify.cli entry point
 |   |-- _io.py                      cli_invoked event capture wrapper
 |   |-- _helpers.py                 shared exit codes, error envelope
-|   `-- (corpus, run, work, draft, wiki, render, eval, mcp).py
+|   `-- (corpus, arxiv, run, work, data, draft, wiki, render, eval, mcp).py
 |-- mcp/                            MCP adapter, envelopes, resources, context binding
 |-- api.py                          Bundle + Corpus context dataclasses
 `-- (config, context, embedding, models, types).py

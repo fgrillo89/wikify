@@ -48,6 +48,7 @@ This note records the file contract for skill-driven wikification.
     index.json
     navigation.json
     vectors.npz
+    stats.jsonl
   claims.db
   wiki.db
 ```
@@ -369,6 +370,7 @@ type raises a validation error):
 - `corpus_drift_detected`
 - `page_embedding_failed`
 - `data_page_collision_skipped`
+- `page_recall_cleared`
 
 Examples:
 
@@ -1363,6 +1365,7 @@ wiki/index.md                          Projection, agent-facing
 derived/index.json                     Projection, machine-facing
 derived/navigation.json                Projection, render-facing
 derived/vectors.npz                    Projection, search-facing
+derived/stats.jsonl                    Projection, per-round build metrics
 claims.db                              Query store, data-wave claims
 wiki.db                                Query store + wiki graph
 ```
