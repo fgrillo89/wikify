@@ -14,13 +14,18 @@ The verdict has the shape::
       "response_path": str,
       "draft_path": str,
       "errors": [{"path": str, "code": str, "message": str}],
+      "warnings": [{"path": str, "code": str, "message": str}],
       "structural_checks": {<check>: <bool>},
       "checked_at": ISO8601,
     }
+
+``errors`` gate the commit (they flip ``ok`` to false); ``warnings`` are
+quality signals that surface in the verdict without blocking the commit.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 
@@ -312,6 +317,62 @@ def _figure_selection_errors(
     return errors
 
 
+# --- Evidence-coverage (breadth-of-use) check ------------------------------
+# A writer can gather many source documents yet cite only a few of them for
+# every claim. These thresholds flag a committed page that under-uses the
+# breadth of evidence it was handed, so richness is enforced at write time
+# rather than merely encouraged. Deliberately conservative: the check stays
+# silent until enough distinct source documents were available that narrow
+# citation is unlikely to reflect a legitimately focused page. Person pages
+# are author-focused but still gather multiple documents; the same thresholds
+# apply to them unchanged.
+EVIDENCE_COVERAGE_MIN_DOCS = 5  # floor on available docs before the check fires
+EVIDENCE_COVERAGE_MIN_CITED = 3  # absolute floor on distinct cited docs
+EVIDENCE_COVERAGE_FRACTION = 0.5  # cite at least this share of available docs
+
+
+def _evidence_coverage_findings(
+    draft: WriteRequest, response: WriteResponse
+) -> list[dict]:
+    """Warn when a page under-uses the breadth of gathered evidence.
+
+    ``available_docs`` is the set of distinct source documents the writer was
+    handed (one per evidence record). ``cited_docs`` is the subset whose
+    ``[^eN]`` marker is actually cited in the reader-facing prose. A page that
+    gathered many documents but leans on only a couple is flagged. This is a
+    quality signal, not a correctness error: the finding is returned as a
+    warning and does not flip ``ok``.
+    """
+    available_docs = {ev.doc_id for ev in draft.evidence if ev.doc_id}
+    if len(available_docs) < EVIDENCE_COVERAGE_MIN_DOCS:
+        return []
+    cited_markers = _parse_prose_markers(
+        _strip_references_section(response.body_markdown)
+    )
+    cited_docs = {
+        draft.evidence[idx].doc_id
+        for idx in cited_markers
+        if 0 <= idx < len(draft.evidence) and draft.evidence[idx].doc_id
+    }
+    threshold = max(
+        EVIDENCE_COVERAGE_MIN_CITED,
+        math.ceil(EVIDENCE_COVERAGE_FRACTION * len(available_docs)),
+    )
+    if len(cited_docs) >= threshold:
+        return []
+    return [
+        {
+            "path": "body_markdown",
+            "code": "evidence_underuse",
+            "message": (
+                f"page cites {len(cited_docs)} of {len(available_docs)} gathered "
+                "source documents; draw on more of the gathered evidence "
+                f"(cite at least {threshold})"
+            ),
+        }
+    ]
+
+
 def validate_response_data(draft_data: dict, response_data: dict) -> dict:
     """Run every check on raw draft + response dicts. Does not touch disk.
 
@@ -350,6 +411,7 @@ def _run_checks(
     response_p: str,
 ) -> dict:
     errors: list[dict] = []
+    warnings: list[dict] = []
     structural: dict[str, bool] = {}
 
     # --- WriteRequest ----------------------------------------------------
@@ -464,6 +526,12 @@ def _run_checks(
         errors.extend(figure_errors)
         structural["figure_selection"] = not figure_errors
 
+        # Quality signal (warning only): a page that gathered broad evidence
+        # but cites only a narrow slice of it. Does not flip ``ok``.
+        coverage_findings = _evidence_coverage_findings(draft, response)
+        warnings.extend(coverage_findings)
+        structural["evidence_coverage"] = not coverage_findings
+
     return {
         "schema_version": VALIDATION_SCHEMA_VERSION,
         "ok": len(errors) == 0,
@@ -471,6 +539,7 @@ def _run_checks(
         "response_path": response_p,
         "draft_path": draft_p,
         "errors": errors,
+        "warnings": warnings,
         "structural_checks": structural,
         "checked_at": _utcnow(),
     }

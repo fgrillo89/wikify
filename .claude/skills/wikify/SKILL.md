@@ -106,6 +106,30 @@ targets to the plan in order, removing them from later bands.
    the last 2 rounds. The rhythm is therefore grow -> leave untouched
    ~2 rounds (grow other slugs meanwhile) -> `ready` -> write. Do not
    keep re-growing a saturated slug or it never becomes writable.
+   **Evidence-recall gate (before writing).** Before dispatching a WRITE
+   for a ready slug, run `wikify work concept-recall <slug> --corpus
+   <corpus> --run <bundle> --format json` and read its `recall` block. If
+   `recall.recall_ok` is false AND the gather did not report
+   `stop_reason: "pool_exhausted"` (a genuinely mined-out slug), DEFER the write and
+   dispatch a targeted GROW that pulls `recall.missing_docs` (the corpus's
+   most-relevant papers this page skips), fills any `recall.empty_buckets`
+   (a missing era), and reduces `recall.max_doc_share` (over-concentration
+   on one doc). Pull those `recall.missing_docs` DIRECTLY, not by generic re-search: for each missing doc run `corpus find --in-doc <doc>` (scored for the concept) to get its best chunks and route them through the vetter, or `wikify work notebook-init <slug> --seed-docs '[<missing ids>]'` then `wikify work build-evidence <slug>` -- capped to the named docs -- so the specific papers the gate identified are retrieved deterministically. Then record the clearance so commit can enforce it:
+   `wikify run record-event --type page_recall_cleared --stage write
+   --concept-id <slug> --run <bundle> --data '{"recall_ok": true}'` (or
+   `{"exhausted": true}`). Only write once `recall.recall_ok` OR the sweep
+   is `pool_exhausted` — the article analogue of the DATA-wave recall gate.
+   Finalize this loop's article commits with `wikify draft finalize <slug>
+   --require-recall` — it refuses to commit an article without a FRESH
+   `page_recall_cleared` record (recall_ok or exhausted, and no evidence
+   added to the slug since the clearance). This enforces the gate for the
+   wikify loop, which ALWAYS passes the flag; a bare `draft finalize`
+   without it is intentionally not gated (ad-hoc / test callers). Record
+   the clearance AFTER the last GROW for the slug so it is not stale.
+   This is what makes a committed page represent the corpus's most diverse,
+   relevant evidence rather than whatever few docs seeded it; the writer
+   validator's `evidence_underuse` warning is the complementary check that
+   the writer then actually cites that breadth.
 2. **REFINE wave.** Fires when `wikify work refine-candidates` returns
    candidates. That command now surfaces two signals: a committed page
    whose live evidence outgrew its write-time snapshot, and a committed
@@ -139,20 +163,24 @@ targets to the plan in order, removing them from later bands.
    slug-disjointness. The single task dedups concept titles internally
    and skips any that match an existing slug.
 6. **PERSON wave.** Fires once `concept_count >= target_min/2` (so the
-   topical roster exists first) and only until `person_count >=
-   expected_people` (a small VIP quota — see Sizing). Seed from the top
-   authors by the strongest populated `rank_metrics.author` metric
-   (`h_index`, else `citation_count`, else `n_papers`), gated to genuine
-   VIPs: take only authors above the corpus median on that metric, cap
-   at `expected_people`. For each, one concept:
+   topical roster exists first). `expected_people` is a SOFT target, not
+   a hard cap (see Sizing): keep seeding while good candidates remain,
+   reviewing up to `person_quota_multiplier` (2.0) times `expected_people`.
+   Seed from TWO sources: (a) the top authors by the strongest populated
+   `rank_metrics.author` metric (`h_index`, else `citation_count`, else
+   `n_papers`) above the corpus median; and (b) the **authorship of
+   already-cited article source documents** and their close (co-author
+   distance `<= 1`) collaborators — the researchers the wiki actually
+   leans on, even when below the VIP metric. For each, one concept:
    `wikify work add concept "<Display Name>" --kind person --aliases
    '["author:<key>"]'`, `notebook-init`, then `build-evidence` (the
-   person path gathers quoted-contribution chunks). The person maturity
-   gate is strict by design (>= 3 quoted-contribution chunks from >= 2
-   docs + `author:` alias), so thinly-covered authors never reach
-   `ready` and silently drop out — this is the regulariser that keeps
-   people pages few and VIP-only. Run as a SINGLE Task over the author
-   list (same slug-race reasoning as SEED).
+   person path gathers BOTH quoted-contribution and `identity_context`
+   chunks — affiliation/role/career — so the page can lead with who the
+   person is). The strict person maturity gate (>= 3 quoted-contribution
+   chunks from >= 2 docs + `author:` alias) still decides commits, so
+   thinly-covered authors drop out — it is the quality regulariser, not a
+   headcount cap. Run as a SINGLE Task over the author list (same
+   slug-race reasoning as SEED).
 7. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank.
 8. **DATA wave.** Fires every round, low cost. Owned by the data skills,
@@ -162,14 +190,30 @@ targets to the plan in order, removing them from later bands.
      this round's SEED/GAP touch — their tables (`asset_type='table'`) and
      number-dense chunks, which the P1-P5 explorers deliberately skip — plus
      a piggyback over any slug grown this round. It stages points and runs
-     `wikify data add` (the verification gate).
+     `wikify data add` (the verification gate). When a property becomes a
+     consolidation theme (a table is about to be built for it, e.g.
+     growth-per-cycle), FIRST run a property-targeted exhaustive harvest:
+     `wikify data harvest-property --property <p> --alias ... --unit ...
+     --corpus <corpus> --run <bundle>` sweeps the WHOLE corpus (not just
+     this round's docs) for every chunk carrying a value for that property,
+     and the `extract-data` Task extracts + verifies every candidate via
+     `data add`. Aim for `data_recall >= 0.90`; re-sweep across rounds
+     while `truncated` or recall stays low. This is what makes a table like
+     GPC comprehensive (nearly every ALD paper reports one) instead of
+     sparse.
    - **Consolidate.** Each round run `wikify data coverage` and enumerate
      ALL uncovered ripe themes (>= 4 subjects sharing a property with no
      committed artifact). Dispatch a `consolidate-data` Task for each,
      highest-subject-count first, capped at 2 per round; keep dispatching
      across rounds until no uncovered ripe theme remains. Consolidation is
      not optional — do not skip the DATA-consolidate step while a ripe theme
-     is uncovered. After a `consolidate-data` Task commits a new `kind=data`
+     is uncovered. Commit property tables with `--require-recall` (the
+     `consolidate-data` Task passes it): the CLI then reads the
+     `property_sweeps` record and REFUSES a sparse table when
+     `docs_mentioning_property >= 10` AND `data_recall < 0.75` (or no sweep
+     exists), so the editor must loop back to `harvest-property` + extract
+     until `>= 0.90` before it can commit. After
+     a `consolidate-data` Task commits a new `kind=data`
      artifact, the committed pages it covers become `refine-candidates`
      (reason `new_data`) so the REFINE wave re-drafts them to cite the new
      table under "Related data".
@@ -184,7 +228,12 @@ For each plan entry, spawn one `Task` (sonnet tier) bound to
 `explore` for explore Tasks or `write-page`
 for the write wave. Pass `pattern`, `target`, `budget_chunks`, `depth`
 verbatim from the plan. Record `{role, model_id, tier, tokens_in,
-tokens_out, stage}` from each return.
+tokens_out, stage}` from each return. `budget_chunks` is NOT a flat 30:
+compute it from Sizing (`clamp(round(20 + 6 * log10(D)), 20, 60)`) and
+multiply by ~1.5 for a central concept (top decile PageRank/degree)
+before passing it, so a larger corpus and a hub concept get a deeper
+sweep (the pattern-defaults in `explore` are the floor, the editor scales
+up).
 
 **Brief-first, cache-aligned dispatch.** Each subagent's FIRST read is
 its stable role brief -- `subskills/write-page/references/writer-brief.md`
@@ -226,8 +275,11 @@ Before dispatching the first Task of each wave, emit one
 ```
 wikify run record-event --type pattern_dispatched \
   --stage explore --concept-id memristor --run <bundle> \
-  --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": 30}'
+  --data '{"pattern": "P3", "target": "memristor", "depth": 0, "budget_chunks": <scaled>}'
 ```
+
+`<scaled>` is the Sizing value `clamp(round(20 + 6 * log10(D)), 20, 60)`
+(x1.5 for a central concept), NOT a flat 30 -- compute it before emitting.
 
 `record-event` reads the payload from `--data` (JSON object); pass
 `--from-stdin` only when you deliberately pipe the payload. Each round

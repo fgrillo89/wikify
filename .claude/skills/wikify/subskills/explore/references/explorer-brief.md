@@ -126,32 +126,41 @@ wikify work notebook-init <slug> --seed-docs '["doc:X"]' --stencil article-metho
 ## P2 - citation-walk
 
 **Target**: ONE existing slug (notebook on disk). **Default**:
-`depth = 1`, `budget_chunks = 20`.
+`depth = 2`, `budget_chunks = 20` (scaled up for hub concepts).
 
-Deepen a dossier through its citation graph. Chunks already cited by the
-dossier are the seed set; walk `references` (papers these chunks cite)
-and `cited-by` (papers citing them).
+Deepen a dossier through its citation graph, marker-precise and bounded.
 
 ```
-P2(slug, depth=1, budget_chunks=20):
+P2(slug, depth=2, budget_chunks=20):
+  q = concept_name(slug)
   seen_chunks = set(notebook(slug).provenance.covered_chunks)
-  for chunk_id in notebook.provenance.covered_chunks:
-    for h in corpus_traverse(chunk_id, to="references", top_k=5) \
-           | corpus_traverse(chunk_id, to="cited-by", top_k=5):
-      if h.id in seen_chunks: continue
-      seen_chunks.add(h.id); candidate_chunks.add(h)
-      if depth > 0: P2_recurse(h, depth - 1)
-
-P2_recurse(chunk, depth):
-  if depth == 0 or budget exhausted: return
-  for h in corpus_traverse(chunk, to="references", top_k=3) \
-         | corpus_traverse(chunk, to="cited-by", top_k=3):
-    if h.id in seen_chunks: continue
-    seen_chunks.add(h.id); candidate_chunks.add(h)
+  # OUTGOING marker-precise multi-hop: corpus_citation_walk follows each
+  # chunk's OWN citation markers to the papers it cites, re-finds each cited
+  # paper's best chunk FOR q, recurses -- query-scoped + deduped across hops,
+  # so bounded (no whole-bibliography fan-out, no cycles).
+  walk = corpus_citation_walk(query=q, depth=depth, top_k=5, rank="all")
+  candidate_chunks |= {r for r in walk.items if r.id not in seen_chunks}  # chunk rows, deduped across hops
+  # INCOMING recency (citation_walk is outgoing-only): one bounded hop.
+  for chunk_id in notebook(slug).provenance.covered_chunks:
+    for h in corpus_traverse(chunk_id, to="cited-by", top_k=3):
+      if h.id not in seen_chunks: seen_chunks.add(h.id); candidate_chunks.add(h)
 ```
 
-Citation graph branches fast; keep `depth = 1` unless the editor
-explicitly raises. Send `candidate_chunks` through the vetter.
+Send `candidate_chunks` to the vetter; it judges at most `budget_chunks`,
+so fan-out never inflates the model-judged step. `corpus_citation_walk`
+(marker-precise, query-scoped) replaces the old whole-bibliography
+`to="references"` walk -- more relevant and bounded (follows only the
+papers a chunk cites, deduped). It re-searches per cited doc, so it is not
+automatically cheaper; `depth=2`/`top_k=5`/`budget_chunks` hold the cost.
+
+**Hub concepts only** (high `n_links` in `wiki rank` / high article-graph
+degree -- signals the editor already has): raise `depth = 3` to reach foundational + extending literature, and run ONE
+bounded co-citation hop -- the walk's top cited papers' OTHER citers via
+`corpus_traverse(chunk, to="cited-by", top_k=3)` (research-thread
+siblings). Both are hub-only + capped; skip for peripheral concepts.
+
+**Era spread.** Bucket candidates by source-doc year (<= p25 / mid /
+>= p75) and keep from every non-empty bucket, so evidence spans eras.
 
 **Stop reasons**: `budget_chunks_reached`, `depth_zero`,
 `no_new_neighbours`, `ok`.
@@ -337,13 +346,23 @@ per slug. Non-negotiable:
 - **Gap-driven follow-up rounds.** After routing accepts, per slug queue
   targeted follow-up queries when there is a gap: `def_for: [<slug>]`
   empty (no definition evidence yet), low section diversity (< 3 distinct
-  `section_type`s), or `distinct_docs < 5`. Aggregate fresh queries across
+  `section_type`s), `distinct_docs < 8`, one doc dominating the records,
+  or all accepted docs clustered in one publication-year band (pull
+  older/seminal AND recent work). Aggregate fresh queries across
   slugs, dedup, cap to 2-4 new queries per round, and loop (issue queries
-  -> judges -> route accepts) up to `max_query_rounds`. Stop when ANY: all
-  slugs hit `quota_per_slug`, `max_query_rounds` exhausted, or the latest
-  round added zero accepts to any slug.
-- Person slugs: accept only chunks quoting ACTUAL contributions by that
-  author; bylines alone do not count.
+  -> judges -> route accepts) while a round still surfaces a NEW DISTINCT
+  DOC or section-type facet. Stop when ANY: all slugs hit `quota_per_slug`;
+  two consecutive rounds add no new distinct doc AND no new facet (plateau
+  -> `stop_reason: "pool_exhausted"`, which the WRITE recall gate treats
+  as permission to write despite missing docs); or `max_query_rounds`
+  reached (`stop_reason: "max_rounds"` so the editor re-dispatches, not
+  assumes done).
+- Person slugs gather TWO classes: `contribution` (chunks quoting the
+  author's ACTUAL work; bylines alone do not count) AND `identity_context`
+  (chunks that NAME the target author and carry affiliation/role/career
+  signal -- normally boilerplate-excluded, accepted here because they name
+  the author; tag `note="identity_context"`, cap ~4). `build-evidence`'s
+  person Phase-3 gathers identity_context automatically.
 - **Gather-evidence judge-routed commit (this section's path).** Commit
   per slug only when `>= 6` accepts (minimum-viable bar) via
   `wikify work build-evidence` with a JSON ARRAY of

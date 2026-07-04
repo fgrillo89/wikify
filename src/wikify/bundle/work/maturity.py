@@ -260,10 +260,16 @@ def _max_chunk_jaccard(mine: set[str], neighbours: list[set[str]]) -> float:
 def _person_components(
     bundle: Bundle, slug: str, records: list[EvidenceRecord]
 ) -> tuple[float, dict[str, float], dict[str, bool], list[str]]:
+    # identity_context records (affiliation/role/career) enrich the dossier
+    # so a page can lead with who the person is, but they must NOT advance the
+    # maturity gate, which is quoted-contribution diversity by design.
+    contribution_records = [
+        r for r in records if (r.note or "") != "identity_context"
+    ]
     n_contribution = sum(
-        1 for r in records if _PERSON_CONTRIBUTION_RE.search(r.quote or "")
+        1 for r in contribution_records if _PERSON_CONTRIBUTION_RE.search(r.quote or "")
     )
-    n_docs = len({r.doc_id for r in records})
+    n_docs = len({r.doc_id for r in contribution_records})
     card = load_card(bundle, slug)
     author_alias = any(
         str(a).lower().startswith("author:") for a in card.aliases
@@ -400,7 +406,7 @@ def compute_maturity(
 
     components = {
         "n_chunks": 0.25 * min(n_chunks / 12.0, 1.0),
-        "n_docs": 0.15 * min(n_docs / 6.0, 1.0),
+        "n_docs": 0.15 * min(n_docs / 8.0, 1.0),
         "kinds_coverage": 0.30 * kinds_required_present,
         "redundancy_inverse": 0.20 * (1.0 - jaccard_max),
         "diversity_bonus": 0.10 * _diversity_bonus(records),

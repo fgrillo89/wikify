@@ -204,16 +204,33 @@ Per slug, ask:
 - Are accepted `section_type`s diverse enough (≥3 distinct)? If not,
   queue queries that target the missing facet (e.g. "<title>
   applications" for slugs with no body chunks).
-- Is `distinct_docs < 5` for this slug? If yes, queue 1 query that
-  excludes the over-represented doc via in-context filtering.
+- Is the slug's evidence too narrow? Broaden when `distinct_docs < 8`,
+  when one document supplies most of the records (over-concentration), or
+  when the accepted docs all cluster in one publication-year band (an era
+  gap). Queue 1-2 queries that exclude the over-represented doc and
+  target under-covered sources and eras — pull in both older/seminal work
+  and recent work — so a page consults old AND new papers, not just the
+  highest-PageRank few.
+- Does the concept have a CONTESTED point (the accepted evidence reports
+  competing values or claims) with only ONE side represented, or a
+  sub-topic the concept clearly spans that has no accepted chunk yet?
+  Queue a query for the alternative/contradictory finding or the missing
+  sub-topic, so a page can present the full range rather than one angle.
 
 Aggregate fresh queries across slugs; dedup; cap to 2-4 new queries per
 round. Loop back to Step 3 (issue queries → fan out judges → route
-accepts). Stop when ANY:
+accepts). Keep looping while a round still surfaces a NEW DISTINCT DOC or
+a new `section_type` facet for a slug — do not stop merely because a fixed
+round budget elapsed. Stop when ANY:
 
 - All slugs hit `quota_per_slug`, OR
-- `max_query_rounds` exhausted, OR
-- Latest round added zero accepts to any slug.
+- Two consecutive rounds add no new distinct doc AND no new section-type
+  facet to any slug — a genuine plateau; return `stop_reason:
+  "pool_exhausted"` (the WRITE recall gate treats this as permission to
+  write despite missing docs), OR
+- The safety ceiling `max_query_rounds` is reached — return `stop_reason:
+  "max_rounds"` so the editor re-dispatches next round rather than
+  assuming completeness.
 
 ## Step 7: commit per slug
 
@@ -290,8 +307,16 @@ tokens.
   signal; the orchestrator may re-spawn this skill on the failed slug as
   a top-up.
 - Do not add seeds to work cards; seeds come from the extractor.
-- Person slugs: judges accept chunks that quote actual contributions by
-  that author; author bylines alone do not count.
+- Person slugs gather TWO evidence classes. (1) `contribution` — chunks
+  quoting the author's actual work; plain author bylines alone do not
+  count. (2) `identity_context` — chunks that NAME the target author AND
+  carry affiliation/role/career/collaboration signal ("Department of
+  ...", "Professor", "joined ...", "research group"). These are normally
+  boilerplate-excluded, but are accepted here BECAUSE they specifically
+  name the target author; tag them `note="identity_context"` (cap ~4).
+  Identity-context chunks let the page lead with who the person is;
+  `wikify work build-evidence`'s person Phase-3 gathers them
+  automatically, so the vetter's job is to keep any that surface.
 
 ## References
 

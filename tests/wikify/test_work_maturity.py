@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wikify.api import Bundle
@@ -104,6 +105,26 @@ def test_article_passes_gates_with_rich_evidence(tmp_path: Path) -> None:
     assert "definition" in report.kinds_present
     assert "mechanism" in report.kinds_present
     assert "application" in report.kinds_present
+
+
+def test_n_docs_component_saturates_at_eight(tmp_path: Path) -> None:
+    # 6 distinct docs: below saturation -> 0.15 * 6/8.
+    bundle = _bundle(tmp_path)
+    create_concept(bundle, page_id="ALD", kind="article")
+    six = [_ev(f"c{i}", f"d{i}", "ALD is a method.") for i in range(6)]
+    append_evidence(bundle, "ald", six)
+    report = compute_maturity(bundle, "ald")
+    assert report.components["n_docs"] == pytest.approx(0.15 * 6 / 8)
+
+    # 8 distinct docs: at saturation -> full 0.15.
+    b2 = tmp_path / "b2"
+    b2.mkdir()
+    bundle2 = _bundle(b2)
+    create_concept(bundle2, page_id="ALD", kind="article")
+    eight = [_ev(f"c{i}", f"d{i}", "ALD is a method.") for i in range(8)]
+    append_evidence(bundle2, "ald", eight)
+    report2 = compute_maturity(bundle2, "ald")
+    assert report2.components["n_docs"] == pytest.approx(0.15)
 
 
 def test_stencil_override_changes_required_kinds(tmp_path: Path) -> None:
@@ -226,6 +247,33 @@ def test_person_contribution_gate_counts_present_tense(tmp_path: Path) -> None:
     report = compute_maturity(bundle, "jane-doe")
     assert report.gates["n_quoted_contribution_chunks_ge_3"] is True
     assert report.gates_passed is True
+
+
+def test_person_gate_ignores_identity_context_docs(tmp_path: Path) -> None:
+    # identity_context records (affiliation/career) enrich the dossier so a
+    # page can lead with WHO, but they must NOT satisfy the person
+    # doc-diversity gate: 3 contributions from one doc plus one
+    # identity_context chunk from a second doc is NOT >= 2 contribution docs,
+    # so the page stays not-ready.
+    bundle = _bundle(tmp_path)
+    create_concept(
+        bundle, page_id="Solo Author", kind="person",
+        aliases=["author:solo_a"],
+    )
+    append_evidence(bundle, "solo-author", [
+        _ev("c1", "d1", "Solo demonstrated a self-limiting ALD process."),
+        _ev("c2", "d1", "Solo proposed the reaction mechanism."),
+        _ev("c3", "d1", "Solo developed the room-temperature variant."),
+        EvidenceRecord(
+            chunk_id="c4", doc_id="d2", status="active",
+            note="identity_context",
+            quote="Solo, Department of Applied Physics, University of Helsinki.",
+        ),
+    ])
+    report = compute_maturity(bundle, "solo-author")
+    assert report.gates["n_quoted_contribution_chunks_ge_3"] is True
+    assert report.gates["n_distinct_docs_ge_2"] is False
+    assert report.gates_passed is False
 
 
 def test_person_contribution_gate_rejects_non_contribution_text(tmp_path: Path) -> None:

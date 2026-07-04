@@ -31,6 +31,13 @@ All fields required, exact key names, exact types.
 }
 ```
 
+`stop_reason` values: `quota_met` (slug hit `quota_per_slug`),
+`pool_exhausted` (a genuine plateau -- two consecutive rounds added no new
+distinct doc AND no new section-type facet; the WRITE recall gate treats
+this as permission to write despite missing docs), `max_rounds`
+(`max_query_rounds` ceiling reached; not a true plateau, so the editor
+re-dispatches), `error`.
+
 ## Worked example (two slugs)
 
 ```json

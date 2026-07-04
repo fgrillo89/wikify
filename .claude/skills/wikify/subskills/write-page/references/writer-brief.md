@@ -121,6 +121,13 @@ Body (Wikipedia structure = lead + H2 sections):
 - Cover the facets present in the draft: definitions, mechanisms,
   materials/properties, methods, evidence/results, applications,
   limitations.
+- Draw across the dossier's DIVERSITY, not one angle: span the available
+  `section_types` (methods vs results vs discussion), cover the distinct
+  sub-topics the evidence spans rather than restating one from many
+  sources, and where the dossier reports CONFLICTING findings on a point,
+  present them side by side (attribute each) instead of silently picking
+  one. Doc count and era spread are necessary but not sufficient for a
+  rich page.
 - `## References` is always the final section, one definition per cited
   marker.
 
@@ -133,21 +140,42 @@ evidence supports them.
 
 ## Person pages (`kind="person"`)
 
-- Lead form: `**Name** is associated with [specific contribution
-  grounded in evidence].[^e1]`. Do NOT use the article "X is a/an"
-  definition-lead.
-- Do NOT invent nationality, degrees, affiliations, dates, awards, or any
-  biographical fact.
+A person page is about the PERSON, not a concept. Lead with who they are;
+organize the body around what they did and how their work developed. Do
+NOT write a concept exposition with the person's name sprinkled in.
+
+- Lead with WHO: `**Name** is a [grounded role/field, e.g. "materials
+  scientist"] [at <affiliation> if grounded] known for [their specific
+  contribution].[^e1]`. When no grounded role or affiliation exists, still
+  lead person-first: `**Name** is a researcher whose work
+  [established/developed] [contribution].[^e1]`. Never open with a concept
+  definition; do NOT use the article "X is a/an" definition-lead.
 - Do NOT put a year range in parentheses after the name.
   `author_context.year_range` is a publishing window, not birth-death.
-  Express a working period only in a separate sentence and only when
-  evidence supports it.
+  Express a working period only as a separate grounded sentence and only
+  when evidence supports it.
+- Organize the body around the PERSON, not concepts: sections describe
+  what the person did and how their work developed over time. Every
+  paragraph foregrounds the person's role (what they did, when, with
+  whom); the concept is context for the contribution, not the subject.
+  Prefer person-centric section titles: `## Key contributions`,
+  `## Research trajectory` (chronological development), `## Collaborations`,
+  `## Affiliations and career` (only when grounded). Do NOT title sections
+  as bare concept expositions (e.g. `## Room-Temperature Platinum ALD`).
+- Affiliation, working period, collaborators, career, and education MAY be
+  stated WHEN a dossier chunk grounds them (each with an `[^eN]` marker);
+  NEVER invent them, and do NOT pull them from non-citable author
+  metadata.
+- Contribution-only fallback: when the dossier has contribution evidence
+  but NO grounded identity/affiliation/career chunk, write a clearly
+  person-centric CONTRIBUTION-ONLY page -- person-first lead plus sections
+  like `## Key contributions` / `## Collaborations` -- and simply OMIT
+  affiliation and history. Do NOT invent them. Still person-framed, never
+  a concept dump.
 - At least TWO non-appendix `## H2` sections before `## References`.
-  `## Research` or `## Contributions` is normally required.
   `## Publications` only when `author_context` supplies primary
-  publications; otherwise add a second grounded section (`## Collaborations`,
-  `## Research areas`, `## Influence`) only when evidence supports it.
-  Optional `## Career` / `## Legacy` require direct evidence.
+  publications; otherwise add a second grounded person-centric section
+  only when evidence supports it.
 - Grounding: quote ACTUAL contributions by the author; author bylines
   alone do not count. Anchor specific facts (named device, measured
   property, publication, collaboration) directly.
@@ -179,13 +207,17 @@ diff; the commit gate promotes whole pages.
 
 ## Figures
 
-- When the dossier's Figure candidates table is non-empty, include at
-  least one by default. Choose the candidate that best depicts what a
-  section discusses. Place `{{figure:<anchor>}}` INSIDE the paragraph
-  discussing it, and that paragraph MUST reference it in text ("as shown
-  in the figure", "(see figure)") so it is not orphaned.
-- Zero figures only when no candidate is genuinely relevant. Two only
-  when the page is inherently visual. Never invent paths or captions.
+- An ARTICLE page SHOULD include figures where the dossier's Figure
+  candidates table supports them, aiming ~4 as a SOFT target (not a cap;
+  typical range 1-10, add more distinct figures when the dossier genuinely
+  has more valuable ones), at most ONE figure per distinct source
+  document, and each figure tied to a distinct cited source/section (its
+  `source_marker` in `used_markers`). Choose the candidates that best depict what a section
+  discusses. Place `{{figure:<anchor>}}` INSIDE the paragraph discussing
+  it, and that paragraph MUST reference it in text ("as shown in the
+  figure", "(see figure)") so it is not orphaned.
+- Zero figures only when no candidate is genuinely relevant; never
+  invent paths or captions. Person pages stay figure-free.
 - A selected figure is represented twice: as a `{{figure:<anchor>}}`
   placeholder in `body_markdown`, and as a `figures[]` entry with ALL
   five fields set: `figure_id`, `path` (both verbatim from the draft

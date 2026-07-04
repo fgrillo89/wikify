@@ -30,8 +30,10 @@ from ..bundle.draft.builder import build_draft, load_draft
 from ..bundle.draft.dossier import render_dossier
 from ..bundle.draft.references import normalize_response_references
 from ..bundle.draft.validator import validate_response, validate_response_data
+from ..bundle.run.events import read_events
 from ..bundle.run.lock import LockHeldError
 from ..bundle.wiki.commit import CommitGateError, commit_page
+from ..bundle.work.card import load_card
 from ..bundle.work.claim import read_claim, release_claim
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error, cli_owner
 from ._io import _clean_slug_arg
@@ -329,6 +331,35 @@ def _resolve_finalize_format(fmt: str) -> str:
     return fmt
 
 
+def _recall_cleared(bundle: Bundle, slug: str) -> bool:
+    """True when a FRESH ``page_recall_cleared`` event cleared *slug*'s gate.
+
+    Scans the run ledger for an event of type ``page_recall_cleared`` whose
+    ``concept_id`` is *slug* and whose ``data`` marks the page either
+    recall-satisfied (``recall_ok == true``) or mined out
+    (``exhausted == true``).
+
+    The clearance is FRESH only if it is the latest such event AND it is
+    newer (later in ledger order) than the latest ``evidence_added`` event
+    for the slug. If any ``evidence_added`` postdates the clearance, evidence
+    changed after the gate was cleared, so the clearance is STALE and this
+    returns ``False``. Uses ledger ORDER (the same signal ``_growth_stalled``
+    keys off), so no hashing is needed.
+    """
+    last_cleared = -1
+    last_evidence = -1
+    for idx, ev in enumerate(read_events(bundle)):
+        if ev.concept_id != slug:
+            continue
+        if ev.type == "evidence_added":
+            last_evidence = idx
+        elif ev.type == "page_recall_cleared" and (
+            ev.data.get("recall_ok") is True or ev.data.get("exhausted") is True
+        ):
+            last_cleared = idx
+    return last_cleared > last_evidence
+
+
 def _emit_finalize(envelope: dict, fmt: str) -> None:
     if fmt == "json":
         typer.echo(json.dumps(envelope))
@@ -357,6 +388,16 @@ def cmd_finalize(
         ),
     ),
     fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
+    require_recall: bool = typer.Option(
+        False,
+        "--require-recall",
+        help=(
+            "Hard-enforce the evidence-recall gate for article pages: refuse "
+            "to commit unless a `page_recall_cleared` event (recall_ok or "
+            "exhausted) was recorded for this slug. Off by default; person "
+            "and data pages are exempt."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -457,6 +498,25 @@ def cmd_finalize(
         _emit_finalize(envelope, fmt_resolved)
         raise typer.Exit(code=EXIT_VALIDATION)
     steps.append({"step": "check", "ok": True, "page_id": verdict.get("page_id")})
+
+    # Step 2b: opt-in evidence-recall gate. Only article pages are gated;
+    # person and data pages have their own gates elsewhere. When the flag is
+    # off, the default path is untouched.
+    if require_recall and load_card(bundle, concept).kind == "article":
+        if not _recall_cleared(bundle, concept):
+            steps.append({
+                "step": "recall-gate",
+                "ok": False,
+                "error": "recall_not_cleared",
+                "message": (
+                    f"evidence-recall gate not cleared for {concept}; run "
+                    "`wikify work concept-recall` and record page_recall_cleared, "
+                    "or pass nothing to skip"
+                ),
+            })
+            _emit_finalize(envelope, fmt_resolved)
+            raise typer.Exit(code=EXIT_VALIDATION)
+        steps.append({"step": "recall-gate", "ok": True})
 
     # Step 3: promote response to the wiki layout.
     typer.echo(f"finalize: commit {concept}", err=True)

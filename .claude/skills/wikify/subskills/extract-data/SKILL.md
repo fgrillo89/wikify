@@ -12,15 +12,58 @@ core (subject / property / value / unit + provenance) with an open
 conditions map. The store is the source of truth; data-artifact tables are
 materialized views over it (built by `consolidate-data`).
 
-## Two modes
+## Three modes
 
 - **Dedicated pass** (target: a doc list or "global"). Pull candidate
   sources and read them: corpus tables (`asset_type='table'`, which carry
   markdown content) and number-dense body chunks. This is the main path —
   tables are the richest source.
+- **Property-targeted** (target: one canonical property + its aliases and
+  units). Sweep the WHOLE corpus for every chunk that mentions the property,
+  then extract+verify each candidate. This is the recall path: use it when a
+  property (e.g. growth per cycle) is under-covered because per-round doc
+  slices only ever scanned a fraction of the papers that report it. See
+  "Property-targeted mode" below.
 - **Piggyback** (target: a slug an explorer just grew). Re-read the chunks
   the explorer accepted as evidence and lift any numbers stated in prose.
   Cheap, because the chunks are already in hand.
+
+## Property-targeted mode
+
+Inputs: a **canonical property** name, its **alias** phrasings, and its
+**units**. Cover EVERY genuinely-different way the corpus names the
+quantity: the acronym AND its expansion (`GPC` and `growth per cycle`),
+close synonyms (`growth rate per cycle`, `deposition per cycle`), and ALL
+unit spellings — ASCII, Unicode, and word forms (`A/cycle`, `Å/cycle`,
+`Angstrom/cycle`, `Angstroms per cycle`, `nm/cycle`, `pm/cycle`).
+Separator variants (space vs hyphen, e.g. `growth per cycle` <->
+`growth-per-cycle`) are AUTO-EXPANDED by the sweep, and duplicate matches
+are deduped per chunk and per doc, so list the distinct NAMES and unit
+spellings — not every hyphenation. Supply 3+ phrasings so paraphrases and
+acronyms are not missed.
+
+1. Enumerate every candidate chunk across all docs and read the recall report:
+   ```bash
+   wikify data harvest-property --property "growth per cycle" \
+     --alias GPC --alias "growth-per-cycle" \
+     --unit "A/cycle" --unit "Angstrom/cycle" \
+     --corpus <corpus> --run <bundle> --format json
+   ```
+   The result is `{report{property, docs_mentioning_property, candidate_chunks,
+   docs_in_table, data_recall, truncated}, candidates:[{doc_id, chunk_id,
+   matched_phrasing, source_kind}], docs_extracted, matched_chunks}`. It does
+   NOT add points — it hands you the worklist. Enumeration is cheap (handles
+   only); pass `--include-text` if you want each candidate's chunk body inline.
+2. For each candidate `chunk_id`, read the source, lift the property's value(s),
+   and stage one JSON point per number exactly as in the dedicated pass.
+3. Ingest through the gate with `data add` (below). The gate's
+   subject/property/value/quote check is what filters false positives from an
+   ambiguous unit like `A/cycle` (amperes vs angstrom) — trust it, do not
+   pre-judge candidates.
+4. Re-run `harvest-property` to refresh `data_recall`. Stop when
+   `data_recall >= 0.90`, or when two consecutive sweeps add < 2 verified
+   claims and nothing is `truncated`. If `truncated` is true, more candidates
+   remain past the `--max-chunks` cap (default 500) — continue across rounds.
 
 ## What a data point is
 
