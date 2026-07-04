@@ -213,17 +213,25 @@ judges at most `budget_chunks`, so the walk's fan-out never inflates the
 expensive (model-judged) step. The `seen_chunks` set plus
 `corpus_citation_walk`'s internal cross-hop dedup make cycles impossible.
 Using `corpus_citation_walk` (marker-precise, query-scoped) instead of the
-old whole-bibliography `corpus_traverse(to="references")` walk is both more
-relevant AND cheaper -- it never fans out over a paper's full reference list.
+old whole-bibliography `corpus_traverse(to="references")` walk is more
+RELEVANT and BOUNDED -- it follows only the papers a chunk actually cites,
+re-scored for the concept and deduped across hops, rather than fanning out
+over a paper's full reference list. It is not automatically cheaper (it does
+a scoped re-search per cited doc), so cost is held by `depth=2` (default),
+`top_k=5`, and the vetter's `budget_chunks` cap -- keep depth at 2 except
+for hub concepts.
 
-**Depth for hub concepts.** Default `depth = 2`. For a HUB concept only
-(top decile PageRank / node degree, editor-flagged) raise to `depth = 3`
+**Depth for hub concepts.** Default `depth = 2`. For a HUB concept only --
+one the editor can identify from data it already has: high `n_links` in
+`wiki rank` metrics, or high node degree in the article graph
+(`derived/index.json`) -- raise to `depth = 3`
 so reference-of-reference chains reach the foundational + extending
 literature; concept-grounding, `top_k`, and dedup keep it bounded. Do NOT
 deepen peripheral concepts.
 
 **Co-citation hop (hub concepts, bounded, optional).** After the walk, for
-a HUB concept only, run ONE co-citation hop: take the walk's top cited
+a HUB concept only (high `n_links` / article-graph degree, as above), run
+ONE co-citation hop: take the walk's top cited
 papers and pull OTHER papers that cite them
 (`corpus_traverse(chunk, to="cited-by", top_k=3)`) -- these co-citing
 "research-thread siblings" surface papers that share the concept's citation

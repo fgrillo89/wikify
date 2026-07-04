@@ -114,7 +114,7 @@ targets to the plan in order, removing them from later bands.
    dispatch a targeted GROW that pulls `recall.missing_docs` (the corpus's
    most-relevant papers this page skips), fills any `recall.empty_buckets`
    (a missing era), and reduces `recall.max_doc_share` (over-concentration
-   on one doc). Pull those `recall.missing_docs` DIRECTLY via a doc-targeted fetch -- `wikify work build-evidence <slug> --seed-docs '[<recall.missing_docs ids>]'` (or `corpus_find --in-doc <doc>` per missing doc, capped) -- so the specific papers the gate named are retrieved rather than re-searched (cheaper + deterministic; the graph already told us which docs). Then record the clearance so commit can enforce it:
+   on one doc). Pull those `recall.missing_docs` DIRECTLY, not by generic re-search: for each missing doc run `corpus find --in-doc <doc>` (scored for the concept) to get its best chunks and route them through the vetter, or `wikify work notebook-init <slug> --seed-docs '[<missing ids>]'` then `wikify work build-evidence <slug>` -- capped to the named docs -- so the specific papers the gate identified are retrieved deterministically. Then record the clearance so commit can enforce it:
    `wikify run record-event --type page_recall_cleared --stage write
    --concept-id <slug> --run <bundle> --data '{"recall_ok": true}'` (or
    `{"exhausted": true}`). Only write once `recall.recall_ok` OR the sweep
