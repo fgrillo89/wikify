@@ -2050,3 +2050,29 @@ def test_concept_recall_proximity_no_evidence_falls_back(tmp_path: Path) -> None
     # Equal relevance + zero proximity -> deterministic doc_id order.
     order = [c["doc_id"] for c in recall["candidate_docs"]]
     assert order == sorted(order)
+
+
+def test_concept_recall_proximity_no_graph_edges_table(tmp_path: Path) -> None:
+    """A corpus whose ``graph_edges`` table is absent yields proximity 0 for
+    every candidate without crashing (targeted read swallows the error)."""
+    import sqlite3
+
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+    cid_2015, _ = docs["doc_2015"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2015, doc_id="doc_2015", status="active")],
+    )
+    con = sqlite3.connect(str(corpus_root / "wikify.db"))
+    try:
+        con.execute("DROP TABLE graph_edges")
+        con.commit()
+    finally:
+        con.close()
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])

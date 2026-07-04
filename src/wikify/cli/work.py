@@ -1778,30 +1778,44 @@ def _citation_proximity(
     evidence docs it shares a citation edge with -- either it cites, or is
     cited by, that evidence doc -- normalised as ``min(count, 3) / 3``.
 
-    Cost-neutral: only the already-enumerated candidates are scored, using
-    cheap adjacency lookups (``source().references()`` / ``.cited_by()``)
-    on the corpus citation graph. No corpus search or traversal expansion.
-    Returns 0.0 for every candidate when there is no evidence, the graph is
-    unavailable, or a doc is absent from the graph.
+    Cost-neutral: one targeted read of the ``graph_edges`` ``references``
+    rows restricted to the candidate x evidence document pairs (both
+    directions), so the whole in-memory knowledge graph is never built.
+    Returns 0.0 for every candidate when there is no evidence, the
+    citation table is unavailable, or a doc has no such edge.
     """
+    import sqlite3
+
     prox = {cid: 0.0 for cid in candidate_ids}
     if not candidate_ids or not represented_docs:
         return prox
-    try:
-        from ..corpus.chunks import read_knowledge_graph
-
-        kg = read_knowledge_graph(corpus)
-    except Exception:
+    if not corpus.sqlite_path.exists():
         return prox
     cand_set = set(candidate_ids)
-    counts = {cid: 0 for cid in candidate_ids}
-    for did in represented_docs:
-        node = kg.source(did)
-        neighbors = set(node.references().ids()) | set(node.cited_by().ids())
-        for cid in cand_set & neighbors:
-            counts[cid] += 1
-    for cid, n in counts.items():
-        prox[cid] = min(n, 3) / 3.0
+    repr_set = set(represented_docs)
+    cand_ph = ",".join("?" * len(candidate_ids))
+    repr_ph = ",".join("?" * len(represented_docs))
+    con = sqlite3.connect(str(corpus.sqlite_path))
+    try:
+        rows = con.execute(
+            "SELECT src_id, dst_id FROM graph_edges WHERE kind='references' AND ("
+            f"(src_id IN ({cand_ph}) AND dst_id IN ({repr_ph})) OR "
+            f"(src_id IN ({repr_ph}) AND dst_id IN ({cand_ph})))",
+            candidate_ids + represented_docs + represented_docs + candidate_ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return prox
+    finally:
+        con.close()
+    # Distinct evidence-doc neighbours per candidate (either edge direction).
+    neighbours: dict[str, set[str]] = {cid: set() for cid in candidate_ids}
+    for src, dst in rows:
+        if src in cand_set and dst in repr_set:
+            neighbours[src].add(dst)
+        if dst in cand_set and src in repr_set:
+            neighbours[dst].add(src)
+    for cid, reps in neighbours.items():
+        prox[cid] = min(len(reps), 3) / 3.0
     return prox
 
 
