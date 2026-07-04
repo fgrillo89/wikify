@@ -31,8 +31,16 @@ materialized views over it (built by `consolidate-data`).
 ## Property-targeted mode
 
 Inputs: a **canonical property** name, its **alias** phrasings, and its
-**units** (supply 3+ phrasings so paraphrases are not missed — e.g.
-`growth per cycle`, `GPC`, plus units `A/cycle`, `Angstrom/cycle`).
+**units**. Cover EVERY genuinely-different way the corpus names the
+quantity: the acronym AND its expansion (`GPC` and `growth per cycle`),
+close synonyms (`growth rate per cycle`, `deposition per cycle`), and ALL
+unit spellings — ASCII, Unicode, and word forms (`A/cycle`, `Å/cycle`,
+`Angstrom/cycle`, `Angstroms per cycle`, `nm/cycle`, `pm/cycle`).
+Separator variants (space vs hyphen, e.g. `growth per cycle` <->
+`growth-per-cycle`) are AUTO-EXPANDED by the sweep, and duplicate matches
+are deduped per chunk and per doc, so list the distinct NAMES and unit
+spellings — not every hyphenation. Supply 3+ phrasings so paraphrases and
+acronyms are not missed.
 
 1. Enumerate every candidate chunk across all docs and read the recall report:
    ```bash

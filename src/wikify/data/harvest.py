@@ -140,15 +140,30 @@ def list_table_assets(corpus: Corpus, doc_ids: list[str] | None = None) -> list[
 
 
 def _needle_set(*groups: list[str]) -> list[str]:
-    """Deduped, lowercased, non-empty match needles from alias/unit groups."""
+    """Deduped, lowercased match needles from alias/unit groups.
+
+    Each alias is expanded to its separator variants: internal whitespace is
+    collapsed and spaces and hyphens are treated as interchangeable, so a
+    caller that supplies ``"growth per cycle"`` also matches
+    ``"growth-per-cycle"`` (and vice versa) without enumerating every
+    spelling. The needle set is deduped, so a chunk that matches several
+    aliases is still counted once by the sweep. (The acronym and the expanded
+    form -- ``"gpc"`` vs ``"growth per cycle"`` -- are genuinely different
+    strings; supply BOTH as aliases.)
+    """
     seen: set[str] = set()
     out: list[str] = []
     for group in groups:
         for raw in group or []:
-            n = (raw or "").strip().lower()
-            if n and n not in seen:
-                seen.add(n)
-                out.append(n)
+            base = re.sub(r"\s+", " ", (raw or "").strip().lower())
+            if not base:
+                continue
+            spaced = re.sub(r"\s+", " ", base.replace("-", " ")).strip()
+            hyphened = spaced.replace(" ", "-")
+            for n in (base, spaced, hyphened):
+                if n and n not in seen:
+                    seen.add(n)
+                    out.append(n)
     return out
 
 
