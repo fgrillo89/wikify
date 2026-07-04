@@ -109,8 +109,10 @@ acquisition with TTL) or by per-concept `.claim` files.
 |-- wiki/
 |   |-- articles/<slug>.md                  canonical article pages
 |   |-- people/<slug>.md                    canonical biography pages
+|   |-- data/<slug>.md                      committed kind=data artifact tables
 |   `-- index.md
 |-- wiki.db                                 committed page query store
+|-- claims.db                               data-point claim store (incl. property_sweeps)
 `-- derived/
     |-- index.json                          page list projection
     |-- navigation.json                     render navigation export
@@ -154,7 +156,12 @@ Allowed event types: `stage_changed`, `cli_invoked`,
 `evidence_added`, `inbox_suggestion_created`, `inbox_consolidated`,
 `query_started`, `wiki_page_read`, `query_feedback_created`,
 `draft_created`, `call`, `validation_completed`, `page_committed`,
-`page_refined`, `budget_exceeded`, `run_closed`.
+`page_refined`, `budget_exceeded`, `run_closed`, `round_started`,
+`round_completed`, `dossier_promoted`, `dossier_stalled`,
+`dossier_parked`, `pattern_dispatched`, `corpus_drift_detected`,
+`page_embedding_failed`, `data_page_collision_skipped`,
+`page_recall_cleared`. The complete, authoritative set is
+`VALID_EVENT_TYPES` in `bundle/run/events.py`.
 
 Cost is computed on demand by
 `src/wikify/bundle/run/cost.py::cost_summary(bundle)` filtering
@@ -190,7 +197,7 @@ src/wikify/
 |   |-- __main__.py                 python -m wikify.cli entry point
 |   |-- _io.py                      cli_invoked event capture wrapper
 |   |-- _helpers.py                 shared exit codes, error envelope
-|   `-- (corpus, run, work, draft, wiki, render, eval, mcp).py
+|   `-- (corpus, arxiv, run, work, data, draft, wiki, render, eval, mcp).py
 |-- mcp/                            MCP adapter, envelopes, resources, context binding
 |-- api.py                          Bundle + Corpus context dataclasses
 `-- (config, context, embedding, models, types).py
