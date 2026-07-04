@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wikify.cli import app
@@ -660,6 +662,21 @@ def _commit_article(bundle: Path, slug: str, title: str) -> None:
     )
 
 
+def _commit_article_with_doc(
+    bundle: Path, slug: str, title: str, doc_id: str
+) -> None:
+    """Committed article carrying one evidence footnote for ``doc_id`` so the
+    evidence-overlap graph can form edges between pages sharing a document."""
+    art_dir = bundle / "wiki" / "articles"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / f"{slug}.md").write_text(
+        f"---\nid: {title}\nkind: article\ntitle: {title}\n---\n\n"
+        f"# {title}\n\nBody with a claim.[^e1]\n\n## References\n\n"
+        f'[^e1]: {doc_id} > "a verbatim quote"\n',
+        encoding="utf-8",
+    )
+
+
 def test_run_metrics_appends_stats_line(tmp_path: Path) -> None:
     bundle = _init_bundle(tmp_path)
     _commit_article(bundle, "ald", "ALD")
@@ -672,6 +689,8 @@ def test_run_metrics_appends_stats_line(tmp_path: Path) -> None:
         "round", "n_committed_pages", "n_articles", "n_people", "band_counts",
         "chunk_coverage_ratio", "addressable_coverage_ratio", "n_data_points",
         "n_data_artifacts", "budget_spent_haiku_eq", "M1", "M3",
+        "graph_edges", "graph_density", "graph_avg_degree",
+        "graph_largest_cc_frac",
     }
     assert expected_keys <= set(rec)
     assert rec["round"] == 0
@@ -682,6 +701,11 @@ def test_run_metrics_appends_stats_line(tmp_path: Path) -> None:
     assert rec["M1"] is None
     # M3 is corpus-free (single page -> modularity 0.0).
     assert rec["M3"] == 0.0
+    # Single-page bundle -> evidence-overlap graph is empty (all zeros).
+    assert rec["graph_edges"] == 0
+    assert rec["graph_density"] == 0.0
+    assert rec["graph_avg_degree"] == 0.0
+    assert rec["graph_largest_cc_frac"] == 0.0
     # No DATA wave ran -> zero data counts, and claims.db is NOT conjured
     # onto disk by the metrics call (opening a DataStore would create it).
     assert rec["n_data_points"] == 0
@@ -696,6 +720,27 @@ def test_run_metrics_appends_stats_line(tmp_path: Path) -> None:
     ]
     assert len(lines) == 2
     assert [json.loads(ln)["round"] for ln in lines] == [0, 1]
+
+
+def test_run_metrics_evidence_overlap_graph(tmp_path: Path) -> None:
+    """Two committed pages sharing a source document form one edge, so the
+    evidence-overlap graph metrics land positive in the stats.jsonl line."""
+    bundle = _init_bundle(tmp_path)
+    _commit_article_with_doc(bundle, "ald", "ALD", "shared-doc")
+    _commit_article_with_doc(bundle, "cvd", "CVD", "shared-doc")
+    result = runner.invoke(
+        app, ["run", "metrics", "--run", str(bundle), "--round", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    line = (bundle / "derived" / "stats.jsonl").read_text(
+        encoding="utf-8"
+    ).strip()
+    rec = json.loads(line)
+    assert rec["n_committed_pages"] == 2
+    assert rec["graph_edges"] >= 1
+    assert rec["graph_density"] > 0
+    assert rec["graph_avg_degree"] > 0
+    assert rec["graph_largest_cc_frac"] > 0
 
 
 def test_run_stats_json_and_csv(tmp_path: Path) -> None:
@@ -713,7 +758,10 @@ def test_run_stats_json_and_csv(tmp_path: Path) -> None:
     csv = runner.invoke(app, ["run", "stats", "--run", str(bundle), "--format", "csv"])
     assert csv.exit_code == 0, csv.output
     rows = csv.output.strip().splitlines()
-    assert rows[0] == "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts"
+    assert rows[0] == (
+        "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts,"
+        "graph_edges,graph_density,graph_avg_degree,graph_largest_cc_frac"
+    )
     assert len(rows) == 3  # header + 2 rounds
     assert rows[1].split(",")[0] == "0"
 
@@ -743,16 +791,19 @@ def test_run_stats_plot_keeps_series(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     lines = result.output.strip().splitlines()
     # Series (header + 2 rounds) still present.
-    assert lines[0] == "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts"
+    assert lines[0] == (
+        "round,pages,chunk_cov,addr_cov,budget,M1,M3,n_artifacts,"
+        "graph_edges,graph_density,graph_avg_degree,graph_largest_cc_frac"
+    )
     assert lines[1].split(",")[0] == "0"
     assert lines[2].split(",")[0] == "1"
-    # Trailing status line carries the plot path.
+    # Trailing status line carries the plot path + renderer.
     status = json.loads(lines[-1])
     assert status["plot"] == str(out)
     assert status["n_rounds"] == 2
-    svg = out.read_text(encoding="utf-8")
-    assert "<svg" in svg
-    assert "<polyline" in svg
+    assert status["renderer"] in {"matplotlib", "svg"}
+    # A non-empty chart file is written regardless of renderer.
+    assert out.stat().st_size > 0
 
 
 def test_run_stats_plot_json_keeps_series(tmp_path: Path) -> None:
@@ -769,8 +820,66 @@ def test_run_stats_plot_json_keeps_series(tmp_path: Path) -> None:
     lines = result.output.strip().splitlines()
     series = json.loads(lines[0])
     assert [r["round"] for r in series] == [0]
-    assert json.loads(lines[-1])["plot"] == str(out)
-    assert out.read_text(encoding="utf-8").startswith("<svg")
+    status = json.loads(lines[-1])
+    assert status["plot"] == str(out)
+    assert status["renderer"] in {"matplotlib", "svg"}
+    assert out.stat().st_size > 0
+
+
+def test_run_stats_plot_svg_fallback(monkeypatch, tmp_path: Path) -> None:
+    """matplotlib absent -> the hand-rolled SVG writer renders the chart."""
+    monkeypatch.setitem(sys.modules, "matplotlib", None)
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    status = json.loads(result.output.strip().splitlines()[-1])
+    assert status["renderer"] == "svg"
+    svg = out.read_text(encoding="utf-8")
+    assert "<svg" in svg
+    assert "<polyline" in svg
+
+
+def test_run_stats_plot_matplotlib_png(tmp_path: Path) -> None:
+    """matplotlib present -> a non-empty PNG is written, renderer reported."""
+    pytest.importorskip("matplotlib")
+    bundle = _init_bundle(tmp_path)
+    _commit_article(bundle, "ald", "ALD")
+    for rnd in ("0", "1"):
+        runner.invoke(app, ["run", "metrics", "--run", str(bundle), "--round", rnd])
+    out = tmp_path / "chart.png"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    status = json.loads(result.output.strip().splitlines()[-1])
+    assert status["renderer"] == "matplotlib"
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_run_stats_plot_sparse_series_ok(monkeypatch, tmp_path: Path) -> None:
+    """None-valued metrics per round do not crash either renderer."""
+    bundle = _init_bundle(tmp_path)
+    # round_completed events with no coverage/budget -> sparse series.
+    runner.invoke(
+        app,
+        [
+            "run", "record-event", "--run", str(bundle),
+            "--type", "round_completed",
+            "--data", '{"round": 0, "n_committed_pages": 1}',
+        ],
+    )
+    out = tmp_path / "chart.svg"
+    result = runner.invoke(
+        app, ["run", "stats", "--run", str(bundle), "--plot", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.stat().st_size > 0
 
 
 def test_run_stats_invalid_format_errors(tmp_path: Path) -> None:
