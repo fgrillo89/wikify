@@ -94,3 +94,104 @@ def test_rank_all_with_no_wikify_db_raises(tmp_path):
     with pytest.raises(queries.QueryError) as exc:
         queries.find(corpus, query="x", by="chunk", rank="all", top_k=5)
     assert exc.value.code == "no_wikify_db"
+
+
+# --------------------------------------------------------------- strict_semantic
+
+
+def _break_semantic(monkeypatch) -> None:
+    """Make the vector-index search raise, simulating a broken embedder path."""
+    from wikify.corpus.store import Store
+
+    class _BadIndex:
+        def search(self, *a, **k):
+            raise RuntimeError("vector index unavailable")
+
+    def _fake_vector_index(self, space_id, node_type="chunk"):
+        return _BadIndex()
+
+    monkeypatch.setattr(Store, "vector_index", _fake_vector_index)
+
+
+def test_strict_semantic_healthy_does_not_raise(corpus):
+    """A working embedder: strict_semantic must NOT raise, and the semantic
+    channel participates (no false positive)."""
+    out = queries.find(
+        corpus, query="growth per cycle", by="chunk", rank="all", top_k=5,
+        strict_semantic=True,
+    )
+    assert out["rows"]
+    assert any("semantic" in r["modes"] for r in out["rows"])
+
+
+def test_strict_semantic_raises_when_semantic_fails(corpus, monkeypatch):
+    """strict_semantic surfaces a semantic-mode failure loudly rather than
+    silently degrading to bm25+text."""
+    _break_semantic(monkeypatch)
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(
+            corpus, query="growth per cycle", by="chunk", rank="all", top_k=5,
+            strict_semantic=True,
+        )
+    assert exc.value.code == "semantic_search_failed"
+
+
+def test_default_tolerates_semantic_failure(corpus, monkeypatch):
+    """Default (strict_semantic off): a semantic failure is still swallowed so
+    interactive search keeps returning lexical hits -- unchanged behavior."""
+    _break_semantic(monkeypatch)
+    out = queries.find(
+        corpus, query="growth per cycle", by="chunk", rank="all", top_k=5,
+    )
+    assert out["kind"] == "chunks"
+    assert all("semantic" not in r["modes"] for r in out["rows"])
+
+
+def test_strict_semantic_raises_when_query_embedding_fails(corpus, monkeypatch):
+    """A broken embedder that fails at QUERY-EMBED time (before the vector
+    search, so outside _safe_mode) is still normalized to a structured
+    QueryError under strict -- not a raw exception."""
+    import wikify.embedding as emb
+
+    def _boom_embedder(*a, **k):
+        raise RuntimeError("onnxruntime/fastembed unavailable")
+
+    monkeypatch.setattr(emb, "embedder_for", _boom_embedder)
+    with pytest.raises(queries.QueryError) as exc:
+        queries.find(
+            corpus, query="growth per cycle", by="chunk", rank="all", top_k=5,
+            strict_semantic=True,
+        )
+    assert exc.value.code == "semantic_search_failed"
+
+
+def test_default_tolerates_query_embedding_failure(corpus, monkeypatch):
+    """Without strict, a query-embed failure degrades to lexical channels
+    instead of raising -- unchanged interactive-search behavior."""
+    import wikify.embedding as emb
+
+    def _boom_embedder(*a, **k):
+        raise RuntimeError("onnxruntime/fastembed unavailable")
+
+    monkeypatch.setattr(emb, "embedder_for", _boom_embedder)
+    out = queries.find(
+        corpus, query="growth per cycle", by="chunk", rank="all", top_k=5,
+    )
+    assert out["kind"] == "chunks"
+    assert all("semantic" not in r["modes"] for r in out["rows"])
+
+
+def test_safe_mode_reraise_true_raises():
+    def boom():
+        raise RuntimeError("x")
+
+    with pytest.raises(queries.QueryError) as exc:
+        queries._safe_mode("semantic", boom, reraise=True)
+    assert exc.value.code == "semantic_search_failed"
+
+
+def test_safe_mode_reraise_false_swallows():
+    def boom():
+        raise RuntimeError("x")
+
+    assert queries._safe_mode("semantic", boom, reraise=False) == []
