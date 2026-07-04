@@ -1852,7 +1852,9 @@ def test_concept_recall_json_shape(tmp_path: Path) -> None:
     # All 5 photonics docs surface as candidates.
     assert len(recall["candidate_docs"]) == 5
     for c in recall["candidate_docs"]:
-        assert set(c) == {"doc_id", "year", "score"}
+        assert set(c) == {"doc_id", "year", "score", "citation_proximity"}
+        # No evidence and no citation edges -> proximity is a no-op.
+        assert c["citation_proximity"] == 0.0
     assert set(recall["year_buckets"]) == {"early", "middle", "recent"}
     for b in recall["year_buckets"].values():
         assert set(b) == {"total", "represented"}
@@ -1981,3 +1983,70 @@ def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> Non
         )
         assert result.exit_code == 0, result.output
         assert seen_modes and all(m == expected for m in seen_modes), seen_modes
+
+
+def _add_reference_edges(corpus_root: Path, citing: str, cited: list[str]) -> None:
+    """Add doc->doc ``references`` edges (``citing`` cites each of ``cited``)."""
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.graph import Edge, GraphStore
+
+    store = Store((corpus_root / "wikify.db"))
+    try:
+        with transaction(store.con):
+            GraphStore(store.con).upsert_edges(
+                [Edge("source", citing, "references", "source", c) for c in cited]
+            )
+    finally:
+        store.close()
+
+
+def test_concept_recall_citation_proximity_reranks(tmp_path: Path) -> None:
+    """Candidates sharing a citation edge with the concept's evidence float
+    above equally-relevant candidates that do not.
+
+    All five fixture docs carry identical chunk text, so BM25 relevance ties
+    across them; ordering is then decided by citation proximity. The evidence
+    doc (2015) cites doc_2010 and doc_2018 but not doc_2012 / doc_2021, so the
+    two cited docs rank first with proximity 1/3 and the rest score 0.0.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # Evidence: the 2015 doc, which cites 2010 (X) and 2018 (Y) but not
+    # 2012 / 2021 (Z candidates).
+    cid_2015, _ = docs["doc_2015"]
+    append_evidence(
+        bundle_api, "photonics",
+        [EvidenceRecord(chunk_id=cid_2015, doc_id="doc_2015", status="active")],
+    )
+    _add_reference_edges(corpus_root, "doc_2015", ["doc_2010", "doc_2018"])
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    prox = {c["doc_id"]: c["citation_proximity"] for c in recall["candidate_docs"]}
+    assert prox["doc_2010"] == pytest.approx(1 / 3, abs=1e-4)
+    assert prox["doc_2018"] == pytest.approx(1 / 3, abs=1e-4)
+    assert prox["doc_2012"] == 0.0
+    assert prox["doc_2021"] == 0.0
+
+    order = [c["doc_id"] for c in recall["candidate_docs"]]
+    # Both cited docs outrank the equally-relevant, non-adjacent Z docs.
+    for cited in ("doc_2010", "doc_2018"):
+        assert order.index(cited) < order.index("doc_2012")
+        assert order.index(cited) < order.index("doc_2021")
+
+
+def test_concept_recall_proximity_no_evidence_falls_back(tmp_path: Path) -> None:
+    """With citation edges present but no evidence docs, proximity is 0 and
+    ordering falls back to pure relevance (no crash)."""
+    bundle, corpus_root, _docs = _recall_bundle(tmp_path)
+    _add_reference_edges(corpus_root, "doc_2015", ["doc_2010", "doc_2018"])
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert recall["represented_docs"] == []
+    assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])
+    # Equal relevance + zero proximity -> deterministic doc_id order.
+    order = [c["doc_id"] for c in recall["candidate_docs"]]
+    assert order == sorted(order)

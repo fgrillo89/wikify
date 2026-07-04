@@ -1763,6 +1763,48 @@ def _coerce_year(value) -> int | None:
         return None
 
 
+# Blend weight for the citation-proximity boost. Proximity is normalised to
+# [0, 1], so a candidate can gain at most this much over its relevance score.
+# Kept small so relevance stays dominant and proximity only breaks near-ties.
+_PROXIMITY_WEIGHT = 0.15
+
+
+def _citation_proximity(
+    corpus, candidate_ids: list[str], represented_docs: list[str],
+) -> dict[str, float]:
+    """Per-candidate citation centrality within the concept's own evidence.
+
+    For each candidate doc, count how many of the concept's current
+    evidence docs it shares a citation edge with -- either it cites, or is
+    cited by, that evidence doc -- normalised as ``min(count, 3) / 3``.
+
+    Cost-neutral: only the already-enumerated candidates are scored, using
+    cheap adjacency lookups (``source().references()`` / ``.cited_by()``)
+    on the corpus citation graph. No corpus search or traversal expansion.
+    Returns 0.0 for every candidate when there is no evidence, the graph is
+    unavailable, or a doc is absent from the graph.
+    """
+    prox = {cid: 0.0 for cid in candidate_ids}
+    if not candidate_ids or not represented_docs:
+        return prox
+    try:
+        from ..corpus.chunks import read_knowledge_graph
+
+        kg = read_knowledge_graph(corpus)
+    except Exception:
+        return prox
+    cand_set = set(candidate_ids)
+    counts = {cid: 0 for cid in candidate_ids}
+    for did in represented_docs:
+        node = kg.source(did)
+        neighbors = set(node.references().ids()) | set(node.cited_by().ids())
+        for cid in cand_set & neighbors:
+            counts[cid] += 1
+    for cid, n in counts.items():
+        prox[cid] = min(n, 3) / 3.0
+    return prox
+
+
 @app.command("concept-recall")
 def cmd_concept_recall(
     concept: str = typer.Argument(...),
@@ -1869,6 +1911,23 @@ def cmd_concept_recall(
     active = [r for r in read_evidence(bundle, concept) if r.status == "active"]
     represented_docs = sorted({r.doc_id for r in active})
     represented_set = set(represented_docs)
+
+    # Re-rank candidates by relevance blended with citation proximity: a
+    # candidate that cites, or is cited by, the concept's current evidence
+    # docs is more clearly part of this concept's literature than one that
+    # merely matches keywords. Proximity only lifts docs that already have
+    # positive relevance, so a zero-relevance doc never jumps the list.
+    proximity = _citation_proximity(
+        corpus, [c["doc_id"] for c in candidate_docs], represented_docs
+    )
+    for c in candidate_docs:
+        c["citation_proximity"] = round(proximity.get(c["doc_id"], 0.0), 4)
+
+    def _combined(c: dict) -> float:
+        boost = _PROXIMITY_WEIGHT * c["citation_proximity"] if c["score"] > 0 else 0.0
+        return c["score"] + boost
+
+    candidate_docs.sort(key=lambda c: (-_combined(c), -c["score"], c["doc_id"]))
     doc_record_counts = Counter(r.doc_id for r in active)
     total_records = len(active)
     max_doc_share = (
