@@ -300,9 +300,14 @@ This computes one snapshot and **appends** it as a single JSON line to
 - `chunk_coverage_ratio`, `addressable_coverage_ratio` — corpus coverage.
 - `n_data_points`, `n_data_artifacts` — data-layer claim and table counts.
 - `budget_spent_haiku_eq` — cumulative spend so far.
-- `M1` — coverage residual, and `M3` — the **G_evidence** modularity, the
-  same graph-structure number the eval machinery reports. Both are reused
-  from `wikify.eval.metrics`, not reimplemented.
+- `M1` — coverage residual, and `M3` — the **G_evidence** modularity
+  (reused from `wikify.eval.metrics`, not reimplemented).
+- `graph_edges`, `graph_density`, `graph_avg_degree`,
+  `graph_largest_cc_frac` — structural metrics of the committed-page
+  evidence-overlap graph (nodes = committed pages; an edge joins two pages
+  that share a source document), tracked alongside M3 so the wiki's
+  connectivity, not just its modularity, is recorded per round. All zero
+  when fewer than two pages are committed.
 
 Coverage and M1 need the source text, so `chunk_coverage_ratio`,
 `addressable_coverage_ratio`, and `M1` are `null` unless `--corpus` is
@@ -322,11 +327,15 @@ log. `--format json` (default) prints the record list; `--format csv`
 emits a header row (`round, pages, chunk_cov, addr_cov, budget, M1, M3,
 n_artifacts`) plus one row per round.
 
-`--plot <out.svg>` writes a chart in addition to the series. The plot is a
-**hand-rolled, dependency-free SVG** — two stacked panels, addressable
-coverage and cumulative committed pages against round — with no plotting
-library involved. The series is still emitted in the requested format; a
-trailing JSON status line reports the plot path.
+`--plot <out>` writes a chart in addition to the series. It renders via
+**matplotlib** when that is installed — the optional `[plot]` extra
+(`uv sync --extra plot` / `pip install 'wikify[plot]'`), honouring the
+output extension (`.png` / `.svg` / `.pdf`) — and falls back to a
+**hand-rolled, dependency-free SVG** (two stacked panels: addressable
+coverage and cumulative committed pages against round) when matplotlib is
+absent. The series is still emitted in the requested format; the trailing
+JSON status line reports the plot path and a `renderer` field
+(`matplotlib` or `svg`).
 
 ## Data-layer completeness: `data_recall`
 
