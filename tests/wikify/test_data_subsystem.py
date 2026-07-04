@@ -1742,6 +1742,27 @@ def test_harvest_property_enumerates_whole_corpus(make_sqlite_corpus) -> None:
     assert len(mentioning) > len(slice_docs)
 
 
+def test_harvest_property_separator_variants_and_dedup(make_sqlite_corpus) -> None:
+    """Hyphen/space naming variants of a property match WITHOUT the caller
+    enumerating every spelling, and a chunk matching several aliases is
+    counted once (deduped per chunk)."""
+    docs = [
+        ("h1", "The Al2O3 growth-per-cycle was 1.1 A/cycle at 200 C."),   # hyphenated
+        ("h2", "HfO2 growth per cycle reached 1.0 A/cycle at 250 C."),    # spaced
+        ("h3", "TiO2 GPC (growth per cycle) of 0.9 A/cycle at 150 C."),   # two aliases
+    ]
+    corpus = make_sqlite_corpus([_doc_with_chunk(d, t) for d, t in docs])
+    # Caller supplies only the SPACE form of the phrase (plus the acronym);
+    # the hyphenated h1 is still found via auto-expanded separator variants.
+    sweep = sweep_property_candidates(
+        corpus, phrasings=["growth per cycle", "GPC"], units=[]
+    )
+    assert set(sweep["docs_mentioning"]) == {"h1", "h2", "h3"}
+    # h3 matches BOTH 'GPC' and 'growth per cycle' but appears once.
+    assert len([c for c in sweep["candidates"] if c["doc_id"] == "h3"]) == 1
+    assert sweep["candidate_chunks"] == 3
+
+
 def test_harvest_property_include_text_returns_chunk_body(make_sqlite_corpus) -> None:
     corpus = _sweep_corpus(make_sqlite_corpus)
     sweep = sweep_property_candidates(
