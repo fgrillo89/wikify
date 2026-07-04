@@ -96,7 +96,11 @@ most one Task per slug per round. Walk the precedence list, attaching
 targets to the plan in order, removing them from later bands.
 
 1. **WRITE wave.** Every slug in `ready` band. Up to `wave_size`
-   (from Sizing) per round. Eager — writing is terminal. Note the
+   (from Sizing) per round. Eager — writing is terminal. Ready slugs may
+   be grouped into fewer writer Tasks (one Task processes several ready
+   slugs sequentially) to amortise per-agent overhead, as long as the
+   Tasks stay slug-disjoint and each slug gets its own `response.json` +
+   `draft check` (see DISPATCH). Note the
    readiness lag: `growth_stalled` is a gate, so a well-evidenced slug
    only enters `ready` once NO `evidence_added` event fired for it in
    the last 2 rounds. The rhythm is therefore grow -> leave untouched
@@ -180,7 +184,27 @@ For each plan entry, spawn one `Task` (sonnet tier) bound to
 `explore` for explore Tasks or `write-page`
 for the write wave. Pass `pattern`, `target`, `budget_chunks`, `depth`
 verbatim from the plan. Record `{role, model_id, tier, tokens_in,
-tokens_out, stage}` from each return. Use the harness-measured token
+tokens_out, stage}` from each return.
+
+**Brief-first, cache-aligned dispatch.** Each subagent's FIRST read is
+its stable role brief -- `subskills/write-page/references/writer-brief.md`
+for writers, `subskills/explore/references/explorer-brief.md` for
+explorers -- not the
+full source file set. The brief text is identical across same-role
+Tasks, so dispatch all same-role Tasks of a wave in ONE burst; the
+shared brief prefix then stays inside the prompt-cache TTL and is
+charged once, not per agent. A writer Task may also process MULTIPLE
+ready slugs sequentially in one Task to amortise per-agent fixed
+overhead, provided the batch is slug-disjoint from every other
+concurrent Task (the one-writer-per-slug ledger claim holds at the SLUG
+level, not the Task level) and the Task writes each slug's own
+`response.json` and runs `wikify draft check <slug> --run <bundle> --dry-run` per slug.
+A batched writer processes its slugs INDEPENDENTLY and returns an ARRAY
+of per-slug result objects `{slug, response_json_path, dry_run_ok,
+escalate?}` (a single-slug Task returns one such object); a one-slug
+failure is recorded in that slug's object and does not abort the others,
+and the editor iterates the array per-slug in CONSOLIDATE. This batching
+does not relax the SEED / PERSON single-Task-per-round race rule. Use the harness-measured token
 usage reported at the Task boundary (`subagent_tokens`), not the
 subagent's self-reported `tokens_in/tokens_out` — children cannot
 introspect their own tool-result intake and routinely undershoot it by
@@ -406,7 +430,7 @@ roles below are subagents it dispatches; each may add an optional
 | editor | **L** | this skill (main loop) | bundle, corpus | round events, dispatch plan, escalation rulings |
 | explorer | sonnet M | `explore` | `pattern`, `target`, `run`, `corpus`, `budget_chunks`, `depth` | per-target envelope (see explorer skill) |
 | classifier | haiku S | this skill (Re-entry) | `doc_id`, dossier index | `{overlapping_slugs: [...]}` |
-| writer | sonnet M | `write-page` | `slug`, dossier path, evidence path | response.json path |
+| writer | sonnet M | `write-page` | `slug`(s), dossier path, evidence path | per-slug result `{slug, response_json_path, dry_run_ok, escalate?}`: one object for a single-slug Task, an ARRAY of them for a batched Task |
 | refiner | sonnet M | `refine` | `slug`, dossier path, committed page | response.json path / committed |
 | data-extractor | sonnet M | `extract-data` | `target` (docs or slug), `run`, `corpus` | `{submitted, stored, rejected}` |
 | data-consolidator | sonnet M | `consolidate-data` | `run`, theme (properties) | committed artifact id |

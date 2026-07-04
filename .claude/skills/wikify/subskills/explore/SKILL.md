@@ -15,6 +15,18 @@ A Task instance of this skill takes ONE pattern + ONE target list +
 budget and returns a structured envelope. The editor dispatches
 multiple parallel Tasks per round.
 
+## Role brief (read this first)
+
+The FIRST thing an explore Task reads is its role brief:
+`references/explorer-brief.md`. It is a lossless distillation of the
+P1-P5 patterns, shared mechanics, evidence-record fields, the
+kind=definition capture rule, the escalate-block contract, the return
+envelope, and the `gather-evidence` vetter contract. Read the brief and
+work from it; open a named source file only when the brief is ambiguous
+or you hit an out-of-brief case. The brief text is stable across explore
+Tasks, so the editor dispatches same-role explore Tasks in one burst to
+keep the shared brief prefix inside the prompt-cache TTL.
+
 ## Inputs
 
 - `pattern`: one of `P1`, `P2`, `P3`, `P4`, `P5`.
@@ -88,9 +100,12 @@ Task (avoids serialisation hazards).
   same `excluded_kinds`, with **no** per-chunk model calls, so its
   telemetry lands on the **editor/supervisor (M) tier**. A round driven
   by `build-evidence` shows ~zero haiku usage; that is expected, not a
-  failure. Both paths terminate in the same ledger via
-  `work add evidence`.
-- The vetter is invoked at the end, in one batch per target slug:
+  failure. Both paths land in the same per-slug evidence ledger, but
+  commit via different commands: this skill's direct-accept path via
+  `work add evidence` (below); the `build-evidence` path via
+  `build-evidence --from-ids` (see the gather-evidence vetter).
+- The direct-accept vetter (this skill's own path) is invoked at the end,
+  in one batch per target slug:
   ```bash
   wikify work add evidence <slug> --records <path> --run <bundle>
   ```
@@ -361,6 +376,7 @@ Patterns themselves do not choose. The editor's precedence rubric
 
 ## References
 
+- `references/explorer-brief.md` — lossless first-read role brief
 - `../reference/references/exploration/patterns.md` — formal definitions
 - `../gather-evidence/SKILL.md` — the vetter
 - `../bundle/SKILL.md` — CLI mechanics

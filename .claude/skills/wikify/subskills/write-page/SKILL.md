@@ -1,7 +1,7 @@
 ---
 name: write-page
 description: Produce a Wikify WriteResponse from supplied page context and evidence. Use when a workflow has selected a concept/page and needs encyclopedic article, person-page, comparison, or refinement prose grounded in evidence. Does not commit pages or decide readiness.
-allowed-tools: Bash(wikify draft show *)
+allowed-tools: Bash(wikify draft show *), Bash(wikify draft check *)
 ---
 
 # write-page
@@ -9,6 +9,36 @@ allowed-tools: Bash(wikify draft show *)
 Use this skill for the model-writing step. The workflow supplies the
 page context and decides why the page should be written. This skill
 produces `response.json` content that must later pass validation.
+
+## Role brief (read this first)
+
+The FIRST thing a writer Task reads is its role brief:
+`references/writer-brief.md`. It is a lossless distillation of every
+writer-facing rule, schema field, and self-check in the files listed
+under Required Style Layers plus the citation / constraint / schema
+references. Read the brief and write from it; open a named source file
+only when the brief is ambiguous or you hit an out-of-brief case. The
+brief text is stable across writer Tasks, so the editor dispatches
+same-role writer Tasks in one burst to keep the shared brief prefix
+inside the prompt-cache TTL.
+
+**Batched multi-slug writer Task.** One writer Task may process MULTIPLE
+ready slugs sequentially, amortising the per-agent fixed overhead
+(brief read + tool warmup). Each slug is processed INDEPENDENTLY: the
+Task writes each slug's own `response.json` and runs `wikify draft check
+<slug> --run <bundle> --dry-run` per slug. A failure on one slug is recorded in that
+slug's result object and does NOT abort the other slugs; partial success
+is normal.
+
+Safety rule: the batch must be slug-disjoint from every other concurrent
+Task (no two Tasks touch the same slug; the one-writer-per-slug ledger
+claim holds at the SLUG level, not the Task level). This does not change
+the SEED / PERSON single-Task-per-round race rule, which is unrelated.
+
+**Return.** A single-slug Task returns one result object; a batched Task
+returns an ARRAY of them, one per slug:
+`{slug, response_json_path, dry_run_ok, escalate?}`. The editor iterates
+the array in CONSOLIDATE (per-slug telemetry and escalation handling).
 
 ## Inputs
 
@@ -35,7 +65,9 @@ produces `response.json` content that must later pass validation.
 
 ## Required Style Layers
 
-Always consult:
+The role brief already distills these layers; read a source below only to
+resolve a brief ambiguity or an out-of-brief case. When you do, always
+consult:
 
 1. `references/style-guide.md`
 2. `../reference/references/writing/field-guides/generic.md`
@@ -187,6 +219,7 @@ Workflows may stage as `evidence -> write`, `evidence -> compaction
 
 ## References
 
+- `references/writer-brief.md`
 - `references/writer-response.md`
 - `references/style-guide.md`
 - `references/article-style.md`
