@@ -1,8 +1,8 @@
 # Metrics
 
-Once a run has produced a wiki, two questions matter: is the wiki any
-good, and was each page worth writing? Wikify answers them with two
-separate machineries.
+Once a run has produced a wiki, three questions matter: is the wiki any
+good, was each page worth writing, and how is the build progressing? Wikify
+answers them with three separate machineries.
 
 - **Evaluation metrics** judge the *finished* wiki in a bundle. They are
   computed after the fact by `wikify eval`, never call a model, and never
@@ -11,12 +11,18 @@ separate machineries.
 - **Maturity scoring** runs *during* the build. It scores each concept's
   dossier to decide when it is ready to be written into a page. It is the
   gate the agent loop checks every round.
+- **Per-round build metrics** snapshot the *whole build* at the end of a
+  round — coverage, page counts, graph structure, budget — and append the
+  line to a time series so progress can be tracked and plotted across
+  rounds.
 
-The two are independent. A high maturity score got a page written; the
-eval metrics tell you whether the wiki those pages form holds together.
+The three are independent. Maturity scoring got a page written; the
+per-round metrics track the build filling out round over round; the eval
+metrics tell you whether the wiki those pages form holds together.
 
-The implementations are `src/wikify/eval/metrics.py` (eval metrics) and
-`src/wikify/bundle/work/maturity.py` (maturity).
+The implementations are `src/wikify/eval/metrics.py` (eval metrics),
+`src/wikify/bundle/work/maturity.py` (maturity), and the `metrics` /
+`stats` commands in `src/wikify/cli/run.py` (per-round build metrics).
 
 ## Running the evaluation
 
@@ -269,3 +275,67 @@ The band follows from the score and gates:
 
 The agent loop reads these bands directly: `ready` concepts get written,
 `growing` concepts get more research, `stalled` ones get parked.
+
+## Per-round build metrics
+
+Eval judges the endpoint and maturity judges a single concept's readiness.
+Neither tells you whether the build is *making progress*. That is the third
+machinery: a per-round snapshot of the whole bundle, appended to a time
+series so coverage, page count, and graph structure can be tracked — and
+plotted — round over round.
+
+### Snapshotting a round
+
+```
+wikify run metrics --run <bundle> --round N [--corpus <corpus>]
+```
+
+This computes one snapshot and **appends** it as a single JSON line to
+`<bundle>/derived/stats.jsonl`. The record carries:
+
+- `round` — the round number this snapshot describes.
+- `n_committed_pages`, `n_articles`, `n_people` — committed page counts.
+- `band_counts` — the maturity-band histogram over all concepts, with
+  committed concepts folded into a `committed` band.
+- `chunk_coverage_ratio`, `addressable_coverage_ratio` — corpus coverage.
+- `n_data_points`, `n_data_artifacts` — data-layer claim and table counts.
+- `budget_spent_haiku_eq` — cumulative spend so far.
+- `M1` — coverage residual, and `M3` — the **G_evidence** modularity, the
+  same graph-structure number the eval machinery reports. Both are reused
+  from `wikify.eval.metrics`, not reimplemented.
+
+Coverage and M1 need the source text, so `chunk_coverage_ratio`,
+`addressable_coverage_ratio`, and `M1` are `null` unless `--corpus` is
+passed — the gap is shown, never a fabricated zero. Recording the same
+round twice appends a second line; the reader keeps the latest per round.
+
+### Reading the series
+
+```
+wikify run stats [--run <bundle>] [--format json|csv] [--plot <out.svg>]
+```
+
+`run stats` reads `derived/stats.jsonl`, dedupes to the latest record per
+round, and sorts by round. If the file is absent or empty it falls back to
+reconstructing a minimal series from `round_completed` events in the event
+log. `--format json` (default) prints the record list; `--format csv`
+emits a header row (`round, pages, chunk_cov, addr_cov, budget, M1, M3,
+n_artifacts`) plus one row per round.
+
+`--plot <out.svg>` writes a chart in addition to the series. The plot is a
+**hand-rolled, dependency-free SVG** — two stacked panels, addressable
+coverage and cumulative committed pages against round — with no plotting
+library involved. The series is still emitted in the requested format; a
+trailing JSON status line reports the plot path.
+
+## Data-layer completeness: `data_recall`
+
+The data layer carries its own per-property completeness signal.
+`wikify data harvest-property` sweeps every corpus chunk that mentions a
+property and reports `data_recall = docs_in_table / docs_mentioning_property`
+— the fraction of documents that mention the property whose value actually
+made it into a quote-verified table row. A property broadly reported across
+the corpus but thinly extracted scores low, and the `--require-recall`
+consolidation gate refuses to commit such a table (below 0.75 recall once
+at least 10 documents mention the property) unless `--skip-recall` is
+passed.
