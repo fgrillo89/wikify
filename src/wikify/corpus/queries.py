@@ -567,6 +567,7 @@ def search_chunks(
     rank: str = "semantic",
     in_doc: str | None = None,
     exclude_kinds: list[str] | None = None,
+    strict_semantic: bool = False,
 ) -> list[dict]:
     """Chunk search via the SQLite store.
 
@@ -598,7 +599,7 @@ def search_chunks(
     if rank == _MULTI_RANK:
         return _search_chunks_all_modes(
             corpus, query, top_k=top_k, in_doc=in_doc,
-            exclude_kinds=exclude_kinds,
+            exclude_kinds=exclude_kinds, strict_semantic=strict_semantic,
         )
     return _search_chunks_sqlite(
         corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
@@ -924,6 +925,7 @@ def _search_chunks_all_modes(
     corpus: Corpus, query: str, *,
     top_k: int, per_mode: int | None = None, in_doc: str | None = None,
     exclude_kinds: list[str] | None = None,
+    strict_semantic: bool = False,
 ) -> list[dict]:
     """Run semantic + bm25 + literal-substring chunk search and dedupe.
 
@@ -949,12 +951,28 @@ def _search_chunks_all_modes(
     pool = per_mode or max(top_k * 2, 20)
     store = open_store(corpus.root)
     try:
-        # Embed once; share between semantic and hybrid (we only need it for
-        # the semantic side here; BM25 + text don't use it).
+        # Embed the query once (shared by the semantic channel; BM25 + text
+        # don't use it). A failure HERE -- e.g. a broken/missing fastembed or
+        # onnxruntime -- happens before ``_safe_mode`` wraps the per-mode
+        # searches, so it would otherwise escape as a raw exception. When the
+        # caller requires the semantic channel (``strict_semantic``) and the
+        # corpus actually has a vector space, normalise it to a structured
+        # ``QueryError`` so callers get the same signal as an in-search
+        # failure; otherwise degrade to the lexical channels (``qv = None``).
         meta = read_meta(corpus.sqlite_path)
-        embed = embedder_for(meta.backend, meta.model, mode="query") if meta else None
         space_id = active_space_id(store)
-        qv = embed([query])[0] if embed else None  # type: ignore[index]
+        qv = None
+        if meta:
+            try:
+                embed = embedder_for(meta.backend, meta.model, mode="query")
+                qv = embed([query])[0]
+            except Exception as exc:  # noqa: BLE001
+                if strict_semantic and space_id:
+                    raise QueryError(
+                        "semantic_search_failed",
+                        f"query embedding failed: {exc}",
+                    ) from exc
+                qv = None
 
         def _doc_ids_for(cids: list[str]) -> dict[str, str]:
             if not cids:
@@ -1003,7 +1021,14 @@ def _search_chunks_all_modes(
                 ).fetchall()
             return [{"id": r["chunk_id"], "doc_id": r["doc_id"]} for r in rows]
 
-        sem_hits = _safe_mode("semantic", _semantic)
+        # When ``strict_semantic`` is set and the corpus actually HAS
+        # embeddings (a query vector was produced and a vector space exists), a
+        # semantic-mode failure means the runtime embedding path is broken;
+        # surface it loudly rather than silently downgrading to bm25+text.
+        sem_hits = _safe_mode(
+            "semantic", _semantic,
+            reraise=strict_semantic and qv is not None and bool(space_id),
+        )
         bm_hits = _safe_mode("bm25", _bm25)
         text_hits = _safe_mode("text", _text)
     finally:
@@ -1074,11 +1099,20 @@ def _search_chunks_all_modes(
     return out[:top_k]
 
 
-def _safe_mode(mode: str, fn) -> list[dict]:
+def _safe_mode(mode: str, fn, *, reraise: bool = False) -> list[dict]:
     try:
         return list(fn())
-    except (QueryError, Exception):  # noqa: BLE001
-        # FTS5 syntax error, embedder hiccup, etc. Drop just this mode.
+    except Exception as exc:  # noqa: BLE001
+        # FTS5 syntax error, embedder hiccup, etc. Drop just this mode so the
+        # other channels still return -- UNLESS the caller marked this mode as
+        # required (``reraise``), in which case a failure means a broken
+        # runtime path (e.g. the embedder) and must surface loudly rather than
+        # silently degrading the result to the remaining modes.
+        if reraise:
+            raise QueryError(
+                f"{mode}_search_failed",
+                f"{mode} chunk search failed: {exc}",
+            ) from exc
         return []
 
 
@@ -2156,6 +2190,7 @@ def find(
     field: str = "chunk_text",
     in_doc: str | None = None,
     exclude_kinds: list[str] | None = None,
+    strict_semantic: bool = False,
 ) -> dict:
     """Validate + dispatch ``find``. Returns ``{kind, rows, scored}``.
 
@@ -2176,6 +2211,12 @@ def find(
       ``by``.
     - ``"title"``: literal substring search over ``Document.title``.
       Only valid with ``by="paper"`` and a non-empty query.
+
+    ``strict_semantic`` (chunk + ``rank="all"`` only): when the corpus has
+    embeddings, raise ``QueryError`` if the semantic channel fails instead of
+    silently degrading to bm25+text. Callers that must not build on a broken
+    embedder (e.g. ``build-evidence``) set this; interactive search leaves it
+    off so a transient embedder hiccup still returns lexical hits.
     """
     _validate_find_params(
         query=query, by=by, rank=rank, top_k=top_k, field=field,
@@ -2283,7 +2324,7 @@ def find(
         "kind": "chunks",
         "rows": search_chunks(
             corpus, query, top_k=top_k, rank=rank, in_doc=in_doc,
-            exclude_kinds=exclude_kinds,
+            exclude_kinds=exclude_kinds, strict_semantic=strict_semantic,
         ),
         "scored": True,
     }

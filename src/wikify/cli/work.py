@@ -770,8 +770,9 @@ def cmd_build_evidence(
 
     Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
     """
+    import contextlib
+    import io
     import sqlite3
-    import subprocess
 
     from ..api import Corpus
     from ..bundle.work.card import load_card
@@ -780,6 +781,8 @@ def cmd_build_evidence(
         append_evidence,
         read_evidence,
     )
+    from ..corpus import queries as _queries
+    from .corpus import _emit_chunk_reads
 
     concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
@@ -1131,28 +1134,63 @@ def cmd_build_evidence(
             (doc_id, limit),
         ).fetchall()
 
-    def find_chunks(query: str, k: int):
-        cmd = [
-            "wikify", "corpus", "find", query,
-            "--rank", "all", "--top-k", str(k),
-            "--exclude-kind", "references",
-            "--exclude-kind", "acknowledgments",
-            "--exclude-kind", "appendix",
-            "--exclude-kind", "figure",
-            "--exclude-kind", "table",
-            "--exclude-kind", "caption",
-            "--exclude-kind", "boilerplate",
-            "--corpus", str(corpus_dir),
-            "--run", str(bundle.root),
-            "--format", "json",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-        if r.returncode != 0:
-            return []
+    find_exclude_kinds = sorted(_FROM_IDS_EXCLUDED_KINDS)
+
+    def find_chunks(query: str, k: int) -> list[dict]:
+        # In-process corpus search. This was previously a subprocess shell-out
+        # to ``wikify corpus find --format json``; parsing the child's stdout
+        # meant any library that printed to stdout at import (e.g. a
+        # mismatched onnxruntime warning) corrupted the JSON, ``json.loads``
+        # threw, and the swallowed error silently contributed ZERO find chunks
+        # -- producing seed-only pages with no signal. Calling ``queries.find``
+        # directly removes the stdout dependency entirely. ``strict_semantic``
+        # makes a broken runtime embedder fail loudly instead of degrading to
+        # a lexical-only, thinly-evidenced page.
+        #
+        # The old subprocess captured the child's stdout, which incidentally
+        # shielded THIS command's stdout from any noise a library printed
+        # while importing the embedder. In-process there is no such shield, so
+        # capture stray stdout into a buffer (NOT stderr -- cli_error writes
+        # the JSON error envelope there) around the search: a stray warning
+        # must corrupt neither the JSON result on stdout nor the JSON error on
+        # stderr. Any captured noise is discarded on success and folded into
+        # the error payload on failure, so it is preserved without breaking
+        # either machine-readable channel.
+        search_noise = io.StringIO()
         try:
-            return json.loads(r.stdout).get("items", [])
-        except Exception:
-            return []
+            with contextlib.redirect_stdout(search_noise):
+                result = _queries.find(
+                    corpus, query=query, by="chunk", rank="all", top_k=k,
+                    text=False, in_doc=None,
+                    exclude_kinds=find_exclude_kinds,
+                    strict_semantic=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            # CLI boundary: normalise ANY search failure into the structured
+            # envelope so ``--format json`` callers never receive a raw
+            # traceback. This covers QueryError (query/embedder failures) and
+            # unexpected store failures alike (e.g. a sqlite3 error from an
+            # empty/corrupt wikify.db). The exception is reported, not
+            # swallowed -- a zero-result gather is loud, matching the old
+            # subprocess boundary that treated any nonzero search as handled.
+            noise = search_noise.getvalue().strip()
+            if isinstance(exc, _queries.QueryError):
+                msg = f"{exc.code}: {exc.message}"
+            else:
+                msg = f"{type(exc).__name__}: {exc}"
+            cli_error(
+                EXIT_VALIDATION,
+                error="corpus_search_failed",
+                message=msg,
+                **({"search_diagnostics": noise[:1000]} if noise else {}),
+            )
+        rows = result["rows"]
+        # Preserve the chunk_read telemetry the CLI find path emitted via
+        # ``--run`` so M5 read-tracking is unchanged by going in-process.
+        _emit_chunk_reads(
+            bundle, (r.get("id", "") for r in rows), via="corpus_find_semantic",
+        )
+        return rows
 
     records: list[dict] = []
     doc_counts: dict[str, int] = {}
