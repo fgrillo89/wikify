@@ -99,6 +99,48 @@ def test_build_evidence_uses_in_process_find(tmp_path: Path, monkeypatch) -> Non
     assert {"cfind1", "cfind2"} & committed
 
 
+def test_build_evidence_queries_title_and_aliases(tmp_path: Path, monkeypatch) -> None:
+    """The find top-up queries the title AND each non-author alias as a
+    separate facet, so specific sub-topics surface papers a broad title query
+    buries."""
+    corpus_root = tmp_path / "corpus"
+    _make_corpus(corpus_root, [("c1", "d1")])
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "run").mkdir(exist_ok=True)
+    b = Bundle(root=bundle_dir)
+    init_run(b, corpus_path=str(corpus_root))
+    create_concept(
+        b, page_id="Nucleation", kind="article",
+        aliases=["Volmer-Weber growth", "island growth mode", "author:someone"],
+    )
+
+    queried: list[str] = []
+
+    def fake_find(corpus, **kwargs):
+        queried.append(kwargs.get("query"))
+        return {"kind": "chunks", "rows": [], "scored": True}
+
+    monkeypatch.setattr(queries, "find", fake_find)
+    # find returns nothing, so the gather queries every facet across all
+    # widening passes (and then reports no_evidence, exit 1 -- expected). What
+    # matters here is which queries were issued.
+    runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "nucleation",
+            "--corpus", str(corpus_root), "--run", str(bundle_dir),
+            "--target", "5", "--format", "json",
+        ],
+    )
+    assert "Nucleation" in queried
+    assert "Volmer-Weber growth" in queried
+    assert "island growth mode" in queried
+    # author: aliases are not used as search facets.
+    assert "author:someone" not in queried
+    assert not any("someone" == q for q in queried)
+
+
 def test_build_evidence_json_survives_stdout_noise(tmp_path: Path, monkeypatch) -> None:
     """In-process search must not let library stdout noise (e.g. a mismatched
     onnxruntime warning) corrupt ``build-evidence --format json`` output."""

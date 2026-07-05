@@ -1253,16 +1253,31 @@ def cmd_build_evidence(
                 break
             try_chunk(row, score=1.0, source="seed")
 
-    # Phase 2: corpus find top-up with widening k
+    # Phase 2: corpus find top-up with widening k. Query the title AND each
+    # non-author alias as a separate facet, so a concept's specific sub-topics
+    # (e.g. "Volmer-Weber growth", a precursor name) surface papers a broad
+    # title query -- flat and generic on a single-domain corpus -- buries.
+    # The title leads each pass for precision; try_chunk dedups across facets.
+    facet_queries = [title]
+    for alias in (card.front.get("aliases") or []):
+        if (
+            isinstance(alias, str)
+            and alias.strip()
+            and not alias.lower().startswith("author:")
+        ):
+            facet_queries.append(alias.strip())
     for k in (top_k, top_k * 2, top_k * 3):
         if len(records) >= target:
             break
-        items = find_chunks(title, k)
-        for it in items:
+        for q in facet_queries:
             if len(records) >= target:
                 break
-            row = fetch_chunk(it.get("id") or "")
-            try_chunk(row, score=float(it.get("score", 0.0)), source="find")
+            items = find_chunks(q, k)
+            for it in items:
+                if len(records) >= target:
+                    break
+                row = fetch_chunk(it.get("id") or "")
+                try_chunk(row, score=float(it.get("score", 0.0)), source="find")
         stats["passes"] += 1
 
     # Phase 3 (person only): identity-context gather. Pull chunks from the
@@ -1806,6 +1821,61 @@ def _coerce_year(value) -> int | None:
 # Kept small so relevance stays dominant and proximity only breaks near-ties.
 _PROXIMITY_WEIGHT = 0.15
 
+# A doc that sits in the citation neighbourhood of at least this many of the
+# concept's own evidence docs is treated as part of its literature even when
+# a broad keyword query buries it (the Grillo/Pt-ALD miss). Bounded so a
+# heavily-cited page cannot flood the candidate set.
+_COCITATION_MIN_NEIGHBOURS = 2
+_COCITATION_CAP = 12
+
+
+def _cocitation_candidates(
+    corpus, represented_docs: list[str], exclude_ids: set[str],
+) -> list[str]:
+    """In-corpus docs cited by / citing at least ``_COCITATION_MIN_NEIGHBOURS``
+    of the concept's evidence docs, excluding those already represented or
+    already candidates.
+
+    These are the papers the wiki's OWN sources collectively lean on, so a
+    page that skips them has a real recall gap even when the concept's title
+    query never ranks them. Returned most-central first (by neighbour count),
+    capped at ``_COCITATION_CAP``. Cost is one targeted read of the
+    ``references`` edges incident to the evidence docs -- the full graph is
+    never built.
+    """
+    import sqlite3
+    from collections import Counter
+
+    if not represented_docs or not corpus.sqlite_path.exists():
+        return []
+    repr_set = set(represented_docs)
+    repr_ph = ",".join("?" * len(represented_docs))
+    con = None
+    try:
+        con = sqlite3.connect(str(corpus.sqlite_path))
+        rows = con.execute(
+            "SELECT src_id, dst_id FROM graph_edges WHERE kind='references' AND ("
+            f"src_id IN ({repr_ph}) OR dst_id IN ({repr_ph}))",
+            represented_docs + represented_docs,
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        if con is not None:
+            con.close()
+    # Distinct evidence-doc neighbours per external doc (either edge direction).
+    neighbours: dict[str, set[str]] = {}
+    for src, dst in rows:
+        if src in repr_set and dst not in repr_set and dst not in exclude_ids:
+            neighbours.setdefault(dst, set()).add(src)
+        if dst in repr_set and src not in repr_set and src not in exclude_ids:
+            neighbours.setdefault(src, set()).add(dst)
+    counts = Counter({d: len(n) for d, n in neighbours.items()})
+    return [
+        d for d, c in counts.most_common()
+        if c >= _COCITATION_MIN_NEIGHBOURS
+    ][:_COCITATION_CAP]
+
 
 def _citation_proximity(
     corpus, candidate_ids: list[str], represented_docs: list[str],
@@ -1930,6 +2000,7 @@ def cmd_concept_recall(
     # ranked most-relevant first. BM25 scores are negated so that, like
     # semantic cosine, a larger value is a better match.
     candidate_docs: list[dict] = []
+    relevance_pool: set[str] = set()
     if sqlite_available(corpus.root) and queries:
         mode = rank
         best: dict[str, float] = {}
@@ -1951,13 +2022,15 @@ def cmd_concept_recall(
                 rel = raw if mode == "semantic" else -raw
                 if did not in best or rel > best[did]:
                     best[did] = rel
+        relevance_pool = set(best)
         ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))[:top_docs]
         docs_by_id = {d.id: d for d in list_documents(corpus)}
         for did, rel in ranked:
             doc = docs_by_id.get(did)
             year = _coerce_year((doc.metadata if doc else {}).get("year"))
             candidate_docs.append(
-                {"doc_id": did, "year": year, "score": round(rel, 6)}
+                {"doc_id": did, "year": year, "score": round(rel, 6),
+                 "source": "relevance"}
             )
 
     # Represented side: distinct docs + per-doc record share + section
@@ -1966,11 +2039,31 @@ def cmd_concept_recall(
     represented_docs = sorted({r.doc_id for r in active})
     represented_set = set(represented_docs)
 
+    # Candidate expansion: add the docs the concept's LITERATURE collectively
+    # cites (co-citation neighbours), not just keyword hits. The anchor is the
+    # union of the represented docs AND the top relevance candidates -- a
+    # seminal paper a broad title query buries (the Grillo aggregative-growth
+    # miss) is still cited by the specific nucleation/growth papers that DO
+    # rank, so co-citing from that literature surfaces it.
+    # Anchor on the WIDER relevance pool (all docs the concept query surfaced,
+    # ~5x top_docs), not just the top_docs that became direct candidates: the
+    # specific papers that cite a buried seminal work rank in this pool even
+    # when they miss the top_docs cut, so co-citing from it reaches the work.
+    anchor_docs = sorted(relevance_pool | represented_set)
+    existing_ids = {c["doc_id"] for c in candidate_docs} | represented_set
+    docs_by_id_all = {d.id: d for d in list_documents(corpus)}
+    for did in _cocitation_candidates(corpus, anchor_docs, existing_ids):
+        doc = docs_by_id_all.get(did)
+        year = _coerce_year((doc.metadata if doc else {}).get("year"))
+        candidate_docs.append(
+            {"doc_id": did, "year": year, "score": 0.0, "source": "cocitation"}
+        )
+
     # Re-rank candidates by relevance blended with citation proximity: a
     # candidate that cites, or is cited by, the concept's current evidence
     # docs is more clearly part of this concept's literature than one that
-    # merely matches keywords. Proximity only lifts docs that already have
-    # positive relevance, so a zero-relevance doc never jumps the list.
+    # merely matches keywords. Co-citation candidates carry no keyword score,
+    # so proximity is what ranks them.
     proximity = _citation_proximity(
         corpus, [c["doc_id"] for c in candidate_docs], represented_docs
     )
@@ -1978,8 +2071,7 @@ def cmd_concept_recall(
         c["citation_proximity"] = round(proximity.get(c["doc_id"], 0.0), 4)
 
     def _combined(c: dict) -> float:
-        boost = _PROXIMITY_WEIGHT * c["citation_proximity"] if c["score"] > 0 else 0.0
-        return c["score"] + boost
+        return max(c["score"], 0.0) + _PROXIMITY_WEIGHT * c["citation_proximity"]
 
     candidate_docs.sort(key=lambda c: (-_combined(c), -c["score"], c["doc_id"]))
     doc_record_counts = Counter(r.doc_id for r in active)
@@ -2039,8 +2131,15 @@ def cmd_concept_recall(
     ]
 
     min_represented = min(8, math.ceil(0.6 * len(candidate_docs)))
+    # Recall is measured against the CANDIDATE set: how many of the
+    # most-relevant docs the page actually cites -- not the raw count of
+    # whatever docs it happens to cite. A page citing 11 arbitrary docs while
+    # covering only 5 of 12 candidates is a recall MISS, not a pass.
+    n_candidates_covered = len(
+        represented_set & {c["doc_id"] for c in candidate_docs}
+    )
     recall_ok = (
-        len(represented_docs) >= min_represented
+        n_candidates_covered >= min_represented
         and not empty_buckets
         and max_doc_share <= 0.35
     )
@@ -2054,6 +2153,7 @@ def cmd_concept_recall(
         "section_types_represented": section_types_represented,
         "max_doc_share": round(max_doc_share, 4),
         "min_represented": min_represented,
+        "n_candidates_covered": n_candidates_covered,
         "recall_ok": recall_ok,
     }
     if fmt == "json":
@@ -2061,8 +2161,9 @@ def cmd_concept_recall(
         return
     typer.echo(
         f"{concept}: recall_ok={recall_ok}  "
-        f"represented={len(represented_docs)}/{len(candidate_docs)} "
-        f"(min {min_represented})  missing={len(missing_docs)}  "
+        f"candidates_covered={n_candidates_covered}/{len(candidate_docs)} "
+        f"(min {min_represented})  represented={len(represented_docs)}  "
+        f"missing={len(missing_docs)}  "
         f"max_doc_share={max_doc_share:.2f}  "
         f"empty_buckets={','.join(empty_buckets) or '-'}  "
         f"section_types={','.join(section_types_represented) or '-'}"

@@ -74,8 +74,17 @@ of the WRITE wave without a separate `wiki list`), `coverage`
 (`chunk_coverage_ratio` raw plus `addressable_coverage_ratio` over
 non-structural chunks — the latter is the meaningful coverage signal),
 `data` (`n_points`, `verified_ratio`,
-subjects/properties — drives the DATA consolidate trigger), and
-`committed_pages`. It replaces separate `run show` + `work maturity
+subjects/properties — drives the DATA consolidate trigger),
+`committed_pages`, and — computed deterministically from `n_docs` so a
+resuming editor never has to re-derive Sizing from prose — `sizing`
+(`target_min`, `expected_pages`, `expected_people`, `wave_size`,
+`max_rounds`), `roster` (`active_concepts`, `n_committed_articles`,
+`n_people`), and `waves` (`seed_should_fire`, `seed_deficit`,
+`person_gate_open`, `person_should_fire`, `person_deficit`,
+`roster_saturated`). Read `waves` directly in DECIDE and STOP CHECK: it
+is the authoritative SEED/PERSON eligibility and roster-saturation signal,
+so the roster cannot silently freeze below the SEED floor across a
+stateless re-entry. It replaces separate `run show` + `work maturity
 --all` + `work coverage` + `data coverage` reads.
 
 Then, if `derived/eval.json` exists, read `M3.g_evidence.modularity`
@@ -153,17 +162,26 @@ targets to the plan in order, removing them from later bands.
    weakest such edge, running P3 over the *union* of the two endpoint
    notebooks' chunk sets. Emits `concept_suggestion` only; never
    appends evidence to either endpoint.
-5. **SEED wave.** Fires when `concept_count < target_min` (`target_min`
-   from Sizing and defaults) OR every dossier is `ready`/`stalled`.
-   Seed from the top-K uncovered PageRank docs, where K is
-   `max(target_min - concept_count, wave_size)`. Run SEED as a SINGLE
+5. **SEED wave.** Fires when `waves.seed_should_fire` (i.e.
+   `roster.active_concepts < sizing.target_min`) OR every dossier is
+   `ready`/`stalled`. This is not optional while the roster is below the
+   SEED floor: a `WRITE`+`GROW`-only round that leaves `seed_should_fire`
+   true is the degenerate loop that freezes the roster far below
+   `expected_pages` and never opens the PERSON gate. Seed from the top-K
+   uncovered PageRank docs, where K is `max(waves.seed_deficit,
+   wave_size)`. Run SEED as a SINGLE
    **P1** Task over the doc list (not one task per doc): P1 tasks
    *create* slugs, and two docs often yield the same concept, so
    parallel SEED tasks would race on the same slug folder and violate
    slug-disjointness. The single task dedups concept titles internally
    and skips any that match an existing slug.
-6. **PERSON wave.** Fires once `concept_count >= target_min/2` (so the
-   topical roster exists first). `expected_people` is a SOFT target, not
+6. **PERSON wave.** Fires once `waves.person_gate_open` (i.e.
+   `roster.active_concepts >= sizing.target_min/2`, so the topical roster
+   exists first); `waves.person_should_fire` additionally confirms the
+   people roster is still below the review quota. A run that reaches
+   completeness with `roster.n_people == 0` while `person_gate_open` is
+   true has skipped this wave — that is a bug, not a saturated roster.
+   `expected_people` is a SOFT target, not
    a hard cap (see Sizing): keep seeding while good candidates remain,
    reviewing up to `person_quota_multiplier` (2.0) times `expected_people`.
    Seed from TWO sources: (a) the top authors by the strongest populated
@@ -393,8 +411,13 @@ from that file.
 
 Stop when ALL completeness signals hold:
 
-- **Roster saturated.** No new `concept_suggestion` for 2 rounds (P5
-  emits only `evidence_suggestion`s), or `concept_count` flat for 2 rounds.
+- **Roster saturated.** `waves.roster_saturated` is true (the roster
+  reached the SEED floor, `active_concepts >= target_min`) AND either no
+  new `concept_suggestion` for 2 rounds (P5 emits only
+  `evidence_suggestion`s) or `concept_count` flat for 2 rounds. A flat
+  `concept_count` while `waves.seed_should_fire` is true is a STARVED
+  roster, not a saturated one — do NOT stop; fire SEED. Likewise never
+  stop while `waves.person_should_fire` is true.
 - **Write queue drained.** No `ready` slug is unwritten.
 - **Refine queue drained.** `work refine-candidates` returns empty
   (committed pages whose evidence outgrew their write-time snapshot have

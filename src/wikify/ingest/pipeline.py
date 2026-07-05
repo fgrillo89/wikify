@@ -134,6 +134,21 @@ FORMAT_PREFERENCE: tuple[str, ...] = (
 )
 
 
+def _long_path(p: Path) -> Path:
+    """Expand a Windows 8.3 short path (e.g. ``_2013M~2.PDF``) to its long
+    form so a ``doc_id`` is never derived from the mangled stem. No-op on
+    non-Windows, or when the file has no long-name alias (the name really is
+    short) -- the ``corpus dedup`` pass is the safety net for that case.
+    """
+    if os.name != "nt" or "~" not in p.name:
+        return p
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetLongPathNameW(str(p), buf, len(buf))
+    return Path(buf.value) if 0 < n < len(buf) else p
+
+
 def iter_sources(
     root: Path,
     *,
@@ -167,7 +182,7 @@ def iter_sources(
     if not dedup_same_stem:
         for p in root.rglob("*"):
             if p.is_file() and p.suffix.lower() in exts:
-                yield p
+                yield _long_path(p)
         return
 
     # Group by (parent dir, stem) — same stem in different subdirectories
@@ -176,6 +191,7 @@ def iter_sources(
     by_location: dict[tuple[str, str], list[Path]] = defaultdict(list)
     for p in root.rglob("*"):
         if p.is_file() and p.suffix.lower() in exts:
+            p = _long_path(p)
             by_location[(str(p.parent), p.stem)].append(p)
 
     order = {ext: i for i, ext in enumerate(FORMAT_PREFERENCE)}

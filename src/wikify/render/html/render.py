@@ -846,8 +846,14 @@ def _render_article(
 
     # Fallback: if the body has no embedded figures, inject the top captioned
     # figure from the evidence docs so older committed pages (built before the
-    # figure pipeline fix) still render with at least one image.
-    if image_index is not None and not _body_has_figure(body_md):
+    # figure pipeline fix) still render with at least one image. Article-only:
+    # a data table is a table (a fallback figure would be an unrelated corpus
+    # image), and person pages are figure-free by design.
+    if (
+        pv.kind == "article"
+        and image_index is not None
+        and not _body_has_figure(body_md)
+    ):
         body_md = _inject_fallback_figure(
             body_md,
             page=page,
