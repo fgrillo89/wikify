@@ -1939,11 +1939,13 @@ def cmd_concept_recall(
         help="Number of most-relevant corpus docs to treat as candidates.",
     ),
     rank: str = typer.Option(
-        "bm25", "--rank",
+        "semantic", "--rank",
         help=(
-            "Relevance ranking: bm25 (default, cheap sqlite metadata, no "
-            "embedder) | semantic (loads an embedder + embeds the query; "
-            "requires corpus chunk vectors)."
+            "Relevance ranking: semantic (default, embedding similarity -- the "
+            "signal the build-evidence gather retrieves on, so the gate scores "
+            "docs the way the evidence was gathered) | all (multi-signal) | "
+            "bm25 (cheap sqlite metadata, no embedder). semantic/all fall back "
+            "to bm25 when the corpus has no usable vectors."
         ),
     ),
     fmt: str = typer.Option("text", "--format"),
@@ -1958,9 +1960,14 @@ def cmd_concept_recall(
     represented, the section-type diversity of the committed evidence, and
     the share of evidence records concentrated in a single document.
 
-    Cheap by default: BM25 over sqlite metadata (no embedder load) plus
-    document metadata + section-type lookup by chunk_id; no full chunk text
-    is read. Pass ``--rank semantic`` to rank by chunk embeddings instead.
+    The default ranking is ``semantic`` -- the embedding-similarity signal
+    ``build-evidence`` gathers on -- so the candidate set the gate checks
+    coverage against matches how the evidence was actually retrieved. A
+    lexical ``bm25`` default diverges from a semantic gather and
+    false-negatives well-gathered pages (a device page whose relevant
+    sources rarely repeat its title verbatim); plain ``all`` reintroduces
+    that lexical component. ``semantic``/``all`` load an embedder and need
+    corpus vectors, degrading to ``bm25`` when absent.
     """
     import math
     import sqlite3
@@ -1971,7 +1978,7 @@ def cmd_concept_recall(
     from ..corpus.queries import QueryError, search_chunks
     from ..corpus.store.routing import sqlite_available
 
-    if rank not in {"bm25", "semantic"}:
+    if rank not in {"all", "semantic", "bm25"}:
         cli_error(EXIT_VALIDATION, error="bad_rank", rank=rank)
     concept = _clean_slug_arg(concept)
     bundle = _resolve_bundle(run)
@@ -2001,9 +2008,14 @@ def cmd_concept_recall(
     # semantic cosine, a larger value is a better match.
     candidate_docs: list[dict] = []
     relevance_pool: set[str] = set()
-    if sqlite_available(corpus.root) and queries:
-        mode = rank
-        best: dict[str, float] = {}
+    rank_used = rank
+
+    def _rank_pass(mode: str) -> dict[str, float]:
+        # bm25's sqlite score is a cost (lower is better), so it is negated to
+        # match the semantic/all convention that a larger value is a better
+        # match. QueryError (missing vectors / embedder) yields no hits.
+        found: dict[str, float] = {}
+        higher_better = mode in {"semantic", "all", "hybrid"}
         for q in queries:
             try:
                 hits = search_chunks(
@@ -2019,9 +2031,18 @@ def cmd_concept_recall(
                 if not did:
                     continue
                 raw = float(h.get("score", 0.0))
-                rel = raw if mode == "semantic" else -raw
-                if did not in best or rel > best[did]:
-                    best[did] = rel
+                rel = raw if higher_better else -raw
+                if did not in found or rel > found[did]:
+                    found[did] = rel
+        return found
+
+    if sqlite_available(corpus.root) and queries:
+        best = _rank_pass(rank)
+        # all/semantic need corpus vectors; when they are absent the pass comes
+        # back empty -- fall back to bm25 so the gate still runs everywhere.
+        if not best and rank in {"all", "semantic"}:
+            rank_used = "bm25"
+            best = _rank_pass("bm25")
         relevance_pool = set(best)
         ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))[:top_docs]
         docs_by_id = {d.id: d for d in list_documents(corpus)}
@@ -2154,6 +2175,7 @@ def cmd_concept_recall(
         "max_doc_share": round(max_doc_share, 4),
         "min_represented": min_represented,
         "n_candidates_covered": n_candidates_covered,
+        "rank_used": rank_used,
         "recall_ok": recall_ok,
     }
     if fmt == "json":
@@ -2168,6 +2190,109 @@ def cmd_concept_recall(
         f"empty_buckets={','.join(empty_buckets) or '-'}  "
         f"section_types={','.join(section_types_represented) or '-'}"
     )
+
+
+# -------------------------------------------------------------- add-gap-note
+
+_GAP_NOTE_TYPES = ["future_work", "unclear", "debated", "understudied",
+                   "contradiction"]
+
+
+@app.command("add-gap-note")
+def cmd_add_gap_note(
+    chunk_id: str = typer.Option(
+        ..., "--chunk-id",
+        help="Canonical id or chunk:<short> handle the gap is stated in.",
+    ),
+    gap_type: str = typer.Option(
+        ..., "--type",
+        help="future_work | unclear | debated | understudied | contradiction.",
+    ),
+    gap: str = typer.Option(..., "--gap", help="One-sentence statement of the gap."),
+    quote: str = typer.Option(
+        ..., "--quote", help="Exact literal quote from the chunk stating the gap.",
+    ),
+    contradicts_chunk_id: str = typer.Option("", "--contradicts-chunk-id"),
+    contradicts_quote: str = typer.Option("", "--contradicts-quote"),
+    corpus_dir: Path = typer.Option(..., "--corpus"),
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Append a grounded literature-gap note to ``work/notes/literature_gaps.md``.
+
+    A gap is one a chunk explicitly STATES -- an open question, a genuine
+    contradiction between two sources, or an understudied point the text names.
+    NEVER infer a gap from absent coverage, sparse data, or general knowledge.
+    The quote is verified to appear literally in the named chunk (and the
+    contradicting quote in its chunk) so a gap cannot be fabricated; the P5
+    explorer has ``Bash(wikify *)`` access, so this is how it records the gaps
+    the GAP wave surfaces. ``type=contradiction`` requires both
+    ``--contradicts-chunk-id`` and ``--contradicts-quote``.
+    """
+    import sqlite3
+
+    from ..api import Corpus
+    from ..grounding import is_grounded
+
+    if gap_type not in _GAP_NOTE_TYPES:
+        cli_error(EXIT_VALIDATION, error="bad_gap_type", type=gap_type,
+                  allowed=_GAP_NOTE_TYPES)
+    if gap_type == "contradiction" and not (contradicts_chunk_id and contradicts_quote):
+        cli_error(EXIT_VALIDATION, error="contradiction_requires_second_chunk")
+    bundle = _resolve_bundle(run)
+    if not corpus_dir.is_dir():
+        cli_error(EXIT_VALIDATION, error="not_a_directory", path=str(corpus_dir))
+    corpus = Corpus(root=corpus_dir)
+    canonical_ids, suffix_index = build_suffix_index(corpus.sqlite_path)
+
+    def _resolve_and_read(raw: str) -> tuple[str, str | None]:
+        resolved = resolve_chunk_id(
+            raw, suffix_index, canonical_ids, sqlite_path=corpus.sqlite_path,
+        ) or raw
+        con = sqlite3.connect(str(corpus.sqlite_path))
+        try:
+            row = con.execute(
+                "SELECT text FROM chunks WHERE chunk_id=?", (resolved,)
+            ).fetchone()
+        finally:
+            con.close()
+        return resolved, (row[0] if row else None)
+
+    resolved_cid, text = _resolve_and_read(chunk_id)
+    if text is None:
+        cli_error(EXIT_VALIDATION, error="chunk_not_found", chunk_id=chunk_id)
+    if not is_grounded(quote, text):
+        cli_error(EXIT_VALIDATION, error="quote_not_in_chunk", chunk_id=resolved_cid)
+    contradicts_cid = "-"
+    if gap_type == "contradiction":
+        contradicts_cid, c_text = _resolve_and_read(contradicts_chunk_id)
+        if c_text is None:
+            cli_error(EXIT_VALIDATION, error="contradicts_chunk_not_found",
+                      chunk_id=contradicts_chunk_id)
+        if not is_grounded(contradicts_quote, c_text):
+            cli_error(EXIT_VALIDATION, error="contradicts_quote_not_in_chunk",
+                      chunk_id=contradicts_cid)
+
+    def _clean(s: str) -> str:
+        return " ".join((s or "").split()).replace('"', "'")
+
+    notes = bundle.work_dir / "notes" / "literature_gaps.md"
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    c_quote = _clean(contradicts_quote) if gap_type == "contradiction" else "-"
+    line = (
+        f"- chunk_id: {resolved_cid}; type: {gap_type}; gap: {_clean(gap)}; "
+        f'quote: "{_clean(quote)}"; contradicts: {contradicts_cid}; '
+        f'contradicts_quote: "{c_quote}"'
+    )
+    with notes.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    if fmt == "json":
+        typer.echo(json.dumps({
+            "ok": True, "path": str(notes), "chunk_id": resolved_cid,
+            "type": gap_type,
+        }))
+        return
+    typer.echo(f"gap note added: {gap_type} @ {resolved_cid}")
 
 
 # -------------------------------------------------------------- notebook-init

@@ -101,6 +101,28 @@ P5 outputs flow through the inbox channels
 `work tend` consolidates them. P5 never edits notebooks or evidence
 ledgers directly.
 
+**Knowledge gaps, not just coverage gaps.** While reading the residual
+chunks, P5 also records what the corpus has NOT settled. Record each with:
+
+```bash
+wikify work add-gap-note --chunk-id <id> \
+  --type <future_work|unclear|debated|understudied|contradiction> \
+  --gap "<one sentence>" --quote "<exact literal quote>" \
+  [--contradicts-chunk-id <id2> --contradicts-quote "<exact quote>"] \
+  --corpus <corpus> --run <bundle>
+```
+
+The command verifies the quote appears literally in the named chunk (and
+the contradicting quote in its chunk) and appends a schema line to
+`work/notes/literature_gaps.md`, so a gap cannot be fabricated. Record
+ONLY a gap a chunk explicitly STATES, or a genuine contradiction between
+two cited chunks. NEVER infer a gap from absent coverage, sparse data, or
+general knowledge: `understudied` is valid only when a chunk itself says
+limited/no studies, not-yet-systematically-studied, remains-unclear, or
+future-work — not merely because the corpus lacks a topic. These notes
+accumulate across rounds and are synthesized into a committed page at
+Finalize.
+
 **Termination guarantee**: with unbounded budget, P5 reduces
 `|residual|` by at least one per round (the highest-PageRank residual
 chunk is always picked). `addressable_coverage_ratio` asymptotes toward

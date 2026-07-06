@@ -1957,22 +1957,27 @@ def test_concept_recall_default_bm25_loads_no_embedder(
     assert len(recall["candidate_docs"]) == 5
 
 
-def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> None:
-    """``--rank semantic`` routes the relevance search through the semantic
-    mode; the default routes through bm25."""
+def test_concept_recall_default_semantic_with_bm25_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The default routes through ``semantic`` (matching the build-evidence
+    gather), ``--rank bm25`` stays lexical, and a semantic pass that yields
+    nothing (no corpus vectors) falls back to bm25 -- reported as
+    ``rank_used``."""
     import wikify.corpus.queries as queries_mod
 
     bundle, corpus_root, _docs = _recall_bundle(tmp_path)
     seen_modes: list[str] = []
 
-    def _capture(corpus, query, *, top_k, rank, exclude_kinds):
+    def _capture_hit(corpus, query, *, top_k, rank, exclude_kinds):
         seen_modes.append(rank)
         return [{"doc_id": "doc_2015", "score": 0.9}]
 
-    # The command imports search_chunks locally from the queries module.
-    monkeypatch.setattr(queries_mod, "search_chunks", _capture)
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture_hit)
 
-    for args, expected in ((["--rank", "semantic"], "semantic"), ([], "bm25")):
+    # Default -> semantic (and rank_used reflects it).
+    for args, expected in ((["--rank", "semantic"], "semantic"),
+                           ([], "semantic"), (["--rank", "bm25"], "bm25")):
         seen_modes.clear()
         result = runner.invoke(
             app,
@@ -1984,6 +1989,72 @@ def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> Non
         )
         assert result.exit_code == 0, result.output
         assert seen_modes and all(m == expected for m in seen_modes), seen_modes
+        assert json.loads(result.output)["recall"]["rank_used"] == expected
+
+    # Semantic pass returns nothing (no vectors) -> transparent bm25 fallback.
+    def _capture_empty_semantic(corpus, query, *, top_k, rank, exclude_kinds):
+        seen_modes.append(rank)
+        return [] if rank == "semantic" else [{"doc_id": "doc_2015", "score": 0.9}]
+
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture_empty_semantic)
+    seen_modes.clear()
+    result = runner.invoke(
+        app,
+        [
+            "work", "concept-recall", "photonics",
+            "--run", str(bundle), "--corpus", str(corpus_root), "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "semantic" in seen_modes and "bm25" in seen_modes
+    assert json.loads(result.output)["recall"]["rank_used"] == "bm25"
+
+
+def test_add_gap_note_grounds_quote_and_rejects_fabrication(tmp_path: Path) -> None:
+    """``add-gap-note`` appends a schema-formatted line only when the quote is a
+    literal substring of the named chunk; a fabricated quote, a bad type, and a
+    contradiction without its second chunk are all rejected."""
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    cid, _ = docs["doc_2015"]
+    base = [
+        "work", "add-gap-note", "--run", str(bundle),
+        "--corpus", str(corpus_root), "--format", "json",
+    ]
+
+    ok = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "understudied",
+        "--gap", "on-chip loss is understudied",
+        "--quote", "on-chip light manipulation",
+    ])
+    assert ok.exit_code == 0, ok.output
+    assert json.loads(ok.stdout)["type"] == "understudied"
+    notes = Path(bundle) / "work" / "notes" / "literature_gaps.md"
+    body = notes.read_text(encoding="utf-8")
+    assert body.startswith("- chunk_id:") and "type: understudied" in body
+    assert 'quote: "on-chip light manipulation"' in body
+
+    fabricated = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "unclear",
+        "--gap", "fake", "--quote", "quantum teleportation xyzzy",
+    ])
+    assert fabricated.exit_code != 0
+    assert json.loads(fabricated.stderr)["error"] == "quote_not_in_chunk"
+
+    bad_type = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "bogus",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+    ])
+    assert bad_type.exit_code != 0
+    assert json.loads(bad_type.stderr)["error"] == "bad_gap_type"
+
+    lone_contradiction = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+    ])
+    assert lone_contradiction.exit_code != 0
+    assert json.loads(lone_contradiction.stderr)["error"] == (
+        "contradiction_requires_second_chunk"
+    )
 
 
 def _add_reference_edges(corpus_root: Path, citing: str, cited: list[str]) -> None:

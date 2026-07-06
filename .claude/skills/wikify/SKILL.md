@@ -200,7 +200,18 @@ targets to the plan in order, removing them from later bands.
    headcount cap. Run as a SINGLE Task over the author list (same
    slug-race reasoning as SEED).
 7. **GAP wave.** Fires every round, low cost. One **P5** Task on the
-   top 20 uncovered chunks by PageRank.
+   top 20 uncovered chunks by PageRank. Beyond *coverage* gaps, the P5
+   explorer also surfaces **knowledge gaps** it reads in those chunks —
+   open questions, contradictory reports between sources, understudied
+   materials/conditions — and records each via `wikify work add-gap-note`
+   (which quote-verifies the anchor and appends a schema line to
+   `work/notes/literature_gaps.md`; the explorer has `Bash(wikify *)`
+   access, so it writes the note itself — the editor does not). These
+   accumulate across rounds and are synthesized at Finalize. It NEVER
+   invents an open question and never infers one from absent coverage: it
+   records only ones a chunk states, or a genuine contradiction between two
+   cited chunks. This is a first-class objective — what the corpus has NOT
+   settled — not a byproduct of coverage.
 8. **DATA wave.** Fires every round, low cost. Owned by the data skills,
    not the P1-P5 explorer. Two parts:
    - **Harvest.** One `extract-data` Task (pattern label `P6`,
@@ -470,8 +481,44 @@ that outgrew its write-time snapshot. Run `wikify work refine-candidates
 workflow (`wikify work claim <slug> --owner refine` -> `wikify draft build
 <slug> --task refine` -> writer subagent -> `wikify draft finalize <slug>
 --owner refine`), whose fresh `page_committed` resets that slug's baseline.
-Repeat `refine-candidates` and drain again until it returns empty. Only then
-run the rebuild/render close-out:
+Repeat `refine-candidates` and drain again until it returns empty.
+
+**Synthesize the literature gaps — do this BEFORE the rebuild/render
+close-out** so the page lands in the rendered and evaluated site and
+nothing mutates the run after `run close`. The GAP wave accumulated open
+questions, contradictions, and understudied areas in
+`work/notes/literature_gaps.md`, each line carrying a `chunk_id` anchor
+and its verified `quote`. If the file has enough entries to field ~6
+evidence markers:
+
+1. `wikify work add concept "Literature Gaps and Open Questions" --kind
+   article --run <bundle>`.
+2. Commit the anchor chunks as its evidence, passing each note's exact
+   quote (the `@-` JSON form carries the gap sentence; a bare comma-id
+   list would store `text[:400]` instead, and `notebook-init --seed-docs`
+   takes DOC handles, not chunk ids, so it is the wrong primitive):
+
+   ```bash
+   echo '[{"chunk_id":"<id>","score":1.0,"quote":"<exact gap quote>"}, ...]' \
+     | wikify work build-evidence <slug> --from-ids @- \
+         --corpus <corpus> --run <bundle>
+   ```
+
+3. `build-evidence` does not self-emit the growth event and the gate needs
+   a fresh clearance, so record both before finalizing: `wikify work add
+   evidence <slug> --round <N> --run <bundle>` (emits `evidence_added`),
+   then `wikify run record-event --type page_recall_cleared --stage write
+   --concept-id <slug> --run <bundle> --data '{"exhausted": true, "reason":
+   "p5_gap_anchor_synthesis"}'`.
+4. Write it through the normal write gate (writer subagent -> `draft check`
+   -> `draft finalize <slug> --require-recall`), grouping the field's
+   unresolved questions by theme, each claim carrying its `[^eN]` marker.
+   Phrase claims as what the literature reports or has NOT established
+   ("...remains debated", "no consensus on..."), never as corpus
+   meta-commentary ("the corpus lacks...").
+
+Skip the page when the notes file is empty or too thin for ~6 markers, and
+put the gaps in the Final Report instead. Then run the close-out:
 
 ```bash
 wikify work tend --run <bundle>
