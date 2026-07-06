@@ -255,6 +255,27 @@ the `chunk_id` it was proposed from; `work tend` gates these behind a
 distinct-chunk support threshold so a one-off gap proposal does not
 create an evidence-less stub.
 
+**Knowledge gaps (not just coverage gaps).** As you read the residual
+chunks, also record what the corpus has NOT settled — open questions,
+contradictions between two sources, understudied points — with:
+
+```bash
+wikify work add-gap-note --chunk-id <id> \
+  --type <future_work|unclear|debated|understudied|contradiction> \
+  --gap "<one sentence>" --quote "<exact literal quote>" \
+  [--contradicts-chunk-id <id2> --contradicts-quote "<exact quote>"] \
+  --corpus <corpus> --run <bundle>
+```
+
+It verifies the quote is literal (and the contradicting quote in its
+chunk) and appends a schema line to `work/notes/literature_gaps.md`.
+Record ONLY a gap a chunk explicitly STATES or a real contradiction
+between two cited chunks. NEVER infer one from absent coverage, sparse
+data, or general knowledge: `understudied` requires a chunk that itself
+says limited/no studies, remains-unclear, or future-work — not merely a
+topic the corpus omits. These notes are synthesized into a committed page
+at Finalize.
+
 Read `addressable_coverage_ratio` (covered / non-structural chunks),
 never raw `chunk_coverage_ratio`: a raw ratio near 1.0 is structurally
 impossible (references, captions, figures, tables, boilerplate are never

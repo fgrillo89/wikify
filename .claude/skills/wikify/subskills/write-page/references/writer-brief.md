@@ -120,7 +120,12 @@ Body (Wikipedia structure = lead + H2 sections):
 - Do not add sections unsupported by evidence.
 - Cover the facets present in the draft: definitions, mechanisms,
   materials/properties, methods, evidence/results, applications,
-  limitations.
+  limitations, and **open questions**. Where the dossier itself states
+  understudied conditions, contradictory findings, or unresolved
+  mechanisms (including explicit "future work / remains unclear /
+  debated"), give them a short **Limitations and open questions**
+  treatment grounded in `[^eN]`. Never invent an open question the
+  evidence does not state.
 - Draw across the dossier's DIVERSITY, not one angle: span the available
   `section_types` (methods vs results vs discussion), cover the distinct
   sub-topics the evidence spans rather than restating one from many
@@ -242,7 +247,11 @@ diff; the commit gate promotes whole pages.
   in the body.
 - No corpus meta-commentary: never "in this corpus", "appears in this
   corpus", "this corpus contains", "in this article", "as discussed
-  above".
+  above". This is about the corpus, not the field: stating what the
+  LITERATURE reports or has not established ("...remains debated", "no
+  consensus on X") is fine and expected — that is the "Limitations and open
+  questions" facet and the synthetic "Literature Gaps and Open Questions"
+  page. Say "the literature has not established", never "the corpus lacks".
 - No first-person research voice ("we examine", "we show", "our
   analysis").
 - Do NOT rebuild data tables in the page. Name any data artifact in prose
