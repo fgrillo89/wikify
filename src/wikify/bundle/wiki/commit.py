@@ -39,7 +39,7 @@ from ..draft.artifact import (
 from ..run.events import Event, append_event
 from ..run.lock import run_lock
 from ..run.state import load_state
-from ..work.card import load_card, save_card
+from ..work.card import list_concept_slugs, load_card, save_card
 from ..work.evidence import read_evidence
 
 _REF_DEF_RE_TEMPLATE = (
@@ -161,6 +161,38 @@ def relevant_committed_artifacts(bundle: Bundle, doc_ids) -> list[str]:
         store.close()
 
 
+def doc_sharing_committed_pages(
+    bundle: Bundle, slug: str, doc_ids
+) -> list[str]:
+    """Committed concept pages (other than ``slug``) whose active evidence
+    shares at least one source DOCUMENT with ``doc_ids``.
+
+    This is the topical-neighbour set used by the ``new_siblings`` cross-link
+    refine signal: a page written when few of these neighbours existed is
+    under-connected once the wiki fills in. Recorded at commit time
+    (``siblings_seen``) so a re-drafted page captures the current neighbour
+    set and converges, exactly like ``data_artifacts_seen``. Deterministic
+    (sorted); token-light (no chunk text).
+    """
+    mine = {d for d in (doc_ids or []) if d}
+    if not mine:
+        return []
+    out: list[str] = []
+    for other in list_concept_slugs(bundle):
+        if other == slug:
+            continue
+        card = load_card(bundle, other)
+        if card.status != "committed":
+            continue
+        docs = {
+            r.doc_id for r in read_evidence(bundle, other)
+            if r.status == "active" and r.doc_id
+        }
+        if docs & mine:
+            out.append(other)
+    return sorted(out)
+
+
 def commit_page(
     bundle: Bundle,
     *,
@@ -263,6 +295,11 @@ def commit_page(
             r.doc_id for r in read_evidence(bundle, slug) if r.status == "active"
         ]
         data_artifacts_seen = relevant_committed_artifacts(bundle, active_doc_ids)
+        # Topical-neighbour snapshot: committed pages sharing a source doc with
+        # this page right now, so a later flush of new siblings (the wiki
+        # filled in after this page was written) surfaces as a cross-link
+        # refine candidate and a re-commit converges it.
+        siblings_seen = doc_sharing_committed_pages(bundle, slug, active_doc_ids)
 
         card = load_card(bundle, slug)
         card.front["status"] = "committed"
@@ -292,6 +329,7 @@ def commit_page(
                     "evidence_count": len(evidence),
                     "evidence_total": evidence_total,
                     "data_artifacts_seen": data_artifacts_seen,
+                    "siblings_seen": siblings_seen,
                 },
             ),
         )
