@@ -1745,6 +1745,31 @@ def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
     assert _refine()["n_candidates"] == 0
 
 
+def _project_committed_to_wiki_db(bundle, slug: str, doc_ids: list[str]) -> None:
+    """Insert a committed page's ``wiki_evidence`` rows (the indexed doc-id
+    projection the cross-link signal reads) into the bundle's wiki.db."""
+    import sqlite3
+    con = sqlite3.connect(str(bundle.sqlite_path))
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS wiki_pages (page_id TEXT PRIMARY KEY, "
+            "slug TEXT, title TEXT, kind TEXT, body TEXT, frontmatter_json TEXT, "
+            "created_at TEXT, updated_at TEXT)")
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS wiki_evidence (page_id TEXT, marker TEXT, "
+            "chunk_id TEXT, doc_id TEXT, quote TEXT)")
+        con.execute(
+            "INSERT OR REPLACE INTO wiki_pages (page_id, slug, kind) VALUES (?,?,?)",
+            (slug, slug, "article"))
+        for i, d in enumerate(doc_ids):
+            con.execute(
+                "INSERT INTO wiki_evidence (page_id, marker, chunk_id, doc_id, quote)"
+                " VALUES (?,?,?,?,?)", (slug, f"e{i}", f"{slug}_c{i}", d, "q"))
+        con.commit()
+    finally:
+        con.close()
+
+
 def test_work_refine_candidates_flags_new_siblings(tmp_path: Path) -> None:
     """A committed page flags ``new_siblings`` when at least
     ``--min-new-siblings`` topical-neighbour pages (sharing a source doc)
@@ -1776,6 +1801,7 @@ def test_work_refine_candidates_flags_new_siblings(tmp_path: Path) -> None:
             data={"slug": slug, "kind": "article", "evidence_count": 1,
                   "evidence_total": 1, "data_artifacts_seen": [],
                   "siblings_seen": siblings_seen}))
+        _project_committed_to_wiki_db(bundle, slug, ["shared_d"])
 
     _commit("a", [])                       # committed first: saw no neighbours
     _commit("b", ["a"])
@@ -1812,6 +1838,7 @@ def test_work_refine_candidates_flags_new_siblings(tmp_path: Path) -> None:
         run_id=run_id, type="page_committed", actor="test", page_id="X",
         data={"slug": "x", "kind": "article", "evidence_count": 1,
               "evidence_total": 1, "data_artifacts_seen": []}))  # no siblings_seen
+    _project_committed_to_wiki_db(bundle, "x", ["shared_d"])
 
     def _refine_siblings(*extra: str) -> dict:
         r = runner.invoke(app, [
@@ -1843,6 +1870,7 @@ def test_doc_sharing_committed_pages_helper(tmp_path: Path) -> None:
             card = load_card(bundle, slug)
             card.front["status"] = "committed"
             save_card(bundle, slug, card)
+            _project_committed_to_wiki_db(bundle, slug, [doc])
 
     _mk("a", "d1")               # self (shares d1) -> excluded
     _mk("b", "d1")               # committed, shares d1 -> included
