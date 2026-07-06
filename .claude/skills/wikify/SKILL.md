@@ -140,16 +140,23 @@ targets to the plan in order, removing them from later bands.
    validator's `evidence_underuse` warning is the complementary check that
    the writer then actually cites that breadth.
 2. **REFINE wave.** Fires when `wikify work refine-candidates` returns
-   candidates. That command now surfaces two signals: a committed page
-   whose live evidence outgrew its write-time snapshot, and a committed
-   page a newly-relevant committed data artifact postdates (reason
-   `new_data`). Dispatch at most `min(2, wave_size)` refine
-   Tasks per round (bound to the `refine` subskill), one per top
-   candidate by ratio; slug-disjoint from all other waves by
-   construction (refine targets committed slugs, which WRITE/GROW never
-   touch). A refined page converges: its fresh `page_committed` event
-   resets its own baseline and records the artifact, so it won't
-   re-trigger until it grows again.
+   candidates. It surfaces three signals: a committed page whose live
+   evidence outgrew its write-time snapshot (`ratio`/`delta`); a committed
+   page a newly-relevant committed data artifact postdates (`new_data`);
+   and a committed page that `>= min_new_siblings` topical-neighbour pages
+   (sharing a source doc) committed AFTER it (`new_siblings`) — the
+   cross-link signal that turns a set of good pages into a connected
+   encyclopedia. `new_siblings` dominates the **settle phase** (roster
+   saturated, coverage plateaued): early pages were written when the wiki
+   was small and are under-connected once it fills in, so refining them
+   weaves in the now-committed neighbours. Dispatch at most `min(2,
+   wave_size)` refine Tasks per round (raise to `wave_size` when draining a
+   large one-time `new_siblings` backlog on a saturated roster), one per top
+   candidate; slug-disjoint from all other waves by construction (refine
+   targets committed slugs, which WRITE/GROW never touch). A refined page
+   converges: its fresh `page_committed` event resets its baseline and
+   records the current artifacts and sibling set, so it won't re-trigger
+   until it changes again.
 3. **GROW wave.** Every slug in `growing` band (`0.50 <= score < 0.70`)
    with `growth_stalled == False`. Up to `wave_size`, slug-disjoint
    from WRITE. Per-slug pattern selection:
@@ -184,21 +191,33 @@ targets to the plan in order, removing them from later bands.
    `expected_people` is a SOFT target, not
    a hard cap (see Sizing): keep seeding while good candidates remain,
    reviewing up to `person_quota_multiplier` (2.0) times `expected_people`.
-   Seed from TWO sources: (a) the top authors by the strongest populated
-   `rank_metrics.author` metric (`h_index`, else `citation_count`, else
-   `n_papers`) above the corpus median; and (b) the **authorship of
-   already-cited article source documents** and their close (co-author
-   distance `<= 1`) collaborators — the researchers the wiki actually
-   leans on, even when below the VIP metric. For each, one concept:
-   `wikify work add concept "<Display Name>" --kind person --aliases
-   '["author:<key>"]'`, `notebook-init`, then `build-evidence` (the
-   person path gathers BOTH quoted-contribution and `identity_context`
-   chunks — affiliation/role/career — so the page can lead with who the
-   person is). The strict person maturity gate (>= 3 quoted-contribution
-   chunks from >= 2 docs + `author:` alias) still decides commits, so
-   thinly-covered authors drop out — it is the quality regulariser, not a
-   headcount cap. Run as a SINGLE Task over the author list (same
-   slug-race reasoning as SEED).
+   Seed from two sources, and seed GENEROUSLY — review up to the quota
+   (tens of candidates on an authorship-rich corpus), because the maturity
+   gate, not the candidate list, decides who commits:
+   - **(a) Contribution to THIS wiki (primary).** The authors of the
+     committed pages' source documents, RANKED by how many such documents
+     each authored (and their close co-authors, distance `<= 1`). This is
+     the "important by contribution" lens: an author the wiki leans on
+     heavily — many of its cited source docs, or repeatedly quoted
+     contributions — earns a page **even with a low or unpopulated
+     `h_index`**. Do NOT gate this source on h-index or citation_count;
+     rank it by wiki-contribution volume.
+   - **(b) Field prominence (secondary).** Top authors by the strongest
+     populated `rank_metrics.author` metric (`h_index`, else
+     `citation_count`, else `n_papers`) above the corpus median, to catch
+     established researchers the committed set has not yet leaned on.
+   For each, one concept: `wikify work add concept "<Display Name>" --kind
+   person --aliases '["author:<key>"]'`, `notebook-init`, then
+   `build-evidence` (the person path gathers BOTH quoted-contribution and
+   `identity_context` chunks — affiliation/role/career — so the page can
+   lead with who the person is). The strict person maturity gate (>= 3
+   quoted-contribution chunks from >= 2 docs + `author:` alias) decides
+   commits, so thinly-covered authors drop out — it is the quality
+   regulariser, not a headcount cap, so a low-h-index but heavily-quoted
+   author passes and a high-h-index author the corpus barely describes does
+   not. `expected_people` scales with `sizing.n_notable_authors`; keep
+   seeding while `waves.person_should_fire`. Run as a SINGLE Task over the
+   author list (same slug-race reasoning as SEED).
 7. **GAP wave.** Fires every round, low cost. One **P5** Task on the
    top 20 uncovered chunks by PageRank. Beyond *coverage* gaps, the P5
    explorer also surfaces **knowledge gaps** it reads in those chunks —

@@ -1592,6 +1592,11 @@ def cmd_refine_candidates(
         False, "--no-data",
         help="Disable the data-artifact signal (only evidence growth flags).",
     ),
+    min_new_siblings: int = typer.Option(
+        4, "--min-new-siblings",
+        help="Flag a page when this many topical-neighbour pages committed "
+             "after it (cross-link refine). 0 disables the signal.",
+    ),
     fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
 ) -> None:
     """List committed pages whose live evidence outgrew their write-time snapshot.
@@ -1611,8 +1616,14 @@ def cmd_refine_candidates(
     its latest ``page_committed`` event -- i.e. a relevant artifact was
     committed after the page, so a re-draft can add a "Related data" link.
     Re-committing records the now-current artifacts and the page converges.
-    Pass ``--no-data`` to disable this signal. Deterministic and
-    token-light (no chunk text).
+    Pass ``--no-data`` to disable this signal.
+
+    Reason ``new_siblings`` flags a page that at least ``--min-new-siblings``
+    topical-neighbour pages (sharing a source document) committed AFTER it and
+    absent from its ``siblings_seen`` snapshot -- a page written when the wiki
+    was small is under-connected once it fills in, so a re-draft weaves in the
+    now-committed neighbours. Re-committing records the current neighbour set
+    and converges. Deterministic and token-light (no chunk text).
     """
     import sys
 
@@ -1637,6 +1648,7 @@ def cmd_refine_candidates(
     # predate ``evidence_total``.
     baseline: dict[str, int] = {}
     seen_artifacts: dict[str, list[str]] = {}
+    seen_siblings: dict[str, set[str]] = {}
     for ev in read_events(bundle):
         if ev.type != "page_committed":
             continue
@@ -1647,13 +1659,27 @@ def cmd_refine_candidates(
         seen = ev.data.get("data_artifacts_seen")
         if isinstance(slug, str) and isinstance(seen, list):
             seen_artifacts[slug] = [a for a in seen if isinstance(a, str)]
+        sibs = ev.data.get("siblings_seen")
+        if isinstance(slug, str) and isinstance(sibs, list):
+            seen_siblings[slug] = {x for x in sibs if isinstance(x, str)}
+
+    # Pre-pass: active-evidence doc set per committed page, for the cross-link
+    # (new_siblings) signal -- two pages are topical neighbours when they share
+    # a source document.
+    committed_slugs = [
+        s for s in list_concept_slugs(bundle)
+        if load_card(bundle, s).status == "committed"
+    ]
+    docsets: dict[str, set[str]] = {
+        s: {r.doc_id for r in read_evidence(bundle, s)
+            if r.status == "active" and r.doc_id}
+        for s in committed_slugs
+    }
 
     items: list[dict] = []
     n_committed = 0
-    for s in list_concept_slugs(bundle):
+    for s in committed_slugs:
         card = load_card(bundle, s)
-        if card.status != "committed":
-            continue
         n_committed += 1
         # Live recount from the ledger on disk so STOP-CHECK/finalize is
         # robust regardless of when ``work tend`` last refreshed the card
@@ -1682,7 +1708,19 @@ def cmd_refine_candidates(
             seen = set(seen_artifacts.get(s, []))
             new_artifacts = [a for a in current if a not in seen]
 
-        if not (by_ratio or by_delta or new_artifacts):
+        # Cross-link signal: topical-neighbour pages (share a source doc) that
+        # committed after this page and were not in its write-time snapshot.
+        new_siblings: list[str] = []
+        if min_new_siblings > 0:
+            mine = docsets.get(s, set())
+            current_sibs = {
+                q for q, qd in docsets.items()
+                if q != s and (qd & mine)
+            }
+            new_siblings = sorted(current_sibs - seen_siblings.get(s, set()))
+
+        siblings_hit = len(new_siblings) >= min_new_siblings > 0
+        if not (by_ratio or by_delta or new_artifacts or siblings_hit):
             continue
 
         tokens: list[str] = []
@@ -1694,6 +1732,8 @@ def cmd_refine_candidates(
             tokens.append("delta")
         if new_artifacts:
             tokens.append("new_data")
+        if siblings_hit:
+            tokens.append("new_siblings")
         item = {
             "slug": s,
             "evidence_at_commit": e0 if (e0 and e0 > 0) else 0,
@@ -1705,14 +1745,21 @@ def cmd_refine_candidates(
         }
         if new_artifacts:
             item["new_data_artifacts"] = new_artifacts
+        if siblings_hit:
+            item["n_new_siblings"] = len(new_siblings)
         items.append(item)
 
-    items.sort(key=lambda it: it["ratio"], reverse=True)
+    items.sort(
+        key=lambda it: (it["ratio"], it.get("n_new_siblings", 0)), reverse=True
+    )
     payload = {
         "ok": True,
         "kind": "refine_candidates",
         "items": items,
-        "thresholds": {"growth": growth, "min_new_chunks": min_new_chunks},
+        "thresholds": {
+            "growth": growth, "min_new_chunks": min_new_chunks,
+            "min_new_siblings": min_new_siblings,
+        },
         "n_committed": n_committed,
         "n_candidates": len(items),
     }

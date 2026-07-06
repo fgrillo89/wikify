@@ -10,7 +10,8 @@ target_min           = clamp(round(42 * log10(D) - 27), 10, 200)        # SEED c
 concurrent_explorers = clamp(wave_size, 2, 8)                           # throttled by live rate limits
 max_rounds           = clamp(round(Kc / (wave_size * 25)) + 12, 12, 250) # coverage-bound safety ceiling
 expected_pages       = clamp(round(38 * log10(D) - 37), 5, 250)        # article roster the build commits, ~log(D)
-expected_people      = clamp(round(4 * log10(D) - 3), 0, 30)           # SOFT person-page target (may be exceeded, see below); median-author gated
+expected_people      = clamp(round(max(4*log10(D) - 3, 0.5 * n_notable_authors)), 0, 60)  # SOFT person target; scales with the corpus author pool, gate-regularised
+# n_notable_authors = corpus authors with rank_metrics h_index >= 4 (0 when the author graph is absent -> falls back to the log(D) fit)
 person_quota_multiplier = 2.0                                          # review up to 2x expected_people candidates; maturity gate still decides commits
 budget_est_haiku_eq  = 600_000 * (expected_pages + expected_people)    # ~0.6M haiku-eq/committed page; editor is inline, off the call ledger
 ```
