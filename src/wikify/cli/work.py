@@ -1672,18 +1672,28 @@ def cmd_refine_candidates(
         if isinstance(slug, str) and isinstance(sibs, list):
             seen_siblings[slug] = {x for x in sibs if isinstance(x, str)}
 
-    # Pre-pass: active-evidence doc set per committed page, for the cross-link
-    # (new_siblings) signal -- two pages are topical neighbours when they share
-    # a source document.
     committed_slugs = [
         s for s in list_concept_slugs(bundle)
         if load_card(bundle, s).status == "committed"
     ]
-    docsets: dict[str, set[str]] = {
-        s: {r.doc_id for r in read_evidence(bundle, s)
-            if r.status == "active" and r.doc_id}
-        for s in committed_slugs
-    }
+    # doc_id -> committed slugs citing it, from the indexed wiki_evidence
+    # projection (one query), for the cross-link (new_siblings) signal: two
+    # pages are topical neighbours when they share a source document.
+    doc_slugs: dict[str, set[str]] = {}
+    if min_new_siblings > 0 and bundle.sqlite_path.exists():
+        import sqlite3
+        _con = sqlite3.connect(str(bundle.sqlite_path))
+        try:
+            for _slug, _doc in _con.execute(
+                "SELECT p.slug, e.doc_id FROM wiki_evidence e "
+                "JOIN wiki_pages p ON p.page_id = e.page_id"
+            ):
+                if _slug and _doc:
+                    doc_slugs.setdefault(_doc, set()).add(_slug)
+        except sqlite3.Error:
+            doc_slugs = {}
+        finally:
+            _con.close()
 
     items: list[dict] = []
     n_committed = 0
@@ -1721,11 +1731,11 @@ def cmd_refine_candidates(
         # committed after this page and were not in its write-time snapshot.
         new_siblings: list[str] = []
         if min_new_siblings > 0:
-            mine = docsets.get(s, set())
-            current_sibs = {
-                q for q, qd in docsets.items()
-                if q != s and (qd & mine)
-            }
+            mine = {r.doc_id for r in active if r.doc_id}
+            current_sibs: set[str] = set()
+            for d in mine:
+                current_sibs |= doc_slugs.get(d, set())
+            current_sibs.discard(s)
             # A page with no recorded snapshot predates this feature. Treat its
             # neighbours as already-seen (converged) unless the caller opts into
             # a one-time legacy drain, so an old wiki never floods the queue.
