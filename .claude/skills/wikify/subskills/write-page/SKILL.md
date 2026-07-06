@@ -154,8 +154,11 @@ or `validation.json`. Fix any errors before persisting.
   after filtering you cannot field 6 evidence markers per page,
   surface that as a workflow signal rather than padding with junk.
 - For normal articles, use evidence across definitions, mechanisms,
-  materials/properties, methods, evidence/results, applications, and
-  limitations when those facets are present in the draft.
+  materials/properties, methods, evidence/results, applications,
+  limitations, and open questions when those facets are present in the
+  draft. Where the dossier states understudied conditions, contradictory
+  findings, or unresolved mechanisms, give them a short "Limitations and
+  open questions" treatment grounded in `[^eN]` — never invented.
 - No visible `[[wikilinks]]`.
 - Figures are expected when candidates exist. An ARTICLE page SHOULD
   include figures where the dossier's Figure candidates table supports

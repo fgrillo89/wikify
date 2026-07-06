@@ -2056,6 +2056,29 @@ def test_add_gap_note_grounds_quote_and_rejects_fabrication(tmp_path: Path) -> N
         "contradiction_requires_second_chunk"
     )
 
+    # A well-formed contradiction: both quotes verified against their chunks.
+    cid2, _ = docs["doc_2010"]
+    good_contra = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "sources disagree on X", "--quote", "on-chip light manipulation",
+        "--contradicts-chunk-id", cid2,
+        "--contradicts-quote", "high-bandwidth data transmission",
+    ])
+    assert good_contra.exit_code == 0, good_contra.output
+    body = notes.read_text(encoding="utf-8")
+    assert "type: contradiction" in body
+    assert 'contradicts_quote: "high-bandwidth data transmission"' in body
+
+    # The contradicting quote must also be literal.
+    bad_contra = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+        "--contradicts-chunk-id", cid2,
+        "--contradicts-quote", "warp drive containment field",
+    ])
+    assert bad_contra.exit_code != 0
+    assert json.loads(bad_contra.stderr)["error"] == "contradicts_quote_not_in_chunk"
+
 
 def _add_reference_edges(corpus_root: Path, citing: str, cited: list[str]) -> None:
     """Add doc->doc ``references`` edges (``citing`` cites each of ``cited``)."""
